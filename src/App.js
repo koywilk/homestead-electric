@@ -4870,11 +4870,36 @@ const stripEmoji = (s) => String(s == null ? "" : s)
   .replace(/\s{2,}/g, " ")
   .trim();
 
+// Convert the date shapes used across old and current job documents to epoch
+// milliseconds. Besides ISO strings, some imported/legacy records can carry a
+// numeric epoch or Firestore Timestamp-like value.
+const dateValueMs = (value) => {
+  if(value == null || value === "") return NaN;
+  if(value instanceof Date) return value.getTime();
+  if(typeof value?.toMillis === "function"){
+    const ms = value.toMillis();
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  if(typeof value?.seconds === "number"){
+    const ms = value.seconds*1000 + (Number(value.nanoseconds)||0)/1000000;
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  if(typeof value === "number") return Number.isFinite(value) ? (value<1e12?value*1000:value) : NaN;
+  const raw = String(value).trim();
+  if(/^\d+(?:\.\d+)?$/.test(raw)){
+    const n = Number(raw);
+    return Number.isFinite(n) ? (n<1e12?n*1000:n) : NaN;
+  }
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : NaN;
+};
+
 const timeAgo = (isoStr) => {
   if(!isoStr) return "";
-  const d = new Date(isoStr);
-  if(isNaN(d.getTime())) return "";
-  const mins = Math.floor((Date.now()-d.getTime())/60000);
+  const ms = dateValueMs(isoStr);
+  if(!Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  const mins = Math.floor((Date.now()-ms)/60000);
   if(mins < 1) return "just now";
   if(mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins/60);
@@ -13289,20 +13314,25 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
 
-const PANEL_ORDER_BASE = {"":0,"Meter":0.5,"Dedicated Loads":999};
 const getPanelOpts = (customPanels) => {
   // "Meter" and "Dedicated Loads" are always-present built-ins, appended here.
-  // Filter them (and blanks) out of the custom list so a job that saved either
-  // INTO customPanels doesn't get a DUPLICATE option / summary card — this is
-  // what caused two "Dedicated Loads" panels to appear after the gen-load stamp.
-  const custom = (customPanels&&customPanels.length?customPanels:DEFAULT_PANELS)
-    .filter(p => p && p !== "Meter" && p !== "Dedicated Loads");
+  // Trim and de-dupe case-insensitively so the editor, panel view, breaker
+  // summary, and schedule fill all agree on what constitutes one panel.
+  const seen = new Set(["", "meter", "dedicated loads"]);
+  const custom = [];
+  (customPanels&&customPanels.length?customPanels:DEFAULT_PANELS).forEach(raw=>{
+    const p = String(raw||"").trim();
+    const key = p.toLowerCase();
+    if(!p || seen.has(key)) return;
+    seen.add(key);
+    custom.push(p);
+  });
   return ["","Meter",...custom,"Dedicated Loads"];
 };
 const getPanelOrder = (customPanels) => {
   const opts = getPanelOpts(customPanels);
-  const order = {};
-  opts.forEach((p,i)=>{ order[p]=i; });
+  const order = new Map();
+  opts.forEach((p,i)=>{ order.set(p.toLowerCase(),i); });
   return order;
 };
 
@@ -13324,6 +13354,13 @@ const sortHRRows = (arr) => [...arr].sort((a,b)=>{
 // so each view routes the write back to the right floor array. addRow is
 // optional (panel view has no add — adding lives in the floor view).
 function HRRow({r, upd, del, addRow, customPanels}) {
+  const rawPanel = String(r.panel||"").trim();
+  const panelOpts = getPanelOpts(customPanels);
+  const knownPanel = panelOpts.find(p=>p.toLowerCase()===rawPanel.toLowerCase());
+  // Preserve an orphan label after its custom panel was deleted. Without a
+  // matching option the controlled select misleadingly renders blank.
+  if(rawPanel && !knownPanel) panelOpts.splice(panelOpts.length-1,0,rawPanel);
+  const selectedPanel = knownPanel || rawPanel;
   return (
     <div
       style={{marginBottom:6,paddingBottom:6,
@@ -13333,10 +13370,10 @@ function HRRow({r, upd, del, addRow, customPanels}) {
       {/* Row 1: drag handle, number, panel, wire, delete */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
         <span style={{fontSize:10,color:C.muted,textAlign:"right"}}>{r.num}.</span>
-        <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
-          style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
+        <select value={selectedPanel} onChange={e=>upd(r.id,{panel:e.target.value})}
+          style={{background:C.surface,color:selectedPanel?C.accent:C.dim,border:`1px solid ${C.border}`,
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",outline:"none",width:"100%"}}>
-          {getPanelOpts(customPanels).map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
+          {panelOpts.map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
         </select>
         <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
           style={{background:WIRE_COLORS[r.wire]||C.surface,
@@ -13473,17 +13510,26 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
     ...((homeRuns.extraFloors||[]).map(ef=>[ef.key, ef.label||ef.key])),
   ];
   const floorIdx = {}; floors.forEach(([k],i)=>{ floorIdx[k]=i; });
-  const hasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||r.panel||r.status));
+  const hasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||(r.panel||"").trim()||r.status));
   const flat = floors.flatMap(([k,label]) => (homeRuns[k]||[]).filter(hasContent).map(r=>({fk:k, fl:label, r})));
 
+  const panelOpts = getPanelOpts(customPanels);
+  const canonicalPanels = new Map(panelOpts.map(p=>[p.toLowerCase(),p]));
   const panelOrder = getPanelOrder(customPanels);
-  const groups = {};
-  flat.forEach(x=>{ const p=(x.r.panel||"").trim(); (groups[p]=groups[p]||[]).push(x); });
+  const groups = new Map();
+  flat.forEach(x=>{
+    const raw = String(x.r.panel||"").trim();
+    const key = raw.toLowerCase();
+    if(!groups.has(key)) groups.set(key,{key,name:canonicalPanels.get(key)||raw,rows:[]});
+    groups.get(key).rows.push(x);
+  });
   // Unknown panel names (row kept a label that's no longer in the custom
-  // list) sort after the known panels but before Dedicated Loads (999).
-  const panelNames = Object.keys(groups).sort((a,b)=>{
-    const oa = panelOrder[a]!==undefined?panelOrder[a]:500, ob = panelOrder[b]!==undefined?panelOrder[b]:500;
-    return oa!==ob ? oa-ob : a.localeCompare(b);
+  // list) sort after known custom panels but before Dedicated Loads.
+  const dedicatedOrder = panelOrder.get("dedicated loads") ?? Number.MAX_SAFE_INTEGER;
+  const panelGroups = [...groups.values()].sort((a,b)=>{
+    const oa = panelOrder.get(a.key) ?? dedicatedOrder-0.5;
+    const ob = panelOrder.get(b.key) ?? dedicatedOrder-0.5;
+    return oa!==ob ? oa-ob : a.name.localeCompare(b.name);
   });
 
   const updIn = (fk) => (id,p) => {
@@ -13497,8 +13543,8 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
 
   return (
     <div style={{marginBottom:12}}>
-      {panelNames.map(p=>{
-        const rows = [...groups[p]].sort((a,b)=>{
+      {panelGroups.map(({key:panelKey,name:p,rows:panelRows})=>{
+        const rows = [...panelRows].sort((a,b)=>{
           const fd = (floorIdx[a.fk]!==undefined?floorIdx[a.fk]:99)-(floorIdx[b.fk]!==undefined?floorIdx[b.fk]:99);
           if(fd!==0) return fd;
           return (a.r.name||"").toLowerCase().localeCompare((b.r.name||"").toLowerCase());
@@ -13506,7 +13552,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
         const pulled = rows.filter(x=>x.r.status==="Pulled").length;
         let lastFk = null;
         return (
-          <div key={p||"__nopanel"} style={{marginBottom:22}}>
+          <div key={panelKey||"__nopanel"} style={{marginBottom:22}}>
             <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,borderBottom:`1px solid ${p?C.accent+"44":C.border}`,paddingBottom:4}}>
               <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.muted}}>
                 {p||"No Panel Assigned"}
@@ -14313,7 +14359,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
     ];
     const breakers = allRows
       .filter(r => r && r.panel && r.wire &&
-        (r.panel||"").toLowerCase() === (panelLabel||"").toLowerCase() &&
+        (r.panel||"").trim().toLowerCase() === (panelLabel||"").trim().toLowerCase() &&
         WIRE_BREAKER[r.wire])
       .map(r => ({
         name: (r.name||"").trim() || `${r.wire} circuit`,
@@ -14916,7 +14962,12 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       {/* Panels */}
       {(()=>{
         const cP=homeRuns.customPanels||DEFAULT_PANELS;
-        const addP=()=>{ const n=newPanelName.trim(); if(!n||cP.includes(n)) return; onHRChange({...homeRuns,customPanels:[...cP,n]}); setNewPanelName(''); };
+        const addP=()=>{
+          const n=newPanelName.trim();
+          if(!n||getPanelOpts(cP).some(p=>p.toLowerCase()===n.toLowerCase())) return;
+          onHRChange({...homeRuns,customPanels:[...cP,n]});
+          setNewPanelName('');
+        };
         return (
           <Section label="Panels" color={C.blue} defaultOpen={false}>
             <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
@@ -14958,7 +15009,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
           // View default (Koy 2026-07-17): once any panel is labeled, the list
           // reads panel → floor → alphabetical; before that, the floor view.
-          const anyPanelLabeled = allHRRows.some(r=>r&&r.panel);
+          const anyPanelLabeled = allHRRows.some(r=>r&&(r.panel||"").trim());
           const hrViewEff = hrView || (anyPanelLabeled ? "panel" : "floor");
           // Meter can carry breakers, so
           // include it in the panel summary cards.
@@ -14969,8 +15020,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             // card's spot count never drifts from what fillPanelFromHomeRuns
             // would actually pull. Strict equality silently dropped any
             // row whose panel field had different casing than `p`.
-            const pLow = (p||"").toLowerCase();
-            const rows=allHRRows.filter(r=>r&&r.panel&&(r.panel||"").toLowerCase()===pLow&&WIRE_BREAKER[r.wire]);
+            const pLow = (p||"").trim().toLowerCase();
+            const rows=allHRRows.filter(r=>r&&r.panel&&(r.panel||"").trim().toLowerCase()===pLow&&WIRE_BREAKER[r.wire]);
             if(!rows.length && !bOvr[p]) return null;
             const groups={};
             rows.forEach(r=>{
@@ -27157,10 +27208,44 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // Display-only: never writes the job doc.
   const seenKey = jobId ? `qaSeenAns_${jobId}_${photoFolder}` : null;
   const [ansSeenAt] = useState(()=>{ try { return seenKey ? localStorage.getItem(seenKey) : null; } catch { return null; } });
+  const localAnswerKey = seenKey ? `${seenKey}_local` : null;
+  const [locallyAnsweredAt, setLocallyAnsweredAt] = useState(()=>{
+    try {
+      const parsed = localAnswerKey ? JSON.parse(localStorage.getItem(localAnswerKey)||"{}") : {};
+      return parsed && typeof parsed==="object" && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch { return {}; }
+  });
   useEffect(()=>{
     if(seenKey && !ansSeenAt){ try { localStorage.setItem(seenKey, new Date().toISOString()); } catch {} }
-  },[]);
-  const newAns = (q) => !!(ansSeenAt && q.done && q.answeredAt && String(q.answeredAt) > ansSeenAt);
+  },[seenKey, ansSeenAt]);
+  const rememberLocalAnswer = (id, answeredAt) => {
+    if(!id || !answeredAt) return;
+    setLocallyAnsweredAt(prev=>{
+      const next = {...prev,[id]:String(answeredAt)};
+      // Bound this display-only cache while retaining the most recent local
+      // answers. Exact timestamp matching means a later re-answer is still NEW.
+      const entries = Object.entries(next).sort((a,b)=>(dateValueMs(b[1])||0)-(dateValueMs(a[1])||0)).slice(0,200);
+      const bounded = Object.fromEntries(entries);
+      try { if(localAnswerKey) localStorage.setItem(localAnswerKey,JSON.stringify(bounded)); } catch {}
+      return bounded;
+    });
+  };
+  // QASection can render an incoming copy and the regular floor copy at once.
+  // Re-read the tiny cache on render so an answer adopted in one copy is also
+  // suppressed as "local" when the other copy receives the updated question.
+  let persistedLocalAnswers = {};
+  try {
+    const parsed = localAnswerKey ? JSON.parse(localStorage.getItem(localAnswerKey)||"{}") : {};
+    if(parsed && typeof parsed==="object" && !Array.isArray(parsed)) persistedLocalAnswers=parsed;
+  } catch {}
+  const localAnswerStamps = {...locallyAnsweredAt,...persistedLocalAnswers};
+  const seenAtMs = dateValueMs(ansSeenAt);
+  const newAns = (q) => {
+    const answeredAtMs = dateValueMs(q.answeredAt);
+    return !!(q.done && Number.isFinite(seenAtMs) && Number.isFinite(answeredAtMs) &&
+      answeredAtMs>seenAtMs && localAnswerStamps[q.id]!==String(q.answeredAt));
+  };
   const needsReplyQ = (q) => { const t = threadOf(q); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
 
   // Default a new question's recipient to whatever section is being filtered to,
@@ -27201,7 +27286,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // you're hunting for; undated legacy answers sink to the bottom. Q numbers
   // stay stable (renderQ numbers off questions.indexOf, not this order).
   const answered = questions.filter(q=>q.done && matchesRecip(q))
-    .sort((a,b)=>String(b.answeredAt||"").localeCompare(String(a.answeredAt||"")));
+    .sort((a,b)=>(dateValueMs(b.answeredAt)||0)-(dateValueMs(a.answeredAt)||0));
   const newAnsCount = answered.filter(newAns).length;
   const showOpenSection     = statusFilter!=='answered';
   const showAnsweredSection = statusFilter==null || statusFilter==='answered';
@@ -27240,6 +27325,8 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               // user picked in the chips below; GC-via-link carries its own stamp.
               const who=getIdentity();
               const pending = gcAnswerMap[q.id];
+              const answeredAt = q.answeredAt||new Date().toISOString();
+              rememberLocalAnswer(q.id,answeredAt);
               if(pending){
                 // Crew checked the box directly while a link answer sat
                 // PENDING (common — recipients often skip Submit). Adopt it
@@ -27256,10 +27343,10 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   gcRejected:null,
                   answeredVia: q.answeredVia||'link',
                   answeredBy: q.answeredBy || gcAnsweredBy || who?.name || "",
-                  answeredAt: q.answeredAt||new Date().toISOString(),
+                  answeredAt,
                 });
               } else {
-                upd(q.id,{done:true, gcRejected:null, answeredBy:q.answeredBy||who?.name||"", answeredAt:q.answeredAt||new Date().toISOString()});
+                upd(q.id,{done:true, gcRejected:null, answeredBy:q.answeredBy||who?.name||"", answeredAt});
               }
             } else {
               // Re-opening — a REAL reopen (2026-07-10): clear the who/when stamps
@@ -27417,12 +27504,13 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
       {q.done&&(()=>{
         const via = q.answeredVia || (q.gcAnswered ? 'link' : '');
         const methodLabel = answerMethodLabel(via);
-        const when = q.answeredAt ? new Date(q.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+        const answeredMs = dateValueMs(q.answeredAt);
+        const when = Number.isFinite(answeredMs) ? new Date(answeredMs).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
         if(!methodLabel && !q.answeredBy && !when && !q.answerNote) return null;
         return (
           <div style={{marginLeft:22,fontSize:9,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
             {methodLabel&&<span style={{fontWeight:700,color:via==='link'?'#3E7D5A':'#3B5BA5',background:via==='link'?'#DEEFE6':'#E0E8F3',borderRadius:4,padding:'1px 5px'}}>{methodLabel}</span>}
-            {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when} (${timeAgo(q.answeredAt)})`:''}</span>}
+            {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when} (${timeAgo(answeredMs)})`:''}</span>}
             {q.answerNote&&<span style={{fontStyle:'italic'}}>· {q.answerNote}</span>}
           </div>
         );
@@ -27722,9 +27810,19 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
     if(!jobId) return 0;
     let n=0;
     ["upper","main","basement"].forEach(k=>{
-      let seen=null; try { seen=localStorage.getItem(`qaSeenAns_${jobId}_${photoFolder?photoFolder+"-":""}${k}`); } catch {}
-      if(!seen) return;
-      (Array.isArray(questions[k])?questions[k]:[]).forEach(q=>{ if(q.done&&q.answeredAt&&String(q.answeredAt)>seen) n++; });
+      const key=`qaSeenAns_${jobId}_${photoFolder?photoFolder+"-":""}${k}`;
+      let seen=null, localAnswers={};
+      try {
+        seen=localStorage.getItem(key);
+        const parsed=JSON.parse(localStorage.getItem(`${key}_local`)||"{}");
+        if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed)) localAnswers=parsed;
+      } catch {}
+      const seenMs=dateValueMs(seen);
+      if(!Number.isFinite(seenMs)) return;
+      (Array.isArray(questions[k])?questions[k]:[]).forEach(q=>{
+        const answeredMs=dateValueMs(q.answeredAt);
+        if(q.done&&Number.isFinite(answeredMs)&&answeredMs>seenMs&&localAnswers[q.id]!==String(q.answeredAt)) n++;
+      });
     });
     return n;
   })();
