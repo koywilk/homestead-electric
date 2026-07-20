@@ -7864,7 +7864,9 @@ function JobNoteCard({
       destTab = 'Return Trips';
     } else if (promoted.type === 'co') {
       destTab = 'Change Orders';    } else if (promoted.type === 'question') {
-      destTab = promoted.targetPhase === 'finish' ? 'Finish' : 'Rough';
+      // 2026-07-18: questions live on their own always-open tab now — better
+      // landing than a phase tab whose Questions section starts collapsed.
+      destTab = 'Questions';
     }
     if (!destTab) return;
     setTab(destTab);
@@ -22057,7 +22059,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 // lighting tabs constantly. On jobs with NO panelized lighting / NO tape
 // light, though, those tabs are clutter — so `tabsForJob(job)` below moves
 // them to the far right when job.noPanelizedLighting / job.noTapeLight is set.
-const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
+const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","QC"];
 
@@ -24225,8 +24227,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const _phaseInProgress = (parseStage(job?.roughStage) >= 100) ? "Finish" : "Rough";
   const _punchOpenIn = (key) => { const p = job?.[key]||{}; return countFloor(p.upper)+countFloor(p.main)+countFloor(p.basement)+((p.extras||[]).reduce((s,e)=>s+countFloor(p[e.key]||{}),0)); };
   const punchTab = _punchOpenIn('roughPunch')>0 ? "Rough" : _punchOpenIn('finishPunch')>0 ? "Finish" : _phaseInProgress;
-  const _qOpenIn = (key) => { const qs=job?.[key]||{}; return ['upper','main','basement'].reduce((a,fl)=>a+(qs[fl]||[]).filter(q=>q&&!q.done&&!((q.answer||'').trim())).length,0); };
-  const questionTab = _qOpenIn('roughQuestions')>0 ? "Rough" : _qOpenIn('finishQuestions')>0 ? "Finish" : _phaseInProgress;
+  // Unseen-answer count for the Questions tab pill (recomputed every render;
+  // cheap localStorage reads). The pill is the whole point of the tab —
+  // visible from the moment the job opens, before any scrolling.
+  const qNewCount = countUnseenAnswers(job);
 
   // V2.4 — Scheduled-RT map for punch items. Builds {punchItemId → {date,
   // crew, rtId, phase}} from job.returnTrips, so PunchSection can show a
@@ -24408,7 +24412,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </span>
             )}
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red} onClick={()=>setTab(punchTab)}/>}
-            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue} onClick={()=>setTab(questionTab)}/>}
+            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue} onClick={()=>setTab("Questions")}/>}
             {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#B0892C"/>}
 
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange} onClick={()=>setTab("Change Orders")}/>}
@@ -24523,6 +24527,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 whiteSpace:"nowrap",transition:"all 0.15s"}}>
 
               {t}
+              {t==="Questions"&&qNewCount>0&&(
+                <span style={{marginLeft:5,fontSize:8,fontWeight:800,background:'#3E7D5A',color:'#fff',borderRadius:99,padding:'1px 6px',verticalAlign:'middle',letterSpacing:'0.03em'}}>{qNewCount} NEW</span>
+              )}
 
             </button>
 
@@ -24897,19 +24904,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <div style={{marginTop:20}}>
-                <Section label="Questions" color={C.rough} action={
-                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}
-                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
-                    questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
-                }>
-                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if(gcAnswerRejected(qq,a))return;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
-                  // Late link answer: landed on a question the crew already closed
-                  // (done && !gcAnswered) — the appliedGcRef apply effect skips those
-                  // by design, so surface it on the row instead of dropping it silently.
-                  if(has&&qq?.done&&!qq.gcAnswered)late[a.id]={answer:a.answer||'',photos:a.photos||[],clarify:a.clarify||''};}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
-                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
-                  </div>}
-                </Section>
+                <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads}/>
               </div>
 
               <div style={{marginTop:20}}>
@@ -25204,17 +25199,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
 
               <div style={{marginTop:20}}>
-                <Section label="Questions" color={C.finish} action={
-                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}
-                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
-                    questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
-                }>
-                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if(gcAnswerRejected(qq,a))return;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
-                  // Same late-link-answer surfacing as the rough mount above.
-                  if(has&&qq?.done&&!qq.gcAnswered)late[a.id]={answer:a.answer||'',photos:a.photos||[],clarify:a.clarify||''};}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
-                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
-                  </div>}
-                </Section>
+                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads}/>
               </div>
 
               <div style={{marginTop:20}}>
@@ -25229,6 +25214,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           )}
 
+
+          {/* Dedicated Questions tab (2026-07-18) — both phases stacked, zero
+              clicks to content. Same PhaseQuestionsSection mounts as the
+              Rough/Finish tabs (which keep their inline copies for the
+              add-a-question-mid-walk workflow); same state, so no drift. */}
+          {tab==="Questions"&&(
+
+            <div>
+              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions" defaultOpen={true}/>
+              <div style={{marginTop:20}}>
+                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions" defaultOpen={true}/>
+              </div>
+            </div>
+
+          )}
 
           {tab==="Home Runs"&&(
 
@@ -27122,6 +27122,60 @@ const gcAnswerRejected = (q, a) => {
   if(text && !String(rej.answer||'').includes(text)) return false;
   if(!urls.every(u=>(rej.photoUrls||[]).includes(u))) return false;
   return true;
+};
+
+// ── Shared per-phase Questions block (2026-07-18) ────────────────────────
+// Section + QuestionPicker action + QASection with the gc answer/note/late
+// maps. ONE component mounted three times — the Rough tab, the Finish tab,
+// and the dedicated Questions tab — so the mounts can never drift. Only
+// label/defaultOpen differ per mount; the m/nmap/late builders are the same
+// logic the two phase tabs carried inline before this refactor.
+function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThreads, label="Questions", defaultOpen=false}) {
+  const rough = phase === "rough";
+  const color = rough ? C.rough : C.finish;
+  const qs = rough ? job.roughQuestions : job.finishQuestions;
+  const m={}, nmap={}, late={};
+  ['upper','main','basement'].forEach(f=>(gcAnswers?.[phase]?.[f]||[]).forEach(a=>{
+    const qq=(qs?.[f]||[]).find(q=>q.id===a.id);
+    const has=String(a.answer||'').trim()||(a.photos||[]).length;
+    if(gcAnswerRejected(qq,a))return;
+    if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};
+    if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
+    // Late link answer: landed on a question the crew already closed
+    // (done && !gcAnswered) — the appliedGcRef apply effect skips those
+    // by design, so surface it on the row instead of dropping it silently.
+    if(has&&qq?.done&&!qq.gcAnswered)late[a.id]={answer:a.answer||'',photos:a.photos||[],clarify:a.clarify||''};
+  }));
+  return (
+    <Section label={label} color={color} defaultOpen={defaultOpen} action={
+      <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={color}
+        filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
+        questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
+    }>
+      <QASection questions={qs||{upper:[],main:[],basement:[]}} onChange={v=>u(rough?{roughQuestions:v}:{finishQuestions:v})} color={color} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder={phase} fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>
+      {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+      </div>}
+    </Section>
+  );
+}
+
+// Unseen-answer count for the Questions tab pill: answers stamped after this
+// device's per-floor seen marks (the qaSeenAns_* keys QAList writes when the
+// answered section is expanded). Floors with no mark yet count 0 — same
+// first-visit-baseline rule as QAList's badges. localStorage only; never
+// touches the job doc.
+const countUnseenAnswers = (job) => {
+  if(!job?.id) return 0;
+  let n=0;
+  ["rough","finish"].forEach(ph=>{
+    const qs = ph==="rough" ? job.roughQuestions : job.finishQuestions;
+    ["upper","main","basement"].forEach(f=>{
+      let seen=null; try { seen=localStorage.getItem(`qaSeenAns_${job.id}_${ph}-${f}`); } catch {}
+      if(!seen) return;
+      (Array.isArray(qs?.[f])?qs[f]:[]).forEach(q=>{ if(q&&q.done&&q.answeredAt&&String(q.answeredAt)>seen) n++; });
+    });
+  });
+  return n;
 };
 
 function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy=''}) {
@@ -29710,7 +29764,7 @@ function buildJobActivity(job) {
     });
     return out;
   };
-  const qAll = [...qOpen(job.roughQuestions,"Rough","Rough"), ...qOpen(job.finishQuestions,"Finish","Finish")];
+  const qAll = [...qOpen(job.roughQuestions,"Rough","Questions"), ...qOpen(job.finishQuestions,"Finish","Questions")];
   if (qAll.length) groups.push({ key:"questions", label:"Questions", items: qAll });
 
   // ── TIMELINE ──────────────────────────────────────────────────────
@@ -43044,7 +43098,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-17 · App SW version: v345
+**Last manifest update:** 2026-07-18 · App SW version: v346
 
 ---
 
@@ -43160,6 +43214,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - Dedicated Questions tab · 'shipped 2026-07-18' · 'SW v346' · "Questions" tab between Finish and Home Runs stacking both phases always-open ('PhaseQuestionsSection' — one shared component now mounted by the Rough tab, Finish tab, and this tab, replacing the duplicated inline gc-map IIFEs); tab label carries a green "N NEW" unseen-answers pill ('countUnseenAnswers' over the v345 'qaSeenAns_*' seen stamps); header "open questions" pill, Job Notes promoted-question jumps, and Activity question todos all retarget to the tab; '?section=Questions' deep links work via the existing TABS.includes guard. Display-only — no new writes, no data-shape change
   - New-answer visibility + sort by date answered · 'shipped 2026-07-17' · 'SW v345' · answered list sorts newest-'answeredAt' first (undated legacy answers sink); per-device seen stamps ('qaSeenAns_<jobId>_<phase>-<floor>' in localStorage, share-page 'prevVisitAt' pattern) drive a "N NEW" pill on the ANSWERED header + the phase Answered chip, a "NEW ANSWER" badge + green border per question, and a relative time on the answered stamp; expanding the answered section marks seen (badges persist for the visit, clear next visit). Display-only — no job-doc writes
 - **Plans tab** · 'shipped' · 'PlansTab'
 - **Drive Files** · 'shipped' · 'DriveFilesSection'
