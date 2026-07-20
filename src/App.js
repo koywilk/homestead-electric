@@ -27216,16 +27216,19 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // "New answer" tracking (Koy 2026-07-17: "really hard to tell when
   // questions have been answered"). Per-device last-seen stamp for this
   // job+phase+floor's answered list, same localStorage pattern as the share
-  // page's prevVisitAt. Read once at mount so badges stay up the whole
+  // page's prevVisitAt. Capture the baseline at mount so badges stay up the whole
   // visit; re-stamped only when the answered section is actually EXPANDED —
   // answers you never laid eyes on stay flagged NEW next visit. First-ever
   // mount writes a baseline instead of flagging years of history and ensures
   // answers arriving before the first expansion can still be detected.
   // Display-only: never writes the job doc.
   const seenKey = jobId ? `qaSeenAns_${jobId}_${photoFolder}` : null;
-  const [ansSeenAt] = useState(()=>{ try { return seenKey ? localStorage.getItem(seenKey) : null; } catch { return null; } });
+  const [ansSeenAt, setAnsSeenAt] = useState(()=>{ try { return seenKey ? localStorage.getItem(seenKey) : null; } catch { return null; } });
   useEffect(()=>{
-    if(seenKey && !ansSeenAt){ try { localStorage.setItem(seenKey, new Date().toISOString()); } catch {} }
+    if(!seenKey || ansSeenAt) return;
+    const baseline = new Date().toISOString();
+    try { localStorage.setItem(seenKey, baseline); } catch {}
+    setAnsSeenAt(baseline);
   },[seenKey, ansSeenAt]);
   const newAns = (q) => !!(ansSeenAt && q.done && q.answeredAt && String(q.answeredAt) > ansSeenAt);
   const needsReplyQ = (q) => { const t = threadOf(q); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
