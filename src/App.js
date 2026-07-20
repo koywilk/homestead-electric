@@ -7869,7 +7869,7 @@ function JobNoteCard({
       destTab = 'Questions';
     }
     if (!destTab) return;
-    setTab(destTab);
+    setTab(destTab, promoted.type==='question' ? promoted.targetId : null);
     // Best-effort scroll + flash highlight after the destination tab mounts.
     setTimeout(() => {
       try {
@@ -23616,6 +23616,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   };
 
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
+  const [questionJumpTarget, setQuestionJumpTarget] = useState(null);
+  const setTabFromJobNote = useCallback((nextTab, targetId=null)=>{
+    setQuestionJumpTarget(nextTab==="Questions" ? targetId : null);
+    setTab(nextTab);
+  }, []);
+  useEffect(()=>{
+    if(tab!=="Questions" && questionJumpTarget) setQuestionJumpTarget(null);
+  }, [tab, questionJumpTarget]);
   // QAList persists per-floor answer-seen stamps in localStorage. Keep a
   // lightweight revision here so the Questions tab pill refreshes immediately
   // when a child marks answers seen instead of waiting for an unrelated render.
@@ -24821,7 +24829,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   scope="rough"
                   phaseColor={C.rough}
                   onPatch={(patch)=>u(patch)}
-                  setTab={setTab}
+                  setTab={setTabFromJobNote}
                   onViewPhoto={(url)=>window.open(url,'_blank')}
                 />
                 <LegacyInstructionsToggle
@@ -24908,7 +24916,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <div style={{marginTop:20}}>
-                <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} onAnswersSeen={onAnswersSeen}/>
+                <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} onAnswersSeen={onAnswersSeen} jumpTargetId={questionJumpTarget}/>
               </div>
 
               <div style={{marginTop:20}}>
@@ -25117,7 +25125,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   scope="finish"
                   phaseColor={C.finish}
                   onPatch={(patch)=>u(patch)}
-                  setTab={setTab}
+                  setTab={setTabFromJobNote}
                   onViewPhoto={(url)=>window.open(url,'_blank')}
                 />
                 <LegacyInstructionsToggle
@@ -25203,7 +25211,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
 
               <div style={{marginTop:20}}>
-                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} onAnswersSeen={onAnswersSeen}/>
+                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} onAnswersSeen={onAnswersSeen} jumpTargetId={questionJumpTarget}/>
               </div>
 
               <div style={{marginTop:20}}>
@@ -25226,9 +25234,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Questions"&&(
 
             <div>
-              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions" defaultOpen={true} onAnswersSeen={onAnswersSeen}/>
+              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions" defaultOpen={true} onAnswersSeen={onAnswersSeen} jumpTargetId={questionJumpTarget}/>
               <div style={{marginTop:20}}>
-                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions" defaultOpen={true} onAnswersSeen={onAnswersSeen}/>
+                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions" defaultOpen={true} onAnswersSeen={onAnswersSeen} jumpTargetId={questionJumpTarget}/>
               </div>
             </div>
 
@@ -26246,7 +26254,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   jobs={jobs}
                   onUpdateJob={u}
                   onGoToReturnTrips={()=>setTab("Return Trips")}
-                  setTab={setTab}
+                  setTab={setTabFromJobNote}
                 />
               </Section>
 
@@ -27134,7 +27142,7 @@ const gcAnswerRejected = (q, a) => {
 // and the dedicated Questions tab — so the mounts can never drift. Only
 // label/defaultOpen differ per mount; the m/nmap/late builders are the same
 // logic the two phase tabs carried inline before this refactor.
-function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThreads, label="Questions", defaultOpen=false, onAnswersSeen=null}) {
+function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThreads, label="Questions", defaultOpen=false, onAnswersSeen=null, jumpTargetId=null}) {
   const rough = phase === "rough";
   const color = rough ? C.rough : C.finish;
   const qs = rough ? job.roughQuestions : job.finishQuestions;
@@ -27156,7 +27164,7 @@ function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThre
         filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
         questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
     }>
-      <QASection questions={qs||{upper:[],main:[],basement:[]}} onChange={v=>u(rough?{roughQuestions:v}:{finishQuestions:v})} color={color} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder={phase} fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))} onAnswersSeen={onAnswersSeen}/>
+      <QASection questions={qs||{upper:[],main:[],basement:[]}} onChange={v=>u(rough?{roughQuestions:v}:{finishQuestions:v})} color={color} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder={phase} fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))} onAnswersSeen={onAnswersSeen} jumpTargetId={jumpTargetId}/>
       {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
       </div>}
     </Section>
@@ -27182,7 +27190,7 @@ const countUnseenAnswers = (job) => {
   return n;
 };
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy='', onAnswersSeen=null}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy='', onAnswersSeen=null, jumpTargetId=null}) {
 
   // guard: old data may be a string instead of array
 
@@ -27204,18 +27212,21 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // attach, new discussion) live behind a per-question "More" toggle so the
   // list stops being a wall of inputs. Answered section collapses by default.
   const [moreOpen, setMoreOpen] = useState(()=>new Set());
-  const [showAnswered, setShowAnswered] = useState(false);
+  const [showAnswered, setShowAnswered] = useState(()=>!!(jumpTargetId && questions.some(q=>q?.id===jumpTargetId && q.done)));
   // "New answer" tracking (Koy 2026-07-17: "really hard to tell when
   // questions have been answered"). Per-device last-seen stamp for this
   // job+phase+floor's answered list, same localStorage pattern as the share
   // page's prevVisitAt. Read once at mount so badges stay up the whole
   // visit; re-stamped only when the answered section is actually EXPANDED —
   // answers you never laid eyes on stay flagged NEW next visit. First-ever
-  // expansion writes a baseline instead of flagging years of history; merely
-  // mounting an always-open phase must not mark its answered list as visited.
+  // mount writes a baseline instead of flagging years of history and ensures
+  // answers arriving before the first expansion can still be detected.
   // Display-only: never writes the job doc.
   const seenKey = jobId ? `qaSeenAns_${jobId}_${photoFolder}` : null;
   const [ansSeenAt] = useState(()=>{ try { return seenKey ? localStorage.getItem(seenKey) : null; } catch { return null; } });
+  useEffect(()=>{
+    if(seenKey && !ansSeenAt){ try { localStorage.setItem(seenKey, new Date().toISOString()); } catch {} }
+  },[seenKey, ansSeenAt]);
   const newAns = (q) => !!(ansSeenAt && q.done && q.answeredAt && String(q.answeredAt) > ansSeenAt);
   const needsReplyQ = (q) => { const t = threadOf(q); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
 
@@ -27711,7 +27722,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null, onAnswersSeen=null}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null, onAnswersSeen=null, jumpTargetId=null}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -27905,6 +27916,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
                   questionThreads={questionThreads}
                   gcAnsweredBy={gcAnsweredBy}
                   onAnswersSeen={onAnswersSeen}
+                  jumpTargetId={jumpTargetId}
                   photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
               </div>
             ))}
@@ -27941,6 +27953,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             questionThreads={questionThreads}
             gcAnsweredBy={gcAnsweredBy}
             onAnswersSeen={onAnswersSeen}
+            jumpTargetId={jumpTargetId}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
