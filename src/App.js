@@ -13403,20 +13403,35 @@ const HRColHeaders = () => (
   </div>
 );
 
+// A home-run row counts as real content when anything is filled in — used to
+// filter blank seeded rows out of the panel view and the collapsed-header
+// counts (blank rows still render in the floor view for editing).
+const hrHasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||r.panel||r.status));
+
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
+  // Collapsed to start (Koy 2026-07-20) — each floor is a one-line index row
+  // (label + pulled count) until tapped, same idea as the tab's Sections.
+  const [open, setOpen]         = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortHRRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
   const delRow = (id) => onChange(sortHRRows(rows.filter(r=>r.id!==id)));
   const renderRow = (r) => <HRRow key={r.id} r={r} upd={upd} del={delRow} addRow={addRow} customPanels={customPanels}/>;
+  const loaded  = rows.filter(hrHasContent);
+  const pulledN = loaded.filter(r=>r.status==="Pulled").length;
 
   return (
-    <div style={{marginBottom:24}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-        <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
-      </div>
+    <div style={{marginBottom:open?24:14}}>
+      <button type="button" onClick={()=>setOpen(v=>!v)}
+        style={{display:"flex",width:"100%",alignItems:"baseline",gap:8,marginBottom:open?10:0,background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+        <span style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}{open?" ▴":" ▾"}</span>
+        <span style={{fontSize:10,color:loaded.length>0&&pulledN===loaded.length?C.green:C.dim}}>
+          {loaded.length===0?"empty":(pulledN===loaded.length?`all ${loaded.length} pulled`:`${pulledN} of ${loaded.length} pulled`)}
+        </span>
+      </button>
 
+      {open&&(<>
       <HRColHeaders/>
       {(()=>{
         const unpulled=rows.filter(r=>r.status!=="Pulled");
@@ -13455,6 +13470,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
             setBulkOpen(false);
           }}/>
       )}
+      </>)}
     </div>
   );
 
@@ -13470,13 +13486,16 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
 // Blank seeded rows (no name/wire/panel/status) only show in the floor view,
 // which is also where Add Row / Bulk paste live.
 function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
+  // Panel groups start collapsed (Koy 2026-07-20) — the view opens as an
+  // index of "Panel A · 25 of 28 pulled" header rows; tap one to expand.
+  const [openPanels, setOpenPanels] = useState(()=>new Set());
+  const togglePanel = (key) => setOpenPanels(prev=>{ const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; });
   const floors = [
     ["main","Main Level"],["basement","Basement"],["upper","Upper Level"],
     ...((homeRuns.extraFloors||[]).map(ef=>[ef.key, ef.label||ef.key])),
   ];
   const floorIdx = {}; floors.forEach(([k],i)=>{ floorIdx[k]=i; });
-  const hasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||r.panel||r.status));
-  const flat = floors.flatMap(([k,label]) => (homeRuns[k]||[]).filter(hasContent).map(r=>({fk:k, fl:label, r})));
+  const flat = floors.flatMap(([k,label]) => (homeRuns[k]||[]).filter(hrHasContent).map(r=>({fk:k, fl:label, r})));
 
   const panelOrder = getPanelOrder(customPanels);
   const groups = {};
@@ -13506,17 +13525,23 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
           return (a.r.name||"").toLowerCase().localeCompare((b.r.name||"").toLowerCase());
         });
         const pulled = rows.filter(x=>x.r.status==="Pulled").length;
+        const gKey = p||"__nopanel";
+        const gOpen = openPanels.has(gKey);
         let lastFk = null;
         return (
-          <div key={p||"__nopanel"} style={{marginBottom:22}}>
-            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,borderBottom:`1px solid ${p?C.accent+"44":C.border}`,paddingBottom:4}}>
+          <div key={gKey} style={{marginBottom:gOpen?22:10}}>
+            <button type="button" onClick={()=>togglePanel(gKey)}
+              style={{display:"flex",width:"100%",alignItems:"baseline",gap:8,marginBottom:gOpen?8:0,
+                background:"none",border:"none",borderRadius:0,padding:"0 0 4px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
+                borderBottom:`1px solid ${p?C.accent+"44":C.border}`}}>
               <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.muted}}>
-                {p||"No Panel Assigned"}
+                {p||"No Panel Assigned"}{gOpen?" ▴":" ▾"}
               </span>
               <span style={{fontSize:10,color:pulled===rows.length?C.green:C.dim}}>
                 {pulled===rows.length?`all ${rows.length} pulled`:`${pulled} of ${rows.length} pulled`}
               </span>
-            </div>
+            </button>
+            {gOpen&&(<>
             <HRColHeaders/>
             {rows.map(x=>{
               const showFloor = x.fk!==lastFk; lastFk = x.fk;
@@ -13527,6 +13552,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
                 </Fragment>
               );
             })}
+            </>)}
           </div>
         );
       })}
@@ -43101,7 +43127,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-18 · App SW version: v346
+**Last manifest update:** 2026-07-20 · App SW version: v347
 
 ---
 
@@ -43217,6 +43243,8 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - Home Runs inner groups collapse too · 'shipped 2026-07-20' · 'SW v348' · the groups INSIDE the Home Runs section start collapsed as tappable index rows — By Panel's panel groups ("Panel A · 25 of 28 pulled", 'openPanels' Set state) and By Floor's floor levels (label + pulled count; 'hrHasContent' filters blank seeded rows out of the counts). Also converged root 'node_modules' onto the '.nosync' symlink pattern (build-env only, gitignored)
+  - All sections start collapsed on the Questions + Home Runs tabs · 'shipped 2026-07-20' · 'SW v347' · Rough/Finish Questions sections and every Home Runs tab section (Panel Schedules — now a real collapsible 'Section' wrapping 'ElectricalPanelSchedules', header deduped — Generator Load Selection, Panels, Home Runs, Load Mapping Notes) open collapsed so the tab reads as a scannable index first
   - Dedicated Questions tab · 'shipped 2026-07-18' · 'SW v346' · "Questions" tab between Finish and Home Runs stacking both phases always-open ('PhaseQuestionsSection' — one shared component now mounted by the Rough tab, Finish tab, and this tab, replacing the duplicated inline gc-map IIFEs); tab label carries a green "N NEW" unseen-answers pill ('countUnseenAnswers' over the v345 'qaSeenAns_*' seen stamps); header "open questions" pill, Job Notes promoted-question jumps, and Activity question todos all retarget to the tab; '?section=Questions' deep links work via the existing TABS.includes guard. Display-only — no new writes, no data-shape change
   - New-answer visibility + sort by date answered · 'shipped 2026-07-17' · 'SW v345' · answered list sorts newest-'answeredAt' first (undated legacy answers sink); per-device seen stamps ('qaSeenAns_<jobId>_<phase>-<floor>' in localStorage, share-page 'prevVisitAt' pattern) drive a "N NEW" pill on the ANSWERED header + the phase Answered chip, a "NEW ANSWER" badge + green border per question, and a relative time on the answered stamp; expanding the answered section marks seen (badges persist for the visit, clear next visit). Display-only — no job-doc writes
 - **Plans tab** · 'shipped' · 'PlansTab'

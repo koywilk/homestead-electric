@@ -1,6 +1,16 @@
 # Dependencies
 node_modules/
 functions/node_modules/
+# .nosync = excluded from iCloud sync/eviction (functions/node_modules lives
+# in node_modules.nosync behind a symlink — see 2026-07-17 deploy-timeout fix)
+# 2026-07-20: root node_modules got the same treatment (CRA builds died the
+# same death). Bare `node_modules` line covers the SYMLINK — the `node_modules/`
+# dir pattern above doesn't match symlinks. `.icloud-dead` is the stranded old
+# tree; safe to trash any time.
+node_modules
+node_modules.nosync/
+functions/node_modules.nosync/
+node_modules.icloud-dead/
 
 # Build output
 build/
