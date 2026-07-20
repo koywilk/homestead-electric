@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-18 · App SW version: v346
+**Last manifest update:** 2026-07-20 · App SW version: v347
 
 ---
 
@@ -120,6 +120,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - All sections start collapsed on the Questions + Home Runs tabs · `shipped 2026-07-20` · `SW v347` · Rough/Finish Questions sections and every Home Runs tab section (Panel Schedules — now a real collapsible `Section` wrapping `ElectricalPanelSchedules`, header deduped — Generator Load Selection, Panels, Home Runs, Load Mapping Notes) open collapsed so the tab reads as a scannable index first
   - Dedicated Questions tab · `shipped 2026-07-18` · `SW v346` · "Questions" tab between Finish and Home Runs stacking both phases always-open (`PhaseQuestionsSection` — one shared component now mounted by the Rough tab, Finish tab, and this tab, replacing the duplicated inline gc-map IIFEs); tab label carries a green "N NEW" unseen-answers pill (`countUnseenAnswers` over the v345 `qaSeenAns_*` seen stamps); header "open questions" pill, Job Notes promoted-question jumps, and Activity question todos all retarget to the tab; `?section=Questions` deep links work via the existing TABS.includes guard. Display-only — no new writes, no data-shape change
   - New-answer visibility + sort by date answered · `shipped 2026-07-17` · `SW v345` · answered list sorts newest-`answeredAt` first (undated legacy answers sink); per-device seen stamps (`qaSeenAns_<jobId>_<phase>-<floor>` in localStorage, share-page `prevVisitAt` pattern) drive a "N NEW" pill on the ANSWERED header + the phase Answered chip, a "NEW ANSWER" badge + green border per question, and a relative time on the answered stamp; expanding the answered section marks seen (badges persist for the visit, clear next visit). Display-only — no job-doc writes
 - **Plans tab** · `shipped` · `PlansTab`

@@ -14380,7 +14380,8 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
 
   return (
     <div style={{marginTop:18}}>
-      <SectionHead label="Panel Schedules" color={C.accent}/>
+      {/* Header comes from the collapsible <Section> wrapper at the mount
+          (2026-07-20, Koy: every Home Runs tab section starts collapsed). */}
       {list.length === 0 && (
         <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>
           No panel schedules yet — add one to print breaker assignments.
@@ -14745,12 +14746,14 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           mental model already exists (panelCounts, breaker overrides, etc.).
           Self-contained: own data on job.electricalPanels, doesn't read or
           write homeRuns. */}
-      <ElectricalPanelSchedules
-        panels={electricalPanels || []}
-        onChange={onElectricalPanelsChange}
-        jobName={jobName||""}
-        jobAddress={jobAddress||""}
-        homeRuns={homeRuns||{}}/>
+      <Section label="Panel Schedules" color={C.accent} defaultOpen={false}>
+        <ElectricalPanelSchedules
+          panels={electricalPanels || []}
+          onChange={onElectricalPanelsChange}
+          jobName={jobName||""}
+          jobAddress={jobAddress||""}
+          homeRuns={homeRuns||{}}/>
+      </Section>
 
       {/* Generator Load Selection — starts collapsed so the section header is
           quick to scan; foremen can expand when they need to pick/review loads. */}
@@ -14951,7 +14954,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         );
       })()}
 
-      <Section label="Home Runs" color={C.blue} defaultOpen={true}>
+      <Section label="Home Runs" color={C.blue} defaultOpen={false}>
         {(()=>{
           const cp=homeRuns.customPanels||DEFAULT_PANELS;
 
@@ -25222,9 +25225,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Questions"&&(
 
             <div>
-              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions" defaultOpen={true}/>
+              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions"/>
               <div style={{marginTop:20}}>
-                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions" defaultOpen={true}/>
+                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions"/>
               </div>
             </div>
 
