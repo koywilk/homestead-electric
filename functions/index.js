@@ -167,12 +167,12 @@ async function removeStaleToken(token) {
   }
 }
 
-async function sendFCM(token, { title, body, jobId, section, view }) {
+async function sendFCM(token, { title, body, jobId, section, view, dedupeKey }) {
   if (!token) return;
   // Stable tag used for OS-level dedup (Android collapses dup notifications with
   // the same tag; web push uses it the same way). Without this, the iOS->Android
   // bridge or a re-fired SW could surface the same notification twice.
-  const tag = jobId ? `job-${jobId}-${section || "general"}` : `homestead-${Date.now()}`;
+  const tag = jobId ? `job-${jobId}-${dedupeKey || section || "general"}` : `homestead-${Date.now()}`;
   // Deep-link target for the click handler — opens the app at the specific job.
   const linkPath = jobId
     ? `/?jobId=${encodeURIComponent(jobId)}${section ? `&section=${encodeURIComponent(section)}` : ""}`
@@ -773,24 +773,24 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToNameIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
-        jobId, section: "Rough",
+        jobId, section: "Questions", dedupeKey: "questions-rough",
       }));
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
-        jobId, section: "Rough",
+        jobId, section: "Questions", dedupeKey: "questions-rough",
       }));
     }
     if (hasNewQuestions(before.finishQuestions, after.finishQuestions)) {
       tasks.push(sendToNameIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
-        jobId, section: "Finish",
+        jobId, section: "Questions", dedupeKey: "questions-finish",
       }));
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
-        jobId, section: "Finish",
+        jobId, section: "Questions", dedupeKey: "questions-finish",
       }));
     }
 
