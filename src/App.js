@@ -23192,7 +23192,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, users=[], identity=null, jobs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, initialTabRequest=null, users=[], identity=null, jobs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -23616,6 +23616,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   };
 
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
+  useEffect(()=>{
+    if(initialTab && TABS.includes(initialTab)) setTab(initialTab);
+  }, [initialTab, initialTabRequest]);
   const [questionJumpTarget, setQuestionJumpTarget] = useState(null);
   const setTabFromJobNote = useCallback((nextTab, targetId=null)=>{
     setQuestionJumpTarget(nextTab==="Questions" ? targetId : null);
@@ -49052,7 +49055,8 @@ function App() {
 
 
   // ── Notification deep-link state ─────────────────────────────────────────
-  // openTab: passed as initialTab to JobDetail when opening via a notification
+  // openTab: request object passed to JobDetail when opening via a notification.
+  // A fresh object makes repeated clicks navigate even when job + section match.
   const [openTab, setOpenTab] = useState(null);
 
   // ── Helper: open a job by ID and jump to a section ───────────────────────
@@ -49060,7 +49064,7 @@ function App() {
     if (!jobId) return;
     const job = jobs.find(j => j.id === jobId);
     if (job) {
-      setOpenTab(section || null);
+      setOpenTab(section ? { section } : null);
       setSelected(job);
     }
   }, [jobs]);
@@ -50643,7 +50647,7 @@ function App() {
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
-            initialTab={openTab} users={users} identity={identity}
+            initialTab={openTab?.section||null} initialTabRequest={openTab} users={users} identity={identity}
             jobs={jobs}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
