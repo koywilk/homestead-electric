@@ -773,24 +773,24 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToNameIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
-        jobId, section: "Rough",
+        jobId, section: "Questions",
       }));
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
-        jobId, section: "Rough",
+        jobId, section: "Questions",
       }));
     }
     if (hasNewQuestions(before.finishQuestions, after.finishQuestions)) {
       tasks.push(sendToNameIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
-        jobId, section: "Finish",
+        jobId, section: "Questions",
       }));
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
-        jobId, section: "Finish",
+        jobId, section: "Questions",
       }));
     }
 
