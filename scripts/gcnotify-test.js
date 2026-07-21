@@ -93,13 +93,24 @@ t("detection payload never carries notes/financials", (() => {
 })());
 
 console.log("contact routing:");
+// Phase 0: routing keys off contact ID, not name — fixtures below use ids
+// exactly like normalizeGcContacts() would stamp onto a real contact.
 const LINK = { contacts: [
-  { name: "Austin", email: true }, { name: "Bex", email: true }, { name: "Owner", email: true }, { name: "TextOnly", email: false },
-], supersByJob: { jobA: ["Austin"], jobB: ["Bex"] } };
+  { id: "c_austin", name: "Austin", email: true }, { id: "c_bex", name: "Bex", email: true },
+  { id: "c_owner", name: "Owner", email: true }, { id: "c_textonly", name: "TextOnly", email: false },
+], supersByJob: { jobA: ["c_austin"], jobB: ["c_bex"] } };
 t("assigned super gets their job", N.emailRecipients(LINK, "jobA").some((c) => c.name === "Austin"));
 t("other-job super excluded", !N.emailRecipients(LINK, "jobA").some((c) => c.name === "Bex"));
 t("unassigned contact gets everything", N.emailRecipients(LINK, "jobA").some((c) => c.name === "Owner"));
 t("email:false excluded", !N.emailRecipients(LINK, "jobA").some((c) => c.name === "TextOnly"));
+// Regression guard for the Phase 0 fix itself: renaming a contact (same id,
+// different display name) must NOT orphan their job assignment or routing —
+// this is exactly the bug that existed when matching was done by raw name.
+const RENAMED_LINK = { contacts: [
+  { id: "c_austin", name: "Austin B. Smith (was just Austin)", email: true },
+], supersByJob: { jobA: ["c_austin"] } };
+t("renaming a contact doesn't orphan their assignment (matched by id)",
+  N.emailRecipients(RENAMED_LINK, "jobA").some((c) => c.id === "c_austin"));
 
 console.log("quiet hours:");
 t("9pm–7am is quiet", N.inQuietHours(22) && N.inQuietHours(3) && N.inQuietHours(6));

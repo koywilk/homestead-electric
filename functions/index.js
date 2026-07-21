@@ -32,6 +32,40 @@ function requireAppKey(data) {
   }
 }
 
+// ─── Admin gate for the GC-portal office callables (Phase 0 hardening) ───────
+// requireAppKey alone only proves "this call came from someone who read the
+// public JS bundle" — a low bar for functions that can now create/revoke real
+// contractor-facing links and read the GC request inbox. The app has no
+// Firebase Auth (see note above), so the next-strongest check available is the
+// SAME PIN a real admin already has to enter to open the app at all
+// (settings/users, checked client-side in UserPicker). requireAdmin verifies
+// that PIN server-side too, so a caller must know a specific admin's live PIN
+// — not a string baked into shipped JS that never changes without a redeploy.
+// Mirrors the client's getAccess()/PERMISSIONS["users.manage"] tier check
+// (src/App.js ~L3225-3281) — kept in sync manually; there's no shared module
+// between client and functions in this repo.
+const GC_ADMIN_LEGACY_ACCESS = { admin: "admin", justin: "admin", jeromy: "manager", foreman: "standard", lead: "limited", crew: "limited" };
+function gcAdminAccessOf(user) {
+  if (!user) return "limited";
+  if (user.access) return user.access;
+  return GC_ADMIN_LEGACY_ACCESS[user.role] || "limited";
+}
+async function requireAdmin(data) {
+  requireAppKey(data); // both gates must pass — defense in depth, not either/or
+  const by = String((data && data.by) || "").trim();
+  const pin = String((data && data.pin) || "");
+  if (!by || !pin) {
+    throw new functions.https.HttpsError("permission-denied", "Admin verification required for the contractor portal.");
+  }
+  const users = await getUsers();
+  const user = users.find((u) => String((u && u.name) || "").trim().toLowerCase() === by.toLowerCase());
+  const access = gcAdminAccessOf(user);
+  if (!user || !user.pin || String(user.pin) !== pin || !["admin", "manager"].includes(access)) {
+    throw new functions.https.HttpsError("permission-denied", "Not authorized for the contractor portal.");
+  }
+  return user;
+}
+
 // ─── Timezone for scheduled functions ────────────────────────
 const TZ = "America/Denver"; // Mountain Time
 
@@ -5531,7 +5565,14 @@ function normalizeGcContacts(arr) {
   const clip = (s, n) => gcPortal.stripHtml(String(s == null ? "" : s)).slice(0, n);
   return (Array.isArray(arr) ? arr : []).slice(0, 20).map((c) => {
     const addr = clip(c && c.emailAddr, 120).trim();
+    // Preserve a contact's existing stable id across edits (the client sends
+    // it back on every save); mint a fresh one only for a genuinely new
+    // contact. This is what lets supersByJob/email-routing key off id instead
+    // of name (Phase 0 — renaming a contact must never orphan them).
+    const existingId = clip(c && c.id, 24);
+    const id = /^c_[a-f0-9]{6,24}$/.test(existingId) ? existingId : gcPortal.makeContactId();
     return {
+      id,
       name: clip(c && c.name, 60),
       role: clip(c && c.role, 40),
       emailAddr: GC_EMAIL_RE.test(addr) ? addr : "",
@@ -5543,7 +5584,7 @@ function normalizeGcContacts(arr) {
 }
 
 exports.gcPortalCreateLink = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const label = String(data.label || "").trim();
   const gcRaw = String(data.gc || "").trim();
   const gcKey = gcPortal.gcKeyOf(gcRaw);
@@ -5575,7 +5616,7 @@ exports.gcPortalCreateLink = functions.https.onCall(async (data) => {
 });
 
 exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const token = String(data.token || "");
   const ref = db.collection("gc_links").doc(token);
   const snap = await ref.get();
@@ -5661,13 +5702,17 @@ exports.gcPortalOnJobDelete = functions.firestore
 // Update office-managed link fields (contacts, accent, label). Explicit field
 // allowlist — never a blind merge of caller data onto the link doc.
 exports.gcPortalUpdateLink = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const token = String(data.token || "");
   const ref = db.collection("gc_links").doc(token);
   const snap = await ref.get();
   if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such link");
   const patch = {};
-  if (Array.isArray(data.contacts)) patch.contacts = data.contacts.slice(0, 20);
+  // Phase 0 fix: this used to slice() the raw caller array straight onto the
+  // doc — skipping email validation AND skipping id preservation, which broke
+  // the whole point of keying assignments by contact id instead of name.
+  // Always route through the same normalizer create/self-service use.
+  if (Array.isArray(data.contacts)) patch.contacts = normalizeGcContacts(data.contacts);
   if (typeof data.accentColor === "string" && (data.accentColor === "" || /^#[0-9a-fA-F]{6}$/.test(data.accentColor))) patch.accentColor = data.accentColor;
   if (typeof data.logoUrl === "string") patch.logoUrl = gcPortal.cleanLogoUrl(data.logoUrl);
   if (typeof data.label === "string" && data.label.trim()) patch.label = data.label.trim();
@@ -5687,7 +5732,7 @@ exports.gcPortalUpdateLink = functions.https.onCall(async (data) => {
 });
 
 exports.gcPortalBackfill = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const token = String(data.token || "");
   const snap = await db.collection("gc_links").doc(token).get();
   if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such link");
@@ -5695,26 +5740,59 @@ exports.gcPortalBackfill = functions.https.onCall(async (data) => {
   return { ok: true, jobCount };
 });
 
+// Basic per-token throttle on the public, token-authed submit endpoint (Phase 0
+// — previously a leaked/forwarded link had no ceiling on how many gc_requests
+// it could file or how many times it could rewrite supersByJob). Firestore-
+// backed (function instances share no memory) fixed window: resets every 10
+// minutes, caps at 40 submissions per token per window — generous for a real
+// contractor actively working a job, tight enough to blunt abuse of a leaked
+// link. Runs inside a transaction so concurrent submits from the same token
+// can't race past the cap.
+const GC_SUBMIT_WINDOW_MS = 10 * 60 * 1000;
+const GC_SUBMIT_MAX_PER_WINDOW = 40;
+async function gcCheckRateLimit(token) {
+  const ref = db.collection("gc_rate").doc(token);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const now = Date.now();
+    const d = snap.exists ? snap.data() : null;
+    if (!d || !d.windowStart || (now - d.windowStart) > GC_SUBMIT_WINDOW_MS) {
+      tx.set(ref, { windowStart: now, count: 1 });
+      return;
+    }
+    if (d.count >= GC_SUBMIT_MAX_PER_WINDOW) {
+      throw new functions.https.HttpsError("resource-exhausted", "Too many requests — please slow down and try again in a few minutes.");
+    }
+    tx.update(ref, { count: d.count + 1 });
+  });
+}
+
 // ─── GC PORTAL: two-way funnel (Piece 4) ────────────────────────────────────
 // The GC portal calls gcPortalSubmit with their link TOKEN (the capability —
 // NOT requireAppKey; the token is the auth). All GC-side writes route through
 // here so no client ever writes gc_links, gc_portal, or gc_requests directly
-// (rules deny all three). LINK self-service (assign super / contacts) applies
-// immediately to the link doc; JOB-scoped actions (date/thread/punch/answer/
-// file) file a gc_requests doc for the office to review — NEVER jobs/{id}.
+// (rules deny all three). LINK self-service (assign super) applies immediately
+// to the link doc; JOB-scoped actions (date/thread/punch/answer/file) file a
+// gc_requests doc for the office to review — NEVER jobs/{id}. Contact/roster
+// changes (Phase 0 fix) ALSO now file a gc_requests doc instead of writing
+// live — that field drives who receives every future digest/instant email,
+// so it shouldn't change without a human looking at it first.
 exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   const token = String(data.token || "");
   const linkSnap = await db.collection("gc_links").doc(token).get();
   if (!linkSnap.exists) throw new functions.https.HttpsError("permission-denied", "invalid link");
   const link = linkSnap.data();
   if (link.revoked === true) throw new functions.https.HttpsError("permission-denied", "link revoked");
+  await gcCheckRateLimit(token);
   const type = String(data.type || "");
   const jobId = String(data.jobId || "");
   const clip = (s, n) => gcPortal.stripHtml(String(s == null ? "" : s)).slice(0, n || 2000);
 
-  // LINK self-service — applied immediately (the GC owns their own team roster).
+  // LINK self-service — applied immediately (the GC owns which of their own
+  // team runs a given job). `supers` is a list of CONTACT IDS, not names
+  // (Phase 0 fix) — the client resolves id↔name for display.
   if (type === "assign") {
-    const supers = Array.isArray(data.supers) ? data.supers.map((s) => clip(s, 60)).filter(Boolean).slice(0, 6) : [];
+    const supers = Array.isArray(data.supers) ? data.supers.map((s) => clip(s, 40)).filter(Boolean).slice(0, 6) : [];
     // jobId becomes a Firestore FIELD PATH key (supersByJob.<jobId>), so verify
     // it's a real job on THIS portal before writing — prevents arbitrary/oversized
     // keys bloating the link doc (review finding). Doc ids are short numeric strings.
@@ -5725,8 +5803,28 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
     return { ok: true, applied: "assign" };
   }
   if (type === "contact") {
-    await linkSnap.ref.update({ contacts: normalizeGcContacts(data.contacts), updatedAt: new Date().toISOString() });
-    return { ok: true, applied: "contact" };
+    // Phase 0 fix: this used to write link.contacts live, self-service, with
+    // no office review — a single call could silently hijack who gets every
+    // future email for this GC. Now it files a request like everything else
+    // job-scoped; the office applies it via gcPortalUpdateLink after looking.
+    const proposed = normalizeGcContacts(data.contacts);
+    const req = {
+      token, portalId: link.portalId, gcKey: link.gcKey, gcLabel: clip(link.label, 80),
+      type: "contact", jobId: "", jobName: "",
+      by: clip(data.by, 60),
+      text: "Proposed a change to who's on the team roster.",
+      contactsProposed: proposed,
+      status: "new",
+      createdAt: new Date().toISOString(),
+    };
+    const ref = await db.collection("gc_requests").add(req);
+    try {
+      await sendToNameIfWanted("Koy", "gc_request", {
+        title: "📥 " + (req.gcLabel || "Contractor") + " — portal request",
+        body: "proposed a team roster change" + (req.by ? " (" + req.by + ")" : ""),
+      });
+    } catch (e) { functions.logger.warn("[gcPortal] office alert failed (non-fatal)", e.message); }
+    return { ok: true, requestId: ref.id, filed: "contact", pendingReview: true };
   }
 
   // JOB-scoped → gc_requests office queue. Verify the job is actually on THIS
@@ -5807,39 +5905,87 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
 
 // Office: list open GC requests (admin SDK — client list denied).
 exports.gcPortalListRequests = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const includeHandled = data.includeHandled === true;
-  let q = db.collection("gc_requests").orderBy("createdAt", "desc").limit(300);
-  const snap = await q.get();
-  const reqs = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-    .filter((r) => includeHandled || r.status === "new");
+  // Phase 0 fix: always fetch EVERY still-open request via an equality-only
+  // query (no composite index needed — a lone equality clause never requires
+  // one) so a still-open request can never silently age out of a capped
+  // recent-activity window, however many total requests pile up. Previously
+  // this was orderBy(createdAt desc).limit(300) filtered in-memory, so an old
+  // "new" request could drop out of the 300-doc window entirely.
+  const openSnap = await db.collection("gc_requests").where("status", "==", "new").get();
+  const byId = new Map();
+  openSnap.docs.forEach((d) => byId.set(d.id, { id: d.id, ...d.data() }));
+  if (includeHandled) {
+    const recentSnap = await db.collection("gc_requests").orderBy("createdAt", "desc").limit(300).get();
+    recentSnap.docs.forEach((d) => { if (!byId.has(d.id)) byId.set(d.id, { id: d.id, ...d.data() }); });
+  }
+  const reqs = Array.from(byId.values()).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   return { requests: reqs };
 });
 
-// Office: mark a request handled/dismissed (the actual apply-to-job happens
-// client-side via the crew app's transactional merge, tagged fromGC).
+// Office: mark a request handled/dismissed. "contact" requests are simple
+// link-doc field updates (no job/three-way-merge involved), so applied HERE
+// rather than depending on the client to remember to; everything else
+// (date/thread/punch/answer/file/rsvp) still applies client-side via the crew
+// app's transactional merge, tagged fromGC.
 exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const id = String(data.id || "");
   const status = ["applied", "dismissed", "new"].indexOf(String(data.status)) !== -1 ? data.status : "applied";
   const ref = db.collection("gc_requests").doc(id);
-  if (!(await ref.get()).exists) throw new functions.https.HttpsError("not-found", "no such request");
+  const snap = await ref.get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such request");
+  const req = snap.data() || {};
+  if (status === "applied" && req.type === "contact" && Array.isArray(req.contactsProposed) && req.token) {
+    await db.collection("gc_links").doc(req.token).update({
+      contacts: normalizeGcContacts(req.contactsProposed),
+      updatedAt: new Date().toISOString(),
+    });
+  }
   await ref.update({ status, handledBy: String(data.by || ""), handledAt: new Date().toISOString() });
+  // Contractor-visible confirmation (Phase 0 fix) — write a compact status
+  // marker onto the LINK doc, which the portal already subscribes to live
+  // (GCPortalPage's onSnapshot), so "did they see my request" is never
+  // unknowable from the contractor's side. Capped + oldest-trimmed so one
+  // busy link can't grow this field unbounded.
+  if (req.token && id) {
+    try {
+      const linkRef = db.collection("gc_links").doc(req.token);
+      const linkSnap = await linkRef.get();
+      if (linkSnap.exists) {
+        const curData = linkSnap.data() || {};
+        const cur = (curData.requestStatuses && typeof curData.requestStatuses === "object") ? curData.requestStatuses : {};
+        const next = { ...cur, [id]: { status, respondedAt: new Date().toISOString() } };
+        const keys = Object.keys(next);
+        if (keys.length > 60) {
+          keys.sort((a, b) => String((next[a] || {}).respondedAt || "").localeCompare(String((next[b] || {}).respondedAt || "")));
+          keys.slice(0, keys.length - 60).forEach((k) => delete next[k]);
+        }
+        await linkRef.update({ requestStatuses: next });
+      }
+    } catch (e) { functions.logger.warn("[gcPortal] requestStatuses write failed (non-fatal)", e.message); }
+  }
   return { ok: true };
 });
 
 // Office link list. gc_links client-list is DENIED (token secrecy), so the
 // office reads via this admin-SDK callable. Returns tokens — that's fine, the
-// office app is trusted (requireAppKey); the secrecy invariant is about OUTSIDE
+// office app is trusted (requireAdmin); the secrecy invariant is about OUTSIDE
 // clients, not Homestead's own management UI.
 exports.gcPortalListLinks = functions.https.onCall(async (data) => {
-  requireAppKey(data);
+  await requireAdmin(data);
   const snap = await db.collection("gc_links").orderBy("createdAt", "desc").limit(300).get();
   return { links: snap.docs.map((d) => {
     const l = d.data();
     return {
       token: l.token, slug: l.slug, label: l.label, gc: l.gc, gcKey: l.gcKey, portalId: l.portalId,
       accentColor: l.accentColor || "", logoUrl: l.logoUrl || "", contacts: Array.isArray(l.contacts) ? l.contacts : [],
+      // Phase 0 fix: jobIdsInclude/Exclude were computed server-side but never
+      // returned to the office UI at all — GCPortalManager had no way to show
+      // or edit an existing link's hidden/force-included jobs.
+      jobIdsInclude: Array.isArray(l.jobIdsInclude) ? l.jobIdsInclude : [],
+      jobIdsExclude: Array.isArray(l.jobIdsExclude) ? l.jobIdsExclude : [],
       supersByJob: (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {},
       revoked: !!l.revoked, createdAt: l.createdAt || "", createdBy: l.createdBy || "",
     };
@@ -5869,6 +6015,11 @@ async function gcLoadMailConfig() {
     key: cfg.key || "",
     from: cfg.from || "updates@homesteadelectric.net",
     origin: String(cfg.origin || "https://app.homesteadelectric.net").replace(/\/+$/, ""),
+    // Phase 0 fix (Fable verification pass): this was dropped from the cached
+    // config object entirely, so gcSendGridWebhook's signature check always
+    // read undefined and silently no-op'd on every event — bounce tracking
+    // was dead even after Koy set the key per the rollout checklist.
+    webhookPublicKey: cfg.webhookPublicKey || "",
   };
   _gcMailCfgAt = Date.now();
   return _gcMailCfg;
@@ -5895,6 +6046,106 @@ async function sendGcMail({ to, subject, html }) {
     return true;
   } catch (e) { functions.logger.warn("[gcMail] send error", e.message); return false; }
 }
+// Phase 0 fix: send a REAL digest render to a one-off address (Koy's own
+// inbox, or anyone else he wants to check with) so he can verify SendGrid
+// setup, DNS/SPF/DKIM, HTML rendering, and subject lines BEFORE any real
+// contractor ever receives one. Never touches gc_notify_queue or any real
+// contact — this is a preview send, full stop, capped hard at one address.
+exports.gcPortalSendTestMail = functions.https.onCall(async (data) => {
+  await requireAdmin(data);
+  const token = String(data.token || "");
+  const to = String(data.to || "").trim();
+  if (!GC_EMAIL_RE.test(to)) throw new functions.https.HttpsError("invalid-argument", "a valid 'to' address is required");
+  const linkSnap = await db.collection("gc_links").doc(token).get();
+  if (!linkSnap.exists) throw new functions.https.HttpsError("not-found", "no such link");
+  const link = linkSnap.data();
+  const cfg = await gcLoadMailConfig();
+  if (!cfg.key) throw new functions.https.HttpsError("failed-precondition", "gc_config/mail isn't set yet — nothing to test. Add a SendGrid key first.");
+  const jobsSnap = await db.collection("gc_portal").doc(link.portalId).collection("jobs").get();
+  const jobs = jobsSnap.docs.map((d) => d.data()).filter(Boolean);
+  const dg = gcNotify.digestSections(jobs);
+  const html = gcNotify.renderGcEmail({
+    gcLabel: link.label, accent: link.accentColor,
+    title: "Tonight's update — TEST SEND, ignore if unexpected",
+    intro: dg.hasContent ? dg.summary : "(This portal has no active jobs right now — this is just a rendering test.)",
+    sectionsHtml: dg.sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, link.token),
+  });
+  const ok = await sendGcMail({ to, subject: "[TEST] " + (link.label ? link.label + " — " : "") + "your jobs tonight", html });
+  if (!ok) throw new functions.https.HttpsError("internal", "Send failed — check gc_config/mail (key/from/domain auth) and the function logs.");
+  return { ok: true, sentTo: to, jobCount: jobs.length };
+});
+
+// ─── SendGrid bounce/complaint webhook (Phase 0 fix) ─────────────────────────
+// Previously a failing send just retried 5 times over 5-minute intervals then
+// silently dropped — nobody, not Koy, not anyone, was ever told a contractor's
+// email was bouncing. This records every bounce/dropped/spamreport/blocked
+// event SendGrid reports, verified via SendGrid's Event Webhook signature (an
+// ECDSA/SHA256 signature over timestamp+body — NOT requireAppKey/requireAdmin,
+// since SendGrid is the caller, not the app or an admin). No new npm
+// dependency: Node's built-in crypto.verify covers this without installing
+// @sendgrid/eventwebhook. Fails safe both ways: if no verification key is
+// configured yet, this just logs and no-ops rather than trusting an
+// unverifiable POST; if the signature doesn't check out, the event is dropped.
+function gcVerifySendGridSignature(publicKeyB64, signatureB64, timestamp, rawBody) {
+  try {
+    const { createVerify } = require("crypto");
+    const der = Buffer.from(signatureB64, "base64");
+    const cleanB64 = String(publicKeyB64 || "").replace(/\s+/g, "");
+    const keyPem =
+      "-----BEGIN PUBLIC KEY-----\n" +
+      cleanB64.match(/.{1,64}/g).join("\n") +
+      "\n-----END PUBLIC KEY-----";
+    const verifier = createVerify("sha256");
+    verifier.update(Buffer.from(String(timestamp) + rawBody));
+    verifier.end();
+    return verifier.verify(keyPem, der);
+  } catch (e) {
+    functions.logger.warn("[gcBounce] signature verify error", e.message);
+    return false;
+  }
+}
+exports.gcSendGridWebhook = functions.https.onRequest(async (req, res) => {
+  try {
+    const cfg = await gcLoadMailConfig();
+    const pubKey = cfg.webhookPublicKey || "";
+    const sig = req.get("X-Twilio-Email-Event-Webhook-Signature") || "";
+    const ts = req.get("X-Twilio-Email-Event-Webhook-Timestamp") || "";
+    if (!pubKey) {
+      // Not configured yet — safe no-op (matches sendGcMail's fail-safe
+      // posture). Return 200 so SendGrid doesn't retry-storm an unconfigured
+      // endpoint.
+      functions.logger.info("[gcBounce] webhookPublicKey not set — event ignored");
+      res.status(200).send("ok");
+      return;
+    }
+    const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || []);
+    if (!sig || !ts || !gcVerifySendGridSignature(pubKey, sig, ts, rawBody)) {
+      functions.logger.warn("[gcBounce] signature check failed — dropping event");
+      res.status(400).send("bad signature");
+      return;
+    }
+    const events = Array.isArray(req.body) ? req.body : [];
+    const RELEVANT = new Set(["bounce", "dropped", "spamreport", "blocked"]);
+    const ops = [];
+    events.forEach((e) => {
+      if (!e || !RELEVANT.has(String(e.event))) return;
+      ops.push(db.collection("gc_bounces").add({
+        email: String(e.email || "").slice(0, 200),
+        event: String(e.event || "").slice(0, 40),
+        reason: String(e.reason || e.type || "").slice(0, 300),
+        sgEventId: String(e.sg_event_id || "").slice(0, 200),
+        createdAt: new Date().toISOString(),
+      }));
+    });
+    await Promise.all(ops);
+    if (ops.length) functions.logger.info("[gcBounce] recorded", { count: ops.length });
+    res.status(200).send("ok");
+  } catch (e) {
+    functions.logger.warn("[gcBounce] handler error (non-fatal)", e.message);
+    res.status(200).send("ok"); // never make SendGrid retry-storm on our bug
+  }
+});
+
 function gcLocalHour() {
   try { return (parseInt(new Date().toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }), 10) || 0) % 24; }
   catch (e) { return 12; }
@@ -5915,16 +6166,18 @@ function gcDigestRecipients(linksForPortal) {
   (linksForPortal || []).forEach((l) => {
     const contacts = Array.isArray(l.contacts) ? l.contacts : [];
     const sbj = (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {};
-    const assigned = {}; // name(lower) → Set(jobIds) assigned on this link
+    // Keyed by contact ID, not name (Phase 0 fix) — renaming a contact must
+    // never silently drop them from digest scoping.
+    const assigned = {}; // contact id → Set(jobIds) assigned on this link
     Object.keys(sbj).forEach((jid) => (Array.isArray(sbj[jid]) ? sbj[jid] : []).forEach((s) => {
-      const k = String(s || "").trim().toLowerCase(); if (k) (assigned[k] = assigned[k] || new Set()).add(jid);
+      const k = String(s || "").trim(); if (k) (assigned[k] = assigned[k] || new Set()).add(jid);
     }));
     contacts.forEach((c) => {
       if (!c || c.email === false) return;
       const addr = String(c.emailAddr || "").trim().toLowerCase();
       if (!GC_EMAIL_RE.test(addr)) return;
-      const nm = String(c.name || "").trim().toLowerCase();
-      const theirJobs = nm && assigned[nm] ? assigned[nm] : null; // null = all
+      const id = String(c.id || "").trim();
+      const theirJobs = id && assigned[id] ? assigned[id] : null; // null = all
       const prev = map.get(addr);
       if (!prev) map.set(addr, { jobIds: theirJobs ? new Set(theirJobs) : null });
       else if (prev.jobIds === null || theirJobs === null) prev.jobIds = null;

@@ -210,6 +210,20 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // gc_rate/{token}: Phase 0 fixed-window rate-limit counters for
+    // gcPortalSubmit (gcCheckRateLimit). Function-only — a client that could
+    // read or reset its own counter would defeat the whole point of the limit.
+    match /gc_rate/{token} {
+      allow read, write: if false;
+    }
+
+    // gc_bounces/{id}: Phase 0 SendGrid bounce/complaint webhook records
+    // (gcSendGridWebhook). Function-only — written by the webhook handler via
+    // admin SDK, read only by future admin tooling (also via admin SDK).
+    match /gc_bounces/{id} {
+      allow read, write: if false;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {

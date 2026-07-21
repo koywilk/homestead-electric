@@ -74,6 +74,20 @@ function httpsCallable(functionsInstance, name, opts) {
   return (payload = {}) => raw({ ...(payload || {}), _appKey: APP_CALL_KEY });
 }
 
+// Phase 0 hardening: the 8 GC-portal OFFICE callables (create/update/revoke/
+// backfill/list-links/list-requests/handle-request/send-test-mail) now also
+// require the caller's live admin PIN server-side (requireAdmin in
+// functions/index.js) — the static _appKey above proves "this is the app,"
+// not "this is an admin," and those callables can create/revoke real
+// contractor-facing links. `identity` already carries `.pin` in memory (the
+// same PIN the user entered to open the app — see UserPicker); this just
+// forwards name+PIN alongside the usual _appKey. Never used for the public,
+// token-authed gcPortalSubmit — that's a different trust model entirely.
+function gcAdminCallable(name, identity) {
+  const raw = httpsCallable(functions, name);
+  return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "" });
+}
+
 // ── FieldInk (TraceVault) read-only link ─────────────────────────────────────
 // The crew's PDF-markup app lives in its OWN Firebase project ("field-ink").
 // Its `shares` collection is public-read by design (it powers the GC live-link
@@ -39968,18 +39982,29 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
   const [busy, setBusy]   = useState("");     // request id in flight
   const [showDone, setShowDone] = useState(false);
 
-  const refresh = () => httpsCallable(functions,"gcPortalListRequests")({ includeHandled: showDone })
+  const refresh = () => gcAdminCallable("gcPortalListRequests", identity)({ includeHandled: showDone })
     .then(r => setReqs(r.data.requests||[]))
     .catch(e => { setErr(e.message||"Failed to load requests"); setReqs([]); });
   useEffect(() => { refresh(); }, [showDone]);
 
-  const handle = (id, status) => httpsCallable(functions,"gcPortalHandleRequest")({ id, status, by: identity?.name || "" });
+  const handle = (id, status) => gcAdminCallable("gcPortalHandleRequest", identity)({ id, status, by: identity?.name || "" });
 
   // Apply the request's content to the real job (answer/punch), then mark it
   // applied. Returns silently if the job is gone (still marks handled).
   const apply = async (req) => {
     setBusy(req.id); setErr("");
     try {
+      // P0-6: "contact" requests carry no jobId at all — they're a proposed
+      // change to the link's contact roster, not a job mutation. The backend
+      // (gcPortalHandleRequest) applies contactsProposed onto gc_links itself
+      // when status flips to "applied", so the client just needs to send that
+      // status — it must NOT fall into the job-lookup/structural-mutation
+      // logic below, which assumes every request has a matching job.
+      if (req.type === "contact") {
+        await handle(req.id, "applied");
+        await refresh();
+        setBusy(""); return;
+      }
       const job = (jobs||[]).find(j => j.id === req.jobId);
       const who = req.by ? (req.by + " · " + (req.gcLabel||"GC")) : ("GC — " + (req.gcLabel||""));
       // answer/punch actually MUTATE the job; date/thread/file/rsvp are
@@ -40039,7 +40064,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
     setBusy("");
   };
 
-  const TYPE = { answer:"Answered a question", punch:"Added an item", date:"Suggested a date", thread:"Sent a message", file:"Shared a file", rsvp:"Replied" };
+  const TYPE = { answer:"Answered a question", punch:"Added an item", date:"Suggested a date", thread:"Sent a message", file:"Shared a file", rsvp:"Replied", contact:"Proposed a team roster change" };
   // Human anchor for date/answer itemIds so finish_start vs matterport vs RT
   // aren't indistinguishable in the office inbox (v343 audit High).
   const anchorOf = (r) => {
@@ -40051,7 +40076,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
     if (r.type === "answer") return "Question";
     return "";
   };
-  const applyLabel = (t) => (t==="answer"||t==="punch") ? "Apply to job" : "Mark handled";
+  const applyLabel = (t) => (t==="answer"||t==="punch") ? "Apply to job" : (t==="contact") ? "Apply roster change" : "Mark handled";
   const B = { btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
     gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"5px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
   const openReqs = (reqs||[]).filter(r => showDone || r.status === "new");
@@ -40072,12 +40097,21 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
           <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
             <b style={{color:"#2E477D",fontSize:13}}>{r.gcLabel||"Contractor"}</b>
             <span style={{fontSize:12,color:"#1B1F24"}}>· {TYPE[r.type]||r.type}{anchorOf(r)?" · "+anchorOf(r):""}</span>
-            <span style={{fontSize:12,color:"#5E6670"}}>on {r.jobName||r.jobId}</span>
+            {r.type!=="contact" ? <span style={{fontSize:12,color:"#5E6670"}}>on {r.jobName||r.jobId}</span> : null}
             {r.status!=="new" ? <span style={{fontSize:10.5,fontWeight:700,color:"#5E6670",background:"#F0F1F4",borderRadius:99,padding:"1px 8px"}}>{String(r.status).toUpperCase()}</span> : null}
             <span style={{marginLeft:"auto",fontSize:11,color:"#8A93A3"}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
           </div>
           {r.date ? <div style={{fontSize:13,color:"#1B1F24",marginBottom:4}}><b>Date:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
           {r.text ? <div style={{fontSize:12.5,color:"#3A414C",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:"7px 10px",marginBottom:6,whiteSpace:"pre-wrap"}}>{r.text}</div> : null}
+          {r.type==="contact" && Array.isArray(r.contactsProposed) ? (
+            <div style={{fontSize:12.5,color:"#3A414C",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:"7px 10px",marginBottom:6}}>
+              <div style={{fontWeight:600,marginBottom:3,color:"#1B1F24"}}>Proposed roster ({r.contactsProposed.length}):</div>
+              {r.contactsProposed.map((c,i)=>(
+                <div key={c.id||i}>{c.name}{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}</div>
+              ))}
+              {!r.contactsProposed.length ? <div style={{color:"#8A93A3"}}>(empty roster — this would remove all contacts)</div> : null}
+            </div>
+          ) : null}
           {r.fileUrl ? <div style={{marginBottom:6}}><a href={r.fileUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
           {r.status==="new" ? (
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -40091,19 +40125,80 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
   );
 }
 
+// Reusable contact list editor — used both by the "create a link" form and by
+// the per-link "Edit" form, so adding/removing contacts (P0-1) works the same
+// way in both places. Owns its own draft-input state; reports changes upward
+// via onChange(nextContactsArray).
+function GCContactEditor({ contacts, onChange }) {
+  const [draft, setDraft] = useState({ name:"", role:"", emailAddr:"", phone:"" });
+  // Independent verification pass (Fable) flagged that remove+re-add was the
+  // ONLY way to fix a contact's name/email — which mints a NEW id server-side
+  // and silently orphans every supersByJob entry pointing at the old one,
+  // undoing the whole point of the P0-2 id-based-routing fix. In-place edit
+  // preserves the existing contact object (id/email/text flags) and only
+  // overwrites the four editable fields, so a typo fix never breaks routing.
+  const [editIdx, setEditIdx] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
+  const B = { field:{border:"1px solid #CDD9EC",borderRadius:8,padding:"7px 10px",font:"13px system-ui",width:"100%",boxSizing:"border-box"},
+    gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"6px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
+  const startEditRow = (i, c) => { setEditIdx(i); setEditDraft({ name:c.name||"", role:c.role||"", emailAddr:c.emailAddr||"", phone:c.phone||"" }); };
+  const saveEditRow = (i) => {
+    const next = (contacts||[]).slice();
+    const c = next[i];
+    next[i] = { ...c, name: editDraft.name.trim() || c.name, role: editDraft.role.trim(), emailAddr: editDraft.emailAddr.trim(), phone: editDraft.phone.trim() };
+    onChange(next);
+    setEditIdx(null); setEditDraft(null);
+  };
+  return (
+    <Fragment>
+      {(contacts||[]).map((c,i)=>(
+        editIdx===i ? (
+          <div key={c.id||i} style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6,alignItems:"center",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:6}}>
+            <input value={editDraft.name} onChange={e=>setEditDraft({...editDraft,name:e.target.value})} placeholder="Name" style={{...B.field,width:110}}/>
+            <input value={editDraft.role} onChange={e=>setEditDraft({...editDraft,role:e.target.value})} placeholder="Role" style={{...B.field,width:90}}/>
+            <input value={editDraft.emailAddr} onChange={e=>setEditDraft({...editDraft,emailAddr:e.target.value})} placeholder="Email (for updates)" style={{...B.field,width:170}}/>
+            <input value={editDraft.phone} onChange={e=>setEditDraft({...editDraft,phone:e.target.value})} placeholder="Phone" style={{...B.field,width:120}}/>
+            <button onClick={()=>saveEditRow(i)} style={B.gbtn}>Save</button>
+            <button onClick={()=>{ setEditIdx(null); setEditDraft(null); }} style={B.gbtn}>Cancel</button>
+          </div>
+        ) : (
+          <div key={c.id||i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,fontSize:12.5}}>
+            <span style={{flex:1}}><b>{c.name}</b>{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}</span>
+            <button onClick={()=>startEditRow(i,c)} style={{...B.gbtn,padding:"2px 8px"}}>edit</button>
+            <button onClick={()=>onChange(contacts.filter((_,k)=>k!==i))} style={{...B.gbtn,padding:"2px 8px",borderColor:"#E5B4B4",color:"#8A2A2A"}}>remove</button>
+          </div>
+        )
+      ))}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:4}}>
+        <input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="Name" style={{...B.field,width:110}}/>
+        <input value={draft.role} onChange={e=>setDraft({...draft,role:e.target.value})} placeholder="Role" style={{...B.field,width:90}}/>
+        <input value={draft.emailAddr} onChange={e=>setDraft({...draft,emailAddr:e.target.value})} placeholder="Email (for updates)" style={{...B.field,width:170}}/>
+        <input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} placeholder="Phone" style={{...B.field,width:120}}/>
+        <button onClick={()=>{ if(draft.name.trim()){ onChange([...(contacts||[]),{name:draft.name.trim(),role:draft.role.trim()||"Super",emailAddr:draft.emailAddr.trim(),phone:draft.phone.trim(),email:true,text:true}]); setDraft({name:"",role:"",emailAddr:"",phone:""}); } }} style={B.gbtn}>+ Add</button>
+      </div>
+      <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Email is where their daily 8 PM update + instant alerts go. Phone is for texts (coming soon).</div>
+    </Fragment>
+  );
+}
+
 function GCPortalManager({ jobs, identity }) {
   const [links, setLinks] = useState(null);   // null=loading
   const [err, setErr] = useState("");
-  const [busy, setBusy] = useState("");        // token or "create" while a call is in flight
+  const [busy, setBusy] = useState("");        // token (or token+"_test"/"create") while a call is in flight
   const [gcName, setGcName] = useState("");
   const [accent, setAccent] = useState("#3B5BA5");
   const [logoUrl, setLogoUrl] = useState("");
   const [excluded, setExcluded] = useState(() => new Set());
   const [contacts, setContacts] = useState([]);
-  const [cDraft, setCDraft] = useState({ name:"", role:"", emailAddr:"", phone:"" });
   const [created, setCreated] = useState(null); // {token, slug, jobCount}
+  const [editing, setEditing] = useState(null);   // token of the link currently open for edit, or null
+  const [editDraft, setEditDraft] = useState(null); // {label, accentColor, logoUrl, contacts, jobIdsExclude:Set}
+  const [testTo, setTestTo] = useState({});      // token -> draft email address for "send test digest"
+  const [testSent, setTestSent] = useState({});  // token -> confirmation message
 
-  const refresh = () => httpsCallable(functions,"gcPortalListLinks")({})
+  const gc = (name, payload) => gcAdminCallable(name, identity)(payload);
+
+  const refresh = () => gc("gcPortalListLinks",{})
     .then(r => setLinks(r.data.links||[]))
     .catch(e => { setErr(e.message||"Failed to load links"); setLinks([]); });
   useEffect(() => { refresh(); }, []);
@@ -40118,7 +40213,7 @@ function GCPortalManager({ jobs, identity }) {
     setBusy("create"); setErr(""); setCreated(null);
     try {
       const jobIdsExclude = matched.filter(j => excluded.has(j.id)).map(j => j.id);
-      const r = await httpsCallable(functions,"gcPortalCreateLink")({
+      const r = await gc("gcPortalCreateLink",{
         label: gcName.trim(), gc: gcName.trim(),
         contacts, accentColor: accent, logoUrl: logoUrl.trim(), jobIdsExclude, by: identity?.name || "",
       });
@@ -40130,11 +40225,68 @@ function GCPortalManager({ jobs, identity }) {
   };
   const call = async (name, payload, token) => {
     setBusy(token||name); setErr("");
-    try { await httpsCallable(functions,name)(payload); await refresh(); }
+    try { await gc(name, payload); await refresh(); }
     catch(e) { setErr(e.message||"Action failed"); }
     setBusy("");
   };
   const copy = (txt) => { try { navigator.clipboard.writeText(txt); } catch(e){} };
+
+  // P0-1: edit an EXISTING link's contacts / branding / hidden-jobs — this is
+  // the exact gap Koy flagged first ("no way to add employees to existing GC
+  // links"). Prefill from the link as returned by gcPortalListLinks.
+  const editMatched = (l) => activeJobs.filter(j => _gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id));
+  const startEdit = (l) => {
+    setEditing(l.token); setErr("");
+    setEditDraft({
+      label: l.label||"", accentColor: l.accentColor||"#3B5BA5", logoUrl: l.logoUrl||"",
+      contacts: Array.isArray(l.contacts) ? l.contacts.slice() : [],
+      jobIdsExclude: new Set(l.jobIdsExclude||[]),
+    });
+  };
+  const cancelEdit = () => { setEditing(null); setEditDraft(null); };
+  const saveEdit = async (l) => {
+    if(!editDraft || busy) return;
+    setBusy(l.token); setErr("");
+    try {
+      await gc("gcPortalUpdateLink", {
+        token: l.token,
+        label: editDraft.label.trim() || l.label,
+        contacts: editDraft.contacts,
+        accentColor: editDraft.accentColor,
+        logoUrl: editDraft.logoUrl.trim(),
+        jobIdsExclude: Array.from(editDraft.jobIdsExclude),
+      });
+      setEditing(null); setEditDraft(null);
+      await refresh();
+    } catch(e) { setErr(e.message||"Update failed"); }
+    setBusy("");
+  };
+
+  // P0-3: send a real test digest to any address BEFORE a real contractor ever
+  // gets one — verifies SendGrid/DNS/rendering without touching the queue.
+  const sendTest = async (l) => {
+    const to = (testTo[l.token]||"").trim();
+    if(!to || busy) return;
+    setBusy(l.token+"_test"); setErr("");
+    setTestSent(s => { const n = {...s}; delete n[l.token]; return n; });
+    try {
+      await gc("gcPortalSendTestMail", { token: l.token, to });
+      setTestSent(s => ({...s, [l.token]: "Sent — check " + to + "."}));
+    } catch(e) { setErr(e.message||"Test send failed"); }
+    setBusy("");
+  };
+
+  // P0-7: surface per-job super assignments (previously invisible — the data
+  // existed server-side but the office UI never rendered it).
+  const superAssignmentLines = (l) => {
+    const entries = Object.entries(l.supersByJob||{}).filter(([,ids])=>Array.isArray(ids)&&ids.length);
+    if(!entries.length) return [];
+    return entries.map(([jobId, ids]) => {
+      const job = (jobs||[]).find(j=>j.id===jobId);
+      const names = ids.map(cid => { const c = (l.contacts||[]).find(x=>x.id===cid); return c ? c.name : cid; }).join(", ");
+      return (job ? job.name : jobId) + ": " + names;
+    });
+  };
 
   const B = { field:{border:"1px solid #CDD9EC",borderRadius:8,padding:"7px 10px",font:"13px system-ui",width:"100%",boxSizing:"border-box"},
     btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"7px 13px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
@@ -40149,10 +40301,15 @@ function GCPortalManager({ jobs, identity }) {
         <div style={{fontWeight:700,marginBottom:8,color:"#1B1F24"}}>Create a contractor link</div>
         <input value={gcName} onChange={e=>{
           const v = e.target.value; setGcName(v);
-          // seed hidden-jobs from any existing link for this GC — exclude is
-          // GC-level (shared mirror), so a new link must inherit prior hides.
-          const exist = (links||[]).find(l=>!l.revoked && l.gcKey===_gcKeyOf(v));
-          setExcluded(new Set(exist ? (exist.jobIdsExclude||[]) : []));
+          // P0-8 fix: seed hidden-jobs from EVERY existing link for this GC,
+          // revoked or not, unioned together — exclude is GC-level (shared
+          // mirror), so a new link must inherit prior hides even if the link
+          // that set them has since been revoked (its exclude choice still
+          // reflects a real decision about what that GC shouldn't see).
+          const exist = (links||[]).filter(l=>l.gcKey===_gcKeyOf(v));
+          const union = new Set();
+          exist.forEach(l => (l.jobIdsExclude||[]).forEach(id=>union.add(id)));
+          setExcluded(union);
         }} placeholder="General contractor name (must match the job's GC field)" style={B.field}/>
         {gcName.trim() ? (
           <div style={{margin:"9px 0",fontSize:12.5,color:"#5E6670"}}>
@@ -40174,20 +40331,7 @@ function GCPortalManager({ jobs, identity }) {
 
         {/* contacts */}
         <div style={{margin:"10px 0 4px",fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Contacts (optional)</div>
-        {contacts.map((c,i)=>(
-          <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,fontSize:12.5}}>
-            <span style={{flex:1}}><b>{c.name}</b>{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}</span>
-            <button onClick={()=>setContacts(contacts.filter((_,k)=>k!==i))} style={{...B.gbtn,padding:"2px 8px",borderColor:"#E5B4B4",color:"#8A2A2A"}}>remove</button>
-          </div>
-        ))}
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:4}}>
-          <input value={cDraft.name} onChange={e=>setCDraft({...cDraft,name:e.target.value})} placeholder="Name" style={{...B.field,width:110}}/>
-          <input value={cDraft.role} onChange={e=>setCDraft({...cDraft,role:e.target.value})} placeholder="Role" style={{...B.field,width:90}}/>
-          <input value={cDraft.emailAddr} onChange={e=>setCDraft({...cDraft,emailAddr:e.target.value})} placeholder="Email (for updates)" style={{...B.field,width:170}}/>
-          <input value={cDraft.phone} onChange={e=>setCDraft({...cDraft,phone:e.target.value})} placeholder="Phone" style={{...B.field,width:120}}/>
-          <button onClick={()=>{ if(cDraft.name.trim()){ setContacts([...contacts,{name:cDraft.name.trim(),role:cDraft.role.trim()||"Super",emailAddr:cDraft.emailAddr.trim(),phone:cDraft.phone.trim(),email:true,text:true}]); setCDraft({name:"",role:"",emailAddr:"",phone:""}); } }} style={B.gbtn}>+ Add</button>
-        </div>
-        <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Email is where their daily 8 PM update + instant alerts go. Phone is for texts (coming soon).</div>
+        <GCContactEditor contacts={contacts} onChange={setContacts}/>
 
         {/* accent */}
         <div style={{display:"flex",alignItems:"center",gap:8,margin:"12px 0"}}>
@@ -40221,6 +40365,8 @@ function GCPortalManager({ jobs, identity }) {
       {links && links.length===0 ? <div style={{color:"#8A93A3",fontSize:12.5}}>No portal links yet.</div> : null}
       {(links||[]).map(l=>{
         const count = activeJobs.filter(j=>(_gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id)) && !(l.jobIdsExclude||[]).includes(j.id)).length;
+        const isEditing = editing===l.token;
+        const supersLines = superAssignmentLines(l);
         return (
           <div key={l.token} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:l.revoked?0.6:1}}>
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -40229,11 +40375,81 @@ function GCPortalManager({ jobs, identity }) {
               {l.revoked ? <span style={{fontSize:11,fontWeight:700,color:"#8A2A2A",background:"#FBE9E9",borderRadius:99,padding:"1px 8px"}}>REVOKED</span> : <span style={{fontSize:11,fontWeight:700,color:"#2C5C40",background:"#ECF2EE",borderRadius:99,padding:"1px 8px"}}>ACTIVE</span>}
               <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                 {!l.revoked ? <button onClick={()=>copy(urlOf(l.token))} style={B.gbtn}>Copy link</button> : null}
+                {!l.revoked && !isEditing ? <button disabled={busy===l.token} onClick={()=>startEdit(l)} style={B.gbtn}>Edit</button> : null}
                 {!l.revoked ? <button disabled={busy===l.token} onClick={()=>call("gcPortalBackfill",{token:l.token},l.token)} style={B.gbtn}>{busy===l.token?"…":"Rebuild"}</button> : null}
                 <button disabled={busy===l.token} onClick={()=>call("gcPortalSetRevoked",{token:l.token,revoked:!l.revoked},l.token)} style={{...B.gbtn,borderColor:l.revoked?"#CDE6D7":"#E5B4B4",color:l.revoked?"#2C5C40":"#8A2A2A"}}>{l.revoked?"Reactivate":"Revoke"}</button>
               </span>
             </div>
             {!l.revoked ? <code style={{display:"block",marginTop:6,background:"#F4F6F8",borderRadius:6,padding:"3px 7px",fontSize:11,color:"#5E6670",wordBreak:"break-all"}}>{urlOf(l.token)}</code> : null}
+
+            {!isEditing ? (
+              <Fragment>
+                {/* P0-7: contacts + per-job super assignments, previously invisible */}
+                <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #F0F2F5",fontSize:12}}>
+                  <div style={{fontWeight:600,color:"#1B1F24",marginBottom:3}}>Contacts {l.contacts&&l.contacts.length?"("+l.contacts.length+")":""}</div>
+                  {(l.contacts||[]).length ? (l.contacts||[]).map((c,i)=>(
+                    <div key={c.id||i} style={{color:"#5E6670"}}>{c.name}{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}{c.email===false?" · (no email)":""}</div>
+                  )) : <div style={{color:"#8A93A3"}}>No contacts yet — click Edit to add.</div>}
+                  {supersLines.length ? (
+                    <Fragment>
+                      <div style={{fontWeight:600,color:"#1B1F24",margin:"6px 0 3px"}}>Per-job assignments</div>
+                      {supersLines.map((line,i)=>(<div key={i} style={{color:"#5E6670"}}>{line}</div>))}
+                    </Fragment>
+                  ) : null}
+                </div>
+
+                {/* P0-3: send a real test digest before any contractor sees one */}
+                {!l.revoked ? (
+                  <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #F0F2F5",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <input value={testTo[l.token]||""} onChange={e=>setTestTo(s=>({...s,[l.token]:e.target.value}))} placeholder="your email — send a test digest" style={{...B.field,width:200}}/>
+                    <button disabled={busy===l.token+"_test" || !(testTo[l.token]||"").trim()} onClick={()=>sendTest(l)} style={B.gbtn}>{busy===l.token+"_test"?"Sending…":"Send test digest"}</button>
+                    {testSent[l.token] ? <span style={{fontSize:11.5,color:"#2C5C40"}}>{testSent[l.token]}</span> : null}
+                  </div>
+                ) : null}
+              </Fragment>
+            ) : (
+              <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #F0F2F5"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 8px"}}>
+                  <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600,whiteSpace:"nowrap"}}>Label:</span>
+                  <input value={editDraft.label} onChange={e=>setEditDraft({...editDraft,label:e.target.value})} style={{...B.field,flex:1}}/>
+                </div>
+
+                <div style={{margin:"0 0 4px",fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Contacts</div>
+                <GCContactEditor contacts={editDraft.contacts} onChange={(next)=>setEditDraft({...editDraft,contacts:next})}/>
+
+                <div style={{margin:"10px 0 4px",fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Jobs on this link</div>
+                <div style={{maxHeight:150,overflowY:"auto",display:"flex",flexDirection:"column",gap:3,marginBottom:8}}>
+                  {editMatched(l).map(j=>(
+                    <label key={j.id} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer"}}>
+                      <input type="checkbox" checked={!editDraft.jobIdsExclude.has(j.id)} onChange={()=>{
+                        const n = new Set(editDraft.jobIdsExclude);
+                        n.has(j.id) ? n.delete(j.id) : n.add(j.id);
+                        setEditDraft({...editDraft, jobIdsExclude:n});
+                      }}/>
+                      <span>{j.name}{j.address?" · "+j.address:""}</span>
+                    </label>
+                  ))}
+                  {!editMatched(l).length ? <div style={{color:"#8A93A3",fontSize:12}}>No jobs currently match this GC.</div> : null}
+                </div>
+
+                <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 12px"}}>
+                  <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600}}>Accent:</span>
+                  {["#3B5BA5","#4A5D3A","#2E3440","#7A5C14","#6A2C2C"].map(c=>(
+                    <button key={c} onClick={()=>setEditDraft({...editDraft,accentColor:c})} title={c} style={{width:22,height:22,borderRadius:"50%",background:c,border:editDraft.accentColor===c?"3px solid #1B1F24":"2px solid #CDD9EC",cursor:"pointer"}}/>
+                  ))}
+                </div>
+
+                <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 12px"}}>
+                  <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600,whiteSpace:"nowrap"}}>Their logo:</span>
+                  <input value={editDraft.logoUrl} onChange={e=>setEditDraft({...editDraft,logoUrl:e.target.value})} placeholder="https:// image URL (optional)" style={{...B.field,flex:1}}/>
+                </div>
+
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>saveEdit(l)} disabled={busy===l.token} style={{...B.btn,opacity:busy===l.token?0.5:1}}>{busy===l.token?"Saving…":"Save changes"}</button>
+                  <button onClick={cancelEdit} style={B.gbtn}>Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
@@ -43469,6 +43685,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
+  - Phase 0 safety-bar hardening (14-item audit, pre-launch — not yet live to any real GC) · 'shipped 2026-07-21' · 'SW v351' · closed every gap found before the first real contractor sees a link: office can now Edit an existing link's contacts/branding/hidden-jobs ('GCContactEditor' reused in create + edit), "Send test digest to me" ('gcPortalSendTestMail') so email is verified before any real send, all 7 office gcPortal* callables + the new test-mail callable gated by a real live-PIN 'requireAdmin' (not the static app key alone), contact/super-assignment routing rekeyed off stable contact 'id' instead of display name (a rename can no longer orphan email routing — 'GCSuperAssign' + 'gcDigestRecipients'/'emailRecipients' both fixed, regression test added), self-service contact/roster changes now file a 'gc_requests' review instead of writing live (closes a silent-hijack hole), fixed-window rate limiting on 'gcPortalSubmit' ('gc_rate', function-only), a SendGrid bounce/complaint webhook ('gcSendGridWebhook' → 'gc_bounces', function-only, HMAC-verified, fails safe unconfigured), office visibility into a link's contacts + per-job super assignments (previously invisible), sticky-exclude now unions across ALL of a GC's links including revoked ones (previously a revoked link's hides could vanish), a contractor-visible "Homestead has acted on this" status readback ('link.requestStatuses'), a distinct "having trouble connecting" state on the portal's live listeners (previously indistinguishable from "link revoked" / "no jobs"), and a cross-GC mirror-isolation test proving two contractors sharing one job never see each other's link data. Backend covered by 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js' (all passing); day-one go-live steps in 'GC_PORTAL_ROLLOUT_CHECKLIST.md'.
   - v343 audit round (Cursor draft → Claude-approved) · 'shipped 2026-07-17' · 'SW v344' · office inbox labels date anchors (Finish start / Matterport / Return trip / Question); Matterport CTA gated by shared '_gcMpNeedsDate' (card tags + modal can't drift; terminal 'complete' excluded), counts toward Need-your-input, confirm-vs-suggest 'dateKind' when scheduled; status pills map straight from the official ROUGH/FINISH status set (waiting_date/date_confirmed/scheduled/inprogress/waiting/complete — never 'projectedStart' alone); mirror projects 'matterportStatusDate' (+2 tests); 'gcPortalSubmit' requires a date, validates the anchor against the live mirror, and dedupes open same-anchor requests ('deduped:true'); broken-logo Set resets on link/logoUrl change. Needs 'firebase deploy --only functions:gcPortalSubmit'
   - Mockup-fidelity pass + audit fixes · 'shipped 2026-07-17' · 'SW v343' · cards/modal now match the approved mockup: '#simproNo' job numbers, absolute short dates ("updated 7/15", never "115d ago"), action tags carry dates ("Return trip: needs scheduling (by 7/24)", "Confirm finish date — proj Sep 1"), status pill rows ('_gcStatusPills') on cards + modal, modal-top ROUGH/FINISH bars, hot summary tiles tinted, "Return trips — need scheduling" label. NEW modal "Needs & scheduling" section: finish-start plan/confirm + Matterport date-suggest, both filing 'type:"date"' gc_requests ('itemId:"finish_start"' / '"matterport"') so the card's action tags finally land on real actions. Cursor-audit fixes: 'GC_LOGOS' keyed by 'gcKey' (canonical) with label alias, broken logo URL falls down the chain custom → bundled → text ('gcLogoBroken' Set, live-recovering), logo 'maxWidth' cap for phones
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
@@ -46425,6 +46642,14 @@ function GCPortalPage({ token }) {
   const [openId, setOpenId] = useState(null);   // job detail modal
   const [superFilter, setSuperFilter] = useState(null);
   const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
+  // P0-10 fix: a transient onSnapshot error used to collapse into the SAME
+  // state as "link revoked" (setLink(null)) / "no jobs" (setJobs([])) — a
+  // contractor hitting a network blip would see "this link is no longer
+  // active" or an empty board, both of which are wrong and alarming. Track
+  // errors separately so a real revoke/empty-mirror is never confused with a
+  // dropped connection.
+  const [linkErr, setLinkErr] = useState(false);
+  const [jobsErr, setJobsErr] = useState(false);
 
   // Reset the broken-logo Set when the link/token or logoUrl changes so a
   // repaired same-URL or new custom URL isn't stuck skipped for the session
@@ -46435,10 +46660,12 @@ function GCPortalPage({ token }) {
 
   useEffect(() => {
     if(!token) { setLink(null); return; }
+    setLinkErr(false);
     const unsub = onSnapshot(doc(db,"gc_links",token), snap => {
+      setLinkErr(false);
       if(!snap.exists() || snap.data()?.revoked === true) { setLink(null); return; }
       setLink(snap.data());
-    }, () => setLink(null));
+    }, () => setLinkErr(true));
     return unsub;
   }, [token]);
 
@@ -46446,9 +46673,11 @@ function GCPortalPage({ token }) {
   useEffect(() => {
     if(link === undefined) return;             // link still loading
     if(!portalId) { setJobs([]); return; }     // live link but no mirror → empty state, never stuck loading
+    setJobsErr(false);
     const unsub = onSnapshot(collection(db,"gc_portal",portalId,"jobs"), snap => {
+      setJobsErr(false);
       setJobs(snap.docs.map(d => d.data()).filter(Boolean));
-    }, () => setJobs([]));
+    }, () => setJobsErr(true));
     return unsub;
   }, [portalId, link]);
 
@@ -46467,6 +46696,16 @@ function GCPortalPage({ token }) {
     </div>
   );
 
+  // P0-10: a link that never successfully loaded because of a connection
+  // error is NOT the same thing as a revoked/missing link — don't tell the
+  // contractor their access was cut off when it's actually just a dropped
+  // connection they can probably fix with a refresh.
+  if(link === undefined && linkErr) return wrap(
+    <div style={{padding:"120px 0",textAlign:"center"}}>
+      <div style={{fontSize:17,fontWeight:700,color:P.ink,marginBottom:8}}>Having trouble loading your portal.</div>
+      <div style={{fontSize:13,color:P.dim}}>This usually clears up with a refresh. If it keeps happening, contact Homestead Electric.</div>
+    </div>
+  );
   if(link === undefined) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading your portal…</div>);
   if(link === null) return wrap(
     <div style={{padding:"120px 0",textAlign:"center"}}>
@@ -46474,10 +46713,28 @@ function GCPortalPage({ token }) {
       <div style={{fontSize:13,color:P.dim}}>Please contact Homestead Electric for an updated link.</div>
     </div>
   );
+  if(jobs === null && jobsErr) return wrap(
+    <div style={{padding:"120px 0",textAlign:"center"}}>
+      <div style={{fontSize:17,fontWeight:700,color:P.ink,marginBottom:8}}>Having trouble loading your jobs.</div>
+      <div style={{fontSize:13,color:P.dim}}>This usually clears up with a refresh. If it keeps happening, contact Homestead Electric.</div>
+    </div>
+  );
   if(jobs === null) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading jobs…</div>);
+  // Data already loaded once, but the live listener has since dropped —
+  // keep showing the last-known-good board instead of yanking it away, with
+  // a small non-alarming banner rather than a full-page error.
+  const showStaleBanner = linkErr || jobsErr;
 
   // ── helpers ────────────────────────────────────────────────────────────────
-  const supersOf = (id) => (link.supersByJob && Array.isArray(link.supersByJob[id])) ? link.supersByJob[id] : [];
+  // P0-2 fix: supersByJob now stores stable contact IDs (not names) so a
+  // renamed contact never orphans their job assignment. Filtering/dedup below
+  // works on ids; nameOf() resolves an id to its current display name (or the
+  // raw id itself if that contact has since been removed — visible rather
+  // than silently dropped).
+  const supersIdsOf = (id) => (link.supersByJob && Array.isArray(link.supersByJob[id])) ? link.supersByJob[id] : [];
+  const gcContacts = Array.isArray(link.contacts) ? link.contacts : [];
+  const gcNameOf = (cid) => { const c = gcContacts.find(x => x && x.id === cid); return c ? c.name : cid; };
+  const supersOf = (id) => supersIdsOf(id).map(gcNameOf);
   const isDone = (j) => {
     const rc = j.rough && (j.rough.status==="complete" || j.rough.stage==="100%");
     const fc = j.finish && (j.finish.status==="complete" || j.finish.stage==="100%");
@@ -46582,6 +46839,11 @@ function GCPortalPage({ token }) {
 
   return wrap(
     <Fragment>
+      {showStaleBanner ? (
+        <div style={{background:"#FFF6E5",border:"1px solid #E9CE8F",borderRadius:8,padding:"8px 12px",margin:"12px 0",fontSize:12.5,color:"#7A5C14"}}>
+          Having trouble reaching Homestead's servers — showing the last data we loaded. Refresh if this doesn't update.
+        </div>
+      ) : null}
       {/* header */}
       <div style={{background:"linear-gradient(180deg,"+P.deck1+" 0%,"+P.deck2+" 100%)",borderRadius:"0 0 14px 14px",
         padding:"16px 18px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",margin:"0 -0px"}}>
@@ -46744,17 +47006,35 @@ const _gcField = (P) => ({ width:"100%", boxSizing:"border-box", border:"1px sol
 const _gcMiniBtn = (P) => ({ border:"1px solid "+P.line, background:P.card, color:P.accent, borderRadius:8, fontSize:12, fontWeight:700, padding:"5px 11px", cursor:"pointer", fontFamily:"inherit" });
 const _gcPrimaryBtn = (P) => ({ border:"none", background:P.accent, color:"#fff", borderRadius:8, fontSize:12.5, fontWeight:700, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit" });
 
-function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText }) {
+function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText, link }) {
   const [open, setOpen]   = useState(false);
   const [val, setVal]     = useState("");
   const [state, setState] = useState(null); // null | "sending" | "done" | "error"
-  if (state === "done") return <div style={{ fontSize:12, color:"#2C5C40", fontWeight:700, marginTop:6 }}>{doneText || "✓ Sent to Homestead — we’ll follow up."}</div>;
+  // P0-11: once sent, remember the request's id so we can show a live
+  // contractor-visible confirmation when the office actually acts on it
+  // (link.requestStatuses[id], written server-side by gcPortalHandleRequest)
+  // — previously a GC had NO way to tell "did they see my request" from
+  // their own side once the initial "sent" toast disappeared.
+  const [reqId, setReqId] = useState(null);
+  if (state === "done") {
+    const st = (reqId && link && link.requestStatuses && link.requestStatuses[reqId]) || null;
+    return (
+      <div style={{ fontSize:12, color:"#2C5C40", fontWeight:700, marginTop:6 }}>
+        {doneText || "✓ Sent to Homestead — we’ll follow up."}
+        {st ? (
+          <span style={{display:"block",fontWeight:600,color:(P&&P.dim)||"#5E6670",marginTop:2}}>
+            {st.status==="applied" ? "✓ Homestead has acted on this." : st.status==="dismissed" ? "Homestead reviewed this — no further action needed." : ""}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
   if (!open) return <button onClick={()=>setOpen(true)} style={{ ..._gcMiniBtn(P), marginTop:6 }}>{label}</button>;
   const send = async () => {
     const text = val.trim();
     if (!text) return;
     setState("sending");
-    try { await onSend(text); setState("done"); }
+    try { const r = await onSend(text); setReqId((r && r.data && r.data.requestId) || null); setState("done"); }
     catch (e) { setState("error"); }
   };
   return (
@@ -46778,24 +47058,33 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
 // super filter and per-super email routing, so this is the control that makes
 // "Austin only hears about Austin's jobs" real.
 function GCSuperAssign({ P, link, jobId, onAssign }) {
+  // P0-2 fix: assignments are keyed by stable contact ID, not display name —
+  // matching a NAME broke silently the moment someone renamed a contact
+  // (orphaned their assignment/email routing with no error). The roster here
+  // is {id, name} pairs; `cur`/`draft` hold ids; chips DISPLAY the name but
+  // toggle/save the id. A cur id with no matching contact (e.g. the office
+  // removed that person) still renders — as its raw id — rather than
+  // silently vanishing, so a stale assignment stays visible until cleaned up.
+  const contacts = (link && Array.isArray(link.contacts)) ? link.contacts : [];
+  const nameOf = (id) => { const c = contacts.find(x => x && x.id === id); return c ? c.name : id; };
   const cur = (link && link.supersByJob && Array.isArray(link.supersByJob[jobId])) ? link.supersByJob[jobId] : [];
-  const roster = ((link && Array.isArray(link.contacts)) ? link.contacts : [])
-    .map(c => String((c && c.name) || "").trim()).filter(Boolean);
+  const roster = contacts.filter(c => c && c.id && String(c.name||"").trim())
+    .map(c => ({ id: c.id, name: String(c.name).trim() }));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => new Set(cur));
   const [state, setState] = useState(null); // null | "saving" | "error"
-  const chip = (label, on, onClick) => (
-    <button key={label} onClick={onClick || undefined} disabled={!onClick}
+  const chip = (key, label, on, onClick) => (
+    <button key={key} onClick={onClick || undefined} disabled={!onClick}
       style={{border:"1px solid "+(on?P.accent:P.line), background:on?(P.accent+"14"):P.card, color:on?P.accent:P.dim,
         borderRadius:999, fontSize:12, fontWeight:700, padding:"5px 12px", cursor:onClick?"pointer":"default", fontFamily:"inherit"}}>{label}</button>
   );
   if (!editing) return (
     <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-      {cur.length ? cur.map(s => chip(s, true, null)) : <span style={{fontSize:12.5,color:P.muted}}>No super assigned yet.</span>}
+      {cur.length ? cur.map(id => chip(id, nameOf(id), true, null)) : <span style={{fontSize:12.5,color:P.muted}}>No super assigned yet.</span>}
       <button onClick={()=>{ setDraft(new Set(cur)); setState(null); setEditing(true); }} style={_gcMiniBtn(P)}>{cur.length ? "Change" : "Assign your super"}</button>
     </div>
   );
-  const toggle = (n) => setDraft(d => { const nx = new Set(d); if (nx.has(n)) nx.delete(n); else nx.add(n); return nx; });
+  const toggle = (id) => setDraft(d => { const nx = new Set(d); if (nx.has(id)) nx.delete(id); else nx.add(id); return nx; });
   const save = async () => {
     setState("saving");
     try { await onAssign([...draft]); setEditing(false); setState(null); }
@@ -46805,7 +47094,7 @@ function GCSuperAssign({ P, link, jobId, onAssign }) {
     <div>
       <div style={{fontSize:12,color:P.muted,marginBottom:7}}>Tap the teammates who run this job — they'll get this job's updates. Two or more is fine.</div>
       <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:9}}>
-        {roster.length ? roster.map(n => chip(n, draft.has(n), () => toggle(n)))
+        {roster.length ? roster.map(c => chip(c.id, c.name, draft.has(c.id), () => toggle(c.id)))
           : <span style={{fontSize:12.5,color:P.muted}}>No team contacts on file yet — send us a message below and we'll add them.</span>}
       </div>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
@@ -46898,7 +47187,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                   {line(Fn.projectedStart
                     ? <span>Confirm your finish start — projected <b style={{color:P.ink}}>{_gcMonthDay(Fn.projectedStart)}</b>; confirm and we hold crew.</span>
                     : <span><b style={{color:P.ink}}>Ready to plan your finish start</b> — rough is done{j.qc&&j.qc.items.length?", QC walked":""}.</span>,"fp")}
-                  <GCSendBox P={P} multiline={false}
+                  <GCSendBox P={P} link={link} multiline={false}
                     label={Fn.projectedStart ? "Confirm date or suggest a different one" : "Plan finish — suggest a start"}
                     cta="Send date" placeholder="e.g. Sep 1, or any week that works"
                     doneText="✓ Date sent to Homestead — we’ll confirm and hold crew"
@@ -46908,7 +47197,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
               {mpSuggest ? (
                 <div>
                   {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcTxt(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
-                  <GCSendBox P={P} multiline={false}
+                  <GCSendBox P={P} link={link} multiline={false}
                     label={j.matterport.status==="scheduled" ? "Confirm date or suggest a different one" : "Suggest a scan date"}
                     cta="Send date" placeholder="e.g. Tue 7/22, or before the 28th"
                     doneText="✓ Date sent to Homestead — we’ll confirm"
@@ -46937,7 +47226,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                 {g.items.map((q,k)=>(
                   <div key={"q"+k} style={{paddingTop:6,borderTop:"1px solid "+P.line,marginTop:6}}>
                     <div style={{fontSize:12.5,color:P.dim}}>{q.text}</div>
-                    <GCSendBox P={P} label="Answer this" cta="Send answer" placeholder="Type your answer…"
+                    <GCSendBox P={P} link={link} label="Answer this" cta="Send answer" placeholder="Type your answer…"
                       doneText="✓ Answer sent to Homestead"
                       onSend={(text)=>gcSubmit({ type:"answer", itemId:q.id, text })}/>
                   </div>
@@ -46957,7 +47246,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
               {line(<span><b style={{color:P.ink}}>{rt.signedOff?"Completed":rt.scheduled?"Scheduled"+(rt.scheduledDate?" "+rt.scheduledDate:""):rt.needsSchedule?"Needs scheduling":"Open"}</b>{rt.targetDate&&!rt.signedOff?" · target "+rt.targetDate:""}{rt.signedOff&&rt.signedOffDate?" "+rt.signedOffDate:""}</span>,"rts"+i)}
               {rt.scope ? <div style={{fontSize:12,color:P.dim,background:"#8A93A30D",borderLeft:"3px solid "+P.line,borderRadius:"0 6px 6px 0",padding:"7px 10px"}}>{rt.scope}</div> : null}
               {!rt.signedOff ? (
-                <GCSendBox P={P} multiline={false}
+                <GCSendBox P={P} link={link} multiline={false}
                   label={rt.scheduled ? "Confirm or request a different date" : "Suggest a date that works"}
                   cta="Send date" placeholder="e.g. Tue 7/22 AM, or any day next week"
                   doneText="✓ Date sent to Homestead — we’ll confirm"
@@ -47001,10 +47290,10 @@ function GCPortalDetail({ job, link, P, onClose }) {
               <input value={who} onChange={e=>setWhoP(e.target.value)} placeholder="(optional) who's writing"
                 style={{...(_gcField(P)),width:"auto",flex:"1 1 180px",padding:"5px 9px",fontSize:12.5}}/>
             </div>
-            <GCSendBox P={P} label="Send a message about this job" cta="Send message" placeholder="Question, heads-up, or note for the crew…"
+            <GCSendBox P={P} link={link} label="Send a message about this job" cta="Send message" placeholder="Question, heads-up, or note for the crew…"
               onSend={(text)=>gcSubmit({ type:"thread", text })}/>
             <div style={{height:6}}/>
-            <GCSendBox P={P} label="Add an item for us to address" cta="Send item" placeholder="Something you need us to come back for or fix…"
+            <GCSendBox P={P} link={link} label="Add an item for us to address" cta="Send item" placeholder="Something you need us to come back for or fix…"
               doneText="✓ Item sent — it’ll reach the crew after our office reviews it"
               onSend={(text)=>gcSubmit({ type:"punch", text })}/>
           </Fragment>

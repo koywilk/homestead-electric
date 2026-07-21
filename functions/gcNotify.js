@@ -60,7 +60,7 @@ function renderGcEmail({ gcLabel, accent, title, intro, sectionsHtml, portalUrl 
     '<div style="font-size:11.5px;color:#8a93a3;line-height:1.5;margin-top:14px;border-top:1px solid #eceef1;padding-top:12px">' +
     "You're getting this because Homestead Electric is running electrical on your project. " +
     "This portal and these updates were built in-house by Homestead Electric. " +
-    'To change how you hear from us, use the team card in <a href="' + esc(portalUrl || "#") + '" style="color:' + a + '">your portal</a>.' +
+    'To change who gets these updates, send us a message from <a href="' + esc(portalUrl || "#") + '" style="color:' + a + '">your portal</a> and we\'ll update it.' +
     "</div>" +
     "</td></tr></table></td></tr></table></body></html>"
   );
@@ -225,21 +225,23 @@ function detectTriggers(before, after) {
 
 // ── Contact routing + quiet hours (pure) ─────────────────────────────────────
 // Which of a link's contacts should receive email for a given job. Per-job
-// supers routing: a contact whose name is assigned to THIS job (supersByJob),
+// supers routing: a contact whose ID is assigned to THIS job (supersByJob),
 // OR an unassigned/office contact (assigned to no job) receives everything.
 // Only contacts with email !== false qualify for email. Returns [{name,email...}].
+// Matched by contact ID, not name (Phase 0 fix) — renaming a contact (typo fix,
+// last-name change) must never silently drop them from routing.
 function emailRecipients(link, jobId) {
   const L = link || {};
   const contacts = Array.isArray(L.contacts) ? L.contacts : [];
   const sbj = (L.supersByJob && typeof L.supersByJob === "object") ? L.supersByJob : {};
-  const assignedNames = new Set(Object.values(sbj).flat().map((s) => String(s || "").trim().toLowerCase()).filter(Boolean));
-  const thisJob = new Set((Array.isArray(sbj[jobId]) ? sbj[jobId] : []).map((s) => String(s || "").trim().toLowerCase()));
+  const assignedIds = new Set(Object.values(sbj).flat().map((s) => String(s || "").trim()).filter(Boolean));
+  const thisJob = new Set((Array.isArray(sbj[jobId]) ? sbj[jobId] : []).map((s) => String(s || "").trim()));
   return contacts.filter((c) => {
     if (!c || c.email === false) return false;                 // opted out of email
-    const nm = String(c.name || "").trim().toLowerCase();
-    if (!nm) return true;                                       // unnamed = office/owner catch-all
-    if (thisJob.has(nm)) return true;                           // assigned to THIS job
-    if (!assignedNames.has(nm)) return true;                    // assigned to NO job = subscribes to all
+    const id = String((c && c.id) || "").trim();
+    if (!id) return true;                                       // no stable id (shouldn't happen post-normalize) — fail OPEN (visible), not silently dropped
+    if (thisJob.has(id)) return true;                           // assigned to THIS job
+    if (!assignedIds.has(id)) return true;                      // assigned to NO job = subscribes to all
     return false;                                               // assigned to OTHER jobs only
   });
 }

@@ -2,7 +2,7 @@
 // Guards the outbound wall (functions/gcPortal.js). Exit 0 = all pass.
 "use strict";
 const {
-  gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, cleanLogoUrl, projectJobForPortal, jobBelongsToLink,
+  gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, projectJobForPortal, jobBelongsToLink,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -198,6 +198,43 @@ const big = { ...FIXTURE, returnTrips: Array.from({ length: 99 }, (_, i) => ({ i
 t("returnTrips capped", projectJobForPortal("x", big).returnTrips.length === 15);
 t("garbage job safe", projectJobForPortal("x", { name: null, roughPunch: "not-an-object", returnTrips: "nope", roughQuestions: 7 }) !== null);
 t("null job -> null", projectJobForPortal("x", null) === null);
+
+console.log("stable contact ids (Phase 0):");
+t("makeContactId shape", /^c_[a-f0-9]{12}$/.test(makeContactId()));
+t("makeContactId unique per call", makeContactId() !== makeContactId());
+
+// ── Phase 0 (§3.7 completeness-pass finding): multi-GC-per-job cross-
+// visibility was never checked by any prior review pass. This proves — at
+// the pure-function level shared by BOTH the live publisher and the full
+// rebuild — that two different GCs' links, both entitled to the SAME job,
+// can never see each other's link-scoped data (supersByJob, jobIdsInclude/
+// Exclude) through jobBelongsToLink or the job projection itself.
+console.log("multi-GC-per-job cross-visibility (§3.7):");
+const SHARED_JOB = { ...FIXTURE, gc: "Robison" }; // gcKey "robison"
+const LINK_ROBISON = { gcKey: "robison", jobIdsInclude: [], jobIdsExclude: [] };
+// A second, UNRELATED GC (different gcKey) force-included onto the same job —
+// the realistic multi-GC scenario (e.g. a mechanical contractor's own portal
+// scoped to the same address) — via jobIdsInclude, never a gcKey match.
+const LINK_OTHER_GC = { gcKey: "other-mechanical-co", jobIdsInclude: ["job-1"], jobIdsExclude: [] };
+t("job belongs to its real GC's link", jobBelongsToLink("job-1", SHARED_JOB, LINK_ROBISON) === true);
+t("job also belongs to the unrelated GC's link (force-included)", jobBelongsToLink("job-1", SHARED_JOB, LINK_OTHER_GC) === true);
+// The critical guard: Robison's own jobIdsExclude must NEVER affect whether
+// the OTHER GC's link sees the job, and vice versa — each link's membership
+// is evaluated against ONLY that link's own include/exclude, never a shared
+// or merged set. (A regression here would mean revoking/hiding a job for one
+// GC could silently also hide — or, worse, expose — it for a completely
+// unrelated GC sharing the same job.)
+const LINK_ROBISON_EXCLUDED = { gcKey: "robison", jobIdsInclude: [], jobIdsExclude: ["job-1"] };
+t("Robison excluding the job doesn't affect the unrelated GC's own membership",
+  jobBelongsToLink("job-1", SHARED_JOB, LINK_ROBISON_EXCLUDED) === false &&
+  jobBelongsToLink("job-1", SHARED_JOB, LINK_OTHER_GC) === true);
+// The projected job content itself carries no per-link data (no supersByJob,
+// no contacts, no gcKey) — it's a pure function of the JOB alone, so there is
+// no field inside it that could differ (and therefore leak) between two
+// different GCs' views of the same job.
+const viewForAnyLink = projectJobForPortal("job-1", SHARED_JOB);
+t("projected job view carries no link-identifying fields at all",
+  !("gcKey" in viewForAnyLink) && !("supersByJob" in viewForAnyLink) && !("contacts" in viewForAnyLink) && !("jobIdsInclude" in viewForAnyLink));
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nALL PASS");
 process.exit(failures ? 1 : 0);

@@ -76,6 +76,17 @@ function makeSlug(label) {
   return base + "-" + randomUUID().replace(/-/g, "").slice(0, 4);
 }
 
+// Stable per-contact id. Job-super assignments (supersByJob) and digest/instant
+// routing (emailRecipients/gcDigestRecipients) key off THIS, never the contact's
+// display name — renaming a contact (fixing a typo, a last-name change) must
+// never silently orphan their job assignments or drop them from routing
+// (Phase 0 review finding). Preserved across edits by normalizeGcContacts;
+// only minted fresh for a genuinely new contact.
+function makeContactId() {
+  const { randomUUID } = require("crypto");
+  return "c_" + randomUUID().replace(/-/g, "").slice(0, 12);
+}
+
 // GC logo URL for the portal's co-brand header lockup (rendered as an <img>
 // on the outside page). https-only, matching the matterport rule, or a
 // root-relative path to a bundled asset in public/ ("/gc-logo-robison.png").
@@ -289,6 +300,7 @@ module.exports = {
   hashOf,
   makeToken,
   makeSlug,
+  makeContactId,
   cleanLogoUrl,
   jobBelongsToLink,
   projectJobForPortal,
