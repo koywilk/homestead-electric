@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-20 · App SW version: v347
+**Last manifest update:** 2026-07-20 · App SW version: v349
 
 ---
 
@@ -27,8 +27,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Photos strip (thumbnails from jobs touched today)
 - **Safety** · `shipped` · safety meetings / topics
 - **Forecast** · `shipped` · `SchedulingForecast` · upcoming work calendar view
+  - Starts view mode · `shipped 2026-07-20` · `SW v349` · `StartsReport` · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = `roughStartConfirmed` / `finishStartConfirmed`, or a `scheduled` / `date_confirmed` status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
 - **Nav** · `shipped` · `NavView` · map view of jobs
 - **Upcoming** · `shipped` · `UpcomingJobs` · jobs in the pipeline before they're full jobs
+  - Projected Start + confirm toggle · `shipped 2026-07-20` · `SW v349` · each Upcoming entry gets `projectedStart` + `startConfirmed` (set in the edit form); feeds the Starts report so pipeline jobs show up alongside live-job starts
+  - Back to Upcoming (any job) · `shipped 2026-07-20` · `SW v349` · a regular board job can be pulled back into Upcoming from Job Info — mirrors the quote-undo data-safety order (saves the Upcoming entry FIRST via `mergeSaveSettingsFields`, deletes the job doc only after, seeds `projectedStart` from `roughProjectedStart`). Hidden by `jobHasLoggedWork` once rough/finish progress, an inspection, CO, RT, or daily update exists — an active job can't be yanked off the board. Suggestion #1 (Justin Cloward)
 - **Quotes** · `shipped` · proposed jobs awaiting conversion
 - **Tasks** · `shipped` · `Tasks` · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 (`manualTasks` collection was empty; Needs Board is THE manual to-do surface) · `SW v321`
   - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · `SW v321`)

@@ -23221,7 +23221,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, users=[], identity=null, jobs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -24507,6 +24507,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             {job.type==="quote"&&canConvertQuote&&onMoveQuoteBackToUpcoming&&!convertPrompt&&(
               <button onClick={()=>onMoveQuoteBackToUpcoming(job)}
                 title="Move this quote back into the Upcoming pipeline"
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                  color:C.dim,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",
+                  fontFamily:"inherit",letterSpacing:"0.03em",display:"inline-flex",
+                  alignItems:"center",gap:5,whiteSpace:"nowrap"}}>
+                <Icon name="arrowLeft" size={11} stroke={2}/> Back to Upcoming
+              </button>
+            )}
+
+            {/* Suggestion #1 (Justin): pull a REGULAR board job back to Upcoming. */}
+            {/* Only shows on a clean job — jobHasLoggedWork hides it once rough/  */}
+            {/* finish progress, an inspection, CO, RT, or daily update exists.    */}
+            {job.type!=="quote"&&onMoveBackToUpcoming&&!jobHasLoggedWork(job)&&(
+              <button onClick={()=>onMoveBackToUpcoming(job)}
+                title="Move this job back into the Upcoming pipeline (no work logged yet)"
                 style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                   color:C.dim,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",
                   fontFamily:"inherit",letterSpacing:"0.03em",display:"inline-flex",
@@ -28627,7 +28641,7 @@ function deepMergeJob(remote, local) {
 // ── Upcoming Jobs ─────────────────────────────────────────────
 
 function blankUpcoming() {
-  return { id: uid(), name:"", address:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"", photos:[] };
+  return { id: uid(), name:"", address:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"", projectedStart:"", startConfirmed:false, photos:[] };
 }
 
 const SEED_UPCOMING = [
@@ -28661,6 +28675,15 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
         <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
         <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
         <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
+        <div style={{flex:1.5,minWidth:170}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Projected Start</div>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <DateInp value={u.projectedStart||""} onChange={e=>upd(u.id,{projectedStart:e.target.value})}/>
+            <button type="button" onClick={()=>upd(u.id,{startConfirmed:!u.startConfirmed})}
+              title="Mark this projected start as confirmed (crew held)"
+              style={{background:u.startConfirmed?`${C.green}18`:"none",border:`1px solid ${u.startConfirmed?C.green:C.border}`,borderRadius:99,color:u.startConfirmed?C.green:C.dim,fontSize:9,fontWeight:700,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+              {u.startConfirmed?"✓ CONFIRMED":"○ CONFIRM"}</button>
+          </div>
+        </div>
         <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
           <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
             <option value="">— unassigned —</option>
@@ -31572,7 +31595,134 @@ function NavView({ jobs }) {
 
 // ── Scheduling Forecast ───────────────────────────────────────
 
-function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allForemen, identity, onUpdateJob, users=[] }) {
+// ── STARTS helpers + report (suggestions #1 guard + #3 compiled view) ────────
+
+// Compact "Jul 28" from a YYYY-MM-DD; passthrough for free-text dates.
+function _startFmt(d){
+  if(!d) return "";
+  const m=String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return d;
+  const dt=new Date(+m[1],+m[2]-1,+m[3]);
+  return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+}
+
+// Week bucket off today: 0 this week (through Sun), 1 next week, 2 later,
+// -1 past due, null = no parseable date.
+function _weekBucket(dateStr){
+  const m=String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return null;
+  const d=new Date(+m[1],+m[2]-1,+m[3]); d.setHours(0,0,0,0);
+  const now=new Date(); now.setHours(0,0,0,0);
+  const diff=Math.round((d-now)/86400000);
+  const dowToSun=(7-now.getDay())%7;
+  if(diff<0) return -1;
+  if(diff<=dowToSun) return 0;
+  if(diff<=dowToSun+7) return 1;
+  return 2;
+}
+
+// Suggestion #1 guard (Koy: block Back-to-Upcoming once real work is logged).
+// "Work" = anything past a freshly-created board job: rough/finish progress,
+// any inspection, CO, return trip, or daily update. A clean job (maybe just a
+// projected start set) can still go back; an active one can't be yanked.
+function jobHasLoggedWork(j){
+  if(!j) return false;
+  if((parseInt(j.roughStage)||0)>0 || (parseInt(j.finishStage)||0)>0) return true;
+  if(["inprogress","complete"].includes(j.roughStatus) || ["inprogress","complete"].includes(j.finishStatus)) return true;
+  if(j.roughInspectionResult || j.finalInspectionResult) return true;
+  if((j.roughInspectionItems||[]).length || (j.finalInspectionItems||[]).length) return true;
+  if((j.changeOrders||[]).length) return true;
+  if((j.returnTrips||[]).length) return true;
+  if((j.dailyUpdates||[]).length) return true;
+  return false;
+}
+
+// Suggestion #3 (Justin): one compiled view of every projected & confirmed
+// start — rough + finish across live jobs, plus Upcoming-pipeline jobs that
+// carry a projected start. Confidence is the app's real signal
+// (roughStartConfirmed / finishStartConfirmed / an Upcoming entry's
+// startConfirmed, or a scheduled/date_confirmed status) → held/green;
+// otherwise projected/gold. Grouped by week off today. Read-only report.
+function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
+  const [filter,setFilter]=useState("all"); // all | proj | conf
+  const events=[];
+  (jobs||[]).forEach(j=>{
+    if(j.type==="quote") return;
+    [["Rough",j.roughProjectedStart,j.roughStartConfirmed,j.roughStatus],
+     ["Finish",j.finishProjectedStart,j.finishStartConfirmed,j.finishStatus]].forEach(([label,ps,conf,st])=>{
+      if(!ps || st==="complete") return;
+      const confirmed = !!conf || st==="scheduled" || st==="date_confirmed";
+      events.push({ id:j.id+"_"+label, job:j, nm:j.name||"(unnamed)", gc:j.gc||"", phase:label, date:ps, confirmed, up:false });
+    });
+  });
+  (upcoming||[]).forEach(u=>{
+    if(!u.projectedStart) return;
+    events.push({ id:"up_"+u.id, up:true, nm:u.name||"(unnamed)", gc:u.customer||"", phase:"Rough", date:u.projectedStart, confirmed:!!u.startConfirmed });
+  });
+  const shown = events.filter(e=> filter==="proj"?!e.confirmed : filter==="conf"?e.confirmed : true);
+  const byBucket={};
+  shown.forEach(e=>{ const b=_weekBucket(e.date); if(b===null) return; (byBucket[b]=byBucket[b]||[]).push(e); });
+  Object.values(byBucket).forEach(arr=>arr.sort((a,b)=>(a.date>b.date?1:-1)));
+  const total=shown.filter(e=>_weekBucket(e.date)!==null).length;
+  const groups=[["Past due",-1],["This week",0],["Next week",1],["Later",2]];
+  const seg=(v,label,dot)=>(
+    <button onClick={()=>setFilter(v)} style={{flex:1,fontFamily:"inherit",fontSize:12,fontWeight:700,
+      color:filter===v?C.text:C.dim,border:"none",background:filter===v?C.card:"none",padding:"7px 4px",
+      borderRadius:7,cursor:"pointer",boxShadow:filter===v?"0 1px 2px rgba(27,31,36,.08)":"none",
+      display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+      {dot&&<span style={{width:7,height:7,borderRadius:99,background:dot}}/>}{label}</button>
+  );
+  return (
+    <div style={{padding:"12px 12px 40px",maxWidth:820,margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"baseline",gap:8,margin:"2px 2px 3px"}}>
+        <div style={{fontSize:18,fontWeight:800,color:C.text}}>Starts</div>
+        <div style={{fontSize:12,color:C.dim}}>{total} projected &amp; confirmed start{total===1?"":"s"}</div>
+      </div>
+      <div style={{fontSize:11.5,color:C.dim,margin:"0 2px 12px"}}>Every rough &amp; finish start across live jobs, plus Upcoming jobs with a projected date.</div>
+      <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:3,gap:2,marginBottom:14}}>
+        {seg("all","All",null)}{seg("proj","Projected",C.orange)}{seg("conf","Confirmed",C.green)}
+      </div>
+      {total===0 && <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
+      {groups.map(([label,b])=>{
+        const arr=byBucket[b]; if(!arr||!arr.length) return null;
+        return (
+          <div key={b}>
+            <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 3px 8px"}}>
+              <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.07em",textTransform:"uppercase",color:b===-1?C.red:C.dim}}>{label}</span>
+              <span style={{flex:1,height:1,background:C.border}}/>
+              <span style={{fontSize:10.5,fontWeight:700,color:C.muted}}>{arr.length}</span>
+            </div>
+            {arr.map(e=>{
+              const accent = e.up?C.orange:(e.phase==="Finish"?C.finish:C.rough);
+              const pill = e.up?["From Upcoming",C.orange]:(e.confirmed?["Confirmed",C.green]:["Projected",C.orange]);
+              return (
+                <div key={e.id} onClick={()=>{ if(!e.up&&onSelectJob) onSelectJob(e.job); }}
+                  style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${accent}`,
+                    borderStyle:e.up?"dashed":"solid",borderLeftStyle:"solid",borderRadius:12,padding:"10px 11px",
+                    boxShadow:"0 1px 2px rgba(27,31,36,.05)",marginBottom:8,display:"flex",alignItems:"center",gap:11,
+                    cursor:e.up?"default":"pointer"}}>
+                  <div style={{flex:"0 0 46px",textAlign:"center"}}>
+                    <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
+                    <div style={{fontSize:14,fontWeight:800,color:C.text,fontVariantNumeric:"tabular-nums"}}>{_startFmt(e.date)}</div>
+                  </div>
+                  <div style={{width:1,alignSelf:"stretch",background:C.border,margin:"1px 0"}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nm}</div>
+                    <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.gc}{e.up?" · in Upcoming":""}</div>
+                  </div>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase",whiteSpace:"nowrap",
+                    color:pill[1],background:`${pill[1]}18`,borderRadius:99,padding:"3px 7px",border:e.up?`1px dashed ${pill[1]}66`:"none"}}>{pill[0]}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allForemen, identity, onUpdateJob, users=[], upcoming=[] }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("crew"); // crew | kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
@@ -33104,7 +33254,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
           <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-            {[{k:"kanban",l:"Kanban",icon:null},{k:"week",l:"Week",icon:"clipboard"},{k:"attention",l:"Attention",icon:"alertTriangle"},{k:"calendar",l:"Calendar",icon:"calendar"},{k:"crew",l:"Crew",icon:"users"}].map(({k,l,icon})=>(
+            {[{k:"kanban",l:"Kanban",icon:null},{k:"week",l:"Week",icon:"clipboard"},{k:"attention",l:"Attention",icon:"alertTriangle"},{k:"calendar",l:"Calendar",icon:"calendar"},{k:"starts",l:"Starts",icon:"clock"},{k:"crew",l:"Crew",icon:"users"}].map(({k,l,icon})=>(
               <button key={k} onClick={()=>setViewMode(k)}
                 style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
                   cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
@@ -36252,6 +36402,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
 
       {/* ── CALENDAR ── */}
       {viewMode==="calendar"&&<CalendarView/>}
+      {viewMode==="starts"&&<StartsReport jobs={jobs} upcoming={upcoming} onSelectJob={onSelectJob}/>}
 
       {/* ── Color Key ── */}
       <div style={{padding:"16px 26px 32px",borderTop:"1px solid var(--border)",marginTop:8}}>
@@ -50659,6 +50810,37 @@ function App() {
               saveJob(updated,{type:"", simproNo:q.simproNo||""});
               setSelected(updated);
             }}
+            onMoveBackToUpcoming={async (job)=>{
+              // Suggestion #1: pull a REGULAR job back to Upcoming. Same
+              // data-safety order as the quote-undo below: build + save the
+              // upcoming entry FIRST, only then delete the job doc. Guarded
+              // upstream by jobHasLoggedWork, re-checked here defensively.
+              if(jobHasLoggedWork(job)){ toast.error && toast.error("This job has work logged — can't move it back to Upcoming."); return; }
+              if(!await showConfirm({
+                message:`Move "${job.name||"this job"}" back to the Upcoming pipeline? It leaves the Job Board. Name, address, GC, and foreman carry over.`,
+                confirmLabel:"Move to Upcoming", cancelLabel:"Cancel"
+              })) return;
+              const u = {
+                id: uid(), name: job.name||"", address: job.address||"", city:"", sales:"",
+                customer: job.gc||"", notes:"", lastFollowUp:"",
+                foreman: job.foreman && job.foreman!=="Unassigned" ? job.foreman : "",
+                projectedStart: job.roughProjectedStart||"", startConfirmed: !!job.roughStartConfirmed, photos:[],
+              };
+              const next=[u, ...upcoming];
+              try {
+                await mergeSaveSettingsFields("upcoming_jobs",{items:next, updated_at:new Date().toISOString()});
+              } catch(err){
+                console.error("Move-job-back save failed:",err);
+                toast.error && toast.error("Couldn't save to Upcoming — job was NOT moved.");
+                return;
+              }
+              setUpcoming(next);
+              setJobs(js=>js.filter(j=>j.id!==job.id));
+              if(selected?.id===job.id) setSelected(null);
+              deleteJobRemote(job.id);
+              setView("upcoming");
+              toast.success && toast.success(`Moved "${job.name||"job"}" back to Upcoming.`);
+            }}
             onMoveQuoteBackToUpcoming={async (q)=>{
               // Recovery for an accidental "→ Quote" promote from Upcoming.
               // Data-safety order of operations:
@@ -50857,7 +51039,7 @@ function App() {
       })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
-        <SchedulingForecast jobs={jobs} users={users} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob}/>
+        <SchedulingForecast jobs={jobs} users={users} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob} upcoming={upcoming}/>
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
