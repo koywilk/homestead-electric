@@ -31597,21 +31597,32 @@ function NavView({ jobs }) {
 
 // ── STARTS helpers + report (suggestions #1 guard + #3 compiled view) ────────
 
-// Compact "Jul 28" from a YYYY-MM-DD; passthrough for free-text dates.
+// Parse the app's real start-date formats into a Date (or null).
+// Crew/Simpro dates are US slash — "3/19/26", "03/16/26", "6/4/2026" — while the
+// Upcoming DateInp writes ISO "2026-07-13". Both must parse or the row vanishes.
+function _parseStartDate(s){
+  s=String(s||"").trim();
+  if(!s) return null;
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);   // ISO 2026-07-13
+  if(m){ const d=new Date(+m[1],+m[2]-1,+m[3]); return isNaN(d.getTime())?null:d; }
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);   // 6/4/2026 or 03/16/26
+  if(m){ let y=+m[3]; if(y<100) y+=2000; const d=new Date(y,+m[1]-1,+m[2]); return isNaN(d.getTime())?null:d; }
+  return null;
+}
+
+// Compact "Jul 28"; passthrough for anything unparseable.
 function _startFmt(d){
-  if(!d) return "";
-  const m=String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if(!m) return d;
-  const dt=new Date(+m[1],+m[2]-1,+m[3]);
+  const dt=_parseStartDate(d);
+  if(!dt) return d?String(d):"";
   return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"});
 }
 
 // Week bucket off today: 0 this week (through Sun), 1 next week, 2 later,
 // -1 past due, null = no parseable date.
 function _weekBucket(dateStr){
-  const m=String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if(!m) return null;
-  const d=new Date(+m[1],+m[2]-1,+m[3]); d.setHours(0,0,0,0);
+  const d=_parseStartDate(dateStr);
+  if(!d) return null;
+  d.setHours(0,0,0,0);
   const now=new Date(); now.setHours(0,0,0,0);
   const diff=Math.round((d-now)/86400000);
   const dowToSun=(7-now.getDay())%7;
@@ -31650,7 +31661,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
     if(j.type==="quote") return;
     [["Rough",j.roughProjectedStart,j.roughStartConfirmed,j.roughStatus],
      ["Finish",j.finishProjectedStart,j.finishStartConfirmed,j.finishStatus]].forEach(([label,ps,conf,st])=>{
-      if(!ps || st==="complete") return;
+      if(!ps || st==="complete" || st==="inprogress") return; // only starts that haven't happened yet
       const confirmed = !!conf || st==="scheduled" || st==="date_confirmed";
       events.push({ id:j.id+"_"+label, job:j, nm:j.name||"(unnamed)", gc:j.gc||"", phase:label, date:ps, confirmed, up:false });
     });
@@ -31662,7 +31673,10 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
   const shown = events.filter(e=> filter==="proj"?!e.confirmed : filter==="conf"?e.confirmed : true);
   const byBucket={};
   shown.forEach(e=>{ const b=_weekBucket(e.date); if(b===null) return; (byBucket[b]=byBucket[b]||[]).push(e); });
-  Object.values(byBucket).forEach(arr=>arr.sort((a,b)=>(a.date>b.date?1:-1)));
+  Object.values(byBucket).forEach(arr=>arr.sort((a,b)=>{
+    const da=_parseStartDate(a.date), db=_parseStartDate(b.date);
+    return (da?da.getTime():0)-(db?db.getTime():0);
+  }));
   const total=shown.filter(e=>_weekBucket(e.date)!==null).length;
   const groups=[["Past due",-1],["This week",0],["Next week",1],["Later",2]];
   const seg=(v,label,dot)=>(

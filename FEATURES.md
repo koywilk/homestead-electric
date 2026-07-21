@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-20 · App SW version: v349
+**Last manifest update:** 2026-07-20 · App SW version: v350
 
 ---
 
@@ -28,6 +28,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Safety** · `shipped` · safety meetings / topics
 - **Forecast** · `shipped` · `SchedulingForecast` · upcoming work calendar view
   - Starts view mode · `shipped 2026-07-20` · `SW v349` · `StartsReport` · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = `roughStartConfirmed` / `finishStartConfirmed`, or a `scheduled` / `date_confirmed` status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
+    - Date-format fix · `shipped 2026-07-20` · `SW v350` · v349 parsed only ISO `YYYY-MM-DD`, but real job start dates are US slash (`3/19/26`, `6/4/2026`) — so every row's date failed to parse and the report rendered empty. `_parseStartDate` now handles both slash and ISO; bucket sort compares parsed dates (was buggy string compare); already-`inprogress` phases excluded (a start that already happened isn't upcoming)
 - **Nav** · `shipped` · `NavView` · map view of jobs
 - **Upcoming** · `shipped` · `UpcomingJobs` · jobs in the pipeline before they're full jobs
   - Projected Start + confirm toggle · `shipped 2026-07-20` · `SW v349` · each Upcoming entry gets `projectedStart` + `startConfirmed` (set in the edit form); feeds the Starts report so pipeline jobs show up alongside live-job starts
