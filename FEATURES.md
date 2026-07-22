@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-21 · App SW version: v351
+**Last manifest update:** 2026-07-21 · App SW version: v352
 
 ---
 
@@ -38,6 +38,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · `SW v321`)
 - **Huddle** · `shipped` · `HuddleSheet` · weekly team huddle prep
 - **Subcontractors** · `shipped` · external contractor view
+- **Contractors** · `shipped 2026-07-21` · `SW v352` · `GCPortalManager` + `GCPortalInbox` · the GC/contractor portal management promoted out of Settings into its own top-level nav tab (gated `users.manage`) — per-contractor link create/edit/revoke, contacts, per-job super assignment, send-test-digest, and the two-way requests inbox all in one place. Settings keeps a one-line pointer to the tab. Phase 1 of the Contractors build; the SimPro-derived GC auto-list (from `job.gc`) + per-job super auto-fill is the next phase — spec in `08-Specs/Contractors Tab Spec.md`
 - **Scoreboard** · `shipped` · `ScoreboardV2` · admin-only, behavior-driven scoring (info + quality)
   - Foreman board
   - Lead board

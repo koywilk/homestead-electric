@@ -40591,15 +40591,10 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
         </div>
       </SettingsSection>
 
-      {/* GC Portal — admin only. Inbox (two-way requests) then link management. */}
+      {/* GC Portal moved to its own top-level "Contractors" tab (2026-07-21). */}
       {can(identity,"users.manage") && (
-        <SettingsSection title="CONTRACTOR PORTAL — REQUESTS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
-          <GCPortalInbox jobs={jobs} identity={identity} onUpdateJob={onUpdateJob}/>
-        </SettingsSection>
-      )}
-      {can(identity,"users.manage") && (
-        <SettingsSection title="CONTRACTOR PORTAL LINKS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
-          <GCPortalManager jobs={jobs} identity={identity}/>
+        <SettingsSection title="CONTRACTOR PORTAL" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
+          <div style={{fontSize:12.5,color:"#5E6670",lineHeight:1.5}}>Contractor portal links, contacts, and requests now live in the <b>Contractors</b> tab at the top.</div>
         </SettingsSection>
       )}
 
@@ -49896,6 +49891,7 @@ function App() {
               ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
               ...(can(identity,"board.view")?[{key:"needs",label:"Needs"}]:[]),
               ...(can(identity,"cos.view")?[{key:"cos",label:"COs"}]:[]),
+              ...(can(identity,"users.manage")?[{key:"contractors",label:"Contractors"}]:[]),
               {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
@@ -51482,6 +51478,17 @@ function App() {
             setJobs(prev => prev.map(j => j.id === jobId ? updated : j));
             saveJob(updated, { changeOrders: nextCOs });
           }}/>
+      )}
+
+      {view==="contractors"&&can(identity,"users.manage")&&(
+        <div style={{maxWidth:1120,margin:"0 auto",padding:"14px 12px 60px"}}>
+          <SettingsSection title="CONTRACTOR PORTAL — REQUESTS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
+            <GCPortalInbox jobs={jobs} identity={identity} onUpdateJob={updateJob}/>
+          </SettingsSection>
+          <SettingsSection title="CONTRACTOR PORTAL LINKS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
+            <GCPortalManager jobs={jobs} identity={identity}/>
+          </SettingsSection>
+        </div>
       )}
 
       {view==="appmap"&&(
