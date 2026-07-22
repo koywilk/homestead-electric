@@ -6026,6 +6026,12 @@ async function gcLoadMailConfig() {
     // mailbox (e.g. koy@) so a contractor who just hits Reply doesn't bounce
     // off the unmonitored from address.
     replyTo: cfg.replyTo || "",
+    // SOAK TEST (temporary): when set to a mailbox, EVERY outbound GC email is
+    // rerouted here instead of the real contractor (sendGcMail), and the nightly
+    // digest sends one per active portal regardless of contact config / change-
+    // gate. No contractor receives anything while this is set. Clear the field
+    // to end the soak and return to normal behavior. Empty = off.
+    soakTo: cfg.soakTo || "",
   };
   _gcMailCfgAt = Date.now();
   return _gcMailCfg;
@@ -6040,6 +6046,13 @@ let _gcLastSendAt = 0;
 async function sendGcMail({ to, subject, html }) {
   const cfg = await gcLoadMailConfig();
   if (!cfg.key) { functions.logger.info("[gcMail] gc_config/mail not set — email skipped", { to }); return false; }
+  // SOAK: reroute every send to soakTo; prefix the subject with the intended
+  // recipient so you can see who it WOULD have gone to. Belt-and-suspenders —
+  // even a send path we didn't touch can't reach a real contractor while set.
+  if (cfg.soakTo && GC_EMAIL_RE.test(cfg.soakTo)) {
+    subject = "[SOAK → " + String(to || "?").slice(0, 60) + "] " + String(subject || "");
+    to = cfg.soakTo;
+  }
   if (!to || !GC_EMAIL_RE.test(String(to))) return false;
   try {
     const wait = _gcLastSendAt + 600 - Date.now();
@@ -6232,12 +6245,17 @@ exports.gcPortalDailyDigest = functions.pubsub
       const pdoc = await db.collection("gc_portal").doc(portalId).get();
       const meta = pdoc.data() || {};
       // change-gate: skip if nothing on this portal changed since the last digest
-      if (meta.updatedAt && meta.lastDigestAt && meta.updatedAt <= meta.lastDigestAt) continue;
+      // (bypassed during a soak so you reliably get every portal's digest nightly)
+      if (!cfg.soakTo && meta.updatedAt && meta.lastDigestAt && meta.updatedAt <= meta.lastDigestAt) continue;
       const jobsSnap = await db.collection("gc_portal").doc(portalId).collection("jobs").get();
       const allJobs = jobsSnap.docs.map((d) => d.data()).filter(Boolean);
       if (!allJobs.length) continue;
       let any = false;
-      for (const [addr, r] of gcDigestRecipients(group)) {
+      // SOAK: one digest per portal (all jobs) straight to you, bypassing the
+      // per-contact loop — so you see every portal even before contractor emails
+      // are configured. sendGcMail reroutes the address regardless.
+      const recipients = cfg.soakTo ? [[cfg.soakTo, { jobIds: null }]] : gcDigestRecipients(group);
+      for (const [addr, r] of recipients) {
         const jobs = r.jobIds === null ? allJobs : allJobs.filter((j) => r.jobIds.has(j.id));
         const dg = gcNotify.digestSections(jobs);
         if (!dg.hasContent) continue;
