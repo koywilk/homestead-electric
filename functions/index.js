@@ -5995,15 +5995,17 @@ exports.gcPortalListLinks = functions.https.onCall(async (data) => {
 // ─── GC PORTAL NOTIFICATION ENGINE (Piece 5, email v1) ───────────────────────
 // Contractor-facing email: the 8 PM daily digest + INSTANT trigger alerts.
 // DESIGN NOTES:
-//  • Email send is fetch-based (SendGrid HTTP API) — no new npm dependency,
-//    mirrors the existing Anthropic fetch integration.
+//  • Email send is fetch-based (Resend HTTP API — swapped from SendGrid
+//    2026-07-21: new SendGrid signups are Twilio One accounts whose email
+//    product is a different API entirely) — no new npm dependency, mirrors
+//    the existing Anthropic fetch integration.
 //  • The provider key lives in a FUNCTION-ONLY Firestore doc gc_config/mail
 //    (rules deny all client access), NOT runWith({secrets}) — so binding never
 //    blocks the core onJobUpdate deploy, and the whole portal ships BEFORE email
 //    is configured. sendGcMail FAILS SAFE (logs + returns false) when unset.
 //  • The hot path (onJobUpdate) only ENQUEUES to gc_notify_queue; scheduled
-//    drains do the actual sending, so a job save never waits on SendGrid and
-//    never depends on email being configured.
+//    drains do the actual sending, so a job save never waits on the email
+//    provider and never depends on email being configured.
 //  • Texts are v1.5 (Twilio + A2P 10DLC lead time). v1 = email only; the 3
 //    text-eligible triggers are already tagged in gcNotify.TEXT_ALLOWED.
 let _gcMailCfg = null, _gcMailCfgAt = 0;
@@ -6015,11 +6017,15 @@ async function gcLoadMailConfig() {
     key: cfg.key || "",
     from: cfg.from || "updates@homesteadelectric.net",
     origin: String(cfg.origin || "https://app.homesteadelectric.net").replace(/\/+$/, ""),
-    // Phase 0 fix (Fable verification pass): this was dropped from the cached
-    // config object entirely, so gcSendGridWebhook's signature check always
-    // read undefined and silently no-op'd on every event — bounce tracking
-    // was dead even after Koy set the key per the rollout checklist.
-    webhookPublicKey: cfg.webhookPublicKey || "",
+    // Lesson from the Phase 0 pass: every doc field a consumer reads MUST be
+    // spread into this cached object, or the consumer silently reads
+    // undefined (bounce tracking was dead for exactly that reason once).
+    // webhookSecret = Resend webhook signing secret (Svix "whsec_..." format).
+    webhookSecret: cfg.webhookSecret || "",
+    // Optional Reply-To for outbound digests/instants — set this to a REAL
+    // mailbox (e.g. koy@) so a contractor who just hits Reply doesn't bounce
+    // off the unmonitored from address.
+    replyTo: cfg.replyTo || "",
   };
   _gcMailCfgAt = Date.now();
   return _gcMailCfg;
@@ -6027,27 +6033,36 @@ async function gcLoadMailConfig() {
 function gcPortalUrl(origin, token) {
   return (origin || "https://app.homesteadelectric.net") + "/?gcportal=" + encodeURIComponent(token || "");
 }
+// Resend free tier allows 2 requests/second — pace consecutive sends inside
+// this one funnel (digest + drain + test all flow through here) so a burst of
+// recipients can't trip 429s. 600ms floor ≈ 1.6 req/s.
+let _gcLastSendAt = 0;
 async function sendGcMail({ to, subject, html }) {
   const cfg = await gcLoadMailConfig();
   if (!cfg.key) { functions.logger.info("[gcMail] gc_config/mail not set — email skipped", { to }); return false; }
   if (!to || !GC_EMAIL_RE.test(String(to))) return false;
   try {
-    const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    const wait = _gcLastSendAt + 600 - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    _gcLastSendAt = Date.now();
+    const payload = {
+      from: "Homestead Electric <" + cfg.from + ">",
+      to: [String(to)],
+      subject: String(subject || "Homestead Electric").slice(0, 200),
+      html: String(html || ""),
+    };
+    if (cfg.replyTo && GC_EMAIL_RE.test(cfg.replyTo)) payload.reply_to = cfg.replyTo;
+    const resp = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: "Bearer " + cfg.key, "content-type": "application/json" },
-      body: JSON.stringify({
-        personalizations: [{ to: [{ email: String(to) }] }],
-        from: { email: cfg.from, name: "Homestead Electric" },
-        subject: String(subject || "Homestead Electric").slice(0, 200),
-        content: [{ type: "text/html", value: String(html || "") }],
-      }),
+      body: JSON.stringify(payload),
     });
-    if (!resp.ok) { functions.logger.warn("[gcMail] send failed", { status: resp.status }); return false; }
+    if (!resp.ok) { let body = ""; try { body = (await resp.text()).slice(0, 400); } catch (e) {} functions.logger.warn("[gcMail] send failed", { status: resp.status, body }); return false; }
     return true;
   } catch (e) { functions.logger.warn("[gcMail] send error", e.message); return false; }
 }
 // Phase 0 fix: send a REAL digest render to a one-off address (Koy's own
-// inbox, or anyone else he wants to check with) so he can verify SendGrid
+// inbox, or anyone else he wants to check with) so he can verify provider
 // setup, DNS/SPF/DKIM, HTML rendering, and subject lines BEFORE any real
 // contractor ever receives one. Never touches gc_notify_queue or any real
 // contact — this is a preview send, full stop, capped hard at one address.
@@ -6060,7 +6075,7 @@ exports.gcPortalSendTestMail = functions.https.onCall(async (data) => {
   if (!linkSnap.exists) throw new functions.https.HttpsError("not-found", "no such link");
   const link = linkSnap.data();
   const cfg = await gcLoadMailConfig();
-  if (!cfg.key) throw new functions.https.HttpsError("failed-precondition", "gc_config/mail isn't set yet — nothing to test. Add a SendGrid key first.");
+  if (!cfg.key) throw new functions.https.HttpsError("failed-precondition", "gc_config/mail isn't set yet — nothing to test. Add a Resend key first.");
   const jobsSnap = await db.collection("gc_portal").doc(link.portalId).collection("jobs").get();
   const jobs = jobsSnap.docs.map((d) => d.data()).filter(Boolean);
   const dg = gcNotify.digestSections(jobs);
@@ -6075,74 +6090,61 @@ exports.gcPortalSendTestMail = functions.https.onCall(async (data) => {
   return { ok: true, sentTo: to, jobCount: jobs.length };
 });
 
-// ─── SendGrid bounce/complaint webhook (Phase 0 fix) ─────────────────────────
-// Previously a failing send just retried 5 times over 5-minute intervals then
-// silently dropped — nobody, not Koy, not anyone, was ever told a contractor's
-// email was bouncing. This records every bounce/dropped/spamreport/blocked
-// event SendGrid reports, verified via SendGrid's Event Webhook signature (an
-// ECDSA/SHA256 signature over timestamp+body — NOT requireAppKey/requireAdmin,
-// since SendGrid is the caller, not the app or an admin). No new npm
-// dependency: Node's built-in crypto.verify covers this without installing
-// @sendgrid/eventwebhook. Fails safe both ways: if no verification key is
-// configured yet, this just logs and no-ops rather than trusting an
-// unverifiable POST; if the signature doesn't check out, the event is dropped.
-function gcVerifySendGridSignature(publicKeyB64, signatureB64, timestamp, rawBody) {
-  try {
-    const { createVerify } = require("crypto");
-    const der = Buffer.from(signatureB64, "base64");
-    const cleanB64 = String(publicKeyB64 || "").replace(/\s+/g, "");
-    const keyPem =
-      "-----BEGIN PUBLIC KEY-----\n" +
-      cleanB64.match(/.{1,64}/g).join("\n") +
-      "\n-----END PUBLIC KEY-----";
-    const verifier = createVerify("sha256");
-    verifier.update(Buffer.from(String(timestamp) + rawBody));
-    verifier.end();
-    return verifier.verify(keyPem, der);
-  } catch (e) {
-    functions.logger.warn("[gcBounce] signature verify error", e.message);
-    return false;
-  }
-}
+// ─── Bounce/complaint webhook (Resend, Svix-signed) ──────────────────────────
+// Records every bounce / complaint / hard-failure Resend reports so a bad
+// contractor address gets a human look instead of silently dropping (the
+// rollout checklist's "check gc_bounces next morning" step). Verified via
+// Resend's Svix webhook signature — HMAC-SHA256 over "id.timestamp.body" with
+// the base64 signing secret ("whsec_..."), checked in constant time with a
+// ±5-min timestamp window (pure verifier + tests live in gcNotify.js). NOT
+// requireAppKey/requireAdmin, since Resend is the caller, not the app. No new
+// npm dependency (no svix package — Node's crypto covers it). Fails safe both
+// ways: if no signing secret is configured yet, this logs and no-ops rather
+// than trusting an unverifiable POST; if the signature doesn't check out, the
+// event is dropped. NOTE the export keeps its historical name so the deployed
+// endpoint URL (…cloudfunctions.net/gcSendGridWebhook) stays stable — it now
+// serves Resend events.
 exports.gcSendGridWebhook = functions.https.onRequest(async (req, res) => {
   try {
     const cfg = await gcLoadMailConfig();
-    const pubKey = cfg.webhookPublicKey || "";
-    const sig = req.get("X-Twilio-Email-Event-Webhook-Signature") || "";
-    const ts = req.get("X-Twilio-Email-Event-Webhook-Timestamp") || "";
-    if (!pubKey) {
+    if (!cfg.webhookSecret) {
       // Not configured yet — safe no-op (matches sendGcMail's fail-safe
-      // posture). Return 200 so SendGrid doesn't retry-storm an unconfigured
-      // endpoint.
-      functions.logger.info("[gcBounce] webhookPublicKey not set — event ignored");
+      // posture). Return 200 so the provider doesn't retry-storm an
+      // unconfigured endpoint.
+      functions.logger.info("[gcBounce] webhookSecret not set — event ignored");
       res.status(200).send("ok");
       return;
     }
-    const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || []);
-    if (!sig || !ts || !gcVerifySendGridSignature(pubKey, sig, ts, rawBody)) {
+    const svixId = req.get("svix-id") || "";
+    const svixTs = req.get("svix-timestamp") || "";
+    const svixSig = req.get("svix-signature") || "";
+    const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
+    if (!gcNotify.verifySvixSignature(cfg.webhookSecret, svixId, svixTs, rawBody, svixSig)) {
       functions.logger.warn("[gcBounce] signature check failed — dropping event");
       res.status(400).send("bad signature");
       return;
     }
-    const events = Array.isArray(req.body) ? req.body : [];
-    const RELEVANT = new Set(["bounce", "dropped", "spamreport", "blocked"]);
-    const ops = [];
-    events.forEach((e) => {
-      if (!e || !RELEVANT.has(String(e.event))) return;
-      ops.push(db.collection("gc_bounces").add({
-        email: String(e.email || "").slice(0, 200),
-        event: String(e.event || "").slice(0, 40),
-        reason: String(e.reason || e.type || "").slice(0, 300),
-        sgEventId: String(e.sg_event_id || "").slice(0, 200),
+    // Resend delivers ONE event per POST: { type: "email.bounced", data: {...} }
+    const evt = (req.body && typeof req.body === "object") ? req.body : {};
+    const MAP = { "email.bounced": "bounce", "email.complained": "spamreport", "email.failed": "dropped", "email.suppressed": "suppressed" };
+    const kind = MAP[String(evt.type || "")];
+    if (kind) {
+      const d = evt.data || {};
+      const reason = String((d.bounce && d.bounce.message) || (d.failed && d.failed.reason) || evt.type || "").slice(0, 300);
+      const addrs = [].concat(d.to || []).map((a) => String(a || "").slice(0, 200)).filter(Boolean);
+      await Promise.all(addrs.map((email) => db.collection("gc_bounces").add({
+        email,
+        event: kind,
+        reason,
+        eventId: String(svixId).slice(0, 200),
         createdAt: new Date().toISOString(),
-      }));
-    });
-    await Promise.all(ops);
-    if (ops.length) functions.logger.info("[gcBounce] recorded", { count: ops.length });
+      })));
+      if (addrs.length) functions.logger.info("[gcBounce] recorded", { count: addrs.length, kind });
+    }
     res.status(200).send("ok");
   } catch (e) {
     functions.logger.warn("[gcBounce] handler error (non-fatal)", e.message);
-    res.status(200).send("ok"); // never make SendGrid retry-storm on our bug
+    res.status(200).send("ok"); // never make the provider retry-storm on our bug
   }
 });
 

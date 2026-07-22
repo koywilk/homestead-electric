@@ -250,6 +250,37 @@ function emailRecipients(link, jobId) {
 // (8 PM) is exempt (it's a scheduled send, not an interrupt). hour is 0–23.
 function inQuietHours(hour) { return hour >= 21 || hour < 7; }
 
+// ── Svix webhook signature verification (pure) ───────────────────────────────
+// Resend signs webhook deliveries the Svix way: HMAC-SHA256 over
+// "msgId.timestamp.rawBody" keyed with the base64-decoded signing secret
+// (secret arrives as "whsec_<base64>"), result base64-encoded and shipped in
+// the svix-signature header as space-separated "v1,<sig>" entries (multiple
+// entries appear after a secret rotation — any one matching passes).
+// Constant-time compare; timestamps outside ±5 min are rejected to block
+// replays. Kept here (not index.js) so the unit tests can hit it directly.
+function verifySvixSignature(secret, msgId, timestamp, rawBody, sigHeader, nowMs) {
+  try {
+    const { createHmac, timingSafeEqual } = require("crypto");
+    if (!secret || !msgId || !timestamp || !sigHeader) return false;
+    const ts = parseInt(String(timestamp), 10);
+    const now = typeof nowMs === "number" ? nowMs : Date.now();
+    if (!Number.isFinite(ts) || Math.abs(now / 1000 - ts) > 300) return false;
+    const keyBytes = Buffer.from(String(secret).replace(/^whsec_/, ""), "base64");
+    if (!keyBytes.length) return false;
+    const expected = Buffer.from(
+      createHmac("sha256", keyBytes).update(String(msgId) + "." + String(timestamp) + "." + String(rawBody)).digest("base64")
+    );
+    return String(sigHeader).split(/\s+/).some((part) => {
+      const idx = part.indexOf(",");
+      if (idx < 1 || part.slice(0, idx) !== "v1") return false;
+      const got = Buffer.from(part.slice(idx + 1));
+      return got.length === expected.length && timingSafeEqual(got, expected);
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
 module.exports = {
   renderGcEmail,
   digestSections,
@@ -257,6 +288,7 @@ module.exports = {
   detectTriggers,
   emailRecipients,
   inQuietHours,
+  verifySvixSignature,
   isComplete,
   TEXT_ALLOWED,
   // exported for tests

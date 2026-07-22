@@ -116,5 +116,26 @@ console.log("quiet hours:");
 t("9pm–7am is quiet", N.inQuietHours(22) && N.inQuietHours(3) && N.inQuietHours(6));
 t("daytime not quiet", !N.inQuietHours(8) && !N.inQuietHours(20));
 
+console.log("svix webhook signature (Resend bounce webhook):");
+{
+  const { createHmac, randomBytes } = require("crypto");
+  const rawSecret = randomBytes(24);
+  const secret = "whsec_" + rawSecret.toString("base64");
+  const msgId = "msg_test123";
+  const body = JSON.stringify({ type: "email.bounced", data: { to: ["gc@example.com"] } });
+  const now = Date.now();
+  const ts = String(Math.floor(now / 1000));
+  const sig = createHmac("sha256", rawSecret).update(msgId + "." + ts + "." + body).digest("base64");
+  t("valid signature passes", N.verifySvixSignature(secret, msgId, ts, body, "v1," + sig, now));
+  t("multiple entries: any valid one passes (secret rotation)",
+    N.verifySvixSignature(secret, msgId, ts, body, "v1,AAAAinvalid v1," + sig, now));
+  t("tampered body fails", !N.verifySvixSignature(secret, msgId, ts, body + "x", "v1," + sig, now));
+  t("wrong secret fails", !N.verifySvixSignature("whsec_" + randomBytes(24).toString("base64"), msgId, ts, body, "v1," + sig, now));
+  t("stale timestamp fails (replay guard)", !N.verifySvixSignature(secret, msgId, String(Math.floor(now / 1000) - 3600), body,
+    "v1," + createHmac("sha256", rawSecret).update(msgId + "." + String(Math.floor(now / 1000) - 3600) + "." + body).digest("base64"), now));
+  t("missing header fails closed", !N.verifySvixSignature(secret, msgId, ts, body, "", now));
+  t("non-v1 scheme entries ignored", !N.verifySvixSignature(secret, msgId, ts, body, "v2," + sig, now));
+}
+
 console.log(failures ? "\n" + failures + " FAILURES" : "\nALL PASS");
 process.exit(failures ? 1 : 0);
