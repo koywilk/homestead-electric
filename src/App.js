@@ -40292,9 +40292,66 @@ function GCPortalManager({ jobs, identity }) {
     btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"7px 13px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
     gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"6px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
 
+  // ── Discovery: GCs on your jobs that don't have a portal yet ───────────────
+  // Group live jobs by the SAME normalized key the portal membership rule uses
+  // (_gcKeyOf === server gcKeyOf in functions/gcPortal.js), drop keys that
+  // already have a non-revoked link, sort by job count so repeat GCs float up
+  // and one-off names sink. "Create portal" pre-fills the create form below;
+  // the new link then auto-matches these jobs via the same key. No new data,
+  // no backend change — reads the `gc` field already on every job.
+  const discovery = useMemo(() => {
+    if (!Array.isArray(jobs) || links === null) return [];
+    const linked = new Set((links || []).filter(l => !l.revoked).map(l => l.gcKey).filter(Boolean));
+    const groups = new Map();
+    jobs.forEach(j => {
+      if (!j || j.archived === true || j.deleted === true) return;
+      const raw = String(j.gc || "").trim();
+      if (!raw) return;
+      const key = _gcKeyOf(raw);
+      if (!key || linked.has(key)) return;
+      let g = groups.get(key);
+      if (!g) { g = { key, names: new Map(), jobs: [] }; groups.set(key, g); }
+      g.names.set(raw, (g.names.get(raw) || 0) + 1);
+      g.jobs.push(j.name || j.id);
+    });
+    const arr = [...groups.values()].map(g => {
+      let best = "", bestN = -1;
+      g.names.forEach((n, raw) => { if (n > bestN) { bestN = n; best = raw; } });
+      return { key: g.key, name: best, count: g.jobs.length, jobs: g.jobs };
+    });
+    arr.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    return arr;
+  }, [jobs, links]);
+
   return (
     <div style={{fontSize:13,color:"#2E477D"}}>
       {err ? <div style={{background:"#FBE9E9",border:"1px solid #E5B4B4",color:"#8A2A2A",borderRadius:8,padding:"7px 11px",marginBottom:10,fontSize:12.5}}>{err}</div> : null}
+
+      {/* ── Discovery: contractors on your jobs with no portal yet ── */}
+      {discovery.length > 0 && (
+        <div style={{background:"#F7F9FC",border:"1px solid #DCE4F0",borderRadius:10,padding:12,marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+            <div style={{fontWeight:700,color:"#1B1F24"}}>On your jobs · no portal yet</div>
+            <span style={{marginLeft:"auto",fontSize:11.5,color:"#5E6670",fontWeight:700}}>{discovery.length} contractor{discovery.length===1?"":"s"}</span>
+          </div>
+          <div style={{fontSize:11.5,color:"#5E6670",marginBottom:10,lineHeight:1.5}}>
+            Pulled from the <b>GC</b> field on your jobs, most jobs first. Tap one to start a portal — it fills in the name below and the new link auto-matches those jobs. One-off names sink to the bottom; ignore what you don't need. Near-duplicates (e.g. "City Point" vs "City Point Homes") show separately — pick one and add the stray jobs when you create the link.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:340,overflowY:"auto"}}>
+            {discovery.map(g => (
+              <div key={g.key} style={{display:"flex",alignItems:"center",gap:10,background:"#fff",border:"1px solid #E1E4E9",borderRadius:8,padding:"8px 11px"}}>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{fontWeight:700,fontSize:13,color:"#1B1F24",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.name}</div>
+                  <div style={{fontSize:11.5,color:"#8A93A3",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.jobs.slice(0,4).join(" · ")}{g.jobs.length>4?" · +"+(g.jobs.length-4)+" more":""}</div>
+                </div>
+                <span style={{fontSize:11,fontWeight:700,color:"#2E477D",background:"#EAEEF6",borderRadius:99,padding:"2px 9px",flexShrink:0}}>{g.count} job{g.count===1?"":"s"}</span>
+                <button onClick={()=>{ setGcName(g.name); setExcluded(new Set()); }}
+                  style={{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"6px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>Create portal</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* create */}
       <div style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:12,marginBottom:14}}>

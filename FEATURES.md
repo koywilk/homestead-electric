@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-21 · App SW version: v352
+**Last manifest update:** 2026-07-21 · App SW version: v353
 
 ---
 
@@ -39,6 +39,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Huddle** · `shipped` · `HuddleSheet` · weekly team huddle prep
 - **Subcontractors** · `shipped` · external contractor view
 - **Contractors** · `shipped 2026-07-21` · `SW v352` · `GCPortalManager` + `GCPortalInbox` · the GC/contractor portal management promoted out of Settings into its own top-level nav tab (gated `users.manage`) — per-contractor link create/edit/revoke, contacts, per-job super assignment, send-test-digest, and the two-way requests inbox all in one place. Settings keeps a one-line pointer to the tab. Phase 1 of the Contractors build; the SimPro-derived GC auto-list (from `job.gc`) + per-job super auto-fill is the next phase — spec in `08-Specs/Contractors Tab Spec.md`
+  - **Discovery: contractors on your jobs with no portal yet** · `shipped 2026-07-21` · `SW v353` · a panel atop the Contractors tab that groups live jobs by the normalized `_gcKeyOf(job.gc)` (byte-identical to the server membership key `gcKeyOf` in `functions/gcPortal.js`), drops GCs that already have a non-revoked link, and lists the rest **most-jobs-first** so repeat GCs float up and one-off names sink. "Create portal" pre-fills the create form and the new link auto-matches those jobs via the same key. Client-only (reads the `gc` field already on every job), no backend change. Near-duplicate variants (e.g. "City Point" vs "City Point Homes") list separately by design — merge them with `jobIdsInclude` when creating the link (manual curation, per Koy's "portals first so I can clean it up")
 - **Scoreboard** · `shipped` · `ScoreboardV2` · admin-only, behavior-driven scoring (info + quality)
   - Foreman board
   - Lead board
