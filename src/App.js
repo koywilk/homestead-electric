@@ -1384,6 +1384,11 @@ async function fetchSimproJobBasics(simproJobNo) {
   return res?.data || null;
 }
 
+// (GC customer-contacts pull lives in GCPortalManager.pullAndPrefill and calls
+// gcSimproCustomerContacts via the admin-gated gc() helper — deliberately NO
+// module-level app-key-only wrapper here, so the PII endpoint has exactly one
+// caller and it carries the live-PIN admin gate.)
+
 // Shared hook for the 3 Job Info forms (QuickJobDetail / TempPedDetail /
 // JobDetail). Takes the jobRef + update function and returns
 //   { simproPulling, doPullSimpro }
@@ -40164,6 +40169,15 @@ function GCContactEditor({ contacts, onChange }) {
         ) : (
           <div key={c.id||i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,fontSize:12.5}}>
             <span style={{flex:1}}><b>{c.name}</b>{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}</span>
+            {/* Per-contact email mute (review finding) — the staged-rollout gate:
+                flip contacts on one at a time as you hand links over, instead of
+                everyone going live the moment the soak ends. Server already
+                honors it (emailRecipients skips email===false). */}
+            <button onClick={()=>onChange(contacts.map((x,k)=> k===i ? {...x, email: x.email===false} : x))}
+              title={c.email===false ? "Email updates are OFF for this contact — tap to turn on" : "Email updates are ON for this contact — tap to mute"}
+              style={{...B.gbtn,padding:"2px 8px",background:c.email===false?"transparent":"#EAF6EE",borderColor:c.email===false?"#CDD3DB":"#9CCFB0",color:c.email===false?"#8A93A3":"#1E8A55"}}>
+              {c.email===false?"email off":"email on"}
+            </button>
             <button onClick={()=>startEditRow(i,c)} style={{...B.gbtn,padding:"2px 8px"}}>edit</button>
             <button onClick={()=>onChange(contacts.filter((_,k)=>k!==i))} style={{...B.gbtn,padding:"2px 8px",borderColor:"#E5B4B4",color:"#8A2A2A"}}>remove</button>
           </div>
@@ -40176,7 +40190,7 @@ function GCContactEditor({ contacts, onChange }) {
         <input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} placeholder="Phone" style={{...B.field,width:120}}/>
         <button onClick={()=>{ if(draft.name.trim()){ onChange([...(contacts||[]),{name:draft.name.trim(),role:draft.role.trim()||"Super",emailAddr:draft.emailAddr.trim(),phone:draft.phone.trim(),email:true,text:true}]); setDraft({name:"",role:"",emailAddr:"",phone:""}); } }} style={B.gbtn}>+ Add</button>
       </div>
-      <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Email is where their daily 8 PM update + instant alerts go. Phone is for texts (coming soon).</div>
+      <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Email is where their daily 8 PM update + instant alerts go — use the per-contact "email on/off" to stage who receives them (turn people on one at a time as you hand the link over). Phone is for texts (coming soon).</div>
     </Fragment>
   );
 }
@@ -40195,11 +40209,15 @@ function GCPortalManager({ jobs, identity }) {
   const [editDraft, setEditDraft] = useState(null); // {label, accentColor, logoUrl, contacts, jobIdsExclude:Set}
   const [testTo, setTestTo] = useState({});      // token -> draft email address for "send test digest"
   const [testSent, setTestSent] = useState({});  // token -> confirmation message
+  const [pullingKey, setPullingKey] = useState(""); // discovery gcKey whose contacts are being pulled from Simpro
+  const pullSeqRef = useRef(0); // monotonically increasing pull id — guards against a slow pull landing under a newer click's GC
+  const [includedIds, setIncludedIds] = useState(() => new Set()); // create form: jobs force-added from other GC spellings (jobIdsInclude)
+  const [digestInfo, setDigestInfo] = useState({ byPortal: {}, health: null }); // per-portal lastDigestAt + last digest-run health (from gcPortalListLinks)
 
   const gc = (name, payload) => gcAdminCallable(name, identity)(payload);
 
   const refresh = () => gc("gcPortalListLinks",{})
-    .then(r => setLinks(r.data.links||[]))
+    .then(r => { setLinks(r.data.links||[]); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null }); })
     .catch(e => { setErr(e.message||"Failed to load links"); setLinks([]); });
   useEffect(() => { refresh(); }, []);
 
@@ -40215,10 +40233,11 @@ function GCPortalManager({ jobs, identity }) {
       const jobIdsExclude = matched.filter(j => excluded.has(j.id)).map(j => j.id);
       const r = await gc("gcPortalCreateLink",{
         label: gcName.trim(), gc: gcName.trim(),
-        contacts, accentColor: accent, logoUrl: logoUrl.trim(), jobIdsExclude, by: identity?.name || "",
+        contacts, accentColor: accent, logoUrl: logoUrl.trim(), jobIdsExclude,
+        jobIdsInclude: Array.from(includedIds), by: identity?.name || "",
       });
       setCreated(r.data);
-      setGcName(""); setContacts([]); setExcluded(new Set()); setAccent("#3B5BA5"); setLogoUrl("");
+      setGcName(""); setContacts([]); setExcluded(new Set()); setIncludedIds(new Set()); setAccent("#3B5BA5"); setLogoUrl("");
       await refresh();
     } catch(e) { setErr(e.message||"Create failed"); }
     setBusy("");
@@ -40234,13 +40253,18 @@ function GCPortalManager({ jobs, identity }) {
   // P0-1: edit an EXISTING link's contacts / branding / hidden-jobs — this is
   // the exact gap Koy flagged first ("no way to add employees to existing GC
   // links"). Prefill from the link as returned by gcPortalListLinks.
-  const editMatched = (l) => activeJobs.filter(j => _gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id));
+  // NAME-matched only (review finding): force-included jobs are owned by the
+  // chips in the edit form — listing them here too produced a checkbox AND a
+  // chip with contradictory controls, and a ×-removed include couldn't be
+  // re-added until after save because this list still claimed it.
+  const editMatched = (l) => activeJobs.filter(j => _gcKeyOf(j.gc)===l.gcKey);
   const startEdit = (l) => {
     setEditing(l.token); setErr("");
     setEditDraft({
       label: l.label||"", accentColor: l.accentColor||"#3B5BA5", logoUrl: l.logoUrl||"",
       contacts: Array.isArray(l.contacts) ? l.contacts.slice() : [],
       jobIdsExclude: new Set(l.jobIdsExclude||[]),
+      jobIdsInclude: new Set(l.jobIdsInclude||[]),
     });
   };
   const cancelEdit = () => { setEditing(null); setEditDraft(null); };
@@ -40255,6 +40279,7 @@ function GCPortalManager({ jobs, identity }) {
         accentColor: editDraft.accentColor,
         logoUrl: editDraft.logoUrl.trim(),
         jobIdsExclude: Array.from(editDraft.jobIdsExclude),
+        jobIdsInclude: Array.from(editDraft.jobIdsInclude || []),
       });
       setEditing(null); setEditDraft(null);
       await refresh();
@@ -40270,8 +40295,12 @@ function GCPortalManager({ jobs, identity }) {
     setBusy(l.token+"_test"); setErr("");
     setTestSent(s => { const n = {...s}; delete n[l.token]; return n; });
     try {
-      await gc("gcPortalSendTestMail", { token: l.token, to });
-      setTestSent(s => ({...s, [l.token]: "Sent — check " + to + "."}));
+      const r = await gc("gcPortalSendTestMail", { token: l.token, to });
+      // Soak-aware confirmation (review finding): during a soak the send is
+      // rerouted — saying "check <typed address>" sends the office hunting the
+      // wrong inbox. Say where it ACTUALLY went.
+      const soaked = r && r.data && r.data.soakedTo;
+      setTestSent(s => ({...s, [l.token]: soaked ? ("Soak mode is ON — delivered to " + soaked + " (addressed to " + to + ").") : ("Sent — check " + to + ".")}));
     } catch(e) { setErr(e.message||"Test send failed"); }
     setBusy("");
   };
@@ -40310,22 +40339,76 @@ function GCPortalManager({ jobs, identity }) {
       const key = _gcKeyOf(raw);
       if (!key || linked.has(key)) return;
       let g = groups.get(key);
-      if (!g) { g = { key, names: new Map(), jobs: [] }; groups.set(key, g); }
+      if (!g) { g = { key, names: new Map(), jobs: [], simproNos: [] }; groups.set(key, g); }
       g.names.set(raw, (g.names.get(raw) || 0) + 1);
       g.jobs.push(j.name || j.id);
+      const sn = String(j.simproNo || "").trim();
+      if (sn) g.simproNos.push(sn);
     });
     const arr = [...groups.values()].map(g => {
       let best = "", bestN = -1;
       g.names.forEach((n, raw) => { if (n > bestN) { bestN = n; best = raw; } });
-      return { key: g.key, name: best, count: g.jobs.length, jobs: g.jobs };
+      return { key: g.key, name: best, count: g.jobs.length, jobs: g.jobs, simproNos: [...new Set(g.simproNos)] };
     });
     arr.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     return arr;
   }, [jobs, links]);
 
+  // "Create portal" from the discovery list: prefill the create form's name, then
+  // pull Simpro SiteContacts across this GC's jobs (reuses fetchSimproJobBasics),
+  // dedupe, and prefill contacts. Capped at 10 jobs so a big GC can't hang the
+  // pull; you review every pulled contact in the form before Create, so a mis-map
+  // can't reach a live portal. Read-only — no Simpro or Firestore writes.
+  // Review-pass guards: reset EVERY create-form field on each discovery click —
+  // stale contacts/accent/logo from a previous GC must never survive into a
+  // different GC's form (one Create later and GC A's real people are wired to
+  // GC B's portal — same outside-party-data class as the Kweller rules). The
+  // seq ref drops a slow in-flight pull whose result would land under a newer
+  // click's GC name.
+  async function pullAndPrefill(g) {
+    const seq = ++pullSeqRef.current;
+    setGcName(g.name); setExcluded(new Set()); setIncludedIds(new Set());
+    setContacts([]); setAccent("#3B5BA5"); setLogoUrl("");
+    const sn = (g.simproNos || [])[0]; // all a GC's jobs share a Simpro customer — one lookup covers it
+    if (!sn) return; // no Simpro-linked jobs — name is prefilled, add contacts by hand
+    setPullingKey(g.key);
+    try {
+      // Admin-gated like every other gc* office callable (review finding: this
+      // returns customer PII, so the shipped-in-bundle app key alone is too low
+      // a bar — requireAdmin verifies a live admin PIN server-side).
+      const res = await gc("gcSimproCustomerContacts", { simproJobNo: sn });
+      if (seq !== pullSeqRef.current) return; // a newer pull started — drop this result
+      const r = (res && res.data) || {};
+      // Bulk-pulled contacts start MUTED (review finding): defaulting them ON
+      // meant every Simpro import — supers, estimators, AP clerks — would go
+      // live for digests the night the soak ends, the opposite of the staged
+      // "flip people on one at a time" rollout. Hand-ADDED contacts still
+      // default ON (deliberate: typing someone in is an explicit choice).
+      const pulled = (Array.isArray(r.contacts) ? r.contacts : [])
+        .map((c) => ({ name: c.name, role: c.role, emailAddr: c.emailAddr, phone: c.phone, email: false, text: false }));
+      if (pulled.length) {
+        setContacts(pulled);
+        // Show WHICH Simpro company these came from — the office's chance to
+        // catch a wrong-customer prefill before it reaches a live portal.
+        toast.success("Pulled " + pulled.length + " contact" + (pulled.length === 1 ? "" : "s") + (r.customerName ? " for " + r.customerName : "") + " — all start email OFF; flip on who should get updates, then Create");
+        if (r.failedCount) toast.warn(r.failedCount + " contact" + (r.failedCount === 1 ? "" : "s") + " couldn't load from Simpro — pull again or add by hand");
+      }
+      else toast.info("No Simpro contacts found for " + g.name + " — add them by hand");
+    } catch (e) { if (seq === pullSeqRef.current) toast.error("Couldn't reach Simpro — try again, or add contacts by hand"); }
+    finally { if (seq === pullSeqRef.current) setPullingKey(""); }
+  }
+
   return (
     <div style={{fontSize:13,color:"#2E477D"}}>
       {err ? <div style={{background:"#FBE9E9",border:"1px solid #E5B4B4",color:"#8A2A2A",borderRadius:8,padding:"7px 11px",marginBottom:10,fontSize:12.5}}>{err}</div> : null}
+      {/* Digest-run health banner (review finding: a failing digest run was
+          invisible — 403s never reach gc_bounces, only function logs). The
+          digest writes gc_config/mail_health each run; surface failures here. */}
+      {digestInfo.health && digestInfo.health.failed > 0 ? (
+        <div style={{background:"#FBE9E9",border:"1px solid #E5B4B4",color:"#8A2A2A",borderRadius:8,padding:"8px 11px",marginBottom:10,fontSize:12.5}}>
+          <b>Last digest run had {digestInfo.health.failed} failed send{digestInfo.health.failed===1?"":"s"}</b> ({digestInfo.health.lastRunAt ? _gcAgo(digestInfo.health.lastRunAt) : ""}, {digestInfo.health.sent||0} delivered). Failed sends were re-queued and retry automatically for ~25 minutes. If this persists, check the Resend dashboard and the gcPortalDailyDigest function logs.
+        </div>
+      ) : null}
 
       {/* ── Discovery: contractors on your jobs with no portal yet ── */}
       {discovery.length > 0 && (
@@ -40335,7 +40418,7 @@ function GCPortalManager({ jobs, identity }) {
             <span style={{marginLeft:"auto",fontSize:11.5,color:"#5E6670",fontWeight:700}}>{discovery.length} contractor{discovery.length===1?"":"s"}</span>
           </div>
           <div style={{fontSize:11.5,color:"#5E6670",marginBottom:10,lineHeight:1.5}}>
-            Pulled from the <b>GC</b> field on your jobs, most jobs first. Tap one to start a portal — it fills in the name below and the new link auto-matches those jobs. One-off names sink to the bottom; ignore what you don't need. Near-duplicates (e.g. "City Point" vs "City Point Homes") show separately — pick one and add the stray jobs when you create the link.
+            Pulled from the <b>GC</b> field on your jobs, most jobs first. Tap one to start a portal — it fills in the name below and the new link auto-matches those jobs. One-off names sink to the bottom; ignore what you don't need. Near-duplicates (e.g. "City Point" vs "City Point Homes") show separately — fix the stray job's GC field to match the main spelling and it flows into that portal automatically.
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:340,overflowY:"auto"}}>
             {discovery.map(g => (
@@ -40345,8 +40428,8 @@ function GCPortalManager({ jobs, identity }) {
                   <div style={{fontSize:11.5,color:"#8A93A3",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.jobs.slice(0,4).join(" · ")}{g.jobs.length>4?" · +"+(g.jobs.length-4)+" more":""}</div>
                 </div>
                 <span style={{fontSize:11,fontWeight:700,color:"#2E477D",background:"#EAEEF6",borderRadius:99,padding:"2px 9px",flexShrink:0}}>{g.count} job{g.count===1?"":"s"}</span>
-                <button onClick={()=>{ setGcName(g.name); setExcluded(new Set()); }}
-                  style={{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"6px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>Create portal</button>
+                <button disabled={!!pullingKey} onClick={()=>pullAndPrefill(g)}
+                  style={{border:"1px solid #2E477D",background:pullingKey?"#8A93A3":"#2E477D",color:"#fff",borderRadius:8,padding:"6px 11px",fontWeight:700,fontSize:12,cursor:pullingKey?"wait":"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>{pullingKey===g.key?"Pulling…":"Create portal"}</button>
               </div>
             ))}
           </div>
@@ -40357,7 +40440,13 @@ function GCPortalManager({ jobs, identity }) {
       <div style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:12,marginBottom:14}}>
         <div style={{fontWeight:700,marginBottom:8,color:"#1B1F24"}}>Create a contractor link</div>
         <input value={gcName} onChange={e=>{
-          const v = e.target.value; setGcName(v);
+          const v = e.target.value;
+          // Review finding: retyping the name to a DIFFERENT GC must not carry
+          // the previous GC's pulled contacts / force-included jobs along (same
+          // outside-party class as the discovery-click reset), and must drop any
+          // in-flight Simpro pull so it can't land under the new name.
+          if (_gcKeyOf(v) !== _gcKeyOf(gcName)) { pullSeqRef.current++; setContacts([]); setIncludedIds(new Set()); }
+          setGcName(v);
           // P0-8 fix: seed hidden-jobs from EVERY existing link for this GC,
           // revoked or not, unioned together — exclude is GC-level (shared
           // mirror), so a new link must inherit prior hides even if the link
@@ -40383,6 +40472,26 @@ function GCPortalManager({ jobs, identity }) {
                 </div>
               </Fragment>
             ) : <div style={{color:"#B0892C"}}>No jobs match "{gcName.trim()}" yet — check the spelling against the GC field on the jobs, or create the link now and jobs will appear as they're added.</div>}
+
+            {/* Force-include picker (review finding: jobIdsInclude had no UI) —
+                merges a job filed under a different GC spelling into THIS portal
+                without touching the job record. */}
+            <div style={{marginTop:8}}>
+              {Array.from(includedIds).map(id => { const j = activeJobs.find(x=>x.id===id); return (
+                <span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"#EAEEF6",border:"1px solid #CDD9EC",borderRadius:99,padding:"2px 10px",margin:"0 6px 6px 0",fontSize:12,color:"#2E477D",fontWeight:600}}>
+                  {(j&&j.name)||id}{j&&j.gc?<span style={{color:"#8A93A3",fontWeight:400}}>({j.gc})</span>:null}
+                  <button onClick={()=>{ const n=new Set(includedIds); n.delete(id); setIncludedIds(n); }} style={{border:"none",background:"none",color:"#8A2A2A",cursor:"pointer",fontWeight:700,padding:0,fontSize:13}}>×</button>
+                </span>
+              ); })}
+              <select value="" onChange={e=>{ const v=e.target.value; if(v){ const n=new Set(includedIds); n.add(v); setIncludedIds(n); } }}
+                style={{border:"1px solid #CDD9EC",borderRadius:8,padding:"6px 9px",fontSize:12,color:"#2E477D",background:"#fff",fontFamily:"inherit",maxWidth:"100%"}}>
+                <option value="">+ include a job filed under a different GC spelling…</option>
+                {activeJobs.slice().sort((a,b)=>String(a.gc||"").localeCompare(String(b.gc||""))||String(a.name||"").localeCompare(String(b.name||""))).filter(j=>!matched.some(m=>m.id===j.id) && !includedIds.has(j.id)).map(j=>(
+                  <option key={j.id} value={j.id}>{j.gc?j.gc+" — ":""}{j.name}</option>
+                ))}
+              </select>
+              <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Merges near-duplicates — e.g. add the "City Point" job to the "City Point Homes" portal. (Or just fix the job's GC spelling and it flows in on its own.)</div>
+            </div>
           </div>
         ) : null}
 
@@ -40438,6 +40547,21 @@ function GCPortalManager({ jobs, identity }) {
               </span>
             </div>
             {!l.revoked ? <code style={{display:"block",marginTop:6,background:"#F4F6F8",borderRadius:6,padding:"3px 7px",fontSize:11,color:"#5E6670",wordBreak:"break-all"}}>{urlOf(l.token)}</code> : null}
+            {/* Digest observability (review finding): when this portal's digest
+                last actually went out — previously invisible everywhere. The
+                soak wording keys off LIVE config (soakLive), not the last-run
+                snapshot, so it's correct the moment soak flips either way. */}
+            {!l.revoked ? (
+              digestInfo.soakLive && digestInfo.soakLive.soak ? (
+                <div style={{marginTop:5,fontSize:11.5,color:"#B0892C"}}>
+                  Digests: soak mode — nightly copy goes to {digestInfo.soakLive.soakTo || "the soak inbox"}; delivery to this contractor (and this timer) starts when the soak ends
+                </div>
+              ) : (
+                <div style={{marginTop:5,fontSize:11.5,color:"#8A93A3"}}>
+                  Last digest: {digestInfo.byPortal[l.portalId] ? _gcAgo(digestInfo.byPortal[l.portalId]) : "never"}
+                </div>
+              )
+            ) : null}
 
             {!isEditing ? (
               <Fragment>
@@ -40487,6 +40611,24 @@ function GCPortalManager({ jobs, identity }) {
                     </label>
                   ))}
                   {!editMatched(l).length ? <div style={{color:"#8A93A3",fontSize:12}}>No jobs currently match this GC.</div> : null}
+                  {/* Force-include picker (jobIdsInclude — same mechanism as the
+                      create form): pull a job filed under a different GC spelling
+                      onto this portal; save triggers a mirror rebuild server-side. */}
+                  <div style={{marginTop:8}}>
+                    {Array.from(editDraft.jobIdsInclude||[]).map(id => { const j = (jobs||[]).find(x=>x.id===id); return (
+                      <span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"#EAEEF6",border:"1px solid #CDD9EC",borderRadius:99,padding:"2px 10px",margin:"0 6px 6px 0",fontSize:12,color:"#2E477D",fontWeight:600}}>
+                        {(j&&j.name)||id}{j&&j.gc?<span style={{color:"#8A93A3",fontWeight:400}}>({j.gc})</span>:null}
+                        <button onClick={()=>{ const n=new Set(editDraft.jobIdsInclude); n.delete(id); setEditDraft({...editDraft, jobIdsInclude:n}); }} style={{border:"none",background:"none",color:"#8A2A2A",cursor:"pointer",fontWeight:700,padding:0,fontSize:13}}>×</button>
+                      </span>
+                    ); })}
+                    <select value="" onChange={e=>{ const v=e.target.value; if(v){ const n=new Set(editDraft.jobIdsInclude||[]); n.add(v); setEditDraft({...editDraft, jobIdsInclude:n}); } }}
+                      style={{border:"1px solid #CDD9EC",borderRadius:8,padding:"6px 9px",fontSize:12,color:"#2E477D",background:"#fff",fontFamily:"inherit",maxWidth:"100%"}}>
+                      <option value="">+ include a job filed under a different GC spelling…</option>
+                      {activeJobs.slice().sort((a,b)=>String(a.gc||"").localeCompare(String(b.gc||""))||String(a.name||"").localeCompare(String(b.name||""))).filter(j=>!editMatched(l).some(m=>m.id===j.id) && !(editDraft.jobIdsInclude||new Set()).has(j.id)).map(j=>(
+                        <option key={j.id} value={j.id}>{j.gc?j.gc+" — ":""}{j.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 12px"}}>

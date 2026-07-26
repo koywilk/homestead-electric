@@ -2198,6 +2198,62 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── Get a GC's contacts from Simpro (for portal-link prefill) ───────────────
+// job → Customer.ID → the customer's linked contacts. The list endpoint returns
+// id + name only, so a per-contact detail fetch adds Email / CellPhone and the
+// Primary/Job flags. ONE customer lookup per GC (all of a GC's jobs share the
+// same customer). Read-only — never writes to Simpro or Firestore. Returns
+// app-shaped contacts, primary/job contacts first, for the office to review +
+// edit before creating the portal link. Endpoints confirmed via probe 2026-07-22.
+exports.gcSimproCustomerContacts = functions.https.onCall(async (data) => {
+  // requireAdmin, NOT requireAppKey (review finding): this returns customer PII
+  // (names/emails/cells) keyed by small enumerable job numbers, and the app key
+  // ships in the public bundle. Same live-PIN gate as every gc* office callable.
+  await requireAdmin(data);
+  const simproJobNo = String((data && data.simproJobNo) || "").trim();
+  if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+  const jResp = await fetch(`${SIMPRO_BASE}/jobs/${encodeURIComponent(simproJobNo)}`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+  if (!jResp.ok) throw new functions.https.HttpsError("internal", `Simpro job error ${jResp.status}`);
+  const job = await jResp.json();
+  const cust = job.Customer || {};
+  const customerName = cust.CompanyName || [cust.GivenName, cust.FamilyName].map((x) => String(x || "").trim()).filter(Boolean).join(" ") || "";
+  const custId = cust.ID;
+  if (!custId) return { customerName, contacts: [], failedCount: 0 };
+  const lResp = await fetch(`${SIMPRO_BASE}/customers/${encodeURIComponent(custId)}/contacts/`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+  // A failed LIST is an error the office must see — an empty-success here would
+  // read as "this GC has no contacts" and get silently trusted.
+  if (!lResp.ok) throw new functions.https.HttpsError("internal", `Simpro contacts error ${lResp.status}`);
+  const list = await lResp.json();
+  const ids = (Array.isArray(list) ? list : []).map((c) => c && c.ID).filter(Boolean).slice(0, 25);
+  // Detail fetches in chunks of 5 (not one 25-wide burst) — Simpro rate limits;
+  // a 429'd detail returns null and is COUNTED so the client can say "N couldn't
+  // load" instead of toasting success over silently missing contacts.
+  const details = [];
+  for (let i = 0; i < ids.length; i += 5) {
+    const batch = await Promise.all(ids.slice(i, i + 5).map(async (cid) => {
+      try {
+        const dResp = await fetch(`${SIMPRO_BASE}/customers/${encodeURIComponent(custId)}/contacts/${cid}`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+        return dResp.ok ? await dResp.json() : null;
+      } catch (e) { return null; }
+    }));
+    details.push(...batch);
+  }
+  const failedCount = details.filter((d) => !d).length;
+  const contacts = details.filter(Boolean).map((c) => {
+    const name = [c.GivenName, c.FamilyName].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
+    return {
+      name: name || "(unnamed)",
+      role: String(c.Position || "").trim() || (c.PrimaryJobContact ? "Primary contact" : "Contact"),
+      phone: String(c.CellPhone || c.WorkPhone || c.AltPhone || "").trim(),
+      emailAddr: String(c.Email || "").trim(),
+      primary: c.PrimaryJobContact === true || c.PrimaryQuoteContact === true,
+      jobContact: c.JobContact === true,
+    };
+  }).filter((c) => c.emailAddr || c.phone || c.name !== "(unnamed)");
+  contacts.sort((a, b) => (Number(b.primary) - Number(a.primary)) || (Number(b.jobContact) - Number(a.jobContact)));
+  return { customerName, customerId: custId, failedCount, contacts };
+});
+
 // ─── PROBE: Get Simpro quote status (discovery for CO auto-approval) ───────────
 // Read-only. Given a project quote # (as typed onto a CO in the app), fetch the
 // matching Simpro quote and return its raw status/stage shape. Purpose: this
@@ -5976,7 +6032,23 @@ exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
 exports.gcPortalListLinks = functions.https.onCall(async (data) => {
   await requireAdmin(data);
   const snap = await db.collection("gc_links").orderBy("createdAt", "desc").limit(300).get();
-  return { links: snap.docs.map((d) => {
+  // Digest observability (review finding): the office had no way to see when a
+  // portal's digest last went out or that a run failed. Batch-read each unique
+  // portal's meta + the run-health doc and return them alongside the links.
+  const portalIds = [...new Set(snap.docs.map((d) => d.data().portalId).filter(Boolean))].slice(0, 100);
+  const lastDigestByPortal = {};
+  await Promise.all(portalIds.map(async (pid) => {
+    try { const p = await db.collection("gc_portal").doc(pid).get(); lastDigestByPortal[pid] = ((p.data() || {}).lastDigestAt) || ""; }
+    catch (e) { lastDigestByPortal[pid] = ""; }
+  }));
+  let mailHealth = null;
+  try { const h = await db.collection("gc_config").doc("mail_health").get(); if (h.exists) mailHealth = h.data(); } catch (e) {}
+  // LIVE soak state (review finding: keying the card badge off mail_health — a
+  // last-run snapshot — lies for up to 24h right when Koy flips soak off).
+  // Return ONLY the soak fields; never the mail doc itself (it holds the API key).
+  let soakLive = null;
+  try { const m = (await db.collection("gc_config").doc("mail").get()).data() || {}; soakLive = { soak: !!m.soakTo, soakTo: String(m.soakTo || "") }; } catch (e) {}
+  return { lastDigestByPortal, mailHealth, soakLive, links: snap.docs.map((d) => {
     const l = d.data();
     return {
       token: l.token, slug: l.slug, label: l.label, gc: l.gc, gcKey: l.gcKey, portalId: l.portalId,
@@ -6100,7 +6172,10 @@ exports.gcPortalSendTestMail = functions.https.onCall(async (data) => {
   });
   const ok = await sendGcMail({ to, subject: "[TEST] " + (link.label ? link.label + " — " : "") + "your jobs tonight", html });
   if (!ok) throw new functions.https.HttpsError("internal", "Send failed — check gc_config/mail (key/from/domain auth) and the function logs.");
-  return { ok: true, sentTo: to, jobCount: jobs.length };
+  // soakedTo tells the office where the mail ACTUALLY went (sendGcMail reroutes
+  // every send while gc_config/mail.soakTo is set) — without it the UI says
+  // "check <typed address>" and the office hunts the wrong inbox.
+  return { ok: true, sentTo: to, soakedTo: cfg.soakTo || null, jobCount: jobs.length };
 });
 
 // ─── Bounce/complaint webhook (Resend, Svix-signed) ──────────────────────────
@@ -6238,7 +6313,7 @@ exports.gcPortalDailyDigest = functions.pubsub
     const links = await db.collection("gc_links").where("revoked", "==", false).get();
     const byPortal = {};
     links.docs.forEach((d) => { const l = d.data(); if (l.portalId) (byPortal[l.portalId] = byPortal[l.portalId] || []).push(l); });
-    let sent = 0, portals = 0;
+    let sent = 0, portals = 0, failed = 0;
     for (const portalId of Object.keys(byPortal)) {
       const group = byPortal[portalId];
       const rep = group[0];
@@ -6260,11 +6335,38 @@ exports.gcPortalDailyDigest = functions.pubsub
         const dg = gcNotify.digestSections(jobs);
         if (!dg.hasContent) continue;
         const html = gcNotify.renderGcEmail({ gcLabel: rep.label, accent: rep.accentColor, title: "Tonight’s update", intro: dg.summary, sectionsHtml: dg.sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, rep.token) });
-        if (await sendGcMail({ to: addr, subject: (rep.label ? rep.label + " — " : "") + "your jobs tonight", html })) { sent++; any = true; }
+        const subject = (rep.label ? rep.label + " — " : "") + "your jobs tonight";
+        if (await sendGcMail({ to: addr, subject, html })) { sent++; any = true; }
+        else {
+          // Review finding: a failed recipient was silently skipped — and once
+          // lastDigestAt advanced, the change-gate meant they never got that
+          // night's digest at all. Hand the item to gc_notify_queue (the 5-min
+          // drain retries it up to 5 times) and count it toward `any`, since
+          // the queue now owns delivery for this recipient.
+          failed++;
+          try {
+            await db.collection("gc_notify_queue").add({ to: addr, subject, html, sendAt: new Date().toISOString(), tries: 0, createdAt: new Date().toISOString() });
+            any = true;
+          } catch (e) { functions.logger.warn("[gcPortalDailyDigest] failed send could not be queued", { message: e.message }); }
+        }
       }
-      if (any) { await db.collection("gc_portal").doc(portalId).set({ lastDigestAt: new Date().toISOString() }, { merge: true }); portals++; }
+      if (any) portals++;
+      // Soak sends must NOT advance lastDigestAt (review finding) — otherwise
+      // the change-gate would suppress each portal's first REAL digest the
+      // night the soak ends (soak already bypasses the gate on the way in).
+      if (any && !cfg.soakTo) { await db.collection("gc_portal").doc(portalId).set({ lastDigestAt: new Date().toISOString() }, { merge: true }); }
     }
-    functions.logger.info("[gcPortalDailyDigest] ran", { portals, sent });
+    // Run-health doc (review finding: a failing run was invisible — 403s never
+    // reach gc_bounces, only function logs nobody reads). Function-only via the
+    // existing gc_config/{docId} deny-all rule; surfaced to the office through
+    // gcPortalListLinks → the Contractors-tab banner.
+    try {
+      await db.collection("gc_config").doc("mail_health").set({
+        lastRunAt: new Date().toISOString(), sent, failed, portalsWithContent: portals,
+        soak: !!cfg.soakTo, soakTo: cfg.soakTo || "",
+      });
+    } catch (e) { functions.logger.warn("[gcPortalDailyDigest] health write failed", { message: e.message }); }
+    functions.logger.info("[gcPortalDailyDigest] ran", { portals, sent, failed });
     return null;
   });
 
