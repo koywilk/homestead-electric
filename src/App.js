@@ -43001,7 +43001,15 @@ function QuestionsSharePage({ jobId }) {
   }, [job]);
   const [submitting,     setSubmitting]    = useState(false);
   const [submitted,      setSubmitted]     = useState(false);
-  const [respondentName, setRespondentName]= useState('');
+  // Per-device submit memory (2026-07-28): who actually submitted from THIS
+  // browser on THIS link. Replaces two wrong uses of the share's LABEL —
+  // Koy forwarded Haley's link ("Haley") to a designer and the name box came
+  // pre-filled "Haley", so an unedited submit would have filed the designer's
+  // answers under Haley. The share's label describes who the link was made
+  // for; it must never stand in for who is typing right now.
+  const _subKey = `he_qsub_${jobId}_${shareParam||'legacy'}`;
+  const _priorSubmit = (() => { try { return JSON.parse(localStorage.getItem(_subKey)||'null'); } catch(e){ return null; } })();
+  const [respondentName, setRespondentName]= useState(() => (_priorSubmit && _priorSubmit.name) || '');
   const [nameErr,        setNameErr]       = useState(false);
   const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
   const [loadedAnsweredIds, setLoadedAnsweredIds] = useState(() => new Set()); // question ids that ALREADY had a stored answer at load — a snapshot (never grows as you type) so the "previously answered" banner can be scoped to THIS link
@@ -43069,7 +43077,7 @@ function QuestionsSharePage({ jobId }) {
   // Prefill the name from the share's own label (e.g. "Haley - Design") so
   // autosaved answers carry attribution even before the recipient types it.
   // Fires once when the share resolves; doesn't fight a cleared field later.
-  useEffect(() => { if(shareName && !respondentName) setRespondentName(shareName); }, [shareName]);
+  // (Removed: prefill from shareName — see _subKey above. The box now fills only from THIS device's own prior submit.)
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
@@ -43187,6 +43195,7 @@ function QuestionsSharePage({ jobId }) {
         };
       }, 'QuestionsSharePage-submit');
       try { localStorage.removeItem(draftKey); } catch(e){}
+      try { localStorage.setItem(_subKey, JSON.stringify({ name: respondentName.trim(), at: new Date().toISOString() })); } catch(e){}
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
@@ -43283,7 +43292,12 @@ function QuestionsSharePage({ jobId }) {
   // actually had a prior answer, and name the link's OWN recipient (shareName),
   // falling back to the doc-level name only for the generic all-questions link.
   const priorName = shareName || prevAnsweredBy;
-  const showPriorBanner = !!priorName && [...roughQs, ...finishQs].some(q => loadedAnsweredIds.has(q.id));
+  const someAnswered = [...roughQs, ...finishQs].some(q => loadedAnsweredIds.has(q.id));
+  // "YOU previously submitted" is only true for the device that actually did.
+  // Anyone else opening the same link (a forwarded copy) gets a neutral note
+  // instead of being told they are Haley.
+  const iSubmittedBefore = !!(_priorSubmit && _priorSubmit.name);
+  const showPriorBanner = someAnswered && (iSubmittedBefore || !!priorName);
 
   const cardStyle = {background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:16,marginBottom:12};
 
@@ -43417,7 +43431,7 @@ function QuestionsSharePage({ jobId }) {
         </div>
       </div>
 
-      {showPriorBanner&&<div style={{background:'#F3E9CF',border:'1px solid #B0892C',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#6E5212',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>You previously submitted answers as <b>{priorName}</b>. You can update them below and resubmit.</span></div>}
+      {showPriorBanner&&<div style={{background:'#F3E9CF',border:'1px solid #B0892C',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#6E5212',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>{iSubmittedBefore ? <Fragment>You previously submitted answers as <b>{_priorSubmit.name}</b>. You can update them below and resubmit.</Fragment> : <Fragment>Some of these were already answered{priorName?<Fragment> by <b>{priorName}</b></Fragment>:null}. Answer anything still open — put <b>your own name</b> at the bottom and your answers are filed under you.</Fragment>}</span></div>}
 
       {!hasQs ? (
         <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
