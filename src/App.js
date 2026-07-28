@@ -40022,6 +40022,26 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
         setErr("That job isn't in your current list (archived, or still loading). Open it directly, or Dismiss."); setBusy(""); return;
       }
       let mutated = false;
+      // v356: map contractor attachments into the app's standard photo shape so
+      // the crew UIs render them natively (punch-item photos / q.photos —
+      // review finding: photo-only sends dead-ended at Apply and even
+      // text+photo applies dropped the photo on the inbox floor). storagePath
+      // is derived from the download URL so photo-delete flows keep working.
+      const gcPhotos = (Array.isArray(req.attachments) ? req.attachments : []).map(a => {
+        const m = String(a.url||"").match(/\/o\/([^?]+)/);
+        const nm = String(a.name||"file");
+        // SECURITY (verified by hand 2026-07-24): the server pins the URL prefix,
+        // but the SUFFIX is still contractor-influenced — a crafted attachment
+        // url decodes to e.g. "gc_uploads/../../jobs/123/punch-photos/x.jpg",
+        // and storagePath feeds six deleteObject() call sites. Accept the
+        // derived path ONLY when it stays inside gc_uploads/ with no traversal
+        // segment; otherwise leave it blank (photo still displays via url, and
+        // the delete flows no-op instead of touching a crew object).
+        const raw = m ? decodeURIComponent(m[1]) : "";
+        const safePath = (/^gc_uploads\/[^/]/.test(raw) && raw.split("/").every(seg => seg !== ".." && seg !== ".")) ? raw : "";
+        return { id: uid(), name: nm, url: a.url, storagePath: safePath,
+          type: /\.jpe?g$/i.test(nm) ? "image/jpeg" : /\.png$/i.test(nm) ? "image/png" : /\.pdf$/i.test(nm) ? "application/pdf" : "" };
+      });
       if (job && req.type === "answer" && req.itemId) {
         const zones = ["upper","main","basement"];
         let field = null, next = null;
@@ -40033,7 +40053,8 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
             upd[z] = (Array.isArray(qs[z]) ? qs[z] : []).map(q => {
               if (q && String(q.id) === String(req.itemId)) {
                 found = true;
-                return { ...q, answer: req.text, done: true, answeredVia: "gc", answeredBy: who, answeredAt: new Date().toISOString() };
+                return { ...q, answer: req.text || (gcPhotos.length ? "(answered with attached photo)" : ""), done: true, answeredVia: "gc", answeredBy: who, answeredAt: new Date().toISOString(),
+                  ...(gcPhotos.length ? { photos: [ ...(Array.isArray(q.photos) ? q.photos : []), ...gcPhotos ] } : {}) };
               }
               return q;
             });
@@ -40041,11 +40062,12 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
           if (found) { field = f; next = upd; break; }
         }
         if (field) { const patch = { [field]: next }; onUpdateJob({ ...job, ...patch }, patch); mutated = true; }
-      } else if (job && req.type === "punch" && req.text) {
+      } else if (job && req.type === "punch" && (req.text || gcPhotos.length)) {
         const rp = job.roughPunch ? { ...job.roughPunch } : {};
         const main = rp.main ? { ...rp.main } : { rooms: [], general: [], hotcheck: [] };
         main.general = (Array.isArray(main.general) ? [...main.general] : []).concat({
-          id: uid(), text: req.text, done: false, fromGC: true, addedBy: who, addedAt: new Date().toISOString(),
+          id: uid(), text: req.text || "(see attached photo)", done: false, fromGC: true, addedBy: who, addedAt: new Date().toISOString(),
+          ...(gcPhotos.length ? { photos: gcPhotos } : {}),
         });
         rp.main = main;
         const patch = { roughPunch: rp };
@@ -40118,6 +40140,17 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
             </div>
           ) : null}
           {r.fileUrl ? <div style={{marginBottom:6}}><a href={r.fileUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
+          {Array.isArray(r.attachments) && r.attachments.length ? (
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:6,alignItems:"flex-start"}}>
+              {r.attachments.map((a,i)=> /\.(jpe?g|png|webp|gif)$/i.test(a.name||"") ? (
+                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name}>
+                  <img src={a.url} alt={a.name} style={{width:72,height:72,objectFit:"cover",borderRadius:8,border:"1px solid #E1E4E9",display:"block"}}/>
+                </a>
+              ) : (
+                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5,border:"1px solid #CDD9EC",borderRadius:8,padding:"5px 10px"}}>{a.name} ↗</a>
+              ))}
+            </div>
+          ) : null}
           {r.status==="new" ? (
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <button disabled={busy===r.id} onClick={()=>apply(r)} style={{...B.btn,opacity:busy===r.id?0.5:1}}>{busy===r.id?"…":applyLabel(r.type)}</button>
@@ -47128,6 +47161,26 @@ function _gcAgo(iso){
   const h = Math.floor(m/60); if(h < 24) return h+"h ago";
   const d = Math.floor(h/24); return d+"d ago";
 }
+// Contractor attachment prep (v356): recompress images to JPEG ≤1920px q0.85 —
+// caps upload size AND converts iPhone HEIC into something every browser can
+// display in the office inbox. PDFs/others pass through raw with a hard 20MB
+// cap. Returns {blob, name, type}; throws Error("too big") over the cap.
+async function _gcPrepUpload(file){
+  const isImage = /^image\//.test(file.type||"");
+  if (isImage) {
+    try {
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, 1920/Math.max(bmp.width,bmp.height));
+      const w = Math.max(1,Math.round(bmp.width*scale)), h = Math.max(1,Math.round(bmp.height*scale));
+      const cv = document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(bmp,0,0,w,h);
+      const blob = await new Promise(res=>cv.toBlob(res,"image/jpeg",0.85));
+      if (blob) return { blob, name:(file.name||"photo").replace(/\.[a-z0-9]+$/i,"")+".jpg", type:"image/jpeg" };
+    } catch(e) { /* HEIC decode can fail on some browsers — fall through to raw */ }
+  }
+  if (file.size > 20*1024*1024) throw new Error("too big");
+  return { blob:file, name:file.name||"file", type:file.type||"application/octet-stream" };
+}
 // Absolute short dates for the portal (mockup decision: "updated 7/15", never
 // "115d ago" — relative ages read as a dead portal on older jobs). Accepts ISO
 // or M/D/YYYY; unparseable strings pass through untouched.
@@ -47204,10 +47257,38 @@ const _gcField = (P) => ({ width:"100%", boxSizing:"border-box", border:"1px sol
 const _gcMiniBtn = (P) => ({ border:"1px solid "+P.line, background:P.card, color:P.accent, borderRadius:8, fontSize:12, fontWeight:700, padding:"5px 11px", cursor:"pointer", fontFamily:"inherit" });
 const _gcPrimaryBtn = (P) => ({ border:"none", background:P.accent, color:"#fff", borderRadius:8, fontSize:12.5, fontWeight:700, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit" });
 
-function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText, link }) {
+function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText, link, allowFiles = false }) {
   const [open, setOpen]   = useState(false);
   const [val, setVal]     = useState("");
   const [state, setState] = useState(null); // null | "sending" | "done" | "error"
+  // v356: photo/file attachments on the contractor side. Files are prepped
+  // client-side (_gcPrepUpload: images → JPEG ≤1920px; 20MB cap) and uploaded
+  // to gc_uploads/{portalId}/ ONLY when Send is pressed — picking files costs
+  // nothing until then. ≤6 per request; gcPortalSubmit re-validates server-side.
+  const [files, setFiles] = useState([]);   // [{blob,name,type,preview,uploadedUrl?}]
+  const [fileErr, setFileErr] = useState("");
+  const [prepping, setPrepping] = useState(0);   // >0 while picked files are being recompressed — Send/Add lock
+  const [sendMsg, setSendMsg] = useState("");    // "Uploading 2 of 4…" progress during send
+  const pickFiles = async (list) => {
+    setFileErr("");
+    const picked = Array.from(list||[]);
+    // Review finding: the old snapshot-then-await pattern raced — a second pick
+    // clobbered the first batch, and Send mid-prep silently omitted the photos
+    // still being compressed. Functional appends + a prepping lock fix both.
+    setPrepping(p=>p+1);
+    let rejected = 0;
+    try {
+      for (const f of picked) {
+        try {
+          const prep = await _gcPrepUpload(f);
+          const item = { ...prep, preview: /^image\//.test(prep.type) ? URL.createObjectURL(prep.blob) : "" };
+          setFiles(prev => prev.length >= 6 ? prev : [...prev, item]);
+        } catch(e) { rejected++; }
+      }
+    } finally { setPrepping(p=>p-1); }
+    if (rejected) setFileErr(rejected + " file" + (rejected===1?"":"s") + " skipped (20MB max, 6 per message).");
+  };
+  const removeFile = (i) => setFiles(prev => { const n = prev.slice(); if (n[i] && n[i].preview) URL.revokeObjectURL(n[i].preview); n.splice(i,1); return n; });
   // P0-11: once sent, remember the request's id so we can show a live
   // contractor-visible confirmation when the office actually acts on it
   // (link.requestStatuses[id], written server-side by gcPortalHandleRequest)
@@ -47230,19 +47311,68 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
   if (!open) return <button onClick={()=>setOpen(true)} style={{ ..._gcMiniBtn(P), marginTop:6 }}>{label}</button>;
   const send = async () => {
     const text = val.trim();
-    if (!text) return;
+    if (!text && !files.length) return; // a photo alone is a valid answer
     setState("sending");
-    try { const r = await onSend(text); setReqId((r && r.data && r.data.requestId) || null); setState("done"); }
-    catch (e) { setState("error"); }
+    try {
+      // Upload attachments first (only now — not at pick time). Random id +
+      // sanitized name under the portal's own folder; the download URL (with
+      // its unguessable token) is what rides the request. uploadedUrl memoizes
+      // a successful upload on the file entry so a retry after a failed send
+      // never re-uploads (review finding: retries were orphaning duplicates).
+      const attachments = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        setSendMsg("Uploading " + (i+1) + " of " + files.length + "…");
+        if (!f.uploadedUrl) {
+          const safe = String(f.name||"file").replace(/[^\w.\-]+/g,"_").slice(0,80);
+          const path = "gc_uploads/" + ((link && link.portalId) || "unknown") + "/" + Date.now().toString(36) + Math.random().toString(36).slice(2,8) + "_" + safe;
+          const fileRef = ref(storage, path);
+          await uploadBytes(fileRef, f.blob, { contentType: f.type });
+          f.uploadedUrl = await getDownloadURL(fileRef);
+        }
+        attachments.push({ name: f.name, url: f.uploadedUrl });
+      }
+      setSendMsg("");
+      const r = await onSend(text, attachments);
+      setReqId((r && r.data && r.data.requestId) || null); setState("done");
+      files.forEach(f=>{ if(f.preview) URL.revokeObjectURL(f.preview); }); setFiles([]);
+    }
+    catch (e) { setSendMsg(""); setState("error"); }
   };
   return (
     <div style={{ marginTop:8 }}>
       {multiline
         ? <textarea value={val} onChange={e=>setVal(e.target.value)} placeholder={placeholder} rows={2} style={_gcField(P)} />
         : <input value={val} onChange={e=>setVal(e.target.value)} placeholder={placeholder} style={_gcField(P)} />}
+      {allowFiles && files.length ? (
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
+          {files.map((f,i)=>(
+            <span key={i} style={{ position:"relative", display:"inline-flex", alignItems:"center", gap:5, border:"1px solid "+P.line, borderRadius:8, padding: f.preview?0:"5px 9px", overflow:"hidden", fontSize:11.5, color:P.dim, background:P.card }}>
+              {f.preview
+                ? <img src={f.preview} alt={f.name} style={{ width:52, height:52, objectFit:"cover", display:"block" }}/>
+                : <span style={{ maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>}
+              <button onClick={()=>removeFile(i)} title="Remove"
+                style={{ position: f.preview?"absolute":"static", top:2, right:2, border:"none", borderRadius:99, width:18, height:18, lineHeight:"16px", padding:0, cursor:"pointer", fontWeight:700, background:"rgba(20,24,33,.72)", color:"#fff", fontSize:12 }}>×</button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6, flexWrap:"wrap" }}>
-        <button disabled={state==="sending"||!val.trim()} onClick={send} style={{ ..._gcPrimaryBtn(P), opacity:(state==="sending"||!val.trim())?0.5:1 }}>{state==="sending"?"Sending…":(cta||"Send")}</button>
-        <button onClick={()=>{ setOpen(false); setVal(""); setState(null); }} style={_gcMiniBtn(P)}>Cancel</button>
+        <button disabled={state==="sending"||prepping>0||(!val.trim()&&!files.length)} onClick={send} style={{ ..._gcPrimaryBtn(P), opacity:(state==="sending"||prepping>0||(!val.trim()&&!files.length))?0.5:1 }}>
+          {state==="sending" ? (sendMsg||"Sending…") : prepping>0 ? "Preparing photos…" : (cta||"Send")}
+        </button>
+        {allowFiles ? (
+          <label style={{ ..._gcMiniBtn(P), cursor: (files.length>=6||state==="sending")?"default":"pointer", opacity: (files.length>=6||state==="sending")?0.5:1 }}>
+            Add photo or file
+            <input type="file" multiple accept="image/*,application/pdf" disabled={files.length>=6||state==="sending"} style={{ display:"none" }}
+              onChange={e=>{ pickFiles(e.target.files); e.target.value=""; }}/>
+          </label>
+        ) : null}
+        {/* Cancel locked during send (review finding): closing mid-upload left the
+            in-flight request to complete anyway and the box re-materialized as
+            "Sent" — confusing; and mid-send file adds leaked un-uploaded. */}
+        <button disabled={state==="sending"} onClick={()=>{ setOpen(false); setVal(""); setState(null); files.forEach(f=>{ if(f.preview) URL.revokeObjectURL(f.preview); }); setFiles([]); setFileErr(""); }} style={{ ..._gcMiniBtn(P), opacity: state==="sending"?0.5:1 }}>Cancel</button>
+        {fileErr ? <span style={{ fontSize:11.5, color:P.urgent }}>{fileErr}</span> : null}
         {state==="error" ? <span style={{ fontSize:11.5, color:P.urgent }}>Couldn’t send — check your connection and try again.</span> : null}
       </div>
     </div>
@@ -47425,8 +47555,8 @@ function GCPortalDetail({ job, link, P, onClose }) {
                   <div key={"q"+k} style={{paddingTop:6,borderTop:"1px solid "+P.line,marginTop:6}}>
                     <div style={{fontSize:12.5,color:P.dim}}>{q.text}</div>
                     <GCSendBox P={P} link={link} label="Answer this" cta="Send answer" placeholder="Type your answer…"
-                      doneText="✓ Answer sent to Homestead"
-                      onSend={(text)=>gcSubmit({ type:"answer", itemId:q.id, text })}/>
+                      doneText="✓ Answer sent to Homestead" allowFiles
+                      onSend={(text, attachments)=>gcSubmit({ type:"answer", itemId:q.id, text, attachments })}/>
                   </div>
                 ))}
               </div>
@@ -47489,11 +47619,12 @@ function GCPortalDetail({ job, link, P, onClose }) {
                 style={{...(_gcField(P)),width:"auto",flex:"1 1 180px",padding:"5px 9px",fontSize:12.5}}/>
             </div>
             <GCSendBox P={P} link={link} label="Send a message about this job" cta="Send message" placeholder="Question, heads-up, or note for the crew…"
-              onSend={(text)=>gcSubmit({ type:"thread", text })}/>
+              allowFiles
+              onSend={(text, attachments)=>gcSubmit({ type:"thread", text, attachments })}/>
             <div style={{height:6}}/>
             <GCSendBox P={P} link={link} label="Add an item for us to address" cta="Send item" placeholder="Something you need us to come back for or fix…"
-              doneText="✓ Item sent — it’ll reach the crew after our office reviews it"
-              onSend={(text)=>gcSubmit({ type:"punch", text })}/>
+              doneText="✓ Item sent — it’ll reach the crew after our office reviews it" allowFiles
+              onSend={(text, attachments)=>gcSubmit({ type:"punch", text, attachments })}/>
           </Fragment>
         ))}
 

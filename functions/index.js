@@ -5890,6 +5890,18 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   const mirrorJob = await db.collection("gc_portal").doc(link.portalId).collection("jobs").doc(jobId).get();
   if (!mirrorJob.exists) throw new functions.https.HttpsError("permission-denied", "job not on this portal");
   const fileUrl = (typeof data.fileUrl === "string" && /^https:\/\//.test(data.fileUrl)) ? data.fileUrl.slice(0, 500) : "";
+  // Contractor-uploaded attachments (v356): the portal uploads to Storage under
+  // gc_uploads/{portalId}/ and sends {name,url}. Validate HARD — ≤6, https, our
+  // bucket's download-URL host, and the encoded path pinned to the gc_uploads
+  // area — so a request can never launder an arbitrary URL (or another part of
+  // the bucket) into the office inbox as a trusted-looking attachment.
+  // Pin the FULL prefix incl. OUR bucket — host+path alone would validate a
+  // look-alike URL served from an attacker's own Firebase project's bucket.
+  const GC_UPLOAD_PREFIX = "https://firebasestorage.googleapis.com/v0/b/homestead-electric.firebasestorage.app/o/gc_uploads%2F";
+  const attachments = (Array.isArray(data.attachments) ? data.attachments : []).slice(0, 6).map((a) => ({
+    name: clip(a && a.name, 120) || "file",
+    url: (typeof (a && a.url) === "string" && a.url.startsWith(GC_UPLOAD_PREFIX)) ? a.url.slice(0, 700) : "",
+  })).filter((a) => a.url);
   const mirror = mirrorJob.data() || {};
   const rawDateKind = clip(data.dateKind, 20);
   const dateKind = ["suggest", "confirm", "needs-by"].indexOf(rawDateKind) !== -1 ? rawDateKind : (rawDateKind ? "suggest" : "");
@@ -5903,6 +5915,7 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
     itemId: clip(data.itemId, 60),        // question id / rt id / finish_start / matterport
     fileName: clip(data.fileName, 200),
     fileUrl,
+    attachments,                          // contractor uploads [{name,url}], ≤6, bucket-pinned
     status: "new",
     createdAt: new Date().toISOString(),
   };
