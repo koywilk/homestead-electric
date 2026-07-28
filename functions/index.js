@@ -6098,25 +6098,30 @@ async function gcLoadMailConfig() {
   if (_gcMailCfg && (Date.now() - _gcMailCfgAt) < 300000) return _gcMailCfg;
   let cfg = {};
   try { const d = await db.collection("gc_config").doc("mail").get(); cfg = d.exists ? (d.data() || {}) : {}; } catch (e) {}
+  // TRIM every value (2026-07-28): these are hand-typed into the Firestore
+  // console, and a stray leading/trailing space is invisible there but fatal —
+  // " koy@..." failed GC_EMAIL_RE and silently dropped Reply-To. A pasted API
+  // key with a trailing newline would break auth the same silent way.
+  const T = (v) => String(v == null ? "" : v).trim();
   _gcMailCfg = {
-    key: cfg.key || "",
-    from: cfg.from || "updates@homesteadelectric.net",
-    origin: String(cfg.origin || "https://app.homesteadelectric.net").replace(/\/+$/, ""),
+    key: T(cfg.key),
+    from: T(cfg.from) || "updates@homesteadelectric.net",
+    origin: (T(cfg.origin) || "https://app.homesteadelectric.net").replace(/\/+$/, ""),
     // Lesson from the Phase 0 pass: every doc field a consumer reads MUST be
     // spread into this cached object, or the consumer silently reads
     // undefined (bounce tracking was dead for exactly that reason once).
     // webhookSecret = Resend webhook signing secret (Svix "whsec_..." format).
-    webhookSecret: cfg.webhookSecret || "",
+    webhookSecret: T(cfg.webhookSecret),
     // Optional Reply-To for outbound digests/instants — set this to a REAL
     // mailbox (e.g. koy@) so a contractor who just hits Reply doesn't bounce
     // off the unmonitored from address.
-    replyTo: cfg.replyTo || "",
+    replyTo: T(cfg.replyTo),
     // SOAK TEST (temporary): when set to a mailbox, EVERY outbound GC email is
     // rerouted here instead of the real contractor (sendGcMail), and the nightly
     // digest sends one per active portal regardless of contact config / change-
     // gate. No contractor receives anything while this is set. Clear the field
     // to end the soak and return to normal behavior. Empty = off.
-    soakTo: cfg.soakTo || "",
+    soakTo: T(cfg.soakTo),
   };
   _gcMailCfgAt = Date.now();
   return _gcMailCfg;
