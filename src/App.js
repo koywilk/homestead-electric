@@ -40228,6 +40228,62 @@ function GCContactEditor({ contacts, onChange }) {
   );
 }
 
+// Logo finder (v358): pulls a contractor's own logo off their website so the
+// office doesn't hunt for one. Domain comes from their contact emails
+// (Luke@citypointutah.com → citypointutah.com) and is editable. Candidates are
+// PREVIEWED and picked by hand — apple-touch-icons are square crops and og:images
+// are sometimes a hero photo, so auto-applying would put junk in a contractor's
+// header. Picking just fills logoUrl; nothing saves until the form is saved.
+function GCLogoFinder({ contacts, value, onPick, gcCall, B }) {
+  const derived = (() => {
+    const withEmail = (contacts || []).map(c => String((c && c.emailAddr) || "").trim()).filter(e => e.indexOf("@") !== -1)[0];
+    return withEmail ? withEmail.split("@").pop().toLowerCase() : "";
+  })();
+  const [domain, setDomain] = useState(derived);
+  const [busy, setBusy] = useState(false);
+  const [cands, setCands] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => { if (derived && !domain) setDomain(derived); }, [derived]);
+  const find = async () => {
+    const d = domain.trim(); if (!d || busy) return;
+    setBusy(true); setErr(""); setCands(null);
+    try {
+      const r = await gcCall("gcFindLogo", { domain: d });
+      const list = (r && r.data && r.data.candidates) || [];
+      setCands(list);
+      if (!list.length) setErr("Nothing found on that site — paste a logo URL instead.");
+    } catch (e) { setErr(e.message || "Couldn't reach that site."); }
+    setBusy(false);
+  };
+  return (
+    <div style={{marginTop:6}}>
+      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+        <input value={domain} onChange={e=>setDomain(e.target.value)} placeholder="their website (e.g. citypointutah.com)"
+          style={{...B.field,width:230}}/>
+        <button disabled={!domain.trim()||busy} onClick={find} style={{...B.gbtn,opacity:(!domain.trim()||busy)?0.5:1}}>{busy?"Looking…":"Find their logo"}</button>
+        {value ? <button onClick={()=>onPick("")} style={{...B.gbtn,borderColor:"#E5B4B4",color:"#8A2A2A"}}>Clear logo</button> : null}
+      </div>
+      {!derived ? <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Tip: add a contact with an email first and this fills in automatically.</div> : null}
+      {err ? <div style={{fontSize:11.5,color:"#8A2A2A",marginTop:4}}>{err}</div> : null}
+      {cands && cands.length ? (
+        <div style={{marginTop:7}}>
+          <div style={{fontSize:11,color:"#5E6670",marginBottom:5}}>Tap the one that looks right — it goes in their portal header next to ours.</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {cands.map((c,i)=>(
+              <button key={i} onClick={()=>onPick(c.url)} title={c.source+" · "+c.url}
+                style={{border:value===c.url?"2px solid #2E477D":"1px solid #CDD9EC",borderRadius:9,padding:6,background:"#fff",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4,width:92}}>
+                <img src={c.url} alt={c.source} style={{width:64,height:64,objectFit:"contain",display:"block"}}
+                  onError={e=>{ e.currentTarget.style.opacity=0.25; }}/>
+                <span style={{fontSize:9.5,color:"#8A93A3",letterSpacing:".02em"}}>{c.source}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function GCPortalManager({ jobs, identity }) {
   const [links, setLinks] = useState(null);   // null=loading
   const [err, setErr] = useState("");
@@ -40301,6 +40357,44 @@ function GCPortalManager({ jobs, identity }) {
     });
   };
   const cancelEdit = () => { setEditing(null); setEditDraft(null); };
+
+  // Pull Simpro contacts into an EXISTING link's edit form (the discovery-panel
+  // pull only covers GCs with no link yet — Koy: "how do I pull contacts in from
+  // existing links?"). MERGE-ONLY, never replace: an existing contact's id is
+  // load-bearing for supersByJob + email routing, so matched people are left
+  // byte-identical and only genuinely new ones are appended (email/text OFF,
+  // same staged-rollout rule as the create-form pull). Nothing saves until Koy
+  // presses Save on the edit form.
+  async function pullIntoEdit(l) {
+    const jobsForLink = editMatched(l).concat(
+      (jobs||[]).filter(j => ((editDraft && Array.from(editDraft.jobIdsInclude||[])) || []).includes(j.id))
+    );
+    const sn = (jobsForLink.map(j => String(j.simproNo||"").trim()).filter(Boolean))[0];
+    if (!sn) { toast.info("No Simpro-linked job on this contractor yet — add contacts by hand."); return; }
+    setPullingKey("edit:"+l.token);
+    try {
+      const res = await gc("gcSimproCustomerContacts", { simproJobNo: sn });
+      const r = (res && res.data) || {};
+      const have = Array.isArray(editDraft.contacts) ? editDraft.contacts : [];
+      const seenEmail = new Set(have.map(c => String(c.emailAddr||"").trim().toLowerCase()).filter(Boolean));
+      const seenName  = new Set(have.map(c => String(c.name||"").trim().toLowerCase()).filter(Boolean));
+      const fresh = (Array.isArray(r.contacts) ? r.contacts : [])
+        .filter(c => {
+          const e = String(c.emailAddr||"").trim().toLowerCase();
+          const n = String(c.name||"").trim().toLowerCase();
+          return !(e && seenEmail.has(e)) && !(!e && n && seenName.has(n));
+        })
+        .map(c => ({ name:c.name, role:c.role, emailAddr:c.emailAddr, phone:c.phone, email:false, text:false }));
+      if (!fresh.length) {
+        toast.info(r.contacts && r.contacts.length ? "No new contacts — this link already has everyone Simpro lists for " + (r.customerName||"this contractor") + "." : "No Simpro contacts found for this contractor.");
+      } else {
+        setEditDraft(d => ({ ...d, contacts: [ ...(d.contacts||[]), ...fresh ] }));
+        toast.success("Added " + fresh.length + " new contact" + (fresh.length===1?"":"s") + (r.customerName ? " from " + r.customerName : "") + " — email OFF; turn on who should get updates, then Save");
+      }
+      if (r.failedCount) toast.warn(r.failedCount + " contact" + (r.failedCount===1?"":"s") + " couldn't load from Simpro — pull again.");
+    } catch (e) { toast.error("Couldn't reach Simpro — try again, or add contacts by hand."); }
+    finally { setPullingKey(""); }
+  }
   const saveEdit = async (l) => {
     if(!editDraft || busy) return;
     setBusy(l.token); setErr("");
@@ -40545,6 +40639,7 @@ function GCPortalManager({ jobs, identity }) {
           <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600,whiteSpace:"nowrap"}}>Their logo:</span>
           <input value={logoUrl} onChange={e=>setLogoUrl(e.target.value)} placeholder="https:// image URL (optional — shows next to ours in their portal header; transparent PNG works best)" style={{...B.field,flex:1}}/>
         </div>
+        <GCLogoFinder contacts={contacts} value={logoUrl} onPick={setLogoUrl} gcCall={gc} B={B}/>
 
         <button onClick={create} disabled={!gcName.trim()||busy==="create"} style={{...B.btn,opacity:(!gcName.trim()||busy==="create")?0.5:1}}>{busy==="create"?"Creating…":"Create portal link"}</button>
         {created ? (
@@ -40628,7 +40723,13 @@ function GCPortalManager({ jobs, identity }) {
                   <input value={editDraft.label} onChange={e=>setEditDraft({...editDraft,label:e.target.value})} style={{...B.field,flex:1}}/>
                 </div>
 
-                <div style={{margin:"0 0 4px",fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Contacts</div>
+                <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 4px",flexWrap:"wrap"}}>
+                  <span style={{fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Contacts</span>
+                  <button disabled={pullingKey==="edit:"+l.token} onClick={()=>pullIntoEdit(l)}
+                    style={{...B.gbtn,padding:"3px 9px",fontSize:11.5,opacity:pullingKey==="edit:"+l.token?0.5:1}}>
+                    {pullingKey==="edit:"+l.token?"Pulling…":"+ Pull contacts from Simpro"}
+                  </button>
+                </div>
                 <GCContactEditor contacts={editDraft.contacts} onChange={(next)=>setEditDraft({...editDraft,contacts:next})}/>
 
                 <div style={{margin:"10px 0 4px",fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Jobs on this link</div>
@@ -40675,6 +40776,7 @@ function GCPortalManager({ jobs, identity }) {
                   <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600,whiteSpace:"nowrap"}}>Their logo:</span>
                   <input value={editDraft.logoUrl} onChange={e=>setEditDraft({...editDraft,logoUrl:e.target.value})} placeholder="https:// image URL (optional)" style={{...B.field,flex:1}}/>
                 </div>
+                <GCLogoFinder contacts={editDraft.contacts} value={editDraft.logoUrl} onPick={(u)=>setEditDraft(d=>({...d, logoUrl:u}))} gcCall={gc} B={B}/>
 
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>saveEdit(l)} disabled={busy===l.token} style={{...B.btn,opacity:busy===l.token?0.5:1}}>{busy===l.token?"Saving…":"Save changes"}</button>
@@ -46871,6 +46973,21 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
 // e.g. "Robison" — audit 2026-07-17), normalized label kept as an alias.
 // link.logoUrl always wins; a broken URL falls DOWN the chain:
 // custom URL → bundled asset → text label.
+// One place for "how do I reach a human at Homestead" (v357) — rendered in the
+// portal footer, in every dead-end state (revoked link, connection trouble), and
+// mirrored in the email footer (functions/gcNotify.js). Previously a contractor
+// hitting a revoked link or an urgent question had NO route to us anywhere on
+// their side. Phone intentionally omitted until Koy supplies the number he wants
+// contractors calling — email alone is still a real route (and now has a live
+// Reply-To behind it), and a wrong number would be worse than none.
+const HOMESTEAD_CONTACT = { email: "koy@homesteadelectric.net", phone: "" };
+const _gcContactLine = (P, prefix) => (
+  <span>
+    {prefix || "Questions, or need something urgently?"}{" "}
+    <a href={"mailto:" + HOMESTEAD_CONTACT.email} style={{color:(P&&P.ink)||"#1B1F24",fontWeight:700,textDecoration:"underline"}}>{HOMESTEAD_CONTACT.email}</a>
+    {HOMESTEAD_CONTACT.phone ? (<Fragment> · <a href={"tel:"+HOMESTEAD_CONTACT.phone.replace(/[^\d+]/g,"")} style={{color:(P&&P.ink)||"#1B1F24",fontWeight:700,textDecoration:"underline"}}>{HOMESTEAD_CONTACT.phone}</a></Fragment>) : null}
+  </span>
+);
 const GC_LOGOS = { "robison": "/gc-logo-robison.png", "robison build co": "/gc-logo-robison.png" };
 const _gcNorm = (s) => String(s || "").toLowerCase().replace(/\s+/g," ").trim().replace(/[.\s]+$/,"");
 const gcLogoCandidatesFor = (link) => {
@@ -46881,10 +46998,19 @@ const gcLogoCandidatesFor = (link) => {
   if (builtin && builtin !== link.logoUrl) out.push(builtin);
   return out;
 };
-function GCPortalPage({ token }) {
+function GCPortalPage({ token, deepJobId }) {
   const [link, setLink] = useState(undefined); // undefined=loading · null=inactive/missing · obj=live
   const [jobs, setJobs] = useState(null);       // null=loading · []=empty
   const [openId, setOpenId] = useState(null);   // job detail modal
+  // Deep link (&job=): open that job ONCE, and only after the mirror confirms
+  // the id is really on this portal — an unknown/stale id just lands on the
+  // board instead of erroring. Fires once so closing the modal doesn't reopen it.
+  const deepDoneRef = useRef(false);
+  useEffect(() => {
+    if (deepDoneRef.current || !deepJobId || !Array.isArray(jobs) || !jobs.length) return;
+    deepDoneRef.current = true;
+    if (jobs.some(j => j && String(j.id) === String(deepJobId))) setOpenId(String(deepJobId));
+  }, [deepJobId, jobs]);
   const [superFilter, setSuperFilter] = useState(null);
   const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
   // P0-10 fix: a transient onSnapshot error used to collapse into the SAME
@@ -46948,20 +47074,20 @@ function GCPortalPage({ token }) {
   if(link === undefined && linkErr) return wrap(
     <div style={{padding:"120px 0",textAlign:"center"}}>
       <div style={{fontSize:17,fontWeight:700,color:P.ink,marginBottom:8}}>Having trouble loading your portal.</div>
-      <div style={{fontSize:13,color:P.dim}}>This usually clears up with a refresh. If it keeps happening, contact Homestead Electric.</div>
+      <div style={{fontSize:13,color:P.dim}}>This usually clears up with a refresh. If it keeps happening — {_gcContactLine(P, "")}</div>
     </div>
   );
   if(link === undefined) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading your portal…</div>);
   if(link === null) return wrap(
     <div style={{padding:"120px 0",textAlign:"center"}}>
       <div style={{fontSize:17,fontWeight:700,color:P.ink,marginBottom:8}}>This portal link is no longer active.</div>
-      <div style={{fontSize:13,color:P.dim}}>Please contact Homestead Electric for an updated link.</div>
+      <div style={{fontSize:13,color:P.dim}}>Ask us for an updated link — {_gcContactLine(P, "")}</div>
     </div>
   );
   if(jobs === null && jobsErr) return wrap(
     <div style={{padding:"120px 0",textAlign:"center"}}>
       <div style={{fontSize:17,fontWeight:700,color:P.ink,marginBottom:8}}>Having trouble loading your jobs.</div>
-      <div style={{fontSize:13,color:P.dim}}>This usually clears up with a refresh. If it keeps happening, contact Homestead Electric.</div>
+      <div style={{fontSize:13,color:P.dim}}>This usually clears up with a refresh. If it keeps happening — {_gcContactLine(P, "")}</div>
     </div>
   );
   if(jobs === null) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading jobs…</div>);
@@ -47159,6 +47285,7 @@ function GCPortalPage({ token }) {
       {/* provenance */}
       <div style={{marginTop:18,padding:"14px 4px",borderTop:"1px solid "+P.line,fontSize:11.5,color:P.muted}}>
         <b style={{color:P.ink}}>Built in-house at Homestead Electric.</b> This portal runs on our own custom app — not off-the-shelf software. Live from the field, updated as our crews work.
+        <div style={{marginTop:8}}>{_gcContactLine(P)}</div>
       </div>
 
       {detail ? <GCPortalDetail job={detail} link={link} P={P} onClose={()=>setOpenId(null)}/> : null}
@@ -47271,7 +47398,29 @@ const _gcField = (P) => ({ width:"100%", boxSizing:"border-box", border:"1px sol
 const _gcMiniBtn = (P) => ({ border:"1px solid "+P.line, background:P.card, color:P.accent, borderRadius:8, fontSize:12, fontWeight:700, padding:"5px 11px", cursor:"pointer", fontFamily:"inherit" });
 const _gcPrimaryBtn = (P) => ({ border:"none", background:P.accent, color:"#fff", borderRadius:8, fontSize:12.5, fontWeight:700, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit" });
 
-function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText, link, allowFiles = false }) {
+// dateMode (v357): date requests get a real calendar + time choice instead of a
+// free-text box — "Thursday" was ambiguous (which Thursday?) and gave the office
+// nothing schedulable. Composes a clean human string ("Thu 7/30 — any time that
+// day") which is what the server already stores in req.date, so no backend change.
+function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText, link, allowFiles = false, dateMode = false, memoKey = "" }) {
+  const [dateVal, setDateVal] = useState("");
+  const [timeMode, setTimeMode] = useState("any"); // any | am | pm | at
+  const [timeVal, setTimeVal] = useState("");
+  const _todayISO = () => { const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); };
+  const composedDate = () => {
+    if (!dateVal) return "";
+    const p = dateVal.split("-").map(Number);
+    const dt = new Date(p[0], (p[1]||1)-1, p[2]||1);
+    const nice = isNaN(dt.getTime()) ? dateVal : dt.toLocaleDateString("en-US",{weekday:"short",month:"numeric",day:"numeric"});
+    if (timeMode === "am") return nice + " — morning (AM)";
+    if (timeMode === "pm") return nice + " — afternoon (PM)";
+    if (timeMode === "at" && timeVal) {
+      const t = timeVal.split(":").map(Number);
+      const td = new Date(2000,0,1,t[0]||0,t[1]||0);
+      return nice + " — " + td.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+    }
+    return nice + " — any time that day";
+  };
   const [open, setOpen]   = useState(false);
   const [val, setVal]     = useState("");
   const [state, setState] = useState(null); // null | "sending" | "done" | "error"
@@ -47308,7 +47457,44 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
   // (link.requestStatuses[id], written server-side by gcPortalHandleRequest)
   // — previously a GC had NO way to tell "did they see my request" from
   // their own side once the initial "sent" toast disappeared.
-  const [reqId, setReqId] = useState(null);
+  // v357: remember sent requests ACROSS modal closes / page reloads. Before, the
+  // "✓ Sent" + the office's "Homestead has acted on this" readback lived only in
+  // component state — close the job and every trace vanished, so a contractor
+  // couldn't tell whether they'd already asked (and sent it twice). Keyed per
+  // link+job+flow on this device; capped so it can't grow forever.
+  const _sentStoreKey = "gcportal_sent_v1";
+  const _readSent = () => { try { return JSON.parse(localStorage.getItem(_sentStoreKey) || "{}") || {}; } catch(e) { return {}; } };
+  const _rememberSent = (id) => {
+    if (!memoKey) return;
+    try {
+      const all = _readSent();
+      all[memoKey] = { id: id || "", at: new Date().toISOString() };
+      const keys = Object.keys(all);
+      if (keys.length > 200) {
+        keys.sort((a,b) => String(all[a].at||"").localeCompare(String(all[b].at||"")));
+        keys.slice(0, keys.length - 200).forEach(k => delete all[k]);
+      }
+      localStorage.setItem(_sentStoreKey, JSON.stringify(all));
+    } catch(e) {}
+  };
+  const _priorSent = memoKey ? (_readSent()[memoKey] || null) : null;
+  const [reqId, setReqId] = useState(_priorSent ? (_priorSent.id || null) : null);
+  if (state === null && _priorSent) {
+    // Restored from a previous visit — same confirmation + live status readback.
+    const st = (_priorSent.id && link && link.requestStatuses && link.requestStatuses[_priorSent.id]) || null;
+    return (
+      <div style={{ fontSize:12, color:"#2C5C40", fontWeight:700, marginTop:6 }}>
+        {doneText || "✓ Sent to Homestead — we’ll follow up."}
+        <span style={{display:"block",fontWeight:600,color:(P&&P.dim)||"#5E6670",marginTop:2}}>
+          {st && st.status==="applied" ? "✓ Homestead has acted on this."
+            : st && st.status==="dismissed" ? "Homestead reviewed this — no further action needed."
+            : "Sent " + (_gcAgo(_priorSent.at) || "recently") + " — awaiting review."}
+        </span>
+        <button onClick={()=>{ try { const all=_readSent(); delete all[memoKey]; localStorage.setItem(_sentStoreKey, JSON.stringify(all)); } catch(e){} setOpen(true); setState(null); setReqId(null); }}
+          style={{ ..._gcMiniBtn(P), marginTop:6, fontWeight:600 }}>Send another</button>
+      </div>
+    );
+  }
   if (state === "done") {
     const st = (reqId && link && link.requestStatuses && link.requestStatuses[reqId]) || null;
     return (
@@ -47324,8 +47510,8 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
   }
   if (!open) return <button onClick={()=>setOpen(true)} style={{ ..._gcMiniBtn(P), marginTop:6 }}>{label}</button>;
   const send = async () => {
-    const text = val.trim();
-    if (!text && !files.length) return; // a photo alone is a valid answer
+    const text = dateMode ? composedDate() : val.trim();
+    if (dateMode ? !text : (!text && !files.length)) return; // a photo alone is a valid answer
     setState("sending");
     try {
       // Upload attachments first (only now — not at pick time). Random id +
@@ -47348,14 +47534,27 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
       }
       setSendMsg("");
       const r = await onSend(text, attachments);
-      setReqId((r && r.data && r.data.requestId) || null); setState("done");
+      const newId = (r && r.data && r.data.requestId) || null;
+      setReqId(newId); _rememberSent(newId); setState("done");
       files.forEach(f=>{ if(f.preview) URL.revokeObjectURL(f.preview); }); setFiles([]);
     }
     catch (e) { setSendMsg(""); setState("error"); }
   };
   return (
     <div style={{ marginTop:8 }}>
-      {multiline
+      {dateMode ? (
+        <Fragment>
+          <input type="date" value={dateVal} min={_todayISO()} onChange={e=>setDateVal(e.target.value)} style={{..._gcField(P), maxWidth:210}} />
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7,alignItems:"center"}}>
+            {[["any","Any time that day"],["am","Morning"],["pm","Afternoon"],["at","Pick a time"]].map(([k,lbl])=>(
+              <button key={k} onClick={()=>setTimeMode(k)}
+                style={{...(timeMode===k?_gcPrimaryBtn(P):_gcMiniBtn(P)), padding:"5px 10px", fontSize:11.5}}>{lbl}</button>
+            ))}
+            {timeMode==="at" ? <input type="time" value={timeVal} onChange={e=>setTimeVal(e.target.value)} style={{..._gcField(P), width:130}} /> : null}
+          </div>
+          {dateVal ? <div style={{fontSize:11.5,color:P.muted,marginTop:6}}>Sending: <b style={{color:P.ink}}>{composedDate()}</b></div> : null}
+        </Fragment>
+      ) : multiline
         ? <textarea value={val} onChange={e=>setVal(e.target.value)} placeholder={placeholder} rows={2} style={_gcField(P)} />
         : <input value={val} onChange={e=>setVal(e.target.value)} placeholder={placeholder} style={_gcField(P)} />}
       {allowFiles && files.length ? (
@@ -47372,9 +47571,12 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
         </div>
       ) : null}
       <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6, flexWrap:"wrap" }}>
-        <button disabled={state==="sending"||prepping>0||(!val.trim()&&!files.length)} onClick={send} style={{ ..._gcPrimaryBtn(P), opacity:(state==="sending"||prepping>0||(!val.trim()&&!files.length))?0.5:1 }}>
-          {state==="sending" ? (sendMsg||"Sending…") : prepping>0 ? "Preparing photos…" : (cta||"Send")}
-        </button>
+        {(() => { const blocked = state==="sending" || prepping>0 || (dateMode ? !dateVal : (!val.trim() && !files.length));
+          return (
+            <button disabled={blocked} onClick={send} style={{ ..._gcPrimaryBtn(P), opacity: blocked?0.5:1 }}>
+              {state==="sending" ? (sendMsg||"Sending…") : prepping>0 ? "Preparing photos…" : (cta||"Send")}
+            </button>
+          ); })()}
         {allowFiles ? (
           <label style={{ ..._gcMiniBtn(P), cursor: (files.length>=6||state==="sending")?"default":"pointer", opacity: (files.length>=6||state==="sending")?0.5:1 }}>
             Add photo or file
@@ -47529,9 +47731,9 @@ function GCPortalDetail({ job, link, P, onClose }) {
                   {line(Fn.projectedStart
                     ? <span>Confirm your finish start — projected <b style={{color:P.ink}}>{_gcMonthDay(Fn.projectedStart)}</b>; confirm and we hold crew.</span>
                     : <span><b style={{color:P.ink}}>Ready to plan your finish start</b> — rough is done{j.qc&&j.qc.items.length?", QC walked":""}.</span>,"fp")}
-                  <GCSendBox P={P} link={link} multiline={false}
+                  <GCSendBox P={P} link={link} multiline={false} dateMode memoKey={link.token+"|"+j.id+"|finish_start"}
                     label={Fn.projectedStart ? "Confirm date or suggest a different one" : "Plan finish — suggest a start"}
-                    cta="Send date" placeholder="e.g. Sep 1, or any week that works"
+                    cta="Send date"
                     doneText="✓ Date sent to Homestead — we’ll confirm and hold crew"
                     onSend={(text)=>gcSubmit({ type:"date", itemId:"finish_start", date:text, dateKind: Fn.projectedStart?"confirm":"suggest" })}/>
                 </div>
@@ -47539,9 +47741,9 @@ function GCPortalDetail({ job, link, P, onClose }) {
               {mpSuggest ? (
                 <div>
                   {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcTxt(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
-                  <GCSendBox P={P} link={link} multiline={false}
+                  <GCSendBox P={P} link={link} multiline={false} dateMode memoKey={link.token+"|"+j.id+"|matterport"}
                     label={j.matterport.status==="scheduled" ? "Confirm date or suggest a different one" : "Suggest a scan date"}
-                    cta="Send date" placeholder="e.g. Tue 7/22, or before the 28th"
+                    cta="Send date"
                     doneText="✓ Date sent to Homestead — we’ll confirm"
                     onSend={(text)=>gcSubmit({ type:"date", itemId:"matterport", date:text, dateKind: j.matterport.status==="scheduled"?"confirm":"suggest" })}/>
                 </div>
@@ -47568,7 +47770,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                 {g.items.map((q,k)=>(
                   <div key={"q"+k} style={{paddingTop:6,borderTop:"1px solid "+P.line,marginTop:6}}>
                     <div style={{fontSize:12.5,color:P.dim}}>{q.text}</div>
-                    <GCSendBox P={P} link={link} label="Answer this" cta="Send answer" placeholder="Type your answer…"
+                    <GCSendBox P={P} link={link} memoKey={link.token+"|"+j.id+"|q:"+q.id} label="Answer this" cta="Send answer" placeholder="Type your answer…"
                       doneText="✓ Answer sent to Homestead" allowFiles
                       onSend={(text, attachments)=>gcSubmit({ type:"answer", itemId:q.id, text, attachments })}/>
                   </div>
@@ -47588,9 +47790,9 @@ function GCPortalDetail({ job, link, P, onClose }) {
               {line(<span><b style={{color:P.ink}}>{rt.signedOff?"Completed":rt.scheduled?"Scheduled"+(rt.scheduledDate?" "+rt.scheduledDate:""):rt.needsSchedule?"Needs scheduling":"Open"}</b>{rt.targetDate&&!rt.signedOff?" · target "+rt.targetDate:""}{rt.signedOff&&rt.signedOffDate?" "+rt.signedOffDate:""}</span>,"rts"+i)}
               {rt.scope ? <div style={{fontSize:12,color:P.dim,background:"#8A93A30D",borderLeft:"3px solid "+P.line,borderRadius:"0 6px 6px 0",padding:"7px 10px"}}>{rt.scope}</div> : null}
               {!rt.signedOff ? (
-                <GCSendBox P={P} link={link} multiline={false}
+                <GCSendBox P={P} link={link} multiline={false} dateMode memoKey={link.token+"|"+j.id+"|rt:"+rt.id}
                   label={rt.scheduled ? "Confirm or request a different date" : "Suggest a date that works"}
-                  cta="Send date" placeholder="e.g. Tue 7/22 AM, or any day next week"
+                  cta="Send date"
                   doneText="✓ Date sent to Homestead — we’ll confirm"
                   onSend={(text)=>gcSubmit({ type:"date", itemId:rt.id, date:text, dateKind: rt.scheduled?"confirm":"suggest" })}/>
               ) : null}
@@ -47699,7 +47901,11 @@ function App() {
   // GC Portal route — ?gcportal=TOKEN (outside-facing contractor portal;
   // reads ONLY gc_links/{token} + gc_portal/{portalId}, never jobs/{id}).
   const gcpParam = new URLSearchParams(window.location.search).get("gcportal");
-  if(gcpParam) return <GCPortalPage token={gcpParam}/>;
+  // &job=<id> deep link (v357): instant alert emails point at the JOB they're
+  // about, not the board root — a "Cowdrey inspection passed" email that dumps
+  // you on a 6-job board is a scavenger hunt. Validated against the mirror
+  // inside GCPortalPage before it opens anything.
+  if(gcpParam) return <GCPortalPage token={gcpParam} deepJobId={new URLSearchParams(window.location.search).get("job")||""}/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());

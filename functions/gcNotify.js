@@ -60,6 +60,11 @@ function renderGcEmail({ gcLabel, accent, title, intro, sectionsHtml, portalUrl 
     '<div style="font-size:11.5px;color:#8a93a3;line-height:1.5;margin-top:14px;border-top:1px solid #eceef1;padding-top:12px">' +
     "You're getting this because Homestead Electric is running electrical on your project. " +
     "This portal and these updates were built in-house by Homestead Electric. " +
+    // v357: contractors had no reply route — Reply-To is now a real mailbox, but
+    // nothing told them that, and nothing gave them an address if they'd rather
+    // start fresh. Say both, once, in the footer.
+    '<br/><b style="color:#5e6670">You can reply straight to this email</b> — it reaches our office. ' +
+    'Or write us at <a href="mailto:koy@homesteadelectric.net" style="color:' + a + '">koy@homesteadelectric.net</a>. ' +
     'To change who gets these updates, send us a message from <a href="' + esc(portalUrl || "#") + '" style="color:' + a + '">your portal</a> and we\'ll update it.' +
     "</div>" +
     "</td></tr></table></td></tr></table></body></html>"

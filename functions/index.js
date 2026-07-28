@@ -2198,6 +2198,64 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── Find a contractor's logo from their own website ─────────────────────────
+// Small builders aren't in logo databases (Clearbit's free API died Dec 2025),
+// but they all have a site — and their contact emails give us the domain
+// (Luke@citypointutah.com → citypointutah.com). Their own <head> is the best
+// source: apple-touch-icon is almost always the real mark. Probed against Koy's
+// live GCs 2026-07-28: City Point + Ivory Homes both expose one; Symphony has
+// none, hence the Google favicon fallback. READ-ONLY: fetches public pages,
+// writes nothing, returns CANDIDATES for the office to eyeball and pick — a
+// wrong crop must never auto-apply to a contractor's portal header.
+const GC_LOGO_PRIVATE_HOST = /(^|\.)(localhost|internal|local)$|^\d+\.\d+\.\d+\.\d+$/i;
+exports.gcFindLogo = functions.https.onCall(async (data) => {
+  await requireAdmin(data);
+  const raw = String((data && data.domain) || "").trim().toLowerCase();
+  // Accept an email, a bare domain, or a pasted URL.
+  let domain = raw.indexOf("@") !== -1 ? raw.split("@").pop() : raw.replace(/^https?:\/\//, "").replace(/[/?#].*$/, "");
+  domain = domain.replace(/^www\./, "").trim();
+  if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain) || GC_LOGO_PRIVATE_HOST.test(domain)) {
+    throw new functions.https.HttpsError("invalid-argument", "Enter a website like citypointutah.com");
+  }
+  const candidates = [];
+  const push = (url, source) => {
+    const u = String(url || "").trim();
+    if (!u || u.length > 500) return;
+    if (!/^https:\/\//i.test(u)) return;                 // https only — cleanLogoUrl enforces this too
+    if (candidates.some((c) => c.url === u)) return;
+    candidates.push({ url: u, source });
+  };
+  try {
+    const resp = await fetch("https://" + domain, {
+      redirect: "follow",
+      headers: { "user-agent": "Mozilla/5.0 (compatible; HomesteadElectric/1.0; +https://homesteadelectric.net)" },
+      signal: AbortSignal.timeout(14000),   // Ivory Homes timed out at 9s in testing
+    });
+    if (resp.ok) {
+      const html = (await resp.text()).slice(0, 300000);   // head is all we need; cap the read
+      const base = resp.url || ("https://" + domain);
+      const abs = (href) => { try { return new URL(href, base).href; } catch (e) { return ""; } };
+      // Attribute values are HTML-ENCODED in real markup (City Point's icon URL
+      // arrives as "...&#038;ssl=1") — decode or the image link is broken.
+      const deent = (v) => String(v || "").replace(/&(?:amp|#0*38|#x0*26);/gi, "&").replace(/&(?:quot|#0*34);/gi, '"').replace(/&(?:apos|#0*39);/gi, "'").replace(/&(?:#0*47|#x0*2f);/gi, "/");
+      const attr = (tag, name) => { const m = tag.match(new RegExp(name + '\\s*=\\s*["\']([^"\']+)["\']', "i")); return m ? deent(m[1]) : ""; };
+      const tags = html.match(/<(?:link|meta)\b[^>]*>/gi) || [];
+      // apple-touch-icon first: on a small-builder site this is nearly always
+      // the actual logo, already square and sized for a home screen.
+      tags.forEach((t) => { if (/rel\s*=\s*["\'][^"\']*apple-touch-icon/i.test(t)) push(abs(attr(t, "href")), "apple-touch-icon"); });
+      tags.forEach((t) => { if (/property\s*=\s*["\']og:image["\']/i.test(t)) push(abs(attr(t, "content")), "og:image"); });
+      tags.forEach((t) => { if (/name\s*=\s*["\']msapplication-TileImage/i.test(t)) push(abs(attr(t, "content")), "tile"); });
+      tags.forEach((t) => { if (/rel\s*=\s*["\'][^"\']*\bicon\b/i.test(t) && !/apple-touch/i.test(t)) push(abs(attr(t, "href")), "favicon"); });
+    }
+  } catch (e) {
+    functions.logger.info("[gcFindLogo] site fetch failed (falling back)", { domain, message: e.message });
+  }
+  // Always offer the keyless Google favicon as a last resort — low-res, but it
+  // is something when a site exposes nothing (verified: Symphony Homes).
+  push("https://www.google.com/s2/favicons?domain=" + encodeURIComponent(domain) + "&sz=128", "google-favicon");
+  return { domain, candidates: candidates.slice(0, 6) };
+});
+
 // ─── Get a GC's contacts from Simpro (for portal-link prefill) ───────────────
 // job → Customer.ID → the customer's linked contacts. The list endpoint returns
 // id + name only, so a per-contact detail fetch adds Email / CellPhone and the
@@ -6316,7 +6374,9 @@ async function gcEnqueueInstants(gcKey, jobId, triggers) {
   triggers.forEach((trig) => {
     const { subject, sectionsHtml } = gcNotify.instantContent(trig.type, trig.payload);
     recipMap.forEach((link, addr) => {
-      const html = gcNotify.renderGcEmail({ gcLabel: link.label, accent: link.accentColor, title: subject, sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, link.token) });
+      // Deep link straight to the job this alert is about (v357) — digests stay
+      // on the board root (they span jobs), instants point at their one job.
+      const html = gcNotify.renderGcEmail({ gcLabel: link.label, accent: link.accentColor, title: subject, sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, link.token) + (jobId ? "&job=" + encodeURIComponent(jobId) : "") });
       ops.push(db.collection("gc_notify_queue").add({ to: addr, subject, html, sendAt, tries: 0, createdAt: new Date().toISOString() }));
     });
   });
