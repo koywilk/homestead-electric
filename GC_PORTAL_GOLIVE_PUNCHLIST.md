@@ -1,7 +1,9 @@
 # GC Portal — Go-Live Punch List (what's left, pre-filled)
 
-Status as of 2026-07-21 evening. Checklist step 0 + the no-email half of step 2 are
-DONE and verified. **Provider is now Resend, not SendGrid** — see the note below.
+Status as of 2026-07-28. Everything BUILT is deployed (prod SW v358; portal, contractor
+attachments, Simpro contacts + logo pull, date picker, digest health all live). Checklist
+step 0 + the no-email half of step 2 are DONE and verified. **SOAK MODE IS ON and stays on
+until Koy says the portal works how he wants — see B7.** **Provider is now Resend, not SendGrid** — see the note below.
 Everything remaining is either the DNS records (blocked only on the right Squarespace
 login) or your admin PIN — pre-filled here so each item is a short task.
 
@@ -104,8 +106,18 @@ domain `homesteadelectric.net`. Copy the `re_...` key.
    NOT the Robison link (revoke rotates its URL; it's the standing demo link).
    Create → open its portal URL → revoke → confirm the tab flips to "no longer active".
 
-**B7. END THE SOAK — strict order, state-gated (NOT date-gated).** Two silent failure
-modes exist and both are invisible in the app, so the order matters:
+**B7. END THE SOAK — Koy decides WHEN; this is only the safe HOW.**
+
+> **Standing decision (Koy, 2026-07-28):** *"keep soak on till this is all the way
+> mapped out and functioning like I want."* The original "~7/28" was a reminder,
+> **not a deadline** — it has passed and the soak deliberately stays ON. Nothing
+> below fires on a date. Do not clear `soakTo` because a calendar says so; clear it
+> only when Koy says the portal is doing what he wants AND every gate below is met.
+> Leaving it on costs nothing: digests keep landing in Koy's inbox nightly and no
+> contractor can receive anything.
+
+When Koy says go, the order is strict and state-gated — two silent failure modes
+exist and both are invisible in the app, so the order matters:
    1. Resend → Domains → homesteadelectric.net shows **Verified** (green) — B1 done
    2. `from` flipped to `updates@homesteadelectric.net` (B3)
    3. `replyTo` set (B3) and `webhookSecret` set (B4)
