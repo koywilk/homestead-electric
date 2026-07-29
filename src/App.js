@@ -31673,31 +31673,94 @@ function jobHasLoggedWork(j){
 // (roughStartConfirmed / finishStartConfirmed / an Upcoming entry's
 // startConfirmed, or a scheduled/date_confirmed status) → held/green;
 // otherwise projected/gold. Grouped by week off today. Read-only report.
+// A phase is finished for scheduling purposes once it's complete or handed to
+// invoicing — nothing left to put on a calendar. ("invoice" is a legacy status
+// that predates ROUGH_STATUSES but still exists on older jobs.)
+const _startPhaseDone = st => st==="complete" || st==="invoice";
+// The app's own "Awaiting Start Date" gold (ROUGH_STATUSES.waiting_date), reused
+// so the Needs Date section reads as the same concept the status pills already use.
+const _STARTS_GOLD = "#B0892C";
+
 function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
   const [filter,setFilter]=useState("all"); // all | proj | conf
   const events=[];
+  const needsDate=[];
   (jobs||[]).forEach(j=>{
-    if(j.type==="quote") return;
+    if(j.type==="quote" || j.archived || j.deleted || j.archivedAt) return;
     [["Rough",j.roughProjectedStart,j.roughStartConfirmed,j.roughStatus],
      ["Finish",j.finishProjectedStart,j.finishStartConfirmed,j.finishStatus]].forEach(([label,ps,conf,st])=>{
       if(!ps || st==="complete" || st==="inprogress") return; // only starts that haven't happened yet
       const confirmed = !!conf || st==="scheduled" || st==="date_confirmed";
       events.push({ id:j.id+"_"+label, job:j, nm:j.name||"(unnamed)", gc:j.gc||"", phase:label, date:ps, confirmed, up:false });
     });
+
+    // ── Needs Date (Koy + Justin, 2026-07-29) ───────────────────────────
+    // A start can't be "past due" if it never had a date — those jobs were
+    // falling out of this report entirely. These are the jobs with nothing
+    // on the calendar for the phase that's actually NEXT:
+    //   • rough not started and no rough date  → "haven't started the rough yet"
+    //   • rough done, finish unscheduled       → "in between"
+    // Deliberately ONE row per job. We only chase the next phase, so a job
+    // whose rough is still unscheduled doesn't also nag for a finish date
+    // nobody could know yet. A phase already inprogress needs no start date —
+    // the start already happened.
+    if(!j.tempPed && !j.quickJob){
+      const rs=effRS(j), fs=effFS(j);
+      let ph=null;
+      if(!_startPhaseDone(rs)){ if(rs!=="inprogress") ph="Rough"; }
+      else if(!_startPhaseDone(fs) && fs!=="inprogress") ph="Finish";
+      if(ph){
+        const ps=ph==="Rough"?j.roughProjectedStart:j.finishProjectedStart;
+        const sd=ph==="Rough"?j.roughStatusDate    :j.finishStatusDate;
+        // Empty string only — a date that EXISTS but won't parse is handled
+        // by the `undated` fold-in below, so it keeps its raw text.
+        if(!String(ps||"").trim() && !String(sd||"").trim()){
+          const st=ph==="Rough"?rs:fs;
+          needsDate.push({ id:j.id+"_nodate", job:j, nm:j.name||"(unnamed)", gc:j.gc||"",
+            // ROUGH_STATUSES carries a placeholder row for "" whose label is
+            // "— set status —" — not something to show the office, so an empty
+            // status gets its own wording.
+            phase:ph, why:st?(getStatusDef(ROUGH_STATUSES,st).label||"No status set"):"No status set" });
+        }
+      }
+    }
   });
   (upcoming||[]).forEach(u=>{
-    if(!u.projectedStart) return;
+    // Koy 2026-07-29: pipeline jobs with no projected start used to be dropped
+    // here, so the report only ever showed part of the pipeline. He wants one
+    // clear view of every job — dateless Upcoming entries now fall through to
+    // Needs Date instead of a week bucket. They carry no live job doc, so the
+    // row stays non-clickable like every other Upcoming row.
+    if(!String(u.projectedStart||"").trim()){
+      needsDate.push({ id:"up_"+u.id+"_nodate", up:true, nm:u.name||"(unnamed)",
+        gc:u.customer||"", phase:"Rough", why:"No start date set" });
+      return;
+    }
     events.push({ id:"up_"+u.id, up:true, nm:u.name||"(unnamed)", gc:u.customer||"", phase:"Rough", date:u.projectedStart, confirmed:!!u.startConfirmed });
   });
   const shown = events.filter(e=> filter==="proj"?!e.confirmed : filter==="conf"?e.confirmed : true);
   const byBucket={};
-  shown.forEach(e=>{ const b=_weekBucket(e.date); if(b===null) return; (byBucket[b]=byBucket[b]||[]).push(e); });
+  // A date that's present but unreadable used to be dropped on the floor here
+  // (_weekBucket returns null) — it now falls through to Needs Date carrying
+  // its raw text, so a typo'd date is visible instead of invisible.
+  const undated=[];
+  shown.forEach(e=>{ const b=_weekBucket(e.date); if(b===null){ undated.push(e); return; } (byBucket[b]=byBucket[b]||[]).push(e); });
   Object.values(byBucket).forEach(arr=>arr.sort((a,b)=>{
     const da=_parseStartDate(a.date), db=_parseStartDate(b.date);
     return (da?da.getTime():0)-(db?db.getTime():0);
   }));
-  const total=shown.filter(e=>_weekBucket(e.date)!==null).length;
-  const groups=[["Past due",-1],["This week",0],["Next week",1],["Later",2]];
+  const total=shown.length-undated.length;
+  // Past due CLOSES the report instead of leading it (Koy 2026-07-29): the week
+  // you're actually planning reads first, the problems collect at the bottom.
+  const groups=[["This week",0],["Next week",1],["Later",2],["Past due",-1]];
+  // Dateless jobs are neither projected nor confirmed, so they only make sense
+  // under "All". Rows with an unreadable date came through `shown`, so they
+  // already respect the filter. Board jobs first (those are the ones you can
+  // open and fix), then the Upcoming pipeline; Rough before Finish, then name.
+  const gaps=[...(filter==="all"?needsDate:[]),...undated].sort((a,b)=>
+    ((a.up?1:0)-(b.up?1:0)) ||
+    (a.phase===b.phase?0:a.phase==="Rough"?-1:1) ||
+    String(a.nm).localeCompare(String(b.nm)));
   const seg=(v,label,dot)=>(
     <button onClick={()=>setFilter(v)} style={{flex:1,fontFamily:"inherit",fontSize:12,fontWeight:700,
       color:filter===v?C.text:C.dim,border:"none",background:filter===v?C.card:"none",padding:"7px 4px",
@@ -31709,13 +31772,14 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
     <div style={{padding:"12px 12px 40px",maxWidth:820,margin:"0 auto"}}>
       <div style={{display:"flex",alignItems:"baseline",gap:8,margin:"2px 2px 3px"}}>
         <div style={{fontSize:18,fontWeight:800,color:C.text}}>Starts</div>
-        <div style={{fontSize:12,color:C.dim}}>{total} projected &amp; confirmed start{total===1?"":"s"}</div>
+        <div style={{fontSize:12,color:C.dim}}>{total} projected &amp; confirmed start{total===1?"":"s"}
+          {gaps.length>0&&<span style={{color:_STARTS_GOLD,fontWeight:700}}> · {gaps.length} need{gaps.length===1?"s":""} a date</span>}</div>
       </div>
-      <div style={{fontSize:11.5,color:C.dim,margin:"0 2px 12px"}}>Every rough &amp; finish start across live jobs, plus Upcoming jobs with a projected date.</div>
+      <div style={{fontSize:11.5,color:C.dim,margin:"0 2px 12px"}}>Every rough &amp; finish start across live jobs, plus every job in Upcoming.</div>
       <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:3,gap:2,marginBottom:14}}>
         {seg("all","All",null)}{seg("proj","Projected",C.orange)}{seg("conf","Confirmed",C.green)}
       </div>
-      {total===0 && <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
+      {total===0 && gaps.length===0 && <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
       {groups.map(([label,b])=>{
         const arr=byBucket[b]; if(!arr||!arr.length) return null;
         return (
@@ -31751,6 +31815,52 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
           </div>
         );
       })}
+
+      {/* ── Needs Date ────────────────────────────────────────────────────
+          Closes the report under Past due. These jobs have no start on the
+          calendar at all, so they can never appear in a week bucket — the
+          gap the Starts view was blind to. Rows open the job so the date can
+          be set on the spot. Dashed border = nothing scheduled yet. */}
+      {gaps.length>0 && (
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 3px 8px"}}>
+            <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.07em",textTransform:"uppercase",color:_STARTS_GOLD}}>Needs date</span>
+            <span style={{flex:1,height:1,background:C.border}}/>
+            <span style={{fontSize:10.5,fontWeight:700,color:C.muted}}>{gaps.length}</span>
+          </div>
+          <div style={{fontSize:11,color:C.dim,margin:"0 3px 9px"}}>Rough not started, rough done and finish not scheduled, or still in Upcoming. No date set.</div>
+          {gaps.map(e=>{
+            const accent = e.phase==="Finish"?C.finish:C.rough;
+            // A row that came from `undated` has a date string we couldn't read —
+            // show the raw value so a typo is fixable, not just "no date".
+            const bad = !!e.date;
+            // Upcoming-pipeline rows can land here too (bad projectedStart), and
+            // they carry no live job — same non-clickable treatment as above.
+            return (
+              <div key={e.id} onClick={()=>{ if(!e.up&&onSelectJob) onSelectJob(e.job); }}
+                style={{background:C.card,border:`1px dashed ${C.border}`,borderLeft:`3px solid ${e.up?C.orange:accent}`,
+                  borderLeftStyle:"solid",borderRadius:12,padding:"10px 11px",
+                  boxShadow:"0 1px 2px rgba(27,31,36,.05)",marginBottom:8,display:"flex",alignItems:"center",gap:11,
+                  cursor:e.up?"default":"pointer"}}>
+                <div style={{flex:"0 0 46px",textAlign:"center"}}>
+                  <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
+                  <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.muted,
+                    whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{bad?e.date:"—"}</div>
+                </div>
+                <div style={{width:1,alignSelf:"stretch",background:C.border,margin:"1px 0"}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nm}</div>
+                  <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                    {e.gc}{e.gc&&(e.why||bad)?" · ":""}{bad?"Date unreadable":e.why}{e.up?" · in Upcoming":""}</div>
+                </div>
+                <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase",whiteSpace:"nowrap",
+                  color:_STARTS_GOLD,background:`${_STARTS_GOLD}18`,borderRadius:99,padding:"3px 7px",
+                  border:`1px dashed ${_STARTS_GOLD}66`}}>Needs date</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -43875,6 +43985,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Safety** · 'shipped' · safety meetings / topics
 - **Forecast** · 'shipped' · 'SchedulingForecast' · upcoming work calendar view
   - Starts view mode · 'shipped 2026-07-20' · 'SW v349' · 'StartsReport' · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = 'roughStartConfirmed' / 'finishStartConfirmed', or a 'scheduled' / 'date_confirmed' status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
+    - Needs Date section + Past due moved to the bottom · 'shipped 2026-07-29' · 'SW v359' · group order is now This week / Next week / Later / Past due, so the week you're planning reads first and the problems collect at the end. New gold 'Needs date' section closes the report: jobs with NO start on the calendar for the phase that's actually next — rough not started and no rough date, or rough complete and finish unscheduled ('in between'). One row per job (only the next phase is chased, so an unscheduled rough doesn't also nag for a finish date), excludes archived / deleted / quotes / quick jobs / temp peds and any phase already 'inprogress' (the start already happened — Koy: chasing a finish date while the rough is still going is too early). Upcoming entries with no 'projectedStart' land here too, so the report is one clear view of every job, pipeline included; board jobs sort ahead of Upcoming rows since those are the ones you can open and fix. Each row shows WHY it has no date (its status label, or 'No start date set' for pipeline rows). Dateless rows only appear under the All filter since they're neither projected nor confirmed. Also folds in starts whose date string won't parse — previously '_weekBucket' returned null and the row was silently dropped; it now shows with its raw text and a 'Date unreadable' reason. Koy + Justin
     - Date-format fix · 'shipped 2026-07-20' · 'SW v350' · v349 parsed only ISO 'YYYY-MM-DD', but real job start dates are US slash ('3/19/26', '6/4/2026') — so every row's date failed to parse and the report rendered empty. '_parseStartDate' now handles both slash and ISO; bucket sort compares parsed dates (was buggy string compare); already-'inprogress' phases excluded (a start that already happened isn't upcoming)
 - **Nav** · 'shipped' · 'NavView' · map view of jobs
 - **Upcoming** · 'shipped' · 'UpcomingJobs' · jobs in the pipeline before they're full jobs
