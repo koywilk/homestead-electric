@@ -1,0 +1,63 @@
+#!/bin/sh
+#
+# pre-push — refuse to push anything that Vercel would fail to build.
+#
+# Why this exists (2026-07-29): commit 165bb37 bumped the service worker to v359
+# but shipped no FEATURES.md entry. scripts/version-from-sw.js hard-blocks the
+# build in that case, so Vercel died at prebuild and production silently stayed
+# on v358. The commit was already pushed by then — the repo's only build gate
+# runs AFTER the push, which is too late to stop anything.
+#
+# This runs the exact command Vercel runs, before the push leaves the machine:
+#   CI=true npm run build
+# CI=true matters — Vercel sets it, and it makes CRA treat ESLint warnings as
+# errors. A build that passes without it can still fail on Vercel.
+#
+# Emergency bypass:  git push --no-verify
+# Use that only when you know the build is broken and are pushing anyway.
+
+set -u
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Nothing to check if every ref in this push is a deletion.
+z40="0000000000000000000000000000000000000000"
+any_real_push=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" = "$z40" ] || any_real_push=1
+done
+if [ "$any_real_push" -eq 0 ]; then
+  exit 0
+fi
+
+if [ ! -d node_modules ] && [ ! -d node_modules.nosync ]; then
+  echo ""
+  echo "  pre-push: node_modules is missing — cannot verify the build."
+  echo "  Run 'npm install', then push again."
+  echo ""
+  exit 1
+fi
+
+echo ""
+echo "  pre-push: running 'CI=true npm run build' (what Vercel runs)..."
+
+log="$(mktemp -t homestead-prepush)"
+if CI=true npm run build >"$log" 2>&1; then
+  size="$(awk '/build\/static\/js\/main/ {print $1, $2; exit}' "$log")"
+  echo "  pre-push: build OK${size:+ — main bundle $size gzip}"
+  rm -f "$log"
+  exit 0
+fi
+
+echo ""
+echo "  ────────────────────────────────────────────────────────────"
+echo "  PUSH ABORTED — the build failed. Vercel would fail too."
+echo "  ────────────────────────────────────────────────────────────"
+echo ""
+tail -n 30 "$log" | sed 's/^/  /'
+echo ""
+echo "  Full log: $log"
+echo "  Fix the build, then push again.  (bypass: git push --no-verify)"
+echo ""
+exit 1

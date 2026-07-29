@@ -28731,9 +28731,26 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
   );
 }
 
-function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
+function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuote, canManage=false, foremenList, openId=null, onOpened }) {
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  // Deep-link in from the Forecast → Starts report (Koy 2026-07-29): tapping a
+  // pipeline row over there sets `openId`, which expands that entry's card here
+  // and scrolls to it. Both the mobile and desktop layouts key off `editingId`,
+  // so one mechanism covers parity. `onOpened` clears the request so re-opening
+  // the same entry later still works (a stuck openId would make the second tap
+  // a no-op). Guarded on the id actually existing — a deleted entry just lands
+  // on the list instead of expanding nothing.
+  useEffect(()=>{
+    if(!openId) return;
+    if((upcoming||[]).some(u=>u.id===openId)) setEditingId(openId);
+    onOpened && onOpened();
+  },[openId,upcoming,onOpened]);
+  useEffect(()=>{
+    if(!editingId) return;
+    const el=document.querySelector(`[data-upid="${editingId}"]`);
+    el && el.scrollIntoView && el.scrollIntoView({block:"center",behavior:"smooth"});
+  },[editingId]);
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(()=>{
     const handle=()=>setWinW(window.innerWidth);
@@ -28798,7 +28815,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             const fc=getFC(u.foreman)||"#6E7682";
             const isSigned=!!u.signed;
             return (
-              <div key={u.id} style={{
+              <div key={u.id} data-upid={u.id} style={{
                 background: isSigned ? `${C.green}08` : C.card,
                 border: `1px solid ${isSigned ? C.green+"55" : C.border}`,
                 borderLeft: `3px solid ${isSigned ? C.green : C.border}`,
@@ -28886,7 +28903,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             const isEditing=editingId===u.id;
             const isSigned=!!u.signed;
             return (
-              <div key={u.id} style={{
+              <div key={u.id} data-upid={u.id} style={{
                 display:"flex", alignItems:isEditing?"flex-start":"center", gap:0,
                 padding:"6px 12px", borderRadius:8, marginBottom:3,
                 background: isEditing ? C.surface : isSigned ? `${C.green}08` : "none",
@@ -31681,7 +31698,7 @@ const _startPhaseDone = st => st==="complete" || st==="invoice";
 // so the Needs Date section reads as the same concept the status pills already use.
 const _STARTS_GOLD = "#B0892C";
 
-function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
+function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
   const [filter,setFilter]=useState("all"); // all | proj | conf
   const events=[];
   const needsDate=[];
@@ -31732,11 +31749,11 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
     // Needs Date instead of a week bucket. They carry no live job doc, so the
     // row stays non-clickable like every other Upcoming row.
     if(!String(u.projectedStart||"").trim()){
-      needsDate.push({ id:"up_"+u.id+"_nodate", up:true, nm:u.name||"(unnamed)",
+      needsDate.push({ id:"up_"+u.id+"_nodate", up:true, u, nm:u.name||"(unnamed)",
         gc:u.customer||"", phase:"Rough", why:"No start date set" });
       return;
     }
-    events.push({ id:"up_"+u.id, up:true, nm:u.name||"(unnamed)", gc:u.customer||"", phase:"Rough", date:u.projectedStart, confirmed:!!u.startConfirmed });
+    events.push({ id:"up_"+u.id, up:true, u, nm:u.name||"(unnamed)", gc:u.customer||"", phase:"Rough", date:u.projectedStart, confirmed:!!u.startConfirmed });
   });
   const shown = events.filter(e=> filter==="proj"?!e.confirmed : filter==="conf"?e.confirmed : true);
   const byBucket={};
@@ -31761,6 +31778,14 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
     ((a.up?1:0)-(b.up?1:0)) ||
     (a.phase===b.phase?0:a.phase==="Rough"?-1:1) ||
     String(a.nm).localeCompare(String(b.nm)));
+  // Koy 2026-07-29: "I need to be able to click the jobs in the start section
+  // and open their cards." Board rows open the job card; Upcoming rows now jump
+  // to that entry's card in the Upcoming tab instead of being dead (they have no
+  // job doc, so their card lives over there). `canOpen` drives the cursor so the
+  // row never *looks* tappable when there's nothing behind it — e.g. a user
+  // without pipeline.view gets no handler and no pointer.
+  const canOpen=(e)=> e.up ? !!(onSelectUpcoming && e.u) : !!(onSelectJob && e.job);
+  const openRow=(e)=>{ if(!canOpen(e)) return; if(e.up) onSelectUpcoming(e.u); else onSelectJob(e.job); };
   const seg=(v,label,dot)=>(
     <button onClick={()=>setFilter(v)} style={{flex:1,fontFamily:"inherit",fontSize:12,fontWeight:700,
       color:filter===v?C.text:C.dim,border:"none",background:filter===v?C.card:"none",padding:"7px 4px",
@@ -31793,11 +31818,11 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
               const accent = e.up?C.orange:(e.phase==="Finish"?C.finish:C.rough);
               const pill = e.up?["From Upcoming",C.orange]:(e.confirmed?["Confirmed",C.green]:["Projected",C.orange]);
               return (
-                <div key={e.id} onClick={()=>{ if(!e.up&&onSelectJob) onSelectJob(e.job); }}
+                <div key={e.id} onClick={()=>openRow(e)}
                   style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${accent}`,
                     borderStyle:e.up?"dashed":"solid",borderLeftStyle:"solid",borderRadius:12,padding:"10px 11px",
                     boxShadow:"0 1px 2px rgba(27,31,36,.05)",marginBottom:8,display:"flex",alignItems:"center",gap:11,
-                    cursor:e.up?"default":"pointer"}}>
+                    cursor:canOpen(e)?"pointer":"default"}}>
                   <div style={{flex:"0 0 46px",textAlign:"center"}}>
                     <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
                     <div style={{fontSize:14,fontWeight:800,color:C.text,fontVariantNumeric:"tabular-nums"}}>{_startFmt(e.date)}</div>
@@ -31837,11 +31862,11 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
             // Upcoming-pipeline rows can land here too (bad projectedStart), and
             // they carry no live job — same non-clickable treatment as above.
             return (
-              <div key={e.id} onClick={()=>{ if(!e.up&&onSelectJob) onSelectJob(e.job); }}
+              <div key={e.id} onClick={()=>openRow(e)}
                 style={{background:C.card,border:`1px dashed ${C.border}`,borderLeft:`3px solid ${e.up?C.orange:accent}`,
                   borderLeftStyle:"solid",borderRadius:12,padding:"10px 11px",
                   boxShadow:"0 1px 2px rgba(27,31,36,.05)",marginBottom:8,display:"flex",alignItems:"center",gap:11,
-                  cursor:e.up?"default":"pointer"}}>
+                  cursor:canOpen(e)?"pointer":"default"}}>
                 <div style={{flex:"0 0 46px",textAlign:"center"}}>
                   <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
                   <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.muted,
@@ -31865,7 +31890,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob }){
   );
 }
 
-function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allForemen, identity, onUpdateJob, users=[], upcoming=[] }) {
+function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, foremenList: _allForemen, identity, onUpdateJob, users=[], upcoming=[] }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("crew"); // crew | kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
@@ -36545,7 +36570,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
 
       {/* ── CALENDAR ── */}
       {viewMode==="calendar"&&<CalendarView/>}
-      {viewMode==="starts"&&<StartsReport jobs={jobs} upcoming={upcoming} onSelectJob={onSelectJob}/>}
+      {viewMode==="starts"&&<StartsReport jobs={jobs} upcoming={upcoming} onSelectJob={onSelectJob} onSelectUpcoming={onSelectUpcoming}/>}
 
       {/* ── Color Key ── */}
       <div style={{padding:"16px 26px 32px",borderTop:"1px solid var(--border)",marginTop:8}}>
@@ -43961,7 +43986,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-29 · App SW version: v359
+**Last manifest update:** 2026-07-29 · App SW version: v360
 
 ---
 
@@ -43987,6 +44012,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Starts view mode · 'shipped 2026-07-20' · 'SW v349' · 'StartsReport' · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = 'roughStartConfirmed' / 'finishStartConfirmed', or a 'scheduled' / 'date_confirmed' status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
     - Date-format fix · 'shipped 2026-07-20' · 'SW v350' · v349 parsed only ISO 'YYYY-MM-DD', but real job start dates are US slash ('3/19/26', '6/4/2026') — so every row's date failed to parse and the report rendered empty. '_parseStartDate' now handles both slash and ISO; bucket sort compares parsed dates (was buggy string compare); already-'inprogress' phases excluded (a start that already happened isn't upcoming)
     - Needs Date section + Past due moved to the bottom · 'shipped 2026-07-29' · 'SW v359' · from Koy + Justin talking through the Starts view. Group order is now **This week / Next week / Later / Past due**, so the week you're planning reads first and the problems collect at the end. New gold **Needs date** section closes the report and fills the view's blind spot: the event builder did 'if(!ps) return', so **a job with no projected start never became a row at all** — every unscheduled job was invisible in the one view meant to answer "what's starting?" Now surfaced for the phase that's actually next: rough not started and no rough date, or rough complete and finish unscheduled ("in between"). Deliberately **one row per job** — an unscheduled rough doesn't also nag for a finish date nobody could know yet, and a phase already 'inprogress' needs no start date (Koy: chasing the finish date while the rough is still going is too early). Reads 'effRS'/'effFS', not raw 'roughStatus' — 'effRS' derives 'inprogress' from 'roughStage:"40"' with no status field, so keying off the raw field would have dragged every actively-roughing job into the chase list. Excludes archived / deleted / quotes / quick jobs / temp peds. Each row shows **why** it has no date (its status label — "Awaiting Start Date", "On Hold", "No status set") and opens the job so the date can be set on the spot. **Upcoming pipeline included** (Koy: "a clear view of all the jobs") — entries with no 'projectedStart' were being dropped by 'if(!u.projectedStart) return', so the report only ever showed *part* of the pipeline; they now land here too, sorted after board jobs (those are the ones you can open and fix) and non-clickable like every other Upcoming row. Also folds in starts whose date string won't parse: '_weekBucket' returned 'null' and the render loop **silently dropped the row**, so a typo'd date deleted the job from the report — it now shows with its raw text and a "Date unreadable" reason. Colour '#B0892C' is the app's own 'waiting_date' gold, so the section reads as a concept the status pills already use. Read-only — no writes, no new fields, no loader change
+    - Starts rows open their cards · 'shipped 2026-07-29' · 'SW v360' · Koy: "I need to be able to click the jobs in the start section and open their cards." Board-job rows already opened their job card; **Upcoming rows were hard-coded dead** ('cursor:"default"', click ignored) because a pipeline entry has no job doc — its card is the expandable edit form in the Upcoming tab. Tapping one now jumps to Upcoming, expands that entry and scrolls it into view: 'StartsReport' carries the entry ('u') on every pipeline row and calls a new 'onSelectUpcoming', App holds 'upcomingOpenId' + navigates via the existing 'openUpcoming()', and 'UpcomingJobs' takes 'openId' and sets its own 'editingId'. Both the mobile-card and desktop-row layouts key off that same 'editingId', so parity is automatic; rows carry 'data-upid' for the scroll. 'onOpened' clears the request once consumed, so tapping the same entry twice still works (a stuck id would make the second tap a no-op). Gated on 'pipeline.view' — a user without it gets no handler AND no pointer cursor, so a row never *looks* tappable when there's nothing behind it. Navigation + local expand state only; no writes
+- **Deploy safety** · 'shipped 2026-07-29' · 'SW v360' · '.githooks/pre-push' · after '165bb37' shipped an SW bump with no FEATURES.md entry, failed Vercel's 'prebuild' gate and left production silently on v358, the repo now refuses to push a build it can't compile. The hook runs **'CI=true npm run build'** — Vercel's exact invocation, 'CI=true' included so CRA treats ESLint warnings as errors the same way — and aborts the push with the build's tail on failure. Lives in tracked '.githooks/' with 'core.hooksPath' (a hook in '.git/hooks/' isn't versioned and vanishes on a fresh clone). Skips branch deletions, fails clearly if 'node_modules' is missing, bypass is 'git push --no-verify'. Verified all three paths: deletion skips, a good tree passes, and a deliberately bad tree (SW bumped to an unreferenced version) is blocked with exit 1. **One-time setup on a fresh clone:** 'git config core.hooksPath .githooks'
 - **Nav** · 'shipped' · 'NavView' · map view of jobs
 - **Upcoming** · 'shipped' · 'UpcomingJobs' · jobs in the pipeline before they're full jobs
   - Projected Start + confirm toggle · 'shipped 2026-07-20' · 'SW v349' · each Upcoming entry gets 'projectedStart' + 'startConfirmed' (set in the edit form); feeds the Starts report so pipeline jobs show up alongside live-job starts
@@ -48409,6 +48436,11 @@ function App() {
 
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
+  // Which Upcoming entry to expand when the Upcoming tab mounts — set by tapping
+  // a pipeline row in Forecast → Starts (Koy 2026-07-29). Cleared by UpcomingJobs
+  // once consumed, so tapping the same entry again still opens it.
+  const [upcomingOpenId, setUpcomingOpenId] = useState(null);
+  const clearUpcomingOpen = useCallback(()=>setUpcomingOpenId(null),[]);
   const [needs, setNeeds] = useState([]);
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
@@ -52014,7 +52046,9 @@ function App() {
       })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
-        <SchedulingForecast jobs={jobs} users={users} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob} upcoming={upcoming}/>
+        <SchedulingForecast jobs={jobs} users={users} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)}
+          onSelectUpcoming={can(identity,"pipeline.view")?((u)=>{ setUpcomingOpenId(u.id); openUpcoming(); }):undefined}
+          foremenList={_foremen} identity={identity} onUpdateJob={updateJob} upcoming={upcoming}/>
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
@@ -52071,6 +52105,8 @@ function App() {
         <UpcomingJobs
           upcoming={upcoming}
           canManage={can(identity,"pipeline.manage")}
+          openId={upcomingOpenId}
+          onOpened={clearUpcomingOpen}
           foremenList={_foremen}
           onDelete={(id)=>{ deleteUpcomingItem(id); }}
           onChange={(next)=>{
