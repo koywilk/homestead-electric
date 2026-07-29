@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-29 · App SW version: v360
+**Last manifest update:** 2026-07-29 · App SW version: v361
 
 ---
 
@@ -36,6 +36,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Upcoming** · `shipped` · `UpcomingJobs` · jobs in the pipeline before they're full jobs
   - Projected Start + confirm toggle · `shipped 2026-07-20` · `SW v349` · each Upcoming entry gets `projectedStart` + `startConfirmed` (set in the edit form); feeds the Starts report so pipeline jobs show up alongside live-job starts
   - Back to Upcoming (any job) · `shipped 2026-07-20` · `SW v349` · a regular board job can be pulled back into Upcoming from Job Info — mirrors the quote-undo data-safety order (saves the Upcoming entry FIRST via `mergeSaveSettingsFields`, deletes the job doc only after, seeds `projectedStart` from `roughProjectedStart`). Hidden by `jobHasLoggedWork` once rough/finish progress, an inspection, CO, RT, or daily update exists — an active job can't be yanked off the board. Suggestion #1 (Justin Cloward)
+  - Debounced pipeline save · `shipped 2026-07-29` · `SW v361` · Koy reported console spam (`400 failed-precondition` looping) and dropped keystrokes while typing in an Upcoming row. `onChange` was firing `saveAllUpcoming` — a fresh `mergeSaveSettingsFields` transaction against the single `settings/upcoming_jobs` doc — on every keystroke; fast typing queued overlapping transactions that invalidated each other's reads, so the SDK's transaction retry looped the whole time the user typed. `saveAllUpcoming` now trailing-debounces 500ms (same window as `saveJob`'s per-job debounce) — local state still updates instantly, only the Firestore write is delayed and collapses a keystroke burst into one save. The pending timer is wired into the existing `flushSaves` (tab close / backgrounding) and `hasPendingSaves` (auto-reload gate) so a pending edit isn't dropped or silently overwritten by a reload. Read/write shape unchanged — no new fields, no loader change
 - **Quotes** · `shipped` · proposed jobs awaiting conversion
 - **Tasks** · `shipped` · `Tasks` · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 (`manualTasks` collection was empty; Needs Board is THE manual to-do surface) · `SW v321`
   - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · `SW v321`)

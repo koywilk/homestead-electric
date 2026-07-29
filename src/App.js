@@ -43986,7 +43986,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-29 · App SW version: v360
+**Last manifest update:** 2026-07-29 · App SW version: v361
 
 ---
 
@@ -44018,6 +44018,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Upcoming** · 'shipped' · 'UpcomingJobs' · jobs in the pipeline before they're full jobs
   - Projected Start + confirm toggle · 'shipped 2026-07-20' · 'SW v349' · each Upcoming entry gets 'projectedStart' + 'startConfirmed' (set in the edit form); feeds the Starts report so pipeline jobs show up alongside live-job starts
   - Back to Upcoming (any job) · 'shipped 2026-07-20' · 'SW v349' · a regular board job can be pulled back into Upcoming from Job Info — mirrors the quote-undo data-safety order (saves the Upcoming entry FIRST via 'mergeSaveSettingsFields', deletes the job doc only after, seeds 'projectedStart' from 'roughProjectedStart'). Hidden by 'jobHasLoggedWork' once rough/finish progress, an inspection, CO, RT, or daily update exists — an active job can't be yanked off the board. Suggestion #1 (Justin Cloward)
+  - Debounced pipeline save · 'shipped 2026-07-29' · 'SW v361' · Koy reported console spam ('400 failed-precondition' looping) and dropped keystrokes while typing in an Upcoming row. 'onChange' was firing 'saveAllUpcoming' — a fresh 'mergeSaveSettingsFields' transaction against the single 'settings/upcoming_jobs' doc — on every keystroke; fast typing queued overlapping transactions that invalidated each other's reads, so the SDK's transaction retry looped the whole time the user typed. 'saveAllUpcoming' now trailing-debounces 500ms (same window as 'saveJob''s per-job debounce) — local state still updates instantly, only the Firestore write is delayed and collapses a keystroke burst into one save. The pending timer is wired into the existing 'flushSaves' (tab close / backgrounding) and 'hasPendingSaves' (auto-reload gate) so a pending edit isn't dropped or silently overwritten by a reload. Read/write shape unchanged — no new fields, no loader change
 - **Quotes** · 'shipped' · proposed jobs awaiting conversion
 - **Tasks** · 'shipped' · 'Tasks' · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 ('manualTasks' collection was empty; Needs Board is THE manual to-do surface) · 'SW v321'
   - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · 'SW v321')
@@ -48486,6 +48487,17 @@ function App() {
 
   const saveTimers = useRef({});
 
+  // Trailing-debounce for the Upcoming pipeline's single-doc save (mirrors
+  // saveJob's per-job debounce below). onChange fired a brand-new
+  // mergeSaveSettingsFields TRANSACTION on every keystroke with no debounce —
+  // fast typing queued overlapping transactions against the same
+  // settings/upcoming_jobs doc, each one's read invalidated by the next one's
+  // commit, so the SDK's retry logic looped on failed-precondition the whole
+  // time the user was typing. upcomingPending holds only the latest list;
+  // upcomingSaveTimer holds the pending flush.
+  const upcomingPending = useRef(null);
+  const upcomingSaveTimer = useRef(null);
+
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
 
 
@@ -49318,12 +49330,28 @@ function App() {
     try { await deleteDoc(doc(db,"needs",id)); } catch(e){ console.error("deleteNeed error:",e); }
   };
 
-  // Save the entire upcoming list as one document — no per-item deletes needed
-  const saveAllUpcoming = async (list) => {
+  // Flush the pending Upcoming-list save immediately (used by beforeunload /
+  // visibilitychange via flushSaves, and by the debounce timer itself).
+  const flushUpcoming = async () => {
+    clearTimeout(upcomingSaveTimer.current);
+    upcomingSaveTimer.current = null;
+    const list = upcomingPending.current;
+    if (list == null) return;
+    upcomingPending.current = null;
     // Merge-save (data safety): items are id'd — two pipeline editors no
     // longer last-write-wins the whole list. updated_at kept for back-compat.
     try { await mergeSaveSettingsFields("upcoming_jobs",{items:list,updated_at:new Date().toISOString()}); }
     catch(e){ console.error("saveAllUpcoming error:",e); toast.error("Upcoming-jobs save failed — retry."); }
+  };
+
+  // Save the entire upcoming list as one document — no per-item deletes needed.
+  // Trailing-debounced 500ms (same window as saveJob) so typing in a row field
+  // doesn't fire a transaction per keystroke; setUpcoming(next) still updates
+  // the UI instantly, only the network write is delayed.
+  const saveAllUpcoming = (list) => {
+    upcomingPending.current = list;
+    clearTimeout(upcomingSaveTimer.current);
+    upcomingSaveTimer.current = setTimeout(flushUpcoming, 500);
   };
   // Keep these names for call-site compatibility but they now just save the full list
   const saveUpcomingItem = (_item) => {}; // no-op — caller uses onChange which calls saveAllUpcoming
@@ -49361,6 +49389,10 @@ function App() {
 
 
   const flushSaves = () => {
+
+    // Flush a pending Upcoming-list save too — same accepted fire-and-forget
+    // race as the job flush below (tab is closing, we can't await it).
+    if (upcomingSaveTimer.current) flushUpcoming();
 
     // Only flush jobs that have pending save timers — avoids overwriting other users' changes
     const pendingIds = new Set(Object.keys(saveTimers.current).filter(k => saveTimers.current[k]));
@@ -49465,6 +49497,7 @@ function App() {
   const hasPendingSaves = () =>
     Object.values(saveTimers.current || {}).some(Boolean) ||
     Object.values(pendingPatches.current || {}).some(p => p && Object.keys(p).length > 0) ||
+    !!upcomingSaveTimer.current ||
     isDirty.current;
 
   const isTypingFocused = () => {
