@@ -118,13 +118,99 @@ const FIELDINK_VIEWER_BASE = "https://tracevault-pdf-markup.vercel.app/#/v/";
 const fieldinkAuth = getAuth(fieldinkApp);
 let _fiAuthPromise = null;
 function ensureFieldinkAuth() {
-  if (fieldinkAuth.currentUser) return Promise.resolve(fieldinkAuth.currentUser);
+  if (fieldinkAuth.currentUser) { _kickOrgJoin(fieldinkAuth.currentUser); return Promise.resolve(fieldinkAuth.currentUser); }
   if (!_fiAuthPromise) {
     _fiAuthPromise = signInAnonymously(fieldinkAuth)
-      .then(c => c.user)
+      .then(c => { _kickOrgJoin(c.user); return c.user; })
       .catch(e => { _fiAuthPromise = null; console.warn("[fieldink] anon auth failed:", e?.message); return null; });
   }
   return _fiAuthPromise;
+}
+
+// ── ORG MEMBERSHIP JOIN (KC1 stage-B prerequisite) ───────────────────────────
+// Per CC-SIDE SPEC (FieldInk shipped its half in v511): the cc* bridge
+// collections move from "any authenticated session" to "org members only". This
+// session must JOIN the org once before those reads/writes survive stage-B
+// rules. Two write-only docs (never readable); the rules verify membership
+// server-side via exists():
+//   orgauth/company/meta/security   (create-once) = { orgKey, by, at }
+//   orgauth/company/members/<uid>                 = { key,    by, at }
+//
+// Mirrors FieldInk's ensureOrgMembership/_joinOrg (src/utils/livesync.js v511):
+// claim-then-join, swallow the already-claimed denial, refresh the key once on a
+// denied join. Hooked into ensureFieldinkAuth above rather than at the 8 cc*
+// call sites, because every bridge read AND write already funnels through it —
+// including the read listeners' self-healing re-attach, so a failed join is
+// retried for free whenever a listener re-attaches.
+//
+// ★ FIRE-AND-FORGET BY CONTRACT ★ Nothing gates on the result and it is never
+// awaited: under today's stage-A rules the cc* writes behave identically with or
+// without it, and under stage-B a missing join just means they fail until a join
+// lands. With NO key provisioned this is completely inert — the exact "safe to
+// ship anytime" posture step 1 of the spec's build order asks for.
+const FIELDINK_ORG_KEY_LS = "he_fi_orgkey";
+// Build-time key. NOTE: CRA inlines env vars into the JS bundle, and this app's
+// bundle is publicly downloadable — so setting this publishes the org key, which
+// would undercut stage B for BOTH apps (it's one company-wide secret). Prefer
+// the per-device localStorage value, or the callable described in the handoff.
+const FIELDINK_ORG_KEY_ENV = process.env.REACT_APP_FIELDINK_ORG_KEY || "";
+// Single choke point for key resolution, so swapping in a Drive read or a
+// cloud-function callable later is a one-function change. Never logs the VALUE.
+async function _getOrgKey(opts = {}) {
+  if (!opts.refresh) {
+    try { const c = localStorage.getItem(FIELDINK_ORG_KEY_LS); if (typeof c === "string" && c.length >= 16) return c; } catch {}
+  }
+  if (FIELDINK_ORG_KEY_ENV && FIELDINK_ORG_KEY_ENV.length >= 16) {
+    try { localStorage.setItem(FIELDINK_ORG_KEY_LS, FIELDINK_ORG_KEY_ENV); } catch {}
+    return FIELDINK_ORG_KEY_ENV;
+  }
+  // refresh:true with no fresh source → fall back to whatever is cached.
+  try { const c = localStorage.getItem(FIELDINK_ORG_KEY_LS); if (typeof c === "string" && c.length >= 16) return c; } catch {}
+  return null;
+}
+// Keyed by uid: an anonymous uid is NOT stable across a browser-data clear, and
+// a fresh uid needs its OWN members doc. A settled FALSE is never memoized, so a
+// pre-stage-A denial (or a key that shows up later) stays retryable.
+let _orgJoinUid = null, _orgJoinPromise = null, _orgRejoinAt = 0;
+function _kickOrgJoin(user) {
+  if (!user || !user.uid) return;
+  if (_orgJoinUid === user.uid && _orgJoinPromise) return; // already joined/joining this uid
+  _orgJoinUid = user.uid;
+  _orgJoinPromise = _joinOrg(user)
+    .then(ok => { if (!ok) { _orgJoinPromise = null; } return ok; })
+    .catch(() => { _orgJoinPromise = null; return false; });
+}
+async function _joinOrg(user) {
+  const key = await _getOrgKey();
+  if (!key) return false; // no key provisioned → inert, and silent (no console noise every boot)
+  const claim = async (k) => {
+    // Already claimed (FieldInk usually claims first) → permission-denied →
+    // EXPECTED per spec; swallow and proceed to the members write.
+    try { await setDoc(doc(fieldinkDb, "orgauth", "company", "meta", "security"), { orgKey: k, by: user.uid, at: serverTimestamp() }); } catch {}
+  };
+  const join = (k) => setDoc(doc(fieldinkDb, "orgauth", "company", "members", user.uid), { key: k, by: user.uid, at: serverTimestamp() });
+  await claim(key);
+  try { await join(key); console.log("[fieldink] org membership joined"); return true; }
+  catch (e) {
+    if (e?.code === "permission-denied") {
+      // Cached key may be stale vs the claimed org key — refresh once, retry.
+      try { const k2 = await _getOrgKey({ refresh: true }); if (k2 && k2 !== key) { await claim(k2); await join(k2); console.log("[fieldink] org membership joined (after key refresh)"); return true; } } catch {}
+    }
+    console.warn("[fieldink] org join denied — expected until the stage-A/B rules + org key are live on this device");
+    return false;
+  }
+}
+// Self-heal for the cc* write paths: a permission-denied there usually means
+// "fresh uid, not joined yet" (or stage B just deployed mid-session). Throttled
+// to once per 10s so a hard denial can't stampede the org docs.
+function _ccDenied(e) {
+  if (e?.code !== "permission-denied" && !/permission|insufficient/i.test(String(e?.message || ""))) return;
+  const now = Date.now();
+  if (now - _orgRejoinAt < 10000) return;
+  _orgRejoinAt = now;
+  _orgJoinUid = null; _orgJoinPromise = null;
+  const u = fieldinkAuth.currentUser;
+  if (u) _kickOrgJoin(u);
 }
 let _ccJobsLastHash = "";
 async function publishCcJobsIndex(jobs) {
@@ -166,7 +252,7 @@ async function publishCcJobsIndex(jobs) {
       (drop.noId.length || drop.noName.length || drop.deleted || drop.archived)
         ? { droppedNoId: drop.noId, droppedNoName: drop.noName, deleted: drop.deleted, archived: drop.archived }
         : "(nothing dropped)");
-  } catch (e) { console.warn("[fieldink] job index publish failed:", e?.message); }
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] job index publish failed:", e?.message); }
 }
 
 // ── FieldInk HOMERUNS publish (office → field) ───────────────────────────────
@@ -221,7 +307,7 @@ async function _publishCcHomerunsNow(jid, homeRuns) {
     await setDoc(doc(fieldinkDb, "cchomeruns", jid), { panels, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
     _ccHomerunsHash[jid] = hash;
     console.log(`[fieldink] published homeruns for job ${jid}: ${panels.reduce((n, p) => n + p.circuits.length, 0)} run(s)`);
-  } catch (e) { console.warn("[fieldink] homeruns publish failed (rules deployed?):", e?.message); }
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] homeruns publish failed (rules deployed?):", e?.message); }
 }
 
 // ── FieldInk CHANGE-ORDER publish (office → field) ────────────────────────────
@@ -274,6 +360,9 @@ async function publishCcChangeOrders(jobId, changeOrders) {
       // markup blocks. ABORT this publish rather than republishing without them
       // (a transient read failure here used to silently wipe every "drawn ✓"
       // link on the job). Hash stays unset, so the next CO save retries.
+      // Stage B gates cccos READS too, so a denial here is a "not joined yet"
+      // signal — self-heal so the next CO save (hash still unset) can land.
+      _ccDenied(e);
       console.warn("[fieldink] cccos pre-read failed — publish skipped to protect field markup links:", e?.message);
       return;
     }
@@ -283,7 +372,7 @@ async function publishCcChangeOrders(jobId, changeOrders) {
     await setDoc(ref, { cos, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
     _ccCosHash[jid] = hash;
     console.log(`[fieldink] published change orders for job ${jid}: ${cos.length} CO(s)`);
-  } catch (e) { console.warn("[fieldink] change-order publish failed (rules deployed?):", e?.message); }
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] change-order publish failed (rules deployed?):", e?.message); }
 }
 
 // The FOURTH write this app makes to field-ink (ccjobs → cchomeruns → cccos →
@@ -358,6 +447,10 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
     let remote = null;
     try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; }
     catch (e) {
+      // ccquestions READ is one of the two verbs that STAY any-authed per spec,
+      // so a denial here is unexpected — self-heal anyway (costs nothing) and
+      // leave the protective abort intact.
+      _ccDenied(e);
       console.warn("[fieldink] ccquestions pre-read failed — publish skipped to protect field links:", e?.message);
       return;
     }
@@ -367,7 +460,7 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
     await setDoc(ref, { questions, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
     _ccQHash[jid] = hash;
     console.log(`[fieldink] published designer questions for job ${jid}: ${questions.length}`);
-  } catch (e) { console.warn("[fieldink] questions publish failed (rules deployed?):", e?.message); }
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] questions publish failed (rules deployed?):", e?.message); }
 }
 
 // The FIFTH field-ink touch (ccjobs → cchomeruns → cccos → ccquestions →
@@ -396,7 +489,7 @@ async function answerFieldNote(jobId, noteId, answerText, answeredBy) {
     );
     console.log(`[fieldink] answered field note ${noteId} on job ${jobId}`);
     return true;
-  } catch (e) { console.warn("[fieldink] field-note answer failed (rules deployed?):", e?.message); return false; }
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] field-note answer failed (rules deployed?):", e?.message); return false; }
 }
 
 // Debug helpers exposed to window so we can run one-off scripts from the
@@ -413,6 +506,38 @@ if (typeof window !== "undefined") {
     return r.data;
   };
   window._hsFs = { db, doc, getDoc, getDocs, setDoc, updateDoc, collection, query, where };
+
+  // ── Org membership provisioning + verification (CC-SIDE SPEC, KC1 stage B) ──
+  // Provision this device's org key, then re-join. Per-device by design: the key
+  // stays OUT of the public JS bundle this way. Returns the join result.
+  //   await _hsSetOrgKey("<32-hex editor key>")
+  window._hsSetOrgKey = async (key) => {
+    const k = String(key || "").trim();
+    if (k.length < 16) return "refused: key looks too short (expected the 32-hex editor key)";
+    try { localStorage.setItem(FIELDINK_ORG_KEY_LS, k); } catch { return "refused: localStorage unavailable"; }
+    const u = await ensureFieldinkAuth();
+    if (!u) return "key stored, but field-ink anon auth failed — reload and retry";
+    _orgJoinUid = null; _orgJoinPromise = null; _orgRejoinAt = 0;
+    _kickOrgJoin(u);
+    const ok = await (_orgJoinPromise || Promise.resolve(false));
+    return ok
+      ? `joined — orgauth/company/members/${u.uid} written (verify in the field-ink console)`
+      : "key stored, but the join was denied — check the key value, or the orgauth rules aren't live yet";
+  };
+  // Report state WITHOUT ever printing the key value (spec: never log the key).
+  //   await _hsOrgStatus()
+  window._hsOrgStatus = async () => {
+    let cached = null; try { cached = localStorage.getItem(FIELDINK_ORG_KEY_LS); } catch {}
+    const u = fieldinkAuth.currentUser || await ensureFieldinkAuth();
+    return {
+      uid: u?.uid || null,
+      memberDocPath: u?.uid ? `orgauth/company/members/${u.uid}` : null,
+      keyPresent: !!(cached && cached.length >= 16),
+      keySource: (cached && cached.length >= 16) ? "localStorage" : (FIELDINK_ORG_KEY_ENV ? "build env" : "none"),
+      joinAttemptedForUid: _orgJoinUid,
+      joinSettledTruthy: !!_orgJoinPromise,
+    };
+  };
 
   // SCAN: walk every job in Firestore and report which ones still carry
   // legacy inline data-URL photos. Read-only — no writes, no uploads.
@@ -43986,7 +44111,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-29 · App SW version: v361
+**Last manifest update:** 2026-07-29 · App SW version: v362
 
 ---
 
@@ -44285,6 +44410,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Always-current auto-update** · 'shipped 2026-07-10' · 'SW v318' · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
 - **Link Safety funnel** · 'shipped 2026-07-09' · 'SW v313' · every 'homeowner_requests' write goes through 'saveHomeownerRequest' with version snapshots (last 10 per job, 'versions' subcollection) — any clobber is a 2-minute restore
 - **Nightly Firestore backup** · 'shipped 2026-07-09 (deployed)' · 1:00 AM MT cloud function, 30-day retention in Storage 'backups/', 'runBackupNow' manual trigger, 'settings/backupStatus' stamp feeding the in-app banner
+- **Org membership join (KC1 stage-B prerequisite)** · 'shipped 2026-07-29' · 'SW v362' · CC-side leg of 'CC-SIDE SPEC — Org Membership Join'; pairs with FieldInk v511. The six cc* bridge collections move from "any authenticated session" to **org members only**, so this app's field-ink session must JOIN the org once per session or every gated read/write starts failing 'permission-denied' — the live CO loop, on a real job. Writes exactly the two spec'd write-only docs: 'orgauth/company/meta/security' (create-once claim, '{orgKey,by,at}') and 'orgauth/company/members/<uid>' ('{key,by,at}'); rules verify membership server-side via 'exists()'. Mirrors FieldInk's 'ensureOrgMembership'/'_joinOrg': claim-then-join, **swallow the already-claimed denial** (FieldInk usually claims first — expected, not an error), refresh the key once on a denied join. Hooked into 'ensureFieldinkAuth' rather than the 8 cc* call sites because every bridge read AND write already funnels through it — including the listeners' self-healing re-attach, so a failed join retries for free. Joined **per session and per uid** (an anonymous field-ink uid isn't stable across a browser-data clear, and a fresh uid needs its own members doc); a settled FALSE is never memoized, so a pre-stage-A denial stays retryable. '_ccDenied' self-heals the 5 write paths + the 2 protective pre-reads on 'permission-denied', throttled to once per 10s so a hard denial can't stampede. **FIRE-AND-FORGET BY CONTRACT** — never awaited, nothing gates on it, and with no key provisioned it is completely inert (zero writes), which is the "safe to ship anytime" posture the spec's build order step 1 asks for. Key resolution is one choke point ('_getOrgKey') so a Drive read or a callable can replace it in one function; provision per-device with '_hsSetOrgKey("<32-hex>")' and inspect with '_hsOrgStatus()' (neither ever prints the key value). 'ccjoblinks' is **not used by this app**, so that row of the spec's table doesn't apply. Verified by a 29-assertion harness driving the real extracted join block against stubbed Firestore/auth. ⚠️ 'REACT_APP_FIELDINK_ORG_KEY' exists but CRA inlines env vars into the **publicly downloadable** bundle — setting it publishes the one company-wide secret and would undercut stage B for both apps; see the handoff doc
 - **FieldInk bridge hardening** · 'shipped 2026-07-10' · 'SW v323' · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.
 - **Crew link (FieldInk)** · 'shipped 2026-07-10' · 'SW v323' · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the '?crew=' tagged link). Senders type their name per note, so one link serves a whole crew/sub.
 - **CO plan-markup chip** · 'shipped 2026-07-10' · 'SW v323' · Change Orders rows show "Marked up on plan — view" when the crew drew that CO on a plan in FieldInk (the write-back had flowed for weeks with no office display)
@@ -48499,6 +48625,16 @@ function App() {
   const upcomingSaveTimer = useRef(null);
 
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+
+  // ── Org membership join, once per SESSION (CC-SIDE SPEC, KC1 stage B) ───────
+  // Every page load, not once ever: an anonymous field-ink uid isn't stable
+  // across a browser-data clear, and a fresh uid needs its own members doc.
+  // ensureFieldinkAuth kicks the join internally. This explicit boot call is
+  // load-bearing — the only other early caller is publishCcJobsIndex, and its
+  // hash gate returns BEFORE it authenticates, so on a normal reload with an
+  // unchanged job list nothing would ever trigger the join. Fire-and-forget:
+  // deliberately not awaited and nothing gates on it.
+  useEffect(()=>{ ensureFieldinkAuth(); },[]);
 
 
   const migrate = (loaded) => {
