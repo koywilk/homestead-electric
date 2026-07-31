@@ -3334,41 +3334,30 @@ exports.getSimproScheduleByJob = functions
   });
 
 // ─────────────────────────────────────────────────────────────
-// SCHEDULED — Thursday 5pm Mountain Time
-// Friday Scheduling & Strategy Packet — uploaded as a Google Doc
-// to a Drive folder and announced via FCM push to Koy.
-// Read-only on jobs; writes one new Google Doc per run.
+// SCHEDULED — Friday 5:30am Mountain Time
+// Friday Packet — Money & Billing · Blockers & Actions · Week Ahead.
+// One phone-screen Google Doc for Koy + office (admins/managers +
+// coordinators, pref key "friday_packet"), uploaded to Drive and announced
+// via push. Content comes from the PURE builder ./fridayPacket.js so
+// scripts/packet-dryrun.js renders byte-identical output for sign-off.
+// Read-only on jobs; writes one Drive doc per run + the additive
+// settings/fridayPacket state doc (powers "billed since last packet").
+// Rewritten 2026-07-30 from thursdayPacket (Koy: scrap the inventory dump —
+// its forward-looking sections read roughScheduledDate, a field the app no
+// longer writes, so "Next 4 Weeks"/"This Week" rendered empty for months).
 // ─────────────────────────────────────────────────────────────
 
 // Drive folder ID where weekly packets are saved.
 // Koy must share this folder with the service account
-// (<project>@appspot.gserviceaccount.com) as Editor before deploy.
-// See setup notes at bottom of this block.
+// (<project>@appspot.gserviceaccount.com) as Editor before deploy, and with
+// office staff's Google accounts as Viewer (new docs inherit the folder ACL).
 const PACKET_DRIVE_FOLDER_ID = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
 
 const { google } = require("googleapis");
+const fridayPacketLib = require("./fridayPacket.js");
 
-function _daysBetween(a, b) {
-  return Math.round((a - b) / (1000 * 60 * 60 * 24));
-}
-
-function _mtNow() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
-}
-
-function _fmtShortDate(d) {
-  if (!d) return "";
-  const dt = typeof d === "string" ? parseDate(d) : d;
-  if (!dt) return String(d);
-  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function _esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
-  }[c]));
-}
-
+// (The packet's date/escape/flatten helpers moved into ./fridayPacket.js with
+// the 2026-07-30 rewrite. _stripHtml stays — it has callers outside this block.)
 function _stripHtml(s) {
   return String(s || "")
     .replace(/<[^>]*>/g, " ")
@@ -3380,33 +3369,6 @@ function _stripHtml(s) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function _flatPunchWaiting(punch) {
-  const out = [];
-  ["upper", "main", "basement"].forEach(floor => {
-    const f = (punch && punch[floor]) || {};
-    const gen = f.general || [];
-    const hc  = f.hotcheck || [];
-    const rooms = f.rooms || [];
-    [...gen, ...hc].forEach(i => {
-      if (!i.done && i.waiting) out.push({ text: i.text, waitingOn: i.waitingOn });
-    });
-    rooms.forEach(r => (r.items || []).forEach(i => {
-      if (!i.done && i.waiting) out.push({ text: i.text, waitingOn: i.waitingOn });
-    }));
-  });
-  return out;
-}
-
-function _flatQuestions(qs) {
-  const out = [];
-  ["upper", "main", "basement"].forEach(floor => {
-    ((qs || {})[floor] || []).forEach(q => {
-      if (!q.done && !(q.answer || "").trim()) out.push(q.question);
-    });
-  });
-  return out;
 }
 
 // ─── Simpro candidates inbox ──────────────────────────────────────────────
@@ -3569,625 +3531,196 @@ exports.scheduledSimproCandidateRefresh = functions.pubsub
     return null;
   });
 
-exports.thursdayPacket = functions.pubsub
-  .schedule("0 17 * * 4")
-  .timeZone(TZ)
-  .onRun(async () => {
-    const snap = await db.collection("jobs").get();
-    const jobs = snap.docs
-      .map(d => {
-        const raw = d.data() || {};
-        const data = raw.data || {};
-        return { id: d.id, ...data };
-      })
-      .filter(j => j && j.name);
+// Shared runner for the scheduled Friday packet + the manual test callable.
+// All I/O lives here; content/ranking/rendering live in ./fridayPacket.js
+// (pure) so the dry-run script renders exactly what prod will.
+async function runFridayPacket({ testRun = false } = {}) {
+  const now = new Date();
+  // Calendar math on the Mountain-Time wall-clock date; `now` itself stays
+  // raw UTC so display formatting (inside the builder) shifts exactly once.
+  const mtNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
+  const today = new Date(mtNow.getFullYear(), mtNow.getMonth(), mtNow.getDate());
+  const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const nextMonday = new Date(monday); nextMonday.setDate(monday.getDate() + 7);
+  const nextFriday = new Date(nextMonday); nextFriday.setDate(nextMonday.getDate() + 4);
+  const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const windowStart = ymdOf(monday), windowEnd = ymdOf(nextFriday);
 
-    const isComplete = (j) =>
-      j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
-    const active     = jobs.filter(j => !isComplete(j));
-    const activeJobs = active.filter(j => j.type !== "quote");
-    const quotes     = active.filter(j => j.type === "quote");
+  // 1 · Firestore reads. Job docs are wrapped ({data:{...}}); the unwrap keeps
+  //     the TOP-LEVEL lastActivityAt. Settings docs are not wrapped.
+  const [snap, upSnap, planSnap, ptoSnap, stateSnap, users] = await Promise.all([
+    db.collection("jobs").get(),
+    db.doc("settings/upcoming_jobs").get(),
+    db.doc(`settings/schedule_${ymdOf(nextMonday)}`).get(),
+    db.doc("settings/crewPTO").get(),
+    db.doc("settings/fridayPacket").get(),
+    getUsers(),
+  ]);
+  const jobs = snap.docs.map(d => {
+    const raw = d.data() || {};
+    return { id: d.id, ...(raw.data || {}), lastActivityAt: raw.lastActivityAt || null };
+  });
+  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
+  const plannerDoc = planSnap.exists ? planSnap.data() : null;
+  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+  const prevState = stateSnap.exists ? stateSnap.data() : null;
 
-    const now   = _mtNow();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    // ── SECTION 1: NEEDS SCHEDULING ───────────────────────────
-
-    // 1a. Jobs with no start date (not in progress / not complete)
-    const noStartDate = activeJobs.filter(j => {
-      if (j.roughScheduledDate || j.roughStatusDate) return false;
-      const rs = j.roughStatus || "";
-      if (rs === "inprogress" || rs === "complete") return false;
-      return true;
-    });
-
-    // 1b. Approved COs awaiting schedule
-    const approvedCOsNotScheduled = [];
-    activeJobs.forEach(j => {
-      (j.changeOrders || []).forEach((co, i) => {
-        if (co.coStatus === "approved") {
-          approvedCOsNotScheduled.push({
-            jobName: j.name,
-            coNum:   i + 1,
-            coDesc:  _stripHtml(co.description).slice(0, 80),
-          });
-        }
+  // 2 · Simpro schedules (ground truth of who's booked where) — same paginated
+  //     feed the old packet pulled for compliance, now filtered to just
+  //     this-Monday..next-Friday. Failure degrades to planner-only data.
+  let scheduleEntries = [];
+  try {
+    let page = 1;
+    while (page <= 60) {
+      const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`, {
+        headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
       });
-    });
-
-    // 1c. Return trips needing schedule
-    const rtsNeedingSchedule = [];
-    activeJobs.forEach(j => {
-      (j.returnTrips || []).forEach((rt, i) => {
-        if (rt.signedOff || rt.rtScheduled) return;
-        const needs = rt.rtStatus === "needs" || rt.needsSchedule === true;
-        if (needs) {
-          rtsNeedingSchedule.push({
-            jobName: j.name,
-            rtNum:   i + 1,
-            scope:   (rt.scope || "").slice(0, 80),
-          });
-        }
-      });
-    });
-
-    // 1d. QC walks needed
-    const qcWalksNeeded = activeJobs.filter(j => j.qcStatus === "needs");
-
-    // 1e. Matterport pending on rough-complete / finish-active jobs
-    const matterportPending = activeJobs.filter(j => {
-      if (j.matterportStatus === "complete") return false;
-      const rs = j.roughStatus || "";
-      const fs = j.finishStatus || "";
-      return rs === "complete" || fs === "inprogress" ||
-             fs === "scheduled" || fs === "complete";
-    });
-
-    // 1f. Finish date missing — ONLY if rough-complete 50+ days
-    const finishDateMissingLong = activeJobs.filter(j => {
-      if (j.finishScheduledDate || j.finishStatusDate) return false;
-      if (j.roughStatus !== "complete") return false;
-      const roughEnd = parseDate(j.roughStatusDate);
-      if (!roughEnd) return false;
-      return _daysBetween(today, roughEnd) >= 50;
-    });
-
-    // ── SECTION 2: PIPELINE / STRATEGY ────────────────────────
-
-    // 2a. Quotes aging (oldest first; unknown age sinks to the bottom)
-    const quotesAging = quotes
-      .map(q => {
-        const created = q.createdAt ? new Date(q.createdAt) : null;
-        const days = (created && !isNaN(created))
-          ? _daysBetween(today, new Date(created.getFullYear(), created.getMonth(), created.getDate()))
-          : null;
-        return { ...q, _ageDays: days };
-      })
-      .sort((a, b) => (b._ageDays == null ? -1 : b._ageDays) - (a._ageDays == null ? -1 : a._ageDays));
-
-    // 2b. Ready to invoice
-    const readyToInvoice = activeJobs.filter(j => j.readyToInvoice);
-
-    // 2c. Flagged
-    const flagged = activeJobs.filter(j => j.flagged);
-
-    // 2d. Waiting items clustered by reason
-    const waitingByReason = {};
-    activeJobs.forEach(j => {
-      ["roughPunch", "finishPunch", "qcPunch"].forEach(phase => {
-        _flatPunchWaiting(j[phase]).forEach(item => {
-          const reason = (item.waitingOn || "").trim() || "Unspecified";
-          if (!waitingByReason[reason]) waitingByReason[reason] = [];
-          waitingByReason[reason].push({
-            jobName: j.name,
-            text:    _stripHtml(item.text).slice(0, 80),
-          });
-        });
-      });
-    });
-
-    // 2e. Unassigned foreman or lead
-    const unassigned = activeJobs.filter(j => {
-      const noForeman = !j.foreman || j.foreman === "Unassigned";
-      const noLead    = !j.lead    || j.lead    === "Unassigned";
-      return noForeman || noLead;
-    });
-
-    // 2f. Jobs with unanswered questions
-    const unansweredQs = [];
-    activeJobs.forEach(j => {
-      const r = _flatQuestions(j.roughQuestions);
-      const f = _flatQuestions(j.finishQuestions);
-      if (r.length + f.length > 0) {
-        unansweredQs.push({ jobName: j.name, roughCount: r.length, finishCount: f.length });
+      if (!resp.ok) {
+        functions.logger.warn("fridayPacket simpro schedule page failed", { page, status: resp.status });
+        break;
       }
-    });
-
-    // ── SECTION 3: FORWARD LOOKING ────────────────────────────
-
-    const dayOfWeek   = today.getDay();
-    const diffToMon   = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const mondayThis  = new Date(today);
-    mondayThis.setDate(today.getDate() + diffToMon);
-
-    const weekBuckets = [0, 1, 2, 3].map(w => ({ weekOffset: w, jobs: [] }));
-    activeJobs.forEach(j => {
-      const d = parseDate(j.roughScheduledDate) || parseDate(j.finishScheduledDate);
-      if (!d) return;
-      const diffDays = _daysBetween(d, mondayThis);
-      const weekIdx  = Math.floor(diffDays / 7);
-      if (weekIdx >= 0 && weekIdx < 4) {
-        weekBuckets[weekIdx].jobs.push(j);
-      }
-    });
-
-    // 3b. Conflicts — same person on 2+ jobs same week
-    const conflicts = [];
-    weekBuckets.forEach(b => {
-      const group = (role) => {
-        const m = {};
-        b.jobs.forEach(j => {
-          const who = j[role];
-          if (!who || who === "Unassigned") return;
-          m[who] = m[who] || [];
-          m[who].push(j.name);
-        });
-        return m;
-      };
-      Object.entries(group("foreman")).forEach(([p, js]) => {
-        if (js.length > 1) conflicts.push({ weekOffset: b.weekOffset, role: "Foreman", person: p, jobs: js });
-      });
-      Object.entries(group("lead")).forEach(([p, js]) => {
-        if (js.length > 1) conflicts.push({ weekOffset: b.weekOffset, role: "Lead", person: p, jobs: js });
-      });
-    });
-
-    // 3c. This week — completions & slips
-    const completedThisWeek = jobs.filter(j => {
-      if (j.finishStatus !== "complete") return false;
-      const d = parseDate(j.finishStatusDate);
-      return d && _daysBetween(today, d) >= 0 && _daysBetween(today, d) <= 7;
-    });
-    const slippedThisWeek = activeJobs.filter(j => {
-      const d = parseDate(j.roughScheduledDate);
-      if (!d) return false;
-      const da = _daysBetween(today, d);
-      if (da > 7 || da < 0) return false;
-      const rs = j.roughStatus || "";
-      return rs !== "inprogress" && rs !== "complete";
-    });
-
-    // ── COMPLIANCE: daily-update compliance (weekly + yearly) ────────
-    // Attribution rule (per Koy 2026-04-17):
-    //   For each (date, simproNo) where any staff was scheduled in Simpro:
-    //     • If the job's assigned lead was present that day → responsibility
-    //       belongs to the assigned lead (only).
-    //     • If the assigned lead was NOT present but other lead(s) were →
-    //       responsibility falls to those present lead(s).
-    //     • If no leads present → no attribution (skip).
-    //   Hit = the job has ANY daily update (rough or finish) for that date,
-    //   regardless of who added it. Counted as unique (date, simproNo)
-    //   tuples per lead ("job-days").
-    const complianceWindow = 7;
-    const complianceEnd = new Date(today);
-    const weeklyStart = new Date(today);
-    weeklyStart.setDate(today.getDate() - (complianceWindow - 1));
-
-    // Yearly tally anchor (per Koy 2026-04-17):
-    //   • Initial rollout: start 1 month back from today (so there's
-    //     history to look at the first time we see the tally).
-    //   • On Jan 1, 2027: reset — the anchor becomes Jan 1 of the
-    //     current calendar year, rolling each New Year after that.
-    // The initial anchor (2026-03-17) is frozen; we don't slide it
-    // forward day-by-day or the denominator would never grow.
-    const YEARLY_INITIAL_ANCHOR = new Date(2026, 2, 17); // Mar 17, 2026
-    let yearlyStart;
-    if (today.getFullYear() >= 2027) {
-      yearlyStart = new Date(today.getFullYear(), 0, 1);
-    } else {
-      yearlyStart = YEARLY_INITIAL_ANCHOR;
+      const batch = await resp.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      scheduleEntries.push(...batch);
+      if (batch.length < 250) break;
+      page++;
     }
+    scheduleEntries = scheduleEntries.filter(s => s && s.Date && s.Date >= windowStart && s.Date <= windowEnd);
+  } catch (e) {
+    functions.logger.warn("fridayPacket simpro schedule fetch error", { error: e.message });
+    scheduleEntries = [];
+  }
 
-    const _ymdLocal = (d) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    };
-    const weeklyStartYMD = _ymdLocal(weeklyStart);
-    const weeklyEndYMD   = _ymdLocal(complianceEnd);
-    const yearlyStartYMD = _ymdLocal(yearlyStart);
-    const yearlyEndYMD   = _ymdLocal(complianceEnd);
+  // 3 · Bounded live Totals fetch (headline dollars + fresh margins) for the
+  //     ready-to-invoice + margin-watch jobs only — concurrency 5, cap 50.
+  //     Any failure degrades to the on-job simproMargin cache / count-only.
+  //     Parsing mirrors getSimproJobFinancials (Actual===100 → no costs
+  //     tracked yet → use Estimate).
+  const simproTotalsById = {};
+  try {
+    const wanted = fridayPacketLib.collectSimproCandidates(jobs);
+    const CHUNK = 5;
+    for (let i = 0; i < wanted.length; i += CHUNK) {
+      await Promise.all(wanted.slice(i, i + CHUNK).map(async (sn) => {
+        try {
+          const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, {
+            headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
+          });
+          if (!resp.ok) return;
+          const results = await resp.json();
+          const sj = Array.isArray(results) ? results[0] : null;
+          if (!sj) return;
+          const t = sj.Totals || {};
+          const actual = t.NettMargin?.Actual ?? null;
+          const estimate = t.NettMargin?.Estimate ?? null;
+          const hasRealActual = actual !== null && actual !== 100;
+          const top = sj.Total || {};
+          simproTotalsById[sn] = {
+            total: (typeof top.IncTax === "number") ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null),
+            margin: hasRealActual ? actual : estimate,
+            isEstimate: !hasRealActual,
+          };
+        } catch (e) { /* one job's fetch failing just means cache fallback */ }
+      }));
+    }
+  } catch (e) {
+    functions.logger.warn("fridayPacket simpro totals fetch error", { error: e.message });
+  }
 
-    let scheduleEntries = [];
+  // 4 · Build + render (pure — no I/O inside).
+  const model = fridayPacketLib.buildModel({
+    jobs, upcoming, plannerDoc, scheduleEntries, pto, users, prevState, simproTotalsById, now,
+  });
+  const html = fridayPacketLib.renderHtml(model);
+  const docTitle = `Friday Packet — ${model.docDate}`;
+
+  // 5 · Upload to Drive as a Google Doc (unchanged mechanism).
+  let docLink = "", docId = "";
+  try {
+    if (!PACKET_DRIVE_FOLDER_ID || PACKET_DRIVE_FOLDER_ID === "REPLACE_WITH_FOLDER_ID") {
+      throw new Error("PACKET_DRIVE_FOLDER_ID not configured in functions/index.js");
+    }
+    const auth = new google.auth.GoogleAuth({
+      scopes: ["https://www.googleapis.com/auth/drive.file"],
+    });
+    const drive = google.drive({ version: "v3", auth });
+    const createRes = await drive.files.create({
+      requestBody: {
+        name: docTitle,
+        parents: [PACKET_DRIVE_FOLDER_ID],
+        mimeType: "application/vnd.google-apps.document",
+      },
+      media: { mimeType: "text/html", body: html },
+      fields: "id, webViewLink",
+      supportsAllDrives: true,
+    });
+    docId = createRes.data.id || "";
+    docLink = createRes.data.webViewLink || "";
+  } catch (e) {
+    functions.logger.error("fridayPacket Drive upload failed", { error: e.message });
+    // Ops alert — intentionally ungated plain sendToName (can't be muted).
+    await sendToName("Koy", {
+      title: "⚠️ Friday Packet failed",
+      body: `Drive upload error: ${e.message.slice(0, 120)}`,
+    });
+    return { ok: false, error: e.message };
+  }
+
+  // 6 · Persist the billed-diff state (merge; additive; never touches jobs).
+  //     Skipped on test runs so a mid-week test can't swallow the real
+  //     Friday "billed since last packet" list.
+  if (!testRun && model.nextState) {
     try {
-      // Paginate through Simpro schedules, filter to yearly window
-      // client-side (matches existing getSimproSchedule callable behavior).
-      // Bumped cap to 60 pages to accommodate a full year of data.
-      let page = 1;
-      while (page <= 60) {
-        const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`, {
-          headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
-        });
-        if (!resp.ok) {
-          functions.logger.warn("thursdayPacket simpro schedule page failed", { page, status: resp.status });
-          break;
-        }
-        const batch = await resp.json();
-        if (!Array.isArray(batch) || batch.length === 0) break;
-        scheduleEntries.push(...batch);
-        if (batch.length < 250) break;
-        page++;
-      }
-      scheduleEntries = scheduleEntries.filter(s =>
-        s && s.Date && s.Date >= yearlyStartYMD && s.Date <= yearlyEndYMD
+      await db.doc("settings/fridayPacket").set(
+        { ...model.nextState, lastRunAt: now.toISOString() },
+        { merge: true }
       );
     } catch (e) {
-      functions.logger.warn("thursdayPacket simpro schedule fetch error", { error: e.message });
-      scheduleEntries = [];
+      functions.logger.warn("fridayPacket state write failed", { error: e.message });
     }
+  }
 
-    // A "lead" is anyone assigned as .lead on any active job.
-    const leadSet = new Set();
-    activeJobs.forEach(j => {
-      if (j.lead && j.lead !== "Unassigned") leadSet.add(j.lead);
-    });
+  // 7 · Announce. Real runs: pref-gated ("friday_packet") push + bell-inbox
+  //     to Koy + office (admins/managers ∪ coordinators). Test runs: Koy only.
+  const notif = {
+    title: "📋 Friday Packet ready",
+    body: `${docTitle} is in Drive — open it there`,
+    jobId: "",
+    section: "",
+  };
+  let recipients = [];
+  if (testRun) {
+    recipients = ["Koy (test)"];
+    await sendToName("Koy", notif);
+  } else {
+    const resolved = fridayPacketLib.resolveRecipients(users);
+    recipients = resolved.map(r => `${r.user.name} (${r.reason})`);
+    await Promise.all(resolved.map(r => deliverIfWanted(r.user, "friday_packet", notif)));
+  }
 
-    const jobBySimproNo = {};
-    activeJobs.forEach(j => {
-      if (j.simproNo) jobBySimproNo[String(j.simproNo)] = j;
-    });
+  functions.logger.info("fridayPacket saved to Drive", {
+    docId, docLink, testRun, recipients, ...model.counts,
+  });
+  return { ok: true, docLink, docId, recipients, counts: model.counts };
+}
 
-    // Normalize app-side update dates to YYYY-MM-DD so they compare
-    // cleanly against Simpro's s.Date. The app's DateInp stores dates
-    // as M/D/YYYY (e.g. "4/16/2026"), not YYYY-MM-DD.
-    const _toYMD = (raw) => {
-      if (!raw) return "";
-      const s = String(raw).trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-      const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-      if (m) {
-        const mm = m[1].padStart(2, "0");
-        const dd = m[2].padStart(2, "0");
-        return `${m[3]}-${mm}-${dd}`;
-      }
-      // Fallback: parse as Date and format
-      const d = new Date(s);
-      if (!isNaN(d.getTime())) {
-        const y = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, "0");
-        const dd = String(d.getDate()).padStart(2, "0");
-        return `${y}-${mm}-${dd}`;
-      }
-      return s;
-    };
-
-    // Group schedule entries by (date, simproNo) → Set<staffName present that day>
-    const presenceByDateJob = new Map();  // key "YYYY-MM-DD|simproNo"
-    scheduleEntries.forEach(s => {
-      if (s.Type !== "job") return;
-      const date = s.Date;
-      const pid = String((s.Project && s.Project.ProjectID) || "");
-      const staffName = (s.Staff && s.Staff.Name) || "";
-      if (!date || !pid || !staffName) return;
-      const key = `${date}|${pid}`;
-      if (!presenceByDateJob.has(key)) presenceByDateJob.set(key, new Set());
-      presenceByDateJob.get(key).add(staffName);
-    });
-
-    const oppsByLead   = {}; // weekly opportunities per lead → Set<key>
-    const hitsByLead   = {}; // weekly hits
-    const oppsByLeadYr = {}; // yearly opportunities
-    const hitsByLeadYr = {}; // yearly hits
-
-    presenceByDateJob.forEach((staffSet, key) => {
-      const [date, pid] = key.split("|");
-      const job = jobBySimproNo[pid];
-      if (!job) return; // only count jobs we track in the app
-
-      // Determine who's responsible per the attribution rule.
-      const assignedLead = job.lead && job.lead !== "Unassigned" ? job.lead : null;
-      let responsibleLeads = [];
-      if (assignedLead && staffSet.has(assignedLead)) {
-        // Assigned lead was there → they own it.
-        responsibleLeads = [assignedLead];
-      } else {
-        // Assigned lead absent → any other present leads share responsibility.
-        responsibleLeads = [...staffSet].filter(s => leadSet.has(s));
-      }
-      if (responsibleLeads.length === 0) return;
-
-      const updates = [...(job.roughUpdates || []), ...(job.finishUpdates || [])];
-      const hit = updates.some(u => u && _toYMD(u.date) === date);
-
-      const inWeekly = date >= weeklyStartYMD && date <= weeklyEndYMD;
-      const inYearly = date >= yearlyStartYMD && date <= yearlyEndYMD;
-
-      responsibleLeads.forEach(lead => {
-        if (inYearly) {
-          if (!oppsByLeadYr[lead]) oppsByLeadYr[lead] = new Set();
-          oppsByLeadYr[lead].add(key);
-          if (hit) {
-            if (!hitsByLeadYr[lead]) hitsByLeadYr[lead] = new Set();
-            hitsByLeadYr[lead].add(key);
-          }
-        }
-        if (inWeekly) {
-          if (!oppsByLead[lead]) oppsByLead[lead] = new Set();
-          oppsByLead[lead].add(key);
-          if (hit) {
-            if (!hitsByLead[lead]) hitsByLead[lead] = new Set();
-            hitsByLead[lead].add(key);
-          }
-        }
-      });
-    });
-
-    const _buildRows = (opps, hits) =>
-      Object.keys(opps).map(lead => {
-        const total = opps[lead].size;
-        const h     = (hits[lead] || new Set()).size;
-        const pct   = total > 0 ? Math.round((h / total) * 100) : 0;
-        return { lead, hits: h, total, pct };
-      }).sort((a, b) => b.pct - a.pct || a.lead.localeCompare(b.lead));
-
-    const complianceRows   = _buildRows(oppsByLead,   hitsByLead);
-    const complianceRowsYr = _buildRows(oppsByLeadYr, hitsByLeadYr);
-
-    // ── PACKET V2 EXTRAS (2026-07-10) — TL loop, PTO, suggestions, fleet ──
-    // Replaces the dead "Last Week's Decisions" stub with data that exists.
-    // All read-only; a failure here degrades to empty sections, never kills
-    // the packet.
-    let tlRows = [], tlUnincorporated = 0, tlAwaiting = 0;
-    let ptoNext7 = [];
-    let suggOpen = 0, suggNew = 0;
-    let fleetLine = "";
-    try {
-      const [hrSnap, ptoSnap, suggSnap, devSnap] = await Promise.all([
-        db.collection("homeowner_requests").get(),
-        db.doc("settings/crewPTO").get(),
-        db.collection("suggestions").get(),
-        db.doc("settings/deviceVersions").get(),
-      ]);
-
-      // Tech Lighting loop — same predicates as techLightingWeeklyDigest:
-      // unincorporated = logged plan-change item with no ackedAt; awaiting =
-      // discussion thread whose last message is from the client.
-      const ackMap = {}, threadMap = {};
-      hrSnap.forEach(d => {
-        const data = d.data() || {}; // homeowner_requests are NOT wrapped
-        if (data.planChangeAcks)    ackMap[d.id]    = data.planChangeAcks;
-        if (data.planChangeThreads) threadMap[d.id] = data.planChangeThreads;
-      });
-      snap.docs.forEach(d => {
-        const j = d.data()?.data || {};
-        if (j.lightingSystem !== "Lutron") return;
-        if (j.panelizedLighting?.excludeFromLutronHub) return;
-        const items   = (j.panelizedLighting?.lutronRooms || []).flatMap(r => r.items || []);
-        const acks    = ackMap[d.id] || {};
-        const threads = threadMap[d.id] || {};
-        const un = items.filter(it => !acks[it.id]?.ackedAt).length;
-        const aw = [...items.map(it => it.id), "_general"].filter(id => {
-          const msgs = threads[id];
-          return msgs && msgs.length && msgs[msgs.length - 1].role === "client";
-        }).length;
-        if (un > 0 || aw > 0) tlRows.push({ jobName: j.name || d.id, un, aw });
-        tlUnincorporated += un; tlAwaiting += aw;
-      });
-
-      // PTO overlapping the next 7 days — settings/crewPTO {list:[{name,start,end,note}]}
-      const in7 = new Date(today); in7.setDate(today.getDate() + 7);
-      ptoNext7 = ((ptoSnap.exists ? ptoSnap.data().list : []) || []).filter(p => {
-        const s = parseDate(p.start), e = parseDate(p.end || p.start);
-        return s && e && s <= in7 && e >= today;
-      }).sort((a, b) => String(a.start).localeCompare(String(b.start)));
-
-      // App Map suggestions — anything not "built" is open (matches the inbox filter).
-      suggSnap.forEach(d => {
-        const st = (d.data() || {}).status || "new";
-        if (st !== "built") { suggOpen++; if (st === "new") suggNew++; }
-      });
-
-      // Fleet staleness — devices active in the last 7 days still behind the
-      // newest version any device reports.
-      const devices = devSnap.exists ? (devSnap.data().devices || {}) : {};
-      const activeDevs = Object.values(devices).filter(dv => (Date.now() - Date.parse(dv.lastSeenAt || 0)) < 7 * 86400000);
-      const vNum = v => parseInt(String(v || "").replace(/\D/g, ""), 10) || 0;
-      const newest = activeDevs.reduce((m, dv) => Math.max(m, vNum(dv.version)), 0);
-      const behind = activeDevs.filter(dv => vNum(dv.version) < newest);
-      fleetLine = activeDevs.length
-        ? `${behind.length} of ${activeDevs.length} active devices behind v${newest}${behind.length ? ` — ${behind.map(dv => dv.name || "?").join(", ")}` : ""}`
-        : "No device pings in the last 7 days.";
-    } catch (e) {
-      functions.logger.warn("thursdayPacket v2 extras failed", { error: e.message });
-    }
-
-    // ── BUILD HTML ────────────────────────────────────────────
-
-    const section = (title, count, body) => {
-      const badge = count > 0
-        ? `<span style="background:#dc262620;color:#dc2626;padding:2px 8px;border-radius:99px;font-size:11px;margin-left:8px">${count}</span>`
-        : `<span style="background:#16a34a20;color:#16a34a;padding:2px 8px;border-radius:99px;font-size:11px;margin-left:8px">0</span>`;
-      return `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 8px;color:#111">${title}${badge}</h3>${body}`;
-    };
-
-    const list = (items, render) => {
-      if (!items.length) return `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`;
-      return `<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#111">${items.map(i => `<li style="margin-bottom:2px">${render(i)}</li>`).join("")}</ul>`;
-    };
-
-    const bigHeader = (t) => `<h2 style="font-size:15px;margin:28px 0 2px;padding-top:14px;border-top:2px solid #111;color:#111">${t}</h2>`;
-
-    const weekBucketsHtml = weekBuckets.map(b => {
-      const weekMon = new Date(mondayThis); weekMon.setDate(mondayThis.getDate() + b.weekOffset * 7);
-      const label = b.weekOffset === 0 ? "This week"
-                  : b.weekOffset === 1 ? "Next week"
-                  : `Week of ${weekMon.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-      if (b.jobs.length === 0) return `<div style="margin:4px 0;color:#9ca3af;font-size:12px"><b style="color:#111">${label}:</b> nothing scheduled</div>`;
-      return `<div style="margin:4px 0;font-size:13px;line-height:1.55"><b>${label}</b> <span style="color:#6b7280">(${b.jobs.length})</span>: ${b.jobs.map(j => _esc(j.name)).join(", ")}</div>`;
-    }).join("");
-
-    const waitingHtml = Object.keys(waitingByReason).length
-      ? Object.entries(waitingByReason).map(([reason, items]) =>
-          `<div style="margin:6px 0 10px"><div style="font-size:13px;font-weight:700;margin-bottom:2px">${_esc(reason)} <span style="color:#6b7280;font-weight:normal">(${items.length})</span></div><ul style="margin:0;padding:0 0 0 18px;font-size:12px;line-height:1.5;color:#374151">${items.map(i => `<li>${_esc(i.jobName)} — ${_esc(i.text)}</li>`).join("")}</ul></div>`
-        ).join("")
-      : `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`;
-
-    const _renderComplianceRows = (rows, emptyLabel) => rows.length === 0
-      ? `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">${emptyLabel}</div>`
-      : `<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#111">${rows.map(r => {
-          const color = r.pct >= 90 ? "#16a34a" : r.pct >= 70 ? "#f59e0b" : "#dc2626";
-          return `<li style="margin-bottom:2px"><b>${_esc(r.lead)}</b>: ${r.hits}/${r.total} job-days <span style="color:${color};font-weight:700">(${r.pct}%)</span></li>`;
-        }).join("")}</ul>`;
-
-    const complianceHtml   = _renderComplianceRows(
-      complianceRows,
-      `No lead schedule entries found for the last ${complianceWindow} days.`,
-    );
-    const _yearlyStartLabel = yearlyStart.toLocaleDateString("en-US", {
-      month: "short", day: "numeric", year: "numeric",
-    });
-    const complianceYrHtml = _renderComplianceRows(
-      complianceRowsYr,
-      `No lead schedule entries found since ${_yearlyStartLabel}.`,
-    );
-
-    const html = `
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#111">
-<h1 style="font-size:22px;margin:0 0 4px">Friday Scheduling &amp; Strategy Packet</h1>
-<div style="color:#6b7280;font-size:12px;margin-bottom:8px">${today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</div>
-
-${bigHeader(`Daily Update Compliance · last ${complianceWindow} days`)}
-${complianceHtml}
-<div style="color:#6b7280;font-size:11px;margin-top:6px;font-style:italic">A "job-day" = one (lead, date, job) where the lead was on-site in Simpro. Assigned lead owns it if present; otherwise other present leads share it. Hit = the job got any daily update for that date.</div>
-
-<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 6px;color:#374151">Year-to-date · since ${_yearlyStartLabel}</h3>
-${complianceYrHtml}
-
-${bigHeader("Needs Scheduling")}
-${section("No start date set", noStartDate.length, list(noStartDate, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}${j.simproNo ? ` · #${_esc(j.simproNo)}` : ""}`))}
-${section("Approved COs awaiting schedule", approvedCOsNotScheduled.length, list(approvedCOsNotScheduled, c => `<b>${_esc(c.jobName)}</b> · CO #${c.coNum}${c.coDesc ? ` — ${_esc(c.coDesc)}` : ""}`))}
-${section("Return trips needing schedule", rtsNeedingSchedule.length, list(rtsNeedingSchedule, r => `<b>${_esc(r.jobName)}</b> · RT #${r.rtNum}${r.scope ? ` — ${_esc(r.scope)}` : ""}`))}
-${section("QC walks needed", qcWalksNeeded.length, list(qcWalksNeeded, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
-${section("Matterport scans pending", matterportPending.length, list(matterportPending, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
-${section("Finish date missing (rough complete 50+ days)", finishDateMissingLong.length, list(finishDateMissingLong, j => {
-      const re = parseDate(j.roughStatusDate);
-      const d  = re ? _daysBetween(today, re) : 0;
-      return `<b>${_esc(j.name)}</b> · ${d}d since rough complete`;
-    }))}
-
-${bigHeader("Pipeline & Strategy")}
-${section("Quotes aging", quotesAging.length, list(quotesAging, q => `<b>${_esc(q.name)}</b>${q.quoteNumber ? ` · ${_esc(q.quoteNumber)}` : ""}${q._ageDays != null ? ` · ${q._ageDays}d old` : " · age unknown"}`))}
-${section("Ready to invoice", readyToInvoice.length, list(readyToInvoice, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
-${section("Flagged jobs", flagged.length, list(flagged, j => `<b>${_esc(j.name)}</b>${j.flagNote ? ` — ${_esc(j.flagNote)}` : ""}`))}
-${section("Jobs missing foreman or lead", unassigned.length, list(unassigned, j => {
-      const m = [];
-      if (!j.foreman || j.foreman === "Unassigned") m.push("foreman");
-      if (!j.lead    || j.lead    === "Unassigned") m.push("lead");
-      return `<b>${_esc(j.name)}</b> · missing ${m.join(" + ")}`;
-    }))}
-${section("Jobs with unanswered questions", unansweredQs.length, list(unansweredQs, u => `<b>${_esc(u.jobName)}</b> · ${u.roughCount ? `${u.roughCount} rough` : ""}${u.roughCount && u.finishCount ? " · " : ""}${u.finishCount ? `${u.finishCount} finish` : ""}`))}
-${section("Waiting on — clustered by reason", Object.keys(waitingByReason).length, waitingHtml)}
-
-${bigHeader("Next 4 Weeks")}
-${weekBucketsHtml}
-${section("Conflicts (same person, same week)", conflicts.length, list(conflicts, c => {
-      const weekLbl = c.weekOffset === 0 ? "this week" : c.weekOffset === 1 ? "next week" : `week ${c.weekOffset + 1}`;
-      return `${c.role} <b>${_esc(c.person)}</b> on ${c.jobs.length} jobs ${weekLbl}: ${c.jobs.map(_esc).join(", ")}`;
-    }))}
-
-${bigHeader("This Week")}
-${section("Completed", completedThisWeek.length, list(completedThisWeek, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
-${section("Slipped (scheduled but didn't start)", slippedThisWeek.length, list(slippedThisWeek, j => `<b>${_esc(j.name)}</b> · scheduled ${_fmtShortDate(j.roughScheduledDate)}`))}
-
-${bigHeader("Tech Lighting Loop")}
-${section("Jobs with an open loop", tlRows.length, list(tlRows, r => `<b>${_esc(r.jobName)}</b>${r.un ? ` · ${r.un} change${r.un !== 1 ? "s" : ""} not incorporated` : ""}${r.aw ? ` · ${r.aw} question${r.aw !== 1 ? "s" : ""} awaiting a crew reply` : ""}`))}
-${tlRows.length ? `<div style="color:#6b7280;font-size:11px;margin-top:4px;font-style:italic">${tlUnincorporated} unincorporated · ${tlAwaiting} awaiting reply, across all on-link Lutron jobs.</div>` : ""}
-
-${bigHeader("Crew & App")}
-${section("PTO in the next 7 days", ptoNext7.length, list(ptoNext7, p => `<b>${_esc(p.name)}</b> · ${_esc(p.start)}${p.end && p.end !== p.start ? ` → ${_esc(p.end)}` : ""}${p.note ? ` — ${_esc(p.note)}` : ""}`))}
-${section("Open App Map suggestions", suggOpen, suggOpen
-      ? `<div style="font-size:13px;color:#111;padding:2px 0 6px">${suggOpen} open${suggNew ? ` (${suggNew} new)` : ""} — triage in App Map → suggestion inbox.</div>`
-      : `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`)}
-${fleetLine ? `<div style="font-size:12px;color:#374151;margin:8px 0 0"><b>Fleet:</b> ${_esc(fleetLine)}</div>` : ""}
-
-<div style="margin-top:32px;padding-top:14px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px">Generated ${now.toLocaleString("en-US", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" })} MT · Homestead Electric app</div>
-</div>`;
-
-    const docTitle = `Friday Packet — ${today.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
-
-    // ── Upload to Drive as a Google Doc ───────────────────────
-    let docLink = "";
-    let docId   = "";
-    try {
-      if (!PACKET_DRIVE_FOLDER_ID || PACKET_DRIVE_FOLDER_ID === "REPLACE_WITH_FOLDER_ID") {
-        throw new Error("PACKET_DRIVE_FOLDER_ID not configured in functions/index.js");
-      }
-
-      const auth = new google.auth.GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/drive.file"],
-      });
-      const drive = google.drive({ version: "v3", auth });
-
-      const createRes = await drive.files.create({
-        requestBody: {
-          name:     docTitle,
-          parents:  [PACKET_DRIVE_FOLDER_ID],
-          mimeType: "application/vnd.google-apps.document",
-        },
-        media: {
-          mimeType: "text/html",
-          body:     html,
-        },
-        fields: "id, webViewLink",
-        supportsAllDrives: true,
-      });
-      docId   = createRes.data.id || "";
-      docLink = createRes.data.webViewLink || "";
-    } catch (e) {
-      functions.logger.error("thursdayPacket Drive upload failed", { error: e.message });
-      // Fall through — we still notify Koy with the failure so it's visible.
-      await sendToName("Koy", {
-        title: "⚠️ Thursday Packet Failed",
-        body:  `Drive upload error: ${e.message.slice(0, 120)}`,
-      });
-      return null;
-    }
-
-    // ── Notify Koy with a link to the doc ─────────────────────
-    await sendToName("Koy", {
-      title: "📋 Friday Packet Ready",
-      body:  `${docTitle} is in Drive — tap to open`,
-      // Reuse existing push shape; link is included in data payload so
-      // the SW / client can route the user to it.
-      jobId:   "",
-      section: docLink,
-    });
-
-    functions.logger.info("thursdayPacket saved to Drive", {
-      docId,
-      docLink,
-      noStartDate:        noStartDate.length,
-      approvedCOs:        approvedCOsNotScheduled.length,
-      rts:                rtsNeedingSchedule.length,
-      qc:                 qcWalksNeeded.length,
-      matterport:         matterportPending.length,
-      finishMissing50:    finishDateMissingLong.length,
-      quotesAging:        quotesAging.length,
-      readyToInvoice:     readyToInvoice.length,
-      flagged:            flagged.length,
-      unassigned:         unassigned.length,
-      unanswered:         unansweredQs.length,
-      waitingReasons:     Object.keys(waitingByReason).length,
-      conflicts:          conflicts.length,
-      completed:          completedThisWeek.length,
-      slipped:            slippedThisWeek.length,
-      complianceLeadsWeek: complianceRows.length,
-      complianceLeadsYear: complianceRowsYr.length,
-      complianceScheduleEntries: scheduleEntries.length,
-    });
-
+exports.fridayPacket = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .pubsub.schedule("30 5 * * 5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    await runFridayPacket();
     return null;
+  });
+
+// Manual test trigger — a full real run (Drive doc + live fetches) so the
+// whole pipeline can be verified without waiting for a Friday. Push goes to
+// Koy only and the billed-diff state is NOT advanced.
+exports.sendTestFridayPacket = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    return await runFridayPacket({ testRun: true });
   });
 
 // ─────────────────────────────────────────────────────────────
