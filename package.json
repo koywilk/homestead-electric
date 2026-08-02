@@ -4,14 +4,19 @@
   "private": true,
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
+    "dompurify": "^3.4.12",
     "firebase": "^10.7.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1"
   },
+  "devDependencies": {
+    "//": "jsdom gives scripts/sanitize-test.js a DOM under plain node. It was previously resolving only as a transitive dep of react-scripts — so a react-scripts change would have broken `prebuild`, and therefore every build and every push, with a confusing error. Declared explicitly at the version already on disk.",
+    "jsdom": "16.7.0"
+  },
   "scripts": {
     "start": "react-scripts start",
-    "prebuild": "node scripts/version-from-sw.js && node scripts/gcportal-test.js && node scripts/gcnotify-test.js",
+    "prebuild": "node scripts/version-from-sw.js && node scripts/gcportal-test.js && node scripts/gcnotify-test.js && node scripts/sanitize-test.js && node scripts/pending-queue-test.js",
     "build": "react-scripts build",
     "test": "react-scripts test"
   },

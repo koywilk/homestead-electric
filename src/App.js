@@ -8,6 +8,24 @@ import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "fire
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
+import SafeHtml from "./sanitizeHtml";
+
+// ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
+// Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
+// straight to Firestore), and firestore.rules currently lets ANY unauthenticated
+// caller write jobs/* and homeowner_requests/*. So every place that renders
+// stored HTML raw must go through safeHtml() — never the render prop directly.
+// See src/sanitizeHtml.js for the allowlist and scripts/sanitize-test.js for the
+// regression fixtures (both run in `prebuild`, so the pre-push hook enforces it).
+const safeHtml  = SafeHtml.sanitizeHtml;   // untrusted HTML -> allowlisted HTML
+const safeProps = SafeHtml.sanitizeProps;  // same, pre-shaped for the render prop
+const escapeHtml = SafeHtml.escapeHtml;    // plain text -> literal, for write paths
+const safeUrl = SafeHtml.safeUrl;          // untrusted URL -> navigable or ""
+const safeImageSrc = SafeHtml.safeImageSrc;// same, but allows blob:/data:image
+// Open a stored URL only if it is actually navigable. React does NOT block
+// javascript: URLs, and photo/attachment records live in anonymously-writable
+// collections — so an unsafe value must simply do nothing, not open a tab.
+const openUrl = (u) => { const s = safeUrl(u); if (s) window.open(s, "_blank", "noopener"); };
 
 // ── FCM setup ─────────────────────────────────────────────────────────────────
 // VAPID key — generate in Firebase Console → Project Settings → Cloud Messaging
@@ -21,10 +39,95 @@ if("serviceWorker" in navigator) {
 
   window.addEventListener("load", () => {
 
-    navigator.serviceWorker.register("/service-worker.js").catch(()=>{});
+    // Explicit scope "/" — this worker owns the page and the offline shell.
+    navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(()=>{});
 
   });
 
+}
+
+// ── Service-worker ownership (Stage 1, 2026-07-31) ───────────────────────────
+// THE BUG THIS FIXES: both workers used to register with no scope option, so
+// both defaulted to scope "/". A scope can hold exactly ONE registration, so
+// registering a different script for "/" REPLACES the worker there — the two
+// were silently evicting each other on every page load, in a race:
+//
+//   module eval  -> touched whichever worker held "/"
+//   React mount  -> installed firebase-messaging-sw.js at "/"   (push works, offline dead)
+//   window load  -> installed service-worker.js at "/"          (offline works, push dead)
+//
+// service-worker.js has the fetch handler and NO push handler; the messaging
+// worker has onBackgroundMessage/notificationclick and NO fetch handler. So
+// whichever won, the app was missing the other half — which is exactly the
+// "notifications worked, then stopped" pattern, varying by device and load order.
+//
+// THE FIX: give the messaging worker its own non-overlapping scope. This is
+// what the Firebase SDK does by default; the app had been overriding it.
+// Background push does not require controlling a page — push is delivered to
+// whichever registration owns the push SUBSCRIPTION, and notificationclick
+// already uses clients.matchAll({includeUncontrolled:true}) to reach the app.
+// The page therefore stays controlled by /service-worker.js, so offline caching
+// can never again be collateral damage of a notification action.
+const MESSAGING_SW_URL   = "/firebase-messaging-sw.js";
+const MESSAGING_SW_SCOPE = "/firebase-cloud-messaging-push-scope";
+
+let _msgRegPromise = null;
+
+// Wait for a registration's worker to be ACTIVE. Deliberately NOT
+// navigator.serviceWorker.ready: that resolves for whichever registration
+// controls THIS PAGE (the offline worker at "/"), so awaiting it told us
+// nothing about the messaging worker and masked real failures.
+function swActive(reg) {
+  if (!reg || reg.active) return Promise.resolve(reg || null);
+  const sw = reg.installing || reg.waiting;
+  if (!sw) return Promise.resolve(reg);
+  return new Promise(resolve => {
+    const onChange = () => {
+      if (sw.state === "activated") { sw.removeEventListener("statechange", onChange); resolve(reg); }
+    };
+    sw.addEventListener("statechange", onChange);
+    setTimeout(() => resolve(reg), 5000);   // never hang a caller on a stuck SW
+  });
+}
+
+// THE single accessor for the messaging registration. Registers at the explicit
+// scope above if needed, waits for activation, and hands back the exact
+// ServiceWorkerRegistration object that must be passed to getToken().
+function getMessagingRegistration({ refresh = false } = {}) {
+  if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+  if (refresh) _msgRegPromise = null;
+  if (!_msgRegPromise) {
+    _msgRegPromise = navigator.serviceWorker
+      .register(MESSAGING_SW_URL, { scope: MESSAGING_SW_SCOPE })
+      .then(swActive)
+      .catch(e => {
+        console.warn("[HE push] messaging SW register failed:", e && e.message);
+        _msgRegPromise = null;              // let the next caller retry
+        return null;
+      });
+  }
+  return _msgRegPromise;
+}
+
+// Look up the messaging registration WITHOUT creating one — for diagnostics and
+// for the load-time update, neither of which should register a worker for a
+// user who never enabled notifications.
+//
+// NOTE the argument: getRegistration() takes a CLIENT URL and matches by SCOPE,
+// not a script filename. Every previous call passed "/firebase-messaging-sw.js",
+// which matched the scope "/" and therefore returned whatever worker owned the
+// root — usually the offline one. That is why the Notification Doctor could show
+// "Firebase messaging service worker registered: ok" while push was completely
+// dead: it was inspecting the wrong worker.
+function getExistingMessagingRegistration() {
+  if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+  return navigator.serviceWorker.getRegistration(MESSAGING_SW_SCOPE).catch(() => null);
+}
+
+// The PWA/offline worker that controls the page (scope "/").
+function getAppRegistration() {
+  if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+  return navigator.serviceWorker.getRegistration("/").catch(() => null);
 }
 
 
@@ -954,17 +1057,14 @@ async function registerFCMToken(userId, force=false) {
     // Explicitly register the Firebase messaging SW and wait for it to activate.
     // Passing serviceWorkerRegistration to getToken is required for reliable
     // token generation on mobile (especially Android Chrome & iOS Safari PWA).
-    let swReg = null;
-    if ("serviceWorker" in navigator) {
-      try {
-        swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-        // Force update so stale SWs don't serve old token logic — critical for
-        // keeping the SW current after deployments.
-        await swReg.update().catch(() => {});
-        await navigator.serviceWorker.ready;
-      } catch(e) {
-        console.warn("[HE] SW register failed:", e.message);
-      }
+    // One accessor, one scope, and the EXACT registration object is handed to
+    // getToken() below — getToken only type-checks what it is given, so a token
+    // minted against the wrong worker looks valid and silently never delivers.
+    let swReg = await getMessagingRegistration();
+    if (swReg) {
+      // Force update so stale SWs don't serve old token logic — critical for
+      // keeping the SW current after deployments.
+      await swReg.update().catch(() => {});
     }
 
     const tokenOptions = { vapidKey: VAPID_KEY };
@@ -1061,8 +1161,8 @@ async function registerFCMToken(userId, force=false) {
 async function resetPushSubscriptionAndReregister(userId) {
   if (!messaging || !userId) return "skip";
   try {
-    if ("serviceWorker" in navigator) {
-      const swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+    {
+      const swReg = await getMessagingRegistration();
       if (swReg && swReg.pushManager) {
         try {
           const sub = await swReg.pushManager.getSubscription();
@@ -1106,15 +1206,8 @@ async function validateAndSyncFCMToken(userId) {
   if (!("Notification" in window)) return "skip";
   if (Notification.permission !== "granted") return "skip";
   try {
-    let swReg = null;
-    if ("serviceWorker" in navigator) {
-      try {
-        swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js")
-              || await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-        await swReg.update().catch(() => {});
-        await navigator.serviceWorker.ready;
-      } catch {}
-    }
+    let swReg = await getMessagingRegistration();
+    if (swReg) await swReg.update().catch(() => {});
 
     // 1. Push subscription health — if it's gone (browser cleared push state,
     //    SW reinstalled, OS revoked), no FCM token will ever deliver. Run the
@@ -1248,7 +1341,9 @@ if (messaging) {
 // "test push delivered but no toast." update() pulls the latest SW from the
 // server (no-cache by spec) and replaces the controlling SW transparently.
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js")
+  // Look up only — never register here. A user who has not enabled
+  // notifications should not get a messaging worker installed on page load.
+  getExistingMessagingRegistration()
     .then(reg => {
       if (reg) {
         reg.update().then(() => console.log("[HE push] SW updated on load"))
@@ -4595,8 +4690,12 @@ const RICH_COLORS = ["#B23A3A","#B06A2C","#eab308","#46916A","#3B5BA5","#6A5E97"
 // Display helper — renders stored HTML safely; falls back to plain text for old values
 const RichText = ({html, style={}}) => {
   if(!html) return null;
+  // Coerce: these fields come from Firestore, which is anonymously writable, so
+  // a non-string (number/object) would make .includes() throw inside render and
+  // blank the screen. String() makes that a harmless display, not a crash.
+  html = String(html);
   return (html.includes("<") || html.includes("&"))
-    ? <span dangerouslySetInnerHTML={{__html:html}} style={style}/>
+    ? <span dangerouslySetInnerHTML={safeProps(html)} style={style}/>
     : <span style={style}>{html}</span>;
 };
 
@@ -4608,10 +4707,12 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
   const savedRange = useRef(null);
   const [active, setActive] = useState({});
 
-  // Sync prop → DOM only when the user isn't actively typing
+  // Sync prop → DOM only when the user isn't actively typing.
+  // safeHtml() here because this assigns STORED (anonymously-writable) markup
+  // straight into a live DOM node — a sink a grep for the render prop misses.
   useEffect(()=>{
     if(ref.current && !focused.current){
-      const html = htmlValue || "";
+      const html = safeHtml(htmlValue || "");
       if(ref.current.innerHTML !== html) ref.current.innerHTML = html;
     }
   },[htmlValue]);
@@ -5100,7 +5201,7 @@ const TA = ({value, onChange, placeholder, rows=3, onAdd, onBlur, draftKey}) => 
           cursor:"text",lineHeight:1.6,wordBreak:"break-word",
           color:value?.replace(/<[^>]*>/g,"")?.trim() ? C.text : C.dim}}>
         {value?.replace(/<[^>]*>/g,"")?.trim()
-          ? <span dangerouslySetInnerHTML={{__html:value}}/>
+          ? <span dangerouslySetInnerHTML={safeProps(value)}/>
           : (placeholder || "Tap to edit…")}
       </div>
       {/* onLiveSave wires the modal's local html state to the parent on
@@ -5143,7 +5244,7 @@ const AddressLink = ({address, children, style={}}) => {
       const choice = await showConfirm({message:"Open in Apple Maps?",confirmLabel:"Apple Maps",cancelLabel:"Google Maps"});
       window.open(choice ? appleUrl : googleUrl, "_blank");
     } else {
-      window.open(googleUrl, "_blank");
+      openUrl(googleUrl);
     }
   };
   return (
@@ -5391,12 +5492,12 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3B5BA5", 
           {list.map(p => (
             <div key={p.id} style={{position:"relative"}}>
               {isImage(p) ? (
-                <img src={p.url} alt={p.name||"photo"}
-                  onClick={()=>window.open(p.url, "_blank")}
+                <img src={safeImageSrc(p.url)} alt={p.name||"photo"}
+                  onClick={()=>openUrl(p.url)}
                   style={{width:62,height:62,objectFit:"cover",borderRadius:6,
                     border:"1px solid #E1E4E9",cursor:"pointer",display:"block"}}/>
               ) : (
-                <div onClick={()=>window.open(p.url, "_blank")}
+                <div onClick={()=>openUrl(p.url)}
                   title={p.name||"file"}
                   style={{width:62,height:62,borderRadius:6,border:"1px solid #E1E4E9",
                     cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",
@@ -6381,7 +6482,7 @@ function JobNoteLine({
           <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: (photos.length>0 || editing) ? 5 : 0, alignItems:'center'}}>
             {photos.map(p => (
               <div key={p.id} style={{ position:'relative', width:44, height:44, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
-                <img src={p.url} alt={p.name || 'photo'}
+                <img src={safeImageSrc(p.url)} alt={p.name || 'photo'}
                   onClick={()=>onViewPhoto && onViewPhoto(p.url)}
                   style={{ width:'100%', height:'100%', objectFit:'cover', cursor:'pointer' }}/>
                 {editing && (
@@ -8706,7 +8807,7 @@ function JobNoteCard({
           <div style={{ marginTop:8, display:'flex', flexWrap:'wrap', gap:6 }}>
             {(note.photos||[]).map(p => (
               <div key={p.id} style={{ position:'relative', width:52, height:52, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
-                <img src={p.url} alt={p.name || 'photo'}
+                <img src={safeImageSrc(p.url)} alt={p.name || 'photo'}
                   onClick={()=>onViewPhoto && onViewPhoto(p.url)}
                   style={{ width:'100%', height:'100%', objectFit:'cover', cursor:'pointer' }}/>
                 {editing && (
@@ -9833,11 +9934,11 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
                     border:`1px solid ${C.border}`,flexShrink:0}}>
                     {isImg ? (
-                      <img src={photo.url} alt={photo.name}
+                      <img src={safeImageSrc(photo.url)} alt={photo.name}
                         onClick={()=>setLightboxPhoto(photo.url)}
                         style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
                     ) : (
-                      <div onClick={()=>window.open(photo.url, "_blank")}
+                      <div onClick={()=>openUrl(photo.url)}
                         title={photo.name||"file"}
                         style={{width:64,height:64,cursor:'pointer',background:"#F4F6F8",
                           color:"#475569",display:"flex",flexDirection:"column",
@@ -10778,7 +10879,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
           {(item.photos||[]).map(photo=>(
             <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
               border:`1px solid ${C.border}`,flexShrink:0}}>
-              <img src={photo.url} alt={photo.name}
+              <img src={safeImageSrc(photo.url)} alt={photo.name}
                 onClick={()=>setLightboxPhoto(photo.url)}
                 style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
             </div>
@@ -14979,7 +15080,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
             <Icon name="link" size={11}/> Copy link
           </button>
-          <button onClick={()=>window.open(hoLink,'_blank')}
+          <button onClick={()=>openUrl(hoLink)}
             style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
             Preview
@@ -15673,6 +15774,174 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
 // ── Panelized Lighting ────────────────────────────────────────
 
+// ── Bulk paste: keypad rows + central loads ───────────────────
+// Shared by KeypadSection (mode="keypad") and LoadsList (mode="load").
+// Deliberately more forgiving than BulkPasteHomeRuns: that parser splits
+// only on [\n,|] and anchors its wire regex to the WHOLE token, so a table
+// copied out of Google Docs (tab-delimited) silently yields zero rows. Job
+// docs are the main paste source here, so tabs are a first-class delimiter.
+//
+// Fields are classified by CONTENT, not position, so both real-world column
+// orders parse without the user reordering anything:
+//   keypad table  →  1 | Kitchen + Mud Corridor | Pulled
+//   LCP table     →  Powder Bath Sconces | 1 | Pulled
+const BP_STATUS_RE = /^(pulled|need\s*specs?)$/i;
+const BP_HEADER_RE = /^(load\s*name|keypad|status|module\s*#?|mod|#|name|loads?)$/i;
+const bpNormStatus = (s) => /^need/i.test(s) ? "Need Specs" : "Pulled";
+
+// Exported shape: { num, name, status } — callers map it onto their own row
+// factory (newKPRow / newCentralLoad) so no new field is ever introduced.
+function parseLoadPaste(text) {
+  const out = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    // Strip list bullets and leading/trailing markdown table pipes.
+    const line = raw.trim().replace(/^[-•*]\s+/, "").replace(/^\|/, "").replace(/\|$/, "").trim();
+    if (!line) continue;
+    let num = "", status = "", nameParts = [];
+    const fields = line.split(/\t|\|/).map(s => s.trim()).filter(Boolean);
+    // A whole row of column headings ("Keypad | Load Name | Status") would
+    // otherwise concatenate into one bogus load name.
+    if (fields.length && fields.every(f => BP_HEADER_RE.test(f))) continue;
+    if (fields.length > 1) {
+      // Delimited row — classify each cell.
+      for (const f of fields) {
+        if (/^\d{1,3}$/.test(f) && !num) num = f;
+        else if (BP_STATUS_RE.test(f)) status = bpNormStatus(f);
+        else nameParts.push(f);
+      }
+    } else {
+      // Plain line — peel an optional leading number ("7." / "7)" / "7 ")
+      // and an optional trailing status word. Everything else is the name.
+      let s = fields[0] || "";
+      const lead = s.match(/^(\d{1,3})[.)]?\s+(.+)$/);
+      if (lead) { num = lead[1]; s = lead[2]; }
+      const tail = s.match(/^(.+?)[\s—–]+(pulled|need\s*specs?)$/i);
+      if (tail) { s = tail[1].trim(); status = bpNormStatus(tail[2]); }
+      if (s) nameParts.push(s);
+    }
+    const name = nameParts.join(" ").trim();
+    if (!name || BP_HEADER_RE.test(name)) continue;
+    out.push({ num, name, status });
+  }
+  return out;
+}
+
+function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [], existingNames = [], onCancel, onAdd }) {
+  const [text, setText]         = useState("");
+  const [defaultLoc, setDefLoc] = useState("");
+  const isKeypad = mode === "keypad";
+  const dirty    = text.trim().length > 0;
+
+  // Half-transferred sections are the normal case, not the exception — Rose
+  // had its first three keypad buttons typed in by hand before anyone reached
+  // for a paste. Without this, re-pasting the full list duplicates whatever
+  // was already entered. Matching on name keeps the paste idempotent.
+  const existingSet = new Set(existingNames.map(n => String(n||"").trim().toLowerCase()).filter(Boolean));
+  const parsed = parseLoadPaste(text).map(p => ({ ...p, dupe: existingSet.has(p.name.toLowerCase()) }));
+  const fresh  = parsed.filter(p => !p.dupe);
+  const dupes  = parsed.length - fresh.length;
+  const anyMod = parsed.some(p => p.num);
+
+  return (
+    <div onClick={onCancel}
+      style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:560,maxWidth:"95vw",
+          maxHeight:"90vh",overflow:"auto",border:`1px solid ${C.border}`,
+          boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)",marginBottom:6}}>
+          {isKeypad ? "BULK PASTE KEYPAD LOADS" : "BULK PASTE LOADS"}
+        </div>
+        <div style={{fontSize:11,color:C.dim,marginBottom:12,lineHeight:1.5}}>
+          Paste straight from a job doc — a copied table, a pipe list, or one name per line.
+          Column order doesn&apos;t matter. Example:<br/>
+          <code style={{background:C.surface,padding:"1px 5px",borderRadius:4,fontSize:10}}>
+            {isKeypad ? "1  Kitchen + Mud Corridor  Pulled" : "Kitchen Sink Sconce  1  Pulled"}
+          </code>
+        </div>
+
+        {!isKeypad && locationOptions.length > 0 && (
+          <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em"}}>DEFAULT LOCATION</span>
+            <select value={defaultLoc} onChange={e=>setDefLoc(e.target.value)}
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                padding:"4px 8px",fontSize:11,color:C.text,fontFamily:"inherit",outline:"none"}}>
+              <option value="">— none —</option>
+              {locationOptions.map(o=><option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        )}
+
+        <textarea value={text} onChange={e=>setText(e.target.value)}
+          placeholder={isKeypad ? "Paste your keypad list here…" : "Paste your load list here…"}
+          style={{width:"100%",minHeight:180,padding:"10px 12px",
+            background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+            color:C.text,fontSize:12,fontFamily:"'SF Mono', Menlo, monospace",
+            resize:"vertical",outline:"none",lineHeight:1.5}}/>
+
+        {/* Silent zero-parse is the worst failure mode of the home-run paste —
+            say something the moment text is present but nothing was found. */}
+        {dirty && parsed.length === 0 ? (
+          <div style={{marginTop:12,marginBottom:12,fontSize:11,lineHeight:1.5,
+            background:"rgba(178,58,58,0.10)",border:"1px solid rgba(178,58,58,0.35)",
+            borderRadius:7,padding:"8px 10px",color:"#B23A3A"}}>
+            <strong>Nothing detected.</strong> Every line came back empty — check that you pasted
+            the rows and not just a header, and that names aren&apos;t all numbers.
+          </div>
+        ) : (
+          <div style={{marginTop:12,marginBottom:12,fontSize:11,color:C.dim}}>
+            <strong style={{color:fresh.length>0?C.green:C.muted}}>{fresh.length} rows detected</strong>
+            {dupes > 0 && (
+              <span style={{marginLeft:8,color:"#B0892C",fontWeight:700}}>
+                · {dupes} already on this list — skipped
+              </span>
+            )}
+            {!isKeypad && anyMod && (
+              <span style={{marginLeft:8,color:C.muted}}>
+                · module #s shown below aren&apos;t stored on a load — use “Assign to module” after adding
+              </span>
+            )}
+          </div>
+        )}
+
+        {parsed.length > 0 && (
+          <div style={{maxHeight:180,overflowY:"auto",border:`1px solid ${C.border}`,
+            borderRadius:7,padding:6,marginBottom:14,background:C.surface}}>
+            {parsed.map((p,i)=>(
+              <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:11,padding:"3px 6px",
+                opacity:p.dupe?0.45:1,
+                borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
+                <span style={{minWidth:26,color:C.muted,fontFamily:"monospace"}}>{p.num||"·"}</span>
+                <span style={{flex:1,color:C.text,textDecoration:p.dupe?"line-through":"none"}}>{p.name}</span>
+                {p.dupe
+                  ? <span style={{fontSize:9,color:"#B0892C",fontWeight:700,padding:"1px 6px"}}>already added</span>
+                  : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.muted,
+                      background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
+                      padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onCancel}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+              fontFamily:"inherit",flex:1}}>Cancel</button>
+          <button onClick={()=>onAdd(fresh,{location:defaultLoc})} disabled={fresh.length===0}
+            style={{background:fresh.length===0?C.border:color,border:"none",borderRadius:8,
+              color:"#fff",padding:"9px 16px",cursor:fresh.length===0?"default":"pointer",
+              fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,letterSpacing:"0.04em",
+              opacity:fresh.length===0?0.5:1}}>
+            Add {fresh.length} row{fresh.length===1?"":"s"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Central Loads List ────────────────────────────────────────
 function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule,color=C.purple}) {
   // Collapsed state per floor section. Set of floor labels that are
@@ -15705,6 +15974,19 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
   const lastRef = useRef(null);
 
   const add = () => { onChange([...loads, newCentralLoad()]); setFocusLast(true); };
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  // Paste rows land as ordinary central loads — `pulled` is the boolean this
+  // list already stores, so a pasted "Pulled" reads identically to a clicked one.
+  const addBulk = (rows, opts={}) => {
+    onChange([...loads, ...rows.map(r => ({
+      ...newCentralLoad(),
+      name: r.name,
+      location: opts.location || "",
+      pulled: r.status === "Pulled",
+    }))]);
+    setBulkOpen(false);
+  };
 
   const exitSelect = () => { setSelecting(false); setSelected(new Set()); setBatchLoc(""); setBatchMod(""); };
 
@@ -16006,12 +16288,25 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
           })()}
         </>
       )}
-      <button onClick={add}
-        style={{background:"none",border:`1px dashed ${color}44`,color:`${color}88`,borderRadius:7,
-          padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
-          letterSpacing:"0.04em",marginTop:6}}>
-        + Add Load
-      </button>
+      <div style={{display:"flex",gap:6,marginTop:6}}>
+        <button onClick={add}
+          style={{background:"none",border:`1px dashed ${color}44`,color:`${color}88`,borderRadius:7,
+            padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flex:1,
+            letterSpacing:"0.04em"}}>
+          + Add Load
+        </button>
+        <button onClick={()=>setBulkOpen(true)}
+          style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:7,
+            padding:"7px 14px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+            letterSpacing:"0.04em",flexShrink:0}}>
+          Bulk paste
+        </button>
+      </div>
+      {bulkOpen && (
+        <BulkPasteLoads mode="load" color={color} locationOptions={floorOptions||[]}
+          existingNames={loads.map(l=>l.name)}
+          onCancel={()=>setBulkOpen(false)} onAdd={addBulk}/>
+      )}
     </div>
   );
 }
@@ -16962,6 +17257,25 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
 
   const addRow = () => { onChange([...loads, newKPRow(loads.length+1)]); setFocusLast(true); };
 
+  const [bulkOpen, setBulkOpen] = useState(false);
+  // Pasted rows fill the seeded blank rows first, then append — so pasting a
+  // 20-button keypad list onto a fresh section lands as buttons 1-20 rather
+  // than 11-30. `num` stays positional (delRow already renumbers 1..n), so the
+  // pasted number is used for ordering only, never written through.
+  const addBulk = (rows) => {
+    const next = [...loads];
+    let cursor = 0;
+    for (const r of rows) {
+      while (cursor < next.length && next[cursor].name.trim()) cursor++;
+      const filled = { name: r.name, status: r.status || "" };
+      if (cursor < next.length) next[cursor] = { ...next[cursor], ...filled };
+      else next.push({ ...newKPRow(next.length + 1), ...filled });
+      cursor++;
+    }
+    onChange(next.map((r,i)=>({...r,num:i+1})));
+    setBulkOpen(false);
+  };
+
   const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
 
   const namedRows = loads.filter(r=>r.name.trim());
@@ -17071,13 +17385,27 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
 
           ))}
 
-          <button onClick={addRow}
-            style={{background:"none",border:`1px dashed ${color}44`,color:`${color}88`,borderRadius:7,
-              padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
-              letterSpacing:"0.04em",marginTop:4}}>
-            + Add Row
-          </button>
+          <div style={{display:"flex",gap:6,marginTop:4}}>
+            <button onClick={addRow}
+              style={{background:"none",border:`1px dashed ${color}44`,color:`${color}88`,borderRadius:7,
+                padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flex:1,
+                letterSpacing:"0.04em"}}>
+              + Add Row
+            </button>
+            <button onClick={()=>setBulkOpen(true)}
+              style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:7,
+                padding:"7px 14px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                letterSpacing:"0.04em",flexShrink:0}}>
+              Bulk paste
+            </button>
+          </div>
         </>
+      )}
+
+      {bulkOpen && (
+        <BulkPasteLoads mode="keypad" color={color}
+          existingNames={loads.map(r=>r.name)}
+          onCancel={()=>setBulkOpen(false)} onAdd={addBulk}/>
       )}
 
     </div>
@@ -21925,7 +22253,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                   {f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""}
                 </div>
               </div>
-              <a href={f.url} target="_blank" rel="noreferrer"
+              <a href={safeUrl(f.url)} target="_blank" rel="noreferrer"
                 style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
                   border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
                   flexShrink: 0 }}>
@@ -21953,7 +22281,7 @@ function FileUploadSection({ jobId, files, onChange }) {
               style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
               <img src={viewFile.url} alt={viewFile.name}
                 style={{ maxWidth: "95vw", maxHeight: "calc(95vh - 60px)", objectFit: "contain", borderRadius: 8 }} />
-              <a href={viewFile.url} target="_blank" rel="noreferrer"
+              <a href={safeUrl(viewFile.url)} target="_blank" rel="noreferrer"
                 style={{ marginTop: 12, fontSize: 12, color: C.blue, fontWeight: 600, textDecoration: "none",
                   border: `1px solid ${C.blue}66`, borderRadius: 7, padding: "6px 16px", background: "rgba(0,0,0,0.4)" }}>
                 Open full size (pinch-to-zoom) ↗
@@ -21964,7 +22292,7 @@ function FileUploadSection({ jobId, files, onChange }) {
               style={{ background: "#fff", borderRadius: 12, padding: 24, textAlign: "center" }}>
               <div style={{ marginBottom: 12, color: C.dim, display: "flex", justifyContent: "center" }}><Icon name={fileIconName(viewFile)} size={48}/></div>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{viewFile.name}</div>
-              <a href={viewFile.url} target="_blank" rel="noreferrer"
+              <a href={safeUrl(viewFile.url)} target="_blank" rel="noreferrer"
                 style={{ fontSize: 13, color: C.blue, fontWeight: 600 }}>Open file ↗</a>
             </div>
           )}
@@ -22057,7 +22385,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 
                   {lnk.url ? (
 
-                    <a href={lnk.url} target="_blank" rel="noreferrer"
+                    <a href={safeUrl(lnk.url)} target="_blank" rel="noreferrer"
 
                       style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
 
@@ -22166,7 +22494,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 
                   {lnk.url ? (
 
-                    <a href={lnk.url} target="_blank" rel="noreferrer"
+                    <a href={safeUrl(lnk.url)} target="_blank" rel="noreferrer"
 
                       style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
 
@@ -22800,7 +23128,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                       u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
                     }} placeholder="Paste Matterport URL…" />
                   </div>
-                  {ml.url && <a href={ml.url} target="_blank" rel="noopener noreferrer"
+                  {ml.url && <a href={safeUrl(ml.url)} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
                     style={{ fontSize: 11, fontWeight: 700, color: "#6A5E97", background: "#6A5E9715", border: "1px solid #6A5E9733",
                       borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
@@ -23174,7 +23502,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                       u({matterportLinks:links, matterportLink:links[0]?.url||""});
                     }} placeholder="Paste Matterport URL…"/>
                   </div>
-                  {ml.url&&<a href={ml.url} target="_blank" rel="noopener noreferrer"
+                  {ml.url&&<a href={safeUrl(ml.url)} target="_blank" rel="noopener noreferrer"
                     onClick={e=>e.stopPropagation()}
                     style={{fontSize:11,fontWeight:700,color:"#6A5E97",background:"#6A5E9715",border:"1px solid #6A5E9733",
                       borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
@@ -24195,7 +24523,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           if(hasGc && !gcAnswerRejected(q, gcAns) && (!q.done || staleApply)) {
             changed=true;
             return {...q,
-              answer: gcAns.answer || (staleApply ? q.answer : ''),
+              // Escape — the link answer arrives from a PUBLIC, unauthenticated
+              // share page (a plain textarea, so it is plain text by design) and
+              // ends up rendered as HTML in the office view. Mirrors the escape
+              // already applied to the FieldInk sibling path above. Rendering is
+              // sanitized too; this keeps the STORED value honest so "5 < 6"
+              // reads correctly instead of being swallowed as a tag.
+              answer: (gcAns.answer ? escapeHtml(gcAns.answer) : '') || (staleApply ? q.answer : ''),
               answerPhotos: (gcAns.photos||[]).length ? gcAns.photos : (q.answerPhotos||[]),
               done:true, gcAnswered:true, gcRejected:null, answeredVia:'link',
               // Per-question attribution wins over the shared batch name (2026-07-13):
@@ -25005,7 +25339,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   phaseColor={C.rough}
                   onPatch={(patch)=>u(patch)}
                   setTab={setTab}
-                  onViewPhoto={(url)=>window.open(url,'_blank')}
+                  onViewPhoto={(url)=>openUrl(url)}
                 />
                 <LegacyInstructionsToggle
                   items={job.roughInstructions}
@@ -25301,7 +25635,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   phaseColor={C.finish}
                   onPatch={(patch)=>u(patch)}
                   setTab={setTab}
-                  onViewPhoto={(url)=>window.open(url,'_blank')}
+                  onViewPhoto={(url)=>openUrl(url)}
                 />
                 <LegacyInstructionsToggle
                   items={job.finishInstructions}
@@ -25536,7 +25870,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const url=sysUrls[job.lightingSystem||"Control 4"];
                 return url?(
                   <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
-                    <a href={url} target="_blank" rel="noopener noreferrer"
+                    <a href={safeUrl(url)} target="_blank" rel="noopener noreferrer"
                       style={{fontSize:11,color:sysAccentColor(job),textDecoration:"none",fontWeight:600,
                         background:`${sysAccentColor(job)}10`,border:`1px solid ${sysAccentColor(job)}33`,
                         borderRadius:6,padding:"3px 10px",display:"inline-flex",alignItems:"center",gap:4}}>
@@ -26937,7 +27271,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         u({matterportLinks:links, matterportLink:links[0]?.url||""});
                       }} placeholder="Paste Matterport URL…"/>
                     </div>
-                    {ml.url&&<a href={ml.url} target="_blank" rel="noopener noreferrer"
+                    {ml.url&&<a href={safeUrl(ml.url)} target="_blank" rel="noopener noreferrer"
                       onClick={e=>e.stopPropagation()}
                       style={{fontSize:11,fontWeight:700,color:"#6A5E97",background:"#6A5E9715",border:"1px solid #6A5E9733",
                         borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
@@ -27259,8 +27593,8 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
           {(m.photos||[]).filter(p=>p&&p.url).length>0 && (
             <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: m.text?6:0}}>
               {(m.photos||[]).filter(p=>p&&p.url).map(p => isImg(p)
-                ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:64,height:64,objectFit:'cover',borderRadius:7,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
-                : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:150,fontSize:11,fontWeight:600,color: crew?color:'#475569',background:'#fff',border:'1px solid #E1E4E9',borderRadius:6,padding:'4px 8px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}><Icon name="fileText" size={11}/>{p.name||'file'}</a>
+                ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:64,height:64,objectFit:'cover',borderRadius:7,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
+                : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:150,fontSize:11,fontWeight:600,color: crew?color:'#475569',background:'#fff',border:'1px solid #E1E4E9',borderRadius:6,padding:'4px 8px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}><Icon name="fileText" size={11}/>{p.name||'file'}</a>
               )}
             </div>
           )}
@@ -27633,15 +27967,15 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         <div style={{marginLeft:22,marginTop:4}}>
           <div style={{fontSize:11,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
             {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>{q.answeredBy||'Link'}</span>}
-            <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer||'(answered with attachments)'}}/>
+            <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={safeProps(q.answer||'(answered with attachments)')}/>
           </div>
           {(q.answerPhotos||[]).filter(p=>p&&p.url).length>0&&(
             <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5}}>
               {(q.answerPhotos||[]).filter(p=>p&&p.url).map(p=>{
                 const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                 return isImg
-                  ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",display:"block"}}/>
-                  : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:C.dim,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+                  ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",display:"block"}}/>
+                  : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:C.dim,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
               })}
             </div>
           )}
@@ -27692,8 +28026,8 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                 {latePhotos.map(p=>{
                   const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                   return isImg
-                    ? <img key={p.id||p.url} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #E8C97A",cursor:"pointer",display:"block"}}/>
-                    : <a key={p.id||p.url} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#8A6D1F",background:"#FFFDF7",border:"1px solid #E8C97A",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+                    ? <img key={p.id||p.url} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #E8C97A",cursor:"pointer",display:"block"}}/>
+                    : <a key={p.id||p.url} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#8A6D1F",background:"#FFFDF7",border:"1px solid #E8C97A",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
                 })}
               </div>
             )}
@@ -27782,14 +28116,14 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
       {!q.done&&gcAnswerMap[q.id]&&(
         <div style={{marginLeft:22,marginTop:6,background:"#ECF2EE",border:"1px solid #3E7D5A44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
           <span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",marginRight:6}}>{gcAnsweredBy||'Link'}</span>
-          <span style={{color:"#2C5C40",fontStyle:"italic"}} dangerouslySetInnerHTML={{__html:(typeof gcAnswerMap[q.id]==='object'?gcAnswerMap[q.id].answer:gcAnswerMap[q.id])||''}}/>
+          <span style={{color:"#2C5C40",fontStyle:"italic"}} dangerouslySetInnerHTML={safeProps((typeof gcAnswerMap[q.id]==='object'?gcAnswerMap[q.id].answer:gcAnswerMap[q.id])||'')}/>
           {typeof gcAnswerMap[q.id]==='object'&&(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).length>0&&(
             <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>
               {(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).map(p=>{
                 const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                 return isImg
-                  ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #CBE0D4",cursor:"pointer",display:"block"}}/>
-                  : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#2C5C40",background:"#fff",border:"1px solid #CBE0D4",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+                  ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #CBE0D4",cursor:"pointer",display:"block"}}/>
+                  : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#2C5C40",background:"#fff",border:"1px solid #CBE0D4",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
               })}
             </div>
           )}
@@ -28700,7 +29034,7 @@ const openEmail = (to, subject, body) => {
 
     const url = `https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(to||"")}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
-    window.open(url, "_blank");
+    openUrl(url);
 
   }
 
@@ -29002,8 +29336,8 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                     {(u.photos||[]).length>0&&(
                       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
                         {(u.photos||[]).map(p=>(
-                          <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{display:"block",width:54,height:54,borderRadius:7,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
-                            <img src={p.url} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                          <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{display:"block",width:54,height:54,borderRadius:7,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
+                            <img src={safeImageSrc(p.url)} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
                           </a>
                         ))}
                       </div>
@@ -29053,8 +29387,8 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       {(u.photos||[]).length>0&&(
                         <div style={{marginTop:3,display:"flex",gap:4,alignItems:"center"}}>
                           {(u.photos||[]).slice(0,4).map(p=>(
-                            <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{display:"block",width:28,height:28,borderRadius:5,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
-                              <img src={p.url} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                            <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{display:"block",width:28,height:28,borderRadius:5,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
+                              <img src={safeImageSrc(p.url)} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
                             </a>
                           ))}
                           {(u.photos||[]).length>4&&<span style={{fontSize:10,color:C.muted,fontWeight:700}}>+{(u.photos||[]).length-4}</span>}
@@ -30406,7 +30740,7 @@ function JobPhotos({ job, onSetTab }) {
                      p.source.startsWith("Plans") ? "PLAN FILE" : "FILE"}
                   </div>
                 ) : (
-                  <img src={p.url} alt={p.name||""} loading="lazy"
+                  <img src={safeImageSrc(p.url)} alt={p.name||""} loading="lazy"
                     style={{width:"100%", height:120, objectFit:"cover", display:"block"}}/>
                 )}
                 <div style={{padding:"6px 8px", fontSize:10, color:C.dim, lineHeight:1.3,
@@ -30433,13 +30767,13 @@ function JobPhotos({ job, onSetTab }) {
             style={{maxWidth:"100%", maxHeight:"100%", display:"flex",
               flexDirection:"column", alignItems:"center", gap:12}}>
             {lightboxPhoto.isFile ? (
-              <a href={lightboxPhoto.url} target="_blank" rel="noopener noreferrer"
+              <a href={safeUrl(lightboxPhoto.url)} target="_blank" rel="noopener noreferrer"
                 style={{background:"#fff", color:C.purple, padding:"30px 40px",
                   borderRadius:10, fontSize:14, fontWeight:700, textDecoration:"none"}}>
                 Open file ↗
               </a>
             ) : (
-              <img src={lightboxPhoto.url} alt={lightboxPhoto.name||""}
+              <img src={safeImageSrc(lightboxPhoto.url)} alt={lightboxPhoto.name||""}
                 style={{maxWidth:"90vw", maxHeight:"75vh", objectFit:"contain",
                   background:"#fff", borderRadius:8}}/>
             )}
@@ -30547,7 +30881,7 @@ function JobOpenItems({ job, foremenList, jobs, onUpdateJob, onGoToReturnTrips, 
           phaseColor={C.blue || '#3B5BA5'}
           onPatch={(patch)=>onUpdateJob && onUpdateJob(patch)}
           setTab={setTab}
-          onViewPhoto={(url)=>window.open(url,'_blank')}
+          onViewPhoto={(url)=>openUrl(url)}
         />
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -38689,7 +39023,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6}}>
             {photosToday.slice(0,24).map(p => (
               <div key={p.id || p.url}
-                onClick={() => window.open(p.url, "_blank")}
+                onClick={() => openUrl(p.url)}
                 title={`${p.jobName || ""}${p.name ? " · " + p.name : ""}`}
                 style={{
                   flexShrink:0,
@@ -39678,16 +40012,27 @@ function NotifDoctor({ identity }) {
       hint: perm === "denied" ? "Reset in browser settings → site permissions → notifications → Allow" :
             perm === "default" ? "Click 'Enable notifications' below" : "" });
     // 3. Service worker registered
+    // Looked up BY SCOPE. The old check passed the script filename, which the
+    // API resolves as a client URL — it matched scope "/" and returned the
+    // OFFLINE worker, so this line read "ok" even when push was completely
+    // dead. That false green is why the real cause went unfound for months.
     let swReg = null;
-    try {
-      if ("serviceWorker" in navigator) {
-        swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
-      }
-    } catch(e) {}
-    out.push({ label: "Firebase messaging service worker registered", ok: !!swReg,
-      hint: !swReg ? "Will auto-register when you click 'Enable notifications'" : "" });
+    let appReg = null;
+    try { swReg = await getExistingMessagingRegistration(); } catch(e) {}
+    try { appReg = await getAppRegistration(); } catch(e) {}
+    const msgScript = swReg?.active?.scriptURL || swReg?.installing?.scriptURL || swReg?.waiting?.scriptURL || "";
+    const isRealMessagingSW = msgScript.includes("firebase-messaging-sw.js");
+    out.push({ label: "Firebase messaging service worker registered", ok: !!swReg && isRealMessagingSW,
+      hint: !swReg ? "Will auto-register when you click 'Enable notifications'"
+          : !isRealMessagingSW ? `Wrong script at the messaging scope: ${msgScript || "unknown"}` : "" });
     // 4. SW active
     out.push({ label: "Service worker active", ok: !!swReg?.active });
+    // 4b. Offline shell must still be owned by the PWA worker. Enabling or
+    // resetting notifications must never cost the crew offline access.
+    const appScript = appReg?.active?.scriptURL || "";
+    out.push({ label: "Offline cache worker owns the page", ok: appScript.includes("service-worker.js"),
+      hint: appScript.includes("service-worker.js") ? ""
+          : `Page is controlled by: ${appScript || "nothing"} — offline shell may be unavailable` });
     // 5. FCM token in localStorage / from getToken
     let token = null;
     try {
@@ -39792,21 +40137,31 @@ function NotifDoctor({ identity }) {
     }
   };
 
-  // Nuclear reset: unregister every service worker for this origin, delete
-  // the FCM token, then re-register from scratch. Last-resort fix when push
-  // delivery is fundamentally broken (subscription dead, SW corrupted, etc.).
+  // Targeted push reset: delete the FCM token and rebuild ONLY the messaging
+  // worker. Last-resort fix when push delivery is fundamentally broken
+  // (subscription dead, SW corrupted, etc.).
+  //
+  // This used to unregister EVERY worker on the origin and then re-register only
+  // the messaging one — which killed the offline cache, and because the offline
+  // worker only registers on `window load` (already fired), it stayed dead for
+  // the rest of the session. Pressing the "fix my notifications" button took the
+  // crew's offline access away. It now touches only the messaging scope.
   const forceReReg = async () => {
     if (!identity?.id) return;
-    setTestResult({ kind: "info", text: "Force-resetting service worker + push subscription…" });
+    setTestResult({ kind: "info", text: "Resetting push subscription…" });
     try {
       // Delete the FCM token (revokes the underlying subscription too)
       if (messaging) {
         try { await deleteToken(messaging); } catch {}
       }
-      // Unregister every SW on this origin
+      // Unregister ONLY the messaging worker — never the offline shell.
+      const msgReg = await getExistingMessagingRegistration();
+      if (msgReg) await msgReg.unregister().catch(() => {});
+      _msgRegPromise = null;   // force a fresh registration on the next call
+      // Belt and braces: make sure the offline worker is still installed, since
+      // its own registration only runs on `window load`.
       if ("serviceWorker" in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map(r => r.unregister().catch(() => {})));
+        navigator.serviceWorker.register("/service-worker.js", { scope: "/" }).catch(() => {});
       }
       // Re-register fresh — registerFCMToken with force=true creates a brand
       // new SW, brand new push subscription, brand new token.
@@ -39852,7 +40207,7 @@ function NotifDoctor({ identity }) {
       // device the user logged in on).
       let myDeviceStale = false;
       try {
-        const swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+        const swReg = await getExistingMessagingRegistration();
         const myToken = swReg
           ? await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg })
           : null;
@@ -40399,15 +40754,15 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
               {!r.contactsProposed.length ? <div style={{color:"#8A93A3"}}>(empty roster — this would remove all contacts)</div> : null}
             </div>
           ) : null}
-          {r.fileUrl ? <div style={{marginBottom:6}}><a href={r.fileUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
+          {r.fileUrl ? <div style={{marginBottom:6}}><a href={safeUrl(r.fileUrl)} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
           {Array.isArray(r.attachments) && r.attachments.length ? (
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:6,alignItems:"flex-start"}}>
               {r.attachments.map((a,i)=> /\.(jpe?g|png|webp|gif)$/i.test(a.name||"") ? (
-                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name}>
+                <a key={i} href={safeUrl(a.url)} target="_blank" rel="noopener noreferrer" title={a.name}>
                   <img src={a.url} alt={a.name} style={{width:72,height:72,objectFit:"cover",borderRadius:8,border:"1px solid #E1E4E9",display:"block"}}/>
                 </a>
               ) : (
-                <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5,border:"1px solid #CDD9EC",borderRadius:8,padding:"5px 10px"}}>{a.name} ↗</a>
+                <a key={i} href={safeUrl(a.url)} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5,border:"1px solid #CDD9EC",borderRadius:8,padding:"5px 10px"}}>{a.name} ↗</a>
               ))}
             </div>
           ) : null}
@@ -42988,7 +43343,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                               <div style={{flex:1}}>
                                 <span style={{fontSize:12,color:item.done?'#99A0AA':'#1B1F24',
                                   textDecoration:item.done?'line-through':'none',lineHeight:1.45}}
-                                  dangerouslySetInnerHTML={{__html:item.text}}/>
+                                  dangerouslySetInnerHTML={safeProps(item.text)}/>
                                 {item.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}>✓ done</span>}
                               </div>
                             </div>
@@ -43144,7 +43499,7 @@ function PunchSharePage({ jobId, stage }) {
           background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
           {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
         </div>
-        <span style={{fontSize:13,color:item.done?'#99A0AA':'#1B1F24',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={{__html:item.text}}/>
+        <span style={{fontSize:13,color:item.done?'#99A0AA':'#1B1F24',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={safeProps(item.text)}/>
       </div>
       {item.waiting && !item.done && (
         <div style={{marginLeft:24,marginTop:4}}>
@@ -43686,9 +44041,9 @@ function QuestionsSharePage({ jobId }) {
             {q.photos.filter(p=>p&&p.url).map(p=>{
               const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
               return isImg
-                ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')}
+                ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)}
                     style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
-                : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer"
                     style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
             })}
           </div>
@@ -44009,9 +44364,9 @@ function JobNoteSharePage({ param }) {
         {photos.length > 0 && (
           <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:14}}>
             {photos.map(p => (
-              <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+              <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer"
                  style={{display:'block',width:72,height:72,borderRadius:6,overflow:'hidden',border:'1px solid #E1E4E9'}}>
-                <img src={p.url} alt={p.name || 'photo'} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+                <img src={safeImageSrc(p.url)} alt={p.name || 'photo'} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
               </a>
             ))}
           </div>
@@ -44040,9 +44395,9 @@ function JobNoteSharePage({ param }) {
                   {lPhotos.length > 0 && (
                     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:6}}>
                       {lPhotos.map(p => (
-                        <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                        <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer"
                            style={{display:'block',width:52,height:52,borderRadius:6,overflow:'hidden',border:'1px solid #E1E4E9'}}>
-                          <img src={p.url} alt={p.name || 'photo'} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+                          <img src={safeImageSrc(p.url)} alt={p.name || 'photo'} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
                         </a>
                       ))}
                     </div>
@@ -44111,7 +44466,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-29 · App SW version: v362
+**Last manifest update:** 2026-07-31 · App SW version: v364
 
 ---
 
@@ -44269,6 +44624,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Keypad section
   - (Savant V1/V1.5 editor chain removed in the 2026-07-10 cleanup · SW v319)
 - **Panelized Lighting tab (Lutron / Control 4 / Crestron)** · 'shipped' · system pills + lock, Loads / Keypads / Panel Loads sections, system-accent colors (blue = Lutron) · 'SW v310'
+  - **Bulk paste loads + keypads** · 'shipped 2026-07-30' · 'SW v363' · 'BulkPasteLoads' + 'parseLoadPaste' — a "Bulk paste" button next to '+ Add Load' ('LoadsList') and next to '+ Add Row' on all three keypad sections ('KeypadSection', Main/Basement/Upper), built to migrate the legacy per-job Google Docs into the app (Rose #889 was the first: 20 main keypad buttons, 8 basement, 16 LCP channels typed by hand otherwise). Deliberately more forgiving than 'BulkPasteHomeRuns', whose parser splits only on '[\n,|]' and anchors its wire regex to the WHOLE token — so a table copied out of Google Docs (**tab**-delimited) silently yields zero rows, as does the format its own on-screen example advertises. Here **tabs are a first-class delimiter**, and fields are classified by CONTENT rather than position (bare integer → number, status word → status, remainder → name), so both real column orders parse with no reordering: keypad tables read '1 | Kitchen + Mud Corridor | Pulled' and Control-4 LCP tables read 'Powder Bath Sconces | 1 | Pulled'. Also accepts markdown table rows, '-'/'•' bullets, '7.'/'7)' numbering, and bare name-per-line; a full row of column headings is dropped instead of concatenating into a bogus load. **Dedupe on name** (case-insensitive) against what the section already holds — half-transferred sections are the normal case, not the exception (Rose already had 3 keypad buttons typed in), so re-pasting the full list skips them (struck-through "already added" in the preview, "N already on this list — skipped" in the count) and the paste is idempotent. Keypad rows fill seeded blank rows first then append, so a 20-button list lands as buttons 1–20 rather than 11–30; 'num' stays positional ('delRow' already renumbers 1..n). Text present but nothing parsed now raises an explicit "Nothing detected" banner — the home-run box's silent "0 rows detected" reads as a broken feature. Rows land on the existing 'newKPRow' / 'newCentralLoad' shapes via the sections' own 'onChange'; **no new fields, no new Firestore writes, no loader change**. LCP module numbers are parsed and previewed but not stored (a central load has no module field) — the modal says so inline and points at the existing "Assign to module" batch flow
   - **Plan Changes log ("Changes From Original Plan")** · 'shipped 2026-07-09' · 'SW v313–v317' · Lutron jobs, sits at the TOP of the tab
     - Rooms matching plan labels; items with change types Added / Moved / Removed / Changed (Moved carries from → to)
     - Per-change and job-level discussion threads with file/photo attach ('QAThread' reuse) — Tech Lighting asks, crew replies
@@ -44379,6 +44735,10 @@ Pages designed to be opened by people outside the company via share links (no au
 
 ## Infrastructure
 
+- **Service-worker ownership — two scopes, not one** · 'shipped 2026-07-31' · 'SW v364' · Both workers used to 'register()' with no scope option, so both defaulted to scope '/'. A scope holds exactly ONE registration, so registering a different script for '/' **replaces** the worker there — the two were silently evicting each other, in a per-load race: React mount installed 'firebase-messaging-sw.js' at '/' (push alive, offline dead), then 'window load' installed 'service-worker.js' at '/' (offline alive, push dead). The two are disjoint — the PWA worker has the 'fetch' handler and NO push handler; the messaging worker has 'onBackgroundMessage'/'notificationclick' and NO 'fetch' handler — so whichever won, the app was missing the other half. That is the "notifications worked, then stopped" pattern, varying by device and network speed. Fix: the messaging worker now registers at its own '/firebase-cloud-messaging-push-scope' (the Firebase SDK's own default, which the app had been overriding). Background push does not require controlling a page — push goes to whichever registration owns the SUBSCRIPTION, and 'notificationclick' already used 'clients.matchAll({includeUncontrolled:true})'. **Also fixed the diagnostics, which were lying:** every lookup passed 'getRegistration("/firebase-messaging-sw.js")', but that API takes a CLIENT URL and matches by SCOPE — it resolved to '/' and returned the OFFLINE worker, so Notification Doctor reported "messaging service worker registered: ok" while push was completely dead (verified live: the old lookup returns '/service-worker.js'). All lookups now go through one shared accessor; Doctor gained a "wrong script at the messaging scope" warning and an "offline cache worker owns the page" check. **The reset button no longer removes offline support** — it used to unregister EVERY worker and re-register only the messaging one, and since the PWA worker only registers on 'window load' (already fired), pressing "fix my notifications" killed offline access for the rest of the session. No Firestore read/write, no data shape change.
+- **Stored-XSS containment — one sanitizer at every render boundary** · 'shipped 2026-07-31' · 'SW v364' · 'src/sanitizeHtml.js' (DOMPurify + a minimal allowlist) now guards all six raw-HTML render sites plus the 'RichEditor' prop→DOM sync, which a grep for the render prop misses. Rich HTML is the STORAGE format here (contenteditable read verbatim into Firestore), and 'jobs/*' + 'homeowner_requests/*' are anonymously writable, so stored markup reached crew and admin browsers — one site ('PunchSharePage') is a PUBLIC unauthenticated page. Verified chain: public share '<textarea>' → 'saveHomeownerRequest' → office adoption → raw render in an admin session. The adoption path now escapes, matching the FieldInk sibling path that already did. Allowlist covers everything the toolbar emits (b/i/u, lists, all colour forms) plus pasted headings/tables so existing crew content is not flattened. 'style' is re-validated per-declaration by a hook rather than trusted to the CSS engine — verified that jsdom lets 'background:url(javascript:…)' through where a browser does not. 165-assertion suite in 'scripts/sanitize-test.js', wired into 'prebuild' so the pre-push hook enforces it, plus a real-browser harness that injects each payload into a live DOM and detects actual execution (0 executed).
+- **URL sanitization — 'javascript:' links can no longer run** · 'shipped 2026-07-31' · 'SW v364' · React 18 does NOT block 'javascript:' hrefs (verified: 'renderToStaticMarkup' emits them byte-for-byte, dev warning only), and photo/attachment records carry a 'url' field in anonymously-writable collections — so a stored record named 'punchlist.pdf' pointing at a script ran in whichever session clicked it. 54 sites now route through 'safeUrl' (links, 'window.open') or 'safeImageSrc' (images, which additionally allow 'blob:'/'data:image' because the upload-preview path legitimately mints those). Control characters are stripped first, so 'java\tscript:' cannot slip past a prefix test. Unsafe values resolve to '""' and the click does nothing rather than opening a tab; 'openUrl' also adds 'noopener'. Blob download links (direct DOM 'a.href') and the hard-coded 'sms:'/Maps links are deliberately untouched.
+- **Durable offline edits — a save with no signal survives the app being killed** · 'shipped 2026-07-31' · 'SW v364' · Every job save goes through 'runTransaction', and Firestore does **not** queue transactions offline the way it queues 'setDoc'/'updateDoc' — a transaction needs a server read, so offline it fails immediately. Pending work then lived only in 'pendingPatches' (a 'useRef'), i.e. volatile memory. So: edit offline → app killed → relaunch → 'hejobs_backup' seeded the UI so the user SAW the edit and believed it saved → first snapshot landed with 'pendingPatches' empty on a cold mount, so the '_inFlight' guard didn't fire → state replaced and 'hejobs_backup' overwritten. **The edit vanished from the screen and from the only durable copy, silently.** (Worse: the daily-backup effect deletes 'hejobs_backup' once per calendar day, replacing it with scalars only — no punch, COs, Q&A or photos.) Now the patch queue is mirrored to 'localStorage' on the same synchronous write 'saveJob' already performs — durable BEFORE any network attempt — restored on mount BEFORE the listener can deliver a snapshot (so the '_inFlight' guard actually protects it), and replayed only after a genuinely FRESH snapshot ('syncHealth.synced', never 'fromCache' — replaying against stale cache is how a fix like this causes the loss it prevents). The durable copy is cleared **only on server confirmation**, never before the write lands. The daily wipe now skips while unsynced edits exist. Replay reuses the existing transactional three-way merge, so offline deletes stay deleted and other devices' additions survive — no new write semantics. Slots are keyed by tab so two open tabs can't erase each other. **Interim by design:** no per-op ordering, no idempotency marker, no multi-tab lease, and 'localStorage' has a quota — the IndexedDB journal replaces this and removes it in the same commit.
 - **Service Worker** · 'shipped' · network-first cache; version bumps trigger fleet-wide refresh
   - Current: 'v181'
   - Bumped on every deploy that changes bundle
@@ -48094,7 +48454,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
           <Fragment>
             {j.matterport && j.matterport.links.length ? j.matterport.links.map((m,i)=>(
               <div key={"mp"+i} style={{marginBottom:6}}>
-                <a href={m.url} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>3D walkthrough — {m.label} ↗</a>
+                <a href={safeUrl(m.url)} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>3D walkthrough — {m.label} ↗</a>
                 <span style={{fontSize:11.5,color:P.muted}}> (a 3D as-built of your walls)</span>
               </div>
             )) : line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.")}
@@ -48997,8 +49357,18 @@ function App() {
         if(k?.startsWith("he_daily_backup_") && k !== key) keysToRemove.push(k);
       }
       keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
-      // Also clear the rolling hejobs_backup to reclaim space — Firestore is the source of truth
-      try { localStorage.removeItem('hejobs_backup'); } catch(e){}
+      // Also clear the rolling hejobs_backup to reclaim space — Firestore is the
+      // source of truth. EXCEPT while unsynced edits exist: hejobs_backup is the
+      // only place those edits' full job objects live, and today's replacement
+      // (`compact`, below) stores scalars only — no punch, COs, Q&A or photos.
+      // Wiping it mid-outage would destroy the very work Stage 2c is protecting.
+      const _unsynced = Object.keys(pendingPatches.current || {})
+        .some(jid => Object.keys(pendingPatches.current[jid] || {}).length > 0);
+      if (_unsynced) {
+        console.log("[HE] Daily backup: keeping hejobs_backup — unsynced edits are still pending");
+      } else {
+        try { localStorage.removeItem('hejobs_backup'); } catch(e){}
+      }
       // Save a minimal version: just id, name, type, quoteNumber, foreman, roughStatus, finishStatus
       const compact = jobs.map(j => ({
         id:j.id, name:j.name, address:j.address, gc:j.gc, foreman:j.foreman,
@@ -49018,6 +49388,127 @@ function App() {
   // Save a single job — uses field-level merge when a patch is provided
   // so concurrent edits to different fields don't overwrite each other
   const pendingPatches = useRef({}); // jobId → accumulated patch fields
+
+  // ── Durable pending-patch mirror (Stage 2c, 2026-07-31) ────────────────────
+  // THE PROBLEM: every job save goes through runTransaction, and Firestore does
+  // NOT queue transactions offline the way it queues setDoc/updateDoc — a
+  // transaction needs a server read, so offline it fails immediately (see the
+  // comment on the saveJob catch). The pending work then lives only in
+  // `pendingPatches`, a useRef, i.e. volatile memory.
+  //
+  // So: edit with no signal -> app killed -> relaunch. `hejobs_backup` seeds the
+  // UI, so the user SEES their edit and believes it saved. Then the first
+  // snapshot lands, `pendingPatches` is empty on a cold mount so the _inFlight
+  // guard doesn't fire, state is replaced with server data and hejobs_backup is
+  // overwritten. The edit disappears from the screen AND from the only durable
+  // copy, silently. (Worse: the daily-backup effect deletes hejobs_backup once
+  // per calendar day, replacing it with scalars only — no punch, COs, or Q&A.)
+  //
+  // THIS FIX mirrors the patch queue to localStorage on the same synchronous
+  // write that already happens in saveJob, and replays it after the first
+  // genuinely-fresh snapshot. It deliberately reuses the existing transactional
+  // three-way merge — no new write semantics, no new loss surface.
+  //
+  // INTERIM, not the final design: no per-operation ordering, no idempotency
+  // marker, no multi-tab lease, and localStorage has a quota. Stage 5 replaces
+  // it with an IndexedDB journal and removes this in the same commit.
+  const PENDING_KEY = "he_pending_patches";
+  const pendingRestored = useRef(false);
+  const pendingDrained = useRef(false);
+
+  // Slots are keyed by tab so two open tabs cannot erase each other's queue.
+  const persistPending = useCallback(() => {
+    try {
+      const src = pendingPatches.current || {};
+      const mine = {};
+      Object.keys(src).forEach(jid => {
+        if (src[jid] && Object.keys(src[jid]).length > 0) mine[jid] = src[jid];
+      });
+      let all = {};
+      try { all = JSON.parse(localStorage.getItem(PENDING_KEY) || "{}") || {}; } catch(e) { all = {}; }
+      if (Object.keys(mine).length > 0) all[TAB_ID] = { at: Date.now(), patches: mine };
+      else delete all[TAB_ID];
+      if (Object.keys(all).length > 0) localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+      else localStorage.removeItem(PENDING_KEY);
+    } catch(e) {
+      // Quota or private-mode failure. The in-memory queue still works exactly
+      // as before, so this degrades to today's behaviour rather than breaking.
+      console.warn("[HE] pending-patch mirror write failed:", e && e.message);
+    }
+  }, []);
+
+  // Read back everything worth replaying. Our own slot always counts. Another
+  // tab's slot only counts once it has gone quiet (20s) — a live tab refreshes
+  // its timestamp on every save, so we won't steal work out from under it.
+  // Adoption TAKES OWNERSHIP of the slots it reads — it does not just read them.
+  //
+  // WHY THIS IS NOT A PURE READ (blocker found in pre-ship review, 2026-07-31):
+  // TAB_ID is `'tab_' + Math.random()` at module scope, so it is a NEW value on
+  // every page load, and persistPending() only ever deletes `all[TAB_ID]` — its
+  // own slot. So a slot written by a session that died before its transaction
+  // confirmed could never be deleted by ANY future session. Every launch would
+  // re-adopt it, replay it to Firestore, clear its own new slot, and leave the
+  // orphan untouched — forever, once per app open.
+  //
+  // That is not merely wasteful, it is destructive: the restore below populates
+  // pendingPatches before the jobs listener attaches, so `hasPending` is true
+  // when the first snapshot lands and the baseline recorder skips that job. The
+  // merge then runs with NO baseline, which unions (deleted punch items come
+  // back) and writes scalars verbatim (a stale foreman/status overwrites a newer
+  // one, with the v338 telemetry deliberately silent). That is precisely the
+  // punch-resurrection / silent-revert class v301/v302/v312 exist to prevent.
+  //
+  // Fix: delete the adopted slots AND re-key their contents under this session's
+  // TAB_ID in the SAME synchronous write. One setItem, so a kill mid-way cannot
+  // lose the work — it is either still theirs or already ours, never neither.
+  const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  const adoptPersistedPending = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(PENDING_KEY);
+      if (!raw) return {};
+      const all = JSON.parse(raw) || {};
+      const merged = {};
+      const now = Date.now();
+      let changed = false;
+      Object.keys(all).forEach(tab => {
+        const slot = all[tab] || {};
+        const age = slot.at ? (now - slot.at) : Infinity;
+        // Too old to reconcile honestly against today's server state. Replaying a
+        // week-old patch would do more harm than dropping it.
+        if (age > PENDING_MAX_AGE_MS) { delete all[tab]; changed = true; return; }
+        // A LIVE other tab refreshes its slot on every save, so a recent foreign
+        // slot is still being worked on — leave it alone.
+        if (tab !== TAB_ID && age <= 20000) return;
+        Object.keys(slot.patches || {}).forEach(jid => {
+          merged[jid] = { ...(merged[jid] || {}), ...slot.patches[jid] };
+        });
+        delete all[tab];
+        changed = true;
+      });
+      if (changed) {
+        if (Object.keys(merged).length > 0) all[TAB_ID] = { at: now, patches: merged };
+        if (Object.keys(all).length > 0) localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+        else localStorage.removeItem(PENDING_KEY);
+      }
+      return merged;
+    } catch(e) { return {}; }
+  }, []);
+
+  // Restore BEFORE the jobs listener can deliver a snapshot. This matters: the
+  // _inFlight guard keys off pendingPatches, so if the queue is still empty when
+  // the first snapshot lands, that snapshot silently overwrites the very edit we
+  // are trying to rescue.
+  if (!pendingRestored.current) {
+    pendingRestored.current = true;
+    const restored = adoptPersistedPending();
+    const ids = Object.keys(restored);
+    if (ids.length > 0) {
+      ids.forEach(jid => {
+        pendingPatches.current[jid] = { ...(restored[jid] || {}), ...(pendingPatches.current[jid] || {}) };
+      });
+      console.log(`[HE] Restored ${ids.length} unsynced job edit(s) from a previous session`);
+    }
+  }
 
   // ── Concurrent-edit protection (Cougar Moon punch-loss fix, 2026-07-06) ──
   // serverBaselines holds, per job, the last server state this device's LOCAL
@@ -49113,6 +49604,7 @@ function App() {
     // Accumulate patches for this job so we only write changed fields
     if(patch) {
       pendingPatches.current[job.id] = {...(pendingPatches.current[job.id]||{}), ...patch};
+      persistPending();   // durable BEFORE any network work is attempted
       // Mirror change orders to FieldInk when they change (fire-and-forget,
       // hash-gated internally, separate field-ink project — cannot affect this
       // job's save). Only runs when a CO field is in the patch.
@@ -49248,6 +49740,7 @@ function App() {
               delete pendingPatches.current[job.id];
             }
           }
+          persistPending();   // confirmed by the server -> drop from durable queue
         } else {
           // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
           // so we never wipe Firestore fields another user added that aren't in our local snapshot.
@@ -49368,6 +49861,43 @@ function App() {
   // (newer) on the server now resolves local-device-wins instead of
   // newest-timestamp-wins — consistent with the online merge policy.
 
+  // ── Startup drain of edits restored from a previous session ────────────────
+  // Waits for a genuinely FRESH snapshot (syncHealth.synced flips only on a
+  // non-fromCache snapshot). Replaying against the cached view would merge our
+  // rescued edit against stale server data, which is how a "fix" of this kind
+  // causes the loss it was meant to prevent. Each patch goes back through
+  // saveJob, so it uses the identical transactional three-way merge as any
+  // normal save — deletes made offline stay deleted, other devices' additions
+  // are preserved, and the durable copy is cleared only on server confirmation.
+  useEffect(() => {
+    if (pendingDrained.current) return;
+    if (!syncHealth.synced || !isOnline) return;
+    const ids = Object.keys(pendingPatches.current || {})
+      .filter(jid => Object.keys(pendingPatches.current[jid] || {}).length > 0);
+    if (ids.length === 0) { pendingDrained.current = true; return; }
+    // Nothing loaded yet — wait for the jobs list rather than discarding.
+    if ((jobsRef.current || []).length === 0) return;
+    const known = ids.filter(jid => (jobsRef.current || []).some(j => j.id === jid));
+    pendingDrained.current = true;
+    // Jobs ARE loaded and this id isn't among them (deleted or archived since).
+    // Drop it: keeping it would pin `_unsynced` true forever, which permanently
+    // disables the daily hejobs_backup reclaim and leaves a slot we can never
+    // replay. It cannot be delivered, so holding it helps nobody.
+    const orphaned = ids.filter(jid => !known.includes(jid));
+    if (orphaned.length > 0) {
+      console.warn(`[HE] Discarding ${orphaned.length} unsynced edit(s) for job(s) no longer present:`, orphaned.join(", "));
+      orphaned.forEach(jid => { delete pendingPatches.current[jid]; });
+      persistPending();
+    }
+    if (known.length === 0) return;
+    console.log(`[HE] Replaying ${known.length} unsynced edit(s) from a previous session`);
+    known.forEach(jid => {
+      const job = (jobsRef.current || []).find(j => j.id === jid);
+      const patch = { ...(pendingPatches.current[jid] || {}) };
+      if (job && Object.keys(patch).length > 0) saveJob(job, patch);
+    });
+  }, [syncHealth.synced, isOnline, jobs.length]); // eslint-disable-line
+
   const wasOnlineRef = useRef(isOnline);
   useEffect(() => {
     const wasOffline = !wasOnlineRef.current;
@@ -49412,6 +49942,9 @@ function App() {
       saveTimers.current[job.id] = null;
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
+      // Deliberately NOT persisting here. The durable copy must survive until
+      // the server confirms — dropping it now would recreate the very window
+      // this change exists to close.
       if(accumulated && Object.keys(accumulated).length > 0) {
         const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
         const cleanPatch = sanitize(accumulated);
@@ -49430,10 +49963,12 @@ function App() {
             const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
             tx.update(jref, {...meta, merged:_fr.length > 0, ...wp});
           });
+          persistPending();   // server confirmed -> safe to drop from durable queue
         } catch(e) {
           console.error('[HE] flushJob save error:',e?.message);
           // Put the patch back so the retry / reconnect paths can deliver it.
           pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
+          persistPending();
         }
       }
       // No else — never do a full overwrite from flushJob, it can wipe other users' data
@@ -49542,6 +50077,9 @@ function App() {
       // Use accumulated patches if available — never do full overwrite
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
+      // Deliberately NOT persisting here. The durable copy must survive until
+      // the server confirms — dropping it now would recreate the very window
+      // this change exists to close.
       if(accumulated && Object.keys(accumulated).length > 0) {
         const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
         const cleanPatch = sanitize(accumulated);
@@ -49563,9 +50101,12 @@ function App() {
           const _fr = [];
           const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
           tx.update(jref, {...meta, merged:_fr.length > 0, ...wp});
+        }).then(() => {
+          persistPending();   // server confirmed -> safe to drop from durable queue
         }).catch(e => {
           console.error('[HE] flushSaves merge error:',e?.message);
           pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
+          persistPending();
         });
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
@@ -49697,7 +50238,7 @@ function App() {
         return;
       }
       setUpdateReady(true);
-      try { const reg = await navigator.serviceWorker?.getRegistration('/service-worker.js'); reg?.update().catch(()=>{}); } catch(e){}
+      try { const reg = await getAppRegistration(); reg?.update().catch(()=>{}); } catch(e){}
       tryAutoReload();
     };
     checkForUpdate();
