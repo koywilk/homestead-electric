@@ -2096,6 +2096,78 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── Shared parser for Simpro job AND quote records ──────────────────────────
+// Simpro returns the same Site / SiteContact / Customer envelope on /jobs/{ID}
+// and /quotes/{ID}, so one parser serves both. Lifted out of getSimproJobBasics
+// unchanged when the quote endpoint was added (2026-08-05) — the job path's
+// behavior is byte-for-byte what it was.
+//
+// Deliberately tolerant: this tenant's Site.Address arrives as either a plain
+// string or a structured object, and the site contact's phone hides in any of
+// four field names. The quote side's exact shape has never been confirmed
+// against a real record, so every call logs the raw key sets — an unexpected
+// field name shows up in the Cloud Functions log instead of silently yielding
+// a blank prefill.
+//
+// Read-only: builds a plain object, writes nothing.
+function _simproBasicsFrom(rec, label, fallbackName) {
+  functions.logger.info(`${label} raw`, {
+    topKeys:         rec ? Object.keys(rec)         : null,
+    siteKeys:        rec.Site        ? Object.keys(rec.Site)        : null,
+    siteContactKeys: rec.SiteContact ? Object.keys(rec.SiteContact) : null,
+    customerKeys:    rec.Customer    ? Object.keys(rec.Customer)    : null,
+    siteContactSample: rec.SiteContact || null,
+  });
+
+  // ── Name: prefer Name, fall back to Description, then a placeholder.
+  const name =
+    (rec.Name && String(rec.Name).trim()) ||
+    (rec.Description && String(rec.Description).trim()) ||
+    fallbackName;
+
+  // ── Address: Site.Address is either a string or { Address, City, State,
+  // PostalCode }. Mirrors _runSimproCandidateRefresh.
+  let address = "";
+  if (rec.Site) {
+    if (typeof rec.Site.Address === "string") {
+      address = rec.Site.Address;
+    } else if (rec.Site.Address && typeof rec.Site.Address === "object") {
+      const a = rec.Site.Address;
+      address = [a.Address, a.City, a.State, a.PostalCode].filter(Boolean).join(", ");
+    } else if (rec.Site.Name) {
+      address = rec.Site.Name;
+    }
+  }
+
+  // ── Site Contact: name + phone. CellPhone first — most useful on a jobsite.
+  let siteContactName = "";
+  let siteContactPhone = "";
+  const sc = rec.SiteContact;
+  if (sc && typeof sc === "object") {
+    const parts = [sc.GivenName, sc.FamilyName].filter(Boolean);
+    if (parts.length) siteContactName = parts.join(" ").trim();
+    else if (sc.Name) siteContactName = String(sc.Name).trim();
+    siteContactPhone =
+      (sc.CellPhone && String(sc.CellPhone).trim()) ||
+      (sc.Phone     && String(sc.Phone).trim())     ||
+      (sc.WorkPhone && String(sc.WorkPhone).trim()) ||
+      (sc.Mobile    && String(sc.Mobile).trim())    ||
+      "";
+  }
+
+  return {
+    name,
+    address,
+    siteContactName,
+    siteContactPhone,
+    // Forward-compat: raw blobs so the client can surface extra fields
+    // without a redeploy.
+    _rawSite:        rec.Site        || null,
+    _rawSiteContact: rec.SiteContact || null,
+    _rawCustomer:    rec.Customer    || null,
+  };
+}
+
 // ─── Get Simpro job basics (name / address / site contact) ───────────────────
 // Reads the single-job endpoint and returns the fields the manual Add Job
 // form wants to prefill: name, full street address (joined from Site.Address
@@ -2134,68 +2206,53 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
   }
   const job = await resp.json();
 
-  // Log the raw shape so the exact field names from this tenant are visible
-  // in Cloud Functions logs. Cheap and only fires when the user explicitly
-  // triggers the pull from the Add Job form.
-  functions.logger.info("getSimproJobBasics raw", {
-    simproJobNo,
-    siteKeys:        job.Site        ? Object.keys(job.Site)        : null,
-    siteContactKeys: job.SiteContact ? Object.keys(job.SiteContact) : null,
-    customerKeys:    job.Customer    ? Object.keys(job.Customer)    : null,
-    siteContactSample: job.SiteContact || null,
-  });
+  // Parsing + raw-shape logging live in the shared helper (see above) so the
+  // quote endpoint gets identical treatment. Behavior here is unchanged.
 
-  // ── Name: prefer Name, fall back to Description, then a placeholder.
-  const name =
-    (job.Name && String(job.Name).trim()) ||
-    (job.Description && String(job.Description).trim()) ||
-    `Simpro ${simproJobNo}`;
+  return _simproBasicsFrom(job, "getSimproJobBasics", `Simpro ${simproJobNo}`);
+});
 
-  // ── Address: Simpro returns Site.Address as either a string or a
-  // structured { Address, City, State, PostalCode } object. Mirrors the
-  // existing candidates flow at functions/index.js _runSimproCandidateRefresh.
-  let address = "";
-  if (job.Site) {
-    if (typeof job.Site.Address === "string") {
-      address = job.Site.Address;
-    } else if (job.Site.Address && typeof job.Site.Address === "object") {
-      const a = job.Site.Address;
-      address = [a.Address, a.City, a.State, a.PostalCode].filter(Boolean).join(", ");
-    } else if (job.Site.Name) {
-      address = job.Site.Name;
-    }
+// ─── Get Simpro QUOTE basics (name / address / site contact) ─────────────────
+// The Quotes tab's counterpart to getSimproJobBasics, added 2026-08-05 after
+// Koy reported "I put in a job number and it says not found" on a quote.
+//
+// Simpro numbers quotes and jobs in SEPARATE sequences. A quote # sent to
+// /jobs/{ID} either 404s (the reported symptom) or — worse — matches a totally
+// unrelated real job, which would have pulled that job's name and address onto
+// the quote. So quotes get their own endpoint here AND their own app field
+// (`simproQuoteNo`): `simproNo` stays reserved for a real Simpro JOB number,
+// which a quote only earns when it converts. That separation is the point —
+// `simproNo` feeds the job financials, cost centers, crew-planner day matching
+// and the Drive plans push, none of which should ever fire on a quote #.
+//
+// Response shape is identical to getSimproJobBasics so the client fills blanks
+// through one code path.
+//
+// Data safety: read-only. Never writes to Simpro or Firestore.
+exports.getSimproQuoteBasics = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const quoteNo = String((data && data.simproQuoteNo) || "").trim();
+  if (!quoteNo) {
+    throw new functions.https.HttpsError("invalid-argument", "simproQuoteNo required");
   }
 
-  // ── Site Contact: name + phone. Simpro typically returns
-  //   SiteContact: { ID, GivenName, FamilyName, Phone, CellPhone, WorkPhone, Email }
-  // but the field set varies by tenant. Try every plausible phone field in
-  // priority order — CellPhone is the most useful on a jobsite.
-  let siteContactName = "";
-  let siteContactPhone = "";
-  const sc = job.SiteContact;
-  if (sc && typeof sc === "object") {
-    const parts = [sc.GivenName, sc.FamilyName].filter(Boolean);
-    if (parts.length) siteContactName = parts.join(" ").trim();
-    else if (sc.Name) siteContactName = String(sc.Name).trim();
-    siteContactPhone =
-      (sc.CellPhone && String(sc.CellPhone).trim()) ||
-      (sc.Phone     && String(sc.Phone).trim())     ||
-      (sc.WorkPhone && String(sc.WorkPhone).trim()) ||
-      (sc.Mobile    && String(sc.Mobile).trim())    ||
-      "";
+  const resp = await fetch(
+    `${SIMPRO_BASE}/quotes/${encodeURIComponent(quoteNo)}`,
+    { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+  );
+  if (resp.status === 404) {
+    throw new functions.https.HttpsError("not-found", `No Simpro quote ${quoteNo}`);
   }
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new functions.https.HttpsError(
+      "internal",
+      `Simpro error: ${resp.status} ${body.slice(0, 200)}`
+    );
+  }
+  const quote = await resp.json();
 
-  return {
-    name,
-    address,
-    siteContactName,
-    siteContactPhone,
-    // Forward-compat: raw blobs so the client can surface extra fields
-    // without a redeploy if Koy decides he wants email or Customer too.
-    _rawSite:        job.Site        || null,
-    _rawSiteContact: job.SiteContact || null,
-    _rawCustomer:    job.Customer    || null,
-  };
+  return _simproBasicsFrom(quote, "getSimproQuoteBasics", `Simpro quote ${quoteNo}`);
 });
 
 // ─── Find a contractor's logo from their own website ─────────────────────────

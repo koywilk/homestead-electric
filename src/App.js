@@ -1500,6 +1500,41 @@ const REDLINE_STATUSES = [
   {value:"co_sent",   label:"Redline CO Sent",      color:"#B0892C"},
   {value:"signed",    label:"CO Signed",            color:"#46916A"},
 ];
+// ── One CO board: red line walks live on the change-order kanban ────────────
+// Jeromy, 2026-08-05: red line walks and change orders belong on one page, not
+// two sub-tabs inside the CO tab. They fit because a red line walk IS a change
+// order that doesn't have a quote number yet — the walk stages are the front of
+// the same lifecycle, not a parallel one. Koy's two calls: fold "Walk Done — CO
+// Owed" into "Needs to be Sent" but flag the card so it's obvious which is
+// which, and keep walks counted separately in the header.
+//
+// REDLINE_STATUSES above is deliberately LEFT INTACT and `walk.status` is still
+// the walk's own lifecycle. Only the COLUMN a walk renders in is derived, so
+// this ships with **no Firestore migration**: no doc is rewritten, and a walk
+// carrying a legacy or unknown status still lands in a visible column via the
+// fallback in walkColumn() rather than silently vanishing (the failure mode the
+// retired `simpro_task` coStatus already demonstrates — see CO_STATUSES_NEW).
+const RL_COLOR = "#6A5E97";                  // C.purple — the only palette colour
+const RL_TINT  = "#F1EFF7";                  // that collides with no CO status colour
+const RL_EDGE  = "#DCD6EA";
+const WALK_COL = "walk_scheduled";           // head column, walks only
+const CO_BOARD_STATUSES = [
+  { value: WALK_COL, label: "Walk Scheduled", color: RL_COLOR, walksOnly: true },
+  ...CO_STATUSES_NEW,
+];
+// Which column an UNQUOTED walk renders in, keyed by its own REDLINE_STATUSES
+// value. Note `scheduled` exists in BOTH vocabularies with different meanings
+// (walk-scheduled vs CO-work-scheduled) — mapping through this table instead of
+// using the raw value is what keeps a walk out of the CO "Scheduled" column.
+// Once a walk has a quote # it stops using this and flows by coStatus.
+const WALK_COLUMN_BY_STATUS = {
+  scheduled: WALK_COL,
+  co_owed:   "needs_sending",
+  co_sent:   "pending",
+  signed:    "approved",
+};
+const walkColumn = (w) => WALK_COLUMN_BY_STATUS[(w && w.status) || "scheduled"] || WALK_COL;
+
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
   // Giving "needs" a date lets Koy set a "schedule by" target on unscheduled
@@ -1604,6 +1639,19 @@ async function fetchSimproJobBasics(simproJobNo) {
   return res?.data || null;
 }
 
+// Quote counterpart — reads /quotes/{ID} via getSimproQuoteBasics and returns
+// the SAME shape as fetchSimproJobBasics, so useSimproAutoPull fills blanks
+// through one code path. Separate endpoint because Simpro numbers quotes and
+// jobs independently: a quote # sent to the jobs endpoint 404s (the "not found"
+// Koy hit) or silently matches an unrelated job.
+async function fetchSimproQuoteBasics(simproQuoteNo) {
+  const qn = String(simproQuoteNo || "").trim();
+  if (!qn) return null;
+  const fn = httpsCallable(functions, "getSimproQuoteBasics");
+  const res = await fn({ simproQuoteNo: qn });
+  return res?.data || null;
+}
+
 // (GC customer-contacts pull lives in GCPortalManager.pullAndPrefill and calls
 // gcSimproCustomerContacts via the admin-gated gc() helper — deliberately NO
 // module-level app-key-only wrapper here, so the PII endpoint has exactly one
@@ -1628,13 +1676,21 @@ function useSimproAutoPull(jobRef, u) {
   const [simproPulling, setSimproPulling] = useState(false);
   const lastPulledSimproRef = useRef("");
   async function doPullSimpro({ force = false } = {}) {
-    const sn = String(jobRef.current?.simproNo || "").trim();
+    // A quote carries a Simpro QUOTE number in its own field and must be looked
+    // up on the quotes endpoint — Simpro numbers quotes and jobs separately, so
+    // sending a quote # to /jobs/{ID} is what produced the "not found" report.
+    const rec = jobRef.current || {};
+    const isQuote = rec.type === "quote";
+    const sn = String((isQuote ? rec.simproQuoteNo : rec.simproNo) || "").trim();
     if (!sn) return;
     if (simproPulling) return;
-    if (!force && lastPulledSimproRef.current === sn) return;
+    // De-dupe key includes the kind, so a record that converts from quote to job
+    // isn't blocked from pulling by the quote number it already pulled.
+    const pullKey = `${isQuote ? "q" : "j"}:${sn}`;
+    if (!force && lastPulledSimproRef.current === pullKey) return;
     setSimproPulling(true);
     try {
-      const r = await fetchSimproJobBasics(sn);
+      const r = isQuote ? await fetchSimproQuoteBasics(sn) : await fetchSimproJobBasics(sn);
       if (!r) { toast.error("Simpro returned nothing"); return; }
       const cur = jobRef.current || {};
       const patch = {};
@@ -1644,11 +1700,11 @@ function useSimproAutoPull(jobRef, u) {
       if (r.siteContactPhone && !String(cur.phone   || "").trim()) patch.phone   = r.siteContactPhone;
       if (Object.keys(patch).length) {
         u(patch);
-        toast.success(`Filled from Simpro #${sn}: ${Object.keys(patch).join(", ")}`);
+        toast.success(`Filled from Simpro ${isQuote ? "quote " : ""}#${sn}: ${Object.keys(patch).join(", ")}`);
       } else {
-        toast.info(`Simpro #${sn} matched, but no blanks left to fill`);
+        toast.info(`Simpro ${isQuote ? "quote " : ""}#${sn} matched, but no blanks left to fill`);
       }
-      lastPulledSimproRef.current = sn;
+      lastPulledSimproRef.current = pullKey;
     } catch (e) {
       console.error("[HE] doPullSimpro failed", e);
       const msg = (e?.message || "Simpro fetch failed").slice(0, 140);
@@ -4064,7 +4120,11 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
 
 const blankJob = () => ({
 
-  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
+  // simproNo = Simpro JOB number. simproQuoteNo = Simpro QUOTE number, used only
+  // while the record is type "quote" — Simpro numbers the two separately, so
+  // they must never share a field (a quote # in simproNo can match an unrelated
+  // real job and pull its financials). A quote earns its simproNo at conversion.
+  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", matterportLinks:[], driveFolderId:"",
 
@@ -22699,6 +22759,18 @@ const _scalarTelemetrySkip = new Set(["roughStage", "finishStage"]);
 // bookkeeping — never written to Firestore.
 const _settingsBaselines = {};
 
+// docId → the `updatedAt` stamp THIS tab most recently wrote to that doc.
+// Paired with `tab` to identify a snapshot as our own save echo (see the
+// upcoming_jobs listener). Why both and not `tab` alone: `tx.update()` is a
+// FIELD merge, not a document replace, so a client running a build older than
+// v365 writes `{updatedAt, items}` and leaves whatever `tab` was already on
+// the doc in place — our own, from our last save. During a rollout window that
+// makes another device's edit read as our echo and we'd skip applying it.
+// Every writer stamps a fresh `updatedAt`, so requiring it to match the exact
+// string we authored makes the identity write-scoped instead of tab-scoped.
+// Read-only bookkeeping — never written to Firestore.
+const _settingsLastWrite = {};
+
 // Transactionally merge-write the given fields of settings/<docId>.
 // Same recipe as saveJob: read the server's CURRENT doc inside a
 // transaction, three-way merge every structural field (baseline vs what
@@ -22712,7 +22784,23 @@ async function mergeSaveSettingsFields(docId, fields) {
   await runTransaction(db, async (tx) => {
     const dref = doc(db, "settings", docId);
     const snap = await tx.get(dref);
-    const stamp = { updatedAt: new Date().toISOString() };
+    // `tab` is the same own-echo identity saveJob stamps on jobs/* (see TAB_ID),
+    // extended to settings/* — this was the one write path that never stamped it,
+    // and no settings listener could tell its own echo from a teammate's edit.
+    // `merged` records whether THIS write had to rescue another device's
+    // concurrent change: a listener may ignore its own CLEAN echo, but must
+    // adopt a merged one, because the merged copy holds content the writing
+    // tab's local state does not have. Both are rebuilt per transaction
+    // attempt, so an SDK retry re-derives them against the re-read server doc.
+    const stamp = { updatedAt: new Date().toISOString(), tab: TAB_ID, merged: false };
+    // Recorded HERE, inside the transaction, not after it resolves. The commit
+    // ack and the snapshot of that commit are both delivered off the same
+    // Firestore response — their order is not guaranteed, so recording this
+    // after `await runTransaction` could lose the race and let our own echo
+    // through the listener's guard. Retries simply overwrite it, and the last
+    // attempt is the one that commits; if the transaction ultimately throws,
+    // the leftover value matches no snapshot that will ever arrive and is inert.
+    _settingsLastWrite[docId] = stamp.updatedAt;
     if (!snap.exists()) { tx.set(dref, { ...sanitize(fields), ...stamp }); return; }
     const server = snap.data() || {};
     const out = { ...stamp };
@@ -22720,7 +22808,10 @@ async function mergeSaveSettingsFields(docId, fields) {
       let merged = v;
       if (v && typeof v === "object" && server[k] !== undefined && server[k] !== null) {
         merged = _threeWayMerge(base[k], v, server[k]);
-        if (!_jeq(merged, v)) console.log(`[HE] concurrent-edit merge: preserved server changes on settings/${docId}.${k}`);
+        if (!_jeq(merged, v)) {
+          out.merged = true;   // hoisted from the log below — same condition, now actionable
+          console.log(`[HE] concurrent-edit merge: preserved server changes on settings/${docId}.${k}`);
+        }
       }
       out[k] = merged;
     });
@@ -22732,7 +22823,7 @@ async function mergeSaveSettingsFields(docId, fields) {
   // and revert — same fix as the job save path.
   if (_wrote) {
     const b = { ..._settingsBaselines[docId] };
-    Object.keys(_wrote).forEach(k => { if (k !== "updatedAt") b[k] = _wrote[k]; });
+    Object.keys(_wrote).forEach(k => { if (k !== "updatedAt" && k !== "tab" && k !== "merged") b[k] = _wrote[k]; });
     _settingsBaselines[docId] = b;
   }
 }
@@ -27138,13 +27229,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 {[["name","Job Name"],["address","Address"],["gc","General Contractor"],
 
-                  ["gcContact","GC Contact"],["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
+                  ["gcContact","GC Contact"],["phone","GC Phone"],
+                  // A quote has no Simpro JOB number yet — it has a Simpro QUOTE
+                  // number, which lives in its own field and is looked up on the
+                  // quotes endpoint. Showing "Simpro Job #" here is what had
+                  // people typing a quote # into the job field, where it 404'd
+                  // (and where a collision with a real job's ID would have pulled
+                  // that job's financials onto the quote). The job field returns
+                  // on conversion, which is when a real job number exists.
+                  job.type==="quote" ? ["simproQuoteNo","Simpro Quote #"] : ["simproNo","Simpro Job #"]].map(([k,l])=>(
 
                   <div key={k}>
 
                     <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
                       <span>{l}</span>
-                      {k==="simproNo" && String(job.simproNo||"").trim() && (
+                      {(k==="simproNo"||k==="simproQuoteNo") && String(job[k]||"").trim() && (
                         <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                           title="Fill blank fields from Simpro (Site address + Site Contact)"
                           style={{background:"none",border:"none",padding:"0 4px",margin:0,
@@ -27165,7 +27264,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       </div>
                     ) : (
                       <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}
-                        onBlur={k==="simproNo" ? ()=>doPullSimpro() : undefined}/>
+                        onBlur={(k==="simproNo"||k==="simproQuoteNo") ? ()=>doPullSimpro() : undefined}/>
                     )}
 
                   </div>
@@ -44466,7 +44565,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-31 · App SW version: v364
+**Last manifest update:** 2026-08-05 · App SW version: v365
 
 ---
 
@@ -44499,7 +44598,9 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Projected Start + confirm toggle · 'shipped 2026-07-20' · 'SW v349' · each Upcoming entry gets 'projectedStart' + 'startConfirmed' (set in the edit form); feeds the Starts report so pipeline jobs show up alongside live-job starts
   - Back to Upcoming (any job) · 'shipped 2026-07-20' · 'SW v349' · a regular board job can be pulled back into Upcoming from Job Info — mirrors the quote-undo data-safety order (saves the Upcoming entry FIRST via 'mergeSaveSettingsFields', deletes the job doc only after, seeds 'projectedStart' from 'roughProjectedStart'). Hidden by 'jobHasLoggedWork' once rough/finish progress, an inspection, CO, RT, or daily update exists — an active job can't be yanked off the board. Suggestion #1 (Justin Cloward)
   - Debounced pipeline save · 'shipped 2026-07-29' · 'SW v361' · Koy reported console spam ('400 failed-precondition' looping) and dropped keystrokes while typing in an Upcoming row. 'onChange' was firing 'saveAllUpcoming' — a fresh 'mergeSaveSettingsFields' transaction against the single 'settings/upcoming_jobs' doc — on every keystroke; fast typing queued overlapping transactions that invalidated each other's reads, so the SDK's transaction retry looped the whole time the user typed. 'saveAllUpcoming' now trailing-debounces 500ms (same window as 'saveJob''s per-job debounce) — local state still updates instantly, only the Firestore write is delayed and collapses a keystroke burst into one save. The pending timer is wired into the existing 'flushSaves' (tab close / backgrounding) and 'hasPendingSaves' (auto-reload gate) so a pending edit isn't dropped or silently overwritten by a reload. Read/write shape unchanged — no new fields, no loader change
+  - Own-echo guard on the pipeline listener · 'shipped 2026-08-05' · 'SW v365' · Koy: "why can't we seem to fix this upcoming jobs tab." Typing in any Upcoming row dropped characters, reverted the field and jumped the cursor to the end, while the console repeated 'concurrent-edit merge: preserved server changes on settings/upcoming_jobs.items' ~8x per sentence. **Every previous fix targeted the write side; the bug was on the read side.** The 'settings/upcoming_jobs' listener applied the server copy UNCONDITIONALLY — including the echo of this tab's own save. Timeline per keystroke: 'setUpcoming(next)' renders instantly and arms the 500ms debounce → 'flushUpcoming' writes → ~200ms later Firestore echoes **our own write** back and 'setUpcoming(server)' replaces what's on screen with the 500ms-old copy. Everything typed in that window died. The next keystroke then saved from that rolled-back base, so '_threeWayMerge' saw client≠base AND server≠base → "both sides changed" → per-item merge → the log. **The repeating log was one tab fighting its own echo, not a second editor** — which is why v361's debounce (real: it killed the '400 failed-precondition' retry storm) only shortened the clobber window instead of closing it. Fix is a near-exact port of the guard the jobs loader has had since v312: 'mergeSaveSettingsFields' was the one write path that never stamped 'tab', so no 'settings/*' listener could tell its own echo from a teammate's edit. It now stamps 'tab: TAB_ID' plus 'merged' (hoisted from the condition that already emitted the log line), and the listener skips the apply on a clean own echo. 'merged' is the half that keeps it safe: an echo whose transaction rescued another device's concurrent edit is adopted even by the tab that wrote it, because that tab's local copy is missing the rescued content — skipping that re-seed is what let the next burst of saves bulldoze another crew's work in the Kweller punch wipe. Own-echo identity is **write-scoped, not tab-scoped** ('tab' AND the exact 'updatedAt' this tab authored, tracked in '_settingsLastWrite'): 'tx.update()' is a field merge, not a document replace, so a device still on v364 writes '{updatedAt, items}' and leaves our 'tab' sitting on the doc — matching on 'tab' alone would make that device's edit read as our echo and be skipped for the whole rollout window. The stamp is recorded INSIDE the transaction, since the commit ack and the snapshot of that commit arrive off the same response with no guaranteed order. Deliberately NOT 'isTypingFocused()' (which already guards 'tryAutoReload'): it's global to the document, so typing in any input anywhere would drop a real teammate's pipeline edit, with no re-apply until reload. **Why it can't lose data:** a skipped apply can never delete or overwrite — it only declines to replace local state with a copy this same tab just authored, which is by construction older than what's on screen; '_settingsBaselines' still advances on EVERY snapshot, so the merge math and the write transaction are byte-for-byte unchanged; 'tab'/'merged' are additive fields no existing reader requires and 'sanitize()' is untouched; worst case of a wrong skip is one tab showing a stale row until the next snapshot or reload. **Six other 'settings/*' listeners have the identical unconditional-apply shape** ('crewPTO' ×2, 'crewRoster', 'schedule_<wk>', 'crewTeams', 'timeOffRequests') and five are written by 'mergeSaveSettingsFields', so they inherit the same echo clobber — they now receive the stamp but are deliberately NOT guarded yet, pending a confirmed field test of this one
 - **Quotes** · 'shipped' · proposed jobs awaiting conversion
+  - Link a quote to its Simpro quote · 'shipped 2026-08-05' · 'SW v365' · Koy: "when i put in a job number it says not found, because in simpro its a quote number not a job number. so its not looking in the right spot." A quote's Job Info showed one Simpro box labelled **Simpro Job #**, and tabbing out of it called 'getSimproJobBasics' → 'GET /jobs/{ID}'. **Simpro numbers quotes and jobs in separate sequences**, so a quote # sent to the jobs endpoint 404s — and the 404 was the lucky outcome: 'simproNo' also feeds 'getSimproJobFinancials', 'getSimproJobCostCenters', crew-planner day matching and 'pushPlansToSimpro', so a quote # that happened to collide with a real job's ID would have pulled **that unrelated job's money and address onto the quote**. Fix keeps the two numbers apart rather than teaching one field two meanings: quotes get their own 'simproQuoteNo' field and a new read-only 'getSimproQuoteBasics' callable reading '/quotes/{ID}'; 'simproNo' stays reserved for a real Simpro JOB number, which a quote only earns at conversion ('onConvertQuote' already sets it and clears 'type', so the form flips back to "Simpro Job #" by itself). The Job Info form swaps the field + label on 'type==="quote"', so a quote never again advertises the wrong number. 'useSimproAutoPull' picks the endpoint off the record type and keys its de-dupe ref by kind, so a record that converts isn't blocked from pulling by the quote # it already pulled. The job and quote parsers are **the same function** — lifted out of 'getSimproJobBasics' byte-for-byte, so the live job path is unchanged and the quote path inherits its tolerance for this tenant's shape drift ('Site.Address' as string *or* structured object, four candidate phone fields); it logs the raw key sets on every call, so an unconfirmed quote-side field name surfaces in the Cloud Functions log instead of silently yielding a blank. Fills **blank fields only**, never overwrites typed text. **Deliberately untouched: change orders.** COs already carry their own Simpro quote # and that flow works — this is only the initial quote, before it becomes a job. **Requires a functions deploy** ('getSimproQuoteBasics') — deploy the function BEFORE pushing the app, or the Pull button 404s on a client that has the new UI and no endpoint. No Firestore rules change; 'simproQuoteNo' lives inside the job's 'data' envelope, so no loader change
 - **Tasks** · 'shipped' · 'Tasks' · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 ('manualTasks' collection was empty; Needs Board is THE manual to-do surface) · 'SW v321'
   - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · 'SW v321')
 - **Huddle** · 'shipped' · 'HuddleSheet' · weekly team huddle prep
@@ -44691,6 +44792,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - "Manage their link" master list (office-only) — see/edit every job's on-link state in one spot · 'SW v317'
 - **Needs board** · 'shipped' · coordinator board for deadline-bound contractor call-ins ('needs' collection)
 - **Redline walks → CO tracking** · 'shipped 2026-07-08' · 'SW v306' · quoted walks surface in the Change Orders board
+- **Red line walks and COs on one board** · 'shipped 2026-08-05' · 'SW v365' · Jeromy asked for the red line walks and the change orders to be **one page, not two sub-tabs** inside the CO tab. They merge cleanly because **a red line walk is a change order that doesn't have a quote number yet** — that was already the app's behavior (a walk surfaced on the CO board the moment 'coQuoteNumber' was set), so the sub-tab only ever covered the stretch *before* that number existed. The two status vocabularies chain rather than compete: 'Walk Scheduled → [Walk Done — CO Owed] → Needs to be Sent → Sent — Pending → Approved → Scheduled → Work Completed → Converted to RT'. So the board gains **one** head column ('walk_scheduled', walks only) and — Koy's call — "Walk Done — CO Owed" **folds into Needs to be Sent** rather than getting its own column, with the card flagged instead. 'RedlineWalkBoard' and the 'subView' state are deleted; its add form moved into the header and delete moved onto the walk card (it had the only create/delete path in the whole view — dropping the component without them would have silently removed the capability). **No Firestore migration, and no doc is rewritten:** 'REDLINE_STATUSES' is left intact and 'walk.status' remains the walk's own lifecycle — only the *column* is derived, through 'WALK_COLUMN_BY_STATUS'. That indirection is load-bearing: 'scheduled' exists in **both** vocabularies with different meanings (walk-scheduled vs CO-work-scheduled), so keying columns off the raw value would file walks into the CO "Scheduled" column; and an unknown/legacy status falls back to the walk column instead of vanishing (the failure the retired 'simpro_task' coStatus already demonstrates). A walk carries **two independent, never-synced status fields**, so 'handleSetStatus' forks: an **unquoted** walk offers 'REDLINE_STATUSES' and writes 'status'; a **quoted** one offers 'CO_STATUSES_NEW' and writes 'coStatus' — writing the wrong field would place the row by one field while the picker edited another, and the card would appear not to move. Fixed in passing: **the status pill rendered the enclosing column's label and colour, not the row's own** — harmless when every card in a column shared its status, wrong the moment walk rows joined. Clearing a quote # now returns the walk to a walk column instead of making the row vanish from the board entirely. Walks with no quote # are counted **separately** in the header ("N red line walks") and excluded from the CO figures — an un-quoted walk folded into Needs to be Sent must not inflate Jeromy's red triage number when nothing has been written to send yet; a quoted walk does count as a CO, because by then it is one. The walk date stays **editable** on the card (an adversarial review pass caught that the deleted board held the app's only date editor — rendering it read-only would have made a mistyped or defaulted date permanently uncorrectable, with delete-and-recreate the only recovery, losing status, quote # and attribution); it is keyed on its current value so another device's snapshot can't leave a stale date sitting in the input, and the label reads "walk" vs "walked" off the walk's own status rather than always claiming past tense. The empty state keys off the full row set (a board holding only walks would otherwise claim to be empty) and now names the search term instead of saying "none yet" when a query simply didn't match. Cards click through to the job **or quote** behind them for plan access ('onSelectJob' re-resolves from 'jobs'; quotes are jobs with 'type==="quote"', so it already worked — job-less walks keep their existing inert-cursor guard). Card treatment: tinted ground + a spelled-out "Red Line Walk" label in 'C.purple', the one palette colour that collides with none of the six CO status colours; **the left edge stays the foreman colour** on every card, since that is the board's existing who-owns-this signal. **Deliberately untouched: change orders inside jobs** — Koy: "that function is working perfectly right now." **Why it can't lose data:** no Firestore write shape changed and no migration ran; the redline write path still re-finds the live walk from the 'redlineWalks' prop at commit time before spreading it ('onUpdateRedline' is a whole-document 'setDoc' with no merge, so patching from a stale row would clobber the record); job COs still route through the field-scoped 'onUpdateCO'; and verified exhaustively that 'redlineWalks' is read **nowhere** outside the CO tab — no badge, Today task, nudge, huddle, scoreboard, report or Cloud Function touches the collection, so 'dailyCoChase'/'dailyBookDigest' counts are unaffected
 - **Huddle Sheet** · 'shipped' · 'HuddleSheet' · content revisit (auto-tasks instead of dead manual tasks) · 'SW v321'
 - **Job Activity (per job)** · 'shipped' · 'JobActivity'
 - **Job Photos (per job)** · 'shipped' · 'JobPhotos'
@@ -46575,124 +46677,10 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
 // normal saveJob path — same write surface as the in-job CO editor, so all
 // existing notifications (co_new / co_approved / co_completed Cloud Function
 // branches) fire identically. No new Firestore fields, no schema changes.
-// ── Redline Walks board — the COs-tab sub-view ──────────────────────────────
-// Standalone redline-walk records (custom names, optional job link) as a status
-// board mirroring the CO kanban. Reuses C + REDLINE_STATUSES.
-function RedlineWalkBoard({ walks = [], jobs = [], identity, onAdd, onUpdate, onDelete }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft]   = useState({ jobId: "", address: "", walkDate: "" });
-
-  const jobName = (id) => { const j = (jobs || []).find(x => x.id === id); return j ? (jobLabel(j) || j.name || j.id) : ""; };
-  // Jobs AND quotes are selectable. Show the job number (#simproNo) / quote number,
-  // and organize the list by number (numbered first ascending, unnumbered last).
-  const jobOpts = useMemo(() => {
-    const rows = (jobs || []).filter(j => j && (j.name || j.simproNo || j.quoteNumber)).map(j => ({
-      id: j.id,
-      label: j.type === "quote"
-        ? `${j.quoteNumber ? `Q${j.quoteNumber} · ` : ""}${j.name || "(quote)"} · quote`
-        : (jobLabel(j) || j.name || j.id),
-      sortNum: (parseInt(String(j.simproNo || j.quoteNumber || "").replace(/\D/g, ""), 10) || 999999),
-    }));
-    rows.sort((a, b) => (a.sortNum - b.sortNum) || a.label.localeCompare(b.label));
-    return rows;
-  }, [jobs]);
-
-  const byStatus = {};
-  REDLINE_STATUSES.forEach(s => { byStatus[s.value] = []; });
-  (walks || []).forEach(w => { const s = w.status || "scheduled"; (byStatus[s] = byStatus[s] || []).push(w); });
-  Object.keys(byStatus).forEach(k => byStatus[k].sort((a, b) => (a.walkDate || "").localeCompare(b.walkDate || "")));
-
-  const submitAdd = async () => {
-    const name = (draft.address || "").trim();
-    if (!name && !draft.jobId) return;
-    await onAdd?.({ jobId: draft.jobId || "", address: name, walkDate: draft.walkDate || new Date().toISOString().slice(0, 10), status: "scheduled", statusDate: draft.walkDate || "" });
-    setDraft({ jobId: "", address: "", walkDate: "" });
-    setAdding(false);
-  };
-
-  const inp = { width: "100%", padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "inherit", color: C.text, background: "#fff", outline: "none", marginTop: 3 };
-  const lbl = { fontSize: 9.5, color: C.dim, textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.03em", display: "block" };
-
-  const card = (w) => {
-    const label = (w.address || "").trim() || jobName(w.jobId) || "(unnamed walk)";
-    const linked = !!w.jobId;
-    return (
-      <div key={w.id} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 11px", marginBottom: 8 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.text, lineHeight: 1.25 }}>{label}</div>
-          <button title="Delete" onClick={() => { if (window.confirm("Delete this redline walk?")) onDelete?.(w.id); }}
-            style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
-        </div>
-        <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.03em", textTransform: "uppercase", color: linked ? "#3B5BA5" : "#8a6d2e", background: linked ? "#eaf0fb" : "#f0ece1", borderRadius: 4, padding: "1px 6px", display: "inline-block", marginTop: 6 }}>{linked ? "Linked job" : "Custom name"}</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-          <label style={lbl}>Status
-            <select value={w.status || "scheduled"} onChange={e => onUpdate?.({ ...w, status: e.target.value })} style={inp}>
-              {REDLINE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
-          </label>
-          <label style={lbl}>Walk date
-            <input type="date" defaultValue={w.walkDate || ""} onBlur={e => { if (e.target.value !== (w.walkDate || "")) onUpdate?.({ ...w, walkDate: e.target.value }); }} style={inp} />
-          </label>
-          <label style={lbl}>Redline CO Quote #
-            <input defaultValue={w.coQuoteNumber || ""} placeholder="Quote # from SimPro" onBlur={e => { const v = e.target.value.trim(); if (v !== (w.coQuoteNumber || "")) onUpdate?.({ ...w, coQuoteNumber: v }); }} style={inp} />
-          </label>
-          {(w.coQuoteNumber || "").trim() && (
-            <div style={{ fontSize: 10.5, color: "#3E7D5A", fontWeight: 700, letterSpacing: "0.02em", marginTop: -3 }}>
-              ✓ Now tracking in Change Orders
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div>
-      {!adding ? (
-        <button onClick={() => setAdding(true)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, fontSize: 13, fontFamily: "inherit", cursor: "pointer", marginBottom: 14 }}>+ Add redline walk</button>
-      ) : (
-        <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", maxWidth: 520, marginBottom: 16, boxShadow: "0 4px 16px rgba(15,31,61,0.08)" }}>
-          <div style={{ fontWeight: 800, fontSize: 14, color: C.text, marginBottom: 10 }}>New redline walk</div>
-          <label style={lbl}>Job (optional — leave blank if it's not in the app yet)
-            <select value={draft.jobId} onChange={e => setDraft(d => ({ ...d, jobId: e.target.value }))} style={inp}>
-              <option value="">— no job / quote yet —</option>
-              {jobOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
-          </label>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 150px", gap: 10, marginTop: 10 }}>
-            <label style={lbl}>Custom name / address
-              <input value={draft.address} onChange={e => setDraft(d => ({ ...d, address: e.target.value }))} placeholder="e.g. Miller Custom Home" style={inp} />
-            </label>
-            <label style={lbl}>Walk date
-              <input type="date" value={draft.walkDate} onChange={e => setDraft(d => ({ ...d, walkDate: e.target.value }))} style={inp} />
-            </label>
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <button onClick={submitAdd} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>Add walk</button>
-            <button onClick={() => { setAdding(false); setDraft({ jobId: "", address: "", walkDate: "" }); }} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: "#fff", color: C.dim, fontWeight: 600, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 12, scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}>
-        {REDLINE_STATUSES.map(s => {
-          const items = byStatus[s.value] || [];
-          return (
-            <div key={s.value} style={{ flex: "0 0 260px", maxWidth: 260, background: "#F7F8FA", border: `1px solid ${C.border}`, borderRadius: 10, borderTop: `3px solid ${s.color}`, display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 240px)" }}>
-              <div style={{ padding: "10px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 11.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", color: s.color }}>{s.label}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: C.dim, background: "#fff", border: `1px solid ${C.border}`, borderRadius: 20, padding: "0 8px" }}>{items.length}</span>
-              </div>
-              <div style={{ padding: 10, overflowY: "auto" }}>
-                {items.length === 0 ? <div style={{ fontSize: 12, color: C.dim, textAlign: "center", padding: "18px 0" }}>—</div> : items.map(card)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+// (The Redline Walks sub-view board was removed 2026-08-05 — SW v365. Jeromy
+// asked for one page instead of two sub-tabs inside the CO tab, so red line
+// walks now render as cards on the change-order kanban itself. Its add form
+// moved into ChangeOrderTracker; delete moved onto the walk card.)
 
 function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getPersonColor, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [showClosed, setShowClosed]       = useState(false);
@@ -46701,7 +46689,10 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   const [statusOpen, setStatusOpen]       = useState(null); // co id
   const [foremanFilter, setForemanFilter] = useState("");
   const [search, setSearch]               = useState(""); // suggestion #3 — CO tab search
-  const [subView, setSubView]             = useState("cos"); // "cos" | "redline" — Redline Walks sub-view
+  // v365: the "cos" | "redline" sub-view is gone — one board (Jeromy). What
+  // remains of the old Redline Walks tab is its add form, opened from the header.
+  const [addingWalk, setAddingWalk]       = useState(false);
+  const [walkDraft,  setWalkDraft]        = useState({ jobId:"", address:"", walkDate:"" });
 
   // Aggregate: every CO across every job, with job context stitched on.
   // Quotes (job.type === "quote") are skipped — they don't have COs in the
@@ -46741,12 +46732,19 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
     (redlineWalks || []).forEach(w => {
       if (!w) return;
       const q = (w.coQuoteNumber || "").trim();
-      if (!q) return;
+      // v365: UNQUOTED walks surface here too. They used to be dropped by a
+      // `if (!q) return;` and lived only on the Redline Walks sub-view, which
+      // is now gone. Placement forks on the quote #, matching the lifecycle:
+      //   quoted   → flows by coStatus, exactly as before (default "pending",
+      //              which is deliberately NOT the real-CO default of
+      //              "needs_sending" — a freshly quoted walk has been sent)
+      //   unquoted → placed by its walk status via walkColumn()
+      // The walk's own `status` field is never rewritten by this.
       const linked = w.jobId ? (jobs || []).find(j => j && j.id === w.jobId) : null;
       out.push({
         coId:         w.id,
         coIndex:      "R",
-        coStatus:     w.coStatus || "pending",
+        coStatus:     q ? (w.coStatus || "pending") : walkColumn(w),
         coStatusDate: w.coStatusDate || "",
         createdAt:    w.createdAt || "",
         createdBy:    w.walkedBy || "",
@@ -46761,6 +46759,10 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
         jobGc:        linked ? (linked.gc || "") : "",
         source:       "redline",
         redlineId:    w.id,
+        quoted:       !!q,                    // drives which status vocabulary the pill offers
+        walkStatus:   w.status || "scheduled",
+        walkDate:     w.walkDate || "",
+        isQuoteJob:   !!(linked && linked.type === "quote"),
       });
     });
     return out;
@@ -46791,7 +46793,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   // Done columns sort newest-first (most recent at top).
   const byStatus = useMemo(() => {
     const map = {};
-    CO_STATUSES_NEW.forEach(s => { map[s.value] = []; });
+    CO_BOARD_STATUSES.forEach(s => { map[s.value] = []; });
     filteredCOs.forEach(co => {
       const s = co.coStatus || "needs_sending";
       if (!map[s]) map[s] = [];
@@ -46811,13 +46813,22 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
 
   const closedKeys = ["converted", "denied"];
   const visibleStatuses = useMemo(() =>
-    CO_STATUSES_NEW.filter(s => showClosed || !closedKeys.includes(s.value))
+    CO_BOARD_STATUSES.filter(s => showClosed || !closedKeys.includes(s.value))
   , [showClosed]);
 
-  const totalCount        = filteredCOs.length;
-  const needsSendingCount = (byStatus["needs_sending"] || []).length;
-  const pendingCount      = (byStatus["pending"]       || []).length;
-  const approvedCount     = (byStatus["approved"]      || []).length;
+  // Koy's call: walks with no quote # are counted SEPARATELY, so the CO figures
+  // Jeromy already reads don't quietly change meaning now that walks share the
+  // columns — an un-quoted walk folded into "Needs to be Sent" must not inflate
+  // the red triage number, because nothing has been written to send yet. A
+  // QUOTED walk does count as a change order: by then it is one.
+  const isUnquotedWalk    = (c) => c.source === "redline" && !c.quoted;
+  const coRows            = filteredCOs.filter(c => !isUnquotedWalk(c));
+  const countIn           = (k) => (byStatus[k] || []).filter(c => !isUnquotedWalk(c)).length;
+  const totalCount        = coRows.length;
+  const needsSendingCount = countIn("needs_sending");
+  const pendingCount      = countIn("pending");
+  const approvedCount     = countIn("approved");
+  const walkCount         = filteredCOs.length - coRows.length;
 
   // Close the status popover on outside click. The toggle button itself uses
   // stopPropagation so opening it doesn't immediately close. Editing-quote
@@ -46833,6 +46844,17 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   }, [statusOpen]);
 
   const handleSetStatus = (co, newStatus) => {
+    // An UNQUOTED walk still owns its own lifecycle: its pill offers
+    // REDLINE_STATUSES and we write `status`. Writing coStatus here instead
+    // would place the row by one field while the popover edited another — a
+    // walk carries BOTH and nothing keeps them in sync, so picking the wrong
+    // one makes the card appear not to move.
+    if (co.source === "redline" && !co.quoted) {
+      const w = (redlineWalks || []).find(x => x && x.id === co.redlineId);
+      if (w) onUpdateRedline && onUpdateRedline({ ...w, status: newStatus });
+      setStatusOpen(null);
+      return;
+    }
     const patch = { coStatus: newStatus };
     const def   = getStatusDef(CO_STATUSES_NEW, newStatus);
     if (!def.hasDate) patch.coStatusDate = "";
@@ -46881,33 +46903,42 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
     setEditingQuote(null);
   };
 
-  // Sub-view toggle: Change Orders | Redline Walks (Koy's call — no new tab).
-  const tabStrip = (
-    <div style={{display:"flex",gap:2,borderBottom:`2px solid ${C.border}`,marginBottom:16,maxWidth:460}}>
-      {[["cos","Change Orders"],["redline","Redline Walks"]].map(([k,label])=>(
-        <button key={k} onClick={()=>setSubView(k)} style={{
-          padding:"9px 18px",fontSize:14,fontWeight:subView===k?800:600,fontFamily:"inherit",
-          color:subView===k?C.text:C.dim,background:"none",border:"none",cursor:"pointer",
-          borderBottom:subView===k?`2px solid ${C.accent}`:"2px solid transparent",marginBottom:-2}}>
-          {label}{k==="redline"&&redlineWalks.length>0?` · ${redlineWalks.length}`:""}
-        </button>
-      ))}
-    </div>
-  );
+  // Add-a-walk form. Lifted out of the deleted RedlineWalkBoard — it was the
+  // only way in the whole COs view to CREATE a walk, so dropping that component
+  // without this would have quietly removed the capability. Jobs AND quotes are
+  // selectable (a walk can hang off a quote that hasn't become a job yet), and
+  // both may be left blank for a walk on an address that isn't in the app.
+  const walkJobOpts = useMemo(() => {
+    const rows = (jobs || []).filter(j => j && (j.name || j.simproNo || j.quoteNumber)).map(j => ({
+      id: j.id,
+      label: j.type === "quote"
+        ? `${j.quoteNumber ? `${j.quoteNumber} · ` : ""}${j.name || "(quote)"} · quote`
+        : (jobLabel(j) || j.name || j.id),
+      sortNum: (parseInt(String(j.simproNo || j.quoteNumber || "").replace(/\D/g, ""), 10) || 999999),
+    }));
+    rows.sort((a, b) => (a.sortNum - b.sortNum) || a.label.localeCompare(b.label));
+    return rows;
+  }, [jobs]);
 
-  if (subView === "redline") {
-    return (
-      <div style={{padding:"16px 18px 40px", maxWidth:"100%"}}>
-        {tabStrip}
-        <RedlineWalkBoard walks={redlineWalks} jobs={jobs} identity={identity}
-          onAdd={onAddRedline} onUpdate={onUpdateRedline} onDelete={onDeleteRedline} />
-      </div>
-    );
-  }
+  const submitAddWalk = async () => {
+    const name = (walkDraft.address || "").trim();
+    if (!name && !walkDraft.jobId) { toast.error("Pick a job/quote or type a name for the walk."); return; }
+    await onAddRedline?.({
+      jobId: walkDraft.jobId || "", address: name,
+      walkDate: walkDraft.walkDate || new Date().toISOString().slice(0, 10),
+      status: "scheduled", statusDate: walkDraft.walkDate || "",
+    });
+    setWalkDraft({ jobId: "", address: "", walkDate: "" });
+    setAddingWalk(false);
+  };
+
+  const wInp = { width:"100%", padding:"6px 8px", borderRadius:6, border:`1px solid ${C.border}`,
+    fontSize:12.5, fontFamily:"inherit", color:C.text, background:"#fff", outline:"none", marginTop:3 };
+  const wLbl = { fontSize:9.5, color:C.dim, textTransform:"uppercase", fontWeight:700,
+    letterSpacing:"0.03em", display:"block" };
 
   return (
     <div style={{padding:"16px 18px 40px", maxWidth:"100%"}}>
-      {tabStrip}
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
         flexWrap:"wrap",gap:12,marginBottom:14}}>
@@ -46926,6 +46957,9 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
             )}
             {approvedCount > 0 && (
               <span style={{color:"#3E7D5A",fontWeight:700}}> · {approvedCount} approved</span>
+            )}
+            {walkCount > 0 && (
+              <span style={{color:RL_COLOR,fontWeight:700}}> · {walkCount} red line walk{walkCount!==1?"s":""}</span>
             )}
           </div>
         </div>
@@ -46949,8 +46983,46 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
               cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
             {showClosed ? "Hide closed" : "Show closed"}
           </button>
+          <button onClick={()=>setAddingWalk(v=>!v)}
+            style={{padding:"6px 12px",borderRadius:7,fontSize:12,border:"none",
+              background:RL_COLOR,color:"#fff",cursor:"pointer",
+              fontFamily:"inherit",fontWeight:700}}>
+            {addingWalk ? "Cancel" : "+ Add red line walk"}
+          </button>
         </div>
       </div>
+
+      {addingWalk && (
+        <div style={{background:"#fff",border:`1px solid ${RL_EDGE}`,borderLeft:`3px solid ${RL_COLOR}`,
+          borderRadius:10,padding:"14px 16px",maxWidth:560,marginBottom:16,
+          boxShadow:"0 4px 16px rgba(15,31,61,0.08)"}}>
+          <div style={{fontWeight:800,fontSize:14,color:C.text,marginBottom:10}}>New red line walk</div>
+          <label style={wLbl}>Job or quote (leave blank if it&apos;s not in the app yet)
+            <select value={walkDraft.jobId} onChange={e=>setWalkDraft(d=>({...d,jobId:e.target.value}))} style={wInp}>
+              <option value="">— no job / quote yet —</option>
+              {walkJobOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:10,marginTop:10}}>
+            <label style={wLbl}>Custom name / address
+              <input value={walkDraft.address} onChange={e=>setWalkDraft(d=>({...d,address:e.target.value}))}
+                placeholder="e.g. Miller Custom Home" style={wInp}/>
+            </label>
+            <label style={wLbl}>Walk date
+              <input type="date" value={walkDraft.walkDate}
+                onChange={e=>setWalkDraft(d=>({...d,walkDate:e.target.value}))} style={wInp}/>
+            </label>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:14}}>
+            <button onClick={submitAddWalk}
+              style={{padding:"8px 16px",borderRadius:8,border:"none",background:RL_COLOR,color:"#fff",
+                fontWeight:700,fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>Add walk</button>
+            <button onClick={()=>{setAddingWalk(false);setWalkDraft({jobId:"",address:"",walkDate:""});}}
+              style={{padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",
+                color:C.dim,fontWeight:600,fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {/* Kanban — horizontal-scrollable row of columns. Mobile users swipe
           between columns; desktop sees all visible at once with horizontal
@@ -47009,17 +47081,54 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                   const fmColor        = getPersonColor ? getPersonColor(co.jobForeman) : "#6E7682";
                   const isEditingQuote = editingQuote === co.coId;
                   const isStatusOpen   = statusOpen === co.coId;
+                  const isWalk         = co.source === "redline";
+                  // An unquoted walk is still on the WALK lifecycle, so its pill
+                  // and its picker use REDLINE_STATUSES. Everything else uses the
+                  // CO set. Read the def from the ROW, never from the enclosing
+                  // column — the column and the row disagree for walk rows, and
+                  // the old code showed the column's label on every card.
+                  const walkOnly   = isWalk && !co.quoted;
+                  const pillSet    = walkOnly ? REDLINE_STATUSES : CO_STATUSES_NEW;
+                  const pillValue  = walkOnly ? co.walkStatus : (co.coStatus || "needs_sending");
+                  const pillDef    = getStatusDef(pillSet, pillValue);
+                  const pillColor  = pillDef.color || status.color;
+                  const pillLabel  = pillDef.label || status.label;
                   return (
                     <div key={`${co.jobId}_${co.coId}`} style={{
-                      background:"#fff",
-                      border:`1px solid ${C.border}`,
+                      // Red line walks read differently at a glance: tinted
+                      // ground + a spelled-out label. The left edge stays the
+                      // FOREMAN colour on every card — it is the board's
+                      // existing who-owns-this signal and taking it for walk
+                      // identity would cost more than it bought.
+                      background: isWalk ? RL_TINT : "#fff",
+                      border:`1px solid ${isWalk ? RL_EDGE : C.border}`,
                       borderLeft:`3px solid ${fmColor}`,
                       borderRadius:8,
                       padding:"9px 11px",
                       fontSize:12, lineHeight:1.4,
                       position:"relative",
                     }}>
-                      {/* Job name — click opens the job's CO tab (redline rows may be job-less) */}
+                      {/* Delete — walks only. The Redline Walks sub-view that
+                          used to own this is gone, and a walk has no other
+                          delete path anywhere in the app. Real COs are still
+                          deleted from inside the job's own CO editor. */}
+                      {isWalk && (
+                        <button
+                          title="Delete this red line walk"
+                          onClick={async e=>{
+                            e.stopPropagation();
+                            if (!await showConfirm({
+                              message:`Delete the red line walk for "${co.jobName}"? This can't be undone from here.`,
+                              confirmLabel:"Delete", cancelLabel:"Keep",
+                            })) return;
+                            onDeleteRedline && onDeleteRedline(co.redlineId);
+                          }}
+                          style={{position:"absolute",top:6,right:7,border:"none",background:"none",
+                            color:C.muted,cursor:"pointer",fontSize:15,lineHeight:1,padding:"0 3px",
+                            fontFamily:"inherit"}}>×</button>
+                      )}
+
+                      {/* Job name — click opens the job or quote (walks may be job-less) */}
                       <div onClick={()=>co.jobId && onSelectJob && onSelectJob({id:co.jobId})}
                         style={{
                           fontSize:13,fontWeight:700,color:C.text,
@@ -47035,9 +47144,41 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         display:"flex",alignItems:"center",gap:6,
                         fontSize:10,color:C.dim,marginBottom:5,flexWrap:"wrap",
                       }}>
-                        {co.source === "redline"
-                          ? <span style={{fontWeight:800,color:"#8a6d2e",background:"#f0ece1",border:"1px solid #d9cca8",borderRadius:4,padding:"0 6px",fontSize:9,letterSpacing:"0.05em",textTransform:"uppercase"}}>Redline CO</span>
+                        {isWalk
+                          ? <span style={{fontWeight:800,color:"#fff",background:RL_COLOR,borderRadius:4,padding:"1px 7px",fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase"}}>Red Line Walk</span>
                           : <span style={{fontWeight:700,color:C.text}}>CO #{co.coIndex}</span>}
+                        {/* Walk date — EDITABLE. The deleted RedlineWalkBoard card
+                            carried the only date editor in the app; rendering it as
+                            static text here would have made a mistyped or defaulted
+                            date permanently uncorrectable (delete-and-recreate was
+                            the only recovery, losing status, quote # and attribution).
+                            `key` on the current value forces a remount when another
+                            device's snapshot lands, so this uncontrolled input can't
+                            sit there showing a stale date. Tense follows the walk's
+                            own status — a scheduled walk has not been walked yet. */}
+                        {isWalk && (
+                          <label onClick={e=>e.stopPropagation()}
+                            style={{display:"inline-flex",alignItems:"center",gap:3,color:C.muted}}>
+                            {co.walkStatus === "scheduled" ? "walk" : "walked"}
+                            <input
+                              type="date"
+                              key={co.walkDate || "none"}
+                              defaultValue={co.walkDate || ""}
+                              onBlur={e=>{
+                                const v = e.target.value;
+                                if (v === (co.walkDate || "")) return;
+                                // Re-find the LIVE walk at commit time — onUpdateRedline
+                                // replaces the whole document, so patching from this
+                                // render's row would clobber every other field.
+                                const w = (redlineWalks || []).find(x => x && x.id === co.redlineId);
+                                if (w) onUpdateRedline && onUpdateRedline({ ...w, walkDate: v });
+                              }}
+                              style={{border:"none",background:"none",color:C.dim,fontSize:10,
+                                fontFamily:"inherit",padding:0,outline:"none",cursor:"pointer",
+                                width:92}}/>
+                          </label>
+                        )}
+                        {co.isQuoteJob && <span style={{color:RL_COLOR,fontWeight:700}}>· on a quote</span>}
                         {co.jobForeman && (
                           <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
                             <span style={{width:7,height:7,borderRadius:"50%",
@@ -47111,14 +47252,14 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                           style={{
                             display:"inline-flex",alignItems:"center",gap:5,
                             fontSize:10,fontWeight:800,letterSpacing:"0.04em",
-                            color: status.color,
-                            background:`${status.color}1a`,
-                            border:`1px solid ${status.color}55`,
+                            color: pillColor,
+                            background:`${pillColor}1a`,
+                            border:`1px solid ${pillColor}55`,
                             borderRadius:6,padding:"3px 8px",
                             cursor:"pointer",fontFamily:"inherit",
                             textTransform:"uppercase",
                           }}>
-                          {status.label}
+                          {pillLabel}
                           <span style={{fontSize:9}}>▾</span>
                         </button>
                         {co.coStatusDate && (
@@ -47133,7 +47274,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.18)",
                             padding:5,minWidth:200,
                           }}>
-                            {CO_STATUSES_NEW.map(s => (
+                            {pillSet.map(s => (
                               <button
                                 key={s.value}
                                 onClick={e=>{
@@ -47144,7 +47285,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                                   display:"flex",alignItems:"center",gap:6,
                                   width:"100%",padding:"6px 8px",borderRadius:5,
                                   fontSize:11,fontWeight:600,color:C.text,
-                                  background: s.value === co.coStatus ? `${s.color}10` : "transparent",
+                                  background: s.value === pillValue ? `${s.color}10` : "transparent",
                                   border:"none",cursor:"pointer",fontFamily:"inherit",
                                   textAlign:"left",
                                 }}>
@@ -47165,9 +47306,16 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
         })}
       </div>
 
-      {totalCount === 0 && (
+      {/* Keyed off the FULL row set, not totalCount — totalCount excludes
+          un-quoted walks, so a board holding only walks would otherwise claim
+          it was empty while cards sat on screen. Names the search too: it's
+          far more discoverable than the foreman select, and "nothing yet" is
+          actively misleading when a query simply didn't match. */}
+      {filteredCOs.length === 0 && (
         <div style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontStyle:"italic"}}>
-          No change orders {foremanFilter ? `for ${foremanFilter}` : "yet"}.
+          {search.trim()
+            ? `Nothing matches “${search.trim()}”${foremanFilter ? ` for ${foremanFilter}` : ""}.`
+            : `No change orders or red line walks ${foremanFilter ? `for ${foremanFilter}` : "yet"}.`}
         </div>
       )}
     </div>
@@ -49261,14 +49409,36 @@ function App() {
     // Both bugs removed. Migration has been complete for weeks; the legacy `upcoming`
     // collection is now inert (no code reads from it). The doc is the sole source of
     // truth for the Upcoming list.
+    // NOTE (2026-08-05 — SW v365): own-echo guard. Typing in an Upcoming row
+    // dropped characters and reverted the field, and the console repeated
+    // "concurrent-edit merge: preserved server changes on
+    // settings/upcoming_jobs.items" ~8x per sentence. Every earlier fix
+    // targeted the WRITE side; the bug was here on the READ side. This
+    // listener re-applied the server copy UNCONDITIONALLY, including the echo
+    // of this tab's own save — so ~200ms after each debounced flush,
+    // setUpcoming() replaced what was on screen with the 500ms-old copy the
+    // flush had sent. The next keystroke then saved from that rolled-back
+    // base, which made _threeWayMerge see both sides changed and log a merge.
+    // The repeating log was one tab fighting its own echo, not a second
+    // editor. v361's 500ms debounce shortened that window but never closed it.
     const unsubUpcoming = onSnapshot(doc(db,"settings","upcoming_jobs"), snap => {
-      _settingsBaselines["upcoming_jobs"] = snap.exists() ? (snap.data()||{}) : {};
-      if(snap.exists()) {
-        setUpcoming(snap.data().items || []);
-      } else {
-        // Doc doesn't exist — treat as empty. Do NOT re-seed from anywhere.
-        setUpcoming([]);
-      }
+      const d = snap.exists() ? (snap.data()||{}) : {};
+      // The baseline advances on EVERY snapshot — including ones we skip
+      // applying. mergeSaveSettingsFields measures "did the server change since
+      // we last synced" against it, so freezing it here would trade a typing
+      // bug for a merge bug. Do not move this below the guard.
+      _settingsBaselines["upcoming_jobs"] = d;
+      // Same rule the jobs loader has used since v312 (App.js ~23723), now
+      // available to settings/* because mergeSaveSettingsFields stamps `tab`.
+      // `merged` is the other half: an echo whose transaction rescued another
+      // device's concurrent edit must be adopted even by the tab that wrote it,
+      // because our local copy is missing that rescued content. Skipping that
+      // re-seed is what let the next burst of saves bulldoze another crew's
+      // work in the Kweller punch wipe. The updatedAt half makes the identity
+      // write-scoped rather than tab-scoped — see _settingsLastWrite.
+      if (d.tab === TAB_ID && d.updatedAt === _settingsLastWrite["upcoming_jobs"] && !d.merged) return;
+      // Doc missing → treat as empty. Do NOT re-seed from anywhere.
+      setUpcoming(snap.exists() ? (d.items || []) : []);
     }, err => console.error("Upcoming listener error:", err));
 
     // Simpro inbox subscription. The cloud function refreshes the doc every
