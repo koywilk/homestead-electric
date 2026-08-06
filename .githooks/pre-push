@@ -39,6 +39,47 @@ if [ ! -d node_modules ] && [ ! -d node_modules.nosync ]; then
   exit 1
 fi
 
+# ── package.json dependency-name gate ───────────────────────────────────────
+# Why (2026-08-05): commit bb30fe8 added a `"//": "…"` comment INSIDE
+# devDependencies. npm's `//` comment convention only works at the TOP LEVEL —
+# inside a dependency map every key is parsed as a package NAME, so `npm install`
+# died with EINVALIDPACKAGENAME and EVERY Vercel deploy failed from that commit
+# on. Nobody noticed for three days: production sat on v362 while the repo went
+# to v364, so the whole XSS/URL-sanitizing/SW-scope security ship never reached
+# a single browser.
+#
+# The build gate below could never catch this: `npm run build` uses the
+# node_modules already on disk and never re-resolves package.json. This does.
+# Pure JSON parse, no network, milliseconds.
+if ! node -e '
+  const p = require("./package.json");
+  const bad = [];
+  for (const k of ["dependencies","devDependencies","peerDependencies","optionalDependencies"]) {
+    for (const name of Object.keys(p[k] || {})) {
+      // npm package names: no leading dot/underscore, lowercase, URL-safe.
+      // A comment key like "//" fails here exactly as npm install would.
+      if (!/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(name)) {
+        bad.push(k + "." + JSON.stringify(name));
+      }
+    }
+  }
+  if (bad.length) {
+    console.error("  Invalid package name(s): " + bad.join(", "));
+    console.error("  Comments belong at the TOP LEVEL of package.json, not inside a");
+    console.error("  dependency map — npm parses every key there as a package name.");
+    process.exit(1);
+  }
+'; then
+  echo ""
+  echo "  ────────────────────────────────────────────────────────────"
+  echo "  PUSH ABORTED — package.json would break 'npm install'."
+  echo "  Vercel installs from scratch, so this fails the deploy even"
+  echo "  though a local build passes against existing node_modules."
+  echo "  ────────────────────────────────────────────────────────────"
+  echo ""
+  exit 1
+fi
+
 echo ""
 echo "  pre-push: running 'CI=true npm run build' (what Vercel runs)..."
 

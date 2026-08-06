@@ -10,8 +10,8 @@
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1"
   },
+  "//": "jsdom gives scripts/sanitize-test.js a DOM under plain node. It was previously resolving only as a transitive dep of react-scripts — so a react-scripts change would have broken `prebuild`, and therefore every build and every push, with a confusing error. Declared explicitly at the version already on disk. NOTE: this note lives at the TOP LEVEL on purpose — npm's `//` comment convention only works here. Inside `dependencies`/`devDependencies` every key is parsed as a package NAME, so a `//` entry there fails `npm install` with EINVALIDPACKAGENAME and takes every Vercel deploy down with it (2026-08-05).",
   "devDependencies": {
-    "//": "jsdom gives scripts/sanitize-test.js a DOM under plain node. It was previously resolving only as a transitive dep of react-scripts — so a react-scripts change would have broken `prebuild`, and therefore every build and every push, with a confusing error. Declared explicitly at the version already on disk.",
     "jsdom": "16.7.0"
   },
   "scripts": {
