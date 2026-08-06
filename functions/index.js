@@ -2262,6 +2262,12 @@ async function _simproCustomerContacts(custId) {
   const contacts = details.filter(Boolean).map((c) => {
     const name = [c.GivenName, c.FamilyName].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
     return {
+      // Simpro's contact ID is the STABLE key. The app stores per-job labels
+      // ("Darris is running this one") keyed by it, and gcContacts itself is a
+      // mirror that gets replaced on every pull — so labels keyed by NAME would
+      // detach the moment a contact is renamed in Simpro, and would collide
+      // outright for two people sharing a first name.
+      id:    c.ID != null ? String(c.ID) : "",
       name:  name || "(unnamed)",
       role:  String(c.Position || "").trim() || (c.PrimaryJobContact ? "Primary contact" : "Contact"),
       phone: String(c.CellPhone || c.WorkPhone || c.AltPhone || "").trim(),

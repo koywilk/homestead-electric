@@ -1718,8 +1718,14 @@ function useSimproAutoPull(jobRef, u) {
       // Simpro returns no SiteContact at all, it got nothing. The person now
       // lands in `gcContact` where the form already has a box for them.
       if (r.gc               && !String(cur.gc        || "").trim()) patch.gc        = r.gc;
-      if (r.siteContactName  && !String(cur.gcContact || "").trim()) patch.gcContact = r.siteContactName;
-      if (r.siteContactPhone && !String(cur.phone     || "").trim()) patch.phone     = r.siteContactPhone;
+      // Simpro's suggested contact fills the boxes ONLY while nobody has been
+      // marked as running this job. Once Koy picks someone, a later pull must
+      // not quietly hand the job back to Simpro's primary — that pick is the
+      // whole point of the override.
+      if (!String(cur.gcContactLead || "").trim()) {
+        if (r.siteContactName  && !String(cur.gcContact || "").trim()) patch.gcContact = r.siteContactName;
+        if (r.siteContactPhone && !String(cur.phone     || "").trim()) patch.phone     = r.siteContactPhone;
+      }
       // Every contact on the Simpro customer, not just the one attached to this
       // record — the attached one carries no phone (Simpro inlines only
       // name+email there), so the list is the only route to a cell number.
@@ -4163,7 +4169,7 @@ const blankJob = () => ({
   // while the record is type "quote" — Simpro numbers the two separately, so
   // they must never share a field (a quote # in simproNo can match an unrelated
   // real job and pull its financials). A quote earns its simproNo at conversion.
-  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
+  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], gcContactLead:"", gcContactLabels:{}, simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", matterportLinks:[], driveFolderId:"",
 
@@ -27311,28 +27317,81 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 ))}
 
-              {/* Every contact on the GC in Simpro. Read-only mirror — pulled
-                  by the Simpro pull, never hand-edited, so it can't drift from
-                  the source. Spans both grid columns; hidden entirely when the
-                  pull hasn't run, so it never shows an empty shell. */}
-              {Array.isArray(job.gcContacts) && job.gcContacts.length > 0 && (
+              {/* Every contact on the GC in Simpro, with per-JOB overrides.
+                  `gcContacts` itself is a mirror that the Simpro pull REPLACES
+                  wholesale, so nothing editable may live on it — Koy's labels
+                  and his "running this job" pick are stored beside it, keyed by
+                  the Simpro contact ID, and survive every re-pull.
+                  Why the override exists (Koy, 2026-08-06): "it says taylor is
+                  primary but darris is actually the one running this job."
+                  Simpro's primary flag is the CUSTOMER's default across every
+                  job; who's actually running THIS one is job-specific and Simpro
+                  has nowhere to record it. Spans both grid columns; hidden
+                  entirely before the first pull so it never shows an empty shell. */}
+              {Array.isArray(job.gcContacts) && job.gcContacts.length > 0 && (() => {
+                const labels = job.gcContactLabels || {};
+                const leadId = job.gcContactLead || "";
+                const keyOf  = (c, i) => String(c.id || c.email || c.name || i);
+                // Whoever is running this job sorts to the top, then Simpro's
+                // primary, then by name — so the person you actually call is
+                // first on a phone without scrolling.
+                const rows = job.gcContacts.map((c, i) => ({ c, k: keyOf(c, i) }))
+                  .sort((a, b) =>
+                    (Number(b.k === leadId) - Number(a.k === leadId)) ||
+                    (Number(!!b.c.primary) - Number(!!a.c.primary)) ||
+                    String(a.c.name || "").localeCompare(String(b.c.name || "")));
+                return (
                 <div style={{gridColumn:"1 / -1"}}>
-                  <div style={{fontSize:10,color:C.dim,marginBottom:4,display:"flex",alignItems:"center",gap:6}}>
-                    <span>GC Contacts ({job.gcContacts.length}) · from Simpro</span>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:4}}>
+                    GC Contacts ({job.gcContacts.length}) · from Simpro · tap a name to mark who&apos;s running this job
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    {job.gcContacts.map((c, i) => (
-                      <div key={`${c.name||"c"}_${i}`}
+                    {rows.map(({ c, k }) => {
+                      const isLead = k === leadId;
+                      return (
+                      <div key={k}
                         style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
-                          background:C.surface,border:`1px solid ${C.border}`,
+                          background: isLead ? "#E8F1EC" : C.surface,
+                          border:`1px solid ${isLead ? "#3E7D5A" : C.border}`,
                           borderRadius:7,padding:"6px 9px",fontSize:12}}>
-                        <span style={{fontWeight:700,color:C.text}}>{c.name}</span>
-                        {c.primary && (
+                        {/* Tapping a contact makes them this job's contact AND
+                            promotes them into the GC Contact / GC Phone boxes.
+                            That overwrite is deliberate — it's an explicit pick,
+                            not the fill-blanks-only behaviour of an auto-pull.
+                            Tapping the lead again clears it back to Simpro's. */}
+                        <button type="button"
+                          title={isLead ? "Running this job — tap to clear" : "Mark as running this job"}
+                          onClick={()=>{
+                            if (isLead) { u({ gcContactLead: "" }); return; }
+                            u({ gcContactLead: k, gcContact: c.name || "", phone: c.phone || "" });
+                          }}
+                          style={{border:"none",background:"none",padding:0,margin:0,
+                            font:"inherit",fontWeight:700,
+                            color: isLead ? "#2F6349" : C.text,
+                            cursor:"pointer",textAlign:"left"}}>
+                          {c.name}
+                        </button>
+                        {isLead && (
                           <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.04em",
-                            textTransform:"uppercase",color:"#3E7D5A",background:"#E8F1EC",
-                            borderRadius:4,padding:"1px 6px"}}>Primary</span>
+                            textTransform:"uppercase",color:"#fff",background:"#3E7D5A",
+                            borderRadius:4,padding:"1px 6px"}}>Running this job</span>
+                        )}
+                        {/* Simpro's own flag stays visible but muted once it's
+                            been overridden, so it's clear the app didn't just
+                            lose it — and clear which one is Koy's call. */}
+                        {c.primary && (
+                          <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.04em",
+                            textTransform:"uppercase",
+                            color: leadId ? C.muted : "#3E7D5A",
+                            background: leadId ? "transparent" : "#E8F1EC",
+                            border: leadId ? `1px solid ${C.border}` : "none",
+                            borderRadius:4,padding:"1px 6px"}}>Simpro primary</span>
                         )}
                         {c.role && <span style={{color:C.dim,fontSize:11}}>{c.role}</span>}
+                        <Inp value={labels[k] || ""}
+                          onChange={e=>u({ gcContactLabels: { ...labels, [k]: e.target.value } })}
+                          placeholder="Label (e.g. Super, Billing)"
+                          style={{flex:"0 1 180px",minWidth:120,width:"auto",fontSize:11,padding:"3px 7px"}}/>
                         <span style={{flex:1}}/>
                         {c.phone && (
                           <a href={safeUrl(`tel:${String(c.phone).replace(/[^\d+]/g,"")}`)}
@@ -27343,10 +27402,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             style={{color:C.dim,textDecoration:"none"}}>{c.email}</a>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
-              )}
+                );
+              })()}
 
               <div>
 
