@@ -2116,7 +2116,13 @@ function _simproBasicsFrom(rec, label, fallbackName) {
     siteKeys:        rec.Site        ? Object.keys(rec.Site)        : null,
     siteContactKeys: rec.SiteContact ? Object.keys(rec.SiteContact) : null,
     customerKeys:    rec.Customer    ? Object.keys(rec.Customer)    : null,
-    siteContactSample: rec.SiteContact || null,
+    siteContactSample:     rec.SiteContact     || null,
+    // Added 2026-08-06: the quote record carries CustomerContact /
+    // AdditionalContacts and we don't yet know whether they're inlined or
+    // stubs like Site was. Log the shape so the next real pull tells us
+    // instead of us guessing — same technique that caught the Site stub.
+    customerContactSample: rec.CustomerContact || null,
+    additionalContactsLen: Array.isArray(rec.AdditionalContacts) ? rec.AdditionalContacts.length : null,
   });
 
   // ── Name: prefer Name, fall back to Description, then a placeholder.
@@ -2127,6 +2133,16 @@ function _simproBasicsFrom(rec, label, fallbackName) {
 
   // ── Address: Site.Address is either a string or { Address, City, State,
   // PostalCode }. Mirrors _runSimproCandidateRefresh.
+  //
+  // 2026-08-06 — the `Site.Name` fallback that used to live here is GONE. On
+  // /quotes/{ID} Simpro returns Site as a bare reference — logged live as
+  // siteKeys: ["ID","Name"], no address whatsoever — so the fallback fired
+  // every time and wrote the SITE NAME into the address box ("Skyridge Lot 208
+  // - Mayflower" instead of "1839 West Aries Place, Heber City, UT, 84032").
+  // A site name is not an address and must never be offered as one; a blank
+  // box is honest and the user fixes it in seconds, a plausible-looking wrong
+  // address gets trusted. When the address isn't inline the caller resolves it
+  // from `siteId` via _simproSiteAddress().
   let address = "";
   if (rec.Site) {
     if (typeof rec.Site.Address === "string") {
@@ -2134,10 +2150,19 @@ function _simproBasicsFrom(rec, label, fallbackName) {
     } else if (rec.Site.Address && typeof rec.Site.Address === "object") {
       const a = rec.Site.Address;
       address = [a.Address, a.City, a.State, a.PostalCode].filter(Boolean).join(", ");
-    } else if (rec.Site.Name) {
-      address = rec.Site.Name;
     }
   }
+
+  // ── GC / customer. The customer IS the general contractor on this tenant
+  // (Koy, 2026-08-06: "it should pull the customer name for the GC"). Sits
+  // right on the record — customerKeys logged as
+  // ["ID","Type","CompanyName","GivenName","FamilyName"] — and was previously
+  // ignored entirely, which is why the GC box stayed blank whenever the quote
+  // had no SiteContact (it had none: siteContactKeys logged null).
+  const cust = rec.Customer || {};
+  const gc =
+    String(cust.CompanyName || "").trim() ||
+    [cust.GivenName, cust.FamilyName].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
 
   // ── Site Contact: name + phone. CellPhone first — most useful on a jobsite.
   let siteContactName = "";
@@ -2155,17 +2180,170 @@ function _simproBasicsFrom(rec, label, fallbackName) {
       "";
   }
 
+  // The quote's own attached contact, when it has one. This is ONE contact
+  // already bound to this record — the same shape getSimproJobBasics has always
+  // returned from SiteContact under the app key. The customer's FULL contact
+  // list stays out of here on purpose: gcSimproCustomerContacts gates that
+  // behind requireAdmin + live PIN because an enumerable bulk address book is a
+  // different exposure from one contact on the job you're already looking at.
+  const cc = rec.CustomerContact;
+  if (!siteContactName && cc && typeof cc === "object") {
+    const parts = [cc.GivenName, cc.FamilyName].filter(Boolean);
+    if (parts.length) siteContactName = parts.join(" ").trim();
+    else if (cc.Name) siteContactName = String(cc.Name).trim();
+    if (!siteContactPhone) {
+      siteContactPhone =
+        (cc.CellPhone && String(cc.CellPhone).trim()) ||
+        (cc.Phone     && String(cc.Phone).trim())     ||
+        (cc.WorkPhone && String(cc.WorkPhone).trim()) ||
+        "";
+    }
+  }
+
   return {
     name,
     address,
+    gc,
     siteContactName,
     siteContactPhone,
+    // Set when the address could not be read inline — the caller resolves it
+    // with a second /sites/{ID} fetch. Quotes always land here.
+    siteId: (rec.Site && rec.Site.ID) || null,
     // Forward-compat: raw blobs so the client can surface extra fields
     // without a redeploy.
     _rawSite:        rec.Site        || null,
     _rawSiteContact: rec.SiteContact || null,
     _rawCustomer:    rec.Customer    || null,
   };
+}
+
+// Resolve a site's real street address. Simpro returns Site as a bare
+// {ID, Name} reference on /quotes/{ID} (and sometimes on /jobs/{ID}), so the
+// address needs its own fetch. Read-only; returns "" on any failure rather
+// than throwing — a missing address must degrade to an empty box, never take
+// down the whole prefill.
+// Fetch every contact on a Simpro CUSTOMER. Lifted verbatim out of
+// gcSimproCustomerContacts (2026-08-06) so the quote/job prefill and the GC
+// Portal share one implementation instead of drifting — the chunking below is
+// load-bearing and easy to get wrong twice.
+//
+// Detail fetches go 5 at a time, not one 25-wide burst: Simpro rate-limits, and
+// a 429'd detail returns null and is COUNTED, so a caller can say "N couldn't
+// load" instead of showing a short list as if it were complete. Silent
+// truncation here reads as "this GC has no other contacts" and gets trusted.
+//
+// Read-only. Never writes to Simpro or Firestore.
+async function _simproCustomerContacts(custId) {
+  if (!custId) return { contacts: [], failedCount: 0 };
+  const lResp = await fetch(
+    `${SIMPRO_BASE}/customers/${encodeURIComponent(custId)}/contacts/`,
+    { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+  );
+  if (!lResp.ok) {
+    functions.logger.warn("_simproCustomerContacts list non-ok", { custId, status: lResp.status });
+    return { contacts: [], failedCount: 0, listFailed: true };
+  }
+  const list = await lResp.json();
+  const ids = (Array.isArray(list) ? list : []).map((c) => c && c.ID).filter(Boolean).slice(0, 25);
+  const details = [];
+  for (let i = 0; i < ids.length; i += 5) {
+    const batch = await Promise.all(ids.slice(i, i + 5).map(async (cid) => {
+      try {
+        const dResp = await fetch(
+          `${SIMPRO_BASE}/customers/${encodeURIComponent(custId)}/contacts/${cid}`,
+          { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+        );
+        return dResp.ok ? await dResp.json() : null;
+      } catch (e) { return null; }
+    }));
+    details.push(...batch);
+  }
+  const failedCount = details.filter((d) => !d).length;
+  const contacts = details.filter(Boolean).map((c) => {
+    const name = [c.GivenName, c.FamilyName].map((x) => String(x || "").trim()).filter(Boolean).join(" ");
+    return {
+      name:  name || "(unnamed)",
+      role:  String(c.Position || "").trim() || (c.PrimaryJobContact ? "Primary contact" : "Contact"),
+      phone: String(c.CellPhone || c.WorkPhone || c.AltPhone || "").trim(),
+      email: String(c.Email || "").trim(),
+      primary: c.PrimaryJobContact === true || c.PrimaryQuoteContact === true,
+    };
+  }).filter((c) => c.email || c.phone || c.name !== "(unnamed)");
+  contacts.sort((a, b) => (Number(b.primary) - Number(a.primary)) || a.name.localeCompare(b.name));
+  return { contacts, failedCount };
+}
+
+// Attach the customer's full contact list to a prefill result, and promote the
+// best one into the single gcContact/phone boxes the forms already have.
+//
+// Koy, 2026-08-06: "i want it to pull all contacts in simpro if there is
+// multiple." The quote's own CustomerContact is inlined but carries NO phone
+// (live log: {GivenName, FamilyName, Email, ID}) -- every cell number lives on
+// the customer's contact list, so pulling the list is the only way to get one.
+//
+// EXPOSURE, stated plainly: this rides the app key, which ships in the public
+// bundle, so GC contact names/emails/phones become reachable by anyone who
+// extracts it. gcSimproCustomerContacts stays requireAdmin for the GC Portal;
+// this is a deliberate, owner-approved widening for the job/quote prefill only.
+//
+// A contact-list failure NEVER fails the prefill -- name, address and GC are
+// still worth having on their own.
+async function _attachContacts(basics, rec) {
+  basics.contacts = [];
+  basics.contactsFailed = 0;
+  try {
+    const custId = rec && rec.Customer && rec.Customer.ID;
+    if (!custId) return;
+    const { contacts, failedCount, listFailed } = await _simproCustomerContacts(custId);
+    basics.contacts = contacts;
+    basics.contactsFailed = failedCount || 0;
+    basics.contactsListFailed = !!listFailed;
+    // Promote a single contact into the existing gcContact/phone boxes: prefer
+    // the one Simpro attached to THIS record, else the primary, else the first
+    // with a phone. Only fills what the record parse left empty.
+    const attachedName = basics.siteContactName;
+    const pick =
+      (attachedName && contacts.find((c) => c.name === attachedName)) ||
+      contacts.find((c) => c.primary) ||
+      contacts.find((c) => c.phone) ||
+      contacts[0] || null;
+    if (pick) {
+      if (!basics.siteContactName)  basics.siteContactName  = pick.name;
+      if (!basics.siteContactPhone) basics.siteContactPhone = pick.phone || "";
+    }
+  } catch (e) {
+    functions.logger.warn("_attachContacts failed", { err: e && e.message });
+  }
+}
+
+async function _simproSiteAddress(siteId) {
+  if (!siteId) return "";
+  try {
+    const r = await fetch(
+      `${SIMPRO_BASE}/sites/${encodeURIComponent(siteId)}`,
+      { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+    );
+    if (!r.ok) {
+      functions.logger.warn("_simproSiteAddress non-ok", { siteId, status: r.status });
+      return "";
+    }
+    const s = await r.json();
+    functions.logger.info("_simproSiteAddress raw", {
+      siteId, siteKeys: s ? Object.keys(s) : null, addressSample: s && s.Address,
+    });
+    const a = s && s.Address;
+    if (typeof a === "string") return a.trim();
+    if (a && typeof a === "object") {
+      return [a.Address, a.City, a.State, a.PostalCode]
+        .map((x) => String(x || "").trim()).filter(Boolean).join(", ");
+    }
+    // Some tenants flatten these onto the site itself.
+    return [s && s.Address, s && s.City, s && s.State, s && s.PostalCode]
+      .map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean).join(", ");
+  } catch (e) {
+    functions.logger.warn("_simproSiteAddress failed", { siteId, err: e && e.message });
+    return "";
+  }
 }
 
 // ─── Get Simpro job basics (name / address / site contact) ───────────────────
@@ -2209,7 +2387,12 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
   // Parsing + raw-shape logging live in the shared helper (see above) so the
   // quote endpoint gets identical treatment. Behavior here is unchanged.
 
-  return _simproBasicsFrom(job, "getSimproJobBasics", `Simpro ${simproJobNo}`);
+  const basics = _simproBasicsFrom(job, "getSimproJobBasics", `Simpro ${simproJobNo}`);
+  if (!basics.address && basics.siteId) {
+    basics.address = await _simproSiteAddress(basics.siteId);
+  }
+  await _attachContacts(basics, job);
+  return basics;
 });
 
 // ─── Get Simpro QUOTE basics (name / address / site contact) ─────────────────
@@ -2252,7 +2435,14 @@ exports.getSimproQuoteBasics = functions.https.onCall(async (data) => {
   }
   const quote = await resp.json();
 
-  return _simproBasicsFrom(quote, "getSimproQuoteBasics", `Simpro quote ${quoteNo}`);
+  const basics = _simproBasicsFrom(quote, "getSimproQuoteBasics", `Simpro quote ${quoteNo}`);
+  // Always needed on quotes: Simpro returns Site as {ID, Name} here, with no
+  // address at all (confirmed from a live pull's logged siteKeys).
+  if (!basics.address && basics.siteId) {
+    basics.address = await _simproSiteAddress(basics.siteId);
+  }
+  await _attachContacts(basics, quote);
+  return basics;
 });
 
 // ─── Find a contractor's logo from their own website ─────────────────────────

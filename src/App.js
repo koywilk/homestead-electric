@@ -1535,6 +1535,22 @@ const WALK_COLUMN_BY_STATUS = {
 };
 const walkColumn = (w) => WALK_COLUMN_BY_STATUS[(w && w.status) || "scheduled"] || WALK_COL;
 
+// The effective Simpro JOB number for any job-scoped Simpro lookup — financials,
+// cost centers, schedule matching, the Drive plans push. Empty for a quote.
+//
+// A quote's Simpro number is a QUOTE number and belongs to /quotes/{ID}; Simpro
+// numbers the two sequences independently. Sending one to a /jobs endpoint is at
+// best a 404 loop (Koy's console on quote #2382, 2026-08-06 — the financials
+// effect retried on every render) and at worst a COLLISION that pulls an
+// unrelated real job's MONEY and address onto the quote card.
+//
+// Checking `simproQuoteNo` alone is not enough: quotes created before the two
+// fields were split (v365) still carry their quote number in `simproNo`, so the
+// type is the only reliable signal. Read-only — this never rewrites the field,
+// so a quote that later converts still has its number where conversion expects.
+const simproJobNoOf = (job) =>
+  (job && job.type === "quote") ? "" : String((job && job.simproNo) || "").trim();
+
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
   // Giving "needs" a date lets Koy set a "schedule by" target on unscheduled
@@ -1696,13 +1712,36 @@ function useSimproAutoPull(jobRef, u) {
       const patch = {};
       if (r.name             && !String(cur.name    || "").trim()) patch.name    = r.name;
       if (r.address          && !String(cur.address || "").trim()) patch.address = r.address;
-      if (r.siteContactName  && !String(cur.gc      || "").trim()) patch.gc      = r.siteContactName;
-      if (r.siteContactPhone && !String(cur.phone   || "").trim()) patch.phone   = r.siteContactPhone;
+      // GC is the CUSTOMER COMPANY ("Trek Construction"), not a person. This
+      // used to write `siteContactName` into `gc`, so the General Contractor
+      // box got whoever happened to be the site contact — and on a quote, where
+      // Simpro returns no SiteContact at all, it got nothing. The person now
+      // lands in `gcContact` where the form already has a box for them.
+      if (r.gc               && !String(cur.gc        || "").trim()) patch.gc        = r.gc;
+      if (r.siteContactName  && !String(cur.gcContact || "").trim()) patch.gcContact = r.siteContactName;
+      if (r.siteContactPhone && !String(cur.phone     || "").trim()) patch.phone     = r.siteContactPhone;
+      // Every contact on the Simpro customer, not just the one attached to this
+      // record — the attached one carries no phone (Simpro inlines only
+      // name+email there), so the list is the only route to a cell number.
+      // Unlike the scalar boxes this REPLACES rather than fills-blanks-only:
+      // it's a mirror of Simpro, has no hand-typed content to protect, and a
+      // stale list is worse than none when someone leaves the GC. Skipped
+      // entirely when the fetch came back empty, so a Simpro hiccup can never
+      // blank a list we already have.
+      if (Array.isArray(r.contacts) && r.contacts.length) patch.gcContacts = r.contacts;
       if (Object.keys(patch).length) {
         u(patch);
-        toast.success(`Filled from Simpro ${isQuote ? "quote " : ""}#${sn}: ${Object.keys(patch).join(", ")}`);
+        const n = Array.isArray(patch.gcContacts) ? patch.gcContacts.length : 0;
+        const filled = Object.keys(patch).filter(k => k !== "gcContacts");
+        const bits = filled.concat(n ? [`${n} GC contact${n !== 1 ? "s" : ""}`] : []);
+        toast.success(`Filled from Simpro ${isQuote ? "quote " : ""}#${sn}: ${bits.join(", ")}`);
       } else {
         toast.info(`Simpro ${isQuote ? "quote " : ""}#${sn} matched, but no blanks left to fill`);
+      }
+      if (r.contactsFailed) {
+        // Never let a short list read as a complete one — the whole reason the
+        // fetcher counts failures instead of silently dropping them.
+        toast.error(`${r.contactsFailed} GC contact${r.contactsFailed !== 1 ? "s" : ""} couldn't load from Simpro — list may be incomplete.`);
       }
       lastPulledSimproRef.current = pullKey;
     } catch (e) {
@@ -4124,7 +4163,7 @@ const blankJob = () => ({
   // while the record is type "quote" — Simpro numbers the two separately, so
   // they must never share a field (a quote # in simproNo can match an unrelated
   // real job and pull its financials). A quote earns its simproNo at conversion.
-  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
+  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", matterportLinks:[], driveFolderId:"",
 
@@ -21813,7 +21852,7 @@ function DriveFilesSection({ job, onUpdate }) {
   };
 
   const handlePushToSimpro = async () => {
-    if (!job.simproNo) return;
+    if (!simproJobNoOf(job)) return;   // quotes have no Simpro JOB number
     const fid = extractDriveFolderId(job.driveFolderId);
     if (!fid) return;
     if (!await showConfirm({
@@ -21824,7 +21863,7 @@ function DriveFilesSection({ job, onUpdate }) {
     setSimproSync("loading");
     try {
       const pushFn = httpsCallable(functions, "pushPlansToSimpro");
-      const result = await pushFn({ simproJobNo: job.simproNo, driveFolderId: fid });
+      const result = await pushFn({ simproJobNo: simproJobNoOf(job), driveFolderId: fid });
       setSimproSync(result.data);
     } catch (e) {
       setSimproSync({ uploaded: [], skipped: [], errors: [{ name: "Connection", error: e.message }] });
@@ -22373,7 +22412,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
           before scheduling material, pulling wire, or writing a CO. */}
       <Section label="Bid Items (Simpro)" color={C.blue||"#3B5BA5"} defaultOpen={false}>
         <BidItemsPanel
-          simproNo={job.simproNo}
+          simproNo={simproJobNoOf(job)}
           data={simproCostCenters}
           error={simproCostCentersErr}
           refreshing={simproCostCentersRefreshing}
@@ -24225,9 +24264,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
   const [simproFinancials, setSimproFinancials] = useState(null);
   useEffect(() => {
-    if (!job.simproNo) { setSimproFinancials(null); return; }
+    const sjn = simproJobNoOf(job);
+    if (!sjn) { setSimproFinancials(null); return; }   // never price a quote off /jobs
     const fn = httpsCallable(functions, "getSimproJobFinancials");
-    fn({ simproJobNo: job.simproNo })
+    fn({ simproJobNo: sjn })
       .then(res => {
         setSimproFinancials(res.data);
         // Cache on the job doc so the job board can show it without an extra call
@@ -24266,8 +24306,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // a user marking a job "needsSched" while Simpro has it scheduled is the
   // signal that matters — manual escalations to scheduled win.
   useEffect(() => {
-    if (!simproOnSchedulePids || !job.simproNo) return;
-    const onSch = simproOnSchedulePids.has(String(job.simproNo));
+    if (!simproOnSchedulePids || !simproJobNoOf(job)) return;
+    const onSch = simproOnSchedulePids.has(simproJobNoOf(job));
     const derive = onSch ? "scheduled" : "ongoing";
     const patch = {};
     if (job.roughStatus === "inprogress") {
@@ -24286,9 +24326,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const resyncInProgressMode = async (phase) => {
     try {
       const pids = await fetchSimproOnSchedulePids(httpsCallable, functions, /*force*/true);
-      if (!pids || !job.simproNo) return;
+      if (!pids || !simproJobNoOf(job)) return;
       setSimproOnSchedulePids(new Set(pids));
-      const onSch = pids.has(String(job.simproNo));
+      const onSch = pids.has(simproJobNoOf(job));
       const val = onSch ? "scheduled" : "ongoing";
       if (phase === "rough")  u({ roughInProgressMode: val });
       if (phase === "finish") u({ finishInProgressMode: val });
@@ -24310,7 +24350,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const refetchSimproCostCenters = () => setSimproCostCentersTick(n => n + 1);
 
   useEffect(() => {
-    if (!job.simproNo) {
+    if (!simproJobNoOf(job)) {                        // quotes have no bid on /jobs
       setSimproCostCenters(null);
       setSimproCostCentersErr(null);
       return;
@@ -24333,7 +24373,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if (!cached || isStale || forced) {
       setSimproCostCentersRefreshing(!!cached); // only show "refreshing" chip when we already have data
       const fn = httpsCallable(functions, "getSimproJobCostCenters");
-      fn({ simproJobNo: job.simproNo })
+      fn({ simproJobNo: simproJobNoOf(job) })
         .then(res => {
           setSimproCostCenters(res.data);
           setSimproCostCentersRefreshing(false);
@@ -27270,6 +27310,43 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
 
                 ))}
+
+              {/* Every contact on the GC in Simpro. Read-only mirror — pulled
+                  by the Simpro pull, never hand-edited, so it can't drift from
+                  the source. Spans both grid columns; hidden entirely when the
+                  pull hasn't run, so it never shows an empty shell. */}
+              {Array.isArray(job.gcContacts) && job.gcContacts.length > 0 && (
+                <div style={{gridColumn:"1 / -1"}}>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:4,display:"flex",alignItems:"center",gap:6}}>
+                    <span>GC Contacts ({job.gcContacts.length}) · from Simpro</span>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {job.gcContacts.map((c, i) => (
+                      <div key={`${c.name||"c"}_${i}`}
+                        style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+                          background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,padding:"6px 9px",fontSize:12}}>
+                        <span style={{fontWeight:700,color:C.text}}>{c.name}</span>
+                        {c.primary && (
+                          <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.04em",
+                            textTransform:"uppercase",color:"#3E7D5A",background:"#E8F1EC",
+                            borderRadius:4,padding:"1px 6px"}}>Primary</span>
+                        )}
+                        {c.role && <span style={{color:C.dim,fontSize:11}}>{c.role}</span>}
+                        <span style={{flex:1}}/>
+                        {c.phone && (
+                          <a href={safeUrl(`tel:${String(c.phone).replace(/[^\d+]/g,"")}`)}
+                            style={{color:C.accent,fontWeight:700,textDecoration:"none"}}>{c.phone}</a>
+                        )}
+                        {c.email && (
+                          <a href={safeUrl(`mailto:${c.email}`)}
+                            style={{color:C.dim,textDecoration:"none"}}>{c.email}</a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div>
 
