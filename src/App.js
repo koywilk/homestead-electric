@@ -3865,6 +3865,25 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
 
   const upd  = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
   const del  = async (id) => { if(!await showConfirm("Remove this person?")) return; const next=list.filter(u=>u.id!==id); setList(next); onSave(next); };
+  // Deactivate = the right move for layoffs. Keeps the record (history,
+  // scoreboard names on old jobs, clean reactivation if they come back) but
+  // kills access: hidden from the login picker, cached identity booted on
+  // that device's next check-in, and fcmTokens stripped so job pushes stop
+  // hitting their phone immediately. PIN is kept so reactivation is one tap.
+  const deactivate = async (id) => {
+    const u = list.find(x=>x.id===id); if(!u) return;
+    if(!await showConfirm(`Deactivate ${u.name||"this person"}? They can't log in or get notifications until reactivated. Their history stays.`)) return;
+    const next = list.map(x=>x.id===id?{...x, active:false,
+      deactivatedAt:new Date().toISOString(),
+      deactivatedBy:getIdentity()?.name||"",
+      fcmTokens:[], fcmToken:""}:x);
+    setList(next); onSave(next); setEditing(null);
+  };
+  const reactivate = async (id) => {
+    const u = list.find(x=>x.id===id); if(!u) return;
+    const next = list.map(x=>x.id===id?{...x, active:true, deactivatedAt:"", deactivatedBy:""}:x);
+    setList(next); onSave(next);
+  };
   const save = () => { onSave(list); setEditing(null); };
 
   // Access level colors
@@ -4090,17 +4109,33 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         color:C.dim,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                       Cancel
                     </button>
+                    {u.id!=="koy"&&(u.active===false?(
+                      <button onClick={()=>reactivate(u.id)}
+                        style={{background:"none",border:"1px solid #3E7D5A55",borderRadius:8,
+                          color:"#3E7D5A",fontSize:12,fontWeight:600,padding:"8px 14px",
+                          cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
+                        Reactivate
+                      </button>
+                    ):(
+                      <button onClick={()=>deactivate(u.id)}
+                        style={{background:"none",border:"1px solid #B0892C55",borderRadius:8,
+                          color:"#B0892C",fontSize:12,fontWeight:600,padding:"8px 14px",
+                          cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
+                        Deactivate access
+                      </button>
+                    ))}
                     {u.id!=="koy"&&(
                       <button onClick={()=>del(u.id)}
                         style={{background:"none",border:"none",color:"#B23A3A",fontSize:12,
-                          cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
+                          cursor:"pointer",fontFamily:"inherit"}}>
                         Remove
                       </button>
                     )}
                   </div>
                 </div>
               ) : (
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                  opacity:u.active===false?0.55:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
                     <div style={{width:36,height:36,borderRadius:"50%",
                       background:`${accessColor[access]||C.dim}22`,
@@ -4116,6 +4151,12 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           borderRadius:99,padding:"1px 8px",fontSize:10,fontWeight:700}}>
                           {ACCESS_LABELS[access]||access}
                         </span>
+                        {u.active===false&&(
+                          <span style={{background:"#B23A3A15",color:"#B23A3A",border:"1px solid #B23A3A44",
+                            borderRadius:99,padding:"1px 8px",fontSize:10,fontWeight:700,letterSpacing:"0.04em"}}>
+                            DEACTIVATED{u.deactivatedAt?" · "+new Date(u.deactivatedAt).toLocaleDateString("en-US"):""}
+                          </span>
+                        )}
                         <span>{TITLE_LABELS[title]||title}</span>
                         {/* Foreman assignment chip — surfaces who this person's
                             crew lead is without having to click Edit. Only
@@ -12661,6 +12702,11 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 )}
                 {o.desc&&isCollapsed&&<span style={{fontSize:11,color:"var(--dim)",fontStyle:"italic"}}>{o.desc}</span>}
                 {!isCollapsed&&o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
+                {!isCollapsed&&o.submittedAt&&(
+                  <span style={{fontSize:10,color:"#3E7D5A",fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>
+                    <Icon name="check" size={10} stroke={3}/> submitted{o.submittedBy?<> by <b>{o.submittedBy}</b></>:null} · {new Date(o.submittedAt).toLocaleDateString("en-US")}
+                  </span>
+                )}
                 {Array.isArray(o.fromJobNotes) && o.fromJobNotes.length > 0 && (
                   <FromJobNoteBadge ref={o.fromJobNotes} jobNotes={jobNotes} size="xs"/>
                 )}
@@ -12854,6 +12900,40 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                       label="Add photo / file"/>
                   </div>
                 )}
+                {/* Submit bar — every field above autosaves as you type
+                    (closing the card never loses work), but the guys had no
+                    moment that said "this went through." Submit stamps
+                    who/when, confirms with a toast, and flips the card from
+                    the amber draft state to the green submitted line up top.
+                    Only unprocessed COs show it: once the office moves the
+                    status past needs_sending, submission is moot. Fields
+                    stay editable after submitting — same as before. */}
+                {o.coStatus==="needs_sending"&&!o.submittedAt&&(()=>{
+                  const hasDesc = !!stripHtml(o.desc||"").trim();
+                  return (
+                    <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
+                      padding:"10px 12px",borderRadius:8,marginTop:2,
+                      background:"#B0892C0a",border:"1px dashed #B0892C55"}}>
+                      <span style={{fontSize:11,color:"#B0892C",fontWeight:600}}>
+                        {hasDesc?"Ready — submit so the office picks it up.":"Draft — add a description, then submit."}
+                      </span>
+                      <button
+                        disabled={!hasDesc}
+                        title={hasDesc?"":"Add a description first"}
+                        onClick={()=>{
+                          const me = getIdentity();
+                          upd(o.id,{submittedAt:new Date().toISOString(), submittedBy:me?.name||o.createdBy||""});
+                          try { toast.success("Change Order submitted — the office has it."); } catch {}
+                        }}
+                        style={{marginLeft:"auto",background:hasDesc?"#3E7D5A":"#3E7D5A44",
+                          border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,
+                          padding:"8px 18px",cursor:hasDesc?"pointer":"not-allowed",fontFamily:"inherit",
+                          display:"inline-flex",alignItems:"center",gap:6}}>
+                        <Icon name="check" size={12} stroke={2.5}/> Submit Change Order
+                      </button>
+                    </div>
+                  );
+                })()}
               </>
             )}
 
@@ -29381,14 +29461,76 @@ const SEED_UPCOMING = [
 // React then unmounted the input, remounted it, and focus was lost —
 // the user had to click the field again after every single character.
 // Hoisting fixes the focus loss with no behavior change.
+// Text fields keep a LOCAL draft and commit on blur. Every other fix for
+// "typing in an Upcoming row eats letters" targeted the save path — v361
+// debounced the Firestore write, v365 stopped the listener re-applying our own
+// echo — and neither helped, because the cost was never the network. It was the
+// RENDER: these inputs were controlled straight off `upcoming`, which lives in
+// the top-level App component, so every keystroke re-rendered the whole app and
+// every pipeline row with it. React then delivered the new value late and the
+// controlled input dropped characters and jumped the caret.
+//
+// Now a keystroke only re-renders this form. The parent (and the debounced
+// save) sees one update per field when you leave it. Same pattern the CO
+// board's quote cell already uses.
+//
+// Data safety: the draft is flushed on blur AND on unmount, so collapsing the
+// card, switching tabs or navigating away still commits — `latest` holds the
+// live values because the unmount cleanup can't see fresh state otherwise.
+// Re-seeded only when the row IDENTITY changes: re-seeding on every `u` change
+// would reintroduce the exact clobber, since the parent echoes each commit back.
+const UPCOMING_TEXT_FIELDS = ["name", "city", "sales", "customer", "address", "notes"];
+
 function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuote, setEditingId }) {
+  const seed = () => {
+    const o = {};
+    UPCOMING_TEXT_FIELDS.forEach(k => { o[k] = u[k] || ""; });
+    return o;
+  };
+  const [draft, setDraft] = useState(seed);
+  const latest = useRef({ draft, u });
+  latest.current = { draft, u };
+
+  // Re-seed when a DIFFERENT entry takes over this form.
+  const lastIdRef = useRef(u.id);
+  useEffect(() => {
+    if (lastIdRef.current === u.id) return;
+    lastIdRef.current = u.id;
+    setDraft(seed());
+  }, [u.id]);
+
+  // `val` is passed explicitly by the MOBILE sheet, which fires onChange and
+  // onBlur in the same tick — the ref is set during render, so it would still
+  // hold the pre-edit draft and the whole sheet edit would be dropped.
+  const commit = (k, val) => {
+    const { draft: d, u: cur } = latest.current;
+    const next = val !== undefined ? val : (d[k] ?? "");
+    if (next === (cur[k] ?? "")) return;   // nothing changed — don't burn a write
+    upd(cur.id, { [k]: next });
+  };
+  const commitAll = () => {
+    const { draft: d, u: cur } = latest.current;
+    const patch = {};
+    UPCOMING_TEXT_FIELDS.forEach(k => { if ((d[k] ?? "") !== (cur[k] ?? "")) patch[k] = d[k]; });
+    if (Object.keys(patch).length) upd(cur.id, patch);
+  };
+  // Flush whatever is still in the box if this form goes away — closing the
+  // card must never be a silent way to lose a sentence.
+  useEffect(() => () => commitAll(), []);
+
+  const txt = (k) => ({
+    value: draft[k],
+    onChange: (e) => setDraft(d => ({ ...d, [k]: e.target.value })),
+    onBlur: (e) => commit(k, typeof e === "string" ? e : undefined),
+  });
+
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-        <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
-        <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
-        <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
-        <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
+        <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp {...txt("name")} placeholder="Job name"/></div>
+        <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp {...txt("city")} placeholder="City"/></div>
+        <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp {...txt("sales")} placeholder="Sales rep"/></div>
+        <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp {...txt("customer")} placeholder="Customer or GC"/></div>
         <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
         <div style={{flex:1.5,minWidth:170}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Projected Start</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -29406,8 +29548,8 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
           </select>
         </div>
       </div>
-      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Address</div><Inp value={u.address||""} onChange={e=>upd(u.id,{address:e.target.value})} placeholder="Street address for navigation (e.g. 123 Main St, Park City UT)"/></div>
-      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
+      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Address</div><Inp {...txt("address")} placeholder="Street address for navigation (e.g. 123 Main St, Park City UT)"/></div>
+      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA {...txt("notes")} placeholder="Status, timeline, notes…" rows={2}/></div>
       <div>
         <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Progress Photos</div>
         <PhotoAttacher
@@ -31825,13 +31967,13 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   const foremanCrews = useMemo(() => {
     const foremen = users.filter(u => {
       const t = u.title || u.role || "";
-      return t === "foreman";
+      return t === "foreman" && u.active !== false;
     });
     return foremen.map(f => {
       const firstName = (f.name||"").split(" ")[0];
       const color = foremanColors[f.name] || foremanColors[firstName] || C.accent;
       // The crew = the foreman + everyone assigned to them (full-name matched).
-      const crewNames = [f.name, ...users.filter(u => u.foremanId === f.id).map(u => u.name)];
+      const crewNames = [f.name, ...users.filter(u => u.foremanId === f.id && u.active !== false).map(u => u.name)];
       const staffNames = allStaff.filter(n => crewNames.some(cn => staffMatchesUser(n, cn)));
       return { foremanId: f.id, foremanName: firstName, color, staffNames };
     }).filter(fc => fc.staffNames.length > 0);
@@ -39531,6 +39673,7 @@ const sb4Build = (jobs, board, users) => {
   const list = Array.isArray(users) ? users : [];
   const foremen = [], leads = [], f2c = {};
   list.forEach(u => {
+    if (u.active === false) return; // laid-off / deactivated — off the boards
     const t = _sb3lc(u.title || u.role), nm = String(u.name || "").trim();
     if (t === "foreman") { foremen.push(nm); if (u.coordinator) f2c[nm] = String(u.coordinator).trim(); }
     if (t === "lead") leads.push(nm);
@@ -41678,7 +41821,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
     if(["foreman","lead","crew"].includes(u.role)) return u.role;
     return "crew";
   };
-  const foremanUsers = (users||[]).filter(u=>getT(u)==="foreman");
+  const foremanUsers = (users||[]).filter(u=>getT(u)==="foreman"&&u.active!==false);
   const leadUsers    = (users||[]).filter(u=>getT(u)==="lead");
   const crewUsers    = (users||[]).filter(u=>getT(u)==="crew");
 
@@ -44703,7 +44846,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-05 · App SW version: v365
+**Last manifest update:** 2026-08-06 · App SW version: v366
 
 ---
 
@@ -44738,6 +44881,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Back to Upcoming (any job) · 'shipped 2026-07-20' · 'SW v349' · a regular board job can be pulled back into Upcoming from Job Info — mirrors the quote-undo data-safety order (saves the Upcoming entry FIRST via 'mergeSaveSettingsFields', deletes the job doc only after, seeds 'projectedStart' from 'roughProjectedStart'). Hidden by 'jobHasLoggedWork' once rough/finish progress, an inspection, CO, RT, or daily update exists — an active job can't be yanked off the board. Suggestion #1 (Justin Cloward)
   - Debounced pipeline save · 'shipped 2026-07-29' · 'SW v361' · Koy reported console spam ('400 failed-precondition' looping) and dropped keystrokes while typing in an Upcoming row. 'onChange' was firing 'saveAllUpcoming' — a fresh 'mergeSaveSettingsFields' transaction against the single 'settings/upcoming_jobs' doc — on every keystroke; fast typing queued overlapping transactions that invalidated each other's reads, so the SDK's transaction retry looped the whole time the user typed. 'saveAllUpcoming' now trailing-debounces 500ms (same window as 'saveJob''s per-job debounce) — local state still updates instantly, only the Firestore write is delayed and collapses a keystroke burst into one save. The pending timer is wired into the existing 'flushSaves' (tab close / backgrounding) and 'hasPendingSaves' (auto-reload gate) so a pending edit isn't dropped or silently overwritten by a reload. Read/write shape unchanged — no new fields, no loader change
   - Own-echo guard on the pipeline listener · 'shipped 2026-08-05' · 'SW v365' · Koy: "why can't we seem to fix this upcoming jobs tab." Typing in any Upcoming row dropped characters, reverted the field and jumped the cursor to the end, while the console repeated 'concurrent-edit merge: preserved server changes on settings/upcoming_jobs.items' ~8x per sentence. **Every previous fix targeted the write side; the bug was on the read side.** The 'settings/upcoming_jobs' listener applied the server copy UNCONDITIONALLY — including the echo of this tab's own save. Timeline per keystroke: 'setUpcoming(next)' renders instantly and arms the 500ms debounce → 'flushUpcoming' writes → ~200ms later Firestore echoes **our own write** back and 'setUpcoming(server)' replaces what's on screen with the 500ms-old copy. Everything typed in that window died. The next keystroke then saved from that rolled-back base, so '_threeWayMerge' saw client≠base AND server≠base → "both sides changed" → per-item merge → the log. **The repeating log was one tab fighting its own echo, not a second editor** — which is why v361's debounce (real: it killed the '400 failed-precondition' retry storm) only shortened the clobber window instead of closing it. Fix is a near-exact port of the guard the jobs loader has had since v312: 'mergeSaveSettingsFields' was the one write path that never stamped 'tab', so no 'settings/*' listener could tell its own echo from a teammate's edit. It now stamps 'tab: TAB_ID' plus 'merged' (hoisted from the condition that already emitted the log line), and the listener skips the apply on a clean own echo. 'merged' is the half that keeps it safe: an echo whose transaction rescued another device's concurrent edit is adopted even by the tab that wrote it, because that tab's local copy is missing the rescued content — skipping that re-seed is what let the next burst of saves bulldoze another crew's work in the Kweller punch wipe. Own-echo identity is **write-scoped, not tab-scoped** ('tab' AND the exact 'updatedAt' this tab authored, tracked in '_settingsLastWrite'): 'tx.update()' is a field merge, not a document replace, so a device still on v364 writes '{updatedAt, items}' and leaves our 'tab' sitting on the doc — matching on 'tab' alone would make that device's edit read as our echo and be skipped for the whole rollout window. The stamp is recorded INSIDE the transaction, since the commit ack and the snapshot of that commit arrive off the same response with no guaranteed order. Deliberately NOT 'isTypingFocused()' (which already guards 'tryAutoReload'): it's global to the document, so typing in any input anywhere would drop a real teammate's pipeline edit, with no re-apply until reload. **Why it can't lose data:** a skipped apply can never delete or overwrite — it only declines to replace local state with a copy this same tab just authored, which is by construction older than what's on screen; '_settingsBaselines' still advances on EVERY snapshot, so the merge math and the write transaction are byte-for-byte unchanged; 'tab'/'merged' are additive fields no existing reader requires and 'sanitize()' is untouched; worst case of a wrong skip is one tab showing a stale row until the next snapshot or reload. **Six other 'settings/*' listeners have the identical unconditional-apply shape** ('crewPTO' ×2, 'crewRoster', 'schedule_<wk>', 'crewTeams', 'timeOffRequests') and five are written by 'mergeSaveSettingsFields', so they inherit the same echo clobber — they now receive the stamp but are deliberately NOT guarded yet, pending a confirmed field test of this one
+  - Upcoming rows keep a local draft, commit on blur · 'shipped 2026-08-06' · 'SW v366' · (authored in the 2026-08-05 parallel session, bundled into this ship) the v361 debounce and the v365 own-echo guard both targeted the SAVE path, but Upcoming text fields still ate letters and jumped the caret — because the cost was never the network, it was the RENDER: the inputs were controlled straight off 'upcoming' state in the top-level App component, so every keystroke re-rendered the whole app and React delivered the new value late. 'UpcomingEditForm''s six text fields (name/city/sales/customer/address/notes) now hold a LOCAL draft and commit once on blur — one update per field when you leave it, same pattern the CO board's quote cell uses. Draft is flushed on blur AND on unmount (collapsing the card / switching tabs still commits, via a 'latest' ref since unmount cleanup can't see fresh state), the mobile sheet passes its value explicitly because it fires onChange+onBlur in the same tick, and re-seeding happens ONLY when the row identity changes — re-seeding on every 'u' change would reintroduce the echo clobber. Dates, selects, promote and delete are untouched. Why it can't lose data: commits go through the exact same 'upd(id, patch)' path with the same field names — this only changes WHEN it's called (blur/unmount instead of every keystroke), and the unmount flush means closing a card can never silently drop a typed sentence
 - **Quotes** · 'shipped' · proposed jobs awaiting conversion
   - Link a quote to its Simpro quote · 'shipped 2026-08-05' · 'SW v365' · Koy: "when i put in a job number it says not found, because in simpro its a quote number not a job number. so its not looking in the right spot." A quote's Job Info showed one Simpro box labelled **Simpro Job #**, and tabbing out of it called 'getSimproJobBasics' → 'GET /jobs/{ID}'. **Simpro numbers quotes and jobs in separate sequences**, so a quote # sent to the jobs endpoint 404s — and the 404 was the lucky outcome: 'simproNo' also feeds 'getSimproJobFinancials', 'getSimproJobCostCenters', crew-planner day matching and 'pushPlansToSimpro', so a quote # that happened to collide with a real job's ID would have pulled **that unrelated job's money and address onto the quote**. Fix keeps the two numbers apart rather than teaching one field two meanings: quotes get their own 'simproQuoteNo' field and a new read-only 'getSimproQuoteBasics' callable reading '/quotes/{ID}'; 'simproNo' stays reserved for a real Simpro JOB number, which a quote only earns at conversion ('onConvertQuote' already sets it and clears 'type', so the form flips back to "Simpro Job #" by itself). The Job Info form swaps the field + label on 'type==="quote"', so a quote never again advertises the wrong number. 'useSimproAutoPull' picks the endpoint off the record type and keys its de-dupe ref by kind, so a record that converts isn't blocked from pulling by the quote # it already pulled. The job and quote parsers are **the same function** — lifted out of 'getSimproJobBasics' byte-for-byte, so the live job path is unchanged and the quote path inherits its tolerance for this tenant's shape drift ('Site.Address' as string *or* structured object, four candidate phone fields); it logs the raw key sets on every call, so an unconfirmed quote-side field name surfaces in the Cloud Functions log instead of silently yielding a blank. Fills **blank fields only**, never overwrites typed text. **Deliberately untouched: change orders.** COs already carry their own Simpro quote # and that flow works — this is only the initial quote, before it becomes a job. **Requires a functions deploy** ('getSimproQuoteBasics') — deploy the function BEFORE pushing the app, or the Pull button 404s on a client that has the new UI and no endpoint. No Firestore rules change; 'simproQuoteNo' lives inside the job's 'data' envelope, so no loader change
 - **Tasks** · 'shipped' · 'Tasks' · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 ('manualTasks' collection was empty; Needs Board is THE manual to-do surface) · 'SW v321'
@@ -44801,6 +44945,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Email CO
   - Chat CO
   - Send to Simpro
+  - Submit Change Order · 'shipped 2026-08-06' · 'SW v366' · crew feedback: making a CO "feels like they didn't do it right because there's no sort of submit or anything" — every field autosaves through the debounced job save, so filling one out just… ended, with no moment that said the office has it. New COs (and job-note promotes) still autosave exactly as before — nothing typed is ever lost by NOT submitting — but an unsubmitted 'needs_sending' CO now shows an amber dashed draft bar ("Draft — add a description, then submit" → "Ready — submit so the office picks it up") with a green **Submit Change Order** button, disabled until the description has text so blank COs can't be fired at the office. Submit stamps 'submittedAt' (ISO) + 'submittedBy' (identity, falls back to 'createdBy'), toasts "Change Order submitted — the office has it," swaps the draft bar for a green check "submitted by X · date" line in the card header, and leaves every field editable after. The bar keys strictly off 'coStatus==="needs_sending" && !submittedAt': legacy COs whose status the office already advanced never see a draft bar, and the retired empty/'simpro_task' statuses are deliberately excluded so historical cards don't sprout buttons. Both stamps are additive fields inside 'changeOrders[]' items — 'normalizeJob' spreads '...o', so they survive the loader untouched, and no write path or rules change was needed
 - **Return Trips** · 'shipped' · 'ReturnTrips'
   - Items list per RT
   - Schedule RT
@@ -44946,7 +45091,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Fleet Notification Health · 'FleetHealth' (admin only)
   - Devices — app versions · 'DeviceVersionsCard' (admin only) · fleet list vs latest deployed version, stale devices glow red · 'shipped 2026-07-10' · 'SW v318'
   - User management · 'UserManagement'
-  - Color overrides
+  - Deactivate team member access + delete-resurrection fix · 'shipped 2026-08-06' · 'SW v366' · Koy laid five people off and "it wont let me delete them they keep coming back." Root cause: the "one-time" 'heUserMerge_v1' employee backfill in the users loader was keyed on **per-device localStorage** but wrote the **shared** 'settings/users' doc — every new phone, cleared browser, or fresh install re-ran it and re-added anyone missing from its hardcoded 28-name list, via an unstamped 'setDoc' that also wiped 'updated_at'/'saved_by' and disarmed saveUsers' stale-write guard. The merge block is deleted (roster's only source of truth is the doc; 'BAD_IDS' stays as a read-side filter but its unstamped write-back is gone too), so Remove now sticks. On top of that, layoffs get a first-class **Deactivate access** action (edit card, next to Remove; Koy's own record exempt like Remove): sets 'active:false' + 'deactivatedAt'/'deactivatedBy' stamps and strips 'fcmTokens'/'fcmToken' so job pushes stop reaching their phone immediately, all through the existing stale-guarded 'saveUsers' funnel. Deactivated people: hidden from the login picker (the 'onSavePin' closure maps the FULL outer list, so a new hire setting a PIN can't drop them from the doc); booted from any device with a cached identity by a new roster check that runs on app open, on return-to-foreground, and every 30 minutes (also boots identities whose id is GONE from the roster, closing the "deleted but still logged in for up to the 24h identity TTL" hole; fails open on read errors and empty lists so a flaky network can never lock out the crew); excluded from every derived name list — foremen/leads dropdowns, module 'FOREMEN'/'LEADS' globals, Crew view foremanCrews, Crew Board columns and unassigned pool (which now also catches crew whose foreman was deactivated, so they surface for re-drag instead of vanishing), foremen-colors settings, and the Scoreboard boards; and denied server-side in 'requireAdmin' (one added 'user.active === false' condition — needs the next functions deploy, client works without it). Shown dimmed with a red DEACTIVATED · date pill in Team Members, one-tap **Reactivate** restores them (PIN kept). Remove stays for true mistakes; deactivate is the layoff path — history, scoreboard attributions, and job name strings all stay intact
   - Backup / restore + Force Update All Devices
   - Contractor portal — requests inbox · 'GCPortalInbox' (admin only) · 'shipped 2026-07-16' · 'SW v340' · reviews GC-filed requests ('gc_requests' via admin callables); Apply lands an answer on the exact question ('answeredVia:"gc"', "From contractor portal" chip) or adds a punch item with a 'GC' badge — through the app's merge-safe patch path, and NEVER marks "applied" unless the mutation actually landed
   - Contractor portal — link manager · 'GCPortalManager' (admin only) · 'shipped 2026-07-16' · 'SW v340' · create per-GC links (contacts w/ email for the notification engine, accent color, hide-jobs picker seeded from the GC's existing excludes), copy/revoke/reactivate/rebuild; job-count badge honors include+exclude
@@ -47528,12 +47673,17 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
   useEffect(() => { if (!dirty) setList(users); }, [users, dirty]);
 
   const T = u => u.title || u.role || "";
-  const foremen    = list.filter(u => T(u) === "foreman");
+  const foremen    = list.filter(u => T(u) === "foreman" && u.active !== false);
   const coordNames = [...new Set(foremen.map(f => f.coordinator).filter(Boolean))].sort();
-  const crewOf = fid => list.filter(u => u.foremanId === fid)
+  const activeForemanIds = new Set(foremen.map(f => f.id));
+  const crewOf = fid => list.filter(u => u.foremanId === fid && u.active !== false)
     .sort((a,b) => (T(a)==="lead"?0:1) - (T(b)==="lead"?0:1) || (a.name||"").localeCompare(b.name||""));
   const noCoordForemen = foremen.filter(f => !f.coordinator);
-  const unassigned = list.filter(u => T(u) !== "foreman" && T(u) !== "admin" && !u.foremanId);
+  // Unassigned also catches crew whose foreman was deactivated — their
+  // foremanId points at a hidden column, so without this they'd vanish
+  // from the board instead of surfacing for re-assignment.
+  const unassigned = list.filter(u => T(u) !== "foreman" && T(u) !== "admin" && u.active !== false
+    && (!u.foremanId || !activeForemanIds.has(u.foremanId)));
 
   const setUser = (id, patch) => { setList(l => l.map(u => u.id===id ? {...u, ...patch} : u)); setDirty(true); };
   // target: {kind:'foreman',id} | {kind:'coord',name} | {kind:'nocoord'} | {kind:'unassigned'}
@@ -48965,59 +49115,17 @@ function App() {
       const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
       const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
 
-      // ── One-time merge: add missing employees (v1) ──────────────
-      const MERGE_KEY = "heUserMerge_v1";
-      if(!localStorage.getItem(MERGE_KEY)) {
-        const ALL_EMPLOYEES = [
-          { id:"abraham_tristan",        name:"Abraham Tristan" },
-          { id:"asher_miller",           name:"Asher Miller" },
-          { id:"austin_schut",           name:"Austin Schut" },
-          { id:"bailey_smith",           name:"Bailey Smith" },
-          { id:"braden_davis",           name:"Braden Davis" },
-          { id:"brady_nelson",           name:"Brady Nelson" },
-          { id:"braxton_raven",          name:"Braxton Raven" },
-          { id:"callen_jakeman",         name:"Callen Jakeman" },
-          { id:"colby_fogh",            name:"Colby Fogh" },
-          { id:"daegan_smith",           name:"Daegan Smith" },
-          { id:"fonoivasa_mataafa",      name:"Fonoivasa Mataafa" },
-          { id:"gage_lund",             name:"Gage Lund" },
-          { id:"isaiah_miller",          name:"Isaiah Miller" },
-          { id:"jacob_nuffer",           name:"Jacob Nuffer" },
-          { id:"jacob_spackman",         name:"Jacob Spackman" },
-          { id:"jakob_bingham",          name:"Jakob Bingham" },
-          { id:"james_coleman_christen", name:"James Coleman Christen" },
-          { id:"jeromy_cloward",         name:"Jeromy Cloward" },
-          { id:"jonathan_harding",       name:"Jonathan Harding" },
-          { id:"josh_cloward",           name:"Josh Cloward" },
-          { id:"justin_cloward",         name:"Justin Cloward" },
-          { id:"keegan_wilkinson",       name:"Keegan Wilkinson" },
-          { id:"koy_wilkinson",          name:"Koy Wilkinson" },
-          { id:"lisa_brown",             name:"Lisa Brown" },
-          { id:"louis_hoffman",          name:"Louis Hoffman" },
-          { id:"noah_davis",             name:"Noah Davis" },
-          { id:"payton_bolda",           name:"Payton Bolda" },
-          { id:"treycen_rollene",        name:"Treycen Rollene" },
-        ];
-        const existingNames = new Set(cleaned.map(u=>(u.name||"").toLowerCase()));
-        const existingIds   = new Set(cleaned.map(u=>u.id));
-        const toAdd = ALL_EMPLOYEES
-          .filter(e => !existingNames.has(e.name.toLowerCase()) && !existingIds.has(e.id))
-          .map(e => ({ ...e, title:"crew", access:"limited", pin:"" }));
-        if(toAdd.length > 0) {
-          const merged = [...cleaned, ...toAdd];
-          setUsers(merged);
-          setDoc(doc(db,"settings","users"),{list:merged}).catch(()=>{});
-          console.log(`[HE] Added ${toAdd.length} missing employee(s):`, toAdd.map(u=>u.name).join(", "));
-        } else {
-          setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
-        }
-        localStorage.setItem(MERGE_KEY, "1");
-      } else {
-        setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
-      }
-
-      if(cleaned.length !== raw.length)
-        setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
+      // The old "one-time merge" (heUserMerge_v1) that re-seeded a hardcoded
+      // 28-name employee list lived here until 2026-08-06. It was keyed on
+      // per-device localStorage, so every NEW device (or cleared browser)
+      // re-ran it and silently re-added anyone the office had removed — the
+      // "deleted guys keep coming back" bug — via an unstamped setDoc that
+      // also blew away updated_at/saved_by and disarmed saveUsers' stale
+      // guard. The roster's only source of truth is settings/users; people
+      // who leave get active:false (deactivate), never re-seeded.
+      // BAD_IDS stays read-side only: its old write-back was unstamped too,
+      // and saveUsers persists the cleaned list on the next real team edit.
+      setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
     }).catch(()=>{});
 
     // ── Load color overrides only from settings/main ───────────
@@ -49078,6 +49186,36 @@ function App() {
     }
   };
 
+  // ── Deactivated / removed member boot ────────────────────────
+  // If THIS device's saved identity has been deactivated (active:false) or
+  // removed from the roster, kick it back to the login screen — on app open,
+  // whenever the app returns to the foreground, and every 30 minutes while
+  // it stays open. The picker already hides deactivated people, so there's
+  // no way back in. Fail-open on read errors and on an empty list: a flaky
+  // network or a half-written doc must never lock out the whole crew.
+  useEffect(() => {
+    if (!identity?.id) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const snap = await getDoc(doc(db, "settings", "users"));
+        if (cancelled || !snap.exists()) return;
+        const list = snap.data().list || [];
+        if (!list.length) return; // empty/corrupt doc — never boot on bad data
+        const me = list.find(u => u.id === identity.id);
+        if (!me || me.active === false) {
+          localStorage.removeItem(IDENTITY_KEY);
+          setIdentity(null);
+        }
+      } catch {} // offline — leave the session alone
+    };
+    check();
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    const iv = setInterval(check, 30 * 60 * 1000);
+    return () => { cancelled = true; document.removeEventListener("visibilitychange", onVis); clearInterval(iv); };
+  }, [identity?.id]);
+
   // ── Color overrides (keyed by full name) ─────────────────────
   const [_colorOverrides, set_colorOverrides] = useState({
     "Koy":"#3B5BA5","Koy Wilkinson":"#3B5BA5",
@@ -49093,8 +49231,10 @@ function App() {
     if(["foreman","lead","crew"].includes(u.role)) return u.role;
     return "crew";
   };
-  const _foremanUsers = users.filter(u=>getTitle(u)==="foreman");
-  const _leadUsers    = users.filter(u=>getTitle(u)==="lead");
+  // active!==false everywhere: deactivated members stay in the roster doc
+  // (history + reactivation) but disappear from every picker and name list.
+  const _foremanUsers = users.filter(u=>getTitle(u)==="foreman"&&u.active!==false);
+  const _leadUsers    = users.filter(u=>getTitle(u)==="lead"&&u.active!==false);
   const _crewUsers    = users.filter(u=>getTitle(u)==="crew");
 
   // One-time lead-notification backfill. Leads were created with old defaults
@@ -51345,7 +51485,7 @@ function App() {
 
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
-    return <UserPicker users={users}
+    return <UserPicker users={users.filter(u=>u.active!==false)}
       onSelect={m => { saveIdentity(m); setIdentity(m); registerFCMToken(m.id); }}
       onSavePin={async (updated) => {
         // Save the new PIN into the users list in Firestore

@@ -60,7 +60,10 @@ async function requireAdmin(data) {
   const users = await getUsers();
   const user = users.find((u) => String((u && u.name) || "").trim().toLowerCase() === by.toLowerCase());
   const access = gcAdminAccessOf(user);
-  if (!user || !user.pin || String(user.pin) !== pin || !["admin", "manager"].includes(access)) {
+  // active === false: deactivated members keep their roster record (history)
+  // but lose every access path — including this server-side gate, so a
+  // deactivated office user's remembered PIN stops working for callables too.
+  if (!user || user.active === false || !user.pin || String(user.pin) !== pin || !["admin", "manager"].includes(access)) {
     throw new functions.https.HttpsError("permission-denied", "Not authorized for the contractor portal.");
   }
   return user;
