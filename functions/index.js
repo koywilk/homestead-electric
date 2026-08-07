@@ -710,8 +710,26 @@ exports.onJobUpdate = functions.firestore
     const beforeCOs = before.changeOrders || [];
     const afterCOs  = after.changeOrders  || [];
 
+    // v367: the crew-facing Submit step (v366) moved the "this CO is ready"
+    // moment from creation to submission. These sends fire on the submittedAt
+    // transition and go to the office actors who process COs — the job's
+    // coordinator and Jeromy. co_new (above) still fires at creation; Jeromy
+    // can mute co_new and keep co_submitted to hear only about ready COs.
+    const coSubmittedSends = (coNumber, co) => ([
+      sendToJobCoordinatorIfWanted(after.foreman, "co_submitted", {
+        title: "📨 CO Submitted",
+        body:  `CO #${coNumber} on ${name} submitted by ${co.submittedBy || "the crew"} — ready to review.`,
+        jobId, section: "Change Orders",
+      }),
+      sendToNameIfWanted("Jeromy Cloward", "co_submitted", {
+        title: "📨 CO submitted — quote & send",
+        body:  `CO #${coNumber} on ${name} (${co.submittedBy || "crew"}) is ready to quote & send.`,
+        jobId, section: "Change Orders",
+      }),
+    ]);
+
     if (afterCOs.length > beforeCOs.length) {
-      for (const co of afterCOs.slice(beforeCOs.length)) {
+      afterCOs.slice(beforeCOs.length).forEach((co, off) => {
         tasks.push(sendToNameIfWanted(after.foreman, "co_new", {
           title: "📝 New Change Order",
           body:  `A new change order was created on ${name}`,
@@ -729,7 +747,14 @@ exports.onJobUpdate = functions.firestore
           body:  `New change order on ${name} — review & get it quoted/sent.`,
           jobId, section: "Change Orders",
         }));
-      }
+        // A CO that ARRIVES already submitted — created, filled, and submitted
+        // offline, then synced as one write — never hits the prev-diff below
+        // (no `prev` exists for it). Fire the submit push here so the offline
+        // path is not a silent one. Disjoint from the loop below by construction.
+        if (co && co.submittedAt) {
+          tasks.push(...coSubmittedSends(beforeCOs.length + off + 1, co));
+        }
+      });
     }
 
     const beforeCOMap = {};
@@ -738,6 +763,11 @@ exports.onJobUpdate = functions.firestore
       const co = afterCOs[i];
       const prev = co.id ? beforeCOMap[co.id] : beforeCOs[i];
       if (!prev) continue;
+
+      // Crew hit Submit on an existing draft (the normal online path).
+      if (!prev.submittedAt && co.submittedAt) {
+        tasks.push(...coSubmittedSends(i + 1, co));
+      }
 
       if (prev.coStatus !== "approved" && co.coStatus === "approved") {
         functions.logger.info("[onJobUpdate] CO approved — sending", {
@@ -1547,7 +1577,13 @@ exports.dailyCoChase = functions.pubsub
     const snap = await db.collection("jobs").get();
     const DONE = new Set(["completed", "complete", "approved", "denied", "converted"]);
     const now = Date.now();
+    // v367: crew drafts (created after the Submit feature shipped, never
+    // submitted) get their own callout in the chase, so Jeromy knows which
+    // "waiting" COs are actually stuck on the CREW, not on him. Date-gated:
+    // every pre-v366 CO lacks the stamp by definition, not by neglect.
+    const SUBMIT_CUTOVER = Date.parse("2026-08-07");
     let staleCount = 0;
+    let draftCount = 0;
     const staleJobs = new Set();
     snap.forEach(d => {
       const j = d.data()?.data || {};
@@ -1557,12 +1593,17 @@ exports.dailyCoChase = functions.pubsub
         const t = Date.parse(co.createdAt || co.coStatusDate || "");
         const ageDays = Number.isFinite(t) ? (now - t) / 86400000 : 99;
         if (ageDays >= 2) { staleCount++; staleJobs.add(j.name || d.id); }
+        if (co.coStatus === "needs_sending" && !co.submittedAt
+            && Number.isFinite(t) && t >= SUBMIT_CUTOVER && ageDays >= 1) draftCount++;
       });
     });
     if (staleCount > 0) {
+      const draftLine = draftCount > 0
+        ? ` ${draftCount} ${draftCount !== 1 ? "are" : "is an"} unsubmitted crew draft${draftCount !== 1 ? "s" : ""} — chase from the CO board.`
+        : "";
       await sendToNameIfWanted("Jeromy Cloward", "co_chase", {
         title: "📋 COs waiting",
-        body:  `${staleCount} change order${staleCount !== 1 ? "s" : ""} open across ${staleJobs.size} job${staleJobs.size !== 1 ? "s" : ""} — review & send.`,
+        body:  `${staleCount} change order${staleCount !== 1 ? "s" : ""} open across ${staleJobs.size} job${staleJobs.size !== 1 ? "s" : ""} — review & send.${draftLine}`,
         view:  "cos",
       });
     }

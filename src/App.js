@@ -3810,6 +3810,7 @@ const NOTIF_CATEGORIES = [
   ]},
   { label:"Change Orders", items:[
     { key:"co_new",            label:"New change order created",             roles:["admin","manager","foreman"] },
+    { key:"co_submitted",      label:"CO submitted by crew (ready to review)", roles:["admin","manager"] },
     { key:"co_approved",       label:"Change order approved",                roles:["admin","manager","foreman","lead"] },
     { key:"co_completed",      label:"Change order work completed",          roles:["admin","manager"] },
   ]},
@@ -44846,7 +44847,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-06 · App SW version: v366
+**Last manifest update:** 2026-08-06 · App SW version: v367
 
 ---
 
@@ -44946,6 +44947,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Chat CO
   - Send to Simpro
   - Submit Change Order · 'shipped 2026-08-06' · 'SW v366' · crew feedback: making a CO "feels like they didn't do it right because there's no sort of submit or anything" — every field autosaves through the debounced job save, so filling one out just… ended, with no moment that said the office has it. New COs (and job-note promotes) still autosave exactly as before — nothing typed is ever lost by NOT submitting — but an unsubmitted 'needs_sending' CO now shows an amber dashed draft bar ("Draft — add a description, then submit" → "Ready — submit so the office picks it up") with a green **Submit Change Order** button, disabled until the description has text so blank COs can't be fired at the office. Submit stamps 'submittedAt' (ISO) + 'submittedBy' (identity, falls back to 'createdBy'), toasts "Change Order submitted — the office has it," swaps the draft bar for a green check "submitted by X · date" line in the card header, and leaves every field editable after. The bar keys strictly off 'coStatus==="needs_sending" && !submittedAt': legacy COs whose status the office already advanced never see a draft bar, and the retired empty/'simpro_task' statuses are deliberately excluded so historical cards don't sprout buttons. Both stamps are additive fields inside 'changeOrders[]' items — 'normalizeJob' spreads '...o', so they survive the loader untouched, and no write path or rules change was needed
+  - CO submit follow-ups: office push + draft chase · 'shipped 2026-08-06' · 'SW v367' · Koy: "yes i think we need the follow up items as well." Two halves. **Push (server, rides the pending functions deploy):** new 'co_submitted' pref ("CO submitted by crew (ready to review)", default admin/manager; 'wantsNotif' treats the missing key as ON so nobody has to re-save prefs) — 'onJobUpdate' fires it on the 'submittedAt' transition to the job's coordinator + Jeromy, via a shared 'coSubmittedSends' helper that ALSO covers the offline case where a CO arrives already-submitted in its creation write (created+filled+submitted offline, synced as one write — the prev-diff loop can't see it because no 'prev' exists; the new-CO branch catches it, disjoint by construction so no double-fire). 'co_new' still fires at creation, deliberately untouched — Jeromy can now mute 'co_new' and keep 'co_submitted' to hear only about ready COs instead of empty just-created drafts; that's his toggle, not a code decision. 'dailyCoChase' body now calls out how many of the waiting COs are unsubmitted crew drafts (1+ day old), so the 8am number distinguishes "stuck on Jeromy" from "stuck on the crew". **Board (client, live now):** 'allCOs' stitches 'submittedAt/By' through (the projection whitelists fields — without this the board can never see the stamp), and a 'needs_sending' CO with no stamp created **on/after 2026-08-07** shows an amber dashed "DRAFT — NOT SUBMITTED" chip (same language as the in-job draft bar, one state two surfaces), a "(N unsubmitted crew drafts)" callout inside the header's need-sending count, and a **Chase** RemindButton pre-picked to the job's foreman — reuses the deployed 'reNudge' path (renudge pref-gated on the recipient), so chasing works immediately with no functions deploy. The date gate is the same reasoning as the in-job bar's status gate: every pre-v366 CO lacks the stamp by definition, not by neglect — flagging the legacy backlog would make the office chase COs it already triages (D32 Payne CO #2, filed the morning of the ship, is exactly the card that must NOT get flagged). Why it can't lose data: board + header are pure read-side derivations; the chase button writes nothing (reNudge sends a push); the functions changes only ADD sends on a field transition and enrich one chase body — no write path, no schema, no rules touched
 - **Return Trips** · 'shipped' · 'ReturnTrips'
   - Items list per RT
   - Schedule RT
@@ -46995,6 +46997,8 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
           coStatusDate: co.coStatusDate || "",
           createdAt:    co.createdAt || "",
           createdBy:    co.createdBy || "",
+          submittedAt:  co.submittedAt || "",
+          submittedBy:  co.submittedBy || "",
           desc:         stripHtml(co.desc || "") || stripHtml(co.task || "") || "",
           quoteNumber:  co.quoteNumber || "",
           quoteAddedBy: co.quoteAddedBy || "",
@@ -47106,10 +47110,21 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   // the red triage number, because nothing has been written to send yet. A
   // QUOTED walk does count as a change order: by then it is one.
   const isUnquotedWalk    = (c) => c.source === "redline" && !c.quoted;
+  // v367: a needs_sending CO with no submit stamp, created AFTER the Submit
+  // feature shipped, is a crew DRAFT — filled out (or not) but never handed
+  // to the office. Date-gated to 2026-08-07+ because every pre-v366 CO lacks
+  // the stamp by definition, not by neglect — flagging the whole legacy
+  // backlog as "drafts" would make the office chase COs it already triages.
+  const isUnsubmittedDraft = (c) => {
+    if (c.source === "redline" || c.coStatus !== "needs_sending" || c.submittedAt) return false;
+    const t = Date.parse(c.createdAt || "");
+    return Number.isFinite(t) && t >= Date.parse("2026-08-07");
+  };
   const coRows            = filteredCOs.filter(c => !isUnquotedWalk(c));
   const countIn           = (k) => (byStatus[k] || []).filter(c => !isUnquotedWalk(c)).length;
   const totalCount        = coRows.length;
   const needsSendingCount = countIn("needs_sending");
+  const draftCount        = coRows.filter(isUnsubmittedDraft).length;
   const pendingCount      = countIn("pending");
   const approvedCount     = countIn("approved");
   const walkCount         = filteredCOs.length - coRows.length;
@@ -47234,7 +47249,9 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
           <div style={{fontSize:12,color:C.dim,marginTop:4}}>
             {totalCount} total
             {needsSendingCount > 0 && (
-              <span style={{color:"#B23A3A",fontWeight:700}}> · {needsSendingCount} need sending</span>
+              <span style={{color:"#B23A3A",fontWeight:700}}> · {needsSendingCount} need sending{draftCount > 0 && (
+                <span style={{color:"#B0892C"}}> ({draftCount} unsubmitted crew draft{draftCount!==1?"s":""})</span>
+              )}</span>
             )}
             {pendingCount > 0 && (
               <span style={{color:"#B0892C",fontWeight:700}}> · {pendingCount} pending</span>
@@ -47439,6 +47456,16 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         {isWalk
                           ? <span style={{fontWeight:800,color:"#fff",background:RL_COLOR,borderRadius:4,padding:"1px 7px",fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase"}}>Red Line Walk</span>
                           : <span style={{fontWeight:700,color:C.text}}>CO #{co.coIndex}</span>}
+                        {/* v367: crew never hit Submit on this one — same amber
+                            dashed language as the in-job draft bar, so the two
+                            surfaces read as one state. */}
+                        {!isWalk && isUnsubmittedDraft(co) && (
+                          <span style={{fontWeight:800,color:"#B0892C",background:"#B0892C14",
+                            border:"1px dashed #B0892C88",borderRadius:4,padding:"1px 7px",
+                            fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase"}}>
+                            Draft — not submitted
+                          </span>
+                        )}
                         {/* Walk date — EDITABLE. The deleted RedlineWalkBoard card
                             carried the only date editor in the app; rendering it as
                             static text here would have made a mistyped or defaulted
@@ -47480,6 +47507,20 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         )}
                         {co.jobGc && <span style={{color:C.muted}}>· {co.jobGc}</span>}
                       </div>
+
+                      {/* v367: chase a stuck draft without opening the job —
+                          reuses the existing reNudge path (renudge pref-gated
+                          on the recipient, works today with no functions
+                          deploy). Pre-picked to the job's foreman; the picker
+                          still lets Jeromy redirect to whoever wrote it. */}
+                      {!isWalk && isUnsubmittedDraft(co) && co.jobForeman && (
+                        <div style={{marginBottom:6}} onClick={e=>e.stopPropagation()}>
+                          <RemindButton to={co.jobForeman} label="Chase draft —"
+                            title="CO draft waiting on Submit"
+                            body={(`CO draft on ${co.jobName}: ${co.desc || "no description yet"} — finish it and hit Submit so the office can send it.`).slice(0,110)}
+                            jobId={co.jobId} section="cos"/>
+                        </div>
+                      )}
 
                       {/* Description preview */}
                       {co.desc && (
