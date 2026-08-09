@@ -31548,6 +31548,11 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
     let who = "";
     try { const ident = getIdentity && getIdentity(); who = ident?.name || ""; } catch {}
     const today = new Date().toLocaleDateString("en-US");
+    // Real timestamp alongside the date-only checkedAt — same additive pair the
+    // other four close paths write, so Today's feed shows a real time instead
+    // of a midday fallback for cascade closes. Existing values are never
+    // overwritten (p.checkedAtTs || ...).
+    const todayTs = new Date().toISOString();
 
     // Build next RTs: sign this one off, flip its punch items done too
     const nextTrips = (job.returnTrips||[]).map(r => {
@@ -31559,7 +31564,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
         signedOffBy: r.signedOffBy || who,
         signedOffDate: r.signedOffDate || today,
         punch: (r.punch||[]).map(p => p && !p.done
-          ? { ...p, done:true, checkedBy: p.checkedBy||who, checkedAt: p.checkedAt||today }
+          ? { ...p, done:true, checkedBy: p.checkedBy||who, checkedAt: p.checkedAt||today, checkedAtTs: p.checkedAtTs||todayTs }
           : p),
       };
     });
@@ -31575,7 +31580,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
     const flipPunch = (punch, ids) => {
       if (!punch || ids.size === 0) return punch;
       const mapItem = (it) => (it && ids.has(it.id) && !it.done)
-        ? { ...it, done:true, checkedBy: it.checkedBy||who, checkedAt: it.checkedAt||today, waiting:false }
+        ? { ...it, done:true, checkedBy: it.checkedBy||who, checkedAt: it.checkedAt||today, checkedAtTs: it.checkedAtTs||todayTs, waiting:false }
         : it;
       const mapFloor = (fl) => fl ? ({
         ...fl,
@@ -32744,7 +32749,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   // Additive + read-only: "all" reproduces today's exact behavior.
   const coordinatorNames = useMemo(() =>
     [...new Set((users||[])
-      .filter(u => (u.title||u.role)==="foreman" && u.coordinator)
+      .filter(u => u.active !== false && (u.title||u.role)==="foreman" && u.coordinator)
       .map(u => u.coordinator))].sort()
   , [users]);
   const _myName = identity?.name || "";
@@ -38575,7 +38580,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
   // free. Fully additive: no writes, "all" = today's exact behavior.
   const coordinatorNames = useMemo(() =>
     [...new Set((users||[])
-      .filter(u => (u.title||u.role)==="foreman" && u.coordinator)
+      .filter(u => u.active !== false && (u.title||u.role)==="foreman" && u.coordinator)
       .map(u => u.coordinator))].sort()
   , [users]);
   const _myName = identity?.name || "";
@@ -38587,6 +38592,9 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
   const pickCoord = (v) => { setCoordFilter(v); try { localStorage.setItem("today.coordFilter", v); } catch {} };
   const _myForemen = useMemo(() => {
     if (coordFilter === "all") return null;
+    // NOTE: deliberately NOT filtered by u.active — a laid-off foreman's
+    // not-yet-reassigned jobs must stay visible in his coordinator's book.
+    // Deactivation hides people from rosters, never jobs from views.
     return new Set((users||[])
       .filter(u => (u.title||u.role)==="foreman" && u.coordinator===coordFilter)
       .map(u => (u.name||"").toLowerCase()));
@@ -38595,25 +38603,16 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
     if (!_myForemen) return _allJobs;
     return (_allJobs||[]).filter(j => j.foreman && _myForemen.has(String(j.foreman).toLowerCase()));
   }, [_allJobs, _myForemen]);
-  // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
-  // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
-  // been touched since the field was introduced). Returns null for unknown.
-  const toDate = (ts) => {
-    if (!ts) return null;
-    if (typeof ts === "object" && typeof ts.toDate === "function") return ts.toDate();
-    if (ts instanceof Date) return ts;
-    if (typeof ts === "string" || typeof ts === "number") { const d = new Date(ts); return isNaN(d) ? null : d; }
-    return null;
-  };
   const fmtTime = (d) => d ? d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}) : "";
+  // Feed timestamps: date-only sources (CO createdAt, inspection attempt dates,
+  // pre-v180 punch closes) parse to exact local midnight — showing "12:00 AM"
+  // for those would be a lie, so they render as "—" (no time recorded).
+  const fmtEvTime = (d) => (d && d.getHours()===0 && d.getMinutes()===0 && d.getSeconds()===0) ? "—" : fmtTime(d);
   const fmtDay  = (d) => d ? d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) : "";
 
   const now = new Date();
   const startOfToday = new Date(now); startOfToday.setHours(0,0,0,0);
   const twoHoursAgo  = new Date(now.getTime() - 2*60*60*1000);
-  const threeDaysAgo = new Date(now.getTime() - 3*24*60*60*1000);
-  // Existing punch.checkedAt / CO.createdAt use toLocaleDateString("en-US") — match it.
-  const todayLocale  = now.toLocaleDateString("en-US");
 
   // ── Helpers (pure, no writes) ──
   // Walk every punch item on a job: rough/finish/qc punches across floors
@@ -38688,9 +38687,17 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
   const ev = []; // mutable accumulator
   const push = (at, who, job, type, kind, label, color, detail) => {
     const d = parseAt(at); if (!d) return;
+    // Future-dated "events" aren't activity — e.g. an RT's scheduledDate is the
+    // APPOINTMENT date, which used to float to the top of today's feed days
+    // early. 5-minute grace covers device clock skew.
+    if (d.getTime() > Date.now() + 5*60*1000) return;
     ev.push({ at:d, who:who||"", jobId:job?.id||null, jobName:(job?.name||job?.id||"")+"", type, kind, label, color, detail:detail||"" });
   };
-  const allJobs = jobs || [];
+  // Real jobs only — Simpro quotes live in the SAME Firestore collection
+  // (type==="quote"), and archived/deleted docs can too. Without this filter
+  // the pulse counted quotes as active jobs and the stale rows called them
+  // "never touched". Same defensive trio other views use.
+  const allJobs = (jobs || []).filter(j => j && j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt);
   allJobs.forEach(j => {
     // 3, 5, 7, 8, 9 — punch item events (some have addedAt, some only checkedAt)
     forEachPunch(j, (item, ctx) => {
@@ -38845,6 +38852,9 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
     });
     // 63, 64, 65 — Job lifecycle
     if (j.createdAt) push(j.createdAt, j.createdBy||j.firstSavedBy, j, "lifecycle", "created", `New job created`, "#3E7D5A");
+    // Simpro imports have imported_at but no createdAt (blankJob doesn't stamp
+    // one) — without this they'd read "no logged work" the day they arrive.
+    if (j.imported_at) push(j.imported_at, "", j, "lifecycle", "imported", `Job imported from Simpro`, "#3E7D5A");
     if (j.foremanAssignedAt) push(j.foremanAssignedAt, j.foremanAssignedBy||j._saved_by, j, "lifecycle", "foreman", `Foreman assigned: ${j.foreman||"—"}`, "#6A5E97");
     if (j.driveLinkedAt) push(j.driveLinkedAt, j.driveLinkedBy||j._saved_by, j, "lifecycle", "drive", `Drive folder linked`, "#6A7BAA");
     // 60, 61, 62 — Presence (light: { name: lastSeenISO } map on job)
@@ -38864,41 +38874,59 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
   ev.sort((a,b) => b.at.getTime() - a.at.getTime());
   const eventsToday = ev.filter(e => e.at >= startOfToday);
 
+  // ── Worked vs viewed ──
+  // Everything below derives from the EVENT STREAM, not from lastActivityAt.
+  // The presence ping stamps lastActivityAt + saved_by on merely OPENING a
+  // job (it rides the saveJob funnel), so lastActivityAt conflates "someone
+  // looked" with "someone worked" — it un-staled jobs people checked on and
+  // credited the last viewer. Presence events stay in the feed (honest
+  // "opened X" rows) but never count as work.
+  const workEvents = ev.filter(e => e.type !== "presence");
+  const workEventsToday = workEvents.filter(e => e.at >= startOfToday);
+  const lastWorkByJob = new Map();
+  workEvents.forEach(e => {
+    if (!e.jobId) return;
+    const cur = lastWorkByJob.get(e.jobId);
+    if (!cur || e.at > cur) lastWorkByJob.set(e.jobId, e.at);
+  });
+  const lastWork = (j) => lastWorkByJob.get(j.id) || null;
+
   // ── Job sets ──
-  const activeJobs = allJobs.filter(j => (j.finishStatus || "") !== "complete");
-  const touchedToday = allJobs.filter(j => { const d = toDate(j.lastActivityAt); return d && d >= startOfToday; });
-  const foremenOnAppToday = [...new Set(touchedToday.map(j => j._saved_by).filter(Boolean))];
+  // Canonical "active" — mirrors Huddle / Crew Planner (effRS/effFS, minus
+  // temp peds and quick jobs) so Today's count agrees with the rest of the
+  // app instead of the old finishStatus-only guess.
+  const activeJobs = allJobs.filter(j => {
+    if (j.tempPed || j.quickJob) return false;
+    const rs = effRS(j), fs = effFS(j);
+    return (rs && rs !== "complete" && rs !== "invoice") || (fs && fs !== "complete" && fs !== "invoice");
+  });
+  const touchedTodayIds = new Set(workEventsToday.map(e => e.jobId).filter(Boolean));
+  const touchedToday = allJobs.filter(j => touchedTodayIds.has(j.id));
 
-  // Stale = active job, never touched OR last activity > 3 days ago.
-  const staleJobs = activeJobs.filter(j => { const d = toDate(j.lastActivityAt); return !d || d < threeDaysAgo; })
-    .sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (ad?ad.getTime():0)-(bd?bd.getTime():0); });
+  // Foreman roster — ACTIVE users only (team-deactivation convention, v366);
+  // falls back to names found on jobs when the users list is scarce. Needed
+  // here for the pulse counter; the heartbeat cards reuse it below.
+  const foremenFromUsers = (users || []).filter(u => u.active !== false && ((u.title||u.role||"").toLowerCase()) === "foreman").map(u => u.name).filter(Boolean);
+  const foremenFromJobs  = [...new Set(allJobs.map(j => j.foreman).filter(n => n && n !== "Unassigned"))];
+  const foremenForBoard = foremenFromUsers.length > 0 ? foremenFromUsers : foremenFromJobs;
+  // "On app today" = had ANY event today, presence included — opening the app
+  // counts as being ON it, just not as work. Matched against the foreman
+  // roster so office users no longer inflate a counter labeled "Foremen".
+  const foremenOnAppToday = foremenForBoard.filter(name => eventsToday.some(e => nameMatches(e.who, name)));
 
-  // All jobs sorted by lastActivityAt desc — drives activity feed and jobs grid.
-  const byActivityDesc = [...allJobs].sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (bd?bd.getTime():0)-(ad?ad.getTime():0); });
-  const activeByActivity = byActivityDesc.filter(j => (j.finishStatus || "") !== "complete");
+  // Active jobs sorted by most recent WORK — drives the jobs grid.
+  const activeByWork = [...activeJobs].sort((a,b)=>{ const ad=lastWork(a); const bd=lastWork(b); return (bd?bd.getTime():0)-(ad?ad.getTime():0); });
 
-  // ── Cross-job counters (single walk, multiple outputs) ──
-  let punchesClosedToday = 0;
-  let cosAddedToday = 0;
-  const jobsWithUnassignedPunches = []; // { job, count }
-  const jobsWithCOsMissingQuote   = []; // { job, count }
+  // ── Pulse counters — derived from the SAME event stream as the feed, so a
+  // tile's number always equals the rows you see when you expand Live
+  // activity. (The old string-match counters — checkedAt === "8/9/2026" —
+  // could disagree with the feed and missed non-locale date formats.)
+  const punchesClosedToday = workEventsToday.filter(e => e.type === "punch" && e.kind === "closed").length;
+  const cosAddedToday      = workEventsToday.filter(e => e.type === "co" && e.kind === "created").length;
+
+  // Failed inspections — current state, surfaced only while open items remain.
   const jobsWithFailedInspection  = []; // { job, kind, open }
   allJobs.forEach(j => {
-    let unassignedCount = 0;
-    forEachPunch(j, (item) => {
-      if (item?.done && item?.checkedAt === todayLocale) punchesClosedToday++;
-      if (item && !item.done && !item.assignedTo) unassignedCount++;
-    });
-    if (unassignedCount > 0) jobsWithUnassignedPunches.push({ job:j, count:unassignedCount });
-
-    let missingQuoteCount = 0;
-    (j.changeOrders || []).forEach(co => {
-      if (co?.createdAt === todayLocale) cosAddedToday++;
-      if (co && !co.quoteNumber && co.coStatus !== "completed") missingQuoteCount++;
-    });
-    if (missingQuoteCount > 0) jobsWithCOsMissingQuote.push({ job:j, count:missingQuoteCount });
-
-    // Failed inspections — surface only if there are still open items to act on.
     if (j.roughInspectionResult === "fail") {
       const open = (j.roughInspectionItems || []).filter(i => i && !i.done).length;
       if (open > 0) jobsWithFailedInspection.push({ job:j, kind:"Rough", open });
@@ -38909,41 +38937,35 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
     }
   });
 
-  // ── Photos (V3) — collected from jobs touched today; deduped by URL ──
+  // ── Photos (V3) — only photos actually taken/uploaded TODAY, deduped by
+  // URL. The old version collected EVERY photo ever attached to any job
+  // touched today (a job with 80 old photos + one save = counter says 80).
+  // Undated photos are excluded — safer to undercount than to fake "today".
   const photoMap = new Map();
-  touchedToday.forEach(j => {
+  allJobs.forEach(j => {
     collectPhotos(j).forEach(p => {
+      const t = parseAt(p.takenAt || p.uploadedAt || p.addedAt);
+      if (!t || t < startOfToday) return;
       if (p.url && !photoMap.has(p.url)) photoMap.set(p.url, { ...p, jobName:j.name||j.id, jobId:j.id });
     });
   });
   const photosToday = Array.from(photoMap.values());
 
-  // ── Foreman heartbeat (V2) — derived from existing saved_by + checkedBy ──
-  // Foremen list: prefer users prop (filter by title/role), fall back to any
-  // distinct foreman name found on jobs so the row isn't empty if users
-  // are scarce in this client.
-  const foremenFromUsers = (users || []).filter(u => ((u.title||u.role||"").toLowerCase()) === "foreman").map(u => u.name).filter(Boolean);
-  const foremenFromJobs  = [...new Set(allJobs.map(j => j.foreman).filter(n => n && n !== "Unassigned"))];
-  const foremenForBoard = foremenFromUsers.length > 0 ? foremenFromUsers : foremenFromJobs;
+  // ── Foreman heartbeat (V2) — event-derived. The old version keyed off
+  // job._saved_by, which the presence ping hands to the last person who
+  // merely OPENED the job — a foreman's 7am work vanished if anyone looked
+  // at his job after him. Now: status (active/earlier/quiet) counts any
+  // event including presence ("on the app"); the tallies count work only.
+  // Roster (foremenForBoard) is defined with the job sets above.
   const heartbeats = foremenForBoard.map(name => {
     const firstName = (name || "").split(/\s+/)[0];
-    let jobsTouched = 0, punches = 0, cos = 0;
+    const mine = eventsToday.filter(e => nameMatches(e.who, name));
+    const mineWork = mine.filter(e => e.type !== "presence");
+    const jobsTouched = new Set(mineWork.map(e => e.jobId).filter(Boolean)).size;
+    const punches = mineWork.filter(e => e.type === "punch" && e.kind === "closed").length;
+    const cos     = mineWork.filter(e => e.type === "co" && e.kind === "created").length;
     let lastSeen = null;
-    allJobs.forEach(j => {
-      if (nameMatches(j._saved_by, name)) {
-        const d = toDate(j.lastActivityAt);
-        if (d && d >= startOfToday) {
-          jobsTouched++;
-          if (!lastSeen || d > lastSeen) lastSeen = d;
-        }
-      }
-      forEachPunch(j, (item) => {
-        if (item?.done && item?.checkedAt === todayLocale && nameMatches(item.checkedBy, name)) punches++;
-      });
-      (j.changeOrders || []).forEach(co => {
-        if (co?.createdAt === todayLocale && nameMatches(co.createdBy, name)) cos++;
-      });
-    });
+    mine.forEach(e => { if (!lastSeen || e.at > lastSeen) lastSeen = e.at; });
     const status = lastSeen && lastSeen >= twoHoursAgo ? "active"
                  : lastSeen ? "earlier"
                  : "quiet";
@@ -38956,11 +38978,6 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
   const pulseCard = { background: C.bg, borderRadius: 8, padding: "10px 12px" };
   const rowStyle = { display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:8, cursor: onSelectJob?"pointer":"default" };
   const naRow    = (bg, text) => ({...rowStyle, background:bg, color:text});
-
-  // Combined Needs Attention count (drives the header pill)
-  // NOTE: Unassigned punch items intentionally NOT counted here — Koy moved
-  // that triage out of Today; it lives on the Punch tab where it belongs.
-  const needsCount = jobsWithFailedInspection.length + staleJobs.length + jobsWithCOsMissingQuote.length;
 
   // ── Per-person pulser (P1) ──
   // One card per person who did something today. Pulls from eventsToday.who.
@@ -39047,7 +39064,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           <div style={{fontSize:22,fontWeight:600,color:C.text}}>{cosAddedToday}</div>
         </div>
         <div style={pulseCard}>
-          <div style={{fontSize:11,color:C.dim}}>Photos on active jobs</div>
+          <div style={{fontSize:11,color:C.dim}}>Photos today</div>
           <div style={{fontSize:22,fontWeight:600,color:C.text}}>{photosToday.length}</div>
         </div>
         <div style={pulseCard}>
@@ -39131,7 +39148,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                     <div key={`ev-${idx}`} style={{...rowStyle, padding:"6px 8px", borderBottom:`1px solid ${C.border}`}}
                       onClick={() => j && onSelectJob && onSelectJob(j)}>
                       <span style={{width:6,height:6,borderRadius:99,background:e.color||C.muted,flexShrink:0}}/>
-                      <span style={{fontSize:11,color:C.muted,minWidth:54}}>{fmtTime(e.at)}</span>
+                      <span style={{fontSize:11,color:C.muted,minWidth:54}}>{fmtEvTime(e.at)}</span>
                       <div style={{flex:1,fontSize:13,color:C.text,lineHeight:1.35}}>
                         {e.who && <b>{(e.who||"").split(/\s+/)[0]}</b>}{e.who?" · ":""}
                         <span style={{color:C.text}}>{e.label}</span>
@@ -39172,26 +39189,26 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           {jobsTodayOpen && (touchedToday.length === 0 ? (
             <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No job activity yet today.</div>
           ) : touchedToday
-              .sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (bd?bd.getTime():0)-(ad?ad.getTime():0); })
+              .sort((a,b)=>{ const ad=lastWork(a); const bd=lastWork(b); return (bd?bd.getTime():0)-(ad?ad.getTime():0); })
               .slice(0,12).map(j => {
-            const d = toDate(j.lastActivityAt);
+            const d = lastWork(j);
             return (
               <div key={j.id} style={{...rowStyle, padding:"8px 10px", borderBottom:`1px solid ${C.border}`}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:13,fontWeight:600,color:C.text}}>{j.name || j.id}</div>
-                  <div style={{fontSize:11,color:C.dim}}>{j.foreman || "—"} · last touched {fmtTime(d)}</div>
+                  <div style={{fontSize:11,color:C.dim}}>{j.foreman || "—"} · last work {fmtEvTime(d)}</div>
                 </div>
               </div>
             );
           }))}
-          {/* Stale jobs at the bottom, grayed */}
-          {jobsTodayOpen && activeByActivity.filter(j => { const d=toDate(j.lastActivityAt); return !d || d < startOfToday; }).slice(0,4).map(j => {
-            const d = toDate(j.lastActivityAt);
+          {/* Active jobs with no work yet today — grayed at the bottom */}
+          {jobsTodayOpen && activeByWork.filter(j => { const d=lastWork(j); return !d || d < startOfToday; }).slice(0,4).map(j => {
+            const d = lastWork(j);
             return (
               <div key={j.id} style={{...rowStyle, padding:"6px 10px", opacity:0.55}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:12,color:C.dim}}>{j.name || j.id}</div>
-                  <div style={{fontSize:11,color:C.muted}}>last touched {d ? fmtDay(d) : "never"}</div>
+                  <div style={{fontSize:11,color:C.muted}}>{d ? `no work since ${fmtDay(d)}` : "no logged work"}</div>
                 </div>
               </div>
             );
@@ -39249,7 +39266,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                     {p.events.slice(0,3).map((e,i) => (
                       <div key={i} style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.5}}
                         title={e.label + (e.jobName?` · ${e.jobName}`:"")}>
-                        <span style={{color:C.muted}}>{fmtTime(e.at)}</span> · {e.label}
+                        <span style={{color:C.muted}}>{fmtEvTime(e.at)}</span> · {e.label}
                         {e.jobName && <span style={{color:C.blue}}> · {e.jobName}</span>}
                       </div>
                     ))}
@@ -39331,7 +39348,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                       {g.events.map((e,i) => (
                         <div key={i} style={{display:"flex", gap:8, alignItems:"flex-start", fontSize:12, color:C.text, lineHeight:1.45, padding:"3px 0"}}>
                           <span style={{width:6, height:6, borderRadius:99, background:e.color||C.muted, marginTop:6, flexShrink:0}}/>
-                          <span style={{fontSize:11, color:C.muted, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtTime(e.at)}</span>
+                          <span style={{fontSize:11, color:C.muted, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtEvTime(e.at)}</span>
                           <div style={{flex:1}}>
                             <span>{e.label}</span>
                             {e.detail && <div style={{fontSize:11, color:C.dim, marginTop:1}}>{e.detail}</div>}
@@ -39391,14 +39408,14 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           Starts COLLAPSED — tap header to expand. */}
       <div style={{...card, marginTop: 12}}>
         <div style={{...sectionTitle, cursor:"pointer", userSelect:"none"}} onClick={() => setPhotosOpen(o => !o)}>
-          <Icon name="camera" size={14} stroke={2}/> Photos on today's active jobs
+          <Icon name="camera" size={14} stroke={2}/> Photos today
           <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0,display:"flex",alignItems:"center",gap:6}}>
             {photosToday.length}
             <span style={{fontSize:11,color:C.dim,transform: photosOpen ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 80ms"}}>▾</span>
           </span>
         </div>
         {photosOpen && (photosToday.length === 0 ? (
-          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No photos on jobs touched today.</div>
+          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No photos taken today.</div>
         ) : (
           <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6}}>
             {photosToday.slice(0,24).map(p => (
@@ -39440,7 +39457,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
 
       {/* Footer note */}
       <div style={{marginTop:14,padding:"8px 12px",fontSize:11,color:C.dim,textAlign:"center"}}>
-        Live · auto-refreshes as foremen and office save changes. Photos shown are from jobs with activity today.
+        Live · auto-refreshes as foremen and office save changes. Counters and photos cover today only — opening a job to look doesn't count as work.
       </div>
     </div>
   );
@@ -44847,7 +44864,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-06 · App SW version: v367
+**Last manifest update:** 2026-08-09 · App SW version: v368
 
 ---
 
@@ -44862,12 +44879,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Flag-only toggle
   - Drag-to-reorder within stage
 - **Today** · 'shipped 2026-05-21' · 'SW v180' · cross-job command center (gated to admin/manager/foreman)
-  - Pulse counters (active jobs, foremen on app, punches closed, COs added, photos, failed inspections)
-  - Needs Attention (failed inspections, stale jobs, unassigned punches, COs missing quote #)
+  - Pulse counters (active jobs, foremen on app, punches closed, COs added, photos today, failed inspections)
+  - Needs Attention — no longer on Today (punch triage moved to the Punch tab, book worklist to the Needs page); the leftover unrendered math was deleted in 'SW v368'
   - Live Activity feed (reverse-chrono across all jobs)
-  - Jobs Today grid (jobs touched today, sorted by 'lastActivityAt')
+  - Jobs Today grid (jobs with WORK events today, sorted by last work — since 'SW v368'; was 'lastActivityAt')
   - Foreman Heartbeat row (green/amber/gray status per foreman)
-  - Photos strip (thumbnails from jobs touched today)
+  - Photos strip (photos taken today — since 'SW v368')
+  - Accuracy rebuild: worked ≠ viewed · 'shipped 2026-08-09' · 'SW v368' · Koy: "it needs to pull information more accurately." Every band now derives from Today's own normalized event stream instead of 'lastActivityAt'/'saved_by' — those get stamped by the presence ping on merely OPENING a job (it rides the 'u()' → 'saveJob' funnel), so a look counted as work: it inflated "Jobs today", silenced the no-work signal for any stale job someone checked on, and handed a foreman's morning to whoever viewed his job last ("Foremen on app today" also counted office viewers). Presence rows stay in the feed as honest "Opened X" entries; they just never count as work, and heartbeat status ("on the app") still counts them while its tallies count work only. Active jobs now uses the canonical Huddle / Crew Planner definition ('effRS'/'effFS', minus temp peds + quick jobs) and the whole tab filters out Simpro quotes + archived/deleted docs — quotes share the jobs collection, so the old 'finishStatus !== "complete"' guess counted every quote as an active job and listed them all as "never touched". Pulse counters (punches closed, COs added) count the same events the feed renders, so a tile can never disagree with its own expanded rows (the old string-equality counters — 'checkedAt === "8/9/2026"' — could, and missed non-locale formats). Photos tile + strip show photos actually TAKEN today; the old version collected every photo ever attached to any job touched today, so one save on a photo-heavy job read as a big photo day. Heartbeat roster + coordinator Book pills (Today AND Forecast — same memo pattern) exclude deactivated users per the v366 convention, so laid-off foremen stop sitting as forever-quiet cards; Book JOB-scoping deliberately does NOT filter, so a laid-off foreman's not-yet-reassigned jobs stay visible in his coordinator's book (deactivation hides people from rosters, never jobs from views). Feed honesty: date-only events (CO created, inspection attempts, pre-v180 punch closes) show "—" instead of a fake 12:00 AM, future-dated RT appointment "events" no longer float to the top of today's feed (5-minute clock-skew grace), and Simpro imports emit "Job imported" off 'imported_at' instead of reading "never touched" the day they arrive. Why it can't lose data: read-side derivation rebuild — no loader change, no field removed, no rules change, presence write path untouched; the single write change is additive: the RT sign-off cascade now stamps 'checkedAtTs' (ISO) beside its date-only 'checkedAt', the identical pair the other four punch-close paths already write, and never overwrites an existing value ('p.checkedAtTs || nowISO')
 - **Safety** · 'shipped' · safety meetings / topics
 - **Forecast** · 'shipped' · 'SchedulingForecast' · upcoming work calendar view
   - Starts view mode · 'shipped 2026-07-20' · 'SW v349' · 'StartsReport' · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = 'roughStartConfirmed' / 'finishStartConfirmed', or a 'scheduled' / 'date_confirmed' status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
@@ -45150,7 +45168,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Activity tracking (lastActivityAt)** · 'shipped 2026-05-21' · 'SW v180'
   - 'lastActivityAt: serverTimestamp()' on all 7 job-write paths
   - Loader at L44066 preserves the field through unwrap
-  - Drives the Today command center's activity sort + staleness
+  - Since 'SW v368' Today derives its activity sort + staleness from work EVENTS instead — the presence ping (fired on job OPEN) also rides the save funnel and stamps this field, so it counts views as work. Still stamped on every write path; Coordinator Worklist recency and Scoreboard recency tie-breaks still read it
 - **Smart merge on reconnect** · 'shipped' · '_smartMergeForReconnect'
 - **Debounced save ('saveJob')** · 'shipped' · hot path for all job mutations; three-way merge + per-tab echo identity ('TAB_ID', Kweller burst-wipe fix) · 'SW v312'
 - **Pending patches queue** · 'shipped' · 'pendingPatches.current' per-job patch accumulator

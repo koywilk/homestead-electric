@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-08-06 · App SW version: v367
+**Last manifest update:** 2026-08-09 · App SW version: v368
 
 ---
 
@@ -19,12 +19,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Flag-only toggle
   - Drag-to-reorder within stage
 - **Today** · `shipped 2026-05-21` · `SW v180` · cross-job command center (gated to admin/manager/foreman)
-  - Pulse counters (active jobs, foremen on app, punches closed, COs added, photos, failed inspections)
-  - Needs Attention (failed inspections, stale jobs, unassigned punches, COs missing quote #)
+  - Pulse counters (active jobs, foremen on app, punches closed, COs added, photos today, failed inspections)
+  - Needs Attention — no longer on Today (punch triage moved to the Punch tab, book worklist to the Needs page); the leftover unrendered math was deleted in `SW v368`
   - Live Activity feed (reverse-chrono across all jobs)
-  - Jobs Today grid (jobs touched today, sorted by `lastActivityAt`)
+  - Jobs Today grid (jobs with WORK events today, sorted by last work — since `SW v368`; was `lastActivityAt`)
   - Foreman Heartbeat row (green/amber/gray status per foreman)
-  - Photos strip (thumbnails from jobs touched today)
+  - Photos strip (photos taken today — since `SW v368`)
+  - Accuracy rebuild: worked ≠ viewed · `shipped 2026-08-09` · `SW v368` · Koy: "it needs to pull information more accurately." Every band now derives from Today's own normalized event stream instead of `lastActivityAt`/`saved_by` — those get stamped by the presence ping on merely OPENING a job (it rides the `u()` → `saveJob` funnel), so a look counted as work: it inflated "Jobs today", silenced the no-work signal for any stale job someone checked on, and handed a foreman's morning to whoever viewed his job last ("Foremen on app today" also counted office viewers). Presence rows stay in the feed as honest "Opened X" entries; they just never count as work, and heartbeat status ("on the app") still counts them while its tallies count work only. Active jobs now uses the canonical Huddle / Crew Planner definition (`effRS`/`effFS`, minus temp peds + quick jobs) and the whole tab filters out Simpro quotes + archived/deleted docs — quotes share the jobs collection, so the old `finishStatus !== "complete"` guess counted every quote as an active job and listed them all as "never touched". Pulse counters (punches closed, COs added) count the same events the feed renders, so a tile can never disagree with its own expanded rows (the old string-equality counters — `checkedAt === "8/9/2026"` — could, and missed non-locale formats). Photos tile + strip show photos actually TAKEN today; the old version collected every photo ever attached to any job touched today, so one save on a photo-heavy job read as a big photo day. Heartbeat roster + coordinator Book pills (Today AND Forecast — same memo pattern) exclude deactivated users per the v366 convention, so laid-off foremen stop sitting as forever-quiet cards; Book JOB-scoping deliberately does NOT filter, so a laid-off foreman's not-yet-reassigned jobs stay visible in his coordinator's book (deactivation hides people from rosters, never jobs from views). Feed honesty: date-only events (CO created, inspection attempts, pre-v180 punch closes) show "—" instead of a fake 12:00 AM, future-dated RT appointment "events" no longer float to the top of today's feed (5-minute clock-skew grace), and Simpro imports emit "Job imported" off `imported_at` instead of reading "never touched" the day they arrive. Why it can't lose data: read-side derivation rebuild — no loader change, no field removed, no rules change, presence write path untouched; the single write change is additive: the RT sign-off cascade now stamps `checkedAtTs` (ISO) beside its date-only `checkedAt`, the identical pair the other four punch-close paths already write, and never overwrites an existing value (`p.checkedAtTs || nowISO`)
 - **Safety** · `shipped` · safety meetings / topics
 - **Forecast** · `shipped` · `SchedulingForecast` · upcoming work calendar view
   - Starts view mode · `shipped 2026-07-20` · `SW v349` · `StartsReport` · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = `roughStartConfirmed` / `finishStartConfirmed`, or a `scheduled` / `date_confirmed` status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
@@ -307,7 +308,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Activity tracking (lastActivityAt)** · `shipped 2026-05-21` · `SW v180`
   - `lastActivityAt: serverTimestamp()` on all 7 job-write paths
   - Loader at L44066 preserves the field through unwrap
-  - Drives the Today command center's activity sort + staleness
+  - Since `SW v368` Today derives its activity sort + staleness from work EVENTS instead — the presence ping (fired on job OPEN) also rides the save funnel and stamps this field, so it counts views as work. Still stamped on every write path; Coordinator Worklist recency and Scoreboard recency tie-breaks still read it
 - **Smart merge on reconnect** · `shipped` · `_smartMergeForReconnect`
 - **Debounced save (`saveJob`)** · `shipped` · hot path for all job mutations; three-way merge + per-tab echo identity (`TAB_ID`, Kweller burst-wipe fix) · `SW v312`
 - **Pending patches queue** · `shipped` · `pendingPatches.current` per-job patch accumulator
