@@ -15198,219 +15198,6 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
   return (
     <div>
-      {/* Panel Schedules — printable per-panel breaker layout. Lives at the
-          top of the Home Runs tab because that's where the electrical panel
-          mental model already exists (panelCounts, breaker overrides, etc.).
-          Self-contained: own data on job.electricalPanels, doesn't read or
-          write homeRuns. */}
-      <Section label="Panel Schedules" color={C.accent} defaultOpen={false}>
-        <ElectricalPanelSchedules
-          panels={electricalPanels || []}
-          onChange={onElectricalPanelsChange}
-          jobName={jobName||""}
-          jobAddress={jobAddress||""}
-          homeRuns={homeRuns||{}}/>
-      </Section>
-
-      {/* Generator Load Selection — starts collapsed so the section header is
-          quick to scan; foremen can expand when they need to pick/review loads. */}
-      <Section label="Generator Load Selection" color={C.accent} defaultOpen={false}>
-        {hoResponse?.submitted&&(
-          <div style={{background:`${C.green}12`,border:`1px solid ${C.green}44`,borderRadius:10,
-            padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.green}}>✓ Homeowner Submitted</div>
-              <div style={{fontSize:11,color:C.dim,marginTop:2}}>
-                {hoResponse.signature} · {hoResponse.signedDate}
-                {' · '}{(hoResponse.items||[]).filter(i=>i.included).length} circuits selected
-              </div>
-            </div>
-            <button onClick={()=>setShowModal(true)}
-              style={{background:'none',border:`1px solid ${C.green}44`,borderRadius:7,
-                color:C.green,fontSize:11,fontWeight:600,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>
-              View
-            </button>
-            <button onClick={resend} disabled={sending}
-              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
-                color:C.dim,fontSize:11,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
-              <Icon name="rotateCw" size={11}/> Resend
-            </button>
-          </div>
-        )}
-
-        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}/>
-
-        <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-          {!hoResponse?.submitted?(
-            <button onClick={send} disabled={sending||!genLoads.length}
-              style={{background:genLoads.length?C.accent:C.muted,border:'none',borderRadius:9,
-                color:'#000',fontSize:13,fontWeight:700,padding:'10px 22px',
-                cursor:genLoads.length?'pointer':'not-allowed',fontFamily:'inherit',
-                opacity:sending?0.6:1}}>
-              {sending?<><Spinner size={12}/> Sending…</>:<><Icon name="send" size={13}/> Send to Homeowner</>}
-            </button>
-          ):(
-            <button onClick={resend} disabled={sending}
-              style={{background:'none',border:`1px solid ${C.accent}55`,borderRadius:9,
-                color:C.accent,fontSize:12,fontWeight:700,padding:'8px 18px',
-                cursor:'pointer',fontFamily:'inherit',opacity:sending?0.6:1}}>
-              {sending?<><Spinner size={12}/> Resending…</>:<><Icon name="rotateCw" size={12}/> Reset & Resend</>}
-            </button>
-          )}
-          {copied&&<span style={{fontSize:12,color:C.green,fontWeight:700}}>✓ Link copied!</span>}
-        </div>
-
-        <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
-          <button onClick={()=>{navigator.clipboard.writeText(hoLink);setCopied(true);setTimeout(()=>setCopied(false),2000);}}
-            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
-              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
-            <Icon name="link" size={11}/> Copy link
-          </button>
-          <button onClick={()=>openUrl(hoLink)}
-            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
-              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
-            Preview
-          </button>
-          {!hoResponse?.submitted&&(
-            <button onClick={checkResponse}
-              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
-                fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
-              Check for response
-            </button>
-          )}
-        </div>
-      </Section>
-
-      {/* Response modal */}
-      {showModal&&hoResponse&&(
-        <div onClick={()=>setShowModal(false)}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',zIndex:9999,
-            display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
-          <div onClick={e=>e.stopPropagation()}
-            style={{background:'#fff',borderRadius:14,padding:22,maxWidth:460,width:'100%',
-              maxHeight:'85vh',overflowY:'auto',border:'0.5px solid #E1E4E9'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-              <div style={{fontSize:14,fontWeight:600,color:'#1B1F24'}}>Homeowner Selections</div>
-              <button onClick={()=>setShowModal(false)}
-                style={{background:'none',border:'none',fontSize:16,cursor:'pointer',color:'#8A929D'}}>✕</button>
-            </div>
-            <div style={{fontSize:11,color:'#8A929D',marginBottom:14}}>
-              Signed: {hoResponse.signature} · {hoResponse.signedDate}
-            </div>
-            <button onClick={resend} disabled={sending}
-              style={{width:'100%',marginBottom:14,background:'none',border:`1px solid ${C.border}`,
-                borderRadius:8,color:C.dim,fontSize:12,padding:'8px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}>
-              <Icon name="rotateCw" size={12}/> Reset &amp; Resend
-            </button>
-
-                        <div style={{fontSize:10,fontWeight:600,color:'#8A929D',letterSpacing:'0.08em',marginBottom:8}}>
-              ON GENERATOR · {(hoResponse.items||[]).filter(i=>i.included).length}
-            </div>
-            {(hoResponse.items||[]).filter(i=>i.included).map((it,idx)=>(
-              <div key={it.id||idx} style={{background:'#F4F6F8',border:'0.5px solid #E1E4E9',
-                borderRadius:8,padding:'9px 12px',marginBottom:5}}>
-                <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <div style={{width:20,height:20,borderRadius:'50%',background:'#F3E9CF',
-                    border:'0.5px solid #EAD9A6',display:'flex',alignItems:'center',
-                    justifyContent:'center',fontSize:10,fontWeight:600,color:'#8A6A1E',flexShrink:0}}>
-                    {it.priority||idx+1}
-                  </div>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:13,fontWeight:500,color:'#1B1F24',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                      {it.name||'Unnamed'}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
-                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
-                      {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:'#8A6A1E',
-                        background:'#F3E9CF',borderRadius:99,padding:'1px 6px',border:'0.5px solid #EAD9A6'}}>★ REC</span>}
-                    </div>
-                    <div style={{fontSize:11,color:'#8A929D',marginTop:2}}>
-                      {wireAmpsVolts(it.wire, it.v240)}
-                    </div>
-                    {it.notes&&<div style={{fontSize:11,color:'#5E6670',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
-                  </div>
-                </div>
-              </div>
-            ))}
-            {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
-              <>
-                <div style={{fontSize:10,fontWeight:600,color:'#CDD3DB',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
-                  NOT ON GENERATOR · {(hoResponse.items||[]).filter(i=>!i.included).length}
-                </div>
-                {(hoResponse.items||[]).filter(i=>!i.included).map((it,idx)=>(
-                  <div key={it.id||idx} style={{background:'#F4F6F8',border:'0.5px solid #E1E4E9',
-                    borderRadius:8,padding:'8px 12px',marginBottom:4,opacity:0.55}}>
-                    <div style={{fontSize:12,color:'#5E6670'}}>{it.name||'Unnamed'}</div>
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Pull progress */}
-      {total>0&&(
-        <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
-          border:`1px solid ${C.border}`,borderRadius:12}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-            <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled</span>
-            <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>{pulled} / {total} — {pct}%</span>
-          </div>
-          <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden'}}>
-            <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
-              borderRadius:99,transition:'width 0.4s ease'}}/>
-          </div>
-        </div>
-      )}
-
-      {/* Share Live View */}
-      <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-        <button onClick={()=>{
-          const link=`${window.location.origin}/?homeruns=${jobId}`;
-          navigator.clipboard.writeText(link).then(()=>toast.success('Live view link copied! Anyone with this link can see Home Runs in real time (view only).',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
-        }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:6,
-          color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
-          Share ↗
-        </button>
-        <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
-      </div>
-
-      {/* Panels */}
-      {(()=>{
-        const cP=homeRuns.customPanels||DEFAULT_PANELS;
-        const addP=()=>{ const n=newPanelName.trim(); if(!n||cP.includes(n)) return; onHRChange({...homeRuns,customPanels:[...cP,n]}); setNewPanelName(''); };
-        return (
-          <Section label="Panels" color={C.blue} defaultOpen={false}>
-            <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-              {cP.map(p=>(
-                <div key={p} style={{display:'flex',alignItems:'center',gap:4,
-                  background:`${C.blue}15`,border:`1px solid ${C.blue}44`,
-                  borderRadius:20,padding:'4px 10px 4px 12px',fontSize:12,color:C.blue,fontWeight:600}}>
-                  {p}
-                  <button onClick={()=>onHRChange({...homeRuns,customPanels:cP.filter(x=>x!==p)})}
-                    style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
-                      fontSize:14,lineHeight:1,padding:'0 2px',fontWeight:700}}>×</button>
-                </div>
-              ))}
-            </div>
-            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-              <input value={newPanelName} onChange={e=>setNewPanelName(e.target.value)}
-                onKeyDown={e=>e.key==='Enter'&&addP()}
-                placeholder="e.g. Panel E, Sub Panel…"
-                style={{flex:1,minWidth:180,background:C.surface,border:`1px solid ${C.border}`,
-                  borderRadius:7,padding:'7px 10px',fontSize:12,fontFamily:'inherit',outline:'none',color:C.text}}/>
-              <button onClick={addP}
-                style={{background:C.blue,color:'#fff',border:'none',borderRadius:7,
-                  padding:'7px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>+ Add Panel</button>
-              <button onClick={()=>onHRChange({...homeRuns,customPanels:DEFAULT_PANELS})}
-                style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
-                  padding:'7px 12px',fontSize:11,color:C.dim,cursor:'pointer'}}>Reset</button>
-            </div>
-            <div style={{fontSize:11,color:C.muted,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
-          </Section>
-        );
-      })()}
-
       <Section label="Home Runs" color={C.blue} defaultOpen={false}>
         {(()=>{
           const cp=homeRuns.customPanels||DEFAULT_PANELS;
@@ -15950,6 +15737,220 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           );
         })()}
       </Section>
+
+      {/* Panel Schedules — printable per-panel breaker layout. Lives at the
+          top of the Home Runs tab because that's where the electrical panel
+          mental model already exists (panelCounts, breaker overrides, etc.).
+          Self-contained: own data on job.electricalPanels, doesn't read or
+          write homeRuns. */}
+      <Section label="Panel Schedules" color={C.accent} defaultOpen={false}>
+        <ElectricalPanelSchedules
+          panels={electricalPanels || []}
+          onChange={onElectricalPanelsChange}
+          jobName={jobName||""}
+          jobAddress={jobAddress||""}
+          homeRuns={homeRuns||{}}/>
+      </Section>
+
+      {/* Generator Load Selection — starts collapsed so the section header is
+          quick to scan; foremen can expand when they need to pick/review loads. */}
+      <Section label="Generator Load Selection" color={C.accent} defaultOpen={false}>
+        {hoResponse?.submitted&&(
+          <div style={{background:`${C.green}12`,border:`1px solid ${C.green}44`,borderRadius:10,
+            padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.green}}>✓ Homeowner Submitted</div>
+              <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                {hoResponse.signature} · {hoResponse.signedDate}
+                {' · '}{(hoResponse.items||[]).filter(i=>i.included).length} circuits selected
+              </div>
+            </div>
+            <button onClick={()=>setShowModal(true)}
+              style={{background:'none',border:`1px solid ${C.green}44`,borderRadius:7,
+                color:C.green,fontSize:11,fontWeight:600,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+              View
+            </button>
+            <button onClick={resend} disabled={sending}
+              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
+                color:C.dim,fontSize:11,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
+              <Icon name="rotateCw" size={11}/> Resend
+            </button>
+          </div>
+        )}
+
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}/>
+
+        <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          {!hoResponse?.submitted?(
+            <button onClick={send} disabled={sending||!genLoads.length}
+              style={{background:genLoads.length?C.accent:C.muted,border:'none',borderRadius:9,
+                color:'#000',fontSize:13,fontWeight:700,padding:'10px 22px',
+                cursor:genLoads.length?'pointer':'not-allowed',fontFamily:'inherit',
+                opacity:sending?0.6:1}}>
+              {sending?<><Spinner size={12}/> Sending…</>:<><Icon name="send" size={13}/> Send to Homeowner</>}
+            </button>
+          ):(
+            <button onClick={resend} disabled={sending}
+              style={{background:'none',border:`1px solid ${C.accent}55`,borderRadius:9,
+                color:C.accent,fontSize:12,fontWeight:700,padding:'8px 18px',
+                cursor:'pointer',fontFamily:'inherit',opacity:sending?0.6:1}}>
+              {sending?<><Spinner size={12}/> Resending…</>:<><Icon name="rotateCw" size={12}/> Reset & Resend</>}
+            </button>
+          )}
+          {copied&&<span style={{fontSize:12,color:C.green,fontWeight:700}}>✓ Link copied!</span>}
+        </div>
+
+        <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+          <button onClick={()=>{navigator.clipboard.writeText(hoLink);setCopied(true);setTimeout(()=>setCopied(false),2000);}}
+            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
+            <Icon name="link" size={11}/> Copy link
+          </button>
+          <button onClick={()=>openUrl(hoLink)}
+            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
+            Preview
+          </button>
+          {!hoResponse?.submitted&&(
+            <button onClick={checkResponse}
+              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+                fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
+              Check for response
+            </button>
+          )}
+        </div>
+      </Section>
+
+      {/* Response modal */}
+      {showModal&&hoResponse&&(
+        <div onClick={()=>setShowModal(false)}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',zIndex:9999,
+            display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:'#fff',borderRadius:14,padding:22,maxWidth:460,width:'100%',
+              maxHeight:'85vh',overflowY:'auto',border:'0.5px solid #E1E4E9'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+              <div style={{fontSize:14,fontWeight:600,color:'#1B1F24'}}>Homeowner Selections</div>
+              <button onClick={()=>setShowModal(false)}
+                style={{background:'none',border:'none',fontSize:16,cursor:'pointer',color:'#8A929D'}}>✕</button>
+            </div>
+            <div style={{fontSize:11,color:'#8A929D',marginBottom:14}}>
+              Signed: {hoResponse.signature} · {hoResponse.signedDate}
+            </div>
+            <button onClick={resend} disabled={sending}
+              style={{width:'100%',marginBottom:14,background:'none',border:`1px solid ${C.border}`,
+                borderRadius:8,color:C.dim,fontSize:12,padding:'8px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}>
+              <Icon name="rotateCw" size={12}/> Reset &amp; Resend
+            </button>
+
+                        <div style={{fontSize:10,fontWeight:600,color:'#8A929D',letterSpacing:'0.08em',marginBottom:8}}>
+              ON GENERATOR · {(hoResponse.items||[]).filter(i=>i.included).length}
+            </div>
+            {(hoResponse.items||[]).filter(i=>i.included).map((it,idx)=>(
+              <div key={it.id||idx} style={{background:'#F4F6F8',border:'0.5px solid #E1E4E9',
+                borderRadius:8,padding:'9px 12px',marginBottom:5}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{width:20,height:20,borderRadius:'50%',background:'#F3E9CF',
+                    border:'0.5px solid #EAD9A6',display:'flex',alignItems:'center',
+                    justifyContent:'center',fontSize:10,fontWeight:600,color:'#8A6A1E',flexShrink:0}}>
+                    {it.priority||idx+1}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:500,color:'#1B1F24',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                      {it.name||'Unnamed'}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
+                      {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:'#8A6A1E',
+                        background:'#F3E9CF',borderRadius:99,padding:'1px 6px',border:'0.5px solid #EAD9A6'}}>★ REC</span>}
+                    </div>
+                    <div style={{fontSize:11,color:'#8A929D',marginTop:2}}>
+                      {wireAmpsVolts(it.wire, it.v240)}
+                    </div>
+                    {it.notes&&<div style={{fontSize:11,color:'#5E6670',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
+              <>
+                <div style={{fontSize:10,fontWeight:600,color:'#CDD3DB',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
+                  NOT ON GENERATOR · {(hoResponse.items||[]).filter(i=>!i.included).length}
+                </div>
+                {(hoResponse.items||[]).filter(i=>!i.included).map((it,idx)=>(
+                  <div key={it.id||idx} style={{background:'#F4F6F8',border:'0.5px solid #E1E4E9',
+                    borderRadius:8,padding:'8px 12px',marginBottom:4,opacity:0.55}}>
+                    <div style={{fontSize:12,color:'#5E6670'}}>{it.name||'Unnamed'}</div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Pull progress */}
+      {total>0&&(
+        <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled</span>
+            <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>{pulled} / {total} — {pct}%</span>
+          </div>
+          <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
+              borderRadius:99,transition:'width 0.4s ease'}}/>
+          </div>
+        </div>
+      )}
+
+      {/* Share Live View */}
+      <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <button onClick={()=>{
+          const link=`${window.location.origin}/?homeruns=${jobId}`;
+          navigator.clipboard.writeText(link).then(()=>toast.success('Live view link copied! Anyone with this link can see Home Runs in real time (view only).',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
+        }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:6,
+          color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+          Share ↗
+        </button>
+        <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
+      </div>
+
+      {/* Panels */}
+      {(()=>{
+        const cP=homeRuns.customPanels||DEFAULT_PANELS;
+        const addP=()=>{ const n=newPanelName.trim(); if(!n||cP.includes(n)) return; onHRChange({...homeRuns,customPanels:[...cP,n]}); setNewPanelName(''); };
+        return (
+          <Section label="Panels" color={C.blue} defaultOpen={false}>
+            <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+              {cP.map(p=>(
+                <div key={p} style={{display:'flex',alignItems:'center',gap:4,
+                  background:`${C.blue}15`,border:`1px solid ${C.blue}44`,
+                  borderRadius:20,padding:'4px 10px 4px 12px',fontSize:12,color:C.blue,fontWeight:600}}>
+                  {p}
+                  <button onClick={()=>onHRChange({...homeRuns,customPanels:cP.filter(x=>x!==p)})}
+                    style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
+                      fontSize:14,lineHeight:1,padding:'0 2px',fontWeight:700}}>×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <input value={newPanelName} onChange={e=>setNewPanelName(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&addP()}
+                placeholder="e.g. Panel E, Sub Panel…"
+                style={{flex:1,minWidth:180,background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,padding:'7px 10px',fontSize:12,fontFamily:'inherit',outline:'none',color:C.text}}/>
+              <button onClick={addP}
+                style={{background:C.blue,color:'#fff',border:'none',borderRadius:7,
+                  padding:'7px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>+ Add Panel</button>
+              <button onClick={()=>onHRChange({...homeRuns,customPanels:DEFAULT_PANELS})}
+                style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
+                  padding:'7px 12px',fontSize:11,color:C.dim,cursor:'pointer'}}>Reset</button>
+            </div>
+            <div style={{fontSize:11,color:C.muted,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
+          </Section>
+        );
+      })()}
+
 
       <Section label="Load Mapping Notes" color={C.blue}>
         <TA value={homeRuns.loadMappingNotes||''} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})} placeholder="Load mapping notes…" rows={5}/>
@@ -44864,7 +44865,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-09 · App SW version: v368
+**Last manifest update:** 2026-08-09 · App SW version: v369
 
 ---
 
@@ -45014,6 +45015,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - Home Runs list first + "Refresh from home runs" revert fix · 'shipped 2026-08-09' · 'SW v369' · Koy: "when i hit refresh from homeruns list it works for a second and then reverts back… the homeruns list tab here needs to be at the top." Two halves. **Order:** the Home Runs list section now leads the tab (was Panel Schedules → Generator → list); every section still starts collapsed per the v347 convention. **Revert fix (root-caused, reproduced against the real '_threeWayMerge' in a node harness):** the revert was a stale-baseline delete-resurrection — 'flushJob' and 'flushSaves' (job close / tab switch / backgrounding inside the 500ms debounce window) ran the SAME merge transaction as 'saveJob' but never advanced 'serverBaselines', so an edit that left through a flush kept that key's baseline old for the whole session; the next delete-shaped write of the same key (breaker-override "Refresh from home runs" deleting its panel key, panel-schedule Fill replacing a circuits map) three-way-merged against the stale base, the merge read the server's own copy as "another device's change" and kept it, 'merged:true' made the tab re-adopt its own echo, and the UI reverted ~1s after the click — and every retry after it, because a rescued key's baseline deliberately stays at the sent value (Kweller rule), so base ≠ server forever. Fix: the post-write baseline advance is extracted to '_advanceMergeBaseline' and called by ALL THREE writers (it was saveJob-only); the Kweller rescued-key rule is preserved byte-for-byte inside the helper. Why it can't lose data: the baseline is in-memory bookkeeping ('serverBaselines.current') never written to Firestore; no write shape, no schema, no rules change; flush-path writes get STRICTLY safer (a user's explicit delete stops resurrecting) and the v312 never-fresher-than-local invariant holds because the baseline advances to exactly what was written — the local copy's value for non-rescued keys, the sent value for rescued ones
   - Per-floor home runs
   - By Panel view · 'shipped 2026-07-17' · 'SW v345' · 'HomeRunsByPanel' + shared 'HRRow'/'sortHRRows' — groups every non-blank row by panel (dropdown order), then floor (main → basement → upper → extras), then A-Z, with per-panel pulled counts; auto-default once any panel is labeled, By Panel / By Floor toggle; rows fully editable in both views, edits write back to the row's own floor array through the same sort/renumber, adding + bulk paste stay in By Floor. Stored data shape unchanged
   - Bulk paste home runs
@@ -45171,6 +45173,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Since 'SW v368' Today derives its activity sort + staleness from work EVENTS instead — the presence ping (fired on job OPEN) also rides the save funnel and stamps this field, so it counts views as work. Still stamped on every write path; Coordinator Worklist recency and Scoreboard recency tie-breaks still read it
 - **Smart merge on reconnect** · 'shipped' · '_smartMergeForReconnect'
 - **Debounced save ('saveJob')** · 'shipped' · hot path for all job mutations; three-way merge + per-tab echo identity ('TAB_ID', Kweller burst-wipe fix) · 'SW v312'
+  - Flush paths advance the merge baseline · 'shipped 2026-08-09' · 'SW v369' · post-write baseline advance extracted to '_advanceMergeBaseline', now shared by saveJob + flushJob + flushSaves (was saveJob-only) — closes the stale-baseline delete-resurrection behind the Home Runs "Refresh from home runs" revert; see the Home Runs (panels) entry for the full story
 - **Pending patches queue** · 'shipped' · 'pendingPatches.current' per-job patch accumulator
 - **Force update mechanism** · 'shipped' · admin can push 'config/app' doc to force fleet refresh
 - **Always-current auto-update** · 'shipped 2026-07-10' · 'SW v318' · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
@@ -50109,6 +50112,43 @@ function App() {
     return writePatch;
   };
 
+  // Advance the three-way-merge baseline to EXACTLY what a CONFIRMED write
+  // left on the server. Shared by all three merge writers (saveJob patch mode,
+  // flushJob, flushSaves). Without it, `serverBaselines` only moves forward on
+  // an idle snapshot — which never happens during a burst of edits — so the
+  // next save merges against a FROZEN-OLD baseline, decides the server
+  // "changed" the field, and preserves it: the item you just deleted
+  // reappears, and a box you're typing reverts. (2026-08-09: the two FLUSH
+  // paths were missing this advance — an edit flushed by a tab-switch or
+  // job-close left that key's baseline stale for the whole session, and the
+  // next delete-shaped write of the same key — "Refresh from home runs",
+  // panel-schedule Fill — came back ~1s later off its own merged echo.)
+  //
+  // KWELLER WIPE FIX (2026-07-09), preserved: if the merge RESCUED server
+  // changes on a field, what we WROTE is fresher than what our LOCAL copy
+  // holds. Advancing the baseline to the written (merged) value made the very
+  // next save in a tap-burst hit the "server == base → client wins verbatim"
+  // fast path with a stale client tree — bulldozing the content the previous
+  // merge had just rescued (checkmarks reverted, other crew's added items
+  // deleted). So a rescued field keeps the baseline at the value the LOCAL
+  // copy actually derives from (what we SENT), and every subsequent save
+  // structural-merges again until the local copy truly re-syncs from the
+  // adopted echo. The baseline is never fresher than the local copy (v312
+  // invariant).
+  const _advanceMergeBaseline = (jobId, writtenPatch, sentPatch, rescued) => {
+    if (!writtenPatch) return;
+    const _b = serverBaselines.current[jobId] ? { ...serverBaselines.current[jobId] } : {};
+    Object.keys(writtenPatch).forEach(pk => {
+      if (pk.indexOf("data.") !== 0) return;
+      const f = pk.slice(5);
+      _b[f] = rescued.includes(f) ? sentPatch[f] : writtenPatch[pk];
+    });
+    // Stamp our write time so the snapshot's forward-only guard treats this
+    // advanced baseline as the latest and a stale echo can't undo it.
+    if (writtenPatch.updated_at) _b.updated_at = writtenPatch.updated_at;
+    serverBaselines.current[jobId] = _b;
+  };
+
   const saveJob = (job, patch) => {
 
     if(initialLoad.current) return;
@@ -50213,37 +50253,12 @@ function App() {
             _writtenPatch = writePatch;
             tx.update(jref, writePatch);
           });
-          // CRITICAL: advance the three-way-merge baseline to EXACTLY what we just
-          // wrote. Otherwise `serverBaselines` only moves forward on an idle
-          // snapshot — which never happens during a burst of edits (typing, or
-          // delete-then-keep-editing). Every save in the burst then three-way
-          // merges its patch against a FROZEN-OLD baseline, so the merge decides
-          // the server "changed" the item and preserves it: the punch item you
-          // just deleted reappears, and a box you're typing reverts. Advancing the
-          // baseline to our written value makes the next edit's `server === base`
-          // check pass, so the client's change applies verbatim (deletes included).
-          if (_writtenPatch) {
-            const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
-            Object.keys(_writtenPatch).forEach(pk => {
-              if (pk.indexOf("data.") !== 0) return;
-              const f = pk.slice(5);
-              // KWELLER WIPE FIX (2026-07-09): if the merge RESCUED server changes
-              // on this field, what we WROTE is fresher than what our LOCAL copy
-              // holds. Advancing the baseline to the written (merged) value made
-              // the very next save in a tap-burst hit the "server == base →
-              // client wins verbatim" fast path with a stale client tree —
-              // bulldozing the content the previous merge had just rescued
-              // (checkmarks reverted, other crew's added items deleted). Keep
-              // the baseline at the value the LOCAL copy actually derives from
-              // (what we SENT), so every subsequent save structural-merges again
-              // until the local copy truly re-syncs from a snapshot.
-              _b[f] = _rescued.includes(f) ? cleanPatch[f] : _writtenPatch[pk];
-            });
-            // Stamp our write time so the snapshot's forward-only guard treats
-            // this advanced baseline as the latest and a stale echo can't undo it.
-            if (_writtenPatch.updated_at) _b.updated_at = _writtenPatch.updated_at;
-            serverBaselines.current[job.id] = _b;
-          }
+          // CRITICAL: advance the three-way-merge baseline to EXACTLY what we
+          // just wrote — full story + Kweller rescued-key rule live on
+          // _advanceMergeBaseline (shared with flushJob / flushSaves, which
+          // used to skip this and seeded the stale-baseline delete-resurrection
+          // behind the "Refresh from home runs" revert).
+          _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, _rescued);
           // Write succeeded — clear ONLY the keys we just wrote. New patches
           // that arrived during the await stay in the queue for next flush.
           if (pendingPatches.current[job.id]) {
@@ -50467,7 +50482,10 @@ function App() {
         try {
           // Same transactional three-way merge as saveJob — a close-flush
           // from a stale device must not overwrite punch/CO/etc. wholesale.
+          const _fr = [];
+          let _written = null;
           await runTransaction(db, async (tx) => {
+            _fr.length = 0; _written = null; // transactions retry on contention — start each attempt clean
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
             if(!snap.exists()) {
@@ -50475,10 +50493,15 @@ function App() {
               return;
             }
             const serverData = snap.data()?.data || {};
-            const _fr = [];
             const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
-            tx.update(jref, {...meta, merged:_fr.length > 0, ...wp});
+            _written = {...meta, merged:_fr.length > 0, ...wp};
+            tx.update(jref, _written);
           });
+          // Advance the merge baseline to what we just wrote — flushJob used to
+          // skip this (see _advanceMergeBaseline), leaving the flushed keys'
+          // baseline stale so the NEXT delete-shaped save of the same key
+          // resurrected the deleted content.
+          _advanceMergeBaseline(job.id, _written, cleanPatch, _fr);
           persistPending();   // server confirmed -> safe to drop from durable queue
         } catch(e) {
           console.error('[HE] flushJob save error:',e?.message);
@@ -50606,7 +50629,10 @@ function App() {
         // under a transaction and merge via _mergePatchAgainstServer (same path
         // as saveJob/flushJob). If this cannot complete (tab unload), re-retain
         // the patch for the reconnect/retry path instead of blind-writing.
+        const _fr = [];
+        let _written = null;
         runTransaction(db, async (tx) => {
+          _fr.length = 0; _written = null; // transactions retry on contention — start each attempt clean
           const jref = doc(db,"jobs",job.id);
           const snap = await tx.get(jref);
           if(!snap.exists()) {
@@ -50614,10 +50640,17 @@ function App() {
             return;
           }
           const serverData = snap.data()?.data || {};
-          const _fr = [];
           const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
-          tx.update(jref, {...meta, merged:_fr.length > 0, ...wp});
+          _written = {...meta, merged:_fr.length > 0, ...wp};
+          tx.update(jref, _written);
         }).then(() => {
+          // Baseline advance — flushSaves fires on tab-switch/backgrounding
+          // (visibilitychange), where the page usually SURVIVES. Skipping this
+          // was the main seed of the stale-baseline delete-resurrection: the
+          // flushed key's baseline stayed old for the whole session. If the
+          // page really is unloading, this .then never runs — harmless, the
+          // baselines rebuild on next launch.
+          _advanceMergeBaseline(job.id, _written, cleanPatch, _fr);
           persistPending();   // server confirmed -> safe to drop from durable queue
         }).catch(e => {
           console.error('[HE] flushSaves merge error:',e?.message);

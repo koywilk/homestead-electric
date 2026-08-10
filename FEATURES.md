@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-08-09 · App SW version: v368
+**Last manifest update:** 2026-08-09 · App SW version: v369
 
 ---
 
@@ -154,6 +154,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync (`syncDriveFoldersToJobs()`)
   - Files upload (`FileUploadSection`)
 - **Home Runs (panels)** · `shipped` · `HomeRunsTab`, `HomeRunLevel`
+  - Home Runs list first + "Refresh from home runs" revert fix · `shipped 2026-08-09` · `SW v369` · Koy: "when i hit refresh from homeruns list it works for a second and then reverts back… the homeruns list tab here needs to be at the top." Two halves. **Order:** the Home Runs list section now leads the tab (was Panel Schedules → Generator → list); every section still starts collapsed per the v347 convention. **Revert fix (root-caused, reproduced against the real `_threeWayMerge` in a node harness):** the revert was a stale-baseline delete-resurrection — `flushJob` and `flushSaves` (job close / tab switch / backgrounding inside the 500ms debounce window) ran the SAME merge transaction as `saveJob` but never advanced `serverBaselines`, so an edit that left through a flush kept that key's baseline old for the whole session; the next delete-shaped write of the same key (breaker-override "Refresh from home runs" deleting its panel key, panel-schedule Fill replacing a circuits map) three-way-merged against the stale base, the merge read the server's own copy as "another device's change" and kept it, `merged:true` made the tab re-adopt its own echo, and the UI reverted ~1s after the click — and every retry after it, because a rescued key's baseline deliberately stays at the sent value (Kweller rule), so base ≠ server forever. Fix: the post-write baseline advance is extracted to `_advanceMergeBaseline` and called by ALL THREE writers (it was saveJob-only); the Kweller rescued-key rule is preserved byte-for-byte inside the helper. Why it can't lose data: the baseline is in-memory bookkeeping (`serverBaselines.current`) never written to Firestore; no write shape, no schema, no rules change; flush-path writes get STRICTLY safer (a user's explicit delete stops resurrecting) and the v312 never-fresher-than-local invariant holds because the baseline advances to exactly what was written — the local copy's value for non-rescued keys, the sent value for rescued ones
   - Per-floor home runs
   - By Panel view · `shipped 2026-07-17` · `SW v345` · `HomeRunsByPanel` + shared `HRRow`/`sortHRRows` — groups every non-blank row by panel (dropdown order), then floor (main → basement → upper → extras), then A-Z, with per-panel pulled counts; auto-default once any panel is labeled, By Panel / By Floor toggle; rows fully editable in both views, edits write back to the row's own floor array through the same sort/renumber, adding + bulk paste stay in By Floor. Stored data shape unchanged
   - Bulk paste home runs
@@ -311,6 +312,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Since `SW v368` Today derives its activity sort + staleness from work EVENTS instead — the presence ping (fired on job OPEN) also rides the save funnel and stamps this field, so it counts views as work. Still stamped on every write path; Coordinator Worklist recency and Scoreboard recency tie-breaks still read it
 - **Smart merge on reconnect** · `shipped` · `_smartMergeForReconnect`
 - **Debounced save (`saveJob`)** · `shipped` · hot path for all job mutations; three-way merge + per-tab echo identity (`TAB_ID`, Kweller burst-wipe fix) · `SW v312`
+  - Flush paths advance the merge baseline · `shipped 2026-08-09` · `SW v369` · post-write baseline advance extracted to `_advanceMergeBaseline`, now shared by saveJob + flushJob + flushSaves (was saveJob-only) — closes the stale-baseline delete-resurrection behind the Home Runs "Refresh from home runs" revert; see the Home Runs (panels) entry for the full story
 - **Pending patches queue** · `shipped` · `pendingPatches.current` per-job patch accumulator
 - **Force update mechanism** · `shipped` · admin can push `config/app` doc to force fleet refresh
 - **Always-current auto-update** · `shipped 2026-07-10` · `SW v318` · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
