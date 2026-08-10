@@ -22785,9 +22785,31 @@ const sanitize = (obj) => {
 // ── Three-way merge (Cougar Moon data-loss fix, 2026-07-06) ──────────────────
 // Module scope so every view (jobs saveJob, Crew Planner, Time Off, pipeline)
 // uses the identical merge. See saveJob for the full story.
+// CANONICAL comparison (2026-08-09, Kweller "Refresh from home runs" revert —
+// the root cause under v369/v370's partial fixes): Firestore's two read
+// channels return THE SAME document with DIFFERENT map-key order — verified
+// live on Kweller: the transaction's lookup read gave roughQuestions as
+// upper/main/basement while the watch-channel baseline held main/basement/
+// upper (same for homeRuns, roughPunch, breakerOverrides). Raw JSON.stringify
+// equality is order-sensitive, so "did the server change since my baseline?"
+// was a coin flip for every multi-key map even when nothing changed. Every
+// false "yes" sent the save into the structural merge, where a deleted MAP KEY
+// is kept ("added by server") — the user's delete resurrected inside its own
+// transaction, merged:true re-adopted the echo, and the UI reverted ~1s after
+// the click. _jcanon sorts object keys recursively so _jeq compares CONTENT,
+// not wire order. Arrays keep their order (element order is meaningful).
+const _jcanon = (v) => {
+  if (Array.isArray(v)) return v.map(_jcanon);
+  if (v && typeof v === "object") {
+    const o = {};
+    Object.keys(v).sort().forEach(k => { o[k] = _jcanon(v[k]); });
+    return o;
+  }
+  return v;
+};
 const _jeq = (a, b) => {
   if (a === b) return true;
-  try { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
+  try { return JSON.stringify(_jcanon(a === undefined ? null : a)) === JSON.stringify(_jcanon(b === undefined ? null : b)); }
   catch { return false; }
 };
 
@@ -44865,7 +44887,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-09 · App SW version: v370
+**Last manifest update:** 2026-08-09 · App SW version: v371
 
 ---
 
@@ -45174,6 +45196,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Smart merge on reconnect** · 'shipped' · '_smartMergeForReconnect'
 - **Debounced save ('saveJob')** · 'shipped' · hot path for all job mutations; three-way merge + per-tab echo identity ('TAB_ID', Kweller burst-wipe fix) · 'SW v312'
   - Flush paths advance the merge baseline · 'shipped 2026-08-09' · 'SW v369' · post-write baseline advance extracted to '_advanceMergeBaseline', now shared by saveJob + flushJob + flushSaves (was saveJob-only) — closes ONE seed of the stale-baseline delete-resurrection behind the Home Runs "Refresh from home runs" revert; the sustainer fell in v370 (next entry)
+  - Canonical (key-order-insensitive) merge comparison · 'shipped 2026-08-09' · 'SW v371' · **THE actual root cause under the v369/v370 partial fixes, found by driving the repro in Koy's own Chrome with the extension:** on a fresh v370 tab with an empty pending queue and freshly seeded baselines, clicking "Refresh from home runs" still logged '[HE] concurrent-edit merge: preserved server changes on "breakerOverrides"' (and merely OPENING Kweller logged the same for 'roughQuestions') — a baseline existed, no other device wrote, yet base ≠ server. An offline dual-pipeline test (real 308KB Kweller doc through loader→migrate→normalizeJob vs transaction→normalizeJob) showed ZERO app-side differences — which left the wire. Verified by comparing map-key order across channels: **Firestore's lookup read (transactions) and watch stream (listeners) return the SAME doc with DIFFERENT map-key order** — Kweller 'roughQuestions' came back 'upper/main/basement' on one channel and 'main/basement/upper' on the other (ditto homeRuns, roughPunch). '_jeq' was raw 'JSON.stringify' equality — order-sensitive — so every save's "did the server change since my baseline?" was a coin flip per multi-key map, each false "yes" ran the structural merge, and a deleted MAP KEY resurrected ("added by server → keep") inside the user's own transaction, 'merged:true' re-adopted the echo, UI reverted ~1s after the click. Also explains Kweller Panel A's doubled group list (union of two identical-content lists during a false-mismatch merge) and routine benign rescue logs. Fix: '_jcanon' recursively sorts object keys before stringify, so '_jeq' compares CONTENT; arrays keep element order (meaningful). Node harness proves: reordered-but-identical channels → delete honored; genuine concurrent ADD → still kept; genuine server EDIT of a deleted key → still kept (existing data-keeping bias unchanged). Why it can't lose data: comparison-only change — '_jeq' answers "equal or not" everywhere it's used (merge fast paths, rescue detection, telemetry); no write shape, no schema, no rules change; stricter TRUE-equality means MORE client-verbatim fast paths (fewer spurious structural merges), and every genuinely-changed value still merges exactly as before
   - Own-echo exception in the loader's baseline advance · 'shipped 2026-08-09' · 'SW v370' · v369 closed the flush seeds but Kweller still reverted on v369 — **proved live, not guessed:** 'settings/deviceVersions' showed Koy's Chrome running v369 during the repro (same 'tab' id across writes = no reload between them), and PITR reads of 'jobs/1773092930059' showed every save from his tab landing with 'merged:true' — the delete was being resurrected INSIDE its own transaction on every attempt. Mechanism: after a rescued save, '_advanceMergeBaseline' deliberately pins the baseline at the SENT value (Kweller rule, v312) and DEPENDS on the write's own watch echo to re-converge the baseline to server state via the loader — but the loader's baseline advance was gated on "no pending saves", and a transaction's watch echo can arrive BEFORE the commit promise clears 'pendingPatches'. When that race hits (and no other fleet activity fires the collection listener — a quiet Saturday evening), the echo is skipped, base ≠ server sticks permanently, and every subsequent delete-shaped write re-rescues: 78 → 39 → back to 78, forever. Fix: a copy stamped with THIS tab's id ('j._tab === TAB_ID') is a state this tab itself wrote — local can never be older than it, so the loader now advances the baseline on own echoes UNCONDITIONALLY (forward-only 'updated_at' guard still applies); the convergence point the Kweller rule depends on can no longer be missed. Bonus find explained: Kweller Panel A's "manual 78" was the SAME five auto groups DUPLICATED (39+39) — union shrapnel from an earlier stale-base merge of two same-content-different-uid materializations; the first successful Refresh click deletes it and the card returns to the honest auto 39. Why it can't lose data: read-only in-memory bookkeeping (which snapshot may update 'serverBaselines') — no write path, shape, schema, or rules change; the advance target is a state this tab already wrote, so the v312 never-fresher-than-local invariant holds by construction, and JobDetail's adoption of '_merged' echoes is untouched
 - **Pending patches queue** · 'shipped' · 'pendingPatches.current' per-job patch accumulator
 - **Force update mechanism** · 'shipped' · admin can push 'config/app' doc to force fleet refresh
