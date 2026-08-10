@@ -38259,7 +38259,40 @@ const sb3JobSignals = (j) => {
     questions: _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions),
     shares: Array.isArray(j.questionShares) ? j.questionShares.length : 0 };
 };
+// SB4_DEFAULTS / sb4Config — admin-tunable scoring config (severity QC,
+// App Usage blend, misc knobs) that every later scoring task reads. Deep-
+// merges `stored` (e.g. a partial Firestore doc) over these defaults:
+// missing keys fall back, extra keys are ignored. Values below reproduce
+// today's hardcoded literals exactly, so sb3Agg(jobs, sb4Config()) ==
+// sb3Agg(jobs, <legacy weights object>) for every job.
+const SB4_DEFAULTS = {
+  weights: { quality: 40, appUsage: 25, sharedLinks: 20, handoff: 15 },
+  appMix: 50,
+  qc: { seriousCredit: 0, minorDivisor: 40, minorMaxCost: 50 },
+  appCaps: { punch: 300, updates: 40, questions: 60 },
+  sharedLinksCap: 3,
+  handoffDivisor: 40,
+  strandedDays: 7,
+};
+const sb4Config = (stored) => {
+  const s = stored && typeof stored === "object" ? stored : {};
+  return {
+    weights:  { ...SB4_DEFAULTS.weights,  ...(s.weights  || {}) },
+    appMix:   typeof s.appMix === "number" ? s.appMix : SB4_DEFAULTS.appMix,
+    qc:       { ...SB4_DEFAULTS.qc,       ...(s.qc       || {}) },
+    appCaps:  { ...SB4_DEFAULTS.appCaps,  ...(s.appCaps  || {}) },
+    sharedLinksCap: typeof s.sharedLinksCap === "number" ? s.sharedLinksCap : SB4_DEFAULTS.sharedLinksCap,
+    handoffDivisor: typeof s.handoffDivisor === "number" ? s.handoffDivisor : SB4_DEFAULTS.handoffDivisor,
+    strandedDays:   typeof s.strandedDays   === "number" ? s.strandedDays   : SB4_DEFAULTS.strandedDays,
+  };
+};
+// TEMPORARY dual-shape shim, removed in Task 7 (which updates every call
+// site to pass a full sb4Config(...) result and renames this param `cfg`):
+// sb3Agg accepts EITHER a full cfg object (has .weights) or the legacy
+// {quality,appUsage,sharedLinks,handoff} weights object, so the app keeps
+// building while Tasks 2-6 land.
 const sb3Agg = (jobs, weights) => {
+  const cfg = (weights && weights.weights) ? weights : sb4Config(weights ? { weights } : null);
   let ftpP=0,ftpT=0,qcItems=0,qcWalks=0,punch=0,openPunch=0,updates=0,questions=0,shares=0;
   jobs.forEach(j => { const s = sb3JobSignals(j);
     s.ftp.forEach(e => { ftpT++; if (e) ftpP++; });
@@ -38271,10 +38304,10 @@ const sb3Agg = (jobs, weights) => {
   const handoff = punch > 0 ? openPunch/punch*100 : null;
   const nFtp = ftpPct, nQc = qcPerJob == null ? null : Math.max(0, 1 - qcPerJob/6);
   const quality = (nFtp == null && nQc == null) ? null : (((nFtp||0)+(nQc||0)) / ((nFtp==null?0:1)+(nQc==null?0:1)));
-  const appUsage = (Math.min(1,punch/300) + Math.min(1,updates/40) + Math.min(1,questions/60)) / 3;
-  const sharedLinks = Math.min(1, shares/3);
-  const nHandoff = handoff == null ? null : Math.max(0, 1 - handoff/40);
-  const w = weights || SB3_DEFAULT_WEIGHTS;
+  const appUsage = (Math.min(1,punch/cfg.appCaps.punch) + Math.min(1,updates/cfg.appCaps.updates) + Math.min(1,questions/cfg.appCaps.questions)) / 3;
+  const sharedLinks = Math.min(1, shares/cfg.sharedLinksCap);
+  const nHandoff = handoff == null ? null : Math.max(0, 1 - handoff/cfg.handoffDivisor);
+  const w = cfg.weights;
   const dims = [[quality, w.quality],[appUsage, w.appUsage],[sharedLinks, w.sharedLinks],[nHandoff, w.handoff]].filter(d => d[0] != null && d[1] > 0);
   const wsum = dims.reduce((s,d) => s+d[1], 0);
   const overall = wsum ? dims.reduce((s,d) => s + d[0]*d[1], 0)/wsum : 0;
