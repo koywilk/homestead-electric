@@ -14551,6 +14551,11 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // fit judgment and no in-section schedule (removed per Koy 2026-07-14).
   const included = loads.filter(l=>l.included);
   const usage = genPanelUsage(included);
+  // Select-all state (Koy 2026-08-11: "generator selection should have a select
+  // all button"). One button that flips to Deselect all once everything is on,
+  // so the same control undoes itself — no separate "none" button to hunt for.
+  const allIncluded = loads.length>0 && included.length===loads.length;
+  const toggleAll = () => commit(loads.map(l=>({...l, included:!allIncluded})));
 
   return (
     <div>
@@ -14581,6 +14586,19 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
             color:C.green,fontSize:12,fontWeight:600,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
           + Add Manually
         </button>
+        {loads.length>0&&(
+          <button onClick={toggleAll}
+            title={allIncluded?'Take every load off the generator':'Put every load on the generator'}
+            style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:8,
+              color:C.blue,fontSize:11,fontWeight:700,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+            {allIncluded?'Deselect all':'Select all'}
+          </button>
+        )}
+        {loads.length>0&&(
+          <span style={{fontSize:11,color:C.dim}}>
+            {included.length} of {loads.length} on the generator
+          </span>
+        )}
         {loads.length>0&&(
           <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
@@ -14960,7 +14978,12 @@ const panelFillSig = (breakers) => stableStringify(
   breakers.map(b => [b.name, b.amps, b.poles, b.wire])
     .sort((a, b) => String(a).localeCompare(String(b))));
 
-function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {} }) {
+// onEnsurePanelName(label) is the reverse half of the Panels <-> Schedules link
+// (Koy 2026-08-11): creating a schedule here also adds that name to the home-run
+// panel dropdown, so a panel created on either side exists on both. This
+// component can't write homeRuns itself, so HomeRunsTab passes the callback in.
+// CREATE-only — deleting a schedule never removes the panel name.
+function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {}, onEnsurePanelName }) {
   // Fill a panel's circuits map from home runs assigned to that panel.
   // Sorting per Koy:
   //   1. 2-pole breakers first (top)
@@ -15052,6 +15075,10 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       slotCount: 40,
       circuits: {},
     }]);
+    // Mirror the name into the home-run panel dropdown so it doesn't have to be
+    // added twice. Safe to call unconditionally — the handler no-ops if the name
+    // is already there.
+    if (onEnsurePanelName) onEnsurePanelName(label);
     setExpanded(v => ({ ...v, [id]: true }));
     setNewLabel("");
   };
@@ -15575,10 +15602,13 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           // ── Inline panel breaker summary ──
           const extraRows=(homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
           const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
-          // View default (Koy 2026-07-17): once any panel is labeled, the list
-          // reads panel → floor → alphabetical; before that, the floor view.
-          const anyPanelLabeled = allHRRows.some(r=>r&&r.panel);
-          const hrViewEff = hrView || (anyPanelLabeled ? "panel" : "floor");
+          // View default (Koy 2026-08-11): ALWAYS By Floor until the user taps
+          // the toggle. v345 auto-switched to By Panel the moment ANY row had a
+          // panel label — which on a real job is immediately and forever, so the
+          // floor view was effectively unreachable ("by floor should be default
+          // view"). The By Panel / By Floor toggle itself is unchanged; this only
+          // decides which one you land on.
+          const hrViewEff = hrView || "floor";
           // Meter can carry breakers, so
           // include it in the panel summary cards.
           const panels=getPanelOpts(cp).filter(p=>p!=="");
@@ -16131,7 +16161,15 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           onChange={onElectricalPanelsChange}
           jobName={jobName||""}
           jobAddress={jobAddress||""}
-          homeRuns={homeRuns||{}}/>
+          homeRuns={homeRuns||{}}
+          onEnsurePanelName={(label)=>{
+            const n=(label||"").trim(); if(!n) return;
+            const cur=homeRuns.customPanels||DEFAULT_PANELS;
+            // Case-insensitive so "sub panel" doesn't duplicate "Sub Panel".
+            if(cur.some(p=>(p||"").toLowerCase()===n.toLowerCase())) return;
+            onHRChange({...homeRuns,customPanels:[...cur,n]});
+            toast.success(`"${n}" added to the panel list.`);
+          }}/>
       </Section>
 
       {/* Generator Load Selection — starts collapsed so the section header is
@@ -16285,7 +16323,35 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       {/* Panels */}
       {(()=>{
         const cP=homeRuns.customPanels||DEFAULT_PANELS;
-        const addP=()=>{ const n=newPanelName.trim(); if(!n||cP.includes(n)) return; onHRChange({...homeRuns,customPanels:[...cP,n]}); setNewPanelName(''); };
+        // Adding a panel here ALSO creates its blank Panel Schedule (Koy
+        // 2026-08-11: "shouldnt have to add panel twice if youve already created
+        // the panel somewhere else"). CREATE-only and one-directional per click:
+        // it never touches an existing schedule, and removing a panel chip below
+        // never deletes one — a schedule holds typed circuits.
+        //
+        // Both writes ride the SAME `u` patch updater (jobRef.current is advanced
+        // synchronously, App.js ~24368), so calling onHRChange then
+        // onElectricalPanelsChange composes instead of clobbering, and both fields
+        // land in ONE accumulated patch / one merge transaction.
+        //
+        // Deliberately fires only on this explicit click — never on load and never
+        // for DEFAULT_PANELS, or every job would sprout four empty schedules.
+        const addP=()=>{
+          // Case-insensitive dedupe, matching how the breaker cards and FILL
+          // already compare panel names. Was `cP.includes(n)` (exact) — which
+          // let "panel a" join an existing "Panel A" as a second chip, and now
+          // that chip would silently get no schedule (the schedule check below
+          // IS case-insensitive), leaving a panel with no sheet and no toast.
+          const n=newPanelName.trim();
+          if(!n||cP.some(p=>(p||"").toLowerCase()===n.toLowerCase())) return;
+          onHRChange({...homeRuns,customPanels:[...cP,n]});
+          const eps=electricalPanels||[];
+          if(onElectricalPanelsChange && !eps.some(ep=>(ep.label||"").toLowerCase()===n.toLowerCase())){
+            onElectricalPanelsChange([...eps,{id:uid(),label:n,location:"",size:"40/80",slotCount:40,circuits:{}}]);
+            toast.success(`Added "${n}" — blank panel schedule created.`);
+          }
+          setNewPanelName('');
+        };
         return (
           <Section label="Panels" color={C.blue} defaultOpen={false}>
             <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
@@ -45255,7 +45321,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-10 · App SW version: v376
+**Last manifest update:** 2026-08-11 · App SW version: v378
 
 ---
 
@@ -45407,6 +45473,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - By Floor is the default view again + a panel creates its own schedule + generator select-all · 'shipped 2026-08-11' · 'SW v378' · Koy: "by floor should be default view... the panel schedules should be created when a panel is created, shouldnt have to add panel twice if youve already created the panel somewhere else... generator selection should have a select all button." Three independent fixes in one ship. **(1) By Floor default:** 'hrViewEff' was 'hrView || (anyPanelLabeled ? "panel" : "floor")' (v345) — it flipped to By Panel the moment ANY row carried a panel label, which on a real job happens immediately and permanently, so nobody ever landed on the floor view. Now 'hrView || "floor"'; the By Panel / By Floor toggle is untouched, only the landing view changed. **(2) Panels ↔ Panel Schedules link:** the two lists were completely independent — 'homeRuns.customPanels' (strings, feeds every row's panel dropdown) and 'job.electricalPanels' (objects, the printable breaker sheets) — so every new panel had to be typed in twice. Now CREATE-only in BOTH directions: 'addP' in the Panels section also appends a blank '{label,location:"",size:"40/80",slotCount:40,circuits:{}}' schedule, and 'ElectricalPanelSchedules.addPanel' calls the new 'onEnsurePanelName' prop (the component can't write 'homeRuns' itself, so 'HomeRunsTab' passes the callback in) to add the name to the dropdown. Both matches are case-insensitive so "sub panel" can't duplicate "Sub Panel". **Deletes never cascade either way** — a schedule holds typed circuits, and a panel name may still be referenced by home-run rows. Fires only on the explicit add click — never on load and never for the four 'DEFAULT_PANELS', or every job would sprout four empty schedules. **(3) Generator select-all:** one button in the 'GeneratorLoadSection' toolbar that flips to "Deselect all" once everything is on (so the same control undoes itself), plus a live "{n} of {total} on the generator" readout. Why it can't lose data: the panel link writes 'homeRuns' and 'electricalPanels' back-to-back in one click, and both go through the same 'u' patch updater, which advances 'jobRef.current' SYNCHRONOUSLY before returning — so the second call composes on the first instead of clobbering it, and 'saveJob' accumulates both into ONE patch and one three-way-merge transaction (the path hardened in v369/v370/v371). No new field, no schema or rules change; auto-created schedules arrive with 'circuits:{}' and no 'fillSig', so the v373 sync effect leaves them blank until someone hits FILL; select-all rides the existing 'saveHomeownerRequest' funnel (version snapshot before every write) and is reversible by the same button
   - Pull-summary leads the tab + expandable A-Z flat list · 'shipped 2026-08-10' · 'SW v376' · Koy: "I want the Home Runs pulled, with the number of pulled compared to not pulled at the very top... click that list and have it show you all of the home runs organized and wiresized alphabetically... the whole list of pulled and not pulled right there so it's easy to see. Right now it's kind of hard to navigate: you have to click into Home Runs and then find the panel or the floor." The "Home Runs Pulled" progress card now leads the WHOLE tab — above even the v369 list-first Home Runs section and Panel Schedules, not just above Generator Load Selection — and its header line spells out both sides of the count ('{pulled} pulled · {notPulled} left', was the bare 'pulled / total — pct%'). New 'HomeRunsPullSummary' component: click the card to expand (starts collapsed, per the v347 every-section-collapsed convention) into one flat A-Z list of every named home run on the job — no drilling into a panel or floor first. Split into "Not Pulled" (the actionable set, listed first) and "Pulled" groups, each with its own count header (a group hides entirely when empty, same pattern the generator response modal already uses for its ON/NOT ON lists); every row carries its wire size as a colored chip plus panel · floor · 'wireAmpsVolts()' so the row is self-describing without opening it. Sort is alphabetical-by-name only — Koy's "organized and wiresized alphabetically" resolved as name-sort with wire shown on every row, NOT grouped by wire; the 'byName' comparator inside 'HomeRunsPullSummary' is the one place a future wire-size-grouping pass would touch. List membership comes from the same per-floor arrays (main/basement/upper/extraFloors) and the same name-required 'namedRows' filter the pulled/total counts already used, so the header numbers and the expanded list's group counts can never drift apart. Purely additive: the existing By Panel / By Floor Home Runs section, 'HomeRunsByPanel', and the row editors are untouched. Why it can't lose data: read-only presentational component — no new field, no write path, no schema or rules change; the moved progress card reuses the exact 'pulled'/'total'/'pct' values 'HomeRunsTab' already computed, nothing recalculated a new way
   - 240V flip now moves the breaker COUNT cards too · 'shipped 2026-08-10' · 'SW v374' · Koy, testing v373 on Webb: "ive marked two of the 12/2 homeruns as 240v but it still does not appear in the breaker counts." v373 was real but only half the surface — it taught the panel *schedule* about 240V ('fillPanelFromHomeRuns' already called 'effectivePoles'), while the **panel summary cards above it** still destructured 'poles' straight off the raw wire table ('const {amps,poles}=WIRE_BREAKER[r.wire]'), so the flag re-poled the printed sheet while the counts never moved. Audited every 'WIRE_BREAKER[...]' read in the file: this was the ONLY one that ignored 'v240' — the generator panel ('slotsUsed'), 'GenPanelGrid' and the schedule fill all already went through 'effectivePoles'. Now 'poles = effectivePoles(r.wire, r.v240)' at that one site, and because every downstream number flows from it, the whole card chain corrects at once: the group label (a 240V 12/2 files under "20A 2P" instead of "20A 1P"), the space math, 'autoSpaces'/drift detection, the tandem + quad sizing banner, and the PO breaker counts. Pairs with the v369 drift banner — an existing manual override on that panel now correctly reads "Manual count is stale" and its Refresh pulls the corrected number. Why it can't lose data: read-side derivation only — no write, no new field, no schema or rules change, and 'effectivePoles' is the same module-scope helper four other call sites already trusted
   - 240V flip re-poles filled panel schedules · 'shipped 2026-08-10' · 'SW v373' · Koy: "I made a 20a circuit a 240v load and it did not update the breakers to be 2 pole for those loads." The panel-schedule circuits map is a fill-time snapshot, so flipping a 12/2 or 14/2 home run to 240V (or any wire/load change) left an already-filled schedule silently stale — the home-run row said "2-pole · 240V" while the breaker sheet below still showed 1-pole. Fills now stamp two additive strings on the panel: 'fillSig' (order-insensitive signature of the breakers the fill derived FROM — new shared 'panelBreakersFromHomeRuns' + 'panelFillSig', the same derivation the FILL button uses, so the two can never disagree) and 'fillCircuitsSig' (canonical sorted-key 'stableStringify' of what it produced, so Firestore map-key reordering can't fake a hand-edit). A sync effect in 'ElectricalPanelSchedules' keeps snapshots honest: a panel still byte-identical to its own last fill output auto re-fills through the normal 'placeBreakers' engine the moment Home Runs drift (toast if breakers no longer fit); a panel hand-edited since its fill is NEVER auto-written — its FILL button turns into an orange RE-FILL alert (existing REPLACE confirm still applies); pre-v373 fills are adopted silently the first time their circuits match a fresh fill byte-for-byte, otherwise they keep today's manual-only behavior (one manual re-fill opts them in). Why it can't lose data: both new fields are additive strings inside each 'job.electricalPanels[]' entry (inside 'data' — no loader change); the auto path writes ONLY when current circuits equal the panel's own last fill output, so typed circuits are unreachable by it; an empty derivation (rows moved off / homeRuns not yet loaded) never touches a panel, so an auto-wipe is impossible; all writes ride the existing updPanel → saveJob funnel (merge-baseline advance fixed v369/v370)
