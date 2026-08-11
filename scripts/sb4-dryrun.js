@@ -43,6 +43,27 @@
  * SB4_DEFAULT_WEIGHTS; if it were ever a separate copy instead of a direct
  * reference, it could drift from SB4_DEFAULTS silently).
  *
+ * TASK 2R EXTENSION — severity-aware QC score. cfg.qc now actually drives
+ * sb4Agg's `qc` field (no longer a plumbing no-op for that sub-object): a
+ * walk with any `severity === "serious"` item scores 0 credit (by default —
+ * tunable via cfg.qc.seriousCredit), otherwise it loses a little per minor
+ * item, floored at cfg.qc.minorMaxCost. `qc` becomes the MEAN of these
+ * per-walk 0-1 scores (previously: raw qcItems/qcWalks, a defect COUNT, not
+ * a score). New fields `qcSeriousPct`/`qcMinorAvg`/`qcWalks` ride along for
+ * the stat card. Block 5 below extracts `clamp`/`NORM` too — both are
+ * declared INSIDE the ScoreboardV4 component body, past the MAIN region's
+ * end marker, so they need their own extraction — to prove the single
+ * highest-risk line in this task: NORM.qc must become the identity clamp
+ * `v => clamp(v)`, because sb4Agg's `qc` is now ALREADY a 0-1 "higher is
+ * better" score. Leaving the old `1 - v/8` formula in place would silently
+ * INVERT it (a serious-item walk scoring 0 would normalize to ~1, i.e.
+ * "great"). Block 2's `row.qc` assertion is updated from the Task 1R
+ * literal (`1`, the old raw-count semantics) to `0.975` (the new severity
+ * score) — margin/handoff/app in that block are untouched and still prove
+ * true non-regression; qc's VALUE changing is Task 2R's entire point, so
+ * pinning it to the new number is the correct regression gate going
+ * forward, not a weakening of it.
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -122,14 +143,25 @@ const MAIN = sliceBetween(
   'if (typeof window !== "undefined") window.sb4Build = sb4Build;'
 );
 
+// clamp/NORM are declared INSIDE the ScoreboardV4 component function body —
+// past MAIN's end marker — so they need their own extraction. Same
+// extractConst technique (marker + depth-tracked slice); it doesn't care
+// about nesting/indentation, only that "const NAME = " appears once and the
+// statement is self-contained. Both are: clamp is a one-line arrow with no
+// external deps; NORM is a one-line object literal whose fields call
+// `clamp(...)` by closure — declared in that order below so it reads
+// naturally, though closure means either order would work since neither is
+// actually CALLED until block 5, well after both const statements have run.
+const RENDER_BITS = ["clamp", "NORM"].map(extractConst).join("\n");
+
 // Property order matters here: object-literal shorthand evaluates identifiers
 // left to right, so SB4_DEFAULTS must come FIRST for the pre-implementation
 // (RED) run to fail with "SB4_DEFAULTS is not defined" specifically, per the
 // task brief, instead of tripping over sb4Config (also undefined pre-impl)
 // first.
 const combined =
-  HELPERS + "\n" + MAIN +
-  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build });\n";
+  HELPERS + "\n" + MAIN + "\n" + RENDER_BITS +
+  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, NORM });\n";
 
 let extracted;
 try {
@@ -140,7 +172,7 @@ try {
   console.error("  " + e.message);
   process.exit(1);
 }
-const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build } = extracted;
+const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, NORM } = extracted;
 
 // ─── FIXTURES (verbatim from the task brief) ───────────────────────────────
 const jobA = { id:"a", name:"Fixture A", foreman:"T", simproMargin: 20,
@@ -191,7 +223,13 @@ const row = built[0] || {};
 assertEq(row.name, "T", "row.name");
 assertEq(row.jobs, 2, "row.jobs");
 assertEq(row.margin, 25, "row.margin (median of [20,30])");
-assertEq(row.qc, 1, "row.qc (2 QC items / 2 QC walks)");
+// Task 2R: qc's VALUE is intentionally different from the Task 1R baseline
+// (was raw count 1 = "2 items / 2 walks"; now a severity score — mean of two
+// 1-minor-item walks, 0.975 each). margin/handoff/app above and below are
+// untouched, still proving true non-regression.
+assertEq(row.qc, 0.975, "row.qc (Task 2R severity score: mean of two 1-minor walks = 0.975, not the old raw count)");
+assertEq(row.qcSeriousPct, 0, "row.qcSeriousPct survives sb4Build's spread (0 — no serious items in these fixtures)");
+assertEq(row.qcWalks, 2, "row.qcWalks survives sb4Build's spread (2 — both jobs had a QC walk)");
 assertEq(row.handoff, 75, "row.handoff (3 open / 4 punch * 100)");
 assertEq(row.app, 6, "row.app (punch 4 + updates 1 + questions 1)");
 
@@ -219,10 +257,109 @@ assertEq(sb4Config({ qc: { minorDivisor: 20 } }).qc.seriousCredit, 0, "partial q
 assertEq(sb4Config(null), SB4_DEFAULTS, "sb4Config(null) deep-equals SB4_DEFAULTS");
 assertEq(sb4Config({ appMix: "x" }).appMix, 50, "non-numeric appMix override is ignored, falls back to default (50)");
 
+console.log("\n── 5. TASK 2R: severity-aware QC score (sb4Agg.qc/qcSeriousPct/qcMinorAvg/qcWalks + NORM.qc) ──");
+// jobB2: a deep clone of jobB with its one fromQC item (p3) marked serious —
+// NOT a mutation of the shared `jobB` fixture, which block 2 above still
+// needs unmodified (1 minor item, walk score 0.975).
+const jobB2 = JSON.parse(JSON.stringify(jobB));
+jobB2.finishPunch.main.general.find(it => it.id === "p3").severity = "serious";
+
+// Base case, defaults (seriousCredit 0, minorDivisor 40, minorMaxCost 50):
+// jobA has 1 fromQC item (p2), no severity => minor. jobB has 1 fromQC item
+// (p3), no severity => minor. Neither job has a serious item.
+//   walk score (either job) = 1 - min(0.5, 1/40) = 1 - 0.025 = 0.975
+const baseAgg = sb4Agg([jobA, jobB]);
+assertEq(baseAgg.qc, 0.975, "base: qc = mean(0.975, 0.975) = 0.975 (two 1-minor-item walks)");
+assertEq(baseAgg.qcSeriousPct, 0, "base: qcSeriousPct = 0 (no serious items anywhere)");
+assertEq(baseAgg.qcMinorAvg, 1, "base: qcMinorAvg = 1 (1 minor item/walk average)");
+assertEq(baseAgg.qcWalks, 2, "base: qcWalks = 2 (both jobs had a QC walk)");
+
+// jobB2's p3 is now serious => its walk scores seriousCredit/100 = 0/100 = 0
+// regardless of minor count (it has none) — ANY serious item zeroes the
+// walk. jobA is untouched at 0.975.
+const seriousAgg = sb4Agg([jobA, jobB2]);
+assertEq(seriousAgg.qc, 0.4875, "serious: qc = mean(0.975, 0) = 0.4875 — one serious item drags the mean, doesn't just shave it");
+assertEq(seriousAgg.qcSeriousPct, 50, "serious: qcSeriousPct = 50 (1 of 2 walks has >=1 serious item)");
+
+// Knob proof 1 — raising seriousCredit gives the serious walk PARTIAL credit
+// instead of zero (still uses jobB2, the severity-marked fixture).
+const creditAgg = sb4Agg([jobA, jobB2], sb4Config({ qc: { seriousCredit: 50 } }));
+assertEq(creditAgg.qc, 0.7375, "knob: seriousCredit 50 => jobB2 walk 0.5 => mean(0.975, 0.5) = 0.7375");
+
+// Knob proof 2 — a harsher minorDivisor bites into a purely-minor walk. jobA
+// ALONE (not jobA+jobB) so this isolates the single-walk formula per the
+// brief's "jobA walk" wording, uncontaminated by jobB's own score.
+const divisorAgg = sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 2 } }));
+assertEq(divisorAgg.qc, 0.5, "knob: minorDivisor 2 => jobA walk 1 - min(0.5, 1/2) = 0.5");
+
+// Self-review Q1 — "does a walk with one serious item really score zero?"
+// jobB2 ISOLATED (not blended with jobA), so this is a direct proof, not an
+// inference from a mean: the walk's OWN score is exactly 0, at defaults.
+assertEq(sb4Agg([jobB2]).qc, 0, "self-review: jobB2 alone (its only fromQC item is serious) scores exactly 0, isolated from any blending");
+
+// Self-review Q2 — "does a job with zero QC items still count as a clean
+// walk when the status says a walk happened?" jobC has a qcStatus ("pass")
+// but NO punch tree at all — zero fromQC items, serious or minor. Walk
+// detection (unchanged per the brief) still flags it as a walk via qcStatus,
+// so it must score a PERFECT 1.0 (0 serious, 0 minor => no penalty), not be
+// dropped or scored as if undiagnosed.
+const jobC = { id: "c", name: "Fixture C", foreman: "T", qcStatus: "pass" };
+const cleanAgg = sb4Agg([jobC]);
+assertEq(cleanAgg.qc, 1, "self-review: qcStatus-only walk with zero fromQC items scores a perfect 1 (clean walk, not undiagnosed)");
+assertEq(cleanAgg.qcWalks, 1, "self-review: qcStatus alone (no punch tree) still counts as a walk — detection logic is unchanged");
+assertEq(cleanAgg.qcSeriousPct, 0, "self-review: a clean walk contributes 0 to qcSeriousPct");
+assertEq(cleanAgg.qcMinorAvg, 0, "self-review: a clean walk contributes 0 to qcMinorAvg");
+
+// Self-review Q3 — the brief flags j.qcPunch by name as a preserve-this trap
+// ("the live sb4Agg already walks it and you must preserve that"). jobD's
+// ONLY punch tree is qcPunch (no roughPunch/finishPunch at all), with one
+// serious + one minor fromQC item, so a severity-rewrite that accidentally
+// dropped qcPunch from the walked array would silently score this job as an
+// undiagnosed null instead of a failed (score-0) walk.
+const jobD = { id: "d", name: "Fixture D", foreman: "T", qcStatus: "fail",
+  qcPunch: { main: { general: [ { id: "q1", text: "a", fromQC: true, severity: "serious" }, { id: "q2", text: "b", fromQC: true } ] } } };
+const qcPunchAgg = sb4Agg([jobD]);
+assertEq(qcPunchAgg.qcWalks, 1, "self-review: qcPunch-only job still counts as a walk (qcPunch is walked, not dropped)");
+assertEq(qcPunchAgg.qc, 0, "self-review: qcPunch's serious item (q1) zeroes the walk, proving qcPunch items are read");
+assertEq(qcPunchAgg.qcSeriousPct, 100, "self-review: qcPunch-only walk registers as 100% serious");
+
+// Self-review Q4 — the brief spells out "it.fromQC && !it.voided": a voided
+// serious item must NOT zero the walk. jobE has one voided serious item
+// (excluded entirely, same as it always was for punch/openPunch) and one
+// live minor item — the walk should score as a plain 1-minor walk (0.975),
+// exactly as if the voided item were never there.
+const jobE = { id: "e", name: "Fixture E", foreman: "T", qcStatus: "fail",
+  roughPunch: { main: { general: [
+    { id: "v1", text: "voided-serious", fromQC: true, severity: "serious", voided: true },
+    { id: "v2", text: "live-minor", fromQC: true } ] } } };
+const voidedAgg = sb4Agg([jobE]);
+assertEq(voidedAgg.qc, 0.975, "self-review: a voided serious item doesn't count — walk scores as if it only had the 1 live minor item");
+assertEq(voidedAgg.qcSeriousPct, 0, "self-review: a voided serious item doesn't move qcSeriousPct");
+
+// No-walk case: qc (and the display fields) must stay null, not 0 — a person
+// with zero QC walks is undiagnosed, not "perfect."
+assertEq(sb4Agg([]).qc, null, "empty jobs list: qc stays null (no walks, not a perfect score)");
+assertEq(sb4Agg([]).qcSeriousPct, null, "empty jobs list: qcSeriousPct stays null");
+assertEq(sb4Agg([]).qcMinorAvg, null, "empty jobs list: qcMinorAvg stays null");
+assertEq(sb4Agg([]).qcWalks, 0, "empty jobs list: qcWalks is 0");
+
+// THE INVERSION TRAP. sb4Agg's qc is now an already-normalized 0-1 "higher
+// is better" score, so NORM.qc must be the IDENTITY clamp. If NORM.qc were
+// still (or reverted to) the old raw-count formula `v => clamp(1 - v/8)`,
+// this assertion catches it immediately and loudly:
+//   clamp(1 - 0.4875/8) = clamp(1 - 0.0609375) = clamp(0.9390625) ≈ 0.939
+// — a walk that scored 0.4875 (half-serious) would normalize to ~0.94
+// ("great"), the exact inversion the brief calls the single highest-risk
+// line in this task.
+assertEq(NORM.qc(0.4875), 0.4875, "NORM.qc(0.4875) === 0.4875 — identity clamp, NOT 1 - v/8 (the inversion trap)");
+assertEq(NORM.qc(1), 1, "NORM.qc(1) === 1 — a perfect walk score stays perfect (old formula would give clamp(1-1/8)=0.875)");
+assertEq(NORM.qc(0), 0, "NORM.qc(0) === 0 — an all-serious score stays 0 (old formula would give clamp(1-0/8)=1, i.e. \"perfect\")");
+assertEq(NORM.qc(null), null, "NORM.qc(null) === null");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("task1R ok");
+console.log("task2R ok");
 process.exit(0);

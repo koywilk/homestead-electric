@@ -39681,9 +39681,9 @@ function ScoreboardV3({ jobs, users = [], identity }) {
 // over these defaults: missing keys fall back, extra keys are ignored.
 // SB4_DEFAULT_WEIGHTS below derives from this — ONE source of truth for the
 // weights shape the render code, useState initializer, and the "Reset to
-// defaults" button all read. NOTE: cfg is plumbed through sb4Agg/sb4Build in
-// this task but not yet CONSUMED by the scoring math below — that lands in
-// later tasks. Values here reproduce today's hardcoded literals exactly.
+// defaults" button all read. NOTE: cfg.qc now drives sb4Agg's QC severity
+// score (Task 2R); the remaining margin/handoff/app knobs are still
+// unconsumed by the scoring math below — later tasks wire those in.
 const SB4_DEFAULTS = {
   weights: { margin: 45, qc: 25, handoff: 20, app: 10 },
   marginDivisor: 50,
@@ -39716,21 +39716,27 @@ const _sb4Special = (name) => /phase|temp power|temp p\b|t&m|ev charger|light ch
 const _sb4Median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2 * 10) / 10; };
 const _sb4Stage = (j) => _sb3Completed(j) ? "final" : Number(j.finishStage) > 0 ? "finish" : (_sb3lc(j.roughStatus) === "complete" || Number(j.roughStage) >= 100) ? "rough done" : "rough";
 const sb4Agg = (js, cfg) => {
-  // c is unused this task on purpose — plumbing only; later tasks consume it.
-  const c = cfg || sb4Config(null); // eslint-disable-line
-  const marg = [], live = [];
-  let qcItems = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0;
+  const c = cfg || sb4Config(null);
+  const marg = [], live = [], qcScores = [];
+  let qcSeriousWalks = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0;
   js.forEach(j => {
     const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
     if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
     if (m != null && !_sb3Completed(j)) live.push({ job: String(j.name || "?").trim(), m: Math.round(m * 10) / 10, stage: _sb4Stage(j), special: sp }); // watch: live jobs
-    let qcDefects = 0, qcWalk = false;
+    let seriousCount = 0, minorCount = 0, qcWalk = false;
     [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
-      if (!it || it.voided) return; punch++; if (!it.done) openPunch++; if (it.fromQC) { qcWalk = true; qcDefects++; }
+      if (!it || it.voided) return; punch++; if (!it.done) openPunch++;
+      if (it.fromQC) { qcWalk = true; if (it.severity === "serious") seriousCount++; else minorCount++; } // severity absent => minor, by design
     }));
     const st = _sb3lc(j.qcStatus);
     if (["pass", "fail", "fixed", "completed"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) qcWalk = true;
-    if (qcWalk) { qcWalks++; qcItems += qcDefects; }
+    if (qcWalk) {
+      qcWalks++;
+      if (seriousCount > 0) qcSeriousWalks++;
+      qcMinorSum += minorCount;
+      // any serious item zeroes (or partial-credits, if tuned) the whole walk; otherwise lose a little per minor item, floored.
+      qcScores.push(seriousCount > 0 ? c.qc.seriousCredit / 100 : 1 - Math.min(c.qc.minorMaxCost / 100, minorCount / c.qc.minorDivisor));
+    }
     updates += (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
     questions += _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
   });
@@ -39738,7 +39744,10 @@ const sb4Agg = (js, cfg) => {
   return {
     jobs: js.length,
     margin: _sb4Median(marg), marginN: marg.length,
-    qc: qcWalks ? Math.round(qcItems / qcWalks * 10) / 10 : null,
+    qc: qcWalks ? Math.round(qcScores.reduce((a, b) => a + b, 0) / qcWalks * 10000) / 10000 : null, // 0-1 severity score, mean of per-walk scores — NOT a raw count
+    qcSeriousPct: qcWalks ? Math.round(qcSeriousWalks / qcWalks * 100) : null,
+    qcMinorAvg: qcWalks ? Math.round(qcMinorSum / qcWalks * 10) / 10 : null,
+    qcWalks,
     handoff: punch > 0 ? Math.round(openPunch / punch * 1000) / 10 : null,
     app: punch + updates + questions,
     live: live.slice(0, 8),
@@ -39807,7 +39816,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   const rows = useMemo(() => sb4Build(windowedJobs, board, users), [windowedJobs, board, users]);
 
   const clamp = (v) => Math.max(0, Math.min(1, v));
-  const NORM = { margin: v => v == null ? null : clamp(v / 50), qc: v => v == null ? null : clamp(1 - v / 8), handoff: v => v == null ? null : clamp(1 - v / 20), app: v => v == null ? null : clamp(v / 2500) };
+  const NORM = { margin: v => v == null ? null : clamp(v / 50), qc: v => v == null ? null : clamp(v), handoff: v => v == null ? null : clamp(1 - v / 20), app: v => v == null ? null : clamp(v / 2500) };
   const overallOf = (r) => {
     let s = 0, wsum = 0;
     ["margin", "qc", "handoff", "app"].forEach(k => { const n = NORM[k](r[k]), wt = weights[k]; if (n != null && wt > 0) { s += n * wt; wsum += wt; } });
@@ -39921,7 +39930,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
             </div>
             <div className="stats">
               <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">typical job · goal {SB4_MARGIN_TARGET}%</div></div>
-              <div className="stat"><div className="sl">QC items per job</div><div className="sv">{r.qc == null ? "—" : r.qc}</div><div className="sh">fewer is better</div></div>
+              <div className="stat"><div className="sl">Serious QC walks</div><div className="sv">{r.qcSeriousPct == null ? "—" : r.qcSeriousPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMinorAvg ?? "—"} minor items per walk</div></div>
               <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
               <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.app}</div><div className="sh">punch + updates + questions</div></div>
             </div>
