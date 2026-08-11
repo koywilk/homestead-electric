@@ -1555,13 +1555,19 @@ const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
   // Giving "needs" a date lets Koy set a "schedule by" target on unscheduled
   // RTs — these surface in the Crew Planner's needs-scheduling list.
-  {value:"needs",     label:"Needs to be Scheduled", color:"#B23A3A", hasDate:true},
-  {value:"scheduled", label:"Scheduled",             color:"#6A5E97", hasDate:true},
-  {value:"complete",  label:"Complete",              color:"#46916A"},
+  // Every status label carries its own domain word (Koy, 2026-08-10: "make sure
+  // its all labeled better like qc needs to be included where it applies").
+  // RT, QC and Matterport all used the IDENTICAL bare "Needs to be Scheduled",
+  // and these pills render side by side on job cards / Open Items / Forecast,
+  // so the reader couldn't tell which thing needed scheduling. Labels are
+  // display-only — every lookup keys off `value` — so renaming is inert.
+  {value:"needs",     label:"RT Needs to be Scheduled", color:"#B23A3A", hasDate:true},
+  {value:"scheduled", label:"RT Scheduled",             color:"#6A5E97", hasDate:true},
+  {value:"complete",  label:"RT Complete",              color:"#46916A"},
 ];
 const QC_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
-  {value:"needs",     label:"Needs to be Scheduled", color:"#B23A3A"},
+  {value:"needs",     label:"QC Needs to be Scheduled", color:"#B23A3A"},
   {value:"scheduled", label:"QC Scheduled",          color:"#3B5BA5", hasDate:true},
   {value:"completed", label:"QC Completed",          color:"#6A5E97", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#46916A"},
@@ -1577,7 +1583,7 @@ const QC_STATUSES = [
 ];
 const MATTERPORT_STATUSES = [
   {value:"",          label:"— set status —",           color:null},
-  {value:"needs",     label:"Needs to be Scheduled",    color:"#B23A3A", hasDate:true},
+  {value:"needs",     label:"Scan Needs to be Scheduled", color:"#B23A3A", hasDate:true},
   {value:"scheduled", label:"Scan Scheduled",           color:"#3B5BA5", hasDate:true},
   {value:"complete",  label:"Scan Complete",            color:"#46916A"},
 ];
@@ -5647,7 +5653,7 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3B5BA5", 
             <div key={p.id} style={{position:"relative"}}>
               {isImage(p) ? (
                 <img src={safeImageSrc(p.url)} alt={p.name||"photo"}
-                  onClick={()=>openUrl(p.url)}
+                  onClick={()=>openPhoto(p.url, p.name)}
                   style={{width:62,height:62,objectFit:"cover",borderRadius:6,
                     border:"1px solid #E1E4E9",cursor:"pointer",display:"block"}}/>
               ) : (
@@ -5752,6 +5758,195 @@ const toast = {
   error:   (m, o)=>showToast(m, {type:'error',   ...o}),
   warn:    (m, o)=>showToast(m, {type:'warn',    ...o}),
 };
+
+// ── Zoomable photo lightbox (2026-08-10, Koy: "need any pictures uploaded to
+// be zoominable") ─────────────────────────────────────────────────────────────
+// The PWA viewport pins user-scalable=no (deliberate — tapping a form input
+// must not zoom the whole UI), which also killed pinch-zoom on every photo.
+// So the zoom lives in the app instead: one shared gesture engine + one global
+// host, replacing the three bare per-view lightboxes and the open-in-new-tab
+// thumbnails. Call openPhoto(url, name) from anywhere — same CustomEvent
+// pattern as showConfirm/toast above. Pure UI: reads photo URLs, writes
+// nothing.
+//
+// ZoomableImage — the gesture engine. Pinch (2-pointer), wheel/trackpad,
+// drag-pan when zoomed, double-tap / double-click to toggle 1x <-> 2.5x.
+// Continuous transforms go straight to the DOM via refs (no re-render per
+// pointermove). Scale clamps to [1, 8]; at 1x the pan resets so the photo can
+// never be lost off-screen.
+function ZoomableImage({ src, alt, onBackdropTap }) {
+  const boxRef = useRef(null);
+  const imgRef = useRef(null);
+  const st = useRef({ s:1, tx:0, ty:0, ptrs:new Map(), pinchDist:0, lastTap:0, lastToggleAt:0, moved:false });
+
+  const apply = () => {
+    const t = st.current;
+    if (imgRef.current) imgRef.current.style.transform = `translate(${t.tx}px, ${t.ty}px) scale(${t.s})`;
+    if (boxRef.current) boxRef.current.style.cursor = t.s > 1 ? "grab" : "zoom-in";
+  };
+  // Zoom keeping the container point (cx,cy — measured from the container
+  // center) visually fixed: with transform-origin at the image center,
+  // p = t + s*q  =>  t' = p - (ns/s)*(p - t).
+  const zoomAt = (cx, cy, factor) => {
+    const t = st.current;
+    const ns = Math.min(8, Math.max(1, t.s * factor));
+    const k = ns / t.s;
+    t.tx = cx - k * (cx - t.tx);
+    t.ty = cy - k * (cy - t.ty);
+    t.s = ns;
+    if (t.s === 1) { t.tx = 0; t.ty = 0; }
+    apply();
+  };
+  const rel = (e) => {
+    const r = boxRef.current.getBoundingClientRect();
+    return { x: e.clientX - r.left - r.width / 2, y: e.clientY - r.top - r.height / 2 };
+  };
+  // The img carries pointerEvents:none (gestures live on the box), so
+  // e.target is ALWAYS the box — photo-vs-backdrop must be decided by
+  // geometry. getBoundingClientRect reflects the current zoom transform.
+  const overImg = (e) => {
+    const ir = imgRef.current && imgRef.current.getBoundingClientRect();
+    return !!ir && e.clientX >= ir.left && e.clientX <= ir.right && e.clientY >= ir.top && e.clientY <= ir.bottom;
+  };
+
+  useEffect(() => { const t = st.current; t.s = 1; t.tx = 0; t.ty = 0; t.ptrs.clear(); t.pinchDist = 0; apply(); }, [src]);
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    // React's onWheel registers passively — preventDefault (so the page under
+    // the lightbox never scrolls) needs a manual non-passive listener.
+    const onWheel = (e) => {
+      e.preventDefault();
+      const p = rel(e);
+      zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.002));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const down = (e) => {
+    const t = st.current;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    t.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    t.moved = false;
+    if (t.ptrs.size === 2) {
+      const [a, b] = [...t.ptrs.values()];
+      t.pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+  };
+  const move = (e) => {
+    const t = st.current;
+    if (!t.ptrs.has(e.pointerId)) return;
+    const prev = t.ptrs.get(e.pointerId);
+    t.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (t.ptrs.size === 2) {
+      const [a, b] = [...t.ptrs.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (t.pinchDist > 0 && dist > 0) {
+        const r = boxRef.current.getBoundingClientRect();
+        zoomAt((a.x + b.x) / 2 - r.left - r.width / 2, (a.y + b.y) / 2 - r.top - r.height / 2, dist / t.pinchDist);
+      }
+      t.pinchDist = dist;
+      t.moved = true;
+    } else if (t.ptrs.size === 1 && t.s > 1) {
+      t.tx += e.clientX - prev.x;
+      t.ty += e.clientY - prev.y;
+      if (Math.abs(e.clientX - prev.x) + Math.abs(e.clientY - prev.y) > 2) t.moved = true;
+      apply();
+    }
+  };
+  const up = (e) => {
+    const t = st.current;
+    t.ptrs.delete(e.pointerId);
+    if (t.ptrs.size < 2) t.pinchDist = 0;
+    if (t.moved || t.ptrs.size > 0) return;
+    // Tap on the dark area (not the photo) closes — mirrors the old lightboxes.
+    if (!overImg(e) && onBackdropTap) { onBackdropTap(); return; }
+    // Double-tap zoom for touch (mouse gets native dblclick below).
+    if (e.pointerType === "touch") {
+      const now = Date.now();
+      if (now - t.lastTap < 320) { toggleZoom(e); t.lastTap = 0; }
+      else { t.lastTap = now; }
+    }
+  };
+  // One toggle per double-activation: a touch double-tap can ALSO synthesize a
+  // browser dblclick (verified via the extension's tap events), so both paths
+  // funnel here behind a 500ms dedupe — without it the zoom applied and then
+  // instantly un-applied.
+  const toggleZoom = (e) => {
+    const t = st.current;
+    const now = Date.now();
+    if (now - t.lastToggleAt < 500) return;
+    t.lastToggleAt = now;
+    const p = rel(e);
+    if (t.s > 1) { t.s = 1; t.tx = 0; t.ty = 0; apply(); }
+    else zoomAt(p.x, p.y, 2.5);
+  };
+  const dbl = (e) => {
+    if (!overImg(e)) return;
+    toggleZoom(e);
+  };
+
+  return (
+    <div ref={boxRef}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+      onDoubleClick={dbl}
+      style={{ width:"100%", height:"100%", display:"flex", alignItems:"center",
+        justifyContent:"center", overflow:"hidden", touchAction:"none",
+        cursor:"zoom-in", userSelect:"none", WebkitUserSelect:"none" }}>
+      <img ref={imgRef} src={safeImageSrc(src)} alt={alt || "photo"} draggable={false}
+        style={{ maxWidth:"100%", maxHeight:"100%", objectFit:"contain",
+          transformOrigin:"center center", willChange:"transform", pointerEvents:"none" }}/>
+    </div>
+  );
+}
+
+// Global opener — call from any component; the host below renders it.
+const openPhoto = (url, name) => {
+  window.dispatchEvent(new CustomEvent('he-photo', { detail: { url, name: name || "" } }));
+};
+
+function HEPhotoLightboxHost() {
+  const [photo, setPhoto] = useState(null);
+  useEffect(() => {
+    const handler = (e) => setPhoto(e.detail);
+    window.addEventListener('he-photo', handler);
+    return () => window.removeEventListener('he-photo', handler);
+  }, []);
+  useEffect(() => {
+    if (!photo) return;
+    const onKey = (e) => { if (e.key === "Escape") setPhoto(null); };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow; };
+  }, [photo]);
+  if (!photo) return null;
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:99999,
+      display:'flex', flexDirection:'column'}}>
+      <div style={{display:'flex', alignItems:'center', gap:10, padding:'10px 14px', flexShrink:0}}>
+        <span style={{color:'#fff', fontSize:13, fontWeight:600, flex:1, overflow:'hidden',
+          textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{photo.name || ""}</span>
+        <span style={{color:'rgba(255,255,255,0.5)', fontSize:11, flexShrink:0}}>
+          pinch · scroll · double-tap to zoom
+        </span>
+        <button onClick={()=>openUrl(photo.url)}
+          style={{background:'rgba(255,255,255,0.15)', border:'none', color:'#fff', fontSize:11,
+            fontWeight:600, cursor:'pointer', borderRadius:6, padding:'6px 10px',
+            fontFamily:'inherit', flexShrink:0}}>Open original</button>
+        <button onClick={()=>setPhoto(null)}
+          style={{background:'rgba(255,255,255,0.15)', border:'none', color:'#fff', fontSize:20,
+            cursor:'pointer', borderRadius:99, width:34, height:34, display:'flex',
+            alignItems:'center', justifyContent:'center', flexShrink:0}}>×</button>
+      </div>
+      <div style={{flex:1, minHeight:0}}>
+        <ZoomableImage src={photo.url} alt={photo.name || "photo"} onBackdropTap={()=>setPhoto(null)}/>
+      </div>
+    </div>
+  );
+}
 
 function HEConfirmHost() {
   const [state, setState] = useState(null);
@@ -9611,7 +9806,6 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
   const [materialText,    setMaterialText]    = useState('');
   const [mobileSheet,   setMobileSheet]   = useState(null);
   const [uploadingId,   setUploadingId]   = useState(null);
-  const [lightboxPhoto, setLightboxPhoto] = useState(null);
   // Multi-select for bulk-assigning. When selectMode is on, each item shows
   // a checkbox; the toolbar at the top shows "N selected · Assign to:" picker.
   // Stays scoped to this PunchItems instance — selection in one room/section
@@ -10113,7 +10307,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                     border:`1px solid ${C.border}`,flexShrink:0}}>
                     {isImg ? (
                       <img src={safeImageSrc(photo.url)} alt={photo.name}
-                        onClick={()=>setLightboxPhoto(photo.url)}
+                        onClick={()=>openPhoto(photo.url, photo.name)}
                         style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
                     ) : (
                       <div onClick={()=>openUrl(photo.url)}
@@ -10202,19 +10396,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           onCancel={() => setMobileSheet(null)}/>
       )}
 
-      {/* Lightbox */}
-      {lightboxPhoto&&(
-        <div onClick={()=>setLightboxPhoto(null)}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:9999,
-            display:'flex',alignItems:'center',justifyContent:'center',cursor:'zoom-out'}}>
-          <img src={lightboxPhoto} alt="punch photo"
-            style={{maxWidth:'94vw',maxHeight:'90vh',borderRadius:8,objectFit:'contain'}}/>
-          <button onClick={()=>setLightboxPhoto(null)}
-            style={{position:'absolute',top:16,right:20,background:'rgba(255,255,255,0.15)',
-              border:'none',color:'#fff',fontSize:24,cursor:'pointer',borderRadius:99,
-              width:36,height:36,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
-        </div>
-      )}
+      {/* Lightbox: shared zoomable viewer (HEPhotoLightboxHost) — opened via openPhoto above */}
 
     </div>
 
@@ -10709,7 +10891,6 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
   const [addText,      setAddText]      = useState('');
   const [newRoomName,  setNewRoomName]  = useState('');
   const [uploadingId,  setUploadingId]  = useState(null);
-  const [lightboxPhoto,setLightboxPhoto]= useState(null);
   const [editingItem,  setEditingItem]  = useState(null); // {fk, roomId, itemId}
   const [editText,     setEditText]     = useState('');
   const [undoToast,    setUndoToast]    = useState(null); // {fk, roomId, item, index, timer}
@@ -11089,7 +11270,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
             <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
               border:`1px solid ${C.border}`,flexShrink:0}}>
               <img src={safeImageSrc(photo.url)} alt={photo.name}
-                onClick={()=>setLightboxPhoto(photo.url)}
+                onClick={()=>openPhoto(photo.url, photo.name)}
                 style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
             </div>
           ))}
@@ -11349,14 +11530,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
         </div>
       )}
 
-      {lightboxPhoto&&(
-        <div onClick={()=>setLightboxPhoto(null)}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:9999,
-            display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
-          <img src={lightboxPhoto} alt="QC photo"
-            style={{maxWidth:'90vw',maxHeight:'90vh',borderRadius:8,objectFit:'contain'}}/>
-        </div>
-      )}
+      {/* Lightbox: shared zoomable viewer (HEPhotoLightboxHost) — opened via openPhoto above */}
     </div>
   );
 }
@@ -14809,6 +14983,45 @@ function GenPanelGrid({ circuits, slotCount }) {
   );
 }
 
+// Canonical JSON: object keys sorted recursively, so signatures compare equal
+// across Firestore round-trips (Firestore does not guarantee map key order).
+const stableStringify = (v) => {
+  if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+  if (v && typeof v === "object") return "{" + Object.keys(v).sort()
+    .map(k => JSON.stringify(k) + ":" + stableStringify(v[k])).join(",") + "}";
+  return JSON.stringify(v === undefined ? null : v);
+};
+
+// The breakers a panel schedule derives from Home Runs — shared by the FILL
+// button and the staleness sync below so both always agree. A row counts when
+// it's assigned to this panel (label match, case-insensitive) and has a known
+// wire; poles ride effectivePoles so a 12/2 flipped to 240V lands as a 2-pole.
+const panelBreakersFromHomeRuns = (homeRuns, panelLabel) => {
+  if (!homeRuns) return [];
+  const allRows = [
+    ...(homeRuns.main||[]),
+    ...(homeRuns.upper||[]),
+    ...(homeRuns.basement||[]),
+    ...((homeRuns.extraFloors||[]).flatMap(ef => homeRuns[ef.key]||[])),
+  ];
+  return allRows
+    .filter(r => r && r.panel && r.wire &&
+      (r.panel||"").toLowerCase() === (panelLabel||"").toLowerCase() &&
+      WIRE_BREAKER[r.wire])
+    .map(r => ({
+      name: (r.name||"").trim() || `${r.wire} circuit`,
+      amps: WIRE_BREAKER[r.wire].amps,
+      poles: effectivePoles(r.wire, r.v240),
+      wire: r.wire,
+    }));
+};
+
+// Order-insensitive signature of a derived breaker set — row reordering in
+// Home Runs must not read as drift (placeBreakers sorts internally anyway).
+const panelFillSig = (breakers) => stableStringify(
+  breakers.map(b => [b.name, b.amps, b.poles, b.wire])
+    .sort((a, b) => String(a).localeCompare(String(b))));
+
 function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {} }) {
   // Fill a panel's circuits map from home runs assigned to that panel.
   // Sorting per Koy:
@@ -14823,25 +15036,13 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
   //   - The bottom slot of a 2-pole is labeled "(240V cont.)" so the
   //     printed sheet reads like a real panel schedule
   // Always blank-then-filled — the printed sheet still defaults to blank
-  // unless the user typed or clicked Fill.
+  // unless the user typed or clicked Fill. After a Fill, though, the panel
+  // remembers what it was filled FROM (fillSig) and WITH (fillCircuitsSig),
+  // and the sync effect below keeps an untouched fill tracking Home Runs
+  // (2026-08-10, Koy: flipped a 12/2 to 240V and the already-filled schedule
+  // silently kept showing it as a 1-pole).
   const fillPanelFromHomeRuns = (panelLabel, slotCount) => {
-    if (!homeRuns) return {};
-    const allRows = [
-      ...(homeRuns.main||[]),
-      ...(homeRuns.upper||[]),
-      ...(homeRuns.basement||[]),
-      ...((homeRuns.extraFloors||[]).flatMap(ef => homeRuns[ef.key]||[])),
-    ];
-    const breakers = allRows
-      .filter(r => r && r.panel && r.wire &&
-        (r.panel||"").toLowerCase() === (panelLabel||"").toLowerCase() &&
-        WIRE_BREAKER[r.wire])
-      .map(r => ({
-        name: (r.name||"").trim() || `${r.wire} circuit`,
-        amps: WIRE_BREAKER[r.wire].amps,
-        poles: effectivePoles(r.wire, r.v240),
-        wire: r.wire,
-      }));
+    const breakers = panelBreakersFromHomeRuns(homeRuns, panelLabel);
     if (!breakers.length) return null; // signal: nothing to fill
     return placeBreakers(breakers, slotCount);
   };
@@ -14851,6 +15052,56 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
   const [newLabel, setNewLabel] = useState("");
   const [expanded, setExpanded] = useState({}); // { [panelId]: bool }
   const [sizeKind, setSizeKind] = useState({}); // { [panelId]: "30/60" | "Custom" | ... }
+
+  // ── Keep filled schedules honest when Home Runs change (2026-08-10) ────────
+  // A filled panel is a snapshot; a 240V flip (or wire/name/panel change) on a
+  // home-run row used to leave it silently stale. Rules, safest-first:
+  //   • Panel still EXACTLY its own last fill output (fillCircuitsSig match)
+  //     -> auto re-fill: it's a pure mirror, nothing human-typed can be lost.
+  //   • Hand-edited since its fill -> never auto-write; the FILL button turns
+  //     into an orange RE-FILL alert instead (existing REPLACE confirm applies).
+  //   • Pre-sig panels (filled before this shipped): adopted silently the
+  //     first time their circuits match a fresh fill byte-for-byte; otherwise
+  //     they keep today's manual-only behavior.
+  //   • Fresh derivation EMPTY -> never touch the panel (guards both "rows all
+  //     moved off" and "homeRuns not loaded yet" — an auto-wipe is impossible).
+  const freshByPanel = list.map(p => {
+    const breakers = panelBreakersFromHomeRuns(homeRuns, p.label);
+    return { id: p.id, breakers, sig: breakers.length ? panelFillSig(breakers) : "" };
+  });
+  const syncKey = stableStringify(list.map((p, i) => [
+    p.id, freshByPanel[i].sig, p.fillSig || "",
+    stableStringify(p.circuits||{}) === p.fillCircuitsSig ? 1 : 0,
+  ]));
+  useEffect(() => {
+    let changed = false;
+    let overflowWarn = null;
+    const next = list.map((p, i) => {
+      const fresh = freshByPanel[i];
+      if (!fresh.sig) return p; // nothing derivable — never touch
+      const curSig = stableStringify(p.circuits||{});
+      if (!p.fillSig) {
+        // Legacy fill: adopt (stamp sigs, circuits untouched) only on an exact match.
+        const placed = placeBreakers(fresh.breakers, p.slotCount||30);
+        if (!placed.unplaced.length && stableStringify(placed.circuits) === curSig) {
+          changed = true;
+          return { ...p, fillSig: fresh.sig, fillCircuitsSig: curSig };
+        }
+        return p;
+      }
+      if (p.fillSig === fresh.sig) return p;        // in sync
+      if (curSig !== p.fillCircuitsSig) return p;   // hand-edited — RE-FILL chip handles it
+      const placed = placeBreakers(fresh.breakers, p.slotCount||30);
+      if (placed.unplaced.length) overflowWarn = { label: p.label, count: placed.unplaced.length };
+      changed = true;
+      return { ...p, circuits: placed.circuits, fillSig: fresh.sig,
+        fillCircuitsSig: stableStringify(placed.circuits) };
+    });
+    if (changed) onChange(next);
+    if (overflowWarn) toast.warn(
+      `"${overflowWarn.label}" re-synced from Home Runs — ${overflowWarn.count} breaker${overflowWarn.count===1?"":"s"} no longer fit. Open the panel to review.`,
+      { duration: 12000 });
+  }, [syncKey]); // eslint-disable-line
 
   const addPanel = () => {
     const label = (newLabel||"").trim() || `Panel ${String.fromCharCode(65 + list.length)}`;
@@ -14908,6 +15159,10 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       )}
       {list.map(p => {
         const slotCount = p.slotCount || 30;
+        // Stale = Home Runs drifted from this panel's last fill AND the sync
+        // effect declined to auto-fix (i.e. circuits were hand-edited since).
+        const freshP = freshByPanel.find(f => f.id === p.id);
+        const fillStale = !!(p.fillSig && freshP && freshP.sig && freshP.sig !== p.fillSig);
         // Panels default to COLLAPSED — Koy wants to scan a list of names/sizes
         // first and only expand the one he's working on. Newly added panels
         // open immediately because addPanel() sets expanded[id]=true.
@@ -14970,7 +15225,11 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                   });
                   if (!ok) return;
                 }
-                updPanel(p.id, { circuits: result.circuits });
+                // Stamp what this fill derived FROM + produced, so the sync
+                // effect can tell an untouched fill from hand edits later.
+                updPanel(p.id, { circuits: result.circuits,
+                  fillSig: panelFillSig(panelBreakersFromHomeRuns(homeRuns, p.label)),
+                  fillCircuitsSig: stableStringify(result.circuits) });
                 const filledNum = Object.keys(result.circuits).length;
                 if (result.unplaced && result.unplaced.length) {
                   // Some breakers couldn't fit even with full tandeming.
@@ -14988,13 +15247,16 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                   toast.success(`Filled "${p.label}" — ${filledNum} slots populated. Everything fit.`);
                 }
               }}
-                title={`Auto-fill ${p.label||"panel"} from home-run loads`}
-                style={{background:"none",border:`1px solid ${C.border}`,color:C.green,
+                title={fillStale
+                  ? `Home Runs changed since this fill (240V flip, wire, or loads) and this panel has hand edits — re-fill to update (replaces typed circuits)`
+                  : `Auto-fill ${p.label||"panel"} from home-run loads`}
+                style={{background:fillStale?`${C.orange}18`:"none",
+                  border:`1px solid ${fillStale?C.orange:C.border}`,color:fillStale?C.orange:C.green,
                   borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
                   fontFamily:"inherit",letterSpacing:"0.05em",
                   display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
                 <Icon name="zap" size={10} stroke={2}/>
-                FILL
+                {fillStale ? "RE-FILL" : "FILL"}
               </button>
               <button onClick={()=>printElectricalPanel({jobName,jobAddress,panel:p})}
                 title={`Print ${p.label||"panel"} schedule`}
@@ -15285,7 +15547,18 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             if(!rows.length && !bOvr[p]) return null;
             const groups={};
             rows.forEach(r=>{
-              const {amps,poles}=WIRE_BREAKER[r.wire];
+              // Poles come from effectivePoles, NOT the raw wire table (Koy,
+              // 2026-08-10: "ive marked two of the 12/2 homeruns as 240v but it
+              // still does not appear in the breaker counts"). A 12/2 run flipped
+              // to 240V is a 2-pole 2-wire circuit and eats two spaces. v373
+              // taught the panel SCHEDULE that (fillPanelFromHomeRuns already
+              // called effectivePoles) but these summary cards still read
+              // WIRE_BREAKER[r.wire].poles, so the flag changed the printed
+              // schedule while the counts above it never moved. One source of
+              // truth now: group key, space math, tandem/quad sizing and the PO
+              // counts all flow from this value.
+              const {amps}=WIRE_BREAKER[r.wire];
+              const poles=effectivePoles(r.wire, r.v240);
               const key=`${amps}A ${poles===1?"1P":"2P"}`;
               if(!groups[key]) groups[key]={amps,poles,count:0,spaces:0};
               groups[key].count++; groups[key].spaces+=poles;
@@ -15803,8 +16076,9 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       {/* Panel Schedules — printable per-panel breaker layout. Lives at the
           top of the Home Runs tab because that's where the electrical panel
           mental model already exists (panelCounts, breaker overrides, etc.).
-          Self-contained: own data on job.electricalPanels, doesn't read or
-          write homeRuns. */}
+          Data lives on job.electricalPanels; READS homeRuns (fill + the
+          stay-in-sync effect, e.g. a 240V flip re-poles an untouched fill)
+          but never writes it. */}
       <Section label="Panel Schedules" color={C.accent} defaultOpen={false}>
         <ElectricalPanelSchedules
           panels={electricalPanels || []}
@@ -19920,7 +20194,7 @@ function SavantPanelSchedule({
                     }}>
                     Slot {slotN} · {r.amp||"15"}A
                     {r.description && <span style={{fontSize:9,marginLeft:5,opacity:0.7,fontWeight:500}}>
-                      {r.description.slice(0,20)}
+                      {stripHtml(r.description).slice(0,20)}
                     </span>}
                   </button>
                 );
@@ -28068,7 +28342,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
           {(m.photos||[]).filter(p=>p&&p.url).length>0 && (
             <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: m.text?6:0}}>
               {(m.photos||[]).filter(p=>p&&p.url).map(p => isImg(p)
-                ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:64,height:64,objectFit:'cover',borderRadius:7,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
+                ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)} style={{width:64,height:64,objectFit:'cover',borderRadius:7,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
                 : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:150,fontSize:11,fontWeight:600,color: crew?color:'#475569',background:'#fff',border:'1px solid #E1E4E9',borderRadius:6,padding:'4px 8px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}><Icon name="fileText" size={11}/>{p.name||'file'}</a>
               )}
             </div>
@@ -28449,7 +28723,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               {(q.answerPhotos||[]).filter(p=>p&&p.url).map(p=>{
                 const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                 return isImg
-                  ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",display:"block"}}/>
+                  ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",display:"block"}}/>
                   : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:C.dim,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
               })}
             </div>
@@ -28501,7 +28775,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                 {latePhotos.map(p=>{
                   const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                   return isImg
-                    ? <img key={p.id||p.url} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #E8C97A",cursor:"pointer",display:"block"}}/>
+                    ? <img key={p.id||p.url} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #E8C97A",cursor:"pointer",display:"block"}}/>
                     : <a key={p.id||p.url} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#8A6D1F",background:"#FFFDF7",border:"1px solid #E8C97A",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
                 })}
               </div>
@@ -28597,7 +28871,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               {(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).map(p=>{
                 const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                 return isImg
-                  ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #CBE0D4",cursor:"pointer",display:"block"}}/>
+                  ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #CBE0D4",cursor:"pointer",display:"block"}}/>
                   : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#2C5C40",background:"#fff",border:"1px solid #CBE0D4",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
               })}
             </div>
@@ -30325,7 +30599,7 @@ function computeTasks(jobs) {
         type: "auto", category: "rt", foreman,
         rtId: rt.id,
         title: `Return Trip #${i+1} Complete — merge or invoice`,
-        desc: rt.scope ? `Scope: ${rt.scope}` : undefined,
+        desc: stripHtml(rt.scope) ? `Scope: ${stripHtml(rt.scope)}` : undefined,
         color: "#3E7D5A", cleared: false,
         dueDate: rt.rtStatusDate||"",
       });
@@ -30390,7 +30664,7 @@ function computeTasks(jobs) {
           id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
           type: "auto", category: "rt", foreman,
           title: `Schedule Return Trip #${i+1}`,
-          desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
+          desc: stripHtml(rt.scope) ? `Scope: ${stripHtml(rt.scope)}` : "Return trip needs to be scheduled",
           color: "#6A5E97", cleared: false,
           dueDate: rt.rtStatusDate||"",
           windowLabel: rtWindowLabel||undefined,
@@ -30401,7 +30675,7 @@ function computeTasks(jobs) {
         id: job.id+"_rt_"+rt.id+"_sched", jobId: job.id, jobName: job.name,
         type: "auto", category: "rt", foreman,
         title: `Return Trip #${i+1} — Get Sign-Off`,
-        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip is scheduled — confirm completion & sign off",
+        desc: stripHtml(rt.scope) ? `Scope: ${stripHtml(rt.scope)}` : "Return trip is scheduled — confirm completion & sign off",
         color: "#6A5E97", cleared: false,
         dueDate: rt.rtStatusDate||"",
       });
@@ -30713,7 +30987,7 @@ function buildJobActivity(job) {
         if (rt.scheduledDate && !rt.signedOff) bits.push(`scheduled ${rt.scheduledDate}`);
         if (openPunch > 0) bits.push(`${openPunch} open punch`);
         return {
-          label: `RT #${i+1}${rt.scope?` — ${rt.scope.slice(0,40)}`:""}`,
+          label: `RT #${i+1}${stripHtml(rt.scope)?` — ${stripHtml(rt.scope).slice(0,40)}`:""}`,
           detail: bits.join(" · "),
           sourceTab: "Return Trips",
         };
@@ -30775,7 +31049,7 @@ function buildJobActivity(job) {
       waitingCount,
       items: allPunchOpen.map(p => ({
         label: `${p.phase} · ${p.floor}${p.room?` · ${p.room}`:""}`,
-        detail: p.text.slice(0,80),
+        detail: stripHtml(p.text).slice(0,80),
         sourceTab: p.sourceTab,
         waiting: !!p.waiting,
       })),
@@ -30956,7 +31230,7 @@ function buildJobPhotos(job) {
 
   // Return trip photos
   (job.returnTrips||[]).forEach((rt, i) => {
-    (rt.photos||[]).forEach(p => addPhoto(p, `RT #${i+1}${rt.scope?` · ${rt.scope.slice(0,40)}`:""}`, "Return Trips", rt.id));
+    (rt.photos||[]).forEach(p => addPhoto(p, `RT #${i+1}${stripHtml(rt.scope)?` · ${stripHtml(rt.scope).slice(0,40)}`:""}`, "Return Trips", rt.id));
   });
 
   // Change order photos
@@ -31312,9 +31586,10 @@ function JobPhotos({ job, onSetTab }) {
                 Open file ↗
               </a>
             ) : (
-              <img src={safeImageSrc(lightboxPhoto.url)} alt={lightboxPhoto.name||""}
-                style={{maxWidth:"90vw", maxHeight:"75vh", objectFit:"contain",
-                  background:"#fff", borderRadius:8}}/>
+              <div style={{width:"90vw", height:"70vh", background:"#111",
+                borderRadius:8, overflow:"hidden"}}>
+                <ZoomableImage src={lightboxPhoto.url} alt={lightboxPhoto.name||""}/>
+              </div>
             )}
             <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap",
               justifyContent:"center"}}>
@@ -33886,7 +34161,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
         if(di>=0 && di<5) {
           const needsSched = rt.rtStatus==="needs";
           out.push({ id:j.id+"_rt_"+(rt.id||rti), jobId:j.id, jobName:j.name||"Untitled",
-            type:"rt", label:`RT ${rti+1}${rt.scope?" — "+rt.scope.substring(0,30):""}`,
+            type:"rt", label:`RT ${rti+1}${stripHtml(rt.scope)?" — "+stripHtml(rt.scope).substring(0,30):""}`,
             color: needsSched ? "#B23A3A" : "#6A5E97",
             dayIdx:di, date:d, needsSched });
         }
@@ -34124,14 +34399,14 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
       (job.returnTrips||[]).filter(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatus||r.rtStatusDate||r.date)).forEach((rt,i)=>{
         const start=rt.rtStatusDate||rt.date||"";
         const rtDef=getStatusDef(RT_STATUSES,rt.rtStatus||"needs");
-        const statusLabel=rt.rtStatus==="needs"?"Needs to be Scheduled":rtDef.label||rt.rtStatus||"needs scheduling";
+        const statusLabel=rtDef.label||rt.rtStatus||"needs scheduling";
         events.push({
           id:job.id+"_rt_"+rt.id, job, type:"rt",
           label:"RT "+(i+1), color:rtDef.color||"#6A5E97", fc,
           startDate:start, endDate:"",
           hardDate:false,
           status:rt.rtStatus||"", statusLabel,
-          desc:rt.scope||"Return trip",
+          desc:stripHtml(rt.scope)||"Return trip",
           rtNeedsDate: rt.rtStatus==="needs"?rt.rtStatusDate:"",
         });
       });
@@ -39581,7 +39856,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6}}>
             {photosToday.slice(0,24).map(p => (
               <div key={p.id || p.url}
-                onClick={() => openUrl(p.url)}
+                onClick={() => openPhoto(p.url, `${p.jobName || ""}${p.name ? " · " + p.name : ""}`)}
                 title={`${p.jobName || ""}${p.name ? " · " + p.name : ""}`}
                 style={{
                   flexShrink:0,
@@ -44719,7 +44994,7 @@ function QuestionsSharePage({ jobId }) {
             {q.photos.filter(p=>p&&p.url).map(p=>{
               const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
               return isImg
-                ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openUrl(p.url)}
+                ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)}
                     style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
                 : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer"
                     style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
@@ -45144,7 +45419,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-09 · App SW version: v371
+**Last manifest update:** 2026-08-10 · App SW version: v375
 
 ---
 
@@ -45256,8 +45531,10 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - 4-way inspection (rules 14/15/16)
   - Final inspection (rules 23/24)
   - QC walks ('QCWalkSection')
+  - Status labels carry their own domain word · 'shipped 2026-08-10' · 'SW v375' · Koy: "make sure its all labeled better like qc needs to be included where it applies." 'RT_STATUSES', 'QC_STATUSES' and 'MATTERPORT_STATUSES' all rendered the IDENTICAL bare label **"Needs to be Scheduled"** — and those pills sit side by side on job cards, Open Items and the Forecast, so the reader couldn't tell which thing needed scheduling. QC was the worst offender because 5 of its 6 labels already said "QC" and only that one didn't. Now every label names its own system: QC → **"QC Needs to be Scheduled"** (completing the set), Matterport → **"Scan Needs to be Scheduled"** (matching its existing "Scan Scheduled"/"Scan Complete"), and Return Trips → **"RT Needs to be Scheduled" / "RT Scheduled" / "RT Complete"** (RT previously had no domain word at all on any of its three). Also deleted a hardcoded '"Needs to be Scheduled"' duplicate in the Forecast event builder that shadowed the registry and would have gone stale — that surface now reads the registry like everything else, so there is one source of truth per label. Verified no code compares against label TEXT: every status lookup keys off 'value', so this is display-only and inert. Deliberately left alone: Temp Ped and Quick Job status sets, which render on their own dedicated cards where the domain is never ambiguous
   - Failed inspection → punch items
 - **Photos** · 'shipped' · 'PhotoAttacher' · shared upload+thumbnail component
+  - Zoomable photo viewer (app-wide) · 'shipped 2026-08-10' · 'SW v372' · Koy: "need any pictures uploaded to be zoominable." The PWA viewport pins 'user-scalable=no' (deliberate — tapping a form input must never zoom the UI), which also silently killed pinch-zoom on every photo; the old viewers were three separate bare lightboxes (punch, QC, Photos tab) plus thumbnails that just opened the raw URL in a new tab. Now: one shared 'ZoomableImage' gesture engine — pinch (two-pointer), mouse wheel / trackpad, drag-to-pan while zoomed, double-tap / double-click toggles 1x ↔ 2.5x at the tapped point, scale clamped 1x–8x, pan resets at 1x so a photo can never be lost off-screen; continuous transforms write straight to the DOM node (no React re-render per pointermove). One global 'HEPhotoLightboxHost' (dark full-screen, photo name, "pinch · scroll · double-tap" hint, Open-original button, ×) opened via 'openPhoto(url, name)' — the same CustomEvent pattern as showConfirm/toast, so any component can call it without prop plumbing. Wired everywhere pictures render: PhotoAttacher thumbnails (every punch/CO/RT/Savant/walk attachment), punch-item photo strips, QC photos, daily-update + materials strips, Q&A answer photos, and the Today photos strip; the Photos-tab gallery keeps its prev/next + source-jump chrome and swaps only its '<img>' for 'ZoomableImage'. The two gutted per-view lightboxes and their state are deleted (orphan-swept). Non-image files (PDFs, CAD, docs) keep open-in-new-tab. Also in this ship (Koy: "i want any text like that fixed"): **raw rich-text HTML no longer leaks into labels** — RT scope and punch text are stored as HTML (contenteditable / QC-fail clones), and nine label-composition sites sliced or embedded them RAW (slicing mid-tag is what produced 'RT #1 · <span style="font-family…' in the Photos-tab captions). All nine now strip first via the module-scope 'stripHtml' then slice: Photos-tab photo captions, Open Items RT labels + punch details, three auto-task 'Scope:' descriptions, Crew Planner RT chips (two builders), and the Savant slot-picker description. Pure UI — reads photo URLs through the existing 'safeImageSrc' sanitizer, zero writes, no data-shape change
   - Per punch item
   - Per CO
   - Per RT
@@ -45294,6 +45571,8 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - 240V flip now moves the breaker COUNT cards too · 'shipped 2026-08-10' · 'SW v374' · Koy, testing v373 on Webb: "ive marked two of the 12/2 homeruns as 240v but it still does not appear in the breaker counts." v373 was real but only half the surface — it taught the panel *schedule* about 240V ('fillPanelFromHomeRuns' already called 'effectivePoles'), while the **panel summary cards above it** still destructured 'poles' straight off the raw wire table ('const {amps,poles}=WIRE_BREAKER[r.wire]'), so the flag re-poled the printed sheet while the counts never moved. Audited every 'WIRE_BREAKER[...]' read in the file: this was the ONLY one that ignored 'v240' — the generator panel ('slotsUsed'), 'GenPanelGrid' and the schedule fill all already went through 'effectivePoles'. Now 'poles = effectivePoles(r.wire, r.v240)' at that one site, and because every downstream number flows from it, the whole card chain corrects at once: the group label (a 240V 12/2 files under "20A 2P" instead of "20A 1P"), the space math, 'autoSpaces'/drift detection, the tandem + quad sizing banner, and the PO breaker counts. Pairs with the v369 drift banner — an existing manual override on that panel now correctly reads "Manual count is stale" and its Refresh pulls the corrected number. Why it can't lose data: read-side derivation only — no write, no new field, no schema or rules change, and 'effectivePoles' is the same module-scope helper four other call sites already trusted
+  - 240V flip re-poles filled panel schedules · 'shipped 2026-08-10' · 'SW v373' · Koy: "I made a 20a circuit a 240v load and it did not update the breakers to be 2 pole for those loads." The panel-schedule circuits map is a fill-time snapshot, so flipping a 12/2 or 14/2 home run to 240V (or any wire/load change) left an already-filled schedule silently stale — the home-run row said "2-pole · 240V" while the breaker sheet below still showed 1-pole. Fills now stamp two additive strings on the panel: 'fillSig' (order-insensitive signature of the breakers the fill derived FROM — new shared 'panelBreakersFromHomeRuns' + 'panelFillSig', the same derivation the FILL button uses, so the two can never disagree) and 'fillCircuitsSig' (canonical sorted-key 'stableStringify' of what it produced, so Firestore map-key reordering can't fake a hand-edit). A sync effect in 'ElectricalPanelSchedules' keeps snapshots honest: a panel still byte-identical to its own last fill output auto re-fills through the normal 'placeBreakers' engine the moment Home Runs drift (toast if breakers no longer fit); a panel hand-edited since its fill is NEVER auto-written — its FILL button turns into an orange RE-FILL alert (existing REPLACE confirm still applies); pre-v373 fills are adopted silently the first time their circuits match a fresh fill byte-for-byte, otherwise they keep today's manual-only behavior (one manual re-fill opts them in). Why it can't lose data: both new fields are additive strings inside each 'job.electricalPanels[]' entry (inside 'data' — no loader change); the auto path writes ONLY when current circuits equal the panel's own last fill output, so typed circuits are unreachable by it; an empty derivation (rows moved off / homeRuns not yet loaded) never touches a panel, so an auto-wipe is impossible; all writes ride the existing updPanel → saveJob funnel (merge-baseline advance fixed v369/v370)
   - Home Runs list first + "Refresh from home runs" revert fix · 'shipped 2026-08-09' · 'SW v369' · Koy: "when i hit refresh from homeruns list it works for a second and then reverts back… the homeruns list tab here needs to be at the top." Two halves. **Order:** the Home Runs list section now leads the tab (was Panel Schedules → Generator → list); every section still starts collapsed per the v347 convention. **Revert fix (root-caused, reproduced against the real '_threeWayMerge' in a node harness):** the revert was a stale-baseline delete-resurrection — 'flushJob' and 'flushSaves' (job close / tab switch / backgrounding inside the 500ms debounce window) ran the SAME merge transaction as 'saveJob' but never advanced 'serverBaselines', so an edit that left through a flush kept that key's baseline old for the whole session; the next delete-shaped write of the same key (breaker-override "Refresh from home runs" deleting its panel key, panel-schedule Fill replacing a circuits map) three-way-merged against the stale base, the merge read the server's own copy as "another device's change" and kept it, 'merged:true' made the tab re-adopt its own echo, and the UI reverted ~1s after the click — and every retry after it, because a rescued key's baseline deliberately stays at the sent value (Kweller rule), so base ≠ server forever. Fix: the post-write baseline advance is extracted to '_advanceMergeBaseline' and called by ALL THREE writers (it was saveJob-only); the Kweller rescued-key rule is preserved byte-for-byte inside the helper. Why it can't lose data: the baseline is in-memory bookkeeping ('serverBaselines.current') never written to Firestore; no write shape, no schema, no rules change; flush-path writes get STRICTLY safer (a user's explicit delete stops resurrecting) and the v312 never-fresher-than-local invariant holds because the baseline advances to exactly what was written — the local copy's value for non-rescued keys, the sent value for rescued ones
   - Per-floor home runs
   - By Panel view · 'shipped 2026-07-17' · 'SW v345' · 'HomeRunsByPanel' + shared 'HRRow'/'sortHRRows' — groups every non-blank row by panel (dropdown order), then floor (main → basement → upper → extras), then A-Z, with per-panel pulled counts; auto-default once any panel is labeled, By Panel / By Floor toggle; rows fully editable in both views, edits write back to the row's own floor array through the same sort/renumber, adding + bulk paste stay in By Floor. Stored data shape unchanged
@@ -51889,6 +52168,7 @@ function App() {
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
       <HEConfirmHost/>
+      <HEPhotoLightboxHost/>
       <HEToastHost/>
 
       {/* Backup observability banner (Kweller hardening Layer 5). Red strip
