@@ -1566,6 +1566,13 @@ const QC_STATUSES = [
   {value:"completed", label:"QC Completed",          color:"#6A5E97", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#46916A"},
   {value:"fixed",     label:"QC Items Fixed — Pass", color:"#46916A"},
+  // Middle verdict (Task 5, 2026-08-10): items were called on the walk but
+  // none were serious — not a clean pass, but not a fail either. Sits right
+  // before "fail" in this list (the two verdicts a walker chooses between
+  // when the walk turned up something); derived automatically by
+  // deriveQcVerdict (beside sb4Agg below) and offered as a confirmable
+  // suggestion in the QC tab's status pickers — never auto-written.
+  {value:"passed_items", label:"QC Passed with Items", color:"#B0892C"},
   {value:"fail",      label:"QC Fail",               color:"#B23A3A"},
 ];
 const MATTERPORT_STATUSES = [
@@ -24931,8 +24938,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if(!all.every(i=>i.done)) { qcAutoAdvancedRef.current = false; return; }
     if(qcAutoAdvancedRef.current) return;
     qcAutoAdvancedRef.current = true; // consumed for this all-done episode
-    // Only auto-advance from walk-active states; leave manual pass/fail/completed/fixed alone
-    const advanceable = ["", "needs", "scheduled", "fail"];
+    // Only auto-advance from walk-active states; leave manual pass/fail/completed/fixed alone.
+    // "passed_items" (Task 5) is a non-terminal, non-fail verdict — same as "fail", once its
+    // items all close the job should reach "fixed" too, so it belongs in this list alongside it.
+    const advanceable = ["", "needs", "scheduled", "fail", "passed_items"];
     if(!advanceable.includes(job.qcStatus||"")) return;
     u({qcStatus:'fixed'});
   }, [job.roughPunch, job.finishPunch, job.qcStatus]);
@@ -27085,69 +27094,84 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
               {(()=>{
                 const qcDef = getStatusDef(QC_STATUSES, job.qcStatus||"");
+                // Task 5: derive what this walk's own fromQC items say the verdict
+                // should be, and offer it as a one-click SUGGESTION when nothing
+                // final has been recorded yet ("" / "needs" / "scheduled" — same
+                // pre-verdict set the auto-fixed-transition effect above treats as
+                // "advanceable"). Never shown once a real verdict (pass/passed_items/
+                // fail) or a downstream state (fixed/completed) is already on record
+                // — this is a suggestion engine, not an override of a decision someone
+                // already made.
+                const derivedQc = deriveQcVerdict(job);
+                const suggestQc = ["", "needs", "scheduled"].includes(job.qcStatus||"");
+                const sugQcDef = getStatusDef(QC_STATUSES, derivedQc);
+                // Extracted verbatim from the select's old inline onChange so the
+                // suggestion chip below can trigger the EXACT same write (RT
+                // auto-create included) as picking the option by hand.
+                const applyQcStatus = (v) => {
+                  const patch={qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""};
+                  // QC Fail → auto-create an unscheduled return trip if one
+                  // isn't already open. This is the bit that makes the fail
+                  // show up on the schedule (Unscheduled Return Trips
+                  // section) so it can't get forgotten. We gather every
+                  // open fromQC item from rough + finish punch across all
+                  // floors and seed them as the RT's punch list.
+                  if (v==="fail") {
+                    const existingQCFailRT = (job.returnTrips||[]).some(r =>
+                      !r.signedOff && typeof r.scope==="string" && r.scope.startsWith("QC Fail"));
+                    if (!existingQCFailRT) {
+                      const openQC = [];
+                      const grab = (punch, phase) => {
+                        if (!punch) return;
+                        const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+                          ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
+                        // Voided items are filtered out — they're no longer considered QC.
+                        allFloors.forEach(fl => {
+                          if (!fl) return;
+                          (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
+                          (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
+                          (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
+                        });
+                      };
+                      grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
+                      const newRT = {
+                        id:uid(), date:"", scope:"QC Fail — return trip needed",
+                        material:"",
+                        // Copy photos, materialNeeded/source, AND the source item
+                        // id onto each RT punch item so (a) crew can see the
+                        // pictures in context and (b) check-off syncs back to
+                        // the original fromQC entry in roughPunch/finishPunch.
+                        punch: openQC.map(x=>({
+                          id:uid(),
+                          text:x.text||"",
+                          done:false,
+                          fromQC:true,
+                          severity: x.severity, // carry serious/minor onto the RT clone
+                          originItemId: x.id,
+                          originPhase: x.__phase,
+                          photos: Array.isArray(x.photos) ? x.photos.slice() : [],
+                          materialNeeded: x.materialNeeded||"",
+                          materialSource: x.materialSource||"",
+                        })),
+                        photos:[], assignedTo:"",
+                        signedOff:false, signedOffBy:"", signedOffDate:"",
+                        needsSchedule:true, needsScheduleDate:"",
+                        rtScheduled:false, scheduledDate:"",
+                        rtStatus:"needs",
+                        fromQCFail:true,
+                      };
+                      patch.returnTrips=[...(job.returnTrips||[]), newRT];
+                      toast.success(`QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                    }
+                  }
+                  u(patch);
+                };
                 return (
                   <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
                     <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>ROUGH QC STATUS</div>
                     <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                      <select value={job.qcStatus||""} onChange={e=>{
-                        const v=e.target.value;
-                        const patch={qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""};
-                        // QC Fail → auto-create an unscheduled return trip if one
-                        // isn't already open. This is the bit that makes the fail
-                        // show up on the schedule (Unscheduled Return Trips
-                        // section) so it can't get forgotten. We gather every
-                        // open fromQC item from rough + finish punch across all
-                        // floors and seed them as the RT's punch list.
-                        if (v==="fail") {
-                          const existingQCFailRT = (job.returnTrips||[]).some(r =>
-                            !r.signedOff && typeof r.scope==="string" && r.scope.startsWith("QC Fail"));
-                          if (!existingQCFailRT) {
-                            const openQC = [];
-                            const grab = (punch, phase) => {
-                              if (!punch) return;
-                              const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-                                ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
-                              // Voided items are filtered out — they're no longer considered QC.
-                              allFloors.forEach(fl => {
-                                if (!fl) return;
-                                (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
-                                (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
-                                (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
-                              });
-                            };
-                            grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
-                            const newRT = {
-                              id:uid(), date:"", scope:"QC Fail — return trip needed",
-                              material:"",
-                              // Copy photos, materialNeeded/source, AND the source item
-                              // id onto each RT punch item so (a) crew can see the
-                              // pictures in context and (b) check-off syncs back to
-                              // the original fromQC entry in roughPunch/finishPunch.
-                              punch: openQC.map(x=>({
-                                id:uid(),
-                                text:x.text||"",
-                                done:false,
-                                fromQC:true,
-                                severity: x.severity, // carry serious/minor onto the RT clone
-                                originItemId: x.id,
-                                originPhase: x.__phase,
-                                photos: Array.isArray(x.photos) ? x.photos.slice() : [],
-                                materialNeeded: x.materialNeeded||"",
-                                materialSource: x.materialSource||"",
-                              })),
-                              photos:[], assignedTo:"",
-                              signedOff:false, signedOffBy:"", signedOffDate:"",
-                              needsSchedule:true, needsScheduleDate:"",
-                              rtScheduled:false, scheduledDate:"",
-                              rtStatus:"needs",
-                              fromQCFail:true,
-                            };
-                            patch.returnTrips=[...(job.returnTrips||[]), newRT];
-                            toast.success(`QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
-                          }
-                        }
-                        u(patch);
-                      }} style={{background:qcDef.color?`${qcDef.color}18`:C.surface,
+                      <select value={job.qcStatus||""} onChange={e=>applyQcStatus(e.target.value)}
+                        style={{background:qcDef.color?`${qcDef.color}18`:C.surface,
                         color:qcDef.color||C.dim,border:`1px solid ${qcDef.color||C.border}`,
                         borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                         fontWeight:qcDef.color?700:400,outline:"none",cursor:"pointer"}}>
@@ -27160,6 +27184,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             style={{width:140,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
                         </div>
                       )}
+                      {suggestQc&&(
+                        <button type="button" onClick={()=>applyQcStatus(derivedQc)}
+                          title="Derived from this walk's QC items — click to confirm, or pick a different status above"
+                          style={{display:"inline-flex",alignItems:"center",gap:5,
+                            background:`${sugQcDef.color}14`,color:sugQcDef.color,
+                            border:`1px dashed ${sugQcDef.color}66`,borderRadius:99,
+                            padding:"5px 10px",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                            cursor:"pointer",whiteSpace:"nowrap"}}>
+                          <Icon name="checkCircle" size={11} stroke={2.25}/>
+                          Suggested: {sugQcDef.label} — confirm
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -27168,30 +27204,41 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {/* FINISH QC STATUS — parallel to rough; auto-flips to "needs" when finish stage advances. */}
               {(()=>{
                 const fDef = getStatusDef(QC_STATUSES, job.finishQcStatus||"");
+                // Task 5 — same suggestion treatment as the rough picker above, same
+                // whole-job derived verdict (deriveQcVerdict has no rough/finish split;
+                // see the interface note beside its definition), gated on THIS field
+                // (finishQcStatus) being in a pre-verdict state.
+                const derivedQc = deriveQcVerdict(job);
+                const suggestFQc = ["", "needs", "scheduled"].includes(job.finishQcStatus||"");
+                const sugFQcDef = getStatusDef(QC_STATUSES, derivedQc);
+                // Extracted verbatim from the select's old inline onChange so the
+                // suggestion chip below can trigger the EXACT same write (RT
+                // auto-create included) as picking the option by hand.
+                const applyFinishQcStatus = (v) => {
+                  const patch={finishQcStatus:v,finishQcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.finishQcStatusDate:""};
+                  if(v==="fail"){
+                    const existing=(job.returnTrips||[]).some(r=>!r.signedOff&&typeof r.scope==="string"&&r.scope.startsWith("QC Fail"));
+                    if(!existing){
+                      const openQC=[];
+                      const fls=[...["upper","main","basement"].map(k=>job.finishPunch&&job.finishPunch[k]).filter(Boolean),...(((job.finishPunch&&job.finishPunch.extras)||[]).map(x=>x&&x.key?job.finishPunch[x.key]:null).filter(Boolean))];
+                      fls.forEach(fl=>{ if(!fl) return;
+                        (fl.general||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
+                        (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
+                        (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
+                      });
+                      const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
+                      patch.returnTrips=[...(job.returnTrips||[]),newRT];
+                      toast.success(`Finish QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                    }
+                  }
+                  u(patch);
+                };
                 return (
                   <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
                     <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FINISH QC STATUS</div>
                     <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                      <select value={job.finishQcStatus||""} onChange={e=>{
-                        const v=e.target.value;
-                        const patch={finishQcStatus:v,finishQcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.finishQcStatusDate:""};
-                        if(v==="fail"){
-                          const existing=(job.returnTrips||[]).some(r=>!r.signedOff&&typeof r.scope==="string"&&r.scope.startsWith("QC Fail"));
-                          if(!existing){
-                            const openQC=[];
-                            const fls=[...["upper","main","basement"].map(k=>job.finishPunch&&job.finishPunch[k]).filter(Boolean),...(((job.finishPunch&&job.finishPunch.extras)||[]).map(x=>x&&x.key?job.finishPunch[x.key]:null).filter(Boolean))];
-                            fls.forEach(fl=>{ if(!fl) return;
-                              (fl.general||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
-                              (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
-                              (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
-                            });
-                            const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
-                            patch.returnTrips=[...(job.returnTrips||[]),newRT];
-                            toast.success(`Finish QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
-                          }
-                        }
-                        u(patch);
-                      }} style={{background:fDef.color?`${fDef.color}18`:C.surface,color:fDef.color||C.dim,border:`1px solid ${fDef.color||C.border}`,borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",fontWeight:fDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                      <select value={job.finishQcStatus||""} onChange={e=>applyFinishQcStatus(e.target.value)}
+                        style={{background:fDef.color?`${fDef.color}18`:C.surface,color:fDef.color||C.dim,border:`1px solid ${fDef.color||C.border}`,borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",fontWeight:fDef.color?700:400,outline:"none",cursor:"pointer"}}>
                         {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                       {fDef.hasDate&&(
@@ -27199,6 +27246,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:fDef.color}}>QC DATE</div>
                           <DateInp value={job.finishQcStatusDate||""} onChange={e=>u({finishQcStatusDate:e.target.value})} style={{width:140,fontSize:12,borderColor:fDef.color+"55",background:`${fDef.color}08`}}/>
                         </div>
+                      )}
+                      {suggestFQc&&(
+                        <button type="button" onClick={()=>applyFinishQcStatus(derivedQc)}
+                          title="Derived from this walk's QC items — click to confirm, or pick a different status above"
+                          style={{display:"inline-flex",alignItems:"center",gap:5,
+                            background:`${sugFQcDef.color}14`,color:sugFQcDef.color,
+                            border:`1px dashed ${sugFQcDef.color}66`,borderRadius:99,
+                            padding:"5px 10px",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                            cursor:"pointer",whiteSpace:"nowrap"}}>
+                          <Icon name="checkCircle" size={11} stroke={2.25}/>
+                          Suggested: {sugFQcDef.label} — confirm
+                        </button>
                       )}
                     </div>
                   </div>
@@ -30066,8 +30125,10 @@ function computeTasks(jobs) {
       });
     }
 
-    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled/completed/pass/fail
-    if(job.roughQCTaskFired && !["scheduled","completed","pass","fail"].includes(job.qcStatus)) tasks.push({
+    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled/completed/pass/
+    // fail/passed_items (Task 5: a walk that already produced a verdict, even the middle one,
+    // has already happened — this is a "go schedule the walk" nag, not a "verdict outstanding" one).
+    if(job.roughQCTaskFired && !["scheduled","completed","pass","fail","passed_items"].includes(job.qcStatus)) tasks.push({
       id: job.id+"_qc_walk", jobId: job.id, jobName: job.name,
       type: "auto", category: "qc", foreman,
       title: "Schedule QC Walk",
@@ -30077,7 +30138,7 @@ function computeTasks(jobs) {
 
     // FIX 4: Final QC Walk — fires when finish hits 80%+
     const finishPct = parseInt(job.finishStage)||0;
-    if(finishPct>=80 && !["scheduled","completed","pass","fail"].includes(job.qcStatus)) tasks.push({
+    if(finishPct>=80 && !["scheduled","completed","pass","fail","passed_items"].includes(job.qcStatus)) tasks.push({
       id: job.id+"_final_qc_walk", jobId: job.id, jobName: job.name,
       type: "auto", category: "qc", foreman,
       title: "Schedule Final QC Walk",
@@ -34072,7 +34133,9 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
       });
 
       // ── QC Walk — show for all active statuses including scheduled ──
-      if(job.roughQCTaskFired&&job.qcStatus&&!["completed","pass","fail"].includes(job.qcStatus)) {
+      // "passed_items" (Task 5) is a recorded verdict just like pass/fail — the walk already
+      // happened, so this "still needs a walk" event should stop the same way it does for fail.
+      if(job.roughQCTaskFired&&job.qcStatus&&!["completed","pass","fail","passed_items"].includes(job.qcStatus)) {
         const qcDef=getStatusDef(QC_STATUSES,job.qcStatus||"");
         const start=job.qcStatusDate||"";
         events.push({
@@ -39793,6 +39856,31 @@ const sb4JobComplete = (j) => {
   const questions = _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
   return [punch > 0, updates > 0, questions > 0, _sb4HasPhoto(j, 0)].filter(Boolean).length / 4;
 };
+// deriveQcVerdict (Task 5) — the middle QC verdict derives itself instead of
+// making a walker judge severity by hand. Walks the SAME three punch trees
+// sb4Agg scores below ([roughPunch, finishPunch, qcPunch]) via the shared
+// sbv2WalkPunch helper, counting only LIVE (non-voided) fromQC items — a
+// voided item is treated as if it never existed, same as everywhere else in
+// this file. No fromQC items anywhere => "pass" (clean walk, nothing called).
+// Any item with severity==="serious" => "fail" (unchanged meaning — a single
+// serious item fails the whole job, mirroring sb4Agg's own scoring rule just
+// below). Otherwise (>=1 item, none serious) => "passed_items" — the new
+// middle verdict. Whole-job, not phase-scoped: rough/finish/qcPunch all feed
+// ONE verdict, by the brief's exact interface — the QC tab's rough AND
+// finish pickers both offer this SAME derived value as their suggestion (see
+// the two "Suggested: ..." chips in the tab==="QC" block), not a
+// rough-only/finish-only variant. Pure — no defaults, no Firestore read/write
+// — so it's safe to call from render on every keystroke of a live walk.
+const deriveQcVerdict = (job) => {
+  let hasItem = false, hasSerious = false;
+  [job && job.roughPunch, job && job.finishPunch, job && job.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
+    if (!it || it.voided || !it.fromQC) return;
+    hasItem = true;
+    if (it.severity === "serious") hasSerious = true;
+  }));
+  if (!hasItem) return "pass";
+  return hasSerious ? "fail" : "passed_items";
+};
 const sb4Agg = (js, cfg) => {
   const c = cfg || sb4Config(null);
   const marg = [], live = [], qcScores = [];
@@ -39807,7 +39895,10 @@ const sb4Agg = (js, cfg) => {
       if (it.fromQC) { qcWalk = true; if (it.severity === "serious") seriousCount++; else minorCount++; } // severity absent => minor, by design
     }));
     const st = _sb3lc(j.qcStatus);
-    if (["pass", "fail", "fixed", "completed"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) qcWalk = true;
+    // "passed_items" (Task 5) is a recorded verdict same as pass/fail/fixed/completed — a job
+    // whose only live signal is the status (e.g. its fromQC items were later voided) still
+    // counts as a walk, exactly like the self-review Q2 jobC case above already proves for "pass".
+    if (["pass", "fail", "fixed", "completed", "passed_items"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) qcWalk = true;
     if (qcWalk) {
       qcWalks++;
       if (seriousCount > 0) qcSeriousWalks++;
@@ -46296,9 +46387,10 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
       };
       checkAttempts(j.roughInspectionAttempts, "Rough/4-Way");
       checkAttempts(j.finalInspectionAttempts, "Final");
-      // QC: pass / fail / fixed all count as a recorded result; qcStatusDate
+      // QC: pass / fail / fixed / passed_items (Task 5 — the middle verdict is
+      // just as much a recorded result as pass/fail) all count; qcStatusDate
       // is when it was set.
-      if(j.qcStatus && ["pass","fail","fixed","completed"].includes(j.qcStatus) && j.qcStatusDate) {
+      if(j.qcStatus && ["pass","fail","fixed","completed","passed_items"].includes(j.qcStatus) && j.qcStatusDate) {
         const d = parseAnyDate(j.qcStatusDate);
         if(d && toYMD(d) === yesterdayYMD) {
           inspectionResults.push({ jobName, type: "QC Walk", result: j.qcStatus, foreman });
@@ -46721,6 +46813,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
     const labelForResult = (r) => {
       const k = (r||"").toLowerCase();
       if(k === "pass" || k === "fixed" || k === "completed") return "PASS";
+      if(k === "passed_items") return "PASS W/ITEMS"; // Task 5 — distinct from a clean PASS, not lumped into FAIL
       if(k === "fail") return "FAIL";
       return (r||"").toUpperCase();
     };

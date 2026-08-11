@@ -83,6 +83,19 @@
  * every blended score toward zero (a 0.2512 blend would normalize to
  * ~0.0001, i.e. "terrible").
  *
+ * TASK 5 EXTENSION — deriveQcVerdict(job), the pure function behind the new
+ * middle "QC Passed with Items" status. Declared beside sb4Agg's other QC
+ * helpers (directly above it, right after sb4JobComplete), so — like
+ * sb4JobComplete/_sb4HasPhoto before it — it falls inside the existing MAIN
+ * region slice with no separate extraction call; block 8 below only adds it
+ * to the export object. It walks the SAME three punch trees sb4Agg scores
+ * ([roughPunch, finishPunch, qcPunch]) via the shared sbv2WalkPunch helper,
+ * counting only live (non-voided) fromQC items: zero such items anywhere ->
+ * "pass"; any item with severity==="serious" -> "fail"; otherwise (>=1 item,
+ * none serious) -> "passed_items". It does not touch qcStatus or write
+ * anything — the QC tab renders its result as a confirmable suggestion, the
+ * walker still picks the real value by hand.
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -180,7 +193,7 @@ const RENDER_BITS = ["clamp", "NORM"].map(extractConst).join("\n");
 // first.
 const combined =
   HELPERS + "\n" + MAIN + "\n" + RENDER_BITS +
-  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM });\n";
+  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict });\n";
 
 let extracted;
 try {
@@ -191,7 +204,7 @@ try {
   console.error("  " + e.message);
   process.exit(1);
 }
-const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM } = extracted;
+const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict } = extracted;
 
 // ─── FIXTURES (verbatim from the task brief) ───────────────────────────────
 const jobA = { id:"a", name:"Fixture A", foreman:"T", simproMargin: 20,
@@ -529,10 +542,62 @@ assertEq(NORM.app(1), 1, "NORM.app(1) === 1 — a perfect blended score stays pe
 assertEq(NORM.app(0), 0, "NORM.app(0) === 0");
 assertEq(NORM.app(null), null, "NORM.app(null) === null");
 
+console.log("\n── 8. TASK 5: deriveQcVerdict(job) — pure, three-tree, severity-based verdict ──");
+
+// No items anywhere -> "pass". Truly empty job (no punch trees, no fields at all).
+assertEq(deriveQcVerdict({}), "pass", "deriveQcVerdict({}): no punch trees at all -> pass (clean walk, nothing called)");
+// Defensive: a null/undefined job must not throw (called from render, where a job could
+// theoretically be mid-load) — mirrors the `job && job.roughPunch` guard in the implementation.
+assertEq(deriveQcVerdict(null), "pass", "deriveQcVerdict(null): no crash, no items -> pass");
+
+// jobA (block 2 fixture): roughPunch has ONE fromQC item (p2), no severity set -> minor-only.
+// Proves the roughPunch tree specifically can drive a passed_items verdict.
+assertEq(deriveQcVerdict(jobA), "passed_items", "deriveQcVerdict(jobA): 1 minor fromQC item in roughPunch -> passed_items");
+
+// jobB (block 2 fixture): finishPunch has ONE fromQC item (p3), no severity set -> minor-only.
+// Proves the finishPunch tree specifically can drive a passed_items verdict.
+assertEq(deriveQcVerdict(jobB), "passed_items", "deriveQcVerdict(jobB): 1 minor fromQC item in finishPunch -> passed_items");
+
+// jobB2 (block 5 fixture): jobB's clone with its one fromQC item marked severity:"serious".
+// Any serious item anywhere -> fail, regardless of minor count (it has none here).
+assertEq(deriveQcVerdict(jobB2), "fail", "deriveQcVerdict(jobB2): finishPunch's one fromQC item is serious -> fail");
+
+// jobD (block 5 fixture): qcPunch ONLY (no roughPunch/finishPunch at all), one serious (q1) +
+// one minor (q2). Proves the qcPunch tree is actually walked (the brief's own preserve-this
+// trap) and that a serious item there fails the job just like rough/finish would.
+assertEq(deriveQcVerdict(jobD), "fail", "deriveQcVerdict(jobD): qcPunch has a serious item -> fail (qcPunch tree is walked, not dropped)");
+
+// jobE (block 5 fixture): roughPunch has one VOIDED serious item + one live minor item. The
+// voided item must be excluded entirely — it does not fail the walk, and the live minor item
+// alone determines the verdict -> passed_items, NOT fail and NOT pass (voided != absent).
+assertEq(deriveQcVerdict(jobE), "passed_items", "deriveQcVerdict(jobE): voided serious item is ignored -> only the live minor item counts -> passed_items");
+
+// New fixture — qcPunch-only, MINOR-only (no serious at all). jobD above already proved
+// qcPunch can drive a fail; this proves the tree's OTHER branch (passed_items) too, so
+// qcPunch gets the same two-outcome coverage as rough/finish above.
+const jobF = { id: "f", name: "Fixture F", foreman: "T",
+  qcPunch: { main: { general: [ { id: "f1", text: "minor in qcPunch", fromQC: true } ] } } };
+assertEq(deriveQcVerdict(jobF), "passed_items", "deriveQcVerdict(jobF): qcPunch-only, 1 minor item, no serious -> passed_items");
+
+// New fixture — regular (non-fromQC) punch items only, in both rough and finish, zero fromQC
+// items anywhere. Proves ordinary punch items never count toward the verdict, only fromQC ones.
+const jobG = { id: "g", name: "Fixture G", foreman: "T",
+  roughPunch:  { main: { general: [ { id: "g1", text: "not QC", done: false } ] } },
+  finishPunch: { main: { general: [ { id: "g2", text: "also not QC", done: true } ] } } };
+assertEq(deriveQcVerdict(jobG), "pass", "deriveQcVerdict(jobG): only non-fromQC punch items present -> pass (regular punch never counts)");
+
+// New fixture — severity split ACROSS trees: roughPunch has a minor item, finishPunch has the
+// serious one. Proves the verdict is a true UNION over all three trees (any serious item
+// anywhere fails the whole job), not scoped to whichever tree is checked first/last.
+const jobH = { id: "h", name: "Fixture H", foreman: "T",
+  roughPunch:  { main: { general: [ { id: "h1", text: "minor",   fromQC: true } ] } },
+  finishPunch: { main: { general: [ { id: "h2", text: "serious", fromQC: true, severity: "serious" } ] } } };
+assertEq(deriveQcVerdict(jobH), "fail", "deriveQcVerdict(jobH): minor in roughPunch + serious in finishPunch -> fail (union across all three trees)");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("task3R ok");
+console.log("sb4-dryrun ok (Task 1R/2R/3R/5)");
 process.exit(0);
