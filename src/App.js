@@ -15359,6 +15359,94 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
 }
 
 
+// ── Home Runs top pull-summary ──────────────────────────────────
+// Sits above the Home Runs section + Panel Schedules (Koy, 2026-08-10):
+// "I want the Home Runs pulled, with the number of pulled compared to not
+// pulled at the very top... click that list and have it show you all of the
+// home runs organized and wiresized alphabetically... the whole list of
+// pulled and not pulled right there so it's easy to see." The header counts
+// always show; the flat list itself starts collapsed (tap to open), matching
+// this tab's every-section-starts-collapsed convention (v347).
+//
+// `namedFlat`/`pulled`/`total`/`pct` all come from HomeRunsTab unchanged —
+// the same namedRows (name-required) rule that already drives the progress
+// bar, so this card's numbers can never drift from the Home Runs section
+// below it. Sort is alphabetical-by-name ONLY (Koy's "organized and
+// wiresized alphabetically" resolved as name-sort + wire shown per row, NOT
+// grouped by wire) — `byName` below is the one place that lives; a future
+// wire-size-grouping pass means grouping notPulledFlat/pulledFlat by
+// `x.r.wire` before this sort, nothing else changes.
+function HomeRunsPullSummary({namedFlat, pulled, total, pct}) {
+  const [open, setOpen] = useState(false);
+  const notPulled = total - pulled;
+  const byName = (a,b) => (a.r.name||'').toLowerCase().localeCompare((b.r.name||'').toLowerCase());
+  const notPulledFlat = namedFlat.filter(x=>x.r.status!=='Pulled').sort(byName);
+  const pulledFlat    = namedFlat.filter(x=>x.r.status==='Pulled').sort(byName);
+
+  const renderRow = (x) => {
+    const {r, floor} = x;
+    const isPulled = r.status==='Pulled', isNeedSpecs = r.status==='Need Specs';
+    const meta = [r.panel, floor, wireAmpsVolts(r.wire, r.v240)].filter(Boolean).join(' · ');
+    return (
+      <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 8px',
+        borderRadius:7,marginBottom:4,
+        background:isPulled?'rgba(62,125,90,0.08)':isNeedSpecs?'rgba(239,68,68,0.1)':'transparent',
+        border:`1px solid ${isPulled?'rgba(62,125,90,0.3)':isNeedSpecs?'rgba(239,68,68,0.3)':C.border}`}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.text,wordBreak:'break-word'}}>{r.name}</div>
+          <div style={{fontSize:10,color:C.dim,marginTop:1,wordBreak:'break-word'}}>
+            {meta||'—'}{isNeedSpecs&&<span style={{color:C.red,fontWeight:700}}> · Need Specs</span>}
+          </div>
+        </div>
+        <span style={{flexShrink:0,fontSize:10,fontWeight:800,padding:'3px 7px',borderRadius:5,
+          background:r.wire?(WIRE_COLORS[r.wire]||C.surface):C.surface,
+          color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
+          border:`1px solid ${r.wire?(WIRE_COLORS[r.wire]||C.border):C.border}`}}>
+          {r.wire||'—'}
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
+      border:`1px solid ${C.border}`,borderRadius:12}}>
+      <button type="button" onClick={()=>setOpen(v=>!v)}
+        style={{display:'flex',width:'100%',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',
+          gap:8,background:'none',border:'none',padding:0,margin:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+        <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled{open?' ▴':' ▾'}</span>
+        <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>
+          {pulled} pulled · {notPulled} left
+        </span>
+      </button>
+      <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden',marginTop:8}}>
+        <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
+          borderRadius:99,transition:'width 0.4s ease'}}/>
+      </div>
+
+      {open&&(
+        <div style={{marginTop:14}}>
+          {notPulledFlat.length>0&&(<>
+            <div style={{fontSize:10,fontWeight:800,letterSpacing:'0.08em',color:C.red,
+              textTransform:'uppercase',marginBottom:6}}>
+              Not Pulled · {notPulledFlat.length}
+            </div>
+            {notPulledFlat.map(renderRow)}
+          </>)}
+          {pulledFlat.length>0&&(<>
+            <div style={{fontSize:10,fontWeight:800,letterSpacing:'0.08em',color:C.green,
+              textTransform:'uppercase',margin:notPulledFlat.length>0?'14px 0 6px':'0 0 6px'}}>
+              Pulled · {pulledFlat.length}
+            </div>
+            {pulledFlat.map(renderRow)}
+          </>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
@@ -15457,9 +15545,29 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const namedRows=allRows.filter(r=>(r.name||'').trim());
   const total=namedRows.length, pulled=namedRows.filter(r=>r.status==='Pulled').length;
   const pct=total>0?Math.round((pulled/total)*100):0;
+  // Floor-labeled flat list for the top pull-summary's expandable index (Koy,
+  // 2026-08-10: "click that list and have it show you all the home runs...
+  // right at the top"). Same floor set as HomeRunsByPanel's `flat` builder
+  // (main → basement → upper → extras) but filtered on the same name-required
+  // rule as namedRows above (not hrHasContent's looser "any field filled"
+  // rule), so this list's membership always agrees with pulled/total — never
+  // off-by-a-blank-row from the progress bar above it.
+  const hrFloorDefs=[["main","Main Level"],["basement","Basement"],["upper","Upper Level"],
+    ...((homeRuns.extraFloors||[]).map(ef=>[ef.key, ef.label||ef.key]))];
+  const namedFlat=hrFloorDefs.flatMap(([k,label])=>(homeRuns[k]||[])
+    .filter(r=>(r.name||'').trim())
+    .map(r=>({r, floor:label})));
 
   return (
     <div>
+      {/* Pull-progress summary — leads the WHOLE tab (Koy, 2026-08-10: "the
+          number of pulled compared to not pulled at the very top"). Click to
+          expand the full A-Z list; the Home Runs section below (By Panel/By
+          Floor) is unchanged. */}
+      {total>0&&(
+        <HomeRunsPullSummary namedFlat={namedFlat} pulled={pulled} total={total} pct={pct}/>
+      )}
+
       <Section label="Home Runs" color={C.blue} defaultOpen={false}>
         {(()=>{
           const cp=homeRuns.customPanels||DEFAULT_PANELS;
@@ -16158,21 +16266,6 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                 ))}
               </>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Pull progress */}
-      {total>0&&(
-        <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
-          border:`1px solid ${C.border}`,borderRadius:12}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-            <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled</span>
-            <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>{pulled} / {total} — {pct}%</span>
-          </div>
-          <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden'}}>
-            <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
-              borderRadius:99,transition:'width 0.4s ease'}}/>
           </div>
         </div>
       )}
@@ -45162,7 +45255,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-10 · App SW version: v375
+**Last manifest update:** 2026-08-10 · App SW version: v376
 
 ---
 
@@ -45314,6 +45407,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - Pull-summary leads the tab + expandable A-Z flat list · 'shipped 2026-08-10' · 'SW v376' · Koy: "I want the Home Runs pulled, with the number of pulled compared to not pulled at the very top... click that list and have it show you all of the home runs organized and wiresized alphabetically... the whole list of pulled and not pulled right there so it's easy to see. Right now it's kind of hard to navigate: you have to click into Home Runs and then find the panel or the floor." The "Home Runs Pulled" progress card now leads the WHOLE tab — above even the v369 list-first Home Runs section and Panel Schedules, not just above Generator Load Selection — and its header line spells out both sides of the count ('{pulled} pulled · {notPulled} left', was the bare 'pulled / total — pct%'). New 'HomeRunsPullSummary' component: click the card to expand (starts collapsed, per the v347 every-section-collapsed convention) into one flat A-Z list of every named home run on the job — no drilling into a panel or floor first. Split into "Not Pulled" (the actionable set, listed first) and "Pulled" groups, each with its own count header (a group hides entirely when empty, same pattern the generator response modal already uses for its ON/NOT ON lists); every row carries its wire size as a colored chip plus panel · floor · 'wireAmpsVolts()' so the row is self-describing without opening it. Sort is alphabetical-by-name only — Koy's "organized and wiresized alphabetically" resolved as name-sort with wire shown on every row, NOT grouped by wire; the 'byName' comparator inside 'HomeRunsPullSummary' is the one place a future wire-size-grouping pass would touch. List membership comes from the same per-floor arrays (main/basement/upper/extraFloors) and the same name-required 'namedRows' filter the pulled/total counts already used, so the header numbers and the expanded list's group counts can never drift apart. Purely additive: the existing By Panel / By Floor Home Runs section, 'HomeRunsByPanel', and the row editors are untouched. Why it can't lose data: read-only presentational component — no new field, no write path, no schema or rules change; the moved progress card reuses the exact 'pulled'/'total'/'pct' values 'HomeRunsTab' already computed, nothing recalculated a new way
   - 240V flip now moves the breaker COUNT cards too · 'shipped 2026-08-10' · 'SW v374' · Koy, testing v373 on Webb: "ive marked two of the 12/2 homeruns as 240v but it still does not appear in the breaker counts." v373 was real but only half the surface — it taught the panel *schedule* about 240V ('fillPanelFromHomeRuns' already called 'effectivePoles'), while the **panel summary cards above it** still destructured 'poles' straight off the raw wire table ('const {amps,poles}=WIRE_BREAKER[r.wire]'), so the flag re-poled the printed sheet while the counts never moved. Audited every 'WIRE_BREAKER[...]' read in the file: this was the ONLY one that ignored 'v240' — the generator panel ('slotsUsed'), 'GenPanelGrid' and the schedule fill all already went through 'effectivePoles'. Now 'poles = effectivePoles(r.wire, r.v240)' at that one site, and because every downstream number flows from it, the whole card chain corrects at once: the group label (a 240V 12/2 files under "20A 2P" instead of "20A 1P"), the space math, 'autoSpaces'/drift detection, the tandem + quad sizing banner, and the PO breaker counts. Pairs with the v369 drift banner — an existing manual override on that panel now correctly reads "Manual count is stale" and its Refresh pulls the corrected number. Why it can't lose data: read-side derivation only — no write, no new field, no schema or rules change, and 'effectivePoles' is the same module-scope helper four other call sites already trusted
   - 240V flip re-poles filled panel schedules · 'shipped 2026-08-10' · 'SW v373' · Koy: "I made a 20a circuit a 240v load and it did not update the breakers to be 2 pole for those loads." The panel-schedule circuits map is a fill-time snapshot, so flipping a 12/2 or 14/2 home run to 240V (or any wire/load change) left an already-filled schedule silently stale — the home-run row said "2-pole · 240V" while the breaker sheet below still showed 1-pole. Fills now stamp two additive strings on the panel: 'fillSig' (order-insensitive signature of the breakers the fill derived FROM — new shared 'panelBreakersFromHomeRuns' + 'panelFillSig', the same derivation the FILL button uses, so the two can never disagree) and 'fillCircuitsSig' (canonical sorted-key 'stableStringify' of what it produced, so Firestore map-key reordering can't fake a hand-edit). A sync effect in 'ElectricalPanelSchedules' keeps snapshots honest: a panel still byte-identical to its own last fill output auto re-fills through the normal 'placeBreakers' engine the moment Home Runs drift (toast if breakers no longer fit); a panel hand-edited since its fill is NEVER auto-written — its FILL button turns into an orange RE-FILL alert (existing REPLACE confirm still applies); pre-v373 fills are adopted silently the first time their circuits match a fresh fill byte-for-byte, otherwise they keep today's manual-only behavior (one manual re-fill opts them in). Why it can't lose data: both new fields are additive strings inside each 'job.electricalPanels[]' entry (inside 'data' — no loader change); the auto path writes ONLY when current circuits equal the panel's own last fill output, so typed circuits are unreachable by it; an empty derivation (rows moved off / homeRuns not yet loaded) never touches a panel, so an auto-wipe is impossible; all writes ride the existing updPanel → saveJob funnel (merge-baseline advance fixed v369/v370)
   - Home Runs list first + "Refresh from home runs" revert fix · 'shipped 2026-08-09' · 'SW v369' · Koy: "when i hit refresh from homeruns list it works for a second and then reverts back… the homeruns list tab here needs to be at the top." Two halves. **Order:** the Home Runs list section now leads the tab (was Panel Schedules → Generator → list); every section still starts collapsed per the v347 convention. **Revert fix (root-caused, reproduced against the real '_threeWayMerge' in a node harness):** the revert was a stale-baseline delete-resurrection — 'flushJob' and 'flushSaves' (job close / tab switch / backgrounding inside the 500ms debounce window) ran the SAME merge transaction as 'saveJob' but never advanced 'serverBaselines', so an edit that left through a flush kept that key's baseline old for the whole session; the next delete-shaped write of the same key (breaker-override "Refresh from home runs" deleting its panel key, panel-schedule Fill replacing a circuits map) three-way-merged against the stale base, the merge read the server's own copy as "another device's change" and kept it, 'merged:true' made the tab re-adopt its own echo, and the UI reverted ~1s after the click — and every retry after it, because a rescued key's baseline deliberately stays at the sent value (Kweller rule), so base ≠ server forever. Fix: the post-write baseline advance is extracted to '_advanceMergeBaseline' and called by ALL THREE writers (it was saveJob-only); the Kweller rescued-key rule is preserved byte-for-byte inside the helper. Why it can't lose data: the baseline is in-memory bookkeeping ('serverBaselines.current') never written to Firestore; no write shape, no schema, no rules change; flush-path writes get STRICTLY safer (a user's explicit delete stops resurrecting) and the v312 never-fresher-than-local invariant holds because the baseline advances to exactly what was written — the local copy's value for non-rescued keys, the sent value for rescued ones
