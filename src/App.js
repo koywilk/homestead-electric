@@ -10761,6 +10761,22 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
     writeFloor(floorKey, newFloor);
   };
 
+  // Severity toggle — same shape as toggleItem above (get floor, map-flip by
+  // id, writeFloor), so it rides the identical funnel every other QC-walk
+  // edit in this component uses. Absent severity = minor; writing undefined
+  // (not the string "minor") lets sanitize() drop the key on save.
+  const toggleSeverity = (floorKey, roomId, itemId) => {
+    const floor = getFloor(floorKey);
+    const upd = items => items.map(i => i.id===itemId ? {
+      ...i, severity: i.severity === "serious" ? undefined : "serious",
+    } : i);
+    let newFloor;
+    if(roomId==='general')       newFloor = {...floor, general:upd(floor.general)};
+    else if(roomId==='hotcheck') newFloor = {...floor, hotcheck:upd(floor.hotcheck||[])};
+    else newFloor = {...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:upd(r.items||[])}:r)};
+    writeFloor(floorKey, newFloor);
+  };
+
   const addPhoto = async (floorKey, roomId, itemId, files) => {
     if(!files?.length || !jobId) return;
     setUploadingId(itemId);
@@ -10990,18 +11006,33 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
             onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();commitEdit(fk,roomId,item.id,editText);}if(e.key==='Escape'){setEditingItem(null);setEditText('');}}}
             onBlur={()=>commitEdit(fk,roomId,item.id,editText)}
             rows={2}
-            style={{flex:1,fontSize:12,border:`1px solid ${C.border}`,borderRadius:5,padding:'4px 6px',
+            style={{flex:1,minWidth:0,fontSize:12,border:`1px solid ${C.border}`,borderRadius:5,padding:'4px 6px',
               background:C.surface,color:C.text,outline:'none',fontFamily:'inherit',resize:'vertical',lineHeight:1.4}}/>
         ) : (
           <span onClick={()=>{setEditingItem({fk,roomId,itemId:item.id});setEditText(item.text);}}
             title="Click to edit"
-            style={{flex:1,fontSize:12,color:item.done?C.muted:C.text,
+            style={{flex:1,minWidth:0,fontSize:12,color:item.done?C.muted:C.text,
               textDecoration:item.done?'line-through':'none',lineHeight:1.4,
               cursor:'text',borderRadius:4,padding:'2px 4px',
               transition:'background 0.1s'}}
             onMouseEnter={e=>{e.target.style.background=C.border+'66'}}
             onMouseLeave={e=>e.target.style.background='transparent'}>
             {item.text}
+          </span>
+        )}
+        {/* Severity toggle — QC items only (always true in this list, but
+            gated the same explicit way as the punch-list chip). Click cycles
+            minor <-> serious via toggleSeverity (same funnel as toggleItem
+            above). Same labels/visual treatment as the PunchItems chip so
+            the two surfaces read as one feature. */}
+        {item.fromQC && (
+          <span onClick={(e) => { e.stopPropagation(); toggleSeverity(fk, roomId, item.id); }}
+            style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.04em", borderRadius: 99, padding: "2px 8px",
+              cursor: "pointer", userSelect: "none", flexShrink: 0,
+              border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
+              background: item.severity === "serious" ? "#B23A3A14" : C.bg,
+              color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
+            {item.severity === "serious" ? "Serious QC item" : "Minor QC item"}
           </span>
         )}
         {jobId&&(()=>{
