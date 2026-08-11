@@ -40696,6 +40696,29 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   // patch of {margin,qc,handoff,app} (partial or full), same as before Task 7R.
   const saveWeights = (patch) => saveCfg({ weights: patch });
 
+  // JOB-LIST FILTER, NOT A TIME WINDOW — and the labels now say so (Koy,
+  // 2026-08-11: "why does this week, this month, and this year not seem to do
+  // anything to the scoring? Doesn't really change anything by any of them.
+  // Makes no sense."). He was right, and for some people it is literally
+  // inert: this drops jobs by LAST-TOUCHED date, then every stat still counts
+  // each surviving job's ENTIRE lifetime. So a job touched yesterday still
+  // contributes punch items from months ago. Measured on the live set:
+  // 112 jobs -> 79 (month) -> 65 (week), yet Gage scored 89/89/89 because all
+  // five of his jobs are recent, so all three buttons select the identical
+  // set; Daegan's minor-item count read 12 in all three.
+  //
+  // A REAL time window is not buildable on today's data, which is why this was
+  // relabelled rather than fixed:
+  //   • margin   — `simproMargin` is one CURRENT number per job. No history
+  //                exists, so "margin as of last week" cannot be computed.
+  //   • handoff  — of 2,463 punch items, only 1,050 (43%) carry any timestamp
+  //                at all; most are just {done, text, id}.
+  //   • qc walks — windowable (qcStatusDate/finishQcStatusDate).
+  //   • updates  — windowable (all 318 carry a `date`).
+  // Two of the four, holding the majority of the weight, have no time
+  // dimension. Windowing only the other two would put windowed and lifetime
+  // numbers inside one blended score, which is more misleading, not less.
+  // If punch items ever start carrying timestamps, revisit this.
   const windowedJobs = useMemo(() => {
     if (time === "year") return jobs || [];
     const days = time === "week" ? 7 : 31, since = Date.now() - days * 86400e3;
@@ -40828,8 +40851,14 @@ function ScoreboardV4({ jobs, users = [], identity }) {
       <div className="ctr">
         <span className="lbl">Board</span>
         <div className="seg">{["coordinators", "foremen", "leads"].map(b => (<button key={b} className={board === b ? "on" : ""} onClick={() => setBoard(b)}>{b === "coordinators" ? "Coordinators" : b === "leads" ? "Leads" : "Foremen"}</button>))}</div>
-        <span className="lbl">Time</span>
-        <div className="seg">{[["week", "This Week"], ["month", "This Month"], ["year", "This Year"]].map(p => (<button key={p[0]} className={time === p[0] ? "on" : ""} onClick={() => setTime(p[0])}>{p[1]}</button>))}</div>
+        {/* Labelled for what this control ACTUALLY does (Koy, 2026-08-11: "why
+            does this week, this month, and this year not seem to do anything to
+            the scoring? Doesn't really change anything"). It filters the JOB
+            LIST by last-touched date; it does not window the stats. See the
+            windowedJobs comment above for why a real time window is not
+            buildable on today's data. */}
+        <span className="lbl">Active jobs</span>
+        <div className="seg">{[["week", "Touched this week"], ["month", "Touched this month"], ["year", "All jobs"]].map(p => (<button key={p[0]} className={time === p[0] ? "on" : ""} onClick={() => setTime(p[0])}>{p[1]}</button>))}</div>
         {canEdit && <button className="editbtn" onClick={() => setShowEdit(v => !v)}>{showEdit ? "Done" : "Adjust scoring"}</button>}
       </div>
 
@@ -40914,7 +40943,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
       </div>
 
       <div className="note">
-        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {cfg.marginTarget}% at finish: green is at/above, amber below, red underwater.{cfg.marginPriorJobs > 0 && <> A book with only a few jobs is <b>scored</b> partway toward the board's middle until it reaches about {cfg.marginPriorJobs} jobs — five jobs is too few to prove a margin, and the card tells you when that's in play. The percentage shown is always the person's real median.</>} <b>Logged in app</b> counts entries <b>per job</b>, not in total, so a bigger book is no advantage — depth of documentation is. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
+        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {cfg.marginTarget}% at finish: green is at/above, amber below, red underwater.{cfg.marginPriorJobs > 0 && <> A book with only a few jobs is <b>scored</b> partway toward the board's middle until it reaches about {cfg.marginPriorJobs} jobs — five jobs is too few to prove a margin, and the card tells you when that's in play. The percentage shown is always the person's real median.</>} <b>Logged in app</b> counts entries <b>per job</b>, not in total, so a bigger book is no advantage — depth of documentation is. <b>Active jobs</b> narrows the board to jobs with recent activity — it is a job filter, not a time window: every stat still covers that job's whole history, because margin and open punch have no per-week record to draw on. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
       </div>
     </div>
   );
