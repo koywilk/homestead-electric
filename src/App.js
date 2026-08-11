@@ -9710,6 +9710,14 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
     setMaterialText('');
   };
 
+  // Generic single-field patch for one item (QC severity toggle uses this).
+  // Same onChange+map-by-id write every control in this row already uses
+  // (done-checkbox, assignedTo picker, waiting/material edits above) — rides
+  // the same debounced saveJob funnel and its three-way merge.
+  const updateItem = (id, patch) => {
+    onChange(safeItems.map(i => i.id === id ? { ...i, ...patch } : i));
+  };
+
   // Are there any open, assignable items? Hides the Select toggle when not.
   const _selectableCount = safeItems.filter(i => i && !i.done && !i.voided).length;
 
@@ -9892,6 +9900,22 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   </span>
                 )}
               </div>
+            )}
+
+            {/* Severity toggle — QC items only. Click cycles minor <-> serious;
+                writes via updateItem (same onChange+map patch every other
+                control in this row uses). Absent severity = minor — sanitize()
+                drops the undefined key on save, so toggling back to minor
+                returns the doc to its exact legacy shape (no migration). */}
+            {item.fromQC && (
+              <span onClick={(e) => { e.stopPropagation(); updateItem(item.id, { severity: item.severity === "serious" ? undefined : "serious" }); }}
+                style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.04em", borderRadius: 99, padding: "2px 8px",
+                  cursor: "pointer", userSelect: "none", flexShrink: 0,
+                  border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
+                  background: item.severity === "serious" ? "#B23A3A14" : C.bg,
+                  color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
+                {item.severity === "serious" ? "Serious QC item" : "Minor QC item"}
+              </span>
             )}
 
             {/* Waiting toggle — only on open items */}
@@ -27073,6 +27097,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                 text:x.text||"",
                                 done:false,
                                 fromQC:true,
+                                severity: x.severity, // carry serious/minor onto the RT clone
                                 originItemId: x.id,
                                 originPhase: x.__phase,
                                 photos: Array.isArray(x.photos) ? x.photos.slice() : [],
@@ -27129,7 +27154,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
                               (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
                             });
-                            const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
+                            const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
                             patch.returnTrips=[...(job.returnTrips||[]),newRT];
                             toast.success(`Finish QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
                           }
@@ -27199,6 +27224,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             text:x.text||"",
                             done:false,
                             fromQC:true,
+                            severity:x.severity, // carry serious/minor onto the RT clone
                             originItemId:x.id,
                             originPhase:x.__phase,
                             photos:Array.isArray(x.photos)?x.photos.slice():[],
