@@ -15479,7 +15479,18 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             if(!rows.length && !bOvr[p]) return null;
             const groups={};
             rows.forEach(r=>{
-              const {amps,poles}=WIRE_BREAKER[r.wire];
+              // Poles come from effectivePoles, NOT the raw wire table (Koy,
+              // 2026-08-10: "ive marked two of the 12/2 homeruns as 240v but it
+              // still does not appear in the breaker counts"). A 12/2 run flipped
+              // to 240V is a 2-pole 2-wire circuit and eats two spaces. v373
+              // taught the panel SCHEDULE that (fillPanelFromHomeRuns already
+              // called effectivePoles) but these summary cards still read
+              // WIRE_BREAKER[r.wire].poles, so the flag changed the printed
+              // schedule while the counts above it never moved. One source of
+              // truth now: group key, space math, tandem/quad sizing and the PO
+              // counts all flow from this value.
+              const {amps}=WIRE_BREAKER[r.wire];
+              const poles=effectivePoles(r.wire, r.v240);
               const key=`${amps}A ${poles===1?"1P":"2P"}`;
               if(!groups[key]) groups[key]={amps,poles,count:0,spaces:0};
               groups[key].count++; groups[key].spaces+=poles;
@@ -45145,7 +45156,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-10 · App SW version: v373
+**Last manifest update:** 2026-08-10 · App SW version: v374
 
 ---
 
@@ -45296,6 +45307,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - 240V flip now moves the breaker COUNT cards too · 'shipped 2026-08-10' · 'SW v374' · Koy, testing v373 on Webb: "ive marked two of the 12/2 homeruns as 240v but it still does not appear in the breaker counts." v373 was real but only half the surface — it taught the panel *schedule* about 240V ('fillPanelFromHomeRuns' already called 'effectivePoles'), while the **panel summary cards above it** still destructured 'poles' straight off the raw wire table ('const {amps,poles}=WIRE_BREAKER[r.wire]'), so the flag re-poled the printed sheet while the counts never moved. Audited every 'WIRE_BREAKER[...]' read in the file: this was the ONLY one that ignored 'v240' — the generator panel ('slotsUsed'), 'GenPanelGrid' and the schedule fill all already went through 'effectivePoles'. Now 'poles = effectivePoles(r.wire, r.v240)' at that one site, and because every downstream number flows from it, the whole card chain corrects at once: the group label (a 240V 12/2 files under "20A 2P" instead of "20A 1P"), the space math, 'autoSpaces'/drift detection, the tandem + quad sizing banner, and the PO breaker counts. Pairs with the v369 drift banner — an existing manual override on that panel now correctly reads "Manual count is stale" and its Refresh pulls the corrected number. Why it can't lose data: read-side derivation only — no write, no new field, no schema or rules change, and 'effectivePoles' is the same module-scope helper four other call sites already trusted
   - 240V flip re-poles filled panel schedules · 'shipped 2026-08-10' · 'SW v373' · Koy: "I made a 20a circuit a 240v load and it did not update the breakers to be 2 pole for those loads." The panel-schedule circuits map is a fill-time snapshot, so flipping a 12/2 or 14/2 home run to 240V (or any wire/load change) left an already-filled schedule silently stale — the home-run row said "2-pole · 240V" while the breaker sheet below still showed 1-pole. Fills now stamp two additive strings on the panel: 'fillSig' (order-insensitive signature of the breakers the fill derived FROM — new shared 'panelBreakersFromHomeRuns' + 'panelFillSig', the same derivation the FILL button uses, so the two can never disagree) and 'fillCircuitsSig' (canonical sorted-key 'stableStringify' of what it produced, so Firestore map-key reordering can't fake a hand-edit). A sync effect in 'ElectricalPanelSchedules' keeps snapshots honest: a panel still byte-identical to its own last fill output auto re-fills through the normal 'placeBreakers' engine the moment Home Runs drift (toast if breakers no longer fit); a panel hand-edited since its fill is NEVER auto-written — its FILL button turns into an orange RE-FILL alert (existing REPLACE confirm still applies); pre-v373 fills are adopted silently the first time their circuits match a fresh fill byte-for-byte, otherwise they keep today's manual-only behavior (one manual re-fill opts them in). Why it can't lose data: both new fields are additive strings inside each 'job.electricalPanels[]' entry (inside 'data' — no loader change); the auto path writes ONLY when current circuits equal the panel's own last fill output, so typed circuits are unreachable by it; an empty derivation (rows moved off / homeRuns not yet loaded) never touches a panel, so an auto-wipe is impossible; all writes ride the existing updPanel → saveJob funnel (merge-baseline advance fixed v369/v370)
   - Home Runs list first + "Refresh from home runs" revert fix · 'shipped 2026-08-09' · 'SW v369' · Koy: "when i hit refresh from homeruns list it works for a second and then reverts back… the homeruns list tab here needs to be at the top." Two halves. **Order:** the Home Runs list section now leads the tab (was Panel Schedules → Generator → list); every section still starts collapsed per the v347 convention. **Revert fix (root-caused, reproduced against the real '_threeWayMerge' in a node harness):** the revert was a stale-baseline delete-resurrection — 'flushJob' and 'flushSaves' (job close / tab switch / backgrounding inside the 500ms debounce window) ran the SAME merge transaction as 'saveJob' but never advanced 'serverBaselines', so an edit that left through a flush kept that key's baseline old for the whole session; the next delete-shaped write of the same key (breaker-override "Refresh from home runs" deleting its panel key, panel-schedule Fill replacing a circuits map) three-way-merged against the stale base, the merge read the server's own copy as "another device's change" and kept it, 'merged:true' made the tab re-adopt its own echo, and the UI reverted ~1s after the click — and every retry after it, because a rescued key's baseline deliberately stays at the sent value (Kweller rule), so base ≠ server forever. Fix: the post-write baseline advance is extracted to '_advanceMergeBaseline' and called by ALL THREE writers (it was saveJob-only); the Kweller rescued-key rule is preserved byte-for-byte inside the helper. Why it can't lose data: the baseline is in-memory bookkeeping ('serverBaselines.current') never written to Firestore; no write shape, no schema, no rules change; flush-path writes get STRICTLY safer (a user's explicit delete stops resurrecting) and the v312 never-fresher-than-local invariant holds because the baseline advances to exactly what was written — the local copy's value for non-rescued keys, the sent value for rescued ones
   - Per-floor home runs
