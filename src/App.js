@@ -1555,13 +1555,19 @@ const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
   // Giving "needs" a date lets Koy set a "schedule by" target on unscheduled
   // RTs — these surface in the Crew Planner's needs-scheduling list.
-  {value:"needs",     label:"Needs to be Scheduled", color:"#B23A3A", hasDate:true},
-  {value:"scheduled", label:"Scheduled",             color:"#6A5E97", hasDate:true},
-  {value:"complete",  label:"Complete",              color:"#46916A"},
+  // Every status label carries its own domain word (Koy, 2026-08-10: "make sure
+  // its all labeled better like qc needs to be included where it applies").
+  // RT, QC and Matterport all used the IDENTICAL bare "Needs to be Scheduled",
+  // and these pills render side by side on job cards / Open Items / Forecast,
+  // so the reader couldn't tell which thing needed scheduling. Labels are
+  // display-only — every lookup keys off `value` — so renaming is inert.
+  {value:"needs",     label:"RT Needs to be Scheduled", color:"#B23A3A", hasDate:true},
+  {value:"scheduled", label:"RT Scheduled",             color:"#6A5E97", hasDate:true},
+  {value:"complete",  label:"RT Complete",              color:"#46916A"},
 ];
 const QC_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
-  {value:"needs",     label:"Needs to be Scheduled", color:"#B23A3A"},
+  {value:"needs",     label:"QC Needs to be Scheduled", color:"#B23A3A"},
   {value:"scheduled", label:"QC Scheduled",          color:"#3B5BA5", hasDate:true},
   {value:"completed", label:"QC Completed",          color:"#6A5E97", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#46916A"},
@@ -1570,7 +1576,7 @@ const QC_STATUSES = [
 ];
 const MATTERPORT_STATUSES = [
   {value:"",          label:"— set status —",           color:null},
-  {value:"needs",     label:"Needs to be Scheduled",    color:"#B23A3A", hasDate:true},
+  {value:"needs",     label:"Scan Needs to be Scheduled", color:"#B23A3A", hasDate:true},
   {value:"scheduled", label:"Scan Scheduled",           color:"#3B5BA5", hasDate:true},
   {value:"complete",  label:"Scan Complete",            color:"#46916A"},
 ];
@@ -34257,7 +34263,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
       (job.returnTrips||[]).filter(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatus||r.rtStatusDate||r.date)).forEach((rt,i)=>{
         const start=rt.rtStatusDate||rt.date||"";
         const rtDef=getStatusDef(RT_STATUSES,rt.rtStatus||"needs");
-        const statusLabel=rt.rtStatus==="needs"?"Needs to be Scheduled":rtDef.label||rt.rtStatus||"needs scheduling";
+        const statusLabel=rtDef.label||rt.rtStatus||"needs scheduling";
         events.push({
           id:job.id+"_rt_"+rt.id, job, type:"rt",
           label:"RT "+(i+1), color:rtDef.color||"#6A5E97", fc,
@@ -45156,7 +45162,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-10 · App SW version: v374
+**Last manifest update:** 2026-08-10 · App SW version: v375
 
 ---
 
@@ -45268,6 +45274,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - 4-way inspection (rules 14/15/16)
   - Final inspection (rules 23/24)
   - QC walks ('QCWalkSection')
+  - Status labels carry their own domain word · 'shipped 2026-08-10' · 'SW v375' · Koy: "make sure its all labeled better like qc needs to be included where it applies." 'RT_STATUSES', 'QC_STATUSES' and 'MATTERPORT_STATUSES' all rendered the IDENTICAL bare label **"Needs to be Scheduled"** — and those pills sit side by side on job cards, Open Items and the Forecast, so the reader couldn't tell which thing needed scheduling. QC was the worst offender because 5 of its 6 labels already said "QC" and only that one didn't. Now every label names its own system: QC → **"QC Needs to be Scheduled"** (completing the set), Matterport → **"Scan Needs to be Scheduled"** (matching its existing "Scan Scheduled"/"Scan Complete"), and Return Trips → **"RT Needs to be Scheduled" / "RT Scheduled" / "RT Complete"** (RT previously had no domain word at all on any of its three). Also deleted a hardcoded '"Needs to be Scheduled"' duplicate in the Forecast event builder that shadowed the registry and would have gone stale — that surface now reads the registry like everything else, so there is one source of truth per label. Verified no code compares against label TEXT: every status lookup keys off 'value', so this is display-only and inert. Deliberately left alone: Temp Ped and Quick Job status sets, which render on their own dedicated cards where the domain is never ambiguous
   - Failed inspection → punch items
 - **Photos** · 'shipped' · 'PhotoAttacher' · shared upload+thumbnail component
   - Zoomable photo viewer (app-wide) · 'shipped 2026-08-10' · 'SW v372' · Koy: "need any pictures uploaded to be zoominable." The PWA viewport pins 'user-scalable=no' (deliberate — tapping a form input must never zoom the UI), which also silently killed pinch-zoom on every photo; the old viewers were three separate bare lightboxes (punch, QC, Photos tab) plus thumbnails that just opened the raw URL in a new tab. Now: one shared 'ZoomableImage' gesture engine — pinch (two-pointer), mouse wheel / trackpad, drag-to-pan while zoomed, double-tap / double-click toggles 1x ↔ 2.5x at the tapped point, scale clamped 1x–8x, pan resets at 1x so a photo can never be lost off-screen; continuous transforms write straight to the DOM node (no React re-render per pointermove). One global 'HEPhotoLightboxHost' (dark full-screen, photo name, "pinch · scroll · double-tap" hint, Open-original button, ×) opened via 'openPhoto(url, name)' — the same CustomEvent pattern as showConfirm/toast, so any component can call it without prop plumbing. Wired everywhere pictures render: PhotoAttacher thumbnails (every punch/CO/RT/Savant/walk attachment), punch-item photo strips, QC photos, daily-update + materials strips, Q&A answer photos, and the Today photos strip; the Photos-tab gallery keeps its prev/next + source-jump chrome and swaps only its '<img>' for 'ZoomableImage'. The two gutted per-view lightboxes and their state are deleted (orphan-swept). Non-image files (PDFs, CAD, docs) keep open-in-new-tab. Also in this ship (Koy: "i want any text like that fixed"): **raw rich-text HTML no longer leaks into labels** — RT scope and punch text are stored as HTML (contenteditable / QC-fail clones), and nine label-composition sites sliced or embedded them RAW (slicing mid-tag is what produced 'RT #1 · <span style="font-family…' in the Photos-tab captions). All nine now strip first via the module-scope 'stripHtml' then slice: Photos-tab photo captions, Open Items RT labels + punch details, three auto-task 'Scope:' descriptions, Crew Planner RT chips (two builders), and the Savant slot-picker description. Pure UI — reads photo URLs through the existing 'safeImageSrc' sanitizer, zero writes, no data-shape change
