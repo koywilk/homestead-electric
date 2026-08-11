@@ -370,7 +370,9 @@ assertEq(row.margin, 25, "row.margin (median of [20,30])");
 // 1-minor-item walks, 0.975 each). margin/handoff above and below are
 // untouched, still proving true non-regression.
 assertEq(row.qc, 0.975, "row.qc (Task 2R severity score: mean of two 1-minor walks = 0.975, not the old raw count)");
-assertEq(row.qcMissPct, 0, "row.qcMissPct survives sb4Build's spread (0 — no serious items in these fixtures)");
+assertEq(row.qcMissPct, 0, "row.qcMissPct survives sb4Build's spread (0 — no misses in these fixtures)");
+assertEq(row.qcMissTotal, 0, "row.qcMissTotal survives sb4Build's spread (0 misses)");
+assertEq(row.qcMinorTotal, 2, "row.qcMinorTotal survives sb4Build's spread (2 minor items) — the card reads these off the ROW, so a field lost in the spread would render \"—\" for everyone");
 assertEq(row.qcWalks, 2, "row.qcWalks survives sb4Build's spread (2 — both jobs had a QC walk)");
 assertEq(row.handoff, 75, "row.handoff (3 open / 4 punch * 100)");
 // Task 3R: app's VALUE is likewise intentionally different from the Task 1R/2R
@@ -433,6 +435,11 @@ assertEq(baseAgg.qcMissPct, 0, "base: qcMissPct = 0 (no misses anywhere)");
 assertEq(baseAgg.qcMinorAvg, 1, "base: qcMinorAvg = 1 (1 minor item/walk average)");
 assertEq(baseAgg.qcMissAvg, 0, "base: qcMissAvg = 0 (misses are now scored per ITEM, so the card reports their average too)");
 assertEq(baseAgg.qcWalks, 2, "base: qcWalks = 2 (both jobs had a QC walk)");
+// RAW TOTALS — the stat card headline (Koy: "i want the numbers to show").
+// Averages and percentages both hide the count a foreman recognises.
+assertEq(baseAgg.qcMissTotal, 0, "base: qcMissTotal = 0 (no misses across either walk)");
+assertEq(baseAgg.qcMinorTotal, 2, "base: qcMinorTotal = 2 (1 minor on jobA + 1 on jobB) — a TOTAL, not the 1.0 per-walk average sitting beside it");
+assertTrue(baseAgg.qcMinorTotal !== baseAgg.qcMinorAvg, "totals and averages are genuinely different numbers here (2 vs 1), so a card wired to the wrong one fails loudly instead of coincidentally matching", `total ${baseAgg.qcMinorTotal} vs avg ${baseAgg.qcMinorAvg}`);
 
 // jobB2's p3 is now a miss => its walk costs 1/4. It has no minors, so the
 // walk scores 1 - 0.25 = 0.75. jobA is untouched at 0.975.
@@ -458,6 +465,9 @@ const jobMissPlusMinors = { id: "mm", name: "Fixture Miss Plus Minors", foreman:
 const missOnly = sb4Agg([jobMissOnly]).qc, missPlus = sb4Agg([jobMissPlusMinors]).qc;
 assertEq(missOnly, 0.75, "1 miss + 0 minors = 1 - 1/4 = 0.75");
 assertEq(missPlus, 0.65, "1 miss + 4 minors = 1 - (1/4 + 4/40) = 0.65 — the minors are COUNTED on a miss walk");
+const missPlusAgg = sb4Agg([jobMissPlusMinors]);
+assertEq(missPlusAgg.qcMissTotal, 1, "totals: the miss walk reports 1 miss");
+assertEq(missPlusAgg.qcMinorTotal, 4, "totals: and 4 minor items — both counts surface on the card, not just the score they produce");
 assertTrue(missPlus < missOnly, "THE FIX: a miss walk with 4 extra minor items scores WORSE than the same walk without them. Under the old gate both were exactly 0 and this comparison was impossible", `${missPlus} vs ${missOnly}`);
 
 // Knob proof 1 — missDivisor sets what a single miss costs.
@@ -589,6 +599,8 @@ assertEq(sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 2 } })).qc, 0.5, "fix: n
 // with zero QC walks is undiagnosed, not "perfect."
 assertEq(sb4Agg([]).qc, null, "empty jobs list: qc stays null (no walks, not a perfect score)");
 assertEq(sb4Agg([]).qcMissPct, null, "empty jobs list: qcMissPct stays null");
+assertEq(sb4Agg([]).qcMissTotal, null, "empty jobs list: qcMissTotal is null, NOT 0 — a foreman with no walks must read as \"—\" on the card, not as a spotless zero");
+assertEq(sb4Agg([]).qcMinorTotal, null, "empty jobs list: qcMinorTotal is null for the same reason");
 assertEq(sb4Agg([]).qcMinorAvg, null, "empty jobs list: qcMinorAvg stays null");
 assertEq(sb4Agg([]).qcWalks, 0, "empty jobs list: qcWalks is 0");
 

@@ -40580,8 +40580,16 @@ const sb4Agg = (js, cfg) => {
     jobs: js.length,
     margin: _sb4Median(marg), marginN: marg.length,
     qc: qcWalks ? Math.round(qcScores.reduce((a, b) => a + b, 0) / qcWalks * 10000) / 10000 : null, // 0-1 severity score, mean of per-walk scores — NOT a raw count
-    qcMissPct: qcWalks ? Math.round(qcMissWalks / qcWalks * 100) : null,   // % of walks carrying at least one miss — the stat card headline
-    qcMissAvg: qcWalks ? Math.round(qcMissSum / qcWalks * 10) / 10 : null, // misses per walk — now scored per ITEM, so 3 misses != 1 miss
+    // Raw TOTALS are the stat card headline (Koy, 2026-08-11: "show total
+    // missed qc items as well as minor, i want the numbers to show"). A
+    // percentage and a per-walk average both hide the thing a foreman
+    // actually recognises — how many items came off his jobs. Null (not 0)
+    // when there is no walk at all, so "no data" reads as "—" rather than as
+    // a clean zero, matching every other field on this row.
+    qcMissTotal: qcWalks ? qcMissSum : null,
+    qcMinorTotal: qcWalks ? qcMinorSum : null,
+    qcMissPct: qcWalks ? Math.round(qcMissWalks / qcWalks * 100) : null,   // % of walks carrying at least one miss — context on the sub-line
+    qcMissAvg: qcWalks ? Math.round(qcMissSum / qcWalks * 10) / 10 : null, // misses per walk — scored per ITEM, so 3 misses != 1 miss
     qcMinorAvg: qcWalks ? Math.round(qcMinorSum / qcWalks * 10) / 10 : null,
     qcWalks,
     handoff: punch > 0 ? Math.round(openPunch / punch * 1000) / 10 : null,
@@ -40801,6 +40809,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4 .stat{background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:9px;padding:7px 9px;min-width:0}
         .sb4 .stat .sl{font-size:9px;letter-spacing:.03em;text-transform:uppercase;color:var(--c-faint);font-weight:800;line-height:1.3}
         .sb4 .stat .sv{font-size:16px;font-weight:800;margin-top:3px;line-height:1}
+        .sb4 .stat .sv .su{font-size:9.5px;font-weight:700;color:var(--c-faint);margin-left:2px;margin-right:5px}
         .sb4 .stat .sv.mgood{color:var(--c-good)}
         .sb4 .stat .sv.mwarn{color:var(--c-warn)}
         .sb4 .stat .sv.mbad{color:var(--c-bad)}
@@ -40896,7 +40905,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
             </div>
             <div className="stats">
               <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">{marginNote(r)} · goal {cfg.marginTarget}%</div></div>
-              <div className="stat"><div className="sl">Walks with a QC miss</div><div className="sv">{r.qcMissPct == null ? "—" : r.qcMissPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMissAvg ?? "—"} misses + {r.qcMinorAvg ?? "—"} minor per walk</div></div>
+              <div className="stat"><div className="sl">QC misses &amp; minor items</div><div className="sv">{r.qcMissTotal == null ? "—" : <>{r.qcMissTotal}<span className="su">miss</span>{" "}{r.qcMinorTotal}<span className="su">minor</span></>}</div><div className="sh">fewer is better · {r.qcWalks} walks · {r.qcMissPct ?? "—"}% had a miss</div></div>
               <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
               <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.appDensity ?? "—"}</div><div className="sh">entries per job · {r.appVolume} total · {r.appComplete ?? "—"}% of jobs fully tracked</div></div>
             </div>
