@@ -27477,9 +27477,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     // the verdict so it's one Firestore write, not two racing the
                     // debounced save funnel. See qcStrandedItems (module scope) for
                     // the read-only safety net this choice feeds.
-                    patch.qcRtChoice = makeRt ? "rt" : "crew";
-                    patch.qcRtChoiceBy = identity?.name || "";
-                    patch.qcRtChoiceAt = new Date().toISOString();
+                    //
+                    // FIX ROUND 1 (2026-08-10, review Critical finding): PHASE-
+                    // SUFFIXED, not the flat qcRtChoice/qcRtChoiceBy/qcRtChoiceAt
+                    // this task originally shipped. The flat shape meant a later
+                    // finish-phase choice silently overwrote an earlier rough-phase
+                    // one, so a job that got "crew" on rough and later "rt" on
+                    // finish would report qcRtChoice==="rt" job-wide — hiding
+                    // rough's abandoned items from the stranded tripwire even
+                    // though nobody ever came back for them. Each phase now owns
+                    // its own choice.
+                    patch.qcRtChoiceRough = makeRt ? "rt" : "crew";
+                    patch.qcRtChoiceRoughBy = identity?.name || "";
+                    patch.qcRtChoiceRoughAt = new Date().toISOString();
                   }
                   u(patch);
                 };
@@ -27567,9 +27577,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         toast.success(`${v==="fail"?"Finish QC Fail":"Finish QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
                       }
                     }
-                    patch.qcRtChoice = makeRt ? "rt" : "crew";
-                    patch.qcRtChoiceBy = identity?.name || "";
-                    patch.qcRtChoiceAt = new Date().toISOString();
+                    // FIX ROUND 1 (2026-08-10) — phase-suffixed, see the rough
+                    // handler's applyQcStatus above for the full rationale.
+                    patch.qcRtChoiceFinish = makeRt ? "rt" : "crew";
+                    patch.qcRtChoiceFinishBy = identity?.name || "";
+                    patch.qcRtChoiceFinishAt = new Date().toISOString();
                   }
                   u(patch);
                 };
@@ -31043,16 +31055,29 @@ function buildJobActivity(job) {
     });
   }
 
-  // ── STRANDED QC ITEMS (Task 6, 2026-08-10) ─────────────────────────
-  // Read-only tripwire: fires when the QC verdict's return-trip choice was
-  // "crew has it" (qcRtChoice==="crew"), no return trip ever got created,
-  // and the open fromQC items are still sitting there strandedDays later.
-  // Safety net for the automatic RT creation this task removed — see
-  // qcStrandedItems (module scope, beside deriveQcVerdict) for the pure
-  // predicate; this is the only place it renders. Writes nothing.
+  // ── STRANDED QC ITEMS (Task 6, 2026-08-10; per-phase FIX ROUND 1) ──
+  // Read-only tripwire: fires per item, when that item's own phase recorded
+  // "crew has it" (rough via qcRtChoiceRough, finish via qcRtChoiceFinish —
+  // qcPunch items count if EITHER phase did), no open return trip covers it,
+  // and the choice is at least strandedDays old. Safety net for the
+  // automatic RT creation this task removed — see qcStrandedItems (module
+  // scope, beside deriveQcVerdict) for the pure predicate; this is the only
+  // place it renders. Writes nothing.
   const strandedQcCount = qcStrandedItems(job, sb4Config(null), Date.now());
   if (strandedQcCount != null) {
-    const strandedAgeDays = Math.floor((Date.now() - Date.parse(job.qcRtChoiceAt)) / 86400000);
+    // Display age = the OLDEST applicable "crew" choice among the phases
+    // that actually tripped the tripwire (resolveQcRtChoice applies the
+    // same flat-field fallback qcStrandedItems itself uses, so the two can
+    // never disagree about which value a phase resolves to). At least one
+    // of these is guaranteed non-null here, since strandedQcCount is only
+    // non-null when at least one phase's gate fired.
+    const phaseAgeDays = ["rough", "finish"].map(phase => {
+      const { choice, at } = resolveQcRtChoice(job, phase);
+      if (choice !== "crew" || !at) return null;
+      const d = Math.floor((Date.now() - Date.parse(at)) / 86400000);
+      return Number.isFinite(d) ? d : null;
+    }).filter(d => d != null);
+    const strandedAgeDays = phaseAgeDays.length ? Math.max(...phaseAgeDays) : 0;
     groups.push({
       key:"strandedQc", label:"Stranded QC Items",
       items: [{
@@ -40256,28 +40281,64 @@ const deriveQcVerdict = (job, phase) => {
   if (!hasItem) return "pass";
   return hasSerious ? "fail" : "passed_items";
 };
-// qcStrandedItems (Task 6, 2026-08-10) — pure predicate behind the Open
-// Items "Stranded QC Items" row, the read-only safety net for the
-// automatic return-trip creation this task removed. A QC Fail/Passed-with-
-// Items verdict now only creates a return trip when a human confirms it;
-// this is what catches the case where the crew was supposed to "handle it
-// in stride" but the items never actually got closed out after they left.
+// resolveQcRtChoice (Task 6 FIX ROUND 1, 2026-08-10) — reads the per-phase
+// qcRtChoice{Rough,Finish}/qcRtChoice{Rough,Finish}At fields, falling back to
+// the old flat qcRtChoice/qcRtChoiceAt (the shape this task shipped with
+// originally, for exactly one commit) when the phase-specific field is
+// absent. Nothing has shipped to production, so there's no real migration
+// owed — this is a courtesy for any job touched by that earlier build, and
+// it applies the SAME flat value to BOTH phases when that's all a job has,
+// per the fix's spec. Shared by qcStrandedItems (the gating decision) and
+// buildJobActivity (the row's display age), so the two can never disagree
+// about which value a given phase actually resolves to.
+const resolveQcRtChoice = (job, phase) => {
+  const ck = phase === "rough" ? "qcRtChoiceRough" : "qcRtChoiceFinish";
+  const ak = phase === "rough" ? "qcRtChoiceRoughAt" : "qcRtChoiceFinishAt";
+  return {
+    choice: job[ck] != null ? job[ck] : job.qcRtChoice,
+    at:     job[ak] != null ? job[ak] : job.qcRtChoiceAt,
+  };
+};
+// qcStrandedItems (Task 6, 2026-08-10; rewritten FIX ROUND 1, 2026-08-10) —
+// pure predicate behind the Open Items "Stranded QC Items" row, the
+// read-only safety net for the automatic return-trip creation this task
+// removed. A QC Fail/Passed-with-Items verdict now only creates a return
+// trip when a human confirms it; this is what catches the case where the
+// crew was supposed to "handle it in stride" but the items never actually
+// got closed out after they left.
 //
-// Fires only when ALL of:
-//   - the job has open (not done, not voided) fromQC items in ANY of
-//     roughPunch/finishPunch/qcPunch — the SAME three trees deriveQcVerdict's
-//     whole-job mode and sb4Agg walk, via the same sbv2WalkPunch helper;
-//   - no un-signed-off QC return trip already exists — fromQCFail flag OR
-//     the legacy "QC Fail" scope-string prefix (old RTs predate the flag;
-//     a passed_items RT's scope, "QC Items — return trip", never matches
-//     the string alone, which is why the flag has to be checked too);
-//   - the recorded choice was "crew" (site reality said "crew has it") —
-//     a job that never went through the Task 6 confirm prompt at all has
-//     qcRtChoice===undefined, which fails this check, so a job that was
-//     never QC-walked (or was QC-walked before this feature existed) can
-//     NEVER trip this tripwire, no matter how many open fromQC items it has;
-//   - that choice is at least cfg.strandedDays old.
-// Returns the open-item count (>=1) when the row should render, else null.
+// FIX ROUND 1: the original version asked two JOB-LEVEL questions — "does
+// ANY open QC return trip exist" and "was the (single, job-wide) choice
+// crew" — and a review traced the ordinary rough-then-finish workflow
+// through it: rough walk -> "crew" (items left open) -> finish walk later ->
+// "rt" (creates an RT containing only FINISH's items). The flat qcRtChoice
+// field got overwritten to "rt", and the job-level "any RT exists" check was
+// satisfied by finish's unrelated RT — so rough's abandoned items became
+// permanently invisible to this tripwire despite nobody ever returning for
+// them. Rewritten around two PER-ITEM questions instead:
+//   1. Is THIS item covered by an open (un-signed-off) return trip? RT punch
+//      clones carry originItemId (see applyQcStatus/applyFinishQcStatus's RT
+//      construction) — an item is covered iff some un-signed-off RT's
+//      punch[] contains an entry whose originItemId matches it. No scope/flag
+//      filter is needed: only the QC-fail-family RT construction ever
+//      populates originItemId (the unrelated "Failed 4-way"/"Failed final
+//      inspection" conversions use fromRoughInspectionId or no origin link at
+//      all), so presence of a live originItemId link IS the coverage signal.
+//   2. Was the choice for THIS item's phase "crew", and is it old enough?
+//      rough items check qcRtChoiceRough(At); finish items check
+//      qcRtChoiceFinish(At) (both via resolveQcRtChoice's flat-field
+//      fallback). qcPunch items have no phase of their own — genuinely
+//      unattributable — so they're flagged if EITHER phase recorded an old
+//      "crew" choice (an OR, not an AND): over-warning on an unattributable
+//      item is the correct bias for a safety net, silently missing one is not.
+// An item only counts as stranded when it's uncovered AND its phase's gate
+// (2) is satisfied. Fires per item, not per job — a job can have SOME
+// stranded items (rough's) and SOME covered/handled ones (finish's)
+// simultaneously, which is exactly the scenario this fix exists for.
+//
+// Returns the stranded-item count (>=1) when the row should render, else
+// null (0 folds to null — the Open Items row's `!= null` check is the only
+// consumer, so this keeps that contract exactly as before the rewrite).
 // Pure and read-only: writes nothing, schedules nothing, creates nothing.
 // nowMs/cfg are both passed in rather than read from Date.now()/sb4Config
 // internally so this is deterministic and unit-testable in isolation (see
@@ -40285,21 +40346,47 @@ const deriveQcVerdict = (job, phase) => {
 // omitted, mirroring sb4Agg's own `cfg || sb4Config(null)` pattern above.
 const qcStrandedItems = (job, cfg, nowMs) => {
   if (!job) return null;
-  const openQc = [];
-  [job.roughPunch, job.finishPunch, job.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
-    if (it && !it.voided && it.fromQC && !it.done) openQc.push(it);
-  }));
-  if (!openQc.length) return null;
-  const hasQcRt = (job.returnTrips || []).some(rt => rt && !rt.signedOff &&
-    (rt.fromQCFail === true || (typeof rt.scope === "string" && rt.scope.startsWith("QC Fail"))));
-  if (hasQcRt) return null;
-  if (job.qcRtChoice !== "crew") return null;
-  if (!job.qcRtChoiceAt) return null;
-  const ageMs = nowMs - Date.parse(job.qcRtChoiceAt);
-  if (!(ageMs >= 0)) return null; // NaN (bad date) or negative (clock skew) — don't fire
   const strandedDays = (cfg || sb4Config(null)).strandedDays;
-  if (ageMs / 86400000 < strandedDays) return null;
-  return openQc.length;
+  // Per-phase gate 2 above: "crew", has a timestamp, and that timestamp is
+  // at least strandedDays old. A job that never ran the confirm flow on
+  // either phase (no phase-specific field AND no flat fallback) resolves
+  // choice to undefined here, which fails `!== "crew"` immediately — so a
+  // job that was never QC-walked can NEVER trip this tripwire, exactly as
+  // before the rewrite.
+  const crewOldFor = (phase) => {
+    const { choice, at } = resolveQcRtChoice(job, phase);
+    if (choice !== "crew" || !at) return false;
+    const ageMs = nowMs - Date.parse(at);
+    // NaN (bad date) fails ">= 0"; so does a negative (clock skew) — either
+    // way, don't fire off a value we can't trust.
+    return ageMs >= 0 && (ageMs / 86400000) >= strandedDays;
+  };
+  const roughCrewOld = crewOldFor("rough");
+  const finishCrewOld = crewOldFor("finish");
+  // qcPunch's unattributable-phase treatment — OR, not AND (see comment above).
+  const qcCrewOld = roughCrewOld || finishCrewOld;
+
+  // Gate 1 above: item-scoped coverage. Only UN-signed-off RTs count — a
+  // signed-off RT's punch clone does not cover its source item (required
+  // test: "signed-off RT does not count as coverage").
+  const covered = new Set();
+  (job.returnTrips || []).forEach(rt => {
+    if (!rt || rt.signedOff) return;
+    (rt.punch || []).forEach(p => { if (p && p.originItemId) covered.add(p.originItemId); });
+  });
+
+  let strandedCount = 0;
+  const tally = (pp, phaseOld) => sbv2WalkPunch(pp, it => {
+    if (!it || it.voided || !it.fromQC || it.done) return; // not a live open QC item at all
+    if (covered.has(it.id)) return;                        // gate 1: an open RT already has it
+    if (!phaseOld) return;                                 // gate 2: this item's phase isn't stranding yet
+    strandedCount++;
+  });
+  tally(job.roughPunch, roughCrewOld);
+  tally(job.finishPunch, finishCrewOld);
+  tally(job.qcPunch, qcCrewOld);
+
+  return strandedCount > 0 ? strandedCount : null;
 };
 const sb4Agg = (js, cfg) => {
   const c = cfg || sb4Config(null);
