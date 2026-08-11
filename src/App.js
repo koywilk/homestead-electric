@@ -39735,7 +39735,12 @@ const sb4Agg = (js, cfg) => {
       if (seriousCount > 0) qcSeriousWalks++;
       qcMinorSum += minorCount;
       // any serious item zeroes (or partial-credits, if tuned) the whole walk; otherwise lose a little per minor item, floored.
-      qcScores.push(seriousCount > 0 ? c.qc.seriousCredit / 100 : 1 - Math.min(c.qc.minorMaxCost / 100, minorCount / c.qc.minorDivisor));
+      // minorCount===0 short-circuits BEFORE the division: with minorDivisor tunable to 0 (admin slider),
+      // 0/0 is NaN, which Math.min propagates and poisons the whole aggregate (NaN != null, so NORM/overallOf
+      // wouldn't filter it). Zero minor items is unconditionally a perfect walk regardless of the divisor, so
+      // this isn't just a guard — it's the correct answer anyway. A nonzero minorCount over a 0 divisor is
+      // +Infinity, not NaN, and Math.min already clamps that to minorMaxCost/100 correctly on its own.
+      qcScores.push(seriousCount > 0 ? c.qc.seriousCredit / 100 : minorCount === 0 ? 1 : 1 - Math.min(c.qc.minorMaxCost / 100, minorCount / c.qc.minorDivisor));
     }
     updates += (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
     questions += _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);

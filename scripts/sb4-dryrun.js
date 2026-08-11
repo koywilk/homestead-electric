@@ -336,6 +336,52 @@ const voidedAgg = sb4Agg([jobE]);
 assertEq(voidedAgg.qc, 0.975, "self-review: a voided serious item doesn't count — walk scores as if it only had the 1 live minor item");
 assertEq(voidedAgg.qcSeriousPct, 0, "self-review: a voided serious item doesn't move qcSeriousPct");
 
+// REVIEW FIX ROUND 1 — unguarded divide-by-zero (src/App.js:39738). When
+// c.qc.minorDivisor is tuned to 0 (reachable via Task 7R's admin slider) AND
+// a walk is clean (minorCount 0 — jobC, reused from above), the original
+// code computed `minorCount / c.qc.minorDivisor` = 0/0 = NaN, poisoning that
+// walk's score, the whole aggregate's `qc` (via reduce), and — because
+// NORM.qc(NaN) = clamp(NaN) = NaN, and `NaN != null` is true in JS — NOT
+// getting filtered by overallOf's `n != null` guard, so it would have
+// silently corrupted the standings sort. `assertEq`'s strict `===` alone
+// would still technically catch this (NaN === 1 is false), but the printed
+// diagnostic is actively misleading (JSON.stringify(NaN) prints "null",
+// making a FAIL look like the actual value was null) — so each case below
+// gets an explicit Number.isNaN(...) check first, using assertTrue rather
+// than assertEq(x, NaN) (NaN === NaN is ALSO false, so that pattern can
+// never pass no matter what x is — useless as an equality check either way).
+console.log("\n── 6. REVIEW FIX ROUND 1: minorDivisor:0 divide-by-zero guard ──");
+
+// Case 1 — the exact failure scenario: a CLEAN walk (jobC: qcStatus "pass",
+// zero fromQC items => minorCount 0) under minorDivisor:0. Intended
+// semantics: zero minor items means zero penalty, regardless of divisor.
+const cleanZeroDiv = sb4Agg([jobC], sb4Config({ qc: { minorDivisor: 0 } }));
+assertTrue(Number.isNaN(cleanZeroDiv.qc) === false, "fix: clean walk (0 minor) under minorDivisor:0 is not NaN", `got ${cleanZeroDiv.qc}`);
+assertEq(cleanZeroDiv.qc, 1, "fix: clean walk (0 minor) under minorDivisor:0 scores exactly 1 (no minors = no penalty)");
+
+// Case 2 — nonzero minor count under minorDivisor:0. minorCount/0 is
+// +Infinity (not NaN — only 0/0 is NaN), and Math.min(cap, Infinity) already
+// correctly resolves to cap on its own; verified this holds (not assumed)
+// with a direct node repro before relying on it. Intended semantics: clamp
+// to the max penalty, same as an extremely harsh (but finite) divisor would.
+const minorZeroDiv = sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 0 } }));
+assertTrue(Number.isNaN(minorZeroDiv.qc) === false, "fix: 1-minor walk (jobA) under minorDivisor:0 is not NaN", `got ${minorZeroDiv.qc}`);
+assertEq(minorZeroDiv.qc, 0.5, "fix: jobA (1 minor item) under minorDivisor:0 clamps to the max penalty => 1 - minorMaxCost/100 = 0.5");
+
+// Case 3 — a mixed aggregate (jobC clean + jobA 1-minor) under
+// minorDivisor:0 must stay finite and equal the mean of the two walk
+// scores above (1 and 0.5) — proves the fix doesn't just handle isolated
+// single-job cases but the real multi-walk aggregation path.
+const mixedZeroDiv = sb4Agg([jobC, jobA], sb4Config({ qc: { minorDivisor: 0 } }));
+assertTrue(Number.isNaN(mixedZeroDiv.qc) === false, "fix: mixed aggregate (1 clean + 1 minor walk) under minorDivisor:0 is not NaN", `got ${mixedZeroDiv.qc}`);
+assertEq(mixedZeroDiv.qc, 0.75, "fix: mixed aggregate = mean(1, 0.5) = 0.75");
+
+// Non-regression — divisor > 0 must be byte-identical to before this fix.
+// Re-run two of the existing (already-passing) cases through the exact same
+// code path to prove the guard is a true no-op whenever minorDivisor isn't 0.
+assertEq(sb4Agg([jobA, jobB]).qc, 0.975, "fix: no behavior change for the default divisor (40) — base case still 0.975");
+assertEq(sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 2 } })).qc, 0.5, "fix: no behavior change for a normal positive divisor (2) — knob proof still 0.5");
+
 // No-walk case: qc (and the display fields) must stay null, not 0 — a person
 // with zero QC walks is undiagnosed, not "perfect."
 assertEq(sb4Agg([]).qc, null, "empty jobs list: qc stays null (no walks, not a perfect score)");
