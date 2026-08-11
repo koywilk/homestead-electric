@@ -132,6 +132,47 @@
  * own `cfg || sb4Config(null)` pattern), which is what makes this testable
  * without touching the wall clock.
  *
+ * TASK 7R EXTENSION (2026-08-10) — cfg is finally wired LIVE: ScoreboardV4
+ * holds a `cfg` state seeded from sb4Config(null), the onSnapshot handler sets
+ * sb4Config(doc-data) on every settings/scoreboardV4Weights change, saveCfg is
+ * the one write path for every knob (weights still route through saveWeights,
+ * unchanged call shape), and sb4Build(...,cfg) + NORM(cfg) both consume it —
+ * NORM changed from a plain object closing over hardcoded literals to a
+ * FACTORY (`NORM(c) => ({...})`) so marginDivisor/handoffDivisor can be
+ * admin-tunable AND so this harness can call it with an explicit cfg instead
+ * of depending on a React-state free variable. Block 5/7's existing
+ * NORM.qc(...)/NORM.app(...) calls are updated to N0.qc(...)/N0.app(...)
+ * (N0 = NORM(sb4Config(null)), defined once below) — same assertions, same
+ * expected values, just the new call shape; nothing about what they prove
+ * changes. Three defects, deferred to this task because they only become
+ * reachable once a live config (and the admin sliders that write it) exists,
+ * are closed and proven in the new block 11 below:
+ *   1. appCap:0 (sb4Agg's app-volume blend) — identical bug class to Task 2R's
+ *      qc.minorDivisor fix: appVolume/0 is 0/0=NaN exactly when a person has
+ *      logged nothing at all. Fixed with the same "short-circuit the
+ *      zero-numerator case before dividing" pattern. While auditing every
+ *      divisor/cap for the same class of bug (this task's own self-review
+ *      instruction), NORM's marginDivisor/handoffDivisor got the identical
+ *      guard — both are newly slider-reachable-to-0 by this same task, so
+ *      block 11 proves those two as well, not just the one named defect.
+ *   2. sb4Config's `qc` sub-object gains per-field typeof validation, matching
+ *      every top-level scalar's existing `typeof s.X === "number" ? s.X :
+ *      default` guard — a corrupted/hand-edited doc's non-numeric qc.* no
+ *      longer reaches sb4Agg's arithmetic.
+ *   3. Backward compatibility — sb4Config now detects the PRE-Task-7R legacy
+ *      doc shape (flat top-level {margin,qc,handoff,app} numbers, no nested
+ *      `weights` key) via a top-level numeric `margin` (never present in the
+ *      new full-config shape) and routes it into the weights sub-object, so
+ *      an untouched legacy doc reproduces today's live scoring output
+ *      byte-for-byte. This is proven three ways: the config object itself
+ *      deep-equals sb4Config(null) for the brief's literal same-as-default
+ *      fixture; a SECOND fixture using DIFFERENT (non-default) weight values
+ *      proves the flat->nested mapping is real, not a coincidence of the
+ *      first fixture's numbers happening to match SB4_DEFAULTS; and a THIRD
+ *      fixture proves a doc carrying BOTH stale legacy fields (never deleted
+ *      by a later {merge:true} write, since merge only touches fields present
+ *      in the write) and a fresh nested `weights` prefers the fresh one.
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -241,6 +282,14 @@ try {
   process.exit(1);
 }
 const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict, qcStrandedItems } = extracted;
+
+// TASK 7R: NORM is now a factory (`c => ({margin,qc,handoff,app})`), not a
+// plain object — it needs an explicit cfg, the same way sb4Agg/sb4Build do.
+// N0 is the default-cfg normalizer, reused by every existing NORM.qc(...)/
+// NORM.app(...) call below (now N0.qc(...)/N0.app(...) — same assertions,
+// same expected values) and by block 11's new marginDivisor/handoffDivisor
+// guard proofs.
+const N0 = NORM(sb4Config(null));
 
 // ─── FIXTURES (verbatim from the task brief) ───────────────────────────────
 const jobA = { id:"a", name:"Fixture A", foreman:"T", simproMargin: 20,
@@ -471,10 +520,13 @@ assertEq(sb4Agg([]).qcWalks, 0, "empty jobs list: qcWalks is 0");
 // — a walk that scored 0.4875 (half-serious) would normalize to ~0.94
 // ("great"), the exact inversion the brief calls the single highest-risk
 // line in this task.
-assertEq(NORM.qc(0.4875), 0.4875, "NORM.qc(0.4875) === 0.4875 — identity clamp, NOT 1 - v/8 (the inversion trap)");
-assertEq(NORM.qc(1), 1, "NORM.qc(1) === 1 — a perfect walk score stays perfect (old formula would give clamp(1-1/8)=0.875)");
-assertEq(NORM.qc(0), 0, "NORM.qc(0) === 0 — an all-serious score stays 0 (old formula would give clamp(1-0/8)=1, i.e. \"perfect\")");
-assertEq(NORM.qc(null), null, "NORM.qc(null) === null");
+// TASK 7R: NORM is now a factory — N0 = NORM(sb4Config(null)), defined once
+// near the top of this file. Same assertions, same expected values as before;
+// only the call shape (NORM.qc -> N0.qc) changed.
+assertEq(N0.qc(0.4875), 0.4875, "N0.qc(0.4875) === 0.4875 — identity clamp, NOT 1 - v/8 (the inversion trap)");
+assertEq(N0.qc(1), 1, "N0.qc(1) === 1 — a perfect walk score stays perfect (old formula would give clamp(1-1/8)=0.875)");
+assertEq(N0.qc(0), 0, "N0.qc(0) === 0 — an all-serious score stays 0 (old formula would give clamp(1-0/8)=1, i.e. \"perfect\")");
+assertEq(N0.qc(null), null, "N0.qc(null) === null");
 
 console.log("\n── 7. TASK 3R: per-job completeness blended into App Usage (sb4JobComplete/_sb4HasPhoto/sb4Agg.app+appVolume+appComplete + NORM.app) ──");
 
@@ -573,10 +625,11 @@ assertEq(emptyAgg.app, 0, "empty jobs list: app is 0 (clamp(0/2500), compAvg nul
 //   clamp(0.2512 / 2500) = clamp(0.00010048) ≈ 0.0001
 // — a blended score of 0.2512 would normalize to ~0.0001 ("terrible"),
 // exactly the inversion the brief flags as this task's highest-risk line.
-assertEq(NORM.app(0.2512), 0.2512, "NORM.app(0.2512) === 0.2512 — identity clamp, NOT v/2500 (the inversion trap)");
-assertEq(NORM.app(1), 1, "NORM.app(1) === 1 — a perfect blended score stays perfect (old formula would give clamp(1/2500)=0.0004)");
-assertEq(NORM.app(0), 0, "NORM.app(0) === 0");
-assertEq(NORM.app(null), null, "NORM.app(null) === null");
+// TASK 7R: NORM.app -> N0.app (see the N0 comment above block 5).
+assertEq(N0.app(0.2512), 0.2512, "N0.app(0.2512) === 0.2512 — identity clamp, NOT v/2500 (the inversion trap)");
+assertEq(N0.app(1), 1, "N0.app(1) === 1 — a perfect blended score stays perfect (old formula would give clamp(1/2500)=0.0004)");
+assertEq(N0.app(0), 0, "N0.app(0) === 0");
+assertEq(N0.app(null), null, "N0.app(null) === null");
 
 console.log("\n── 8. TASK 5: deriveQcVerdict(job) — pure, three-tree, severity-based verdict ──");
 
@@ -851,10 +904,159 @@ const jobEmptyAt = { id:"ea1", name:"Empty qcRtChoiceRoughAt", qcRtChoiceRough:"
   roughPunch: { main: { general: [ { id:"ea2", text:"x", fromQC:true, done:false } ] } } };
 assertEq(qcStrandedItems(jobEmptyAt, cfgDefault, NOW), null, "defensive: qcRtChoiceRoughAt==='' (falsy) -> null, no crash");
 
+console.log("\n── 11. TASK 7R: cfg wired live — appCap/marginDivisor/handoffDivisor NaN guards, qc sub-validation, backward compat ──");
+
+// ── DEFECT 1 (+ two siblings found via this task's own self-review: "try 0
+// for each divisor/cap"): appCap:0 no longer produces NaN. appVolume/0 for
+// any appVolume>0 is +Infinity, which _sb4Clamp already resolves to 1 on its
+// own (Math.min/max never produce NaN from Infinity) — only the EXACT
+// appVolume===0 case is 0/0=NaN. Two fixtures below exercise the two
+// DIFFERENT code paths a NaN volume can poison: an empty jobs list (compAvg
+// stays null -> the `compAvg==null ? volume : ...` TRUE branch) and a single
+// job with genuinely zero logged activity but which is NOT tempPed/quickJob
+// (compAvg becomes a real 0, not null -> the FALSE/blend branch, where
+// `(1-mix)*NaN` is NaN regardless of mix, even at mix=1, since 0*NaN=NaN in
+// IEEE754 — so compAvg==0 does NOT "save" the blend from a poisoned volume). ──
+const emptyZeroCap = sb4Agg([], sb4Config({ appCap: 0 }));
+assertTrue(Number.isNaN(emptyZeroCap.app) === false, "fix: empty jobs list under appCap:0 is not NaN (compAvg==null branch)", `got ${emptyZeroCap.app}`);
+assertEq(emptyZeroCap.app, 0, "fix: empty jobs list under appCap:0 scores exactly 0 (zero volume = zero credit, regardless of cap)");
+
+const jobZero = { id: "z", name: "Fixture Zero Activity", foreman: "T" }; // no punch/updates/questions/photos anywhere, NOT tempPed/quickJob
+assertEq(sb4JobComplete(jobZero), 0, "sanity: jobZero's own completeness is a real 0 (0/4 checks), NOT null — it's an eligible job that happens to be empty, unlike tempPed/quickJob");
+const zeroActAgg = sb4Agg([jobZero], sb4Config({ appCap: 0 }));
+assertTrue(Number.isNaN(zeroActAgg.app) === false, "fix: a single genuinely-empty job under appCap:0 is not NaN (compAvg==0, the BLEND branch — 0*NaN would still be NaN pre-fix, proving compAvg alone can't mask the volume bug)", `got ${zeroActAgg.app}`);
+assertEq(zeroActAgg.appVolume, 0, "fix: jobZero's appVolume is 0 (nothing logged)");
+assertEq(zeroActAgg.appComplete, 0, "fix: jobZero's appComplete is 0 (not null — it's an eligible, just empty, job)");
+assertEq(zeroActAgg.app, 0, "fix: jobZero under appCap:0 blends to exactly 0 — (1-mix)*0 + mix*0 = 0");
+
+// Non-regression — appVolume>0 under appCap:0 was ALREADY correct pre-fix
+// (Math.min/clamp resolve +Infinity to 1 on their own); re-run jobA+jobB
+// (block 2/7's appVolume=6, compAvg=0.5 fixtures) to prove the fix doesn't
+// disturb that side of the formula.
+const volNonZeroZeroCap = sb4Agg([jobA, jobB], sb4Config({ appCap: 0 }));
+assertTrue(Number.isNaN(volNonZeroZeroCap.app) === false, "non-regression: appVolume=6 under appCap:0 is not NaN (was never at risk — only the 0/0 case is)");
+assertEq(volNonZeroZeroCap.appVolume, 6, "non-regression: appVolume itself is untouched by appCap");
+assertEq(volNonZeroZeroCap.app, 0.75, "non-regression: appCap:0 with real volume clamps to full volume credit (1) — (1-0.5)*1 + 0.5*0.5 = 0.75");
+
+// Same bug class, same fix pattern, found while auditing every divisor/cap
+// per this task's self-review instruction: NORM.margin/NORM.handoff are
+// NEWLY slider-reachable to 0 by this very task (marginDivisor/handoffDivisor
+// were hardcoded 50/20 before Task 7R, never adjustable, never 0). v===0 is
+// the only NaN-risk value (v/0 for v!=0 is +-Infinity, already resolved
+// correctly by clamp's Math.min/max) — short-circuited BEFORE dividing,
+// exactly like appCap/qc.minorDivisor above.
+const Nzero = NORM(sb4Config({ marginDivisor: 0, handoffDivisor: 0 }));
+assertTrue(Number.isNaN(Nzero.margin(0)) === false, "fix: NORM.margin(0) under marginDivisor:0 is not NaN (0% margin, the exact 0/0 case)", `got ${Nzero.margin(0)}`);
+assertEq(Nzero.margin(0), 0, "fix: NORM.margin(0) under marginDivisor:0 is exactly 0 (0% margin = 0 credit, regardless of the divisor)");
+assertTrue(Number.isNaN(Nzero.margin(20)) === false, "fix: NORM.margin(20) under marginDivisor:0 is not NaN (nonzero numerator, was never actually at risk)");
+assertEq(Nzero.margin(20), 1, "fix: NORM.margin(20) under marginDivisor:0 clamps to 1 (any positive margin over a 0 divisor is +Infinity -> full credit)");
+assertEq(Nzero.margin(-5), 0, "fix: NORM.margin(-5) under marginDivisor:0 clamps to 0 (a negative margin over a 0 divisor is -Infinity -> zero credit)");
+assertEq(Nzero.margin(null), null, "fix: NORM.margin(null) stays null under marginDivisor:0 too — the null guard runs before any division");
+assertTrue(Number.isNaN(Nzero.handoff(0)) === false, "fix: NORM.handoff(0) under handoffDivisor:0 is not NaN (0% open punch, the exact 0/0 case)", `got ${Nzero.handoff(0)}`);
+assertEq(Nzero.handoff(0), 1, "fix: NORM.handoff(0) under handoffDivisor:0 is exactly 1 (a perfectly clean handoff is always full credit, regardless of the divisor)");
+assertTrue(Number.isNaN(Nzero.handoff(50)) === false, "fix: NORM.handoff(50) under handoffDivisor:0 is not NaN (nonzero numerator, was never actually at risk)");
+assertEq(Nzero.handoff(50), 0, "fix: NORM.handoff(50) under handoffDivisor:0 clamps to 0 (any open punch over a 0 divisor scores zero)");
+assertEq(Nzero.handoff(null), null, "fix: NORM.handoff(null) stays null under handoffDivisor:0 too");
+// Non-regression — the short-circuit's value equals what the undivided
+// formula already gave for v===0 at any NORMAL (nonzero) divisor, so this is
+// a true no-op for the live board today, not a behavior change. Also sanity
+// pins a normal nonzero value through each formula.
+assertEq(N0.margin(0), 0, "non-regression: NORM.margin(0) at the default marginDivisor(50) is still exactly 0 — same value the guard produces");
+assertEq(N0.margin(25), 0.5, "non-regression: NORM.margin(25) at the default marginDivisor(50) is unaffected by the guard — clamp(25/50)=0.5");
+assertEq(N0.handoff(0), 1, "non-regression: NORM.handoff(0) at the default handoffDivisor(20) is still exactly 1 — same value the guard produces");
+assertEq(N0.handoff(10), 0.5, "non-regression: NORM.handoff(10) at the default handoffDivisor(20) is unaffected by the guard — clamp(1-10/20)=0.5");
+
+// NORM's own contract changed shape (Task 7R) — a factory, not a plain
+// object — pinned directly so a future revert back to a closure-only NORM
+// (which would silently break testability, not correctness) is caught.
+assertEq(typeof NORM, "function", "NORM is now a factory function (cfg => normalizer), not a plain object closing over hardcoded literals or React state");
+
+// ── DEFECT 2: sb4Config's qc sub-object now validates each field
+// individually, exactly like every top-level scalar already does
+// (`typeof s.X === "number" ? s.X : default`). A corrupted/hand-edited
+// doc's non-numeric qc.* must fall back to its own default, not reach
+// sb4Agg's arithmetic, and a valid sibling in the SAME patch must survive. ──
+const qcBadDivisor = sb4Config({ qc: { minorDivisor: "bad", seriousCredit: 10 } });
+assertEq(qcBadDivisor.qc.minorDivisor, 40, "fix: a non-numeric qc.minorDivisor (string) falls back to SB4_DEFAULTS.qc.minorDivisor (40)");
+assertEq(qcBadDivisor.qc.seriousCredit, 10, "fix: a VALID sibling in the same patch (seriousCredit) is still kept, not collateral damage from minorDivisor's fallback");
+assertEq(qcBadDivisor.qc.minorMaxCost, 50, "fix: an untouched sibling (minorMaxCost) falls back to its own default independently");
+
+const qcBadCredit = sb4Config({ qc: { seriousCredit: "x", minorMaxCost: 30 } });
+assertEq(qcBadCredit.qc.seriousCredit, 0, "fix: a non-numeric qc.seriousCredit (string) falls back to SB4_DEFAULTS.qc.seriousCredit (0)");
+assertEq(qcBadCredit.qc.minorMaxCost, 30, "fix: a valid sibling (minorMaxCost) in the same patch is kept");
+
+assertEq(sb4Config({ qc: { minorMaxCost: null } }).qc.minorMaxCost, 50, "fix: a non-numeric qc.minorMaxCost (null) falls back to SB4_DEFAULTS.qc.minorMaxCost (50) — typeof null is \"object\", not \"number\"");
+
+// qc entirely non-object (worse corruption than a bad sub-field) must not
+// throw and must fall back to full defaults, not partially crash.
+assertEq(sb4Config({ qc: "corrupted" }).qc, SB4_DEFAULTS.qc, "fix: qc itself as a non-object (string) falls back to full SB4_DEFAULTS.qc, no crash");
+assertEq(sb4Config({ qc: null }).qc, SB4_DEFAULTS.qc, "fix: qc itself as null falls back to full SB4_DEFAULTS.qc, no crash (typeof null==='object' would slip past a naive typeof-only guard — the `s.qc &&` truthiness check catches it)");
+
+// Non-regression — a FULLY valid qc object still round-trips exactly (proves
+// the per-field rewrite didn't change behavior for well-formed input).
+assertEq(sb4Config({ qc: { seriousCredit: 15, minorDivisor: 25, minorMaxCost: 60 } }).qc, { seriousCredit: 15, minorDivisor: 25, minorMaxCost: 60 }, "non-regression: a fully valid qc object still round-trips exactly, field for field");
+
+// ── DEFECT 3 (BACKWARD COMPATIBILITY — load-bearing, the most important
+// assertion in this task): the settings/scoreboardV4Weights doc in
+// production today holds ONLY flat top-level {margin,qc,handoff,app} numbers
+// — no nested `weights` key, no other config key. sb4Config must turn that
+// into a full config with every OTHER key at its default, so the live
+// board's behavior is UNCHANGED the moment this ships, until the owner
+// actually moves a slider. Proven three ways below. ──
+
+// Prong 1 — the literal brief fixture: flat values that happen to MATCH the
+// hardcoded defaults. Strongest possible pin: the resulting config is
+// deep-equal to SB4_DEFAULTS itself (and therefore to sb4Config(null), which
+// block 4 already pins deep-equal to SB4_DEFAULTS) — not just "close enough".
+const legacyDocSameAsDefault = { margin: 45, qc: 25, handoff: 20, app: 10 };
+const cfgFromLegacySame = sb4Config(legacyDocSameAsDefault);
+assertEq(cfgFromLegacySame, SB4_DEFAULTS, "BACKWARD COMPAT (most important assertion in this task): a legacy weights-only doc — flat {margin,qc,handoff,app}, no nested `weights` key, nothing else — round-trips through sb4Config to a full config deep-equal to SB4_DEFAULTS");
+// End-to-end through the actual scoring pipeline, not just the config shape
+// — sb4Build's OUTPUT for the legacy doc must match sb4Build's output for
+// the real defaults, using the same jobs/users fixtures blocks 1-2 already
+// verified sb4Build against.
+assertEq(sb4Build(jobs, "foremen", users, cfgFromLegacySame), sb4Build(jobs, "foremen", users, sb4Config(null)), "BACKWARD COMPAT: sb4Build's SCORING OUTPUT for the legacy doc is identical to sb4Config(null)'s — not merely the config object, the actual computed rows");
+
+// Prong 2 — DIFFERENT (non-default) weight values. Fixture 1 alone can't
+// discriminate "the flat->nested mapping actually works" from "sb4Config
+// just always falls back to defaults regardless of input", because its
+// numbers happen to BE the defaults. This fixture closes that gap: a real
+// legacy doc with values Koy actually chose must map EXACTLY, not collapse
+// to defaults.
+const legacyDocDifferent = { margin: 12, qc: 63, handoff: 9, app: 16 };
+const cfgFromLegacyDifferent = sb4Config(legacyDocDifferent);
+assertEq(cfgFromLegacyDifferent.weights, { margin: 12, qc: 63, handoff: 9, app: 16 }, "BACKWARD COMPAT (stronger proof): a legacy doc with DIFFERENT non-default weight values maps its flat fields into weights EXACTLY — proves this is a real mapping, not a coincidence of fixture 1's numbers matching the defaults");
+assertEq(cfgFromLegacyDifferent.marginDivisor, SB4_DEFAULTS.marginDivisor, "a true legacy doc never had marginDivisor — falls back to default even though OTHER fields (weights) were present and valid");
+assertEq(cfgFromLegacyDifferent.marginTarget, SB4_DEFAULTS.marginTarget, "same — marginTarget falls back to default");
+assertEq(cfgFromLegacyDifferent.handoffDivisor, SB4_DEFAULTS.handoffDivisor, "same — handoffDivisor falls back to default");
+assertEq(cfgFromLegacyDifferent.appCap, SB4_DEFAULTS.appCap, "same — appCap falls back to default");
+assertEq(cfgFromLegacyDifferent.appMix, SB4_DEFAULTS.appMix, "same — appMix falls back to default");
+assertEq(cfgFromLegacyDifferent.strandedDays, SB4_DEFAULTS.strandedDays, "same — strandedDays falls back to default");
+// The qc NAME COLLISION: the legacy doc's top-level `qc` is a WEIGHT number
+// (63), not the qc severity sub-config object — sb4Config must not let it
+// leak into cfg.qc (proven safe by the `typeof s.qc === "object"` guard in
+// DEFECT 2's fix above; this pins the specific legacy-doc scenario directly).
+assertEq(cfgFromLegacyDifferent.qc, SB4_DEFAULTS.qc, "BACKWARD COMPAT / qc name collision: the legacy doc's top-level `qc` (63) is a WEIGHT, not the severity sub-config — cfg.qc stays at SB4_DEFAULTS.qc entirely, uncorrupted by the collision");
+
+// Prong 3 — coexistence: a doc carrying BOTH stale legacy flat fields (never
+// deleted by a later {merge:true} write — merge only touches fields present
+// in the write, so pre-Task-7R margin/qc/handoff/app linger forever once a
+// NEW-shape save adds `weights` alongside them) AND a fresh nested `weights`
+// must prefer the fresh one, not the stale flat numbers.
+const coexistDoc = {
+  margin: 999, qc: 999, handoff: 999, app: 999,          // stale, pre-Task-7R leftovers
+  weights: { margin: 11, qc: 22, handoff: 33, app: 44 }, // fresh, post-Task-7R shape
+  marginDivisor: 77,
+};
+const cfgCoexist = sb4Config(coexistDoc);
+assertEq(cfgCoexist.weights, { margin: 11, qc: 22, handoff: 33, app: 44 }, "BACKWARD COMPAT / coexistence: once a fresh nested `weights` exists, it wins over stale leftover flat fields from before this shipped — NOT the stale 999s");
+assertEq(cfgCoexist.marginDivisor, 77, "coexistence: a real new-shape scalar (marginDivisor) reads correctly regardless of stale flat fields sitting alongside it");
+assertEq(cfgCoexist.qc, SB4_DEFAULTS.qc, "coexistence: the stale flat `qc:999` still doesn't leak into the qc sub-config, same as prong 2");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6/6-fix1)");
+console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6/6-fix1/7R)");
 process.exit(0);

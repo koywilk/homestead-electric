@@ -40171,8 +40171,9 @@ function ScoreboardV3({ jobs, users = [], identity }) {
 // what Koy sees — NOT settings/scoreboardJobFinancials (that P/L cache is FROZEN,
 // ~71d stale, and inflates in-progress jobs: Chapman cached 96.7% vs real 33.3%).
 // Median so one entangled temp-power / phase job (e.g. Tuhaye Temp Power -153%)
-// can't swing a person. Plus QC items/job, Clean Handoff, App Use, an admin weight
-// tool, and a live "Jobs to Watch" panel flagged against a target line.
+// can't swing a person. Plus Serious QC walks, Clean Handoff, App Use, an admin
+// Scoring panel (Task 7R: every knob behind sb4Config, not just the weights),
+// and a live "Jobs to Watch" panel flagged against a target line.
 //   Roster: a person's jobs = jobs where they were foreman OR lead (deduped),
 //   rolled onto their CURRENT-role board. Leads board = current-lead-title only.
 //   Nobody appears on two boards. Coordinators roll up their book's foreman-jobs.
@@ -40181,14 +40182,24 @@ function ScoreboardV3({ jobs, users = [], identity }) {
 // Pure over jobs; the ONLY write is settings/scoreboardV4Weights (admins only).
 // ═══════════════════════════════════════════════════════════════════════════
 // SB4_DEFAULTS / sb4Config — admin-tunable scoring config (margin/handoff/app
-// divisors, QC severity knobs, misc thresholds) that later QC-severity tasks
-// read. Deep-merges `stored` (e.g. a partial settings/scoreboardV4Weights doc)
-// over these defaults: missing keys fall back, extra keys are ignored.
-// SB4_DEFAULT_WEIGHTS below derives from this — ONE source of truth for the
-// weights shape the render code, useState initializer, and the "Reset to
-// defaults" button all read. NOTE: cfg.qc now drives sb4Agg's QC severity
-// score (Task 2R); the remaining margin/handoff/app knobs are still
-// unconsumed by the scoring math below — later tasks wire those in.
+// divisors, QC severity knobs, misc thresholds), now fully wired: Task 7R
+// threads `cfg` into sb4Build/sb4Agg (appCap/appMix/qc.*) AND into
+// ScoreboardV4's own NORM/marginCls (marginDivisor/marginTarget/handoffDivisor)
+// — every knob below is live-editable from the admin Scoring panel. Deep-merges
+// `stored` (e.g. settings/scoreboardV4Weights) over these defaults: missing
+// keys fall back, extra keys are ignored. SB4_DEFAULT_WEIGHTS below derives
+// from this — ONE source of truth for the weights shape the render code,
+// useState initializer, and the "Reset to defaults" button all read.
+// BACKWARD COMPAT (Task 7R, load-bearing): the doc this deep-merges over
+// PRE-Task-7R only ever held flat top-level {margin,qc,handoff,app} numbers —
+// no nested `weights` key, no other config key. A top-level numeric `margin`
+// never appears in the new full-config shape (which always nests weights
+// under `stored.weights`), so it's an unambiguous legacy signal: route it
+// into the weights sub-object so an untouched legacy doc reproduces today's
+// live scoring output byte-for-byte. Once a NEW-shape doc exists (has
+// `stored.weights`), that always wins — even if stale flat fields from before
+// this shipped still linger alongside it in the same document (Firestore
+// `{merge:true}` never deletes fields absent from the write).
 const SB4_DEFAULTS = {
   weights: { margin: 45, qc: 25, handoff: 20, app: 10 },
   marginDivisor: 50,
@@ -40201,11 +40212,34 @@ const SB4_DEFAULTS = {
 };
 const sb4Config = (stored) => {
   const s = stored && typeof stored === "object" ? stored : {};
+  // Legacy flat-weights doc detection — see the backward-compat note above.
+  // Built field-by-field (not a raw `s` spread) so a legacy doc missing one
+  // of the four is a partial patch, same "missing keys fall back" contract
+  // as everywhere else in this function, not an accidental `undefined`
+  // stomping a sibling default.
+  const legacyWeights = typeof s.margin === "number" ? {
+    margin: s.margin,
+    ...(typeof s.qc === "number" ? { qc: s.qc } : {}),
+    ...(typeof s.handoff === "number" ? { handoff: s.handoff } : {}),
+    ...(typeof s.app === "number" ? { app: s.app } : {}),
+  } : null;
+  // s.qc sub-validation (fix, Task 7R): the old `{ ...SB4_DEFAULTS.qc, ...(s.qc
+  // || {}) }` raw spread accepted anything a corrupted/hand-edited doc (or,
+  // pre-Task-7R, the legacy doc's own top-level `qc` WEIGHT number — spreading
+  // a number is a harmless no-op, so that old case was never actually at risk)
+  // put there — e.g. a string `minorDivisor` would reach sb4Agg's arithmetic
+  // unvalidated. Now each sub-field is typeof-checked individually, exactly
+  // like every top-level scalar below.
+  const sq = (s.qc && typeof s.qc === "object") ? s.qc : {};
   return {
-    weights: { ...SB4_DEFAULTS.weights, ...(s.weights || {}) },
+    weights: { ...SB4_DEFAULTS.weights, ...(s.weights || legacyWeights || {}) },
     marginDivisor: typeof s.marginDivisor === "number" ? s.marginDivisor : SB4_DEFAULTS.marginDivisor,
     marginTarget: typeof s.marginTarget === "number" ? s.marginTarget : SB4_DEFAULTS.marginTarget,
-    qc: { ...SB4_DEFAULTS.qc, ...(s.qc || {}) },
+    qc: {
+      seriousCredit: typeof sq.seriousCredit === "number" ? sq.seriousCredit : SB4_DEFAULTS.qc.seriousCredit,
+      minorDivisor: typeof sq.minorDivisor === "number" ? sq.minorDivisor : SB4_DEFAULTS.qc.minorDivisor,
+      minorMaxCost: typeof sq.minorMaxCost === "number" ? sq.minorMaxCost : SB4_DEFAULTS.qc.minorMaxCost,
+    },
     handoffDivisor: typeof s.handoffDivisor === "number" ? s.handoffDivisor : SB4_DEFAULTS.handoffDivisor,
     appCap: typeof s.appCap === "number" ? s.appCap : SB4_DEFAULTS.appCap,
     appMix: typeof s.appMix === "number" ? s.appMix : SB4_DEFAULTS.appMix,
@@ -40213,7 +40247,11 @@ const sb4Config = (stored) => {
   };
 };
 const SB4_DEFAULT_WEIGHTS = SB4_DEFAULTS.weights;
-const SB4_MARGIN_TARGET = 15; // net-margin goal at finish
+// Kept as the documented literal default (still equals SB4_DEFAULTS.marginTarget
+// — checked in self-review) now that ScoreboardV4's render reads the live
+// cfg.marginTarget instead; eslint-disable-line silences the resulting
+// no-unused-vars warning under CI=true (same pattern as `c` in sb4Agg, Task 1R).
+const SB4_MARGIN_TARGET = 15; // eslint-disable-line
 const _sb4Num = (v) => (typeof v === "number" && isFinite(v)) ? v : null;
 // entangled/add-on jobs whose costs & revenue live on another Simpro job — their
 // standalone margin is fiction, so exclude from the score (still shown in watch).
@@ -40426,7 +40464,16 @@ const sb4Agg = (js, cfg) => {
   live.sort((a, b) => a.m - b.m);
   const appVolume = punch + updates + questions;                 // raw total — same job set as before this task, for the stat card
   const compAvg = compCount ? compSum / compCount : null;        // mean per-job completeness; null when nobody has an eligible job
-  const volume = _sb4Clamp(appVolume / c.appCap);
+  // appCap tunable to 0 (admin slider, Task 7R): appVolume/0 for any
+  // appVolume>0 is +Infinity, which _sb4Clamp already resolves to 1 correctly
+  // on its own (same as qc.minorDivisor's Math.min case) — but EXACTLY 0/0,
+  // when a foreman has logged nothing at all, is NaN. NaN poisons `app` even
+  // through the compAvg blend below (0 * NaN is NaN, not 0, so appMix:100
+  // doesn't save it either), and NORM.app/overallOf's `!= null` guard doesn't
+  // filter it (NaN != null is true) — same bug class Task 2R guarded for
+  // qc.minorDivisor. Zero volume is unconditionally zero credit regardless of
+  // the cap, so the short-circuit is the correct answer, not just a guard.
+  const volume = appVolume === 0 ? 0 : _sb4Clamp(appVolume / c.appCap);
   const mix = _sb4Clamp(c.appMix / 100);
   const app = compAvg == null ? volume : (1 - mix) * volume + mix * compAvg; // blended 0-1 score; no eligible jobs => pure volume, never 0/crash
   return {
@@ -40480,19 +40527,32 @@ if (typeof window !== "undefined") window.sb4Build = sb4Build;
 function ScoreboardV4({ jobs, users = [], identity }) {
   const [board, setBoard] = useState("foremen");
   const [time, setTime] = useState("year");
-  const [weights, setWeights] = useState(SB4_DEFAULT_WEIGHTS);
+  const [cfg, setCfg] = useState(() => sb4Config(null));
+  const weights = cfg.weights; // derived — existing JSX/overallOf keep reading `weights` unchanged
   const [showEdit, setShowEdit] = useState(false);
   const canEdit = can(identity, "scoreboard.editWeights");
 
   useEffect(() => onSnapshot(doc(db, "settings", "scoreboardV4Weights"), s => {
-    const w = s.exists() ? s.data() : null;
-    if (w && typeof w.margin === "number") setWeights({ margin: +w.margin || 0, qc: +w.qc || 0, handoff: +w.handoff || 0, app: +w.app || 0 });
+    setCfg(sb4Config(s.exists() ? s.data() : null));
   }, () => {}), []);
-  const saveWeights = (patch) => {
-    const w = { margin: weights.margin, qc: weights.qc, handoff: weights.handoff, app: weights.app, ...patch };
-    setWeights(w);
-    if (canEdit) setDoc(doc(db, "settings", "scoreboardV4Weights"), w, { merge: true }).catch(() => {});
+  // saveCfg is the ONE write path for every knob (Task 7R). Deep-merges
+  // `patch` onto the CURRENT cfg — not onto SB4_DEFAULTS, sb4Config's own
+  // merge target — so an untouched sibling keeps whatever the admin already
+  // set, not the default; then re-validates through sb4Config defensively
+  // before committing to local state + Firestore. Same doc, same
+  // {merge:true}, same admin gate as before — just a bigger object on the wire.
+  const saveCfg = (patch) => {
+    const next = sb4Config({
+      ...cfg, ...patch,
+      weights: { ...cfg.weights, ...(patch.weights || {}) },
+      qc: { ...cfg.qc, ...(patch.qc || {}) },
+    });
+    setCfg(next);
+    if (canEdit) setDoc(doc(db, "settings", "scoreboardV4Weights"), next, { merge: true }).catch(() => {});
   };
+  // Unchanged call shape for the existing weights editor/reset button — a
+  // patch of {margin,qc,handoff,app} (partial or full), same as before Task 7R.
+  const saveWeights = (patch) => saveCfg({ weights: patch });
 
   const windowedJobs = useMemo(() => {
     if (time === "year") return jobs || [];
@@ -40501,21 +40561,40 @@ function ScoreboardV4({ jobs, users = [], identity }) {
     return (jobs || []).filter(j => recency(j) >= since);
   }, [jobs, time]);
 
-  const rows = useMemo(() => sb4Build(windowedJobs, board, users), [windowedJobs, board, users]);
+  const rows = useMemo(() => sb4Build(windowedJobs, board, users, cfg), [windowedJobs, board, users, cfg]);
 
   const clamp = (v) => Math.max(0, Math.min(1, v));
-  const NORM = { margin: v => v == null ? null : clamp(v / 50), qc: v => v == null ? null : clamp(v), handoff: v => v == null ? null : clamp(1 - v / 20), app: v => v == null ? null : clamp(v) };
+  // NORM is a factory over the live cfg (Task 7R), not a plain object closing
+  // over hardcoded literals — marginDivisor/handoffDivisor are now
+  // admin-tunable, so every render's NORM must reflect the CURRENT cfg. This
+  // also makes NORM independently callable with an explicit cfg (see
+  // scripts/sb4-dryrun.js), instead of silently depending on a React-state
+  // free variable no test harness can supply.
+  // v===0 short-circuits BEFORE dividing on BOTH entries below — same
+  // defensive pattern as qc.minorDivisor/appCap: a nonzero v over a 0 divisor
+  // already resolves correctly through clamp's own Math.min/max (±Infinity,
+  // not NaN); only the exact v===0 case is 0/0=NaN. The short-circuit's value
+  // is the SAME value the original formula already produced for v===0 under
+  // any nonzero divisor, so this is a true no-op whenever
+  // marginDivisor/handoffDivisor aren't tuned to 0, not a behavior change.
+  const NORM = (c) => ({
+    margin: v => v == null ? null : clamp(v === 0 ? 0 : v / c.marginDivisor),
+    qc: v => v == null ? null : clamp(v),
+    handoff: v => v == null ? null : clamp(v === 0 ? 1 : 1 - v / c.handoffDivisor),
+    app: v => v == null ? null : clamp(v),
+  });
   const overallOf = (r) => {
+    const n = NORM(cfg);
     let s = 0, wsum = 0;
-    ["margin", "qc", "handoff", "app"].forEach(k => { const n = NORM[k](r[k]), wt = weights[k]; if (n != null && wt > 0) { s += n * wt; wsum += wt; } });
+    ["margin", "qc", "handoff", "app"].forEach(k => { const nv = n[k](r[k]), wt = weights[k]; if (nv != null && wt > 0) { s += nv * wt; wsum += wt; } });
     return wsum ? Math.round(s / wsum * 100) : 0;
   };
-  const ranked = useMemo(() => rows.map(r => ({ ...r, _ov: overallOf(r) })).sort((a, b) => b._ov - a._ov), [rows, weights]);
+  const ranked = useMemo(() => rows.map(r => ({ ...r, _ov: overallOf(r) })).sort((a, b) => b._ov - a._ov), [rows, cfg]);
 
   const PAL = ["#3B5BA5", "#46916A", "#B06A2C", "#6A5E97", "#3E7D7A", "#C58A4C", "#3E9E74", "#5B7FC0"];
   const colorFor = (nm) => PAL[Math.abs(String(nm).split("").reduce((a, c) => a + c.charCodeAt(0), 0)) % PAL.length];
   const initial = (nm) => { const p = String(nm || "").trim().split(/\s+/); return p.length > 1 ? (p[0][0] + p[p.length - 1][0]) : (p[0] || "?").slice(0, 1); };
-  const marginCls = (v) => v == null ? "" : v < 0 ? "mbad" : v < SB4_MARGIN_TARGET ? "mwarn" : "mgood";
+  const marginCls = (v) => v == null ? "" : v < 0 ? "mbad" : v < cfg.marginTarget ? "mwarn" : "mgood";
   const boardLbl = board === "coordinators" ? "Coordinators" : board === "leads" ? "Leads" : "Foremen";
 
   return (
@@ -40537,11 +40616,14 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4 .wedit{margin-top:12px;background:var(--c-pan);border:1px solid var(--c-gln);border-radius:12px;padding:14px 16px}
         .sb4 .wedit h4{margin:0 0 3px;font-size:14px}
         .sb4 .wedit .hint{font-size:12px;color:var(--c-dim);margin-bottom:10px}
+        .sb4 .wgroup{margin-top:16px;padding-top:14px;border-top:1px solid var(--c-bd)}
+        .sb4 .wgroup:first-of-type{margin-top:10px;padding-top:0;border-top:0}
+        .sb4 .wgtitle{font-size:12.5px;font-weight:800;letter-spacing:.02em;margin:0 0 2px}
         .sb4 .wrow{display:flex;align-items:center;gap:12px;margin:9px 0}
-        .sb4 .wrow label{flex:0 0 122px;font-size:13px;font-weight:700}
+        .sb4 .wrow label{flex:0 0 150px;font-size:13px;font-weight:700;line-height:1.25}
         .sb4 .wrow.ind label{color:var(--c-faint)}
         .sb4 .wrow input[type=range]{flex:1;min-width:0}
-        .sb4 .wrow .wv{width:30px;text-align:right;font-weight:800;font-size:14px}
+        .sb4 .wrow .wv{width:40px;text-align:right;font-weight:800;font-size:14px;flex:0 0 auto}
         .sb4 .card{background:var(--c-pan);border:1px solid var(--c-bd);border-radius:14px;box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 26px -14px rgba(16,24,40,.15);margin-top:12px;overflow:hidden}
         .sb4 .card.gold{border-color:var(--c-gln)}
         .sb4 .bh{padding:13px 15px 8px}
@@ -40587,21 +40669,65 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         <div className="seg">{["coordinators", "foremen", "leads"].map(b => (<button key={b} className={board === b ? "on" : ""} onClick={() => setBoard(b)}>{b === "coordinators" ? "Coordinators" : b === "leads" ? "Leads" : "Foremen"}</button>))}</div>
         <span className="lbl">Time</span>
         <div className="seg">{[["week", "This Week"], ["month", "This Month"], ["year", "This Year"]].map(p => (<button key={p[0]} className={time === p[0] ? "on" : ""} onClick={() => setTime(p[0])}>{p[1]}</button>))}</div>
-        {canEdit && <button className="editbtn" onClick={() => setShowEdit(v => !v)}>{showEdit ? "Done" : "Adjust weights"}</button>}
+        {canEdit && <button className="editbtn" onClick={() => setShowEdit(v => !v)}>{showEdit ? "Done" : "Adjust scoring"}</button>}
       </div>
 
       {canEdit && showEdit && (
         <div className="wedit">
-          <h4>Grading weights</h4>
-          <div className="hint">Admin only. How much each stat counts toward the score (relative — they needn't total 100). Saved for everyone.</div>
-          {[["margin", "Profit margin", false], ["qc", "QC items/job", false], ["handoff", "Punch left open", false], ["app", "Logged in app", true]].map(t => (
-            <div className={"wrow" + (t[2] ? " ind" : "")} key={t[0]}>
-              <label>{t[1]}</label>
-              <input type="range" min="0" max="60" value={weights[t[0]]} onChange={e => saveWeights({ [t[0]]: +e.target.value })} />
-              <div className="wv">{weights[t[0]]}</div>
-            </div>
-          ))}
-          <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveWeights(SB4_DEFAULT_WEIGHTS)}>Reset to 45 / 25 / 20 / 10</button></div>
+          <h4>Scoring settings</h4>
+          <div className="hint">Admin only. Saved for everyone — the board re-ranks live as a knob moves.</div>
+
+          <div className="wgroup">
+            <div className="wgtitle">Weights</div>
+            <div className="hint">How much each stat counts toward the score (relative — they needn't total 100).</div>
+            {[["margin", "Profit margin", false], ["qc", "Serious QC walks", false], ["handoff", "Punch left open", false], ["app", "Logged in app", true]].map(t => (
+              <div className={"wrow" + (t[2] ? " ind" : "")} key={t[0]}>
+                <label>{t[1]}</label>
+                <input type="range" min="0" max="60" value={weights[t[0]]} onChange={e => saveWeights({ [t[0]]: +e.target.value })} />
+                <div className="wv">{weights[t[0]]}</div>
+              </div>
+            ))}
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveWeights(SB4_DEFAULT_WEIGHTS)}>Reset to 45 / 25 / 20 / 10</button></div>
+          </div>
+
+          <div className="wgroup">
+            <div className="wgtitle">QC quality</div>
+            <div className="hint">How the Serious QC walks score is calculated.</div>
+            {[["seriousCredit", "Credit for a walk with a serious item %", 0, 100], ["minorDivisor", "Minor QC items that cost half a walk", 0, 100], ["minorMaxCost", "Most a walk can lose to minor items %", 0, 100]].map(t => (
+              <div className="wrow" key={t[0]}>
+                <label>{t[1]}</label>
+                <input type="range" min={t[2]} max={t[3]} value={cfg.qc[t[0]]} onChange={e => saveCfg({ qc: { [t[0]]: +e.target.value } })} />
+                <div className="wv">{cfg.qc[t[0]]}</div>
+              </div>
+            ))}
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ qc: SB4_DEFAULTS.qc })}>Reset QC quality to defaults</button></div>
+          </div>
+
+          <div className="wgroup">
+            <div className="wgtitle">App usage</div>
+            <div className="hint">How the Logged in app score is calculated.</div>
+            {[["appMix", "Completeness share of App Usage %", 0, 100, 1], ["appCap", "Logged items for full credit", 0, 5000, 50]].map(t => (
+              <div className="wrow" key={t[0]}>
+                <label>{t[1]}</label>
+                <input type="range" min={t[2]} max={t[3]} step={t[4]} value={cfg[t[0]]} onChange={e => saveCfg({ [t[0]]: +e.target.value })} />
+                <div className="wv">{cfg[t[0]]}</div>
+              </div>
+            ))}
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ appMix: SB4_DEFAULTS.appMix, appCap: SB4_DEFAULTS.appCap })}>Reset App usage to defaults</button></div>
+          </div>
+
+          <div className="wgroup">
+            <div className="wgtitle">Other</div>
+            <div className="hint">Margin scoring, handoff scoring, and Open Items timing.</div>
+            {[["marginDivisor", "Margin % for full credit", 0, 100], ["marginTarget", "Margin goal", 0, 60], ["handoffDivisor", "Open-punch % that scores zero", 0, 100], ["strandedDays", "Days before crew-held QC items surface on Open Items", 0, 30]].map(t => (
+              <div className="wrow" key={t[0]}>
+                <label>{t[1]}</label>
+                <input type="range" min={t[2]} max={t[3]} value={cfg[t[0]]} onChange={e => saveCfg({ [t[0]]: +e.target.value })} />
+                <div className="wv">{cfg[t[0]]}</div>
+              </div>
+            ))}
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ marginDivisor: SB4_DEFAULTS.marginDivisor, marginTarget: SB4_DEFAULTS.marginTarget, handoffDivisor: SB4_DEFAULTS.handoffDivisor, strandedDays: SB4_DEFAULTS.strandedDays })}>Reset Other to defaults</button></div>
+          </div>
         </div>
       )}
 
@@ -40617,7 +40743,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
               <span className="ov"><div className="ovv">{r._ov}</div><div className="ovl">score</div></span>
             </div>
             <div className="stats">
-              <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">typical job · goal {SB4_MARGIN_TARGET}%</div></div>
+              <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">typical job · goal {cfg.marginTarget}%</div></div>
               <div className="stat"><div className="sl">Serious QC walks</div><div className="sv">{r.qcSeriousPct == null ? "—" : r.qcSeriousPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMinorAvg ?? "—"} minor items per walk</div></div>
               <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
               <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.appVolume}</div><div className="sh">{r.appComplete ?? "—"}% of jobs fully tracked · more is better</div></div>
@@ -40627,7 +40753,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
       </div>
 
       <div className="note">
-        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {SB4_MARGIN_TARGET}% at finish: green is at/above, amber below, red underwater. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
+        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {cfg.marginTarget}% at finish: green is at/above, amber below, red underwater. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
       </div>
     </div>
   );
