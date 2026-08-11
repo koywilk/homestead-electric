@@ -40225,11 +40225,39 @@ function ScoreboardV3({ jobs, users = [], identity }) {
 // `{merge:true}` never deletes fields absent from the write).
 const SB4_DEFAULTS = {
   weights: { margin: 45, qc: 25, handoff: 20, app: 10 },
-  marginDivisor: 50,
+  // Margin earning full credit. Anchored to the GOAL, not to an arbitrary
+  // ceiling (Koy, 2026-08-11: "daegan is too low"). At the old 50 a foreman
+  // running 31% — more than DOUBLE the 15% company goal — earned only 62% of
+  // the margin points, while every stat card on the board advertised "goal
+  // 15%": the copy said one thing and the math graded another. At 30 the rule
+  // is sayable out loud — hit the goal and you earn half the margin points,
+  // double the goal and you earn them all.
+  marginDivisor: 30,
   marginTarget: 15,
+  // Small-sample handling (Koy, 2026-08-11: "gage doesnt make sense whys he so
+  // high i guess just his profitmargin with fewer jobs"). `margin` is a MEDIAN,
+  // and a median of five jobs is a rumor — one good house swings it enormously,
+  // while the same house barely moves a book of twenty-four. Standard
+  // shrinkage: a person's scored margin is pulled toward the board's own median
+  // with weight n/(n+k), where k is this dial in JOBS. At 5 a five-job book is
+  // scored half on its own number and half on the board's; a seventeen-job book
+  // is 77% its own; a thirty-job book is essentially untouched. 0 disables it
+  // entirely (scored margin === displayed margin, byte-for-byte).
+  // The DISPLAYED margin is never shrunk — the card still shows the person's
+  // real median. Only the score moves. See sb4Shrink.
+  marginPriorJobs: 5,
   qc: { seriousCredit: 0, minorDivisor: 40, minorMaxCost: 50 },
   handoffDivisor: 20,
-  appCap: 2500,
+  // Entries PER JOB earning full app credit — density, not raw volume (Koy,
+  // 2026-08-11: "keegan uses the app far more than anyone else in the company.
+  // look at the desnity of the kweller job compared to any other"). Raw volume
+  // rewarded owning more jobs, which is roster luck, not behavior; per-job
+  // completeness saturates the moment a job has one of each, so a deeply
+  // documented job scored identically to a token one. Density is the thing
+  // being asked for: it keeps "volume speaks loud" while removing the job-count
+  // advantage. Replaces the former `appCap` (a whole-book total, different
+  // units — a saved appCap is simply ignored, it cannot be migrated).
+  appDenseCap: 150,
   appMix: 50,
   strandedDays: 7,
 };
@@ -40258,13 +40286,14 @@ const sb4Config = (stored) => {
     weights: { ...SB4_DEFAULTS.weights, ...(s.weights || legacyWeights || {}) },
     marginDivisor: typeof s.marginDivisor === "number" ? s.marginDivisor : SB4_DEFAULTS.marginDivisor,
     marginTarget: typeof s.marginTarget === "number" ? s.marginTarget : SB4_DEFAULTS.marginTarget,
+    marginPriorJobs: typeof s.marginPriorJobs === "number" ? s.marginPriorJobs : SB4_DEFAULTS.marginPriorJobs,
     qc: {
       seriousCredit: typeof sq.seriousCredit === "number" ? sq.seriousCredit : SB4_DEFAULTS.qc.seriousCredit,
       minorDivisor: typeof sq.minorDivisor === "number" ? sq.minorDivisor : SB4_DEFAULTS.qc.minorDivisor,
       minorMaxCost: typeof sq.minorMaxCost === "number" ? sq.minorMaxCost : SB4_DEFAULTS.qc.minorMaxCost,
     },
     handoffDivisor: typeof s.handoffDivisor === "number" ? s.handoffDivisor : SB4_DEFAULTS.handoffDivisor,
-    appCap: typeof s.appCap === "number" ? s.appCap : SB4_DEFAULTS.appCap,
+    appDenseCap: typeof s.appDenseCap === "number" ? s.appDenseCap : SB4_DEFAULTS.appDenseCap,
     appMix: typeof s.appMix === "number" ? s.appMix : SB4_DEFAULTS.appMix,
     strandedDays: typeof s.strandedDays === "number" ? s.strandedDays : SB4_DEFAULTS.strandedDays,
   };
@@ -40452,8 +40481,14 @@ const qcStrandedItems = (job, cfg, nowMs) => {
 const sb4Agg = (js, cfg) => {
   const c = cfg || sb4Config(null);
   const marg = [], live = [], qcScores = [];
-  let qcSeriousWalks = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0, compSum = 0, compCount = 0;
+  let qcSeriousWalks = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0, compSum = 0, compCount = 0, denseSum = 0;
   js.forEach(j => {
+    // Snapshot the running totals so this job's OWN entry count can be diffed
+    // out below (density's numerator). Diffing the same three counters that
+    // build `appVolume` is deliberate: it makes density exactly
+    // "appVolume-per-job" over the eligible set, so the two app numbers on the
+    // stat card can never drift apart under a different counting rule.
+    const punch0 = punch, updates0 = updates, questions0 = questions;
     const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
     if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
     if (m != null && !_sb3Completed(j)) live.push({ job: String(j.name || "?").trim(), m: Math.round(m * 10) / 10, stage: _sb4Stage(j), special: sp }); // watch: live jobs
@@ -40482,23 +40517,38 @@ const sb4Agg = (js, cfg) => {
     updates += (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
     questions += _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
     const comp = sb4JobComplete(j); // null for tempPed/quickJob — excluded from the completeness average, not scored as 0
-    if (comp != null) { compSum += comp; compCount++; }
+    // Density rides the SAME eligibility gate as completeness: a temp ped or a
+    // quick job contributes neither a numerator nor a denominator. Counting
+    // them would cut both ways and both ways would be wrong — their handful of
+    // entries would drag the per-job average down for whoever carries a lot of
+    // small work, which is the exact unfairness this dimension exists to undo.
+    if (comp != null) {
+      compSum += comp; compCount++;
+      denseSum += (punch - punch0) + (updates - updates0) + (questions - questions0);
+    }
   });
   live.sort((a, b) => a.m - b.m);
-  const appVolume = punch + updates + questions;                 // raw total — same job set as before this task, for the stat card
+  const appVolume = punch + updates + questions;                 // raw whole-book total — context only now, no longer scored; still the stat card's sub-line
   const compAvg = compCount ? compSum / compCount : null;        // mean per-job completeness; null when nobody has an eligible job
-  // appCap tunable to 0 (admin slider, Task 7R): appVolume/0 for any
-  // appVolume>0 is +Infinity, which _sb4Clamp already resolves to 1 correctly
+  const appDensity = compCount ? denseSum / compCount : null;    // entries per eligible job — the scored app number
+  // appDenseCap tunable to 0 (admin slider): appDensity/0 for any
+  // appDensity>0 is +Infinity, which _sb4Clamp already resolves to 1 correctly
   // on its own (same as qc.minorDivisor's Math.min case) — but EXACTLY 0/0,
   // when a foreman has logged nothing at all, is NaN. NaN poisons `app` even
   // through the compAvg blend below (0 * NaN is NaN, not 0, so appMix:100
   // doesn't save it either), and NORM.app/overallOf's `!= null` guard doesn't
   // filter it (NaN != null is true) — same bug class Task 2R guarded for
-  // qc.minorDivisor. Zero volume is unconditionally zero credit regardless of
+  // qc.minorDivisor. Zero density is unconditionally zero credit regardless of
   // the cap, so the short-circuit is the correct answer, not just a guard.
-  const volume = appVolume === 0 ? 0 : _sb4Clamp(appVolume / c.appCap);
+  const density = compCount === 0 ? null : appDensity === 0 ? 0 : _sb4Clamp(appDensity / c.appDenseCap);
   const mix = _sb4Clamp(c.appMix / 100);
-  const app = compAvg == null ? volume : (1 - mix) * volume + mix * compAvg; // blended 0-1 score; no eligible jobs => pure volume, never 0/crash
+  // compCount === 0 (every job a temp ped / quick job) nulls BOTH inputs at
+  // once — they share one eligibility gate, so they cannot diverge — and a
+  // null `app` makes overallOf skip the dimension and re-normalize across the
+  // other three, which is the honest answer: there is nothing here to measure
+  // app usage on. Previously this case fell back to whole-book raw volume,
+  // which counted the very jobs the dimension excludes.
+  const app = compCount === 0 ? null : (1 - mix) * density + mix * compAvg;
   return {
     jobs: js.length,
     margin: _sb4Median(marg), marginN: marg.length,
@@ -40507,11 +40557,44 @@ const sb4Agg = (js, cfg) => {
     qcMinorAvg: qcWalks ? Math.round(qcMinorSum / qcWalks * 10) / 10 : null,
     qcWalks,
     handoff: punch > 0 ? Math.round(openPunch / punch * 1000) / 10 : null,
-    app, appVolume, appComplete: compAvg == null ? null : Math.round(compAvg * 100), // app: 0-1 blended score (was raw total); appVolume: that raw total now; appComplete: 0-100 completeness % or null
+    // app: 0-1 blended score (density × completeness), null when no eligible job exists.
+    // appDensity: entries per eligible job — the stat card's headline. appVolume: whole-book
+    // raw total, context only. appComplete: 0-100 completeness % or null.
+    app, appVolume, appDensity: appDensity == null ? null : Math.round(appDensity * 10) / 10, appComplete: compAvg == null ? null : Math.round(compAvg * 100),
     live: live.slice(0, 8),
   };
 };
+// sb4Shrink — small-sample handling for the margin dimension. A five-job
+// median and a thirty-job median are not the same kind of number, but the
+// board treated them as one, so the thinnest book could top the board off a
+// single lucky house. Each row's SCORED margin is pulled toward the board's own
+// median with the standard n/(n+k) weight (k = cfg.marginPriorJobs, in jobs):
+//   scored = (n * own + k * board) / (n + k)
+// Properties worth knowing before tuning it:
+//   • k = 0 disables it — scored margin === displayed margin, byte-for-byte.
+//   • A one-row board is a mathematical no-op (base IS that row's margin), so
+//     the leads board can never be distorted by having few people on it.
+//   • It only ever moves a row TOWARD the middle; it cannot invent a lead.
+//   • The DISPLAYED margin is untouched. `marginScore`/`marginBase` are extra
+//     fields; nothing that reads `margin` today changes meaning.
+// Runs on the already-filtered rows so the baseline is the median of the people
+// actually being ranked, not of everyone who happens to hold a job.
+const sb4Shrink = (rows, c) => {
+  const k = c.marginPriorJobs;
+  const off = () => rows.map(r => ({ ...r, marginScore: r.margin, marginBase: null }));
+  if (!(k > 0)) return off();                                            // dial at 0, or a non-finite/negative doc value
+  const base = _sb4Median(rows.map(r => r.margin).filter(v => v != null));
+  if (base == null) return off();                                        // nobody on this board has a scorable margin
+  return rows.map(r => {
+    if (r.margin == null) return { ...r, marginScore: null, marginBase: base };
+    // margin != null implies marginN >= 1 (_sb4Median returns null on an empty
+    // list), so n + k is always > 0 here — no 0/0.
+    const n = r.marginN || 0;
+    return { ...r, marginScore: Math.round((n * r.margin + k * base) / (n + k) * 10) / 10, marginBase: base };
+  });
+};
 const sb4Build = (jobs, board, users, cfg) => {
+  const c = cfg || sb4Config(null);
   const list = Array.isArray(users) ? users : [];
   const foremen = [], leads = [], f2c = {};
   list.forEach(u => {
@@ -40541,7 +40624,7 @@ const sb4Build = (jobs, board, users, cfg) => {
   } else {
     rows = foremen.filter(nm => !SBV2_EXCLUDE_NAME(nm)).map(nm => ({ name: nm, ...sb4Agg(jobsFor(nm), cfg) }));
   }
-  return rows.filter(r => r.jobs >= 2);
+  return sb4Shrink(rows.filter(r => r.jobs >= 2), c);
 };
 if (typeof window !== "undefined") window.sb4Build = sb4Build;
 
@@ -40609,7 +40692,18 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   const overallOf = (r) => {
     const n = NORM(cfg);
     let s = 0, wsum = 0;
-    ["margin", "qc", "handoff", "app"].forEach(k => { const nv = n[k](r[k]), wt = weights[k]; if (nv != null && wt > 0) { s += nv * wt; wsum += wt; } });
+    ["margin", "qc", "handoff", "app"].forEach(k => {
+      // Margin scores on its SHRUNK value while the stat card keeps showing the
+      // real median (see sb4Shrink). `?? r.margin` is the identity for any row
+      // that never went through sb4Build — 0 is preserved, only null/undefined
+      // falls through — so this is a no-op when shrinkage is off or absent.
+      // NOTE: keep comments inside this const free of apostrophes.
+      // scripts/sb4-dryrun.js extracts it with a character scanner that has no
+      // comment awareness, so a lone single-quote there opens a phantom string
+      // and swallows the rest of the file.
+      const nv = n[k](k === "margin" ? (r.marginScore ?? r.margin) : r[k]), wt = weights[k];
+      if (nv != null && wt > 0) { s += nv * wt; wsum += wt; }
+    });
     return wsum ? Math.round(s / wsum * 100) : 0;
   };
   const ranked = useMemo(() => rows.map(r => ({ ...r, _ov: overallOf(r) })).sort((a, b) => b._ov - a._ov), [rows, cfg]);
@@ -40618,6 +40712,13 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   const colorFor = (nm) => PAL[Math.abs(String(nm).split("").reduce((a, c) => a + c.charCodeAt(0), 0)) % PAL.length];
   const initial = (nm) => { const p = String(nm || "").trim().split(/\s+/); return p.length > 1 ? (p[0][0] + p[p.length - 1][0]) : (p[0] || "?").slice(0, 1); };
   const marginCls = (v) => v == null ? "" : v < 0 ? "mbad" : v < cfg.marginTarget ? "mwarn" : "mgood";
+  // The card always shows the person's REAL median; when small-sample shrinkage
+  // moved the scored number by a visible amount, say so on the sub-line rather
+  // than letting the board quietly grade a number nobody can see. Under half a
+  // point the two round to the same display anyway, so stay quiet.
+  const marginNote = (r) => (r.marginScore != null && r.margin != null && Math.abs(r.marginScore - r.margin) >= 0.5)
+    ? `scored ${r.marginScore}% on ${r.marginN} job${r.marginN === 1 ? "" : "s"}`
+    : "typical job";
   const boardLbl = board === "coordinators" ? "Coordinators" : board === "leads" ? "Leads" : "Foremen";
 
   return (
@@ -40728,28 +40829,28 @@ function ScoreboardV4({ jobs, users = [], identity }) {
 
           <div className="wgroup">
             <div className="wgtitle">App usage</div>
-            <div className="hint">How the Logged in app score is calculated.</div>
-            {[["appMix", "Completeness share of App Usage %", 0, 100, 1], ["appCap", "Logged items for full credit", 0, 5000, 50]].map(t => (
+            <div className="hint">How the Logged in app score is calculated. It blends how DEEPLY jobs get documented (entries per job) with how CONSISTENTLY (share of jobs carrying punch, dailies, questions and a photo).</div>
+            {[["appMix", "Consistency share — rest is depth %", 0, 100, 1], ["appDenseCap", "Entries per job for full credit", 0, 500, 10]].map(t => (
               <div className="wrow" key={t[0]}>
                 <label>{t[1]}</label>
                 <input type="range" min={t[2]} max={t[3]} step={t[4]} value={cfg[t[0]]} onChange={e => saveCfg({ [t[0]]: +e.target.value })} />
                 <div className="wv">{cfg[t[0]]}</div>
               </div>
             ))}
-            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ appMix: SB4_DEFAULTS.appMix, appCap: SB4_DEFAULTS.appCap })}>Reset App usage to defaults</button></div>
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ appMix: SB4_DEFAULTS.appMix, appDenseCap: SB4_DEFAULTS.appDenseCap })}>Reset App usage to defaults</button></div>
           </div>
 
           <div className="wgroup">
             <div className="wgtitle">Other</div>
             <div className="hint">Margin scoring, handoff scoring, and Open Items timing.</div>
-            {[["marginDivisor", "Margin % for full credit", 0, 100], ["marginTarget", "Margin goal", 0, 60], ["handoffDivisor", "Open-punch % that scores zero", 0, 100], ["strandedDays", "Days before crew-held QC items surface on Open Items", 0, 30]].map(t => (
+            {[["marginDivisor", "Margin % for full credit", 0, 100], ["marginTarget", "Margin goal", 0, 60], ["marginPriorJobs", "Jobs before a margin counts fully (0 = off)", 0, 20], ["handoffDivisor", "Open-punch % that scores zero", 0, 100], ["strandedDays", "Days before crew-held QC items surface on Open Items", 0, 30]].map(t => (
               <div className="wrow" key={t[0]}>
                 <label>{t[1]}</label>
                 <input type="range" min={t[2]} max={t[3]} value={cfg[t[0]]} onChange={e => saveCfg({ [t[0]]: +e.target.value })} />
                 <div className="wv">{cfg[t[0]]}</div>
               </div>
             ))}
-            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ marginDivisor: SB4_DEFAULTS.marginDivisor, marginTarget: SB4_DEFAULTS.marginTarget, handoffDivisor: SB4_DEFAULTS.handoffDivisor, strandedDays: SB4_DEFAULTS.strandedDays })}>Reset Other to defaults</button></div>
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ marginDivisor: SB4_DEFAULTS.marginDivisor, marginTarget: SB4_DEFAULTS.marginTarget, marginPriorJobs: SB4_DEFAULTS.marginPriorJobs, handoffDivisor: SB4_DEFAULTS.handoffDivisor, strandedDays: SB4_DEFAULTS.strandedDays })}>Reset Other to defaults</button></div>
           </div>
         </div>
       )}
@@ -40766,17 +40867,17 @@ function ScoreboardV4({ jobs, users = [], identity }) {
               <span className="ov"><div className="ovv">{r._ov}</div><div className="ovl">score</div></span>
             </div>
             <div className="stats">
-              <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">typical job · goal {cfg.marginTarget}%</div></div>
+              <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">{marginNote(r)} · goal {cfg.marginTarget}%</div></div>
               <div className="stat"><div className="sl">Serious QC walks</div><div className="sv">{r.qcSeriousPct == null ? "—" : r.qcSeriousPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMinorAvg ?? "—"} minor items per walk</div></div>
               <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
-              <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.appVolume}</div><div className="sh">{r.appComplete ?? "—"}% of jobs fully tracked · more is better</div></div>
+              <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.appDensity ?? "—"}</div><div className="sh">entries per job · {r.appVolume} total · {r.appComplete ?? "—"}% of jobs fully tracked</div></div>
             </div>
           </div>
         ))}
       </div>
 
       <div className="note">
-        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {cfg.marginTarget}% at finish: green is at/above, amber below, red underwater. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
+        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {cfg.marginTarget}% at finish: green is at/above, amber below, red underwater.{cfg.marginPriorJobs > 0 && <> A book with only a few jobs is <b>scored</b> partway toward the board's middle until it reaches about {cfg.marginPriorJobs} jobs — five jobs is too few to prove a margin, and the card tells you when that's in play. The percentage shown is always the person's real median.</>} <b>Logged in app</b> counts entries <b>per job</b>, not in total, so a bigger book is no advantage — depth of documentation is. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
       </div>
     </div>
   );
@@ -45879,7 +45980,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - 4-way inspection (rules 14/15/16)
   - Final inspection (rules 23/24)
   - QC walks ('QCWalkSection')
-  - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v377' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "Serious QC item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring + every constant on a dial.** A walk with any serious item scores 'seriousCredit' (default 0); otherwise '1 − min(minorMaxCost, minors/minorDivisor)'. App Usage becomes a blend of raw volume and per-job completeness (has punch / dailies / questions / photos; temp peds and quick jobs excluded) via an 'appMix' dial. All 13 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board: **Gage 65 → 87 (3rd → 1st)**, Vasa 50 → 63, Keegan unchanged at 83, Josh still last on a 6.8% margin. **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 196-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot)
+  - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v377' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "Serious QC item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring, per-job density, small-sample handling, and every constant on a dial.** A walk with any serious item scores 'seriousCredit' (default 0); otherwise '1 − min(minorMaxCost, minors/minorDivisor)'. **App Usage stops counting raw volume and counts DENSITY — entries per job** (Koy: *"keegan uses the app far more than anyone else in the company. look at the desnity of the kweller job compared to any other"* — Kweller is 591 entries, the densest job in the company by 64%). Raw volume rewarded HOLDING MORE JOBS, which is roster luck; per-job completeness saturates the moment a job has one of each, so a deeply documented job scored identically to a token one. 'appDensity = entries / completeness-eligible jobs' shares completeness's exact eligibility gate (temp peds and quick jobs contribute to neither the numerator nor the denominator), blends against completeness via 'appMix', and normalizes at the new 'appDenseCap' dial (default 150/job; the old whole-book 'appCap' is gone — different units, unmigratable, a saved value is simply ignored). Where every eligible job is excluded, 'app' is now **null** and 'overallOf' drops the dimension and re-weights across the other three, instead of falling back to volume counted on the very jobs the dimension excludes. **'sb4Shrink' adds small-sample handling to margin** (Koy: *"gage doesnt make sense whys hes so high i guess just his profitmargin with fewer jobs"*): a median of five jobs is a rumor, so each row's SCORED margin is pulled toward the board's own median at the standard 'n/(n+k)' weight, 'k = marginPriorJobs' (default 5 jobs, 0 disables it byte-for-byte). The **displayed** margin is never shrunk — the card still shows the real median and discloses the scored figure and sample size beneath it ("scored 41.3% on 5 jobs") whenever the two diverge by half a point. A one-row board is a mathematical no-op (the baseline is that row's own margin), so a thin Leads board cannot be distorted by being small, and shrinkage only ever compresses toward the middle — it cannot invent a lead. All 15 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board at the shipped defaults: **Keegan 95, Daegan 91, Gage 90, Vasa 79, Abraham 77, Colby 72** — Gage falls off the top (his 55.75% median scores as 41.3% on five jobs) and Daegan rises to a slim second, both of which Koy called for by name. **A caveat recorded honestly:** at 'marginDivisor' 30 both 55.75% and 41.3% clamp to full margin credit, so shrinkage does not move Gage's RANK at today's settings — its protection binds whenever a thin book lands below the full-credit bar, and it is what stops a future one-job hot streak from topping the board (proven by test: a 30-job 40% book now outranks a 1-job 60% streak, which is exactly backwards from how the board read it before). **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 255-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot). The density/shrinkage round adds its own wiring trap: the harness extracts 'overallOf' itself and pins it to 33 for a row whose real margin is 60% and whose shrunk margin is 10%, because 'sb4Shrink' can be flawless and the board still ignore it — reading 'r.margin' there instead of 'r.marginScore' scores 100, and nothing else in the suite would notice. Three mutations were run to prove the new gates bite: reverting density to raw volume fails 9 assertions, unwiring 'overallOf' fails 2, and removing the 'marginPriorJobs' off-switch fails 2 (a negative dial value would otherwise become a sign-flipped amplifier, scoring a foreman at −100)
   - Status labels carry their own domain word · 'shipped 2026-08-10' · 'SW v375' · Koy: "make sure its all labeled better like qc needs to be included where it applies." 'RT_STATUSES', 'QC_STATUSES' and 'MATTERPORT_STATUSES' all rendered the IDENTICAL bare label **"Needs to be Scheduled"** — and those pills sit side by side on job cards, Open Items and the Forecast, so the reader couldn't tell which thing needed scheduling. QC was the worst offender because 5 of its 6 labels already said "QC" and only that one didn't. Now every label names its own system: QC → **"QC Needs to be Scheduled"** (completing the set), Matterport → **"Scan Needs to be Scheduled"** (matching its existing "Scan Scheduled"/"Scan Complete"), and Return Trips → **"RT Needs to be Scheduled" / "RT Scheduled" / "RT Complete"** (RT previously had no domain word at all on any of its three). Also deleted a hardcoded '"Needs to be Scheduled"' duplicate in the Forecast event builder that shadowed the registry and would have gone stale — that surface now reads the registry like everything else, so there is one source of truth per label. Verified no code compares against label TEXT: every status lookup keys off 'value', so this is display-only and inert. Deliberately left alone: Temp Ped and Quick Job status sets, which render on their own dedicated cards where the domain is never ambiguous
   - Failed inspection → punch items
 - **Photos** · 'shipped' · 'PhotoAttacher' · shared upload+thumbnail component

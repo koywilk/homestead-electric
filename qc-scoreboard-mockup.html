@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>QC Severity + Scoreboard Tuner — Mockup</title>
+<style>
+  :root{--bg:#F2F4F7;--card:#fff;--border:#E1E4E9;--text:#1C2733;--dim:#5E6670;--muted:#98A1AB;
+    --green:#3E7D5A;--amber:#B0892C;--red:#B23A3A;--blue:#2F6FEB;--navy:#141C28;}
+  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  body{background:var(--bg);color:var(--text);padding-bottom:60px}
+  header{background:var(--navy);color:#fff;padding:14px 18px}
+  header h1{font-size:16px;letter-spacing:.06em;text-transform:uppercase}
+  header p{font-size:11px;color:#9FB0C4;margin-top:3px}
+  .wrap{max-width:860px;margin:0 auto;padding:14px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;color:var(--text)}
+  .hint{font-size:11px;color:var(--dim);margin-bottom:10px;line-height:1.5}
+  .qitem{display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--border);font-size:13px}
+  .qitem:last-of-type{border-bottom:none}
+  .sev{margin-left:auto;flex-shrink:0;font-size:10px;font-weight:800;letter-spacing:.05em;border-radius:99px;
+    padding:4px 12px;cursor:pointer;border:1.5px solid var(--border);background:#F6F7F9;color:var(--muted);user-select:none}
+  .sev.on{background:#B23A3A14;border-color:var(--red);color:var(--red)}
+  .del{color:var(--muted);cursor:pointer;font-size:15px;padding:0 4px}
+  .addrow{display:flex;gap:8px;margin-top:10px}
+  .addrow input{flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;outline:none}
+  .btn{padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:#fff;font-size:12px;font-weight:700;cursor:pointer}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .verdict{display:flex;align-items:center;gap:10px;margin:12px 0 4px;padding:12px;border-radius:10px;font-weight:800;font-size:13px}
+  .v-pass{background:#3E7D5A14;color:var(--green);border:1px solid #3E7D5A44}
+  .v-items{background:#B0892C14;color:var(--amber);border:1px solid #B0892C55}
+  .v-fail{background:#B23A3A14;color:var(--red);border:1px solid #B23A3A55}
+  .verdict small{font-weight:500;color:var(--dim)}
+  .overlay{position:fixed;inset:0;background:rgba(10,15,22,.55);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
+  .overlay.show{display:flex}
+  .modal{background:#fff;border-radius:14px;max-width:420px;width:100%;padding:20px}
+  .modal h3{font-size:15px;margin-bottom:6px}
+  .modal p{font-size:12px;color:var(--dim);line-height:1.5;margin-bottom:14px}
+  .choice{display:block;width:100%;text-align:left;padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);
+    background:#fff;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:8px}
+  .choice small{display:block;font-weight:400;font-size:11px;color:var(--dim);margin-top:2px}
+  .choice:hover{border-color:var(--blue)}
+  .result{font-size:12px;color:var(--dim);background:#F6F7F9;border-radius:8px;padding:10px 12px;margin-top:10px;display:none;line-height:1.5}
+  .knobs{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 18px;margin-bottom:8px}
+  .knob{font-size:11px;color:var(--dim)}
+  .knob label{display:flex;justify-content:space-between;font-weight:600;color:var(--text);margin-bottom:2px}
+  .knob label b{color:var(--blue);font-variant-numeric:tabular-nums}
+  .knob input[type=range]{width:100%;accent-color:var(--blue)}
+  .kgroup{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+  .kgroup h4{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between}
+  .reset{font-size:10px;color:var(--blue);cursor:pointer;font-weight:700;text-transform:none;letter-spacing:0}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-align:right;padding:6px 6px;border-bottom:1px solid var(--border)}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:8px 6px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums}
+  td.name{font-weight:700}
+  td .was{color:var(--muted);font-size:10px}
+  .up{color:var(--green);font-weight:700}.down{color:var(--red);font-weight:700}
+  .ovr{font-weight:800;font-size:13px}
+  .sercol input{width:44px;padding:4px;border:1px solid var(--border);border-radius:6px;text-align:right;font-size:12px}
+  .tblwrap{overflow-x:auto}
+  .note{font-size:10.5px;color:var(--muted);margin-top:8px;line-height:1.5}
+</style>
+</head>
+<body>
+<header>
+  <h1>QC Severity + Scoreboard Tuner</h1>
+  <p>Mockup — real board data baked in (pulled 8/10). Nothing here writes anywhere.</p>
+</header>
+<div class="wrap">
+
+  <div class="card">
+    <h2>1 · QC walk — tap Serious on the real problems</h2>
+    <div class="hint">Everything defaults to minor. The verdict decides itself from the items — watch the pill as you toggle. Then hit Complete Walk.</div>
+    <div id="items"></div>
+    <div class="addrow"><input id="newItem" placeholder="Add a QC item…"/><button class="btn" id="addBtn">Add</button></div>
+    <div class="verdict" id="verdict"></div>
+    <button class="btn primary" style="margin-top:8px" id="completeBtn">Complete Walk</button>
+    <div class="result" id="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 · Scoreboard tuner — your real board, your dials</h2>
+    <div class="hint">Live data for all 7 foremen under the NEW math. Drag anything; the board re-ranks instantly. Gray number = today's shipped score. The <b>Serious walks %</b> column is hypothetical (severity doesn't exist in the data yet — all history reads as minor).</div>
+    <div class="kgroup"><h4>Section weights <span class="reset" data-g="w">reset</span></h4><div class="knobs" id="kw"></div></div>
+    <div class="kgroup"><h4>QC quality (new math) <span class="reset" data-g="q">reset</span></h4><div class="knobs" id="kq"></div></div>
+    <div class="kgroup"><h4>App usage — the mix dial <span class="reset" data-g="m">reset</span></h4>
+      <div class="knobs" id="km"></div>
+      <div class="note">0% = pure volume (today's board — effort, but size-biased and maxable). 100% = pure per-job completeness (discipline — every job runs every base, but token-tappable). The dial is the answer to "volume speaks loud, but idk" — both speak, you set how loud. Completeness data is the tightened probe: temp peds + quick jobs excluded, photos counted from anywhere on the job.</div>
+    </div>
+    <div class="kgroup"><h4>App usage caps (volume mode only) · shares · handoff <span class="reset" data-g="a">reset</span></h4><div class="knobs" id="ka"></div></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>Foreman</th><th>Jobs</th><th>Serious-free streak</th><th>Minor QC items/walk</th><th>Serious walks %</th><th>Quality</th><th>App usage</th><th>Shares</th><th>Handoff</th><th>Overall</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div class="note">Approximation note: per-walk minors use each foreman's average items/walk (that's what the app stores today). Serious % simulates "what if N% of his walks had a serious item." Josh Cloward is the one to watch when you touch the app-usage caps — 94 quality, buried by volume math.</div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3 id="mTitle"></h3>
+    <p id="mBody"></p>
+    <button class="choice" id="rtYes">Create return trip<small>Nobody's on site for this — clone the items into an RT so it can't get missed.</small></button>
+    <button class="choice" id="rtNo">Crew on site is handling it<small>Items stay on the punch list; job shows the verdict pill until they're closed.</small></button>
+  </div>
+</div>
+
+<script>
+/* ── helpers ── */
+const esc=(s)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* ── 1 · QC walk sim ── */
+let items=[
+  {t:"Caulk penetrations at master can lights",s:false},
+  {t:"Cover plate crooked — hall bath GFCI",s:false},
+  {t:"Missing nail plate at kitchen island stub",s:false},
+  {t:"Panel B breaker 14 double-tapped",s:false},
+];
+function renderItems(){
+  const el=document.getElementById("items");
+  el.innerHTML=items.map((it,i)=>`<div class="qitem"><span>${esc(it.t)}</span>
+    <span class="sev ${it.s?"on":""}" data-i="${i}" data-act="tog">${it.s?"SERIOUS QC ITEM":"Minor QC item"}</span>
+    <span class="del" data-i="${i}" data-act="del">×</span></div>`).join("")||'<div class="hint">No items — clean walk.</div>';
+  const ser=items.filter(x=>x.s).length;
+  const v=document.getElementById("verdict");
+  if(items.length===0){v.className="verdict v-pass";v.innerHTML="CLEAN PASS <small>no items</small>";}
+  else if(ser===0){v.className="verdict v-items";v.innerHTML=`QC PASSED WITH ITEMS <small>${items.length} minor QC item${items.length===1?"":"s"}</small>`;}
+  else{v.className="verdict v-fail";v.innerHTML=`QC FAIL <small>${ser} serious QC item${ser===1?"":"s"} · ${items.length-ser} minor</small>`;}
+  document.getElementById("result").style.display="none";
+}
+document.getElementById("items").addEventListener("click",(e)=>{
+  const t=e.target; if(!t.dataset||t.dataset.i===undefined)return;
+  const i=+t.dataset.i;
+  if(t.dataset.act==="tog"){items[i].s=!items[i].s;}
+  else if(t.dataset.act==="del"){items.splice(i,1);}
+  renderItems();
+});
+document.getElementById("addBtn").addEventListener("click",()=>{
+  const inp=document.getElementById("newItem");
+  if(!inp.value.trim())return;
+  items.push({t:inp.value.trim(),s:false});
+  inp.value="";renderItems();
+});
+document.getElementById("completeBtn").addEventListener("click",()=>{
+  const ser=items.filter(x=>x.s).length;
+  if(items.length===0){showResult("Recorded: <b>Clean Pass</b>. Done — no prompt, no machinery.");return;}
+  document.getElementById("mTitle").textContent=ser?"QC Fail — return trip needed?":"Passed with Items — return trip needed?";
+  document.getElementById("mBody").textContent="Severity set the verdict. Site reality sets the return trip — your call:";
+  document.getElementById("overlay").classList.add("show");
+});
+function chooseRT(rt){
+  document.getElementById("overlay").classList.remove("show");
+  const ser=items.filter(x=>x.s).length;
+  const verdict=ser?"QC Fail":"Passed with Items";
+  showResult(rt
+    ?`Recorded: <b>${verdict}</b> + return trip created — ${items.length} item(s) cloned in, check-offs sync both ways. Exactly today's RT machinery, just chosen instead of automatic.`
+    :`Recorded: <b>${verdict}</b> · crew on site handling it (stamped who + when). Items stay on the punch list. If the job goes quiet with these still open and no RT and no crew scheduled, it surfaces on Open Items by itself.`);
+}
+document.getElementById("rtYes").addEventListener("click",()=>chooseRT(true));
+document.getElementById("rtNo").addEventListener("click",()=>chooseRT(false));
+function showResult(html){const r=document.getElementById("result");r.innerHTML=html;r.style.display="block";}
+renderItems();
+
+/* ── 2 · Scoreboard tuner ── */
+const DATA=[ /* real sb3Build output + per-job completeness probe, 2026-08-10 */
+ {name:"Keegan Wilkinson",jobs:12,was:95,ftpPct:85,qcPerJob:0.5,handoff:1.2,punch:1472,updates:76,questions:164,shares:4,appV2:58,walks:8},
+ {name:"Abraham Tristan",jobs:13,was:85,ftpPct:95,qcPerJob:3.9,handoff:1.4,punch:906,updates:60,questions:123,shares:3,appV2:90,walks:10},
+ {name:"Daegan Smith",jobs:8,was:77,ftpPct:82,qcPerJob:3.0,handoff:2.4,punch:534,updates:38,questions:47,shares:2,appV2:79,walks:4},
+ {name:"Colby Fogh",jobs:26,was:61,ftpPct:100,qcPerJob:4.5,handoff:8.2,punch:1552,updates:70,questions:54,shares:0,appV2:56,walks:16},
+ {name:"Vasa Mataafa",jobs:15,was:57,ftpPct:100,qcPerJob:6.0,handoff:6.2,punch:1460,updates:44,questions:58,shares:0,appV2:68,walks:9},
+ {name:"Josh Cloward",jobs:10,was:53,ftpPct:100,qcPerJob:0.8,handoff:0,punch:27,updates:1,questions:0,shares:0,appV2:20,walks:4},
+ {name:"Gage Lund",jobs:5,was:47,ftpPct:75,qcPerJob:10.6,handoff:2.5,punch:515,updates:23,questions:34,shares:0,appV2:100,walks:5},
+];
+/* appV2 = per-job completeness, TIGHTENED probe (temp peds + quick jobs excluded;
+   photos counted from anywhere on the job). Blend with volume via the appMix dial. */
+const serPct=DATA.map(()=>0);
+const DEF={wQuality:40,wApp:25,wShares:20,wHandoff:15, appMix:50, serCredit:0,minorDiv:40,minorMax:50, punchCap:300,updCap:40,qCap:60,sharesCap:3,handoffDiv:40};
+let K={...DEF};
+const KNOBS=[
+ ["kw","wQuality","Quality weight",0,100,1,""],["kw","wApp","App usage weight",0,100,1,""],
+ ["kw","wShares","Shared links weight",0,100,1,""],["kw","wHandoff","Clean handoff weight",0,100,1,""],
+ ["km","appMix","Completeness share of App Usage",0,100,5,"%"],
+ ["kq","serCredit","Credit for a serious walk (%)",0,100,5,"%"],
+ ["kq","minorDiv","Minors that cost half a walk",10,100,5,""],
+ ["kq","minorMax","Max % minors can cost",0,100,5,"%"],
+ ["ka","punchCap","Punch items = full credit",50,2000,25,""],
+ ["ka","updCap","Daily updates = full credit",10,150,5,""],
+ ["ka","qCap","Questions = full credit",10,200,5,""],
+ ["ka","sharesCap","Shared links = full credit",1,10,1,""],
+ ["ka","handoffDiv","Open-punch % = zero handoff",10,100,5,"%"],
+];
+function renderKnobs(){
+  ["kw","km","kq","ka"].forEach(g=>document.getElementById(g).innerHTML="");
+  KNOBS.forEach(([g,k,label,min,max,step,suf])=>{
+    const d=document.createElement("div");d.className="knob";
+    const lab=document.createElement("label");
+    lab.textContent=label;
+    const b=document.createElement("b");b.id="v_"+k;b.textContent=K[k]+suf;lab.appendChild(b);
+    const inp=document.createElement("input");
+    inp.type="range";inp.min=min;inp.max=max;inp.step=step;inp.value=K[k];
+    inp.addEventListener("input",()=>{K[k]=+inp.value;b.textContent=inp.value+suf;renderBoard();});
+    d.appendChild(lab);d.appendChild(inp);
+    document.getElementById(g).appendChild(d);
+  });
+}
+document.querySelectorAll(".reset").forEach(r=>r.addEventListener("click",()=>{
+  const keys={w:["wQuality","wApp","wShares","wHandoff"],m:["appMix"],q:["serCredit","minorDiv","minorMax"],a:["punchCap","updCap","qCap","sharesCap","handoffDiv"]}[r.dataset.g];
+  keys.forEach(k=>K[k]=DEF[k]); renderKnobs(); renderBoard();
+}));
+function score(d,idx){
+  const minorScore=1-Math.min(K.minorMax/100, d.qcPerJob/K.minorDiv);
+  const s=Math.min(100,Math.max(0,serPct[idx]||0))/100;
+  /* First-time inspection pass REMOVED from scoring (Koy 2026-08-10) —
+     status-implied passes made it a near-constant. Quality = QC severity alone. */
+  const quality=s*(K.serCredit/100)+(1-s)*minorScore;
+  const app=(Math.min(1,d.punch/K.punchCap)+Math.min(1,d.updates/K.updCap)+Math.min(1,d.questions/K.qCap))/3;
+  const shares=Math.min(1,d.shares/K.sharesCap);
+  const handoff=Math.max(0,1-d.handoff/K.handoffDiv);
+  const appFinal = (1-K.appMix/100)*app + (K.appMix/100)*(d.appV2/100);
+  const dims=[[quality,K.wQuality],[appFinal,K.wApp],[shares,K.wShares],[handoff,K.wHandoff]].filter(x=>x[1]>0);
+  const wsum=dims.reduce((a,x)=>a+x[1],0);
+  const overall=wsum?dims.reduce((a,x)=>a+x[0]*x[1],0)/wsum:0;
+  return {quality:Math.round(quality*100),app:Math.round(((1-K.appMix/100)*app+(K.appMix/100)*(d.appV2/100))*100),shares:Math.round(shares*100),handoff:Math.round(handoff*100),overall:Math.round(overall*100)};
+}
+function renderBoard(){
+  const scored=DATA.map((d,idx)=>({d,idx,s:score(d,idx)})).sort((a,b)=>b.s.overall-a.s.overall);
+  const tb=document.getElementById("rows");
+  tb.innerHTML="";
+  scored.forEach(({d,idx,s})=>{
+    const delta=s.overall-d.was;
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td class="name">${esc(d.name)}</td><td>${d.jobs}</td><td>${d.walks} walks</td><td>${d.qcPerJob}</td>
+      <td class="sercol"></td>
+      <td>${s.quality}</td><td>${s.app}</td><td>${s.shares}</td><td>${s.handoff}</td>
+      <td class="ovr">${s.overall} <span class="was">was ${d.was}</span> ${delta?`<span class="${delta>0?"up":"down"}">${delta>0?"+":""}${delta}</span>`:""}</td>`;
+    const inp=document.createElement("input");
+    inp.type="number";inp.min=0;inp.max=100;inp.value=serPct[idx];
+    inp.addEventListener("change",()=>{serPct[idx]=+inp.value;renderBoard();});
+    tr.querySelector(".sercol").appendChild(inp);
+    tr.querySelector(".sercol").appendChild(document.createTextNode("%"));
+    tb.appendChild(tr);
+  });
+}
+renderKnobs();renderBoard();
+</script>
+</body>
+</html>

@@ -277,7 +277,16 @@ const MAIN = sliceBetween(
 // `clamp(...)` by closure — declared in that order below so it reads
 // naturally, though closure means either order would work since neither is
 // actually CALLED until block 5, well after both const statements have run.
-const RENDER_BITS = ["clamp", "NORM"].map(extractConst).join("\n");
+// overallOf/marginNote are extracted alongside them (density+shrinkage task).
+// overallOf is THE wiring trap for small-sample shrinkage: sb4Shrink can be
+// perfectly correct and the board still ignore it, if overallOf keeps scoring
+// `r.margin` instead of `r.marginScore`. Nothing else in this harness can
+// catch that — sb4Shrink's own output would look right in every assertion.
+// Both close over `cfg`/`weights` (React state in the component), so the
+// sandbox declares them explicitly below, pinned to the default config.
+const RENDER_BITS =
+  "const cfg = sb4Config(null);\nconst weights = cfg.weights;\n" +
+  ["clamp", "NORM", "overallOf", "marginNote"].map(extractConst).join("\n");
 
 // Property order matters here: object-literal shorthand evaluates identifiers
 // left to right, so SB4_DEFAULTS must come FIRST for the pre-implementation
@@ -286,7 +295,7 @@ const RENDER_BITS = ["clamp", "NORM"].map(extractConst).join("\n");
 // first.
 const combined =
   HELPERS + "\n" + MAIN + "\n" + RENDER_BITS +
-  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict, qcStrandedItems });\n";
+  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4Shrink, sb4JobComplete, _sb4HasPhoto, NORM, overallOf, marginNote, deriveQcVerdict, qcStrandedItems });\n";
 
 let extracted;
 try {
@@ -297,7 +306,7 @@ try {
   console.error("  " + e.message);
   process.exit(1);
 }
-const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict, qcStrandedItems } = extracted;
+const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4Shrink, sb4JobComplete, _sb4HasPhoto, NORM, overallOf, marginNote, deriveQcVerdict, qcStrandedItems } = extracted;
 
 // TASK 7R: NORM is now a factory (`c => ({margin,qc,handoff,app})`), not a
 // plain object — it needs an explicit cfg, the same way sb4Agg/sb4Build do.
@@ -370,16 +379,25 @@ assertEq(row.handoff, 75, "row.handoff (3 open / 4 punch * 100)");
 // Full derivation of 0.2512 and the completeness math behind it is in block 7.
 assertEq(row.appVolume, 6, "row.appVolume (punch 4 + updates 1 + questions 1 — the old row.app, renamed and untouched)");
 assertEq(row.appComplete, 50, "row.appComplete survives sb4Build's spread (50 — see block 7 for the per-job math)");
-assertEq(row.app, 0.2512, "row.app (Task 3R blended score, not the old raw total — see block 7 for the full derivation)");
+assertEq(row.appDensity, 3, "row.appDensity survives sb4Build's spread (6 entries / 2 eligible jobs — see block 13)");
+assertEq(row.app, 0.26, "row.app (density x completeness blend — see block 13 for the full derivation)");
+// Shrinkage on a ONE-ROW board is a mathematical no-op: the baseline IS this
+// row's own margin, so (n*25 + 5*25)/(n+5) === 25 for any n. That makes this
+// a genuine non-regression check of block 2's original margin assertion, not
+// a value that had to be re-pinned.
+assertEq(row.marginScore, 25, "row.marginScore === row.margin on a one-row board (baseline is its own margin — shrinkage cannot move it)");
+assertEq(row.marginBase, 25, "row.marginBase (the board median the score was pulled toward)");
 
 console.log("\n── 3. DEFAULT PINNING (mutation-proof — reads SB4_DEFAULTS directly; nothing above this line ever touches it) ──");
 assertEq(SB4_DEFAULTS.weights.margin, 45, "SB4_DEFAULTS.weights.margin");
 assertEq(SB4_DEFAULTS.weights.qc, 25, "SB4_DEFAULTS.weights.qc");
 assertEq(SB4_DEFAULTS.weights.handoff, 20, "SB4_DEFAULTS.weights.handoff");
 assertEq(SB4_DEFAULTS.weights.app, 10, "SB4_DEFAULTS.weights.app");
-assertEq(SB4_DEFAULTS.marginDivisor, 50, "SB4_DEFAULTS.marginDivisor");
+assertEq(SB4_DEFAULTS.marginDivisor, 30, "SB4_DEFAULTS.marginDivisor");
 assertEq(SB4_DEFAULTS.handoffDivisor, 20, "SB4_DEFAULTS.handoffDivisor");
-assertEq(SB4_DEFAULTS.appCap, 2500, "SB4_DEFAULTS.appCap");
+assertEq(SB4_DEFAULTS.appDenseCap, 150, "SB4_DEFAULTS.appDenseCap");
+assertEq(SB4_DEFAULTS.marginPriorJobs, 5, "SB4_DEFAULTS.marginPriorJobs");
+assertEq(SB4_DEFAULTS.appCap, undefined, "SB4_DEFAULTS.appCap is GONE — replaced by appDenseCap (different units: per-job, not whole-book)");
 assertEq(SB4_DEFAULTS.qc.minorDivisor, 40, "SB4_DEFAULTS.qc.minorDivisor");
 assertEq(SB4_DEFAULTS.qc.minorMaxCost, 50, "SB4_DEFAULTS.qc.minorMaxCost");
 assertEq(SB4_DEFAULTS.qc.seriousCredit, 0, "SB4_DEFAULTS.qc.seriousCredit");
@@ -598,13 +616,14 @@ assertEq(volAgg.appVolume, 6, "appVolume(jobA,jobB) = 6 (punch 4 [ALL punch item
 // compAvg = mean(0.75, 0.25) = 0.5 -> appComplete = round(0.5*100) = 50.
 assertEq(volAgg.appComplete, 50, "appComplete = round(compAvg*100) = 50 (mean of jobA 0.75 and jobB 0.25)");
 
-// Blend at the default appMix (50): app = 0.5*clamp(appVolume/appCap) + 0.5*compAvg.
-assertEq(volAgg.app, 0.2512, "app @ default appMix 50 = 0.5*clamp(6/2500) + 0.5*0.5 = 0.0012 + 0.25 = 0.2512");
+// Blend at the default appMix (50): app = 0.5*clamp(appDensity/appDenseCap) + 0.5*compAvg.
+assertEq(volAgg.app, 0.26, "app @ default appMix 50 = 0.5*clamp(3/150) + 0.5*0.5 = 0.01 + 0.25 = 0.26");
 
-// appMix 0 => pure volume — EXACT match to what `app` used to mean pre-Task-3R
-// (clamp(appVolume/appCap)), the volume-only regression the brief calls out.
+// appMix 0 => pure DENSITY (this task replaced whole-book volume with
+// entries-per-eligible-job as the depth half of the blend).
 const mix0Agg = sb4Agg([jobA, jobB], sb4Config({ appMix: 0 }));
-assertEq(mix0Agg.app, mix0Agg.appVolume / 2500, "appMix 0: app === clamp(appVolume/appCap) exactly (volume-only regression)");
+assertEq(mix0Agg.app, mix0Agg.appDensity / 150, "appMix 0: app === clamp(appDensity/appDenseCap) exactly (density-only)");
+assertTrue(mix0Agg.app !== mix0Agg.appVolume / 150, "appMix 0 scores DENSITY, not raw volume — the two differ here (3/150 vs 6/150), so a revert to volume fails loudly", `density-based ${mix0Agg.app} vs volume-based ${mix0Agg.appVolume / 150}`);
 
 // appMix 100 => pure completeness — compAvg exactly, volume plays no part.
 const mix100Agg = sb4Agg([jobA, jobB], sb4Config({ appMix: 100 }));
@@ -617,22 +636,33 @@ assertEq(mix100Agg.app, 0.5, "appMix 100: app === compAvg exactly = 0.5 (complet
 const withTPAgg = sb4Agg([jobA, jobB, jobTP]);
 assertEq(withTPAgg.appComplete, 50, "adding a tempPed job doesn't move appComplete — it's excluded from compAvg entirely");
 assertEq(withTPAgg.appVolume, 8, "but the tempPed job's own updates(1)+questions(1) DO still count toward appVolume (6 + 2 = 8) — volume's job set is unchanged");
+// Density rides completeness's eligibility gate, so a tempPed contributes to
+// NEITHER side of the ratio. If it leaked into only one, this moves: into the
+// numerator only -> 8/2 = 4; into the denominator only -> 6/3 = 2. Pinning 3
+// rules out both halves of that bug in one assertion.
+assertEq(withTPAgg.appDensity, 3, "adding a tempPed job doesn't move appDensity either — excluded from BOTH the numerator and the denominator (still 6/2, not 8/2 or 6/3)");
 
 // Self-review — "does a foreman whose jobs are all temp peds still get a
 // sane score rather than a crash or a zero?" allTPAgg has ZERO
-// completeness-eligible jobs: compAvg must be null (not 0), and app must
-// fall back to pure volume (not 0, not null, not a crash).
+// completeness-eligible jobs. Density and completeness share one eligibility
+// gate, so both go null together and `app` goes null with them — which makes
+// overallOf SKIP the app dimension and re-weight across the other three,
+// rather than scoring a number derived from the very jobs the dimension
+// excludes (the old behavior: fall back to whole-book raw volume).
 const allTPAgg = sb4Agg([jobTP]);
 assertEq(allTPAgg.appComplete, null, "all-tempPed aggregate: appComplete is null (zero eligible jobs, not zero-scored)");
-assertEq(allTPAgg.app, allTPAgg.appVolume / 2500, "all-tempPed aggregate: app falls back to pure volume (not 0, not null, not a crash)");
-assertTrue(allTPAgg.app > 0, "all-tempPed aggregate: app is a real positive number (jobTP has updates+questions, so appVolume>0)", `got ${allTPAgg.app}`);
+assertEq(allTPAgg.appDensity, null, "all-tempPed aggregate: appDensity is null (no eligible job to divide by)");
+assertEq(allTPAgg.app, null, "all-tempPed aggregate: app is null — nothing to measure, so overallOf drops the dimension instead of scoring temp-ped volume");
+assertTrue(Number.isNaN(allTPAgg.app) === false, "all-tempPed aggregate: app is null, NOT NaN (NaN would pass overallOf's `!= null` guard and poison the whole score)", `got ${allTPAgg.app}`);
+assertEq(N0.app(allTPAgg.app), null, "NORM.app(null) is null — the dimension is genuinely dropped, not clamped to 0");
 
 // Empty jobs list — no crash, sane null/0 defaults (mirrors the qc empty-list
 // checks in block 6 above).
 const emptyAgg = sb4Agg([]);
 assertEq(emptyAgg.appVolume, 0, "empty jobs list: appVolume is 0");
 assertEq(emptyAgg.appComplete, null, "empty jobs list: appComplete is null");
-assertEq(emptyAgg.app, 0, "empty jobs list: app is 0 (clamp(0/2500), compAvg null so pure volume)");
+assertEq(emptyAgg.appDensity, null, "empty jobs list: appDensity is null");
+assertEq(emptyAgg.app, null, "empty jobs list: app is null (no eligible job — same one gate as the all-tempPed case)");
 
 // THE INVERSION TRAP. sb4Agg's app is now an already-normalized 0-1 "higher
 // is better" score, so NORM.app must be the IDENTITY clamp. If NORM.app were
@@ -933,26 +963,27 @@ console.log("\n── 11. TASK 7R: cfg wired live — appCap/marginDivisor/hando
 // (compAvg becomes a real 0, not null -> the FALSE/blend branch, where
 // `(1-mix)*NaN` is NaN regardless of mix, even at mix=1, since 0*NaN=NaN in
 // IEEE754 — so compAvg==0 does NOT "save" the blend from a poisoned volume). ──
-const emptyZeroCap = sb4Agg([], sb4Config({ appCap: 0 }));
-assertTrue(Number.isNaN(emptyZeroCap.app) === false, "fix: empty jobs list under appCap:0 is not NaN (compAvg==null branch)", `got ${emptyZeroCap.app}`);
-assertEq(emptyZeroCap.app, 0, "fix: empty jobs list under appCap:0 scores exactly 0 (zero volume = zero credit, regardless of cap)");
+const emptyZeroCap = sb4Agg([], sb4Config({ appDenseCap: 0 }));
+assertTrue(Number.isNaN(emptyZeroCap.app) === false, "fix: empty jobs list under appDenseCap:0 is not NaN (zero-eligible-jobs branch)", `got ${emptyZeroCap.app}`);
+assertEq(emptyZeroCap.app, null, "fix: empty jobs list under appDenseCap:0 is null — the branch short-circuits on compCount BEFORE any division, so the cap never gets to divide");
 
 const jobZero = { id: "z", name: "Fixture Zero Activity", foreman: "T" }; // no punch/updates/questions/photos anywhere, NOT tempPed/quickJob
 assertEq(sb4JobComplete(jobZero), 0, "sanity: jobZero's own completeness is a real 0 (0/4 checks), NOT null — it's an eligible job that happens to be empty, unlike tempPed/quickJob");
-const zeroActAgg = sb4Agg([jobZero], sb4Config({ appCap: 0 }));
-assertTrue(Number.isNaN(zeroActAgg.app) === false, "fix: a single genuinely-empty job under appCap:0 is not NaN (compAvg==0, the BLEND branch — 0*NaN would still be NaN pre-fix, proving compAvg alone can't mask the volume bug)", `got ${zeroActAgg.app}`);
+const zeroActAgg = sb4Agg([jobZero], sb4Config({ appDenseCap: 0 }));
+assertTrue(Number.isNaN(zeroActAgg.app) === false, "fix: a single genuinely-empty job under appDenseCap:0 is not NaN — this is the REAL 0/0 path now (one eligible job, zero entries, so appDensity is exactly 0 and the cap is exactly 0)", `got ${zeroActAgg.app}`);
 assertEq(zeroActAgg.appVolume, 0, "fix: jobZero's appVolume is 0 (nothing logged)");
+assertEq(zeroActAgg.appDensity, 0, "fix: jobZero's appDensity is 0 (0 entries / 1 eligible job — a real 0, not null)");
 assertEq(zeroActAgg.appComplete, 0, "fix: jobZero's appComplete is 0 (not null — it's an eligible, just empty, job)");
-assertEq(zeroActAgg.app, 0, "fix: jobZero under appCap:0 blends to exactly 0 — (1-mix)*0 + mix*0 = 0");
+assertEq(zeroActAgg.app, 0, "fix: jobZero under appDenseCap:0 blends to exactly 0 — (1-mix)*0 + mix*0 = 0");
 
-// Non-regression — appVolume>0 under appCap:0 was ALREADY correct pre-fix
+// Non-regression — appDensity>0 under appDenseCap:0 was ALREADY correct
 // (Math.min/clamp resolve +Infinity to 1 on their own); re-run jobA+jobB
-// (block 2/7's appVolume=6, compAvg=0.5 fixtures) to prove the fix doesn't
+// (block 2/7's appDensity=3, compAvg=0.5 fixtures) to prove the guard doesn't
 // disturb that side of the formula.
-const volNonZeroZeroCap = sb4Agg([jobA, jobB], sb4Config({ appCap: 0 }));
-assertTrue(Number.isNaN(volNonZeroZeroCap.app) === false, "non-regression: appVolume=6 under appCap:0 is not NaN (was never at risk — only the 0/0 case is)");
-assertEq(volNonZeroZeroCap.appVolume, 6, "non-regression: appVolume itself is untouched by appCap");
-assertEq(volNonZeroZeroCap.app, 0.75, "non-regression: appCap:0 with real volume clamps to full volume credit (1) — (1-0.5)*1 + 0.5*0.5 = 0.75");
+const volNonZeroZeroCap = sb4Agg([jobA, jobB], sb4Config({ appDenseCap: 0 }));
+assertTrue(Number.isNaN(volNonZeroZeroCap.app) === false, "non-regression: appDensity=3 under appDenseCap:0 is not NaN (was never at risk — only the 0/0 case is)");
+assertEq(volNonZeroZeroCap.appVolume, 6, "non-regression: appVolume itself is untouched by appDenseCap");
+assertEq(volNonZeroZeroCap.app, 0.75, "non-regression: appDenseCap:0 with real density clamps to full depth credit (1) — (1-0.5)*1 + 0.5*0.5 = 0.75");
 
 // Same bug class, same fix pattern, found while auditing every divisor/cap
 // per this task's self-review instruction: NORM.margin/NORM.handoff are
@@ -977,8 +1008,12 @@ assertEq(Nzero.handoff(null), null, "fix: NORM.handoff(null) stays null under ha
 // formula already gave for v===0 at any NORMAL (nonzero) divisor, so this is
 // a true no-op for the live board today, not a behavior change. Also sanity
 // pins a normal nonzero value through each formula.
-assertEq(N0.margin(0), 0, "non-regression: NORM.margin(0) at the default marginDivisor(50) is still exactly 0 — same value the guard produces");
-assertEq(N0.margin(25), 0.5, "non-regression: NORM.margin(25) at the default marginDivisor(50) is unaffected by the guard — clamp(25/50)=0.5");
+assertEq(N0.margin(0), 0, "non-regression: NORM.margin(0) at the default marginDivisor(30) is still exactly 0 — same value the guard produces");
+// 15% is the company margin GOAL (SB4_DEFAULTS.marginTarget) and the divisor is
+// anchored at double it, so hitting the goal earns exactly half the margin
+// credit. That relationship is the whole point of the 2026-08-11 retune — pin it.
+assertEq(N0.margin(15), 0.5, "goal-anchored scale: NORM.margin(15) — hitting the 15% goal earns exactly half the margin credit at marginDivisor 30");
+assertEq(N0.margin(30), 1, "goal-anchored scale: NORM.margin(30) — doubling the goal earns full margin credit");
 assertEq(N0.handoff(0), 1, "non-regression: NORM.handoff(0) at the default handoffDivisor(20) is still exactly 1 — same value the guard produces");
 assertEq(N0.handoff(10), 0.5, "non-regression: NORM.handoff(10) at the default handoffDivisor(20) is unaffected by the guard — clamp(1-10/20)=0.5");
 
@@ -1045,7 +1080,7 @@ assertEq(cfgFromLegacyDifferent.weights, { margin: 12, qc: 63, handoff: 9, app: 
 assertEq(cfgFromLegacyDifferent.marginDivisor, SB4_DEFAULTS.marginDivisor, "a true legacy doc never had marginDivisor — falls back to default even though OTHER fields (weights) were present and valid");
 assertEq(cfgFromLegacyDifferent.marginTarget, SB4_DEFAULTS.marginTarget, "same — marginTarget falls back to default");
 assertEq(cfgFromLegacyDifferent.handoffDivisor, SB4_DEFAULTS.handoffDivisor, "same — handoffDivisor falls back to default");
-assertEq(cfgFromLegacyDifferent.appCap, SB4_DEFAULTS.appCap, "same — appCap falls back to default");
+assertEq(cfgFromLegacyDifferent.appDenseCap, SB4_DEFAULTS.appDenseCap, "same — appDenseCap falls back to default");
 assertEq(cfgFromLegacyDifferent.appMix, SB4_DEFAULTS.appMix, "same — appMix falls back to default");
 assertEq(cfgFromLegacyDifferent.strandedDays, SB4_DEFAULTS.strandedDays, "same — strandedDays falls back to default");
 // The qc NAME COLLISION: the legacy doc's top-level `qc` is a WEIGHT number
@@ -1131,10 +1166,115 @@ assertTrue(!src.includes("qcStrandedItems(job, sb4Config(null), Date.now());"), 
 const scoreboardV4WeightsSubscribers = (src.match(/onSnapshot\(doc\(db, "settings", "scoreboardV4Weights"\)/g) || []).length;
 assertEq(scoreboardV4WeightsSubscribers, 2, "wiring: settings/scoreboardV4Weights now has TWO live subscribers in the source — ScoreboardV4's original admin-gated one, and JobActivity's new non-admin-gated one (Open Items must work for everyone)");
 
+console.log("\n── 13. DENSITY: App Usage scores entries PER JOB, not whole-book volume ──");
+// Koy, 2026-08-11: "keegan uses the app far more than anyone else in the
+// company. look at the desnity of the kweller job compared to any other."
+// The defect density fixes: raw volume rewarded HOLDING MORE JOBS. A foreman
+// with three times the book scored three times the app credit for identical
+// per-job behavior — roster luck graded as craftsmanship.
+// Each job below carries `punchN` punch items + 1 update + 1 question, so its
+// entry count is punchN+2 and its completeness is a flat 0.75 (punch/updates/
+// questions present, no photo) — which holds compAvg CONSTANT across all three
+// fixtures, isolating density as the only thing that can move `app`.
+const denseJob = (id, foreman, punchN) => ({
+  id, name: `House ${id}`, foreman, simproMargin: 20,
+  roughPunch: { main: { general: Array.from({ length: punchN }, (_, i) => ({ id: `${id}p${i}`, text: "x", done: true })) } },
+  roughUpdates: [{ text: "d" }],
+  roughQuestions: { main: [{ question: "q" }] },
+});
+const smallBook = [0, 1].map(i => denseJob(`s${i}`, "Fa", 10));            // 2 jobs x 12 entries
+const bigBook = [0, 1, 2, 3, 4, 5].map(i => denseJob(`b${i}`, "Fb", 10));  // 6 jobs x 12 entries — SAME behavior, 3x the book
+const deepBook = [0, 1].map(i => denseJob(`d${i}`, "Fc", 40));             // 2 jobs x 42 entries — same book size, far deeper
+const smallAgg = sb4Agg(smallBook), bigAgg = sb4Agg(bigBook), deepAgg = sb4Agg(deepBook);
+
+assertEq(smallAgg.appVolume, 24, "sanity: small book's raw volume is 24 (2 jobs x 12 entries)");
+assertEq(bigAgg.appVolume, 72, "sanity: big book's raw volume is 72 (6 jobs x 12) — genuinely 3x the small book, so the fixtures really do differ");
+assertEq(smallAgg.appDensity, 12, "small book's density is 12 entries/job");
+assertEq(bigAgg.appDensity, 12, "big book's density is ALSO 12 entries/job — identical per-job behavior");
+assertEq(smallAgg.appComplete, 75, "sanity: completeness is a flat 75% in every fixture here, so it cannot be what moves `app`");
+assertEq(bigAgg.appComplete, 75, "sanity: same 75% for the big book");
+// THE headline property of this change.
+assertEq(smallAgg.app, bigAgg.app, "THE FIX: a 2-job book and a 6-job book with identical per-job behavior score EXACTLY the same app credit — holding more jobs is no longer worth points");
+assertTrue(bigAgg.appVolume / 150 > smallAgg.appVolume / 150, "…and they would NOT have tied under the old volume rule (72/150 vs 24/150), so this assertion has real teeth", `${bigAgg.appVolume / 150} vs ${smallAgg.appVolume / 150}`);
+
+// Density still DISCRIMINATES — it isn't just size-blind, it rewards depth.
+assertEq(deepAgg.appDensity, 42, "deep book's density is 42 entries/job (same 2 jobs, far more logged on each)");
+assertTrue(deepAgg.app > smallAgg.app, "documenting the SAME number of jobs more deeply scores higher — density has real discriminating power, unlike completeness which saturates at 100%", `deep ${deepAgg.app} vs small ${smallAgg.app}`);
+assertEq(deepAgg.appComplete, smallAgg.appComplete, "…and it separates them on a pair completeness alone rates IDENTICALLY (both 75%) — exactly the blind spot density was added to cover");
+assertTrue(Math.abs(smallAgg.app - (0.5 * (12 / 150) + 0.5 * 0.75)) < 1e-9, "small/big book app = 0.5*clamp(12/150) + 0.5*0.75 = 0.415", `got ${smallAgg.app}`);
+assertTrue(Math.abs(deepAgg.app - (0.5 * (42 / 150) + 0.5 * 0.75)) < 1e-9, "deep book app = 0.5*clamp(42/150) + 0.5*0.75 = 0.515", `got ${deepAgg.app}`);
+
+// The cap is a real dial, and clamps rather than overflowing.
+assertEq(sb4Agg(deepBook, sb4Config({ appDenseCap: 42 })).app, 0.5 * 1 + 0.5 * 0.75, "appDenseCap 42: the deep book exactly reaches full depth credit (1)");
+assertEq(sb4Agg(deepBook, sb4Config({ appDenseCap: 10 })).app, 0.5 * 1 + 0.5 * 0.75, "appDenseCap 10: density 42 clamps to 1, it does not overflow past full credit");
+
+console.log("\n── 14. SMALL-SAMPLE SHRINKAGE: a thin book's margin is pulled toward the board (sb4Shrink + overallOf + marginNote) ──");
+// Koy, 2026-08-11: "gage doesnt make sense whys hes so high i guess just his
+// profitmargin with fewer jobs." A median of five jobs and a median of thirty
+// are not the same kind of number; the board treated them as one.
+const shRows = [{ name: "Thin", margin: 60, marginN: 3 }, { name: "Mid", margin: 20, marginN: 9 }, { name: "Low", margin: 5, marginN: 9 }];
+const sh5 = sb4Shrink(shRows, sb4Config(null)); // marginPriorJobs 5, board median of [60,20,5] = 20
+assertEq(sh5.map(r => r.marginBase), [20, 20, 20], "baseline is the board's own median margin (median of 60/20/5 = 20), identical for every row");
+assertEq(sh5[0].margin, 60, "the DISPLAYED margin is never shrunk — Thin still shows its real 60% median");
+assertEq(sh5[0].marginScore, 35, "Thin (n=3) scores (3*60 + 5*20)/8 = 35 — pulled most, because 3 jobs prove least");
+assertEq(sh5[1].marginScore, 20, "Mid (n=9) sits AT the baseline, so it cannot move at any n — (9*20 + 5*20)/14 = 20");
+assertEq(sh5[2].marginScore, 10.4, "Low (n=9) is pulled UP toward the board: (9*5 + 5*20)/14 = 10.36 -> 10.4 — shrinkage is symmetric, not a punishment for thin books");
+assertTrue((sh5[0].marginScore - sh5[1].marginScore) < (shRows[0].margin - shRows[1].margin), "the GAP between a thin book and a thick one narrows (40 points -> 15) — it compresses toward the middle rather than reordering by fiat", `${sh5[0].marginScore - sh5[1].marginScore} vs 40`);
+
+// The dial genuinely disables it — required for "byte-for-byte the old board".
+const shOff = sb4Shrink(shRows, sb4Config({ marginPriorJobs: 0 }));
+assertEq(shOff.map(r => r.marginScore), [60, 20, 5], "marginPriorJobs 0: scored margin === displayed margin for every row (shrinkage fully off)");
+assertEq(shOff.map(r => r.marginBase), [null, null, null], "marginPriorJobs 0: no baseline recorded, so the stat card stays quiet too");
+assertEq(sb4Shrink(shRows, sb4Config({ marginPriorJobs: -4 })).map(r => r.marginScore), [60, 20, 5], "a negative marginPriorJobs (corrupt/hand-edited doc) is treated as OFF, not as a sign-flipped amplifier");
+
+// More jobs => less pull. Board median of [60,60,0,0] = 30.
+const shMono = sb4Shrink([{ margin: 60, marginN: 3 }, { margin: 60, marginN: 30 }, { margin: 0, marginN: 9 }, { margin: 0, marginN: 9 }], sb4Config(null));
+assertEq(shMono[0].marginScore, 41.3, "same 60% margin on 3 jobs: (3*60 + 5*30)/8 = 41.25 -> 41.3");
+assertEq(shMono[1].marginScore, 55.7, "same 60% margin on 30 jobs: (30*60 + 5*30)/35 = 55.71 -> 55.7 — a thicker book keeps far more of its own number");
+assertTrue(shMono[1].marginScore > shMono[0].marginScore && shMono[1].marginScore < 60, "monotonic in n, and never reaches the raw value — the pull shrinks as evidence accumulates but never fully disappears", `n=30 ${shMono[1].marginScore}, n=3 ${shMono[0].marginScore}`);
+
+// THE point of the feature: a one-job hot streak stops outranking a real book.
+const shFlip = sb4Shrink([{ name: "OneJob", margin: 60, marginN: 1 }, { name: "RealBook", margin: 40, marginN: 30 },
+  { margin: 15, marginN: 20 }, { margin: 12, marginN: 20 }, { margin: 10, marginN: 20 }], sb4Config(null));
+assertEq(shFlip[0].marginScore, 22.5, "one job at 60% scores 22.5 against a board median of 15 — one house is not evidence");
+assertEq(shFlip[1].marginScore, 36.4, "thirty jobs at 40% scores 36.4 — nearly its own number");
+assertTrue(shFlip[1].marginScore > shFlip[0].marginScore, "THE FIX: a 30-job 40% book now outranks a 1-job 60% streak on margin, which is exactly backwards from how the board read it before", `${shFlip[1].marginScore} vs ${shFlip[0].marginScore}`);
+assertTrue(shFlip[0].margin > shFlip[1].margin, "…while the CARDS still honestly show 60% > 40% — the display never lies about the person's real median", `${shFlip[0].margin} vs ${shFlip[1].margin}`);
+
+// Degenerate shapes.
+assertEq(sb4Shrink([{ margin: 47.3, marginN: 2 }], sb4Config(null))[0].marginScore, 47.3, "a ONE-ROW board is a mathematical no-op — the baseline is that row's own margin, so a thin leads board can't be distorted by being small");
+assertEq(sb4Shrink([{ margin: null, marginN: 0 }, { margin: 20, marginN: 4 }], sb4Config(null))[0].marginScore, null, "a row with no scorable margin gets marginScore null (not 0, not the baseline) — it stays dropped from the score");
+assertEq(sb4Shrink([{ margin: null, marginN: 0 }], sb4Config(null))[0].marginScore, null, "a board where NOBODY has a margin: no baseline exists, shrinkage becomes the identity rather than crashing");
+assertEq(sb4Shrink([], sb4Config(null)), [], "empty board: empty out, no crash");
+
+// WIRING TRAP — sb4Shrink can be flawless and the board still ignore it.
+const trapHigh = { margin: 60, marginScore: 10, marginN: 1, qc: null, handoff: null, app: null };
+assertEq(overallOf(trapHigh), 33, "overallOf scores marginScore (10/30 = 0.333 -> 33). If it still read r.margin this would be 100 (60/30 clamps to 1) — the loudest possible failure for a dropped wire");
+assertEq(overallOf({ margin: 15, qc: null, handoff: null, app: null }), 50, "a row that never went through sb4Shrink falls back to r.margin unchanged (15/30 = 0.5 -> 50) — the `?? r.margin` identity");
+assertEq(overallOf({ margin: 30, marginScore: 0, qc: null, handoff: null, app: null }), 0, "marginScore 0 is honored as a real 0, not treated as missing and replaced by margin 30 (the `??`-vs-`||` trap)");
+
+// The card has to SAY when the score differs from the number printed on it.
+assertEq(marginNote({ margin: 60, marginScore: 35, marginN: 3 }), "scored 35% on 3 jobs", "the stat card discloses the shrunk value and the sample size when they diverge");
+assertEq(marginNote({ margin: 60, marginScore: 35, marginN: 1 }), "scored 35% on 1 job", "singular 'job' at n=1");
+assertEq(marginNote({ margin: 20, marginScore: 20, marginN: 9 }), "typical job", "no disclosure when shrinkage didn't move the number");
+assertEq(marginNote({ margin: 20, marginScore: 20.4, marginN: 9 }), "typical job", "no disclosure under half a point — both sides round to the same displayed figure anyway");
+assertEq(marginNote({ margin: 20, marginScore: null, marginN: 0 }), "typical job", "no disclosure, and no crash, when there's no scored margin at all");
+
+// End-to-end through the real sb4Build, not just the helper in isolation.
+const e2eJobs = [];
+[["Fa", 60, 3], ["Fb", 20, 9], ["Fc", 5, 9]].forEach(([f, m, n]) => { for (let i = 0; i < n; i++) e2eJobs.push({ id: `${f}${i}`, name: `House ${f}${i}`, foreman: f, simproMargin: m }); });
+const e2eUsers = [{ name: "Fa", title: "foreman", active: true }, { name: "Fb", title: "foreman", active: true }, { name: "Fc", title: "foreman", active: true }];
+const e2e = sb4Build(e2eJobs, "foremen", e2eUsers, sb4Config(null));
+assertEq(e2e.length, 3, "sanity: all three foremen rank");
+const e2eFa = e2e.find(r => r.name === "Fa");
+assertEq(e2eFa.margin, 60, "end-to-end: sb4Build still reports Fa's real 60% median");
+assertEq(e2eFa.marginScore, 35, "end-to-end: sb4Build applies shrinkage on the way out (same 35 the helper produced) — the filter-then-shrink order holds");
+assertTrue(sb4Build(e2eJobs, "foremen", e2eUsers, sb4Config({ marginPriorJobs: 0 })).find(r => r.name === "Fa").marginScore === 60, "end-to-end: the dial reaches all the way through sb4Build");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6/6-fix1/7R/7R-fix1)");
+console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6/6-fix1/7R/7R-fix1/density+shrinkage)");
 process.exit(0);
