@@ -255,7 +255,7 @@ function sliceBetween(startMarker, endMarker) {
 // sb4Agg / sb4Build call these; they're defined earlier in App.js (the first
 // three live in the SB3 region but are reused by V4; the last three are the
 // shared SBV2 helpers), outside the contiguous V4 region sliced below.
-const HELPERS = ["_sb3lc", "_sb3QCount", "_sb3Completed", "SBV2_EXCLUDE_NAME", "sbv2WalkPunch", "SBV2_TEST_JOB"]
+const HELPERS = ["_sb3lc", "_sb3QCount", "_sb3Completed", "SBV2_EXCLUDE_NAME", "sbv2WalkPunch", "SBV2_TEST_JOB", "punchStamp"]
   .map(extractConst)
   .join("\n");
 
@@ -295,7 +295,7 @@ const RENDER_BITS =
 // first.
 const combined =
   HELPERS + "\n" + MAIN + "\n" + RENDER_BITS +
-  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4Shrink, sb4JobComplete, _sb4HasPhoto, NORM, overallOf, marginNote, deriveQcVerdict, qcStrandedItems });\n";
+  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4Shrink, sb4JobComplete, _sb4HasPhoto, NORM, overallOf, marginNote, deriveQcVerdict, qcStrandedItems, punchStamp });\n";
 
 let extracted;
 try {
@@ -306,7 +306,7 @@ try {
   console.error("  " + e.message);
   process.exit(1);
 }
-const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4Shrink, sb4JobComplete, _sb4HasPhoto, NORM, overallOf, marginNote, deriveQcVerdict, qcStrandedItems } = extracted;
+const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4Shrink, sb4JobComplete, _sb4HasPhoto, NORM, overallOf, marginNote, deriveQcVerdict, qcStrandedItems, punchStamp } = extracted;
 
 // TASK 7R: NORM is now a factory (`c => ({margin,qc,handoff,app})`), not a
 // plain object — it needs an explicit cfg, the same way sb4Agg/sb4Build do.
@@ -1336,6 +1336,47 @@ const e2eFa = e2e.find(r => r.name === "Fa");
 assertEq(e2eFa.margin, 60, "end-to-end: sb4Build still reports Fa's real 60% median");
 assertEq(e2eFa.marginScore, 35, "end-to-end: sb4Build applies shrinkage on the way out (same 35 the helper produced) — the filter-then-shrink order holds");
 assertTrue(sb4Build(e2eJobs, "foremen", e2eUsers, sb4Config({ marginPriorJobs: 0 })).find(r => r.name === "Fa").marginScore === 60, "end-to-end: the dial reaches all the way through sb4Build");
+
+console.log("\n── 15. punchStamp: the creation stamp every punch item now carries ──");
+// Koy, 2026-08-11: punch items must become time-filterable. Before this, only
+// QC-walk and GC-portal items carried a creation date — 95% of those, against
+// 2% of ordinary punch items, because commitAdd recorded WHO but never WHEN.
+const stamp = punchStamp();
+assertTrue(/^\d{4}-\d{2}-\d{2}$/.test(stamp.addedAt), "addedAt is YYYY-MM-DD", `got ${JSON.stringify(stamp.addedAt)}`);
+assertTrue(!isNaN(Date.parse(stamp.addedAtTs)), "addedAtTs parses as a real date", `got ${JSON.stringify(stamp.addedAtTs)}`);
+assertTrue(stamp.addedAtTs.startsWith(stamp.addedAt) || Math.abs(Date.parse(stamp.addedAtTs) - Date.parse(stamp.addedAt)) < 36e5 * 30, "the two fields describe the SAME moment (addedAtTs is the precise twin of addedAt, not an unrelated clock)", `${stamp.addedAt} vs ${stamp.addedAtTs}`);
+assertEq(Object.keys(stamp).sort(), ["addedAt", "addedAtTs"], "punchStamp emits exactly the two fields — a third key would silently ride into every punch item in the app");
+
+// THE FORMAT GATE. The Friday Packet stuck-item check compares addedAt as a
+// STRING against a YMD cutoff: `if(item.addedAt > stuckCutoff) return`. A
+// locale "8/11/2026" sorts ABOVE any "2026-.." cutoff because "8" > "2", so
+// such an item is skipped forever and can never be reported as stuck. That is
+// a live bug today on job-note promotions, which stamped toLocaleDateString.
+// If anyone ever "tidies" punchStamp into a locale or ISO-with-time format,
+// this block is what catches it.
+const ymdDaysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const cutoff7 = ymdDaysAgo(7);
+assertTrue(stamp.addedAt > cutoff7, "a stamp made TODAY string-compares as newer than a 7-day-ago cutoff — so a fresh item is correctly NOT flagged stuck", `${stamp.addedAt} vs ${cutoff7}`);
+assertTrue(ymdDaysAgo(30) < cutoff7, "a 30-day-old stamp string-compares as older than the cutoff — so it IS flagged stuck; the ordering works in both directions", `${ymdDaysAgo(30)} vs ${cutoff7}`);
+const localeForm = new Date().toLocaleDateString("en-US");
+assertTrue(localeForm > cutoff7 && ymdDaysAgo(400) < cutoff7, "regression witness: the OLD locale format sorts above the cutoff too — but so does a 400-day-old locale date, which is exactly why it silently disabled the check", `locale ${localeForm}`);
+assertTrue(!/^\d{1,2}\//.test(stamp.addedAt), "punchStamp must NEVER emit M/D/YYYY — that form defeats the stuck-item string comparison for every item that carries it", `got ${stamp.addedAt}`);
+
+// Source-level coverage: every stored punch-item construction site stamps.
+// A behavioural test cannot reach these (they are inside React event handlers
+// across a dozen components), so the source text is the gate.
+const stampSites = (src.match(/\.\.\.punchStamp\(\)/g) || []).length;
+assertTrue(stampSites >= 10, `all punch creation paths call punchStamp (found ${stampSites}, expected >= 10)`, `found ${stampSites}`);
+// Exactly one `addedAt: now` may remain, and it must be the QUESTIONS promote
+// (questions are a different data type with their own ISO `now` — they are not
+// punch items and are not read by the stuck-item check). Any other survivor
+// means a `const now` removal left a dangling reference, which is precisely the
+// mistake made while writing this change.
+const addedAtNowSites = (src.match(/addedAt:\s*now\b/g) || []).length;
+assertEq(addedAtNowSites, 1, "exactly one `addedAt: now` remains in the source");
+const nowIdx = src.indexOf("addedAt: now");
+assertTrue(/\bquestion\s*:/.test(src.slice(nowIdx - 400, nowIdx + 200)), "…and the survivor is the QUESTIONS promote, not a punch site with a dangling `now` after the toLocaleDateString removals", src.slice(nowIdx - 120, nowIdx + 60).replace(/\s+/g, " "));
+assertTrue(!src.includes("addedAt: new Date().toLocaleDateString"), "no punch site stamps addedAt with toLocaleDateString any more — the format that broke the stuck check is gone");
 
 console.log("");
 if (failures) {

@@ -5300,6 +5300,33 @@ const toYMD = (str) => {
   return `${yr}-${mo.padStart(2,"0")}-${dy.padStart(2,"0")}`;
 };
 
+// punchStamp — the CREATION stamp every punch item gets (2026-08-11). Koy asked
+// for punch items to become time-filterable; before this, only QC-walk and
+// GC-portal items carried `addedAt` — 95% of those, against 2% of ordinary
+// punch items, because `commitAdd` recorded WHO added an item but never WHEN.
+//
+// Two fields, mirroring the checkedAt / checkedAtTs pair already established on
+// these same items:
+//   addedAt   "2026-08-11"                human, and safe to render raw (several
+//                                         surfaces print it with no formatting)
+//   addedAtTs "2026-08-11T20:15:30.123Z"  machine, precise — read this for any
+//                                         real computation
+//
+// addedAt MUST stay YYYY-MM-DD. The Friday Packet's stuck-item check compares
+// it as a STRING against a YMD cutoff (`if(item.addedAt > stuckCutoff) return`),
+// so a locale "8/11/2026" sorts as greater than any "2026-.." cutoff and the
+// item silently stops being flagged forever. That bug is live today on job-note
+// promotions, which stamped toLocaleDateString; this helper is what fixes it.
+// ISO also compares correctly there (it is YMD-prefixed), which is why the
+// GC-portal path was never affected.
+const punchStamp = () => {
+  const d = new Date();
+  return {
+    addedAt: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+    addedAtTs: d.toISOString(),
+  };
+};
+
 // Format any date string for display as M/D/YYYY
 const fmtDisplay = (str) => {
   if(!str) return "";
@@ -7252,7 +7279,6 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
     // for surgical A2 un-promote (remove just THIS line's punch item, not
     // the whole group).
     const creator = (getIdentity && getIdentity()) || null;
-    const now = new Date().toLocaleDateString('en-US');
     const itemIdByLineId = {};
     const newItems = selectedLines.map(l => {
       const newId = uid();
@@ -7262,7 +7288,9 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
         text: jobNotePlain(l.text) || (l.text || ''),
         done: false,
         addedBy: creator?.name || '',
-        addedAt: now,
+        // was toLocaleDateString('en-US') — see punchStamp: the locale form
+        // silently defeated the Friday Packet stuck-item string comparison.
+        ...punchStamp(),
         photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [], // copy by reference-safe clone
         // Materials follow the line to Punch so the crew sees what to bring.
         // Stored on the punch item as a string array; punch UI can render them
@@ -7470,7 +7498,6 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
   const entryIdByLineIdRef = useRef({});
 
   const buildPunchEntries = () => {
-    const now = new Date().toLocaleDateString('en-US');
     const creator = (getIdentity && getIdentity()) || null;
     entryIdByLineIdRef.current = {};
     return selectedLines.map(l => {
@@ -7481,7 +7508,10 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
         text: jobNotePlain(l.text) || (l.text || ''),
         done: false,
         addedBy: creator?.name || '',
-        addedAt: now,
+        // was toLocaleDateString('en-US') — a live bug: "8/11/2026" sorts above
+        // any "2026-.." cutoff, so the Friday Packet stuck-item check silently
+        // skipped every job-note promotion. punchStamp emits YYYY-MM-DD.
+        ...punchStamp(),
         photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [],
         fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
       };
@@ -9860,7 +9890,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
   const commitAdd = (html, keepOpen=false, materialOverride=undefined, matSourceOverride=undefined) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
     const who = getIdentity();
-    const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"" };
+    const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"", ...punchStamp() };
     const mat = (materialOverride !== undefined ? materialOverride : addMaterial) || "";
     const src = (matSourceOverride !== undefined ? matSourceOverride : addMatSource) || "";
     if (mat.trim()) {
@@ -11050,11 +11080,11 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
     if(!txt) return;
     const floorKey = addFloor;
     const floor = getFloor(floorKey);
-    // addedAt is ISO (YYYY-MM-DD) so the Scoreboard date range can filter QC counts.
+    // addedAt/addedAtTs come from the shared punchStamp helper — the same
+    // YYYY-MM-DD this path already produced, now with the machine-precise twin
+    // beside it, and identical to every other punch creation path.
     // Legacy items from before this shipped won't have it — Scoreboard treats those as "always in range".
-    const _now = new Date();
-    const _addedAt = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,"0")}-${String(_now.getDate()).padStart(2,"0")}`;
-    const newItem = { id:uid(), text:txt, done:false, fromQC:true, addedBy:getIdentity()?.name||"", addedAt:_addedAt };
+    const newItem = { id:uid(), text:txt, done:false, fromQC:true, addedBy:getIdentity()?.name||"", ...punchStamp() };
     let newFloor;
     if(addTarget==='general') {
       newFloor = {...floor, general:[...floor.general, newItem]};
@@ -13276,6 +13306,7 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
           done: src.done,
           originItemId: src.id,
           originPhase: src.phase,
+          ...punchStamp(), // when the LINK was made; the source item keeps its own stamp
         });
       }
     });
@@ -25886,7 +25917,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   ...r, fromInspection: "rough",
                                 }));
                                 const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",
-                                  punch:allItems.map(x=>({id:uid(),text:x.text,done:!!x.done,
+                                  punch:allItems.map(x=>({id:uid(),text:x.text,done:!!x.done,...punchStamp(),
                                     // Backlink so any future edits to this
                                     // RT punch item can be mirrored to the
                                     // source 4-way item by id.
@@ -26196,7 +26227,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   ...r, fromInspection: "final",
                                 }));
                                 const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",
-                                  punch:open.map(x=>({id:uid(),text:x.text,done:false})),
+                                  punch:open.map(x=>({id:uid(),text:x.text,done:false,...punchStamp()})),
                                   photos:reports,
                                   assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                                   needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
@@ -27458,6 +27489,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             severity: x.severity, // carry serious/minor onto the RT clone
                             originItemId: x.id,
                             originPhase: x.__phase,
+                            ...punchStamp(), // when the RT clone was made, not the source item
                             photos: Array.isArray(x.photos) ? x.photos.slice() : [],
                             materialNeeded: x.materialNeeded||"",
                             materialSource: x.materialSource||"",
@@ -27572,7 +27604,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
                           (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
                         });
-                        const newRT={id:uid(),date:"",scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
+                        const newRT={id:uid(),date:"",scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,...punchStamp(),photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
                         patch.returnTrips=[...(job.returnTrips||[]),newRT];
                         toast.success(`${v==="fail"?"Finish QC Fail":"Finish QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
                       }
@@ -27669,6 +27701,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             severity:x.severity, // carry serious/minor onto the RT clone
                             originItemId:x.id,
                             originPhase:x.__phase,
+                            ...punchStamp(), // when the RT clone was made, not the source item
                             photos:Array.isArray(x.photos)?x.photos.slice():[],
                             materialNeeded:x.materialNeeded||"",
                             materialSource:x.materialSource||"",
@@ -42149,7 +42182,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
         const rp = job.roughPunch ? { ...job.roughPunch } : {};
         const main = rp.main ? { ...rp.main } : { rooms: [], general: [], hotcheck: [] };
         main.general = (Array.isArray(main.general) ? [...main.general] : []).concat({
-          id: uid(), text: req.text || "(see attached photo)", done: false, fromGC: true, addedBy: who, addedAt: new Date().toISOString(),
+          id: uid(), text: req.text || "(see attached photo)", done: false, fromGC: true, addedBy: who, ...punchStamp(),
           ...(gcPhotos.length ? { photos: gcPhotos } : {}),
         });
         rp.main = main;
@@ -45076,7 +45109,7 @@ function PunchSharePage({ jobId, stage }) {
               id: Math.random().toString(36).slice(2)+Date.now().toString(36),
               text,
               addedBy: myLabel,
-              addedAt: new Date().toLocaleDateString('en-US'),
+              ...punchStamp(), // was toLocaleDateString — same format bug as the job-note paths
               done: false, checkedBy: '', checkedAt: '',
             };
             await updateDoc(doc(db,'jobs',jobId), {
