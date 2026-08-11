@@ -96,6 +96,22 @@
  * anything — the QC tab renders its result as a confirmable suggestion, the
  * walker still picks the real value by hand.
  *
+ * TASK 5 FIX ROUND 1 (2026-08-10) — deriveQcVerdict gained an optional
+ * `phase` param ("rough" | "finish" | omitted). Review finding: the two QC
+ * tab suggestion chips both called the WHOLE-JOB deriveQcVerdict(job) with
+ * no phase attribution, so a job walked on ONE phase only could make the
+ * OTHER (never-walked) phase's chip suggest — and a single click WRITE — a
+ * verdict for a walk that hadn't happened. Phase mode walks ONLY that
+ * phase's own tree (roughPunch or finishPunch) and DELIBERATELY EXCLUDES
+ * qcPunch (a shared "Legacy QC Items" tree with no rough/finish attribution
+ * — attributing it to both phases is exactly the class of bug this mode
+ * exists to prevent). Phase omitted still walks all three trees exactly as
+ * before — an explicitly required non-regression, since later tasks and any
+ * other existing caller depend on that exact contract. Block 9 below proves
+ * both the new phase-scoped behavior (including the qcPunch-exclusion, via
+ * jobD's qcPunch-only serious item being invisible to EITHER phase call) and
+ * that whole-job mode is byte-for-byte unchanged.
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -594,10 +610,76 @@ const jobH = { id: "h", name: "Fixture H", foreman: "T",
   finishPunch: { main: { general: [ { id: "h2", text: "serious", fromQC: true, severity: "serious" } ] } } };
 assertEq(deriveQcVerdict(jobH), "fail", "deriveQcVerdict(jobH): minor in roughPunch + serious in finishPunch -> fail (union across all three trees)");
 
+// New fixture — the reviewer's missing case: a SERIOUS item isolated in roughPunch only (no
+// finishPunch, no qcPunch). jobH above proves rough contributes to a cross-tree UNION; this
+// proves rough's own serious detection in isolation, mirroring jobB2 (finish-only serious) and
+// jobD (qcPunch-only serious) which already had isolated coverage.
+const jobI = { id: "i", name: "Fixture I", foreman: "T",
+  roughPunch: { main: { general: [ { id: "i1", text: "serious", fromQC: true, severity: "serious" } ] } } };
+assertEq(deriveQcVerdict(jobI), "fail", "deriveQcVerdict(jobI): roughPunch-only serious item -> fail (isolated proof, not just via cross-tree union like jobH)");
+
+console.log("\n── 9. TASK 5 FIX ROUND 1: deriveQcVerdict(job, phase) — phase-scoped mode ──");
+// Review finding (Important): both QC-tab suggestion chips called the WHOLE-JOB
+// deriveQcVerdict(job) with no phase attribution, so a job walked on ONE phase only
+// could make the OTHER (never-walked) phase's chip suggest — and one click WRITE —
+// a verdict for a walk that never happened. Fix: deriveQcVerdict(job, "rough"|"finish")
+// walks ONLY that phase's own tree; qcPunch is excluded from phase mode entirely (see
+// the comment on deriveQcVerdict's definition for why). These assertions are the ones
+// the review explicitly asked for, plus the missing rough-only-serious fixture (jobI,
+// added above) exercised in both phase-scoped directions for symmetry with jobA/jobB2.
+
+// Required test 1 — minor items ONLY in roughPunch (jobA: no finishPunch key at all).
+// The FINISH phase has zero evidence of its own and must derive "pass" (not leak
+// rough's "passed_items"); the ROUGH phase must still derive "passed_items".
+assertEq(deriveQcVerdict(jobA, "finish"), "pass", "deriveQcVerdict(jobA,\"finish\"): jobA has no finishPunch at all -> pass (no cross-phase leak from rough's minor item)");
+assertEq(deriveQcVerdict(jobA, "rough"), "passed_items", "deriveQcVerdict(jobA,\"rough\"): rough's own 1 minor item -> passed_items");
+
+// Required test 2 — a serious item ONLY in finishPunch (jobB2: no roughPunch key at all).
+// The ROUGH phase has zero evidence and must derive "pass"; FINISH must derive "fail".
+// This is the EXACT failure mode from the review: pre-fix, the rough chip would have
+// shown "Suggested: QC Fail" driven entirely by a finish walk that already happened,
+// or (as reported) the reverse — a rough walk's evidence leaking onto an unwalked finish.
+assertEq(deriveQcVerdict(jobB2, "rough"), "pass", "deriveQcVerdict(jobB2,\"rough\"): jobB2 has no roughPunch at all -> pass (no cross-phase leak from finish's serious item)");
+assertEq(deriveQcVerdict(jobB2, "finish"), "fail", "deriveQcVerdict(jobB2,\"finish\"): finish's own serious item -> fail");
+
+// jobI (rough-only serious, added above) exercised the other direction for symmetry:
+// rough sees its own serious item, finish (no finishPunch key) sees nothing.
+assertEq(deriveQcVerdict(jobI, "rough"), "fail", "deriveQcVerdict(jobI,\"rough\"): rough's own serious item -> fail");
+assertEq(deriveQcVerdict(jobI, "finish"), "pass", "deriveQcVerdict(jobI,\"finish\"): jobI has no finishPunch at all -> pass (no cross-phase leak from rough's serious item)");
+
+// Required test 3 — whole-job mode (phase omitted) is UNCHANGED. Re-run every existing
+// whole-job fixture from block 8 above, explicitly passing `undefined` as the second arg
+// this time (rather than simply omitting it, as block 8 did) to prove the default
+// parameter path is truly identical either way. jobD is the qcPunch-only fixture — it
+// MUST still derive from qcPunch when no phase is given, exactly as block 8 already
+// pinned; restating it here answers the review's explicit ask directly rather than just
+// pointing back at block 8.
+assertEq(deriveQcVerdict(jobA, undefined), deriveQcVerdict(jobA), "deriveQcVerdict(jobA, undefined) === deriveQcVerdict(jobA): default phase param is a true no-op");
+assertEq(deriveQcVerdict(jobB, undefined), deriveQcVerdict(jobB), "deriveQcVerdict(jobB, undefined) === deriveQcVerdict(jobB): default phase param is a true no-op");
+assertEq(deriveQcVerdict(jobB2, undefined), "fail", "deriveQcVerdict(jobB2, undefined): whole-job mode unchanged -> fail (same as block 8's deriveQcVerdict(jobB2))");
+assertEq(deriveQcVerdict(jobD, undefined), "fail", "deriveQcVerdict(jobD, undefined): qcPunch-only fixture STILL derives from qcPunch in whole-job mode -> fail (unchanged contract)");
+assertEq(deriveQcVerdict(jobE, undefined), "passed_items", "deriveQcVerdict(jobE, undefined): whole-job mode unchanged -> passed_items (same as block 8's deriveQcVerdict(jobE))");
+assertEq(deriveQcVerdict(jobH, undefined), "fail", "deriveQcVerdict(jobH, undefined): whole-job cross-tree union unchanged -> fail (same as block 8's deriveQcVerdict(jobH))");
+
+// Required test 4 — voided items still ignored in PHASE mode, not just whole-job mode.
+// jobE: roughPunch has one voided serious item + one live minor item, no finishPunch.
+// The voided item must not flip rough's verdict to "fail" — only the live minor counts.
+assertEq(deriveQcVerdict(jobE, "rough"), "passed_items", "deriveQcVerdict(jobE,\"rough\"): voided serious item ignored in phase mode too -> passed_items (only the live minor item counts)");
+assertEq(deriveQcVerdict(jobE, "finish"), "pass", "deriveQcVerdict(jobE,\"finish\"): jobE has no finishPunch at all -> pass");
+
+// qcPunch exclusion from phase mode, proven directly — jobD's qcPunch-only serious item
+// (which whole-job mode DOES pick up, per the "unchanged contract" assertion above) must
+// NOT be visible to EITHER phase-scoped call, since qcPunch has no rough/finish
+// attribution of its own. This is the core of the fix: qcPunch is what would otherwise
+// leak a "fail" onto whichever phase's chip happened to render, even with rough AND
+// finish both genuinely unwalked.
+assertEq(deriveQcVerdict(jobD, "rough"), "pass", "deriveQcVerdict(jobD,\"rough\"): jobD's serious item lives in qcPunch, NOT roughPunch -> pass (qcPunch excluded from phase mode)");
+assertEq(deriveQcVerdict(jobD, "finish"), "pass", "deriveQcVerdict(jobD,\"finish\"): same qcPunch item, NOT finishPunch -> pass (qcPunch excluded from phase mode)");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("sb4-dryrun ok (Task 1R/2R/3R/5)");
+console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1)");
 process.exit(0);

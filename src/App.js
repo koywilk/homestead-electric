@@ -27094,7 +27094,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
               {(()=>{
                 const qcDef = getStatusDef(QC_STATUSES, job.qcStatus||"");
-                // Task 5: derive what this walk's own fromQC items say the verdict
+                // Task 5: derive what THIS PHASE's own fromQC items say the verdict
                 // should be, and offer it as a one-click SUGGESTION when nothing
                 // final has been recorded yet ("" / "needs" / "scheduled" — same
                 // pre-verdict set the auto-fixed-transition effect above treats as
@@ -27102,8 +27102,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // fail) or a downstream state (fixed/completed) is already on record
                 // — this is a suggestion engine, not an override of a decision someone
                 // already made.
-                const derivedQc = deriveQcVerdict(job);
-                const suggestQc = ["", "needs", "scheduled"].includes(job.qcStatus||"");
+                //
+                // FIX ROUND 1 (2026-08-10): phase-scoped, NOT the whole-job verdict.
+                // deriveQcVerdict(job) alone would let ROUGH's items suggest a verdict
+                // for FINISH (and vice versa) even when finish had never been walked —
+                // one click on the finish chip would then record finishQcStatus as
+                // concluded before anyone performed that walk. deriveQcVerdict(job,
+                // "rough") walks ONLY job.roughPunch, so this chip can only ever be
+                // driven by rough's own evidence. The `derivedQc !== "pass"` half of
+                // the gate is what actually prevents the bad write: deriveQcVerdict
+                // returns "pass" for a phase ONLY when that phase has zero live fromQC
+                // items, so "not pass" here means "rough genuinely has evidence to
+                // suggest from" — a phase with nothing called gets no chip at all, the
+                // manual select is all that shows, exactly as before this feature.
+                const derivedQc = deriveQcVerdict(job, "rough");
+                const suggestQc = ["", "needs", "scheduled"].includes(job.qcStatus||"") && derivedQc !== "pass";
                 const sugQcDef = getStatusDef(QC_STATUSES, derivedQc);
                 // Extracted verbatim from the select's old inline onChange so the
                 // suggestion chip below can trigger the EXACT same write (RT
@@ -27204,12 +27217,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {/* FINISH QC STATUS — parallel to rough; auto-flips to "needs" when finish stage advances. */}
               {(()=>{
                 const fDef = getStatusDef(QC_STATUSES, job.finishQcStatus||"");
-                // Task 5 — same suggestion treatment as the rough picker above, same
-                // whole-job derived verdict (deriveQcVerdict has no rough/finish split;
-                // see the interface note beside its definition), gated on THIS field
-                // (finishQcStatus) being in a pre-verdict state.
-                const derivedQc = deriveQcVerdict(job);
-                const suggestFQc = ["", "needs", "scheduled"].includes(job.finishQcStatus||"");
+                // Task 5 — same suggestion treatment as the rough picker above.
+                // FIX ROUND 1 (2026-08-10): phase-scoped, NOT the whole-job verdict —
+                // deriveQcVerdict(job, "finish") walks ONLY job.finishPunch, so this
+                // chip can only ever be driven by FINISH's own evidence, never rough's
+                // (or qcPunch's). See the long comment beside the rough picker above
+                // for the full failure mode this fixes, and the comment on
+                // deriveQcVerdict's definition for why qcPunch is excluded from phase
+                // mode. `derivedQc !== "pass"` gates out phases with zero fromQC items
+                // of their own — no evidence, no chip, manual select only.
+                const derivedQc = deriveQcVerdict(job, "finish");
+                const suggestFQc = ["", "needs", "scheduled"].includes(job.finishQcStatus||"") && derivedQc !== "pass";
                 const sugFQcDef = getStatusDef(QC_STATUSES, derivedQc);
                 // Extracted verbatim from the select's old inline onChange so the
                 // suggestion chip below can trigger the EXACT same write (RT
@@ -39857,23 +39875,38 @@ const sb4JobComplete = (j) => {
   return [punch > 0, updates > 0, questions > 0, _sb4HasPhoto(j, 0)].filter(Boolean).length / 4;
 };
 // deriveQcVerdict (Task 5) — the middle QC verdict derives itself instead of
-// making a walker judge severity by hand. Walks the SAME three punch trees
-// sb4Agg scores below ([roughPunch, finishPunch, qcPunch]) via the shared
-// sbv2WalkPunch helper, counting only LIVE (non-voided) fromQC items — a
-// voided item is treated as if it never existed, same as everywhere else in
-// this file. No fromQC items anywhere => "pass" (clean walk, nothing called).
+// making a walker judge severity by hand. Counts only LIVE (non-voided)
+// fromQC items via the shared sbv2WalkPunch helper — a voided item is
+// treated as if it never existed, same as everywhere else in this file. No
+// fromQC items in the walked tree(s) => "pass" (clean walk, nothing called).
 // Any item with severity==="serious" => "fail" (unchanged meaning — a single
-// serious item fails the whole job, mirroring sb4Agg's own scoring rule just
+// serious item fails the walk, mirroring sb4Agg's own scoring rule just
 // below). Otherwise (>=1 item, none serious) => "passed_items" — the new
-// middle verdict. Whole-job, not phase-scoped: rough/finish/qcPunch all feed
-// ONE verdict, by the brief's exact interface — the QC tab's rough AND
-// finish pickers both offer this SAME derived value as their suggestion (see
-// the two "Suggested: ..." chips in the tab==="QC" block), not a
-// rough-only/finish-only variant. Pure — no defaults, no Firestore read/write
-// — so it's safe to call from render on every keystroke of a live walk.
-const deriveQcVerdict = (job) => {
+// middle verdict.
+//
+// Two modes, selected by the optional `phase` param:
+//   - phase omitted (default — UNCHANGED CONTRACT, later tasks and any other
+//     existing caller depend on this exact shape): walks all THREE punch
+//     trees sb4Agg scores below ([roughPunch, finishPunch, qcPunch]) into one
+//     whole-job verdict, exactly as this function has always worked.
+//   - phase === "rough" | "finish" (Task 5 fix round 1, 2026-08-10): walks
+//     ONLY that phase's own tree (roughPunch or finishPunch respectively).
+//     `qcPunch` is DELIBERATELY EXCLUDED from phase-scoped mode — it's the
+//     "Legacy QC Items" tree, shared with no rough/finish attribution of its
+//     own, and attributing it to BOTH phases is exactly what caused the bug
+//     this mode exists to fix: a phase that was never walked could still
+//     inherit a verdict from a DIFFERENT phase's (or qcPunch's) evidence. The
+//     QC tab's two per-phase suggestion chips call this mode so each chip's
+//     suggestion — and its very visibility — is driven only by that phase's
+//     own items, never leaking evidence across phases or through qcPunch.
+// Pure — no defaults, no Firestore read/write — so it's safe to call from
+// render on every keystroke of a live walk.
+const deriveQcVerdict = (job, phase) => {
+  const trees = phase === "rough" ? [job && job.roughPunch]
+    : phase === "finish" ? [job && job.finishPunch]
+    : [job && job.roughPunch, job && job.finishPunch, job && job.qcPunch];
   let hasItem = false, hasSerious = false;
-  [job && job.roughPunch, job && job.finishPunch, job && job.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
+  trees.forEach(pp => sbv2WalkPunch(pp, it => {
     if (!it || it.voided || !it.fromQC) return;
     hasItem = true;
     if (it.severity === "serious") hasSerious = true;
