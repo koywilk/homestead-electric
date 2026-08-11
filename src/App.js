@@ -39715,10 +39715,31 @@ const _sb4Num = (v) => (typeof v === "number" && isFinite(v)) ? v : null;
 const _sb4Special = (name) => /phase|temp power|temp p\b|t&m|ev charger|light change|whip|\bstc\b/i.test(String(name || ""));
 const _sb4Median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2 * 10) / 10; };
 const _sb4Stage = (j) => _sb3Completed(j) ? "final" : Number(j.finishStage) > 0 ? "finish" : (_sb3lc(j.roughStatus) === "complete" || Number(j.roughStage) >= 100) ? "rough done" : "rough";
+// Module-scope twin of the component's `clamp` (declared inside ScoreboardV4,
+// out of reach here) — same 0-1 clamp, used by sb4Agg's app blend below.
+const _sb4Clamp = (v) => Math.max(0, Math.min(1, v));
+// Presence, not volume — that is what makes it size-proof and un-farmable.
+// Temp peds / quick jobs are excluded: nobody posts dailies on a temp ped, and
+// counting them unfairly drags foremen who carry lots of small work.
+const _sb4HasPhoto = (o, depth) => {
+  if (!o || depth > 6) return false;
+  if (Array.isArray(o)) return o.some(x => _sb4HasPhoto(x, depth + 1));
+  if (typeof o !== "object") return false;
+  if (typeof o.url === "string" && typeof o.storagePath === "string") return true;
+  return Object.values(o).some(v => _sb4HasPhoto(v, depth + 1));
+};
+const sb4JobComplete = (j) => {
+  if (!j || j.tempPed || j.quickJob) return null;
+  let punch = 0;
+  [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pp => sbv2WalkPunch(pp, (it) => { if (it && !it.voided && !it.fromQC) punch++; }));
+  const updates = (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
+  const questions = _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
+  return [punch > 0, updates > 0, questions > 0, _sb4HasPhoto(j, 0)].filter(Boolean).length / 4;
+};
 const sb4Agg = (js, cfg) => {
   const c = cfg || sb4Config(null);
   const marg = [], live = [], qcScores = [];
-  let qcSeriousWalks = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0;
+  let qcSeriousWalks = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0, compSum = 0, compCount = 0;
   js.forEach(j => {
     const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
     if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
@@ -39744,8 +39765,15 @@ const sb4Agg = (js, cfg) => {
     }
     updates += (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
     questions += _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
+    const comp = sb4JobComplete(j); // null for tempPed/quickJob — excluded from the completeness average, not scored as 0
+    if (comp != null) { compSum += comp; compCount++; }
   });
   live.sort((a, b) => a.m - b.m);
+  const appVolume = punch + updates + questions;                 // raw total — same job set as before this task, for the stat card
+  const compAvg = compCount ? compSum / compCount : null;        // mean per-job completeness; null when nobody has an eligible job
+  const volume = _sb4Clamp(appVolume / c.appCap);
+  const mix = _sb4Clamp(c.appMix / 100);
+  const app = compAvg == null ? volume : (1 - mix) * volume + mix * compAvg; // blended 0-1 score; no eligible jobs => pure volume, never 0/crash
   return {
     jobs: js.length,
     margin: _sb4Median(marg), marginN: marg.length,
@@ -39754,7 +39782,7 @@ const sb4Agg = (js, cfg) => {
     qcMinorAvg: qcWalks ? Math.round(qcMinorSum / qcWalks * 10) / 10 : null,
     qcWalks,
     handoff: punch > 0 ? Math.round(openPunch / punch * 1000) / 10 : null,
-    app: punch + updates + questions,
+    app, appVolume, appComplete: compAvg == null ? null : Math.round(compAvg * 100), // app: 0-1 blended score (was raw total); appVolume: that raw total now; appComplete: 0-100 completeness % or null
     live: live.slice(0, 8),
   };
 };
@@ -39821,7 +39849,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   const rows = useMemo(() => sb4Build(windowedJobs, board, users), [windowedJobs, board, users]);
 
   const clamp = (v) => Math.max(0, Math.min(1, v));
-  const NORM = { margin: v => v == null ? null : clamp(v / 50), qc: v => v == null ? null : clamp(v), handoff: v => v == null ? null : clamp(1 - v / 20), app: v => v == null ? null : clamp(v / 2500) };
+  const NORM = { margin: v => v == null ? null : clamp(v / 50), qc: v => v == null ? null : clamp(v), handoff: v => v == null ? null : clamp(1 - v / 20), app: v => v == null ? null : clamp(v) };
   const overallOf = (r) => {
     let s = 0, wsum = 0;
     ["margin", "qc", "handoff", "app"].forEach(k => { const n = NORM[k](r[k]), wt = weights[k]; if (n != null && wt > 0) { s += n * wt; wsum += wt; } });
@@ -39937,7 +39965,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
               <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">typical job · goal {SB4_MARGIN_TARGET}%</div></div>
               <div className="stat"><div className="sl">Serious QC walks</div><div className="sv">{r.qcSeriousPct == null ? "—" : r.qcSeriousPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMinorAvg ?? "—"} minor items per walk</div></div>
               <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
-              <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.app}</div><div className="sh">punch + updates + questions</div></div>
+              <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.appVolume}</div><div className="sh">{r.appComplete ?? "—"}% of jobs fully tracked · more is better</div></div>
             </div>
           </div>
         ))}

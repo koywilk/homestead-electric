@@ -64,6 +64,25 @@
  * pinning it to the new number is the correct regression gate going
  * forward, not a weakening of it.
  *
+ * TASK 3R EXTENSION — per-job completeness blended into App Usage. `app`
+ * stops being a raw volume total (punch+updates+questions) and becomes a 0-1
+ * BLENDED score: `compAvg` — the mean of `sb4JobComplete(j)` (0-1, null for
+ * tempPed/quickJob jobs) across a person's completeness-eligible jobs — is
+ * blended against `clamp(appVolume/appCap)` by the admin-tunable `appMix`
+ * knob (0 = pure volume, 100 = pure completeness). Two new display fields
+ * ride along: `appVolume` (the untouched raw total over the SAME job set as
+ * before — the stat card's headline number) and `appComplete` (0-100 int or
+ * null — the stat card's sub-line). `sb4JobComplete`/`_sb4HasPhoto` are new
+ * module-scope consts declared beside `sb4Agg` — unlike `clamp`/`NORM` they
+ * need no separate extraction call, they simply fall inside the existing
+ * MAIN region slice — so block 7 below only needs to add them to the export
+ * object. Block 7 proves this task's own inversion trap: NORM.app must
+ * become the identity clamp `v => clamp(v)`, mirroring Task 2R's NORM.qc
+ * fix, because sb4Agg's `app` is now ALREADY a 0-1 "higher is better" score.
+ * Leaving the old `v => clamp(v / 2500)` formula in place would collapse
+ * every blended score toward zero (a 0.2512 blend would normalize to
+ * ~0.0001, i.e. "terrible").
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -161,7 +180,7 @@ const RENDER_BITS = ["clamp", "NORM"].map(extractConst).join("\n");
 // first.
 const combined =
   HELPERS + "\n" + MAIN + "\n" + RENDER_BITS +
-  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, NORM });\n";
+  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM });\n";
 
 let extracted;
 try {
@@ -172,7 +191,7 @@ try {
   console.error("  " + e.message);
   process.exit(1);
 }
-const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, NORM } = extracted;
+const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM } = extracted;
 
 // ─── FIXTURES (verbatim from the task brief) ───────────────────────────────
 const jobA = { id:"a", name:"Fixture A", foreman:"T", simproMargin: 20,
@@ -225,13 +244,19 @@ assertEq(row.jobs, 2, "row.jobs");
 assertEq(row.margin, 25, "row.margin (median of [20,30])");
 // Task 2R: qc's VALUE is intentionally different from the Task 1R baseline
 // (was raw count 1 = "2 items / 2 walks"; now a severity score — mean of two
-// 1-minor-item walks, 0.975 each). margin/handoff/app above and below are
+// 1-minor-item walks, 0.975 each). margin/handoff above and below are
 // untouched, still proving true non-regression.
 assertEq(row.qc, 0.975, "row.qc (Task 2R severity score: mean of two 1-minor walks = 0.975, not the old raw count)");
 assertEq(row.qcSeriousPct, 0, "row.qcSeriousPct survives sb4Build's spread (0 — no serious items in these fixtures)");
 assertEq(row.qcWalks, 2, "row.qcWalks survives sb4Build's spread (2 — both jobs had a QC walk)");
 assertEq(row.handoff, 75, "row.handoff (3 open / 4 punch * 100)");
-assertEq(row.app, 6, "row.app (punch 4 + updates 1 + questions 1)");
+// Task 3R: app's VALUE is likewise intentionally different from the Task 1R/2R
+// baseline (was the raw total 6; now a 0-1 blended score). That raw total
+// didn't disappear — it survives under its new name, appVolume, unchanged.
+// Full derivation of 0.2512 and the completeness math behind it is in block 7.
+assertEq(row.appVolume, 6, "row.appVolume (punch 4 + updates 1 + questions 1 — the old row.app, renamed and untouched)");
+assertEq(row.appComplete, 50, "row.appComplete survives sb4Build's spread (50 — see block 7 for the per-job math)");
+assertEq(row.app, 0.2512, "row.app (Task 3R blended score, not the old raw total — see block 7 for the full derivation)");
 
 console.log("\n── 3. DEFAULT PINNING (mutation-proof — reads SB4_DEFAULTS directly; nothing above this line ever touches it) ──");
 assertEq(SB4_DEFAULTS.weights.margin, 45, "SB4_DEFAULTS.weights.margin");
@@ -402,10 +427,112 @@ assertEq(NORM.qc(1), 1, "NORM.qc(1) === 1 — a perfect walk score stays perfect
 assertEq(NORM.qc(0), 0, "NORM.qc(0) === 0 — an all-serious score stays 0 (old formula would give clamp(1-0/8)=1, i.e. \"perfect\")");
 assertEq(NORM.qc(null), null, "NORM.qc(null) === null");
 
+console.log("\n── 7. TASK 3R: per-job completeness blended into App Usage (sb4JobComplete/_sb4HasPhoto/sb4Agg.app+appVolume+appComplete + NORM.app) ──");
+
+// sb4JobComplete: 4 presence checks / 4 — non-QC punch, updates, questions,
+// photo anywhere. Reuses the shared jobA/jobB fixtures from block 2 as-is
+// (read-only here — no mutation, block 2 still needs them unmodified).
+// jobA: p1 counts (no fromQC), p2 doesn't (fromQC:true) => 1 non-QC punch item.
+//   roughUpdates has 1, roughQuestions.main has 1, no photos anywhere.
+assertEq(sb4JobComplete(jobA), 0.75, "sb4JobComplete(jobA) = 3/4 (punch, updates, questions; no photo)");
+// jobB: p4 counts (no fromQC), p3 doesn't (fromQC:true) => 1 non-QC punch item.
+//   no roughUpdates/finishUpdates, no roughQuestions/finishQuestions, no photos.
+assertEq(sb4JobComplete(jobB), 0.25, "sb4JobComplete(jobB) = 1/4 (punch only)");
+
+// tempPed / quickJob exclusion — null, not 0, no matter how complete the job
+// otherwise looks (both fixtures below carry updates AND questions).
+const jobTP = { id: "tp", name: "Fixture TP", foreman: "T", tempPed: true,
+  roughUpdates: [{ text: "d" }], roughQuestions: { main: [{ question: "q" }] } };
+const jobQJ = { id: "qj", name: "Fixture QJ", foreman: "T", quickJob: true,
+  roughUpdates: [{ text: "d" }], roughQuestions: { main: [{ question: "q" }] } };
+assertEq(sb4JobComplete(jobTP), null, "sb4JobComplete(tempPed job) === null, regardless of how complete it otherwise looks");
+assertEq(sb4JobComplete(jobQJ), null, "sb4JobComplete(quickJob) === null, regardless of how complete it otherwise looks");
+
+// Photo detection — deliberately broad, recursive over the WHOLE job, not
+// just punch trees. Two placements per the brief, each a fresh deep clone of
+// jobB (not the shared fixture — block 2 needs jobB unmodified), so both
+// isolate a single added photo against jobB's known 1/4 baseline.
+const jobB_punchPhoto = JSON.parse(JSON.stringify(jobB));
+jobB_punchPhoto.finishPunch.main.general.find(it => it.id === "p4").photos = [{ url: "u", storagePath: "s" }];
+assertEq(sb4JobComplete(jobB_punchPhoto), 0.5, "photo on a punch item flips jobB's 4th check: 1/4 -> 2/4 = 0.5");
+
+const jobB_coPhoto = JSON.parse(JSON.stringify(jobB));
+jobB_coPhoto.changeOrders = [{ id: "co1", description: "x", photos: [{ url: "u", storagePath: "s" }] }];
+assertEq(sb4JobComplete(jobB_coPhoto), 0.5, "photo on a CO (outside any punch tree) also flips jobB's 4th check = 0.5 — detection is job-wide, not punch-only");
+
+// Depth cap — _sb4HasPhoto(o, depth) refuses to look past depth 6. Bury a
+// photo exactly at the depth-6 boundary (found) and one level past it
+// (depth 7, not found) to prove the cap's off-by-one edge directly, rather
+// than trusting the punch/CO placements above (both well within the cap) to
+// exercise it incidentally.
+let deepOK = { url: "u", storagePath: "s" };
+for (let i = 0; i < 6; i++) deepOK = { nest: deepOK };   // photo reachable at depth 6
+const deepTooFar = { nest: deepOK };                      // photo reachable at depth 7 — one past the cap
+assertEq(_sb4HasPhoto(deepOK, 0), true, "_sb4HasPhoto finds a photo nested exactly at the depth-6 boundary");
+assertEq(_sb4HasPhoto(deepTooFar, 0), false, "_sb4HasPhoto stops at depth 6 — one level deeper is NOT found (the cap is honored)");
+
+// appVolume — the SAME formula/job-set as the old raw `app` (ALL punch items
+// incl. fromQC, not sb4JobComplete's filtered non-QC-only count). Re-derives
+// the pre-Task-3R pinned value (was row.app === 6, block 2) under its new
+// name, proving volume's job set didn't change.
+const volAgg = sb4Agg([jobA, jobB]);
+assertEq(volAgg.appVolume, 6, "appVolume(jobA,jobB) = 6 (punch 4 [ALL punch items] + updates 1 + questions 1) — same total as the old raw `app`, unchanged job set");
+
+// compAvg = mean(0.75, 0.25) = 0.5 -> appComplete = round(0.5*100) = 50.
+assertEq(volAgg.appComplete, 50, "appComplete = round(compAvg*100) = 50 (mean of jobA 0.75 and jobB 0.25)");
+
+// Blend at the default appMix (50): app = 0.5*clamp(appVolume/appCap) + 0.5*compAvg.
+assertEq(volAgg.app, 0.2512, "app @ default appMix 50 = 0.5*clamp(6/2500) + 0.5*0.5 = 0.0012 + 0.25 = 0.2512");
+
+// appMix 0 => pure volume — EXACT match to what `app` used to mean pre-Task-3R
+// (clamp(appVolume/appCap)), the volume-only regression the brief calls out.
+const mix0Agg = sb4Agg([jobA, jobB], sb4Config({ appMix: 0 }));
+assertEq(mix0Agg.app, mix0Agg.appVolume / 2500, "appMix 0: app === clamp(appVolume/appCap) exactly (volume-only regression)");
+
+// appMix 100 => pure completeness — compAvg exactly, volume plays no part.
+const mix100Agg = sb4Agg([jobA, jobB], sb4Config({ appMix: 100 }));
+assertEq(mix100Agg.app, 0.5, "appMix 100: app === compAvg exactly = 0.5 (completeness-only)");
+
+// tempPed exclusion from compAvg — adding jobTP (updates+questions both
+// present, but excluded by tempPed) alongside jobA/jobB must NOT move
+// compAvg/appComplete at all, though it DOES still add to appVolume (the
+// raw total's job set is unchanged by this task, per the brief).
+const withTPAgg = sb4Agg([jobA, jobB, jobTP]);
+assertEq(withTPAgg.appComplete, 50, "adding a tempPed job doesn't move appComplete — it's excluded from compAvg entirely");
+assertEq(withTPAgg.appVolume, 8, "but the tempPed job's own updates(1)+questions(1) DO still count toward appVolume (6 + 2 = 8) — volume's job set is unchanged");
+
+// Self-review — "does a foreman whose jobs are all temp peds still get a
+// sane score rather than a crash or a zero?" allTPAgg has ZERO
+// completeness-eligible jobs: compAvg must be null (not 0), and app must
+// fall back to pure volume (not 0, not null, not a crash).
+const allTPAgg = sb4Agg([jobTP]);
+assertEq(allTPAgg.appComplete, null, "all-tempPed aggregate: appComplete is null (zero eligible jobs, not zero-scored)");
+assertEq(allTPAgg.app, allTPAgg.appVolume / 2500, "all-tempPed aggregate: app falls back to pure volume (not 0, not null, not a crash)");
+assertTrue(allTPAgg.app > 0, "all-tempPed aggregate: app is a real positive number (jobTP has updates+questions, so appVolume>0)", `got ${allTPAgg.app}`);
+
+// Empty jobs list — no crash, sane null/0 defaults (mirrors the qc empty-list
+// checks in block 6 above).
+const emptyAgg = sb4Agg([]);
+assertEq(emptyAgg.appVolume, 0, "empty jobs list: appVolume is 0");
+assertEq(emptyAgg.appComplete, null, "empty jobs list: appComplete is null");
+assertEq(emptyAgg.app, 0, "empty jobs list: app is 0 (clamp(0/2500), compAvg null so pure volume)");
+
+// THE INVERSION TRAP. sb4Agg's app is now an already-normalized 0-1 "higher
+// is better" score, so NORM.app must be the IDENTITY clamp. If NORM.app were
+// still (or reverted to) the old raw-total formula `v => clamp(v / 2500)`,
+// this assertion catches it immediately and loudly:
+//   clamp(0.2512 / 2500) = clamp(0.00010048) ≈ 0.0001
+// — a blended score of 0.2512 would normalize to ~0.0001 ("terrible"),
+// exactly the inversion the brief flags as this task's highest-risk line.
+assertEq(NORM.app(0.2512), 0.2512, "NORM.app(0.2512) === 0.2512 — identity clamp, NOT v/2500 (the inversion trap)");
+assertEq(NORM.app(1), 1, "NORM.app(1) === 1 — a perfect blended score stays perfect (old formula would give clamp(1/2500)=0.0004)");
+assertEq(NORM.app(0), 0, "NORM.app(0) === 0");
+assertEq(NORM.app(null), null, "NORM.app(null) === null");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("task2R ok");
+console.log("task3R ok");
 process.exit(0);
