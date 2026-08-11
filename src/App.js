@@ -24677,7 +24677,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     // RTs are immutable.
     const nextTrips = (prev.returnTrips || []).map(rt => {
       if (!rt || rt.signedOff) return rt;
-      const isQCFail = typeof rt.scope === 'string' && rt.scope.startsWith('QC Fail');
+      // Task 6 (2026-08-10): flag-first, same as the dedupe checks in
+      // applyQcStatus/applyFinishQcStatus — a passed_items RT's scope ("QC
+      // Items — return trip") never matches the legacy "QC Fail" string
+      // prefix, so the string check alone would leave a stale clone of this
+      // voided item sitting in a passed_items RT forever.
+      const isQCFail = rt.fromQCFail === true || (typeof rt.scope === 'string' && rt.scope.startsWith('QC Fail'));
       if (!isQCFail) return rt;
       const nextRTPunch = (rt.punch || []).filter(p =>
         !(p && p.originItemId === itemId && p.originPhase === phase)
@@ -25488,7 +25493,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             {/* QC FAIL — loud pill so the status can't be missed at a glance. */}
             {/* Stays red until qcStatus moves off "fail" (e.g. back to "fixed" */}
-            {/* or "pass") and pairs with the auto-created return trip below.  */}
+            {/* or "pass"). Return trip is now a confirm choice (Task 6), not  */}
+            {/* automatic — this pill just reflects the verdict either way.   */}
             {job.qcStatus==="fail"&&(
               <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",
                 padding:"3px 10px",borderRadius:99,background:"#B23A3A",color:"#fff",
@@ -27395,61 +27401,85 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // Extracted verbatim from the select's old inline onChange so the
                 // suggestion chip below can trigger the EXACT same write (RT
                 // auto-create included) as picking the option by hand.
-                const applyQcStatus = (v) => {
+                const applyQcStatus = async (v) => {
                   const patch={qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""};
-                  // QC Fail → auto-create an unscheduled return trip if one
-                  // isn't already open. This is the bit that makes the fail
-                  // show up on the schedule (Unscheduled Return Trips
-                  // section) so it can't get forgotten. We gather every
-                  // open fromQC item from rough + finish punch across all
-                  // floors and seed them as the RT's punch list.
-                  if (v==="fail") {
-                    const existingQCFailRT = (job.returnTrips||[]).some(r =>
-                      !r.signedOff && typeof r.scope==="string" && r.scope.startsWith("QC Fail"));
-                    if (!existingQCFailRT) {
-                      const openQC = [];
-                      const grab = (punch, phase) => {
-                        if (!punch) return;
-                        const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-                          ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
-                        // Voided items are filtered out — they're no longer considered QC.
-                        allFloors.forEach(fl => {
-                          if (!fl) return;
-                          (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
-                          (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
-                          (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
-                        });
-                      };
-                      grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
-                      const newRT = {
-                        id:uid(), date:"", scope:"QC Fail — return trip needed",
-                        material:"",
-                        // Copy photos, materialNeeded/source, AND the source item
-                        // id onto each RT punch item so (a) crew can see the
-                        // pictures in context and (b) check-off syncs back to
-                        // the original fromQC entry in roughPunch/finishPunch.
-                        punch: openQC.map(x=>({
-                          id:uid(),
-                          text:x.text||"",
-                          done:false,
-                          fromQC:true,
-                          severity: x.severity, // carry serious/minor onto the RT clone
-                          originItemId: x.id,
-                          originPhase: x.__phase,
-                          photos: Array.isArray(x.photos) ? x.photos.slice() : [],
-                          materialNeeded: x.materialNeeded||"",
-                          materialSource: x.materialSource||"",
-                        })),
-                        photos:[], assignedTo:"",
-                        signedOff:false, signedOffBy:"", signedOffDate:"",
-                        needsSchedule:true, needsScheduleDate:"",
-                        rtScheduled:false, scheduledDate:"",
-                        rtStatus:"needs",
-                        fromQCFail:true,
-                      };
-                      patch.returnTrips=[...(job.returnTrips||[]), newRT];
-                      toast.success(`QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                  // Task 6 (2026-08-10): severity sets the VERDICT (fail vs passed
+                  // items); only a human on the ground knows site reality, so the
+                  // return trip is no longer auto-created — it's an explicit choice,
+                  // prompted for BOTH non-clean verdicts (not just fail, the whole
+                  // point of this redesign). Confirm builds the RT below (construction
+                  // unchanged from the old auto-create, just gated behind the prompt
+                  // and scope-per-verdict). Cancel means the crew on site has it —
+                  // that's a legitimate choice too, not an aborted action, so it still
+                  // records the choice and still writes the verdict.
+                  if (v==="fail" || v==="passed_items") {
+                    const makeRt = await showConfirm({
+                      title: v==="fail" ? "QC Fail — return trip needed?" : "QC Passed with Items — return trip needed?",
+                      message: "Severity set the verdict. Site reality sets the return trip: if nobody is coming back to this job, make it a return trip so the items can't get missed. If a crew is on site, they handle it in stride.",
+                      confirmLabel: "Create return trip",
+                      cancelLabel: "Crew on site has it",
+                      danger: false,
+                    });
+                    if (makeRt) {
+                      // Dedupe keys off the fromQCFail flag OR the legacy "QC Fail"
+                      // scope-string prefix (pre-Task-6 RTs predate the flag). String
+                      // alone would miss an open passed_items RT — its scope ("QC
+                      // Items — return trip") never starts with "QC Fail" — so both
+                      // verdicts now check the flag first.
+                      const existingQCFailRT = (job.returnTrips||[]).some(r =>
+                        r && !r.signedOff && (r.fromQCFail === true || (typeof r.scope==="string" && r.scope.startsWith("QC Fail"))));
+                      if (!existingQCFailRT) {
+                        const openQC = [];
+                        const grab = (punch, phase) => {
+                          if (!punch) return;
+                          const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+                            ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
+                          // Voided items are filtered out — they're no longer considered QC.
+                          allFloors.forEach(fl => {
+                            if (!fl) return;
+                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
+                            (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
+                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
+                          });
+                        };
+                        grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
+                        const newRT = {
+                          id:uid(), date:"", scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",
+                          material:"",
+                          // Copy photos, materialNeeded/source, AND the source item
+                          // id onto each RT punch item so (a) crew can see the
+                          // pictures in context and (b) check-off syncs back to
+                          // the original fromQC entry in roughPunch/finishPunch.
+                          punch: openQC.map(x=>({
+                            id:uid(),
+                            text:x.text||"",
+                            done:false,
+                            fromQC:true,
+                            severity: x.severity, // carry serious/minor onto the RT clone
+                            originItemId: x.id,
+                            originPhase: x.__phase,
+                            photos: Array.isArray(x.photos) ? x.photos.slice() : [],
+                            materialNeeded: x.materialNeeded||"",
+                            materialSource: x.materialSource||"",
+                          })),
+                          photos:[], assignedTo:"",
+                          signedOff:false, signedOffBy:"", signedOffDate:"",
+                          needsSchedule:true, needsScheduleDate:"",
+                          rtScheduled:false, scheduledDate:"",
+                          rtStatus:"needs",
+                          fromQCFail:true,
+                        };
+                        patch.returnTrips=[...(job.returnTrips||[]), newRT];
+                        toast.success(`${v==="fail"?"QC Fail":"QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                      }
                     }
+                    // Record the choice itself — additive fields, same u() patch as
+                    // the verdict so it's one Firestore write, not two racing the
+                    // debounced save funnel. See qcStrandedItems (module scope) for
+                    // the read-only safety net this choice feeds.
+                    patch.qcRtChoice = makeRt ? "rt" : "crew";
+                    patch.qcRtChoiceBy = identity?.name || "";
+                    patch.qcRtChoiceAt = new Date().toISOString();
                   }
                   u(patch);
                 };
@@ -27506,22 +27536,40 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // Extracted verbatim from the select's old inline onChange so the
                 // suggestion chip below can trigger the EXACT same write (RT
                 // auto-create included) as picking the option by hand.
-                const applyFinishQcStatus = (v) => {
+                const applyFinishQcStatus = async (v) => {
                   const patch={finishQcStatus:v,finishQcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.finishQcStatusDate:""};
-                  if(v==="fail"){
-                    const existing=(job.returnTrips||[]).some(r=>!r.signedOff&&typeof r.scope==="string"&&r.scope.startsWith("QC Fail"));
-                    if(!existing){
-                      const openQC=[];
-                      const fls=[...["upper","main","basement"].map(k=>job.finishPunch&&job.finishPunch[k]).filter(Boolean),...(((job.finishPunch&&job.finishPunch.extras)||[]).map(x=>x&&x.key?job.finishPunch[x.key]:null).filter(Boolean))];
-                      fls.forEach(fl=>{ if(!fl) return;
-                        (fl.general||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
-                        (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
-                        (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
-                      });
-                      const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
-                      patch.returnTrips=[...(job.returnTrips||[]),newRT];
-                      toast.success(`Finish QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                  // Task 6 (2026-08-10) — same redesign as the rough picker's
+                  // applyQcStatus above (see its comment for the full rationale):
+                  // return trip is now an explicit confirm choice, fired for BOTH
+                  // non-clean verdicts, recorded either way in the same patch.
+                  if(v==="fail" || v==="passed_items"){
+                    const makeRt = await showConfirm({
+                      title: v==="fail" ? "QC Fail — return trip needed?" : "QC Passed with Items — return trip needed?",
+                      message: "Severity set the verdict. Site reality sets the return trip: if nobody is coming back to this job, make it a return trip so the items can't get missed. If a crew is on site, they handle it in stride.",
+                      confirmLabel: "Create return trip",
+                      cancelLabel: "Crew on site has it",
+                      danger: false,
+                    });
+                    if (makeRt) {
+                      // Flag-first dedupe — see applyQcStatus above for why the
+                      // string-only check would miss a passed_items RT.
+                      const existing=(job.returnTrips||[]).some(r=>r && !r.signedOff && (r.fromQCFail===true || (typeof r.scope==="string" && r.scope.startsWith("QC Fail"))));
+                      if(!existing){
+                        const openQC=[];
+                        const fls=[...["upper","main","basement"].map(k=>job.finishPunch&&job.finishPunch[k]).filter(Boolean),...(((job.finishPunch&&job.finishPunch.extras)||[]).map(x=>x&&x.key?job.finishPunch[x.key]:null).filter(Boolean))];
+                        fls.forEach(fl=>{ if(!fl) return;
+                          (fl.general||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
+                          (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
+                          (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
+                        });
+                        const newRT={id:uid(),date:"",scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
+                        patch.returnTrips=[...(job.returnTrips||[]),newRT];
+                        toast.success(`${v==="fail"?"Finish QC Fail":"Finish QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                      }
                     }
+                    patch.qcRtChoice = makeRt ? "rt" : "crew";
+                    patch.qcRtChoiceBy = identity?.name || "";
+                    patch.qcRtChoiceAt = new Date().toISOString();
                   }
                   u(patch);
                 };
@@ -30992,6 +31040,25 @@ function buildJobActivity(job) {
           sourceTab: "Return Trips",
         };
       }),
+    });
+  }
+
+  // ── STRANDED QC ITEMS (Task 6, 2026-08-10) ─────────────────────────
+  // Read-only tripwire: fires when the QC verdict's return-trip choice was
+  // "crew has it" (qcRtChoice==="crew"), no return trip ever got created,
+  // and the open fromQC items are still sitting there strandedDays later.
+  // Safety net for the automatic RT creation this task removed — see
+  // qcStrandedItems (module scope, beside deriveQcVerdict) for the pure
+  // predicate; this is the only place it renders. Writes nothing.
+  const strandedQcCount = qcStrandedItems(job, sb4Config(null), Date.now());
+  if (strandedQcCount != null) {
+    const strandedAgeDays = Math.floor((Date.now() - Date.parse(job.qcRtChoiceAt)) / 86400000);
+    groups.push({
+      key:"strandedQc", label:"Stranded QC Items",
+      items: [{
+        label: `${strandedQcCount} stranded QC item${strandedQcCount>1?'s':''} — crew was handling it, still open after ${strandedAgeDays}d`,
+        sourceTab: "QC",
+      }],
     });
   }
 
@@ -40188,6 +40255,51 @@ const deriveQcVerdict = (job, phase) => {
   }));
   if (!hasItem) return "pass";
   return hasSerious ? "fail" : "passed_items";
+};
+// qcStrandedItems (Task 6, 2026-08-10) — pure predicate behind the Open
+// Items "Stranded QC Items" row, the read-only safety net for the
+// automatic return-trip creation this task removed. A QC Fail/Passed-with-
+// Items verdict now only creates a return trip when a human confirms it;
+// this is what catches the case where the crew was supposed to "handle it
+// in stride" but the items never actually got closed out after they left.
+//
+// Fires only when ALL of:
+//   - the job has open (not done, not voided) fromQC items in ANY of
+//     roughPunch/finishPunch/qcPunch — the SAME three trees deriveQcVerdict's
+//     whole-job mode and sb4Agg walk, via the same sbv2WalkPunch helper;
+//   - no un-signed-off QC return trip already exists — fromQCFail flag OR
+//     the legacy "QC Fail" scope-string prefix (old RTs predate the flag;
+//     a passed_items RT's scope, "QC Items — return trip", never matches
+//     the string alone, which is why the flag has to be checked too);
+//   - the recorded choice was "crew" (site reality said "crew has it") —
+//     a job that never went through the Task 6 confirm prompt at all has
+//     qcRtChoice===undefined, which fails this check, so a job that was
+//     never QC-walked (or was QC-walked before this feature existed) can
+//     NEVER trip this tripwire, no matter how many open fromQC items it has;
+//   - that choice is at least cfg.strandedDays old.
+// Returns the open-item count (>=1) when the row should render, else null.
+// Pure and read-only: writes nothing, schedules nothing, creates nothing.
+// nowMs/cfg are both passed in rather than read from Date.now()/sb4Config
+// internally so this is deterministic and unit-testable in isolation (see
+// scripts/sb4-dryrun.js) — cfg falls back to sb4Config(null) defaults when
+// omitted, mirroring sb4Agg's own `cfg || sb4Config(null)` pattern above.
+const qcStrandedItems = (job, cfg, nowMs) => {
+  if (!job) return null;
+  const openQc = [];
+  [job.roughPunch, job.finishPunch, job.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
+    if (it && !it.voided && it.fromQC && !it.done) openQc.push(it);
+  }));
+  if (!openQc.length) return null;
+  const hasQcRt = (job.returnTrips || []).some(rt => rt && !rt.signedOff &&
+    (rt.fromQCFail === true || (typeof rt.scope === "string" && rt.scope.startsWith("QC Fail"))));
+  if (hasQcRt) return null;
+  if (job.qcRtChoice !== "crew") return null;
+  if (!job.qcRtChoiceAt) return null;
+  const ageMs = nowMs - Date.parse(job.qcRtChoiceAt);
+  if (!(ageMs >= 0)) return null; // NaN (bad date) or negative (clock skew) — don't fire
+  const strandedDays = (cfg || sb4Config(null)).strandedDays;
+  if (ageMs / 86400000 < strandedDays) return null;
+  return openQc.length;
 };
 const sb4Agg = (js, cfg) => {
   const c = cfg || sb4Config(null);

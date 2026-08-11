@@ -112,6 +112,26 @@
  * jobD's qcPunch-only serious item being invisible to EITHER phase call) and
  * that whole-job mode is byte-for-byte unchanged.
  *
+ * TASK 6 EXTENSION (2026-08-10) — qcStrandedItems(job, cfg, nowMs), the pure
+ * predicate behind the Open Items "Stranded QC Items" row. Task 6 replaced
+ * automatic return-trip creation on QC Fail with an explicit confirm choice
+ * (fired for BOTH fail and passed_items now), recorded as qcRtChoice/
+ * qcRtChoiceBy/qcRtChoiceAt on the job. Removing the automatic safety net is
+ * only safe if something else catches items nobody comes back for — this
+ * function is that something else: read-only, fires only when a job has
+ * open fromQC items, no open QC return trip exists (fromQCFail flag OR the
+ * legacy "QC Fail" scope-string prefix — a passed_items RT's scope, "QC
+ * Items — return trip", never matches the string alone), the recorded
+ * choice was "crew" (site reality said "crew has it"), and that choice is
+ * at least cfg.strandedDays old. Declared beside deriveQcVerdict (directly
+ * above sb4Agg), so — like sb4JobComplete/deriveQcVerdict before it — it
+ * falls inside the existing MAIN region slice with no separate extraction
+ * call; block 10 below only adds it to the export object. nowMs/cfg are
+ * both explicit params (no internal Date.now()/sb4Config(null) — well,
+ * cfg does fall back to sb4Config(null) when omitted, mirroring sb4Agg's
+ * own `cfg || sb4Config(null)` pattern), which is what makes this testable
+ * without touching the wall clock.
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -209,7 +229,7 @@ const RENDER_BITS = ["clamp", "NORM"].map(extractConst).join("\n");
 // first.
 const combined =
   HELPERS + "\n" + MAIN + "\n" + RENDER_BITS +
-  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict });\n";
+  "\n({ SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict, qcStrandedItems });\n";
 
 let extracted;
 try {
@@ -220,7 +240,7 @@ try {
   console.error("  " + e.message);
   process.exit(1);
 }
-const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict } = extracted;
+const { SB4_DEFAULTS, sb4Config, SB4_DEFAULT_WEIGHTS, sb4Agg, sb4Build, sb4JobComplete, _sb4HasPhoto, NORM, deriveQcVerdict, qcStrandedItems } = extracted;
 
 // ─── FIXTURES (verbatim from the task brief) ───────────────────────────────
 const jobA = { id:"a", name:"Fixture A", foreman:"T", simproMargin: 20,
@@ -676,10 +696,102 @@ assertEq(deriveQcVerdict(jobE, "finish"), "pass", "deriveQcVerdict(jobE,\"finish
 assertEq(deriveQcVerdict(jobD, "rough"), "pass", "deriveQcVerdict(jobD,\"rough\"): jobD's serious item lives in qcPunch, NOT roughPunch -> pass (qcPunch excluded from phase mode)");
 assertEq(deriveQcVerdict(jobD, "finish"), "pass", "deriveQcVerdict(jobD,\"finish\"): same qcPunch item, NOT finishPunch -> pass (qcPunch excluded from phase mode)");
 
+console.log("\n── 10. TASK 6: qcStrandedItems(job, cfg, nowMs) — read-only stranded-QC-items tripwire ──");
+// Fixed clock — deterministic regardless of when this script actually runs.
+// All fixture qcRtChoiceAt values are built from this via toISOString(),
+// which always renders "Z" (UTC), so the math is timezone-proof too.
+const NOW = Date.parse("2026-08-10T12:00:00.000Z");
+const daysAgoIso = (n) => new Date(NOW - n * 86400000).toISOString();
+const cfgDefault = sb4Config(null); // strandedDays: 7, per block 3's pin
+
+// Gate 1 — no open fromQC items at all -> null, regardless of how the other
+// fields look (choice is "crew", plenty old). Nothing stranded, nothing to flag.
+const jobNoOpen = { id:"sn1", name:"No Open Items", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(30),
+  roughPunch: { main: { general: [ { id:"s1", text:"x", fromQC:true, done:true } ] } } };
+assertEq(qcStrandedItems(jobNoOpen, cfgDefault, NOW), null, "gate 1: fromQC item is done (not open) -> null, nothing stranded");
+
+// Gate 2 — the self-review question the brief calls out by name: "can the
+// tripwire ever fire on a job that was never QC-walked?" jobNeverWalked has
+// open fromQC items but NO qcRtChoice field at all (undefined !== "crew").
+const jobNeverWalked = { id:"nw1", name:"Never QC-Walked",
+  roughPunch: { main: { general: [ { id:"n1", text:"x", fromQC:true, done:false } ] } } };
+assertEq(qcStrandedItems(jobNeverWalked, cfgDefault, NOW), null, "self-review: open fromQC items but qcRtChoice===undefined (never ran the Task 6 confirm flow) -> null, can NEVER fire");
+
+// Gate 2b — chose "rt" (not "crew"): the user already decided to make it a
+// return trip, so this isn't a stranded-items situation even with open items.
+const jobChoseRt = { id:"cr1", name:"Chose RT", qcRtChoice:"rt", qcRtChoiceAt:daysAgoIso(30),
+  roughPunch: { main: { general: [ { id:"c1", text:"x", fromQC:true, done:false } ] } } };
+assertEq(qcStrandedItems(jobChoseRt, cfgDefault, NOW), null, "gate 2b: qcRtChoice==='rt' -> null (user chose to make it a return trip, not stranded)");
+
+// Gate 3 — dedupe fires on the fromQCFail FLAG, not the scope string, so a
+// passed_items RT (scope never starts with "QC Fail") still blocks the
+// tripwire. This is the exact case the brief's interface note calls out.
+const jobFlaggedRt = { id:"fr1", name:"Has Flagged RT (passed_items scope)", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(30),
+  roughPunch: { main: { general: [ { id:"f1", text:"x", fromQC:true, done:false } ] } },
+  returnTrips: [ { id:"rt1", scope:"QC Items — return trip", fromQCFail:true, signedOff:false } ] };
+assertEq(qcStrandedItems(jobFlaggedRt, cfgDefault, NOW), null, "gate 3: open RT with passed_items scope (\"QC Items — return trip\") but fromQCFail:true -> still dedupes via the FLAG -> null");
+
+// Gate 3b — the mirror case: a pre-Task-6 legacy RT with the old scope
+// string but NO fromQCFail flag must still dedupe via the string prefix.
+const jobLegacyRt = { id:"lr1", name:"Has Legacy RT (no flag)", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(30),
+  roughPunch: { main: { general: [ { id:"l1", text:"x", fromQC:true, done:false } ] } },
+  returnTrips: [ { id:"rt2", scope:"QC Fail — return trip needed", signedOff:false } ] };
+assertEq(qcStrandedItems(jobLegacyRt, cfgDefault, NOW), null, "gate 3b: open legacy RT (scope starts with \"QC Fail\", no fromQCFail flag) -> still dedupes via the STRING -> null");
+
+// Gate 3c — a SIGNED-OFF RT must NOT block the tripwire (only un-signed-off
+// RTs count as "already handled"). Proves the !rt.signedOff qualifier is honored.
+const jobSignedOffRt = { id:"so1", name:"Only RT Is Signed Off", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(30),
+  roughPunch: { main: { general: [ { id:"o1", text:"x", fromQC:true, done:false } ] } },
+  returnTrips: [ { id:"rt3", scope:"QC Fail — return trip needed", fromQCFail:true, signedOff:true } ] };
+assertEq(qcStrandedItems(jobSignedOffRt, cfgDefault, NOW), 1, "gate 3c: the only RT on file is already signed off -> doesn't count as 'open', tripwire still fires (1)");
+
+// Gate 4 + age boundary — choice is "crew" but too recent (2 days < default 7) -> null.
+const jobTooRecent = { id:"tr1", name:"Too Recent", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(2),
+  roughPunch: { main: { general: [ { id:"t1", text:"x", fromQC:true, done:false } ] } } };
+assertEq(qcStrandedItems(jobTooRecent, cfgDefault, NOW), null, "gate 4: choice only 2 days old (< strandedDays 7) -> null, too soon to flag");
+
+// Boundary — exactly strandedDays old (>=, not >) fires. Also proves the
+// count sums open items across MULTIPLE trees (roughPunch + qcPunch), and
+// that it's a positive real count, not just a truthy sentinel.
+const jobAtBoundary = { id:"bd1", name:"Exactly At Boundary", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(7),
+  roughPunch: { main: { general: [ { id:"b1", text:"a", fromQC:true, done:false } ] } },
+  qcPunch:    { main: { general: [ { id:"b2", text:"b", fromQC:true, done:false } ] } } };
+assertEq(qcStrandedItems(jobAtBoundary, cfgDefault, NOW), 2, "boundary: choice exactly 7 days old (strandedDays) -> fires (>=, not >), count sums roughPunch+qcPunch = 2");
+
+// Voided + done items are excluded from the count — only the live open item counts.
+const jobMixedItems = { id:"mi1", name:"Voided + Done + Live", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(30),
+  roughPunch: { main: { general: [
+    { id:"v1", text:"voided",   fromQC:true, done:false, voided:true },
+    { id:"v2", text:"done",     fromQC:true, done:true },
+    { id:"v3", text:"live-one", fromQC:true, done:false },
+  ] } } };
+assertEq(qcStrandedItems(jobMixedItems, cfgDefault, NOW), 1, "voided + done fromQC items excluded from the count -> only the 1 live open item counts");
+
+// Config knob — same job, two different strandedDays. 3-days-old clears a
+// tuned strandedDays:2 but not the default 7.
+const jobKnob = { id:"kb1", name:"Knob", qcRtChoice:"crew", qcRtChoiceAt:daysAgoIso(3),
+  roughPunch: { main: { general: [ { id:"k1", text:"x", fromQC:true, done:false } ] } } };
+assertEq(qcStrandedItems(jobKnob, cfgDefault, NOW), null, "knob: 3 days old < default strandedDays(7) -> null");
+assertEq(qcStrandedItems(jobKnob, sb4Config({ strandedDays: 2 }), NOW), 1, "knob: same job, strandedDays tuned to 2 -> 3 days clears it -> fires (1)");
+
+// cfg omitted (undefined) falls back to sb4Config(null) defaults, same as an explicit cfgDefault.
+assertEq(qcStrandedItems(jobAtBoundary, undefined, NOW), qcStrandedItems(jobAtBoundary, cfgDefault, NOW), "cfg omitted (undefined) falls back to sb4Config(null) defaults, same result as explicit cfgDefault");
+
+// Defensive — null/undefined job, and a malformed/empty qcRtChoiceAt, must
+// never throw or return NaN-poisoned garbage.
+assertEq(qcStrandedItems(null, cfgDefault, NOW), null, "defensive: qcStrandedItems(null, ...) -> null, no crash");
+assertEq(qcStrandedItems(undefined, cfgDefault, NOW), null, "defensive: qcStrandedItems(undefined, ...) -> null, no crash");
+const jobBadDate = { id:"bd2", name:"Bad Date", qcRtChoice:"crew", qcRtChoiceAt:"not-a-date",
+  roughPunch: { main: { general: [ { id:"bad1", text:"x", fromQC:true, done:false } ] } } };
+assertTrue(qcStrandedItems(jobBadDate, cfgDefault, NOW) === null, "defensive: unparseable qcRtChoiceAt -> null, not NaN/crash (NaN>=0 is false)");
+const jobEmptyAt = { id:"ea1", name:"Empty qcRtChoiceAt", qcRtChoice:"crew", qcRtChoiceAt:"",
+  roughPunch: { main: { general: [ { id:"ea2", text:"x", fromQC:true, done:false } ] } } };
+assertEq(qcStrandedItems(jobEmptyAt, cfgDefault, NOW), null, "defensive: qcRtChoiceAt==='' (falsy) -> null, no crash");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1)");
+console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6)");
 process.exit(0);
