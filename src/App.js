@@ -30998,7 +30998,13 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
 //   timeline:   [{ at, actor, label, sourceTab, kind, detail }] sorted desc
 // No new data, pure read. Source-tab values match TAB labels so click-through
 // can call setTab(item.sourceTab) directly.
-function buildJobActivity(job) {
+// cfg (Task 7R fix round 1, 2026-08-10) — the live scoring config, threaded
+// through to qcStrandedItems below so its admin-tunable strandedDays knob
+// actually affects the Stranded QC Items row here, not just the Scoreboard.
+// Optional: JobActivity (this function's only caller) always passes one, but
+// qcStrandedItems itself already falls back to sb4Config(null) when cfg is
+// omitted/undefined, so no extra defensive code is needed here.
+function buildJobActivity(job, cfg) {
   if (!job) return { todoGroups: [], timeline: [] };
   // Clean rich-text content for display: strip HTML tags AND decode the
   // common entities (&nbsp; &amp; &lt; etc.) so the activity rows don't
@@ -31063,7 +31069,7 @@ function buildJobActivity(job) {
   // automatic RT creation this task removed — see qcStrandedItems (module
   // scope, beside deriveQcVerdict) for the pure predicate; this is the only
   // place it renders. Writes nothing.
-  const strandedQcCount = qcStrandedItems(job, sb4Config(null), Date.now());
+  const strandedQcCount = qcStrandedItems(job, cfg, Date.now());
   if (strandedQcCount != null) {
     // Display age = the OLDEST applicable "crew" choice among the phases
     // that actually tripped the tripwire (resolveQcRtChoice applies the
@@ -31367,7 +31373,24 @@ function buildJobPhotos(job) {
 // Renders to-do groups (collapsible) + activity timeline (with month
 // headers). All buttons that click-through to a source call onSetTab.
 function JobActivity({ job, onSetTab }) {
-  const { todoGroups, timeline } = useMemo(() => buildJobActivity(job), [job]);
+  // Live scoring config (Task 7R fix round 1, 2026-08-10) — qcStrandedItems
+  // (called inside buildJobActivity) needs the admin-tunable strandedDays
+  // knob, not a hardcoded default, so the Scoreboard panel's "Days before
+  // crew-held QC items surface on Open Items" slider actually does something
+  // here — this IS its only consumer. Same settings/scoreboardV4Weights doc
+  // and sb4Config(...) normalization ScoreboardV4 uses, but deliberately NOT
+  // admin-gated: Open Items must work identically for every user, and
+  // firestore.rules already allows open reads on settings/{docId} (writes
+  // stay admin-gated client-side, unchanged — this only adds a reader).
+  // Seeded with sb4Config(null) so the very first render — and the error
+  // callback, on any read failure — behaves exactly as before this fix:
+  // hardcoded defaults, no crash, no flicker into an empty/wrong state.
+  const [sbCfg, setSbCfg] = useState(() => sb4Config(null));
+  useEffect(() => onSnapshot(doc(db, "settings", "scoreboardV4Weights"), s => {
+    setSbCfg(sb4Config(s.exists() ? s.data() : null));
+  }, () => setSbCfg(sb4Config(null))), []);
+
+  const { todoGroups, timeline } = useMemo(() => buildJobActivity(job, sbCfg), [job, sbCfg]);
   const [expanded, setExpanded] = useState({});  // { groupKey: bool }
   const [olderShown, setOlderShown] = useState(false);  // false = last 60 days
   const cutoff = useMemo(() => Date.now() - 60*24*60*60*1000, [olderShown]);

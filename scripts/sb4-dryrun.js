@@ -173,6 +173,22 @@
  *      by a later {merge:true} write, since merge only touches fields present
  *      in the write) and a fresh nested `weights` prefers the fresh one.
  *
+ * TASK 7R FIX ROUND 1 (2026-08-10) — review finding: strandedDays had exactly
+ * ONE consumer (qcStrandedItems) and qcStrandedItems had exactly ONE caller
+ * (buildJobActivity, behind the JobActivity/Open Items component), and that
+ * caller hardcoded sb4Config(null) — so the admin panel's strandedDays slider
+ * saved correctly but was completely inert for its only stated purpose.
+ * Fixed by giving JobActivity its own live (non-admin-gated — Open Items must
+ * work for everyone) onSnapshot on settings/scoreboardV4Weights and threading
+ * a new cfg param through buildJobActivity into that qcStrandedItems call.
+ * Block 12 below proves the two things this harness CAN reach (qcStrandedItems
+ * and sb4Config are pure/extracted; JobActivity itself is a React component,
+ * not unit-testable here — same reasoning already applied to ScoreboardV4's
+ * own onSnapshot): the same 10-day-old "crew" choice is flagged at the
+ * default strandedDays (7) and NOT flagged at 14, proving the knob's value
+ * genuinely changes the outcome; and sb4Config resolves both of JobActivity's
+ * branches (nothing loaded -> defaults, a loaded doc -> its real values) sanely.
+ *
  * Run: node scripts/sb4-dryrun.js
  */
 "use strict";
@@ -1053,10 +1069,72 @@ assertEq(cfgCoexist.weights, { margin: 11, qc: 22, handoff: 33, app: 44 }, "BACK
 assertEq(cfgCoexist.marginDivisor, 77, "coexistence: a real new-shape scalar (marginDivisor) reads correctly regardless of stale flat fields sitting alongside it");
 assertEq(cfgCoexist.qc, SB4_DEFAULTS.qc, "coexistence: the stale flat `qc:999` still doesn't leak into the qc sub-config, same as prong 2");
 
+console.log("\n── 12. TASK 7R FIX ROUND 1 (2026-08-10): strandedDays actually reaches Open Items ──");
+// Review finding (Important): buildJobActivity's qcStrandedItems call
+// (src/App.js, behind the JobActivity component's Open Items feed) was
+// hardcoded to sb4Config(null) — strandedDays has exactly ONE consumer
+// (qcStrandedItems) and qcStrandedItems has exactly ONE caller (that line),
+// so the admin panel's "Days before crew-held QC items surface on Open
+// Items" slider was completely inert: it saved, the number on screen
+// updated, but the Open Items warning never actually changed. Fix:
+// JobActivity now holds its own live cfg (a second, independent,
+// NON-admin-gated onSnapshot on the SAME settings/scoreboardV4Weights doc —
+// Open Items must work for every user, unlike ScoreboardV4's admin-only
+// tab), seeded with sb4Config(null) and threaded through buildJobActivity's
+// new cfg param into this exact qcStrandedItems call.
+//
+// qcStrandedItems/sb4Config are pure and extracted, so the two REQUIRED
+// proofs below can exercise the real mechanism the fix relies on:
+// qcStrandedItems genuinely responding to a non-default strandedDays, and
+// sb4Config genuinely resolving both of JobActivity's two branches (nothing
+// loaded / loaded) sanely. But neither of those, on its own, proves
+// buildJobActivity/JobActivity actually WIRE a live cfg into that call —
+// JobActivity is a React component with hooks (an onSnapshot listener), not
+// unit-testable in this VM sandbox (same boundary this file already accepts
+// for ScoreboardV4's own onSnapshot wiring) — so a THIRD check, after the two
+// required ones, greps the raw source text (already loaded as `src`, above)
+// for the exact wiring itself: this is deliberately a structural pin, not a
+// behavioral test, and it exists specifically so a future revert of the
+// wiring (reverting buildJobActivity's signature, or deleting JobActivity's
+// listener, while leaving qcStrandedItems/sb4Config untouched) is still
+// caught — the two behavioral proofs above cannot catch that on their own,
+// since they call qcStrandedItems/sb4Config directly and would keep passing
+// even if buildJobActivity/JobActivity regressed back to the hardcoded form.
+
+// Required test 1 — same job, same 10-day-old "crew" choice, two different
+// strandedDays: default (7) fires, tuned to 14 (more lenient) does not.
+// Asserted in BOTH directions so this can't pass by only checking the
+// direction that happens to match a null-safe default.
+const jobStranded10d = { id: "sd1", name: "Fix Round 1 — strandedDays knob actually bites",
+  qcRtChoiceRough: "crew", qcRtChoiceRoughAt: daysAgoIso(10),
+  roughPunch: { main: { general: [ { id: "sd-1", text: "x", fromQC: true, done: false } ] } } };
+assertEq(qcStrandedItems(jobStranded10d, sb4Config(null), NOW), 1, "fix: at the DEFAULT strandedDays (7), a 10-day-old 'crew' choice IS old enough -> flagged (1)");
+assertEq(qcStrandedItems(jobStranded10d, sb4Config({ strandedDays: 14 }), NOW), null, "fix: the SAME job/choice at strandedDays TUNED TO 14 is NOT old enough yet -> not flagged (null) — proves the knob's value actually changes the outcome, not just that it saves");
+
+// Required test 2 — the accessor/fallback I introduced is a direct reuse of
+// sb4Config (no new wrapper function): JobActivity's useState(() =>
+// sb4Config(null)) seed AND its onSnapshot's `s.exists() ? s.data() : null`
+// ternary both resolve through it. Prove both branches directly.
+assertEq(sb4Config(null), SB4_DEFAULTS, "fallback: 'nothing loaded' (JobActivity's initial useState seed, and a missing/not-yet-loaded settings/scoreboardV4Weights doc, both call sb4Config(null)) resolves to full SB4_DEFAULTS — no crash, no partial/undefined cfg");
+const loadedDoc = { strandedDays: 21, marginTarget: 18 };
+const loadedCfg = sb4Config(loadedDoc);
+assertEq(loadedCfg.strandedDays, 21, "fallback: 'loaded' (a real settings/scoreboardV4Weights doc, JobActivity's s.exists()===true branch) resolves to the STORED strandedDays (21), not the default (7)");
+assertEq(loadedCfg.marginTarget, 18, "fallback: 'loaded' also carries through a second, independent field (marginTarget) in the same doc — not a strandedDays-only special case");
+
+// Structural wiring pin (not behavioral — see the comment above): the raw
+// source text, not a VM-evaluated value, so it directly catches a revert of
+// the wiring itself, independent of whether qcStrandedItems/sb4Config still
+// behave correctly in isolation.
+assertTrue(src.includes("function buildJobActivity(job, cfg) {"), "wiring: buildJobActivity's signature carries a cfg param (source text) — reverting this would silently drop the argument even if the call site below still looked right");
+assertTrue(src.includes("qcStrandedItems(job, cfg, Date.now());"), "wiring: buildJobActivity's qcStrandedItems call passes the threaded cfg, not a fresh sb4Config(null)");
+assertTrue(!src.includes("qcStrandedItems(job, sb4Config(null), Date.now());"), "wiring: the OLD hardcoded call is gone — not just replaced-but-also-still-present somewhere else in the file");
+const scoreboardV4WeightsSubscribers = (src.match(/onSnapshot\(doc\(db, "settings", "scoreboardV4Weights"\)/g) || []).length;
+assertEq(scoreboardV4WeightsSubscribers, 2, "wiring: settings/scoreboardV4Weights now has TWO live subscribers in the source — ScoreboardV4's original admin-gated one, and JobActivity's new non-admin-gated one (Open Items must work for everyone)");
+
 console.log("");
 if (failures) {
   console.error(`${failures} assertion(s) FAILED`);
   process.exit(1);
 }
-console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6/6-fix1/7R)");
+console.log("sb4-dryrun ok (Task 1R/2R/3R/5/5-fix1/6/6-fix1/7R/7R-fix1)");
 process.exit(0);
