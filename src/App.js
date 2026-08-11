@@ -14644,6 +14644,11 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // fit judgment and no in-section schedule (removed per Koy 2026-07-14).
   const included = loads.filter(l=>l.included);
   const usage = genPanelUsage(included);
+  // Select-all state (Koy 2026-08-11: "generator selection should have a select
+  // all button"). One button that flips to Deselect all once everything is on,
+  // so the same control undoes itself — no separate "none" button to hunt for.
+  const allIncluded = loads.length>0 && included.length===loads.length;
+  const toggleAll = () => commit(loads.map(l=>({...l, included:!allIncluded})));
 
   return (
     <div>
@@ -14674,6 +14679,19 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
             color:C.green,fontSize:12,fontWeight:600,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
           + Add Manually
         </button>
+        {loads.length>0&&(
+          <button onClick={toggleAll}
+            title={allIncluded?'Take every load off the generator':'Put every load on the generator'}
+            style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:8,
+              color:C.blue,fontSize:11,fontWeight:700,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+            {allIncluded?'Deselect all':'Select all'}
+          </button>
+        )}
+        {loads.length>0&&(
+          <span style={{fontSize:11,color:C.dim}}>
+            {included.length} of {loads.length} on the generator
+          </span>
+        )}
         {loads.length>0&&(
           <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
@@ -15053,7 +15071,12 @@ const panelFillSig = (breakers) => stableStringify(
   breakers.map(b => [b.name, b.amps, b.poles, b.wire])
     .sort((a, b) => String(a).localeCompare(String(b))));
 
-function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {} }) {
+// onEnsurePanelName(label) is the reverse half of the Panels <-> Schedules link
+// (Koy 2026-08-11): creating a schedule here also adds that name to the home-run
+// panel dropdown, so a panel created on either side exists on both. This
+// component can't write homeRuns itself, so HomeRunsTab passes the callback in.
+// CREATE-only — deleting a schedule never removes the panel name.
+function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {}, onEnsurePanelName }) {
   // Fill a panel's circuits map from home runs assigned to that panel.
   // Sorting per Koy:
   //   1. 2-pole breakers first (top)
@@ -15145,6 +15168,10 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       slotCount: 40,
       circuits: {},
     }]);
+    // Mirror the name into the home-run panel dropdown so it doesn't have to be
+    // added twice. Safe to call unconditionally — the handler no-ops if the name
+    // is already there.
+    if (onEnsurePanelName) onEnsurePanelName(label);
     setExpanded(v => ({ ...v, [id]: true }));
     setNewLabel("");
   };
@@ -15452,6 +15479,94 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
 }
 
 
+// ── Home Runs top pull-summary ──────────────────────────────────
+// Sits above the Home Runs section + Panel Schedules (Koy, 2026-08-10):
+// "I want the Home Runs pulled, with the number of pulled compared to not
+// pulled at the very top... click that list and have it show you all of the
+// home runs organized and wiresized alphabetically... the whole list of
+// pulled and not pulled right there so it's easy to see." The header counts
+// always show; the flat list itself starts collapsed (tap to open), matching
+// this tab's every-section-starts-collapsed convention (v347).
+//
+// `namedFlat`/`pulled`/`total`/`pct` all come from HomeRunsTab unchanged —
+// the same namedRows (name-required) rule that already drives the progress
+// bar, so this card's numbers can never drift from the Home Runs section
+// below it. Sort is alphabetical-by-name ONLY (Koy's "organized and
+// wiresized alphabetically" resolved as name-sort + wire shown per row, NOT
+// grouped by wire) — `byName` below is the one place that lives; a future
+// wire-size-grouping pass means grouping notPulledFlat/pulledFlat by
+// `x.r.wire` before this sort, nothing else changes.
+function HomeRunsPullSummary({namedFlat, pulled, total, pct}) {
+  const [open, setOpen] = useState(false);
+  const notPulled = total - pulled;
+  const byName = (a,b) => (a.r.name||'').toLowerCase().localeCompare((b.r.name||'').toLowerCase());
+  const notPulledFlat = namedFlat.filter(x=>x.r.status!=='Pulled').sort(byName);
+  const pulledFlat    = namedFlat.filter(x=>x.r.status==='Pulled').sort(byName);
+
+  const renderRow = (x) => {
+    const {r, floor} = x;
+    const isPulled = r.status==='Pulled', isNeedSpecs = r.status==='Need Specs';
+    const meta = [r.panel, floor, wireAmpsVolts(r.wire, r.v240)].filter(Boolean).join(' · ');
+    return (
+      <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 8px',
+        borderRadius:7,marginBottom:4,
+        background:isPulled?'rgba(62,125,90,0.08)':isNeedSpecs?'rgba(239,68,68,0.1)':'transparent',
+        border:`1px solid ${isPulled?'rgba(62,125,90,0.3)':isNeedSpecs?'rgba(239,68,68,0.3)':C.border}`}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.text,wordBreak:'break-word'}}>{r.name}</div>
+          <div style={{fontSize:10,color:C.dim,marginTop:1,wordBreak:'break-word'}}>
+            {meta||'—'}{isNeedSpecs&&<span style={{color:C.red,fontWeight:700}}> · Need Specs</span>}
+          </div>
+        </div>
+        <span style={{flexShrink:0,fontSize:10,fontWeight:800,padding:'3px 7px',borderRadius:5,
+          background:r.wire?(WIRE_COLORS[r.wire]||C.surface):C.surface,
+          color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
+          border:`1px solid ${r.wire?(WIRE_COLORS[r.wire]||C.border):C.border}`}}>
+          {r.wire||'—'}
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
+      border:`1px solid ${C.border}`,borderRadius:12}}>
+      <button type="button" onClick={()=>setOpen(v=>!v)}
+        style={{display:'flex',width:'100%',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',
+          gap:8,background:'none',border:'none',padding:0,margin:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
+        <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled{open?' ▴':' ▾'}</span>
+        <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>
+          {pulled} pulled · {notPulled} left
+        </span>
+      </button>
+      <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden',marginTop:8}}>
+        <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
+          borderRadius:99,transition:'width 0.4s ease'}}/>
+      </div>
+
+      {open&&(
+        <div style={{marginTop:14}}>
+          {notPulledFlat.length>0&&(<>
+            <div style={{fontSize:10,fontWeight:800,letterSpacing:'0.08em',color:C.red,
+              textTransform:'uppercase',marginBottom:6}}>
+              Not Pulled · {notPulledFlat.length}
+            </div>
+            {notPulledFlat.map(renderRow)}
+          </>)}
+          {pulledFlat.length>0&&(<>
+            <div style={{fontSize:10,fontWeight:800,letterSpacing:'0.08em',color:C.green,
+              textTransform:'uppercase',margin:notPulledFlat.length>0?'14px 0 6px':'0 0 6px'}}>
+              Pulled · {pulledFlat.length}
+            </div>
+            {pulledFlat.map(renderRow)}
+          </>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
@@ -15550,9 +15665,29 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const namedRows=allRows.filter(r=>(r.name||'').trim());
   const total=namedRows.length, pulled=namedRows.filter(r=>r.status==='Pulled').length;
   const pct=total>0?Math.round((pulled/total)*100):0;
+  // Floor-labeled flat list for the top pull-summary's expandable index (Koy,
+  // 2026-08-10: "click that list and have it show you all the home runs...
+  // right at the top"). Same floor set as HomeRunsByPanel's `flat` builder
+  // (main → basement → upper → extras) but filtered on the same name-required
+  // rule as namedRows above (not hrHasContent's looser "any field filled"
+  // rule), so this list's membership always agrees with pulled/total — never
+  // off-by-a-blank-row from the progress bar above it.
+  const hrFloorDefs=[["main","Main Level"],["basement","Basement"],["upper","Upper Level"],
+    ...((homeRuns.extraFloors||[]).map(ef=>[ef.key, ef.label||ef.key]))];
+  const namedFlat=hrFloorDefs.flatMap(([k,label])=>(homeRuns[k]||[])
+    .filter(r=>(r.name||'').trim())
+    .map(r=>({r, floor:label})));
 
   return (
     <div>
+      {/* Pull-progress summary — leads the WHOLE tab (Koy, 2026-08-10: "the
+          number of pulled compared to not pulled at the very top"). Click to
+          expand the full A-Z list; the Home Runs section below (By Panel/By
+          Floor) is unchanged. */}
+      {total>0&&(
+        <HomeRunsPullSummary namedFlat={namedFlat} pulled={pulled} total={total} pct={pct}/>
+      )}
+
       <Section label="Home Runs" color={C.blue} defaultOpen={false}>
         {(()=>{
           const cp=homeRuns.customPanels||DEFAULT_PANELS;
@@ -15560,10 +15695,13 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           // ── Inline panel breaker summary ──
           const extraRows=(homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
           const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
-          // View default (Koy 2026-07-17): once any panel is labeled, the list
-          // reads panel → floor → alphabetical; before that, the floor view.
-          const anyPanelLabeled = allHRRows.some(r=>r&&r.panel);
-          const hrViewEff = hrView || (anyPanelLabeled ? "panel" : "floor");
+          // View default (Koy 2026-08-11): ALWAYS By Floor until the user taps
+          // the toggle. v345 auto-switched to By Panel the moment ANY row had a
+          // panel label — which on a real job is immediately and forever, so the
+          // floor view was effectively unreachable ("by floor should be default
+          // view"). The By Panel / By Floor toggle itself is unchanged; this only
+          // decides which one you land on.
+          const hrViewEff = hrView || "floor";
           // Meter can carry breakers, so
           // include it in the panel summary cards.
           const panels=getPanelOpts(cp).filter(p=>p!=="");
@@ -16116,7 +16254,15 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           onChange={onElectricalPanelsChange}
           jobName={jobName||""}
           jobAddress={jobAddress||""}
-          homeRuns={homeRuns||{}}/>
+          homeRuns={homeRuns||{}}
+          onEnsurePanelName={(label)=>{
+            const n=(label||"").trim(); if(!n) return;
+            const cur=homeRuns.customPanels||DEFAULT_PANELS;
+            // Case-insensitive so "sub panel" doesn't duplicate "Sub Panel".
+            if(cur.some(p=>(p||"").toLowerCase()===n.toLowerCase())) return;
+            onHRChange({...homeRuns,customPanels:[...cur,n]});
+            toast.success(`"${n}" added to the panel list.`);
+          }}/>
       </Section>
 
       {/* Generator Load Selection — starts collapsed so the section header is
@@ -16255,21 +16401,6 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         </div>
       )}
 
-      {/* Pull progress */}
-      {total>0&&(
-        <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
-          border:`1px solid ${C.border}`,borderRadius:12}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-            <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled</span>
-            <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>{pulled} / {total} — {pct}%</span>
-          </div>
-          <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden'}}>
-            <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
-              borderRadius:99,transition:'width 0.4s ease'}}/>
-          </div>
-        </div>
-      )}
-
       {/* Share Live View */}
       <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <button onClick={()=>{
@@ -16285,7 +16416,35 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       {/* Panels */}
       {(()=>{
         const cP=homeRuns.customPanels||DEFAULT_PANELS;
-        const addP=()=>{ const n=newPanelName.trim(); if(!n||cP.includes(n)) return; onHRChange({...homeRuns,customPanels:[...cP,n]}); setNewPanelName(''); };
+        // Adding a panel here ALSO creates its blank Panel Schedule (Koy
+        // 2026-08-11: "shouldnt have to add panel twice if youve already created
+        // the panel somewhere else"). CREATE-only and one-directional per click:
+        // it never touches an existing schedule, and removing a panel chip below
+        // never deletes one — a schedule holds typed circuits.
+        //
+        // Both writes ride the SAME `u` patch updater (jobRef.current is advanced
+        // synchronously, App.js ~24368), so calling onHRChange then
+        // onElectricalPanelsChange composes instead of clobbering, and both fields
+        // land in ONE accumulated patch / one merge transaction.
+        //
+        // Deliberately fires only on this explicit click — never on load and never
+        // for DEFAULT_PANELS, or every job would sprout four empty schedules.
+        const addP=()=>{
+          // Case-insensitive dedupe, matching how the breaker cards and FILL
+          // already compare panel names. Was `cP.includes(n)` (exact) — which
+          // let "panel a" join an existing "Panel A" as a second chip, and now
+          // that chip would silently get no schedule (the schedule check below
+          // IS case-insensitive), leaving a panel with no sheet and no toast.
+          const n=newPanelName.trim();
+          if(!n||cP.some(p=>(p||"").toLowerCase()===n.toLowerCase())) return;
+          onHRChange({...homeRuns,customPanels:[...cP,n]});
+          const eps=electricalPanels||[];
+          if(onElectricalPanelsChange && !eps.some(ep=>(ep.label||"").toLowerCase()===n.toLowerCase())){
+            onElectricalPanelsChange([...eps,{id:uid(),label:n,location:"",size:"40/80",slotCount:40,circuits:{}}]);
+            toast.success(`Added "${n}" — blank panel schedule created.`);
+          }
+          setNewPanelName('');
+        };
         return (
           <Section label="Panels" color={C.blue} defaultOpen={false}>
             <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
@@ -45967,7 +46126,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-10 · App SW version: v377
+**Last manifest update:** 2026-08-11 · App SW version: v379
 
 ---
 
@@ -46079,7 +46238,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - 4-way inspection (rules 14/15/16)
   - Final inspection (rules 23/24)
   - QC walks ('QCWalkSection')
-  - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v377' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "QC miss or bigger item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring, per-job density, small-sample handling, and every constant on a dial.** QC walk scoring is a WEIGHTED ITEM COUNT: 'walkScore = 1 − min(maxCost, misses/missDivisor + minors/minorDivisor)', so at the defaults one QC miss costs a quarter of a walk and one minor item a fortieth, and four misses (or forty minors, or any mix summing to one) wipes it out. This replaced an all-or-nothing gate — Koy, 2026-08-11: *"minor QC items should be counted as well"* — under which any miss scored a flat 'seriousCredit' and the walk's minors were DISCARDED, so 1 miss + 30 minors scored identically to 1 miss alone; and because that credit defaulted to 0, no amount of subtracting could ever have made the minors matter. Proven by test: a miss walk carrying 4 extra minor items now scores 0.65 against 0.75 for the same walk without them, a comparison that was impossible when both were pinned to 0. The wording changed with it — "Serious QC item" reads "QC miss or bigger item" everywhere, on the field chip, the stat card ("Walks with a QC miss") and all three dials — but the STORED value is still '"serious"', so nothing already marked is stranded. The verdict rule is deliberately NOT the scoring rule: one miss still fails the walk verdict outright, because "does this need to go back?" and "how clean was it?" are different questions and only the first is all-or-nothing. **App Usage stops counting raw volume and counts DENSITY — entries per job** (Koy: *"keegan uses the app far more than anyone else in the company. look at the desnity of the kweller job compared to any other"* — Kweller is 591 entries, the densest job in the company by 64%). Raw volume rewarded HOLDING MORE JOBS, which is roster luck; per-job completeness saturates the moment a job has one of each, so a deeply documented job scored identically to a token one. 'appDensity = entries / completeness-eligible jobs' shares completeness's exact eligibility gate (temp peds and quick jobs contribute to neither the numerator nor the denominator), blends against completeness via 'appMix', and normalizes at the new 'appDenseCap' dial (default 150/job; the old whole-book 'appCap' is gone — different units, unmigratable, a saved value is simply ignored). Where every eligible job is excluded, 'app' is now **null** and 'overallOf' drops the dimension and re-weights across the other three, instead of falling back to volume counted on the very jobs the dimension excludes. **'sb4Shrink' adds small-sample handling to margin** (Koy: *"gage doesnt make sense whys hes so high i guess just his profitmargin with fewer jobs"*): a median of five jobs is a rumor, so each row's SCORED margin is pulled toward the board's own median at the standard 'n/(n+k)' weight, 'k = marginPriorJobs' (default 5 jobs, 0 disables it byte-for-byte). The **displayed** margin is never shrunk — the card still shows the real median and discloses the scored figure and sample size beneath it ("scored 41.3% on 5 jobs") whenever the two diverge by half a point. A one-row board is a mathematical no-op (the baseline is that row's own margin), so a thin Leads board cannot be distorted by being small, and shrinkage only ever compresses toward the middle — it cannot invent a lead. All 15 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board at the shipped defaults: **Keegan 95, Daegan 91, Gage 90, Vasa 79, Abraham 77, Colby 72** — Gage falls off the top (his 55.75% median scores as 41.3% on five jobs) and Daegan rises to a slim second, both of which Koy called for by name. **A caveat recorded honestly:** at 'marginDivisor' 30 both 55.75% and 41.3% clamp to full margin credit, so shrinkage does not move Gage's RANK at today's settings — its protection binds whenever a thin book lands below the full-credit bar, and it is what stops a future one-job hot streak from topping the board (proven by test: a 30-job 40% book now outranks a 1-job 60% streak, which is exactly backwards from how the board read it before). **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 273-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot). The density/shrinkage round adds its own wiring trap: the harness extracts 'overallOf' itself and pins it to 33 for a row whose real margin is 60% and whose shrunk margin is 10%, because 'sb4Shrink' can be flawless and the board still ignore it — reading 'r.margin' there instead of 'r.marginScore' scores 100, and nothing else in the suite would notice. Three mutations were run to prove the new gates bite: reverting density to raw volume fails 9 assertions, unwiring 'overallOf' fails 2, and removing the 'marginPriorJobs' off-switch fails 2 (a negative dial value would otherwise become a sign-flipped amplifier, scoring a foreman at −100)
+  - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v379' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "QC miss or bigger item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring, per-job density, small-sample handling, and every constant on a dial.** QC walk scoring is a WEIGHTED ITEM COUNT: 'walkScore = 1 − min(maxCost, misses/missDivisor + minors/minorDivisor)', so at the defaults one QC miss costs a quarter of a walk and one minor item a fortieth, and four misses (or forty minors, or any mix summing to one) wipes it out. This replaced an all-or-nothing gate — Koy, 2026-08-11: *"minor QC items should be counted as well"* — under which any miss scored a flat 'seriousCredit' and the walk's minors were DISCARDED, so 1 miss + 30 minors scored identically to 1 miss alone; and because that credit defaulted to 0, no amount of subtracting could ever have made the minors matter. Proven by test: a miss walk carrying 4 extra minor items now scores 0.65 against 0.75 for the same walk without them, a comparison that was impossible when both were pinned to 0. The wording changed with it — "Serious QC item" reads "QC miss or bigger item" everywhere, on the field chip, the stat card ("Walks with a QC miss") and all three dials — but the STORED value is still '"serious"', so nothing already marked is stranded. The verdict rule is deliberately NOT the scoring rule: one miss still fails the walk verdict outright, because "does this need to go back?" and "how clean was it?" are different questions and only the first is all-or-nothing. **App Usage stops counting raw volume and counts DENSITY — entries per job** (Koy: *"keegan uses the app far more than anyone else in the company. look at the desnity of the kweller job compared to any other"* — Kweller is 591 entries, the densest job in the company by 64%). Raw volume rewarded HOLDING MORE JOBS, which is roster luck; per-job completeness saturates the moment a job has one of each, so a deeply documented job scored identically to a token one. 'appDensity = entries / completeness-eligible jobs' shares completeness's exact eligibility gate (temp peds and quick jobs contribute to neither the numerator nor the denominator), blends against completeness via 'appMix', and normalizes at the new 'appDenseCap' dial (default 150/job; the old whole-book 'appCap' is gone — different units, unmigratable, a saved value is simply ignored). Where every eligible job is excluded, 'app' is now **null** and 'overallOf' drops the dimension and re-weights across the other three, instead of falling back to volume counted on the very jobs the dimension excludes. **'sb4Shrink' adds small-sample handling to margin** (Koy: *"gage doesnt make sense whys hes so high i guess just his profitmargin with fewer jobs"*): a median of five jobs is a rumor, so each row's SCORED margin is pulled toward the board's own median at the standard 'n/(n+k)' weight, 'k = marginPriorJobs' (default 5 jobs, 0 disables it byte-for-byte). The **displayed** margin is never shrunk — the card still shows the real median and discloses the scored figure and sample size beneath it ("scored 41.3% on 5 jobs") whenever the two diverge by half a point. A one-row board is a mathematical no-op (the baseline is that row's own margin), so a thin Leads board cannot be distorted by being small, and shrinkage only ever compresses toward the middle — it cannot invent a lead. All 15 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board at the shipped defaults: **Keegan 95, Daegan 91, Gage 90, Vasa 79, Abraham 77, Colby 72** — Gage falls off the top (his 55.75% median scores as 41.3% on five jobs) and Daegan rises to a slim second, both of which Koy called for by name. **A caveat recorded honestly:** at 'marginDivisor' 30 both 55.75% and 41.3% clamp to full margin credit, so shrinkage does not move Gage's RANK at today's settings — its protection binds whenever a thin book lands below the full-credit bar, and it is what stops a future one-job hot streak from topping the board (proven by test: a 30-job 40% book now outranks a 1-job 60% streak, which is exactly backwards from how the board read it before). **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 273-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot). The density/shrinkage round adds its own wiring trap: the harness extracts 'overallOf' itself and pins it to 33 for a row whose real margin is 60% and whose shrunk margin is 10%, because 'sb4Shrink' can be flawless and the board still ignore it — reading 'r.margin' there instead of 'r.marginScore' scores 100, and nothing else in the suite would notice. Three mutations were run to prove the new gates bite: reverting density to raw volume fails 9 assertions, unwiring 'overallOf' fails 2, and removing the 'marginPriorJobs' off-switch fails 2 (a negative dial value would otherwise become a sign-flipped amplifier, scoring a foreman at −100)
   - Status labels carry their own domain word · 'shipped 2026-08-10' · 'SW v375' · Koy: "make sure its all labeled better like qc needs to be included where it applies." 'RT_STATUSES', 'QC_STATUSES' and 'MATTERPORT_STATUSES' all rendered the IDENTICAL bare label **"Needs to be Scheduled"** — and those pills sit side by side on job cards, Open Items and the Forecast, so the reader couldn't tell which thing needed scheduling. QC was the worst offender because 5 of its 6 labels already said "QC" and only that one didn't. Now every label names its own system: QC → **"QC Needs to be Scheduled"** (completing the set), Matterport → **"Scan Needs to be Scheduled"** (matching its existing "Scan Scheduled"/"Scan Complete"), and Return Trips → **"RT Needs to be Scheduled" / "RT Scheduled" / "RT Complete"** (RT previously had no domain word at all on any of its three). Also deleted a hardcoded '"Needs to be Scheduled"' duplicate in the Forecast event builder that shadowed the registry and would have gone stale — that surface now reads the registry like everything else, so there is one source of truth per label. Verified no code compares against label TEXT: every status lookup keys off 'value', so this is display-only and inert. Deliberately left alone: Temp Ped and Quick Job status sets, which render on their own dedicated cards where the domain is never ambiguous
   - Failed inspection → punch items
 - **Photos** · 'shipped' · 'PhotoAttacher' · shared upload+thumbnail component
@@ -46120,6 +46279,8 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - By Floor is the default view again + a panel creates its own schedule + generator select-all · 'shipped 2026-08-11' · 'SW v378' · Koy: "by floor should be default view... the panel schedules should be created when a panel is created, shouldnt have to add panel twice if youve already created the panel somewhere else... generator selection should have a select all button." Three independent fixes in one ship. **(1) By Floor default:** 'hrViewEff' was 'hrView || (anyPanelLabeled ? "panel" : "floor")' (v345) — it flipped to By Panel the moment ANY row carried a panel label, which on a real job happens immediately and permanently, so nobody ever landed on the floor view. Now 'hrView || "floor"'; the By Panel / By Floor toggle is untouched, only the landing view changed. **(2) Panels ↔ Panel Schedules link:** the two lists were completely independent — 'homeRuns.customPanels' (strings, feeds every row's panel dropdown) and 'job.electricalPanels' (objects, the printable breaker sheets) — so every new panel had to be typed in twice. Now CREATE-only in BOTH directions: 'addP' in the Panels section also appends a blank '{label,location:"",size:"40/80",slotCount:40,circuits:{}}' schedule, and 'ElectricalPanelSchedules.addPanel' calls the new 'onEnsurePanelName' prop (the component can't write 'homeRuns' itself, so 'HomeRunsTab' passes the callback in) to add the name to the dropdown. Both matches are case-insensitive so "sub panel" can't duplicate "Sub Panel". **Deletes never cascade either way** — a schedule holds typed circuits, and a panel name may still be referenced by home-run rows. Fires only on the explicit add click — never on load and never for the four 'DEFAULT_PANELS', or every job would sprout four empty schedules. **(3) Generator select-all:** one button in the 'GeneratorLoadSection' toolbar that flips to "Deselect all" once everything is on (so the same control undoes itself), plus a live "{n} of {total} on the generator" readout. Why it can't lose data: the panel link writes 'homeRuns' and 'electricalPanels' back-to-back in one click, and both go through the same 'u' patch updater, which advances 'jobRef.current' SYNCHRONOUSLY before returning — so the second call composes on the first instead of clobbering it, and 'saveJob' accumulates both into ONE patch and one three-way-merge transaction (the path hardened in v369/v370/v371). No new field, no schema or rules change; auto-created schedules arrive with 'circuits:{}' and no 'fillSig', so the v373 sync effect leaves them blank until someone hits FILL; select-all rides the existing 'saveHomeownerRequest' funnel (version snapshot before every write) and is reversible by the same button
+  - Pull-summary leads the tab + expandable A-Z flat list · 'shipped 2026-08-10' · 'SW v376' · Koy: "I want the Home Runs pulled, with the number of pulled compared to not pulled at the very top... click that list and have it show you all of the home runs organized and wiresized alphabetically... the whole list of pulled and not pulled right there so it's easy to see. Right now it's kind of hard to navigate: you have to click into Home Runs and then find the panel or the floor." The "Home Runs Pulled" progress card now leads the WHOLE tab — above even the v369 list-first Home Runs section and Panel Schedules, not just above Generator Load Selection — and its header line spells out both sides of the count ('{pulled} pulled · {notPulled} left', was the bare 'pulled / total — pct%'). New 'HomeRunsPullSummary' component: click the card to expand (starts collapsed, per the v347 every-section-collapsed convention) into one flat A-Z list of every named home run on the job — no drilling into a panel or floor first. Split into "Not Pulled" (the actionable set, listed first) and "Pulled" groups, each with its own count header (a group hides entirely when empty, same pattern the generator response modal already uses for its ON/NOT ON lists); every row carries its wire size as a colored chip plus panel · floor · 'wireAmpsVolts()' so the row is self-describing without opening it. Sort is alphabetical-by-name only — Koy's "organized and wiresized alphabetically" resolved as name-sort with wire shown on every row, NOT grouped by wire; the 'byName' comparator inside 'HomeRunsPullSummary' is the one place a future wire-size-grouping pass would touch. List membership comes from the same per-floor arrays (main/basement/upper/extraFloors) and the same name-required 'namedRows' filter the pulled/total counts already used, so the header numbers and the expanded list's group counts can never drift apart. Purely additive: the existing By Panel / By Floor Home Runs section, 'HomeRunsByPanel', and the row editors are untouched. Why it can't lose data: read-only presentational component — no new field, no write path, no schema or rules change; the moved progress card reuses the exact 'pulled'/'total'/'pct' values 'HomeRunsTab' already computed, nothing recalculated a new way
   - 240V flip now moves the breaker COUNT cards too · 'shipped 2026-08-10' · 'SW v374' · Koy, testing v373 on Webb: "ive marked two of the 12/2 homeruns as 240v but it still does not appear in the breaker counts." v373 was real but only half the surface — it taught the panel *schedule* about 240V ('fillPanelFromHomeRuns' already called 'effectivePoles'), while the **panel summary cards above it** still destructured 'poles' straight off the raw wire table ('const {amps,poles}=WIRE_BREAKER[r.wire]'), so the flag re-poled the printed sheet while the counts never moved. Audited every 'WIRE_BREAKER[...]' read in the file: this was the ONLY one that ignored 'v240' — the generator panel ('slotsUsed'), 'GenPanelGrid' and the schedule fill all already went through 'effectivePoles'. Now 'poles = effectivePoles(r.wire, r.v240)' at that one site, and because every downstream number flows from it, the whole card chain corrects at once: the group label (a 240V 12/2 files under "20A 2P" instead of "20A 1P"), the space math, 'autoSpaces'/drift detection, the tandem + quad sizing banner, and the PO breaker counts. Pairs with the v369 drift banner — an existing manual override on that panel now correctly reads "Manual count is stale" and its Refresh pulls the corrected number. Why it can't lose data: read-side derivation only — no write, no new field, no schema or rules change, and 'effectivePoles' is the same module-scope helper four other call sites already trusted
   - 240V flip re-poles filled panel schedules · 'shipped 2026-08-10' · 'SW v373' · Koy: "I made a 20a circuit a 240v load and it did not update the breakers to be 2 pole for those loads." The panel-schedule circuits map is a fill-time snapshot, so flipping a 12/2 or 14/2 home run to 240V (or any wire/load change) left an already-filled schedule silently stale — the home-run row said "2-pole · 240V" while the breaker sheet below still showed 1-pole. Fills now stamp two additive strings on the panel: 'fillSig' (order-insensitive signature of the breakers the fill derived FROM — new shared 'panelBreakersFromHomeRuns' + 'panelFillSig', the same derivation the FILL button uses, so the two can never disagree) and 'fillCircuitsSig' (canonical sorted-key 'stableStringify' of what it produced, so Firestore map-key reordering can't fake a hand-edit). A sync effect in 'ElectricalPanelSchedules' keeps snapshots honest: a panel still byte-identical to its own last fill output auto re-fills through the normal 'placeBreakers' engine the moment Home Runs drift (toast if breakers no longer fit); a panel hand-edited since its fill is NEVER auto-written — its FILL button turns into an orange RE-FILL alert (existing REPLACE confirm still applies); pre-v373 fills are adopted silently the first time their circuits match a fresh fill byte-for-byte, otherwise they keep today's manual-only behavior (one manual re-fill opts them in). Why it can't lose data: both new fields are additive strings inside each 'job.electricalPanels[]' entry (inside 'data' — no loader change); the auto path writes ONLY when current circuits equal the panel's own last fill output, so typed circuits are unreachable by it; an empty derivation (rows moved off / homeRuns not yet loaded) never touches a panel, so an auto-wipe is impossible; all writes ride the existing updPanel → saveJob funnel (merge-baseline advance fixed v369/v370)
   - Home Runs list first + "Refresh from home runs" revert fix · 'shipped 2026-08-09' · 'SW v369' · Koy: "when i hit refresh from homeruns list it works for a second and then reverts back… the homeruns list tab here needs to be at the top." Two halves. **Order:** the Home Runs list section now leads the tab (was Panel Schedules → Generator → list); every section still starts collapsed per the v347 convention. **Revert fix (root-caused, reproduced against the real '_threeWayMerge' in a node harness):** the revert was a stale-baseline delete-resurrection — 'flushJob' and 'flushSaves' (job close / tab switch / backgrounding inside the 500ms debounce window) ran the SAME merge transaction as 'saveJob' but never advanced 'serverBaselines', so an edit that left through a flush kept that key's baseline old for the whole session; the next delete-shaped write of the same key (breaker-override "Refresh from home runs" deleting its panel key, panel-schedule Fill replacing a circuits map) three-way-merged against the stale base, the merge read the server's own copy as "another device's change" and kept it, 'merged:true' made the tab re-adopt its own echo, and the UI reverted ~1s after the click — and every retry after it, because a rescued key's baseline deliberately stays at the sent value (Kweller rule), so base ≠ server forever. Fix: the post-write baseline advance is extracted to '_advanceMergeBaseline' and called by ALL THREE writers (it was saveJob-only); the Kweller rescued-key rule is preserved byte-for-byte inside the helper. Why it can't lose data: the baseline is in-memory bookkeeping ('serverBaselines.current') never written to Firestore; no write shape, no schema, no rules change; flush-path writes get STRICTLY safer (a user's explicit delete stops resurrecting) and the v312 never-fresher-than-local invariant holds because the baseline advances to exactly what was written — the local copy's value for non-rescued keys, the sent value for rescued ones
