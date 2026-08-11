@@ -10115,7 +10115,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
                   background: item.severity === "serious" ? "#B23A3A14" : C.bg,
                   color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
-                {item.severity === "serious" ? "Serious QC item" : "Minor QC item"}
+                {item.severity === "serious" ? "QC miss or bigger item" : "Minor QC item"}
               </span>
             )}
 
@@ -11220,7 +11220,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
               border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
               background: item.severity === "serious" ? "#B23A3A14" : C.bg,
               color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
-            {item.severity === "serious" ? "Serious QC item" : "Minor QC item"}
+            {item.severity === "serious" ? "QC miss or bigger item" : "Minor QC item"}
           </span>
         )}
         {jobId&&(()=>{
@@ -40194,7 +40194,7 @@ function ScoreboardV3({ jobs, users = [], identity }) {
 // what Koy sees — NOT settings/scoreboardJobFinancials (that P/L cache is FROZEN,
 // ~71d stale, and inflates in-progress jobs: Chapman cached 96.7% vs real 33.3%).
 // Median so one entangled temp-power / phase job (e.g. Tuhaye Temp Power -153%)
-// can't swing a person. Plus Serious QC walks, Clean Handoff, App Use, an admin
+// can't swing a person. Plus QC misses & items, Clean Handoff, App Use, an admin
 // Scoring panel (Task 7R: every knob behind sb4Config, not just the weights),
 // and a live "Jobs to Watch" panel flagged against a target line.
 //   Roster: a person's jobs = jobs where they were foreman OR lead (deduped),
@@ -40246,7 +40246,19 @@ const SB4_DEFAULTS = {
   // The DISPLAYED margin is never shrunk — the card still shows the person's
   // real median. Only the score moves. See sb4Shrink.
   marginPriorJobs: 5,
-  qc: { seriousCredit: 0, minorDivisor: 40, minorMaxCost: 50 },
+  // QC walk scoring is a WEIGHTED ITEM COUNT, not an all-or-nothing gate
+  // (Koy, 2026-08-11: "minor QC items should be counted as well"). The old
+  // shape gave a walk with any miss a flat `seriousCredit` and DISCARDED its
+  // minors, so 1 miss + 30 minors scored identically to 1 miss alone — and
+  // because that credit defaulted to 0, no amount of subtracting could ever
+  // make the minors matter. Now every item costs the walk something:
+  //     walkScore = 1 − min(maxCost, misses/missDivisor + minors/minorDivisor)
+  // Each divisor reads as "how many of THIS kind cost a whole walk", so at the
+  // defaults one miss costs a quarter of a walk and one minor costs a fortieth
+  // (4 misses, or 40 minors, or any mix summing to 1, wipes it out).
+  // `seriousCredit`/`minorMaxCost` are gone; `maxCost` replaces the latter and
+  // caps the COMBINED cost rather than only the minor half.
+  qc: { missDivisor: 4, minorDivisor: 40, maxCost: 100 },
   handoffDivisor: 20,
   // Entries PER JOB earning full app credit — density, not raw volume (Koy,
   // 2026-08-11: "keegan uses the app far more than anyone else in the company.
@@ -40288,9 +40300,9 @@ const sb4Config = (stored) => {
     marginTarget: typeof s.marginTarget === "number" ? s.marginTarget : SB4_DEFAULTS.marginTarget,
     marginPriorJobs: typeof s.marginPriorJobs === "number" ? s.marginPriorJobs : SB4_DEFAULTS.marginPriorJobs,
     qc: {
-      seriousCredit: typeof sq.seriousCredit === "number" ? sq.seriousCredit : SB4_DEFAULTS.qc.seriousCredit,
+      missDivisor: typeof sq.missDivisor === "number" ? sq.missDivisor : SB4_DEFAULTS.qc.missDivisor,
       minorDivisor: typeof sq.minorDivisor === "number" ? sq.minorDivisor : SB4_DEFAULTS.qc.minorDivisor,
-      minorMaxCost: typeof sq.minorMaxCost === "number" ? sq.minorMaxCost : SB4_DEFAULTS.qc.minorMaxCost,
+      maxCost: typeof sq.maxCost === "number" ? sq.maxCost : SB4_DEFAULTS.qc.maxCost,
     },
     handoffDivisor: typeof s.handoffDivisor === "number" ? s.handoffDivisor : SB4_DEFAULTS.handoffDivisor,
     appDenseCap: typeof s.appDenseCap === "number" ? s.appDenseCap : SB4_DEFAULTS.appDenseCap,
@@ -40336,9 +40348,13 @@ const sb4JobComplete = (j) => {
 // fromQC items via the shared sbv2WalkPunch helper — a voided item is
 // treated as if it never existed, same as everywhere else in this file. No
 // fromQC items in the walked tree(s) => "pass" (clean walk, nothing called).
-// Any item with severity==="serious" => "fail" (unchanged meaning — a single
-// serious item fails the walk, mirroring sb4Agg's own scoring rule just
-// below). Otherwise (>=1 item, none serious) => "passed_items" — the new
+// Any item with severity==="serious" (shown to walkers as "QC miss or bigger
+// item") => "fail" — a single miss still fails the WALK VERDICT. Note this is
+// deliberately no longer the same rule sb4Agg scores by: since 2026-08-11 the
+// scoreboard grades a walk on a weighted item count, so a miss costs a lot but
+// does not zero the walk. Verdict and score answer different questions — "does
+// this need to go back?" versus "how clean was it?" — and only the verdict is
+// all-or-nothing. Otherwise (>=1 item, no miss) => "passed_items" — the new
 // middle verdict.
 //
 // Two modes, selected by the optional `phase` param:
@@ -40481,7 +40497,7 @@ const qcStrandedItems = (job, cfg, nowMs) => {
 const sb4Agg = (js, cfg) => {
   const c = cfg || sb4Config(null);
   const marg = [], live = [], qcScores = [];
-  let qcSeriousWalks = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0, compSum = 0, compCount = 0, denseSum = 0;
+  let qcMissWalks = 0, qcMissSum = 0, qcMinorSum = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0, compSum = 0, compCount = 0, denseSum = 0;
   js.forEach(j => {
     // Snapshot the running totals so this job's OWN entry count can be diffed
     // out below (density's numerator). Diffing the same three counters that
@@ -40492,10 +40508,13 @@ const sb4Agg = (js, cfg) => {
     const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
     if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
     if (m != null && !_sb3Completed(j)) live.push({ job: String(j.name || "?").trim(), m: Math.round(m * 10) / 10, stage: _sb4Stage(j), special: sp }); // watch: live jobs
-    let seriousCount = 0, minorCount = 0, qcWalk = false;
+    let missCount = 0, minorCount = 0, qcWalk = false;
     [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
       if (!it || it.voided) return; punch++; if (!it.done) openPunch++;
-      if (it.fromQC) { qcWalk = true; if (it.severity === "serious") seriousCount++; else minorCount++; } // severity absent => minor, by design
+      // The STORED value stays "serious" — only the words on screen changed to
+      // "QC miss or bigger item". Renaming the stored value would buy nothing
+      // and would strand every item already marked.
+      if (it.fromQC) { qcWalk = true; if (it.severity === "serious") missCount++; else minorCount++; } // severity absent => minor, by design
     }));
     const st = _sb3lc(j.qcStatus);
     // "passed_items" (Task 5) is a recorded verdict same as pass/fail/fixed/completed — a job
@@ -40504,15 +40523,23 @@ const sb4Agg = (js, cfg) => {
     if (["pass", "fail", "fixed", "completed", "passed_items"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) qcWalk = true;
     if (qcWalk) {
       qcWalks++;
-      if (seriousCount > 0) qcSeriousWalks++;
+      if (missCount > 0) qcMissWalks++;
+      qcMissSum += missCount;
       qcMinorSum += minorCount;
-      // any serious item zeroes (or partial-credits, if tuned) the whole walk; otherwise lose a little per minor item, floored.
-      // minorCount===0 short-circuits BEFORE the division: with minorDivisor tunable to 0 (admin slider),
-      // 0/0 is NaN, which Math.min propagates and poisons the whole aggregate (NaN != null, so NORM/overallOf
-      // wouldn't filter it). Zero minor items is unconditionally a perfect walk regardless of the divisor, so
-      // this isn't just a guard — it's the correct answer anyway. A nonzero minorCount over a 0 divisor is
-      // +Infinity, not NaN, and Math.min already clamps that to minorMaxCost/100 correctly on its own.
-      qcScores.push(seriousCount > 0 ? c.qc.seriousCredit / 100 : minorCount === 0 ? 1 : 1 - Math.min(c.qc.minorMaxCost / 100, minorCount / c.qc.minorDivisor));
+      // Weighted item count: EVERY item costs the walk something, so a walk
+      // with a miss is still graded on how tidy the rest of it was. The old
+      // gate discarded minors the moment a miss existed.
+      // Each ===0 short-circuits BEFORE its division: with either divisor
+      // tunable to 0 (admin slider), 0/0 is NaN, which Math.min propagates and
+      // poisons the whole aggregate (NaN != null, so NORM/overallOf wouldn't
+      // filter it). Zero items of a kind is unconditionally zero cost from that
+      // kind regardless of its divisor, so this isn't just a guard — it's the
+      // correct answer anyway. A nonzero count over a 0 divisor is +Infinity,
+      // not NaN, and Math.min already clamps that to maxCost/100 on its own
+      // (Infinity + a finite number is still Infinity, so the sum is safe too).
+      const missCost = missCount === 0 ? 0 : missCount / c.qc.missDivisor;
+      const minorCost = minorCount === 0 ? 0 : minorCount / c.qc.minorDivisor;
+      qcScores.push(_sb4Clamp(1 - Math.min(c.qc.maxCost / 100, missCost + minorCost)));
     }
     updates += (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
     questions += _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
@@ -40553,7 +40580,8 @@ const sb4Agg = (js, cfg) => {
     jobs: js.length,
     margin: _sb4Median(marg), marginN: marg.length,
     qc: qcWalks ? Math.round(qcScores.reduce((a, b) => a + b, 0) / qcWalks * 10000) / 10000 : null, // 0-1 severity score, mean of per-walk scores — NOT a raw count
-    qcSeriousPct: qcWalks ? Math.round(qcSeriousWalks / qcWalks * 100) : null,
+    qcMissPct: qcWalks ? Math.round(qcMissWalks / qcWalks * 100) : null,   // % of walks carrying at least one miss — the stat card headline
+    qcMissAvg: qcWalks ? Math.round(qcMissSum / qcWalks * 10) / 10 : null, // misses per walk — now scored per ITEM, so 3 misses != 1 miss
     qcMinorAvg: qcWalks ? Math.round(qcMinorSum / qcWalks * 10) / 10 : null,
     qcWalks,
     handoff: punch > 0 ? Math.round(openPunch / punch * 1000) / 10 : null,
@@ -40804,7 +40832,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
           <div className="wgroup">
             <div className="wgtitle">Weights</div>
             <div className="hint">How much each stat counts toward the score (relative — they needn't total 100).</div>
-            {[["margin", "Profit margin", false], ["qc", "Serious QC walks", false], ["handoff", "Punch left open", false], ["app", "Logged in app", true]].map(t => (
+            {[["margin", "Profit margin", false], ["qc", "QC misses & items", false], ["handoff", "Punch left open", false], ["app", "Logged in app", true]].map(t => (
               <div className={"wrow" + (t[2] ? " ind" : "")} key={t[0]}>
                 <label>{t[1]}</label>
                 <input type="range" min="0" max="60" value={weights[t[0]]} onChange={e => saveWeights({ [t[0]]: +e.target.value })} />
@@ -40815,16 +40843,16 @@ function ScoreboardV4({ jobs, users = [], identity }) {
           </div>
 
           <div className="wgroup">
-            <div className="wgtitle">QC quality</div>
-            <div className="hint">How the Serious QC walks score is calculated.</div>
-            {[["seriousCredit", "Credit for a walk with a serious item %", 0, 100], ["minorDivisor", "Minor QC items that cost half a walk", 0, 100], ["minorMaxCost", "Most a walk can lose to minor items %", 0, 100]].map(t => (
+            <div className="wgtitle">QC misses &amp; items</div>
+            <div className="hint">How the QC misses &amp; items score is calculated. Every item on a walk costs it something — a QC miss costs a lot, a minor item a little — so a walk with a miss is still graded on how tidy the rest of it was.</div>
+            {[["missDivisor", "QC misses that cost a whole walk", 1, 20], ["minorDivisor", "Minor QC items that cost a whole walk", 1, 100], ["maxCost", "Most a walk can lose %", 0, 100]].map(t => (
               <div className="wrow" key={t[0]}>
                 <label>{t[1]}</label>
                 <input type="range" min={t[2]} max={t[3]} value={cfg.qc[t[0]]} onChange={e => saveCfg({ qc: { [t[0]]: +e.target.value } })} />
                 <div className="wv">{cfg.qc[t[0]]}</div>
               </div>
             ))}
-            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ qc: SB4_DEFAULTS.qc })}>Reset QC quality to defaults</button></div>
+            <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveCfg({ qc: SB4_DEFAULTS.qc })}>Reset QC misses &amp; items to defaults</button></div>
           </div>
 
           <div className="wgroup">
@@ -40868,7 +40896,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
             </div>
             <div className="stats">
               <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">{marginNote(r)} · goal {cfg.marginTarget}%</div></div>
-              <div className="stat"><div className="sl">Serious QC walks</div><div className="sv">{r.qcSeriousPct == null ? "—" : r.qcSeriousPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMinorAvg ?? "—"} minor items per walk</div></div>
+              <div className="stat"><div className="sl">Walks with a QC miss</div><div className="sv">{r.qcMissPct == null ? "—" : r.qcMissPct + "%"}</div><div className="sh">fewer is better · avg {r.qcMissAvg ?? "—"} misses + {r.qcMinorAvg ?? "—"} minor per walk</div></div>
               <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
               <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.appDensity ?? "—"}</div><div className="sh">entries per job · {r.appVolume} total · {r.appComplete ?? "—"}% of jobs fully tracked</div></div>
             </div>
@@ -45980,7 +46008,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - 4-way inspection (rules 14/15/16)
   - Final inspection (rules 23/24)
   - QC walks ('QCWalkSection')
-  - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v377' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "Serious QC item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring, per-job density, small-sample handling, and every constant on a dial.** A walk with any serious item scores 'seriousCredit' (default 0); otherwise '1 − min(minorMaxCost, minors/minorDivisor)'. **App Usage stops counting raw volume and counts DENSITY — entries per job** (Koy: *"keegan uses the app far more than anyone else in the company. look at the desnity of the kweller job compared to any other"* — Kweller is 591 entries, the densest job in the company by 64%). Raw volume rewarded HOLDING MORE JOBS, which is roster luck; per-job completeness saturates the moment a job has one of each, so a deeply documented job scored identically to a token one. 'appDensity = entries / completeness-eligible jobs' shares completeness's exact eligibility gate (temp peds and quick jobs contribute to neither the numerator nor the denominator), blends against completeness via 'appMix', and normalizes at the new 'appDenseCap' dial (default 150/job; the old whole-book 'appCap' is gone — different units, unmigratable, a saved value is simply ignored). Where every eligible job is excluded, 'app' is now **null** and 'overallOf' drops the dimension and re-weights across the other three, instead of falling back to volume counted on the very jobs the dimension excludes. **'sb4Shrink' adds small-sample handling to margin** (Koy: *"gage doesnt make sense whys hes so high i guess just his profitmargin with fewer jobs"*): a median of five jobs is a rumor, so each row's SCORED margin is pulled toward the board's own median at the standard 'n/(n+k)' weight, 'k = marginPriorJobs' (default 5 jobs, 0 disables it byte-for-byte). The **displayed** margin is never shrunk — the card still shows the real median and discloses the scored figure and sample size beneath it ("scored 41.3% on 5 jobs") whenever the two diverge by half a point. A one-row board is a mathematical no-op (the baseline is that row's own margin), so a thin Leads board cannot be distorted by being small, and shrinkage only ever compresses toward the middle — it cannot invent a lead. All 15 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board at the shipped defaults: **Keegan 95, Daegan 91, Gage 90, Vasa 79, Abraham 77, Colby 72** — Gage falls off the top (his 55.75% median scores as 41.3% on five jobs) and Daegan rises to a slim second, both of which Koy called for by name. **A caveat recorded honestly:** at 'marginDivisor' 30 both 55.75% and 41.3% clamp to full margin credit, so shrinkage does not move Gage's RANK at today's settings — its protection binds whenever a thin book lands below the full-credit bar, and it is what stops a future one-job hot streak from topping the board (proven by test: a 30-job 40% book now outranks a 1-job 60% streak, which is exactly backwards from how the board read it before). **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 255-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot). The density/shrinkage round adds its own wiring trap: the harness extracts 'overallOf' itself and pins it to 33 for a row whose real margin is 60% and whose shrunk margin is 10%, because 'sb4Shrink' can be flawless and the board still ignore it — reading 'r.margin' there instead of 'r.marginScore' scores 100, and nothing else in the suite would notice. Three mutations were run to prove the new gates bite: reverting density to raw volume fails 9 assertions, unwiring 'overallOf' fails 2, and removing the 'marginPriorJobs' off-switch fails 2 (a negative dial value would otherwise become a sign-flipped amplifier, scoring a foreman at −100)
+  - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v377' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "QC miss or bigger item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring, per-job density, small-sample handling, and every constant on a dial.** QC walk scoring is a WEIGHTED ITEM COUNT: 'walkScore = 1 − min(maxCost, misses/missDivisor + minors/minorDivisor)', so at the defaults one QC miss costs a quarter of a walk and one minor item a fortieth, and four misses (or forty minors, or any mix summing to one) wipes it out. This replaced an all-or-nothing gate — Koy, 2026-08-11: *"minor QC items should be counted as well"* — under which any miss scored a flat 'seriousCredit' and the walk's minors were DISCARDED, so 1 miss + 30 minors scored identically to 1 miss alone; and because that credit defaulted to 0, no amount of subtracting could ever have made the minors matter. Proven by test: a miss walk carrying 4 extra minor items now scores 0.65 against 0.75 for the same walk without them, a comparison that was impossible when both were pinned to 0. The wording changed with it — "Serious QC item" reads "QC miss or bigger item" everywhere, on the field chip, the stat card ("Walks with a QC miss") and all three dials — but the STORED value is still '"serious"', so nothing already marked is stranded. The verdict rule is deliberately NOT the scoring rule: one miss still fails the walk verdict outright, because "does this need to go back?" and "how clean was it?" are different questions and only the first is all-or-nothing. **App Usage stops counting raw volume and counts DENSITY — entries per job** (Koy: *"keegan uses the app far more than anyone else in the company. look at the desnity of the kweller job compared to any other"* — Kweller is 591 entries, the densest job in the company by 64%). Raw volume rewarded HOLDING MORE JOBS, which is roster luck; per-job completeness saturates the moment a job has one of each, so a deeply documented job scored identically to a token one. 'appDensity = entries / completeness-eligible jobs' shares completeness's exact eligibility gate (temp peds and quick jobs contribute to neither the numerator nor the denominator), blends against completeness via 'appMix', and normalizes at the new 'appDenseCap' dial (default 150/job; the old whole-book 'appCap' is gone — different units, unmigratable, a saved value is simply ignored). Where every eligible job is excluded, 'app' is now **null** and 'overallOf' drops the dimension and re-weights across the other three, instead of falling back to volume counted on the very jobs the dimension excludes. **'sb4Shrink' adds small-sample handling to margin** (Koy: *"gage doesnt make sense whys hes so high i guess just his profitmargin with fewer jobs"*): a median of five jobs is a rumor, so each row's SCORED margin is pulled toward the board's own median at the standard 'n/(n+k)' weight, 'k = marginPriorJobs' (default 5 jobs, 0 disables it byte-for-byte). The **displayed** margin is never shrunk — the card still shows the real median and discloses the scored figure and sample size beneath it ("scored 41.3% on 5 jobs") whenever the two diverge by half a point. A one-row board is a mathematical no-op (the baseline is that row's own margin), so a thin Leads board cannot be distorted by being small, and shrinkage only ever compresses toward the middle — it cannot invent a lead. All 15 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board at the shipped defaults: **Keegan 95, Daegan 91, Gage 90, Vasa 79, Abraham 77, Colby 72** — Gage falls off the top (his 55.75% median scores as 41.3% on five jobs) and Daegan rises to a slim second, both of which Koy called for by name. **A caveat recorded honestly:** at 'marginDivisor' 30 both 55.75% and 41.3% clamp to full margin credit, so shrinkage does not move Gage's RANK at today's settings — its protection binds whenever a thin book lands below the full-credit bar, and it is what stops a future one-job hot streak from topping the board (proven by test: a 30-job 40% book now outranks a 1-job 60% streak, which is exactly backwards from how the board read it before). **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 273-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot). The density/shrinkage round adds its own wiring trap: the harness extracts 'overallOf' itself and pins it to 33 for a row whose real margin is 60% and whose shrunk margin is 10%, because 'sb4Shrink' can be flawless and the board still ignore it — reading 'r.margin' there instead of 'r.marginScore' scores 100, and nothing else in the suite would notice. Three mutations were run to prove the new gates bite: reverting density to raw volume fails 9 assertions, unwiring 'overallOf' fails 2, and removing the 'marginPriorJobs' off-switch fails 2 (a negative dial value would otherwise become a sign-flipped amplifier, scoring a foreman at −100)
   - Status labels carry their own domain word · 'shipped 2026-08-10' · 'SW v375' · Koy: "make sure its all labeled better like qc needs to be included where it applies." 'RT_STATUSES', 'QC_STATUSES' and 'MATTERPORT_STATUSES' all rendered the IDENTICAL bare label **"Needs to be Scheduled"** — and those pills sit side by side on job cards, Open Items and the Forecast, so the reader couldn't tell which thing needed scheduling. QC was the worst offender because 5 of its 6 labels already said "QC" and only that one didn't. Now every label names its own system: QC → **"QC Needs to be Scheduled"** (completing the set), Matterport → **"Scan Needs to be Scheduled"** (matching its existing "Scan Scheduled"/"Scan Complete"), and Return Trips → **"RT Needs to be Scheduled" / "RT Scheduled" / "RT Complete"** (RT previously had no domain word at all on any of its three). Also deleted a hardcoded '"Needs to be Scheduled"' duplicate in the Forecast event builder that shadowed the registry and would have gone stale — that surface now reads the registry like everything else, so there is one source of truth per label. Verified no code compares against label TEXT: every status lookup keys off 'value', so this is display-only and inert. Deliberately left alone: Temp Ped and Quick Job status sets, which render on their own dedicated cards where the domain is never ambiguous
   - Failed inspection → punch items
 - **Photos** · 'shipped' · 'PhotoAttacher' · shared upload+thumbnail component

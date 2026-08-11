@@ -49,7 +49,7 @@
  * tunable via cfg.qc.seriousCredit), otherwise it loses a little per minor
  * item, floored at cfg.qc.minorMaxCost. `qc` becomes the MEAN of these
  * per-walk 0-1 scores (previously: raw qcItems/qcWalks, a defect COUNT, not
- * a score). New fields `qcSeriousPct`/`qcMinorAvg`/`qcWalks` ride along for
+ * a score). New fields `qcMissPct`/`qcMinorAvg`/`qcWalks` ride along for
  * the stat card. Block 5 below extracts `clamp`/`NORM` too — both are
  * declared INSIDE the ScoreboardV4 component body, past the MAIN region's
  * end marker, so they need their own extraction — to prove the single
@@ -370,7 +370,7 @@ assertEq(row.margin, 25, "row.margin (median of [20,30])");
 // 1-minor-item walks, 0.975 each). margin/handoff above and below are
 // untouched, still proving true non-regression.
 assertEq(row.qc, 0.975, "row.qc (Task 2R severity score: mean of two 1-minor walks = 0.975, not the old raw count)");
-assertEq(row.qcSeriousPct, 0, "row.qcSeriousPct survives sb4Build's spread (0 — no serious items in these fixtures)");
+assertEq(row.qcMissPct, 0, "row.qcMissPct survives sb4Build's spread (0 — no serious items in these fixtures)");
 assertEq(row.qcWalks, 2, "row.qcWalks survives sb4Build's spread (2 — both jobs had a QC walk)");
 assertEq(row.handoff, 75, "row.handoff (3 open / 4 punch * 100)");
 // Task 3R: app's VALUE is likewise intentionally different from the Task 1R/2R
@@ -399,8 +399,10 @@ assertEq(SB4_DEFAULTS.appDenseCap, 150, "SB4_DEFAULTS.appDenseCap");
 assertEq(SB4_DEFAULTS.marginPriorJobs, 5, "SB4_DEFAULTS.marginPriorJobs");
 assertEq(SB4_DEFAULTS.appCap, undefined, "SB4_DEFAULTS.appCap is GONE — replaced by appDenseCap (different units: per-job, not whole-book)");
 assertEq(SB4_DEFAULTS.qc.minorDivisor, 40, "SB4_DEFAULTS.qc.minorDivisor");
-assertEq(SB4_DEFAULTS.qc.minorMaxCost, 50, "SB4_DEFAULTS.qc.minorMaxCost");
-assertEq(SB4_DEFAULTS.qc.seriousCredit, 0, "SB4_DEFAULTS.qc.seriousCredit");
+assertEq(SB4_DEFAULTS.qc.maxCost, 100, "SB4_DEFAULTS.qc.maxCost");
+assertEq(SB4_DEFAULTS.qc.missDivisor, 4, "SB4_DEFAULTS.qc.missDivisor");
+assertEq(SB4_DEFAULTS.qc.seriousCredit, undefined, "SB4_DEFAULTS.qc.seriousCredit is GONE — the all-or-nothing gate it configured no longer exists");
+assertEq(SB4_DEFAULTS.qc.minorMaxCost, undefined, "SB4_DEFAULTS.qc.minorMaxCost is GONE — replaced by maxCost, which caps the COMBINED miss+minor cost, not just the minor half");
 assertEq(SB4_DEFAULTS.appMix, 50, "SB4_DEFAULTS.appMix");
 assertEq(SB4_DEFAULTS.marginTarget, 15, "SB4_DEFAULTS.marginTarget");
 assertEq(SB4_DEFAULTS.strandedDays, 7, "SB4_DEFAULTS.strandedDays");
@@ -410,49 +412,78 @@ assertTrue(SB4_DEFAULT_WEIGHTS === SB4_DEFAULTS.weights, "SB4_DEFAULT_WEIGHTS ==
 
 console.log("\n── 4. MERGE: sb4Config deep-merges `stored` over SB4_DEFAULTS ──");
 assertEq(sb4Config({ weights: { margin: 10 } }).weights.qc, 25, "partial weights override keeps sibling qc at default (25)");
-assertEq(sb4Config({ qc: { minorDivisor: 20 } }).qc.seriousCredit, 0, "partial qc override keeps sibling seriousCredit at default (0)");
+assertEq(sb4Config({ qc: { minorDivisor: 20 } }).qc.missDivisor, 4, "partial qc override keeps sibling missDivisor at default (4)");
 assertEq(sb4Config(null), SB4_DEFAULTS, "sb4Config(null) deep-equals SB4_DEFAULTS");
 assertEq(sb4Config({ appMix: "x" }).appMix, 50, "non-numeric appMix override is ignored, falls back to default (50)");
 
-console.log("\n── 5. TASK 2R: severity-aware QC score (sb4Agg.qc/qcSeriousPct/qcMinorAvg/qcWalks + NORM.qc) ──");
+console.log("\n── 5. TASK 2R: severity-aware QC score (sb4Agg.qc/qcMissPct/qcMinorAvg/qcWalks + NORM.qc) ──");
 // jobB2: a deep clone of jobB with its one fromQC item (p3) marked serious —
 // NOT a mutation of the shared `jobB` fixture, which block 2 above still
 // needs unmodified (1 minor item, walk score 0.975).
 const jobB2 = JSON.parse(JSON.stringify(jobB));
 jobB2.finishPunch.main.general.find(it => it.id === "p3").severity = "serious";
 
-// Base case, defaults (seriousCredit 0, minorDivisor 40, minorMaxCost 50):
+// Base case, defaults (missDivisor 4, minorDivisor 40, maxCost 100):
 // jobA has 1 fromQC item (p2), no severity => minor. jobB has 1 fromQC item
-// (p3), no severity => minor. Neither job has a serious item.
-//   walk score (either job) = 1 - min(0.5, 1/40) = 1 - 0.025 = 0.975
+// (p3), no severity => minor. Neither job has a miss.
+//   walk score (either job) = 1 - min(1, 0/4 + 1/40) = 1 - 0.025 = 0.975
 const baseAgg = sb4Agg([jobA, jobB]);
 assertEq(baseAgg.qc, 0.975, "base: qc = mean(0.975, 0.975) = 0.975 (two 1-minor-item walks)");
-assertEq(baseAgg.qcSeriousPct, 0, "base: qcSeriousPct = 0 (no serious items anywhere)");
+assertEq(baseAgg.qcMissPct, 0, "base: qcMissPct = 0 (no misses anywhere)");
 assertEq(baseAgg.qcMinorAvg, 1, "base: qcMinorAvg = 1 (1 minor item/walk average)");
+assertEq(baseAgg.qcMissAvg, 0, "base: qcMissAvg = 0 (misses are now scored per ITEM, so the card reports their average too)");
 assertEq(baseAgg.qcWalks, 2, "base: qcWalks = 2 (both jobs had a QC walk)");
 
-// jobB2's p3 is now serious => its walk scores seriousCredit/100 = 0/100 = 0
-// regardless of minor count (it has none) — ANY serious item zeroes the
-// walk. jobA is untouched at 0.975.
+// jobB2's p3 is now a miss => its walk costs 1/4. It has no minors, so the
+// walk scores 1 - 0.25 = 0.75. jobA is untouched at 0.975.
 const seriousAgg = sb4Agg([jobA, jobB2]);
-assertEq(seriousAgg.qc, 0.4875, "serious: qc = mean(0.975, 0) = 0.4875 — one serious item drags the mean, doesn't just shave it");
-assertEq(seriousAgg.qcSeriousPct, 50, "serious: qcSeriousPct = 50 (1 of 2 walks has >=1 serious item)");
+assertEq(seriousAgg.qc, 0.8625, "miss: qc = mean(0.975, 0.75) = 0.8625 — a miss costs a quarter of a walk, it no longer erases it");
+assertEq(seriousAgg.qcMissPct, 50, "miss: qcMissPct = 50 (1 of 2 walks has >=1 miss)");
+assertEq(seriousAgg.qcMissAvg, 0.5, "miss: qcMissAvg = 0.5 (1 miss across 2 walks)");
 
-// Knob proof 1 — raising seriousCredit gives the serious walk PARTIAL credit
-// instead of zero (still uses jobB2, the severity-marked fixture).
-const creditAgg = sb4Agg([jobA, jobB2], sb4Config({ qc: { seriousCredit: 50 } }));
-assertEq(creditAgg.qc, 0.7375, "knob: seriousCredit 50 => jobB2 walk 0.5 => mean(0.975, 0.5) = 0.7375");
+// ═══ THE HEADLINE CHANGE (Koy, 2026-08-11: "minor QC items should be counted
+// as well"). Under the OLD all-or-nothing gate, a walk with a miss scored a
+// flat seriousCredit and its minors were DISCARDED — 1 miss + 4 minors and
+// 1 miss + 0 minors both scored exactly 0, indistinguishable. Now every item
+// costs the walk something, so the tidier walk wins. This pair is the whole
+// point of the change; if the gate ever comes back, these two go equal and
+// this block fails. ═══
+const jobMissOnly = { id: "mo", name: "Fixture Miss Only", foreman: "T", qcStatus: "fail",
+  qcPunch: { main: { general: [ { id: "m1", text: "a", fromQC: true, severity: "serious" } ] } } };
+const jobMissPlusMinors = { id: "mm", name: "Fixture Miss Plus Minors", foreman: "T", qcStatus: "fail",
+  qcPunch: { main: { general: [
+    { id: "m1", text: "a", fromQC: true, severity: "serious" },
+    { id: "n1", text: "b", fromQC: true }, { id: "n2", text: "c", fromQC: true },
+    { id: "n3", text: "d", fromQC: true }, { id: "n4", text: "e", fromQC: true } ] } } };
+const missOnly = sb4Agg([jobMissOnly]).qc, missPlus = sb4Agg([jobMissPlusMinors]).qc;
+assertEq(missOnly, 0.75, "1 miss + 0 minors = 1 - 1/4 = 0.75");
+assertEq(missPlus, 0.65, "1 miss + 4 minors = 1 - (1/4 + 4/40) = 0.65 — the minors are COUNTED on a miss walk");
+assertTrue(missPlus < missOnly, "THE FIX: a miss walk with 4 extra minor items scores WORSE than the same walk without them. Under the old gate both were exactly 0 and this comparison was impossible", `${missPlus} vs ${missOnly}`);
+
+// Knob proof 1 — missDivisor sets what a single miss costs.
+const missKnob = sb4Agg([jobA, jobB2], sb4Config({ qc: { missDivisor: 2 } }));
+assertEq(missKnob.qc, 0.7375, "knob: missDivisor 2 => a miss costs half a walk => jobB2 walk 0.5 => mean(0.975, 0.5) = 0.7375");
+assertEq(sb4Agg([jobMissOnly], sb4Config({ qc: { missDivisor: 1 } })).qc, 0, "knob: missDivisor 1 => a single miss costs a WHOLE walk (the old gate is still reachable as a dial position, it is just no longer the default)");
 
 // Knob proof 2 — a harsher minorDivisor bites into a purely-minor walk. jobA
 // ALONE (not jobA+jobB) so this isolates the single-walk formula per the
 // brief's "jobA walk" wording, uncontaminated by jobB's own score.
 const divisorAgg = sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 2 } }));
-assertEq(divisorAgg.qc, 0.5, "knob: minorDivisor 2 => jobA walk 1 - min(0.5, 1/2) = 0.5");
+assertEq(divisorAgg.qc, 0.5, "knob: minorDivisor 2 => jobA walk 1 - min(1, 1/2) = 0.5");
 
-// Self-review Q1 — "does a walk with one serious item really score zero?"
-// jobB2 ISOLATED (not blended with jobA), so this is a direct proof, not an
-// inference from a mean: the walk's OWN score is exactly 0, at defaults.
-assertEq(sb4Agg([jobB2]).qc, 0, "self-review: jobB2 alone (its only fromQC item is serious) scores exactly 0, isolated from any blending");
+// Knob proof 3 — maxCost floors the COMBINED cost, not just the minor half
+// (which is what the old minorMaxCost did). jobMissPlusMinors costs 0.35;
+// capping at 20% must floor it at 0.80, proving misses ride the same cap.
+assertEq(sb4Agg([jobMissPlusMinors], sb4Config({ qc: { maxCost: 20 } })).qc, 0.8, "knob: maxCost 20 caps the COMBINED miss+minor cost at 0.2 => walk floors at 0.80");
+assertEq(sb4Agg([jobMissPlusMinors], sb4Config({ qc: { maxCost: 0 } })).qc, 1, "knob: maxCost 0 means a walk can never lose anything — a valid dial position, and not a NaN");
+
+// A walk can still be driven to exactly 0 — 4 misses at the default divisor.
+const jobFourMisses = { id: "fm", name: "Fixture Four Misses", foreman: "T", qcStatus: "fail",
+  qcPunch: { main: { general: [1,2,3,4].map(i => ({ id: `f${i}`, text: "x", fromQC: true, severity: "serious" })) } } };
+assertEq(sb4Agg([jobFourMisses]).qc, 0, "4 misses = 1 - 4/4 = 0 exactly — the floor is reachable, it just takes four misses instead of one");
+const jobSixMisses = { id: "sm", name: "Fixture Six Misses", foreman: "T", qcStatus: "fail",
+  qcPunch: { main: { general: [1,2,3,4,5,6].map(i => ({ id: `s${i}`, text: "x", fromQC: true, severity: "serious" })) } } };
+assertEq(sb4Agg([jobSixMisses]).qc, 0, "6 misses clamps at 0, it does not go NEGATIVE and drag the mean below what any real walk could reach");
 
 // Self-review Q2 — "does a job with zero QC items still count as a clean
 // walk when the status says a walk happened?" jobC has a qcStatus ("pass")
@@ -464,24 +495,24 @@ const jobC = { id: "c", name: "Fixture C", foreman: "T", qcStatus: "pass" };
 const cleanAgg = sb4Agg([jobC]);
 assertEq(cleanAgg.qc, 1, "self-review: qcStatus-only walk with zero fromQC items scores a perfect 1 (clean walk, not undiagnosed)");
 assertEq(cleanAgg.qcWalks, 1, "self-review: qcStatus alone (no punch tree) still counts as a walk — detection logic is unchanged");
-assertEq(cleanAgg.qcSeriousPct, 0, "self-review: a clean walk contributes 0 to qcSeriousPct");
+assertEq(cleanAgg.qcMissPct, 0, "self-review: a clean walk contributes 0 to qcMissPct");
 assertEq(cleanAgg.qcMinorAvg, 0, "self-review: a clean walk contributes 0 to qcMinorAvg");
 
 // Self-review Q3 — the brief flags j.qcPunch by name as a preserve-this trap
 // ("the live sb4Agg already walks it and you must preserve that"). jobD's
 // ONLY punch tree is qcPunch (no roughPunch/finishPunch at all), with one
-// serious + one minor fromQC item, so a severity-rewrite that accidentally
+// miss + one minor fromQC item, so a severity-rewrite that accidentally
 // dropped qcPunch from the walked array would silently score this job as an
-// undiagnosed null instead of a failed (score-0) walk.
+// undiagnosed null instead of a penalised walk.
 const jobD = { id: "d", name: "Fixture D", foreman: "T", qcStatus: "fail",
   qcPunch: { main: { general: [ { id: "q1", text: "a", fromQC: true, severity: "serious" }, { id: "q2", text: "b", fromQC: true } ] } } };
 const qcPunchAgg = sb4Agg([jobD]);
 assertEq(qcPunchAgg.qcWalks, 1, "self-review: qcPunch-only job still counts as a walk (qcPunch is walked, not dropped)");
-assertEq(qcPunchAgg.qc, 0, "self-review: qcPunch's serious item (q1) zeroes the walk, proving qcPunch items are read");
-assertEq(qcPunchAgg.qcSeriousPct, 100, "self-review: qcPunch-only walk registers as 100% serious");
+assertEq(qcPunchAgg.qc, 0.725, "self-review: qcPunch's miss (q1) AND its minor (q2) both bite — 1 - (1/4 + 1/40) = 0.725, proving qcPunch items are read and that both severities land from the same tree");
+assertEq(qcPunchAgg.qcMissPct, 100, "self-review: qcPunch-only walk registers as 100% of walks carrying a miss");
 
 // Self-review Q4 — the brief spells out "it.fromQC && !it.voided": a voided
-// serious item must NOT zero the walk. jobE has one voided serious item
+// miss must NOT cost the walk anything. jobE has one voided serious item
 // (excluded entirely, same as it always was for punch/openPunch) and one
 // live minor item — the walk should score as a plain 1-minor walk (0.975),
 // exactly as if the voided item were never there.
@@ -491,7 +522,7 @@ const jobE = { id: "e", name: "Fixture E", foreman: "T", qcStatus: "fail",
     { id: "v2", text: "live-minor", fromQC: true } ] } } };
 const voidedAgg = sb4Agg([jobE]);
 assertEq(voidedAgg.qc, 0.975, "self-review: a voided serious item doesn't count — walk scores as if it only had the 1 live minor item");
-assertEq(voidedAgg.qcSeriousPct, 0, "self-review: a voided serious item doesn't move qcSeriousPct");
+assertEq(voidedAgg.qcMissPct, 0, "self-review: a voided serious item doesn't move qcMissPct");
 
 // REVIEW FIX ROUND 1 — unguarded divide-by-zero (src/App.js:39738). When
 // c.qc.minorDivisor is tuned to 0 (reachable via Task 7R's admin slider) AND
@@ -523,15 +554,30 @@ assertEq(cleanZeroDiv.qc, 1, "fix: clean walk (0 minor) under minorDivisor:0 sco
 // to the max penalty, same as an extremely harsh (but finite) divisor would.
 const minorZeroDiv = sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 0 } }));
 assertTrue(Number.isNaN(minorZeroDiv.qc) === false, "fix: 1-minor walk (jobA) under minorDivisor:0 is not NaN", `got ${minorZeroDiv.qc}`);
-assertEq(minorZeroDiv.qc, 0.5, "fix: jobA (1 minor item) under minorDivisor:0 clamps to the max penalty => 1 - minorMaxCost/100 = 0.5");
+assertEq(minorZeroDiv.qc, 0, "fix: jobA (1 minor item) under minorDivisor:0 clamps to the max penalty => 1 - maxCost/100 = 0 (maxCost now defaults to 100, so the floor is 0, not the old minorMaxCost 50)");
+
+// Case 2b — the SAME bug class on the dial this round introduced. missDivisor
+// is new, so it needs its own 0/0 proof: a walk with zero misses must not
+// divide 0/0, and a walk WITH misses over a 0 divisor must resolve through
+// the cap rather than to NaN. The sum `missCost + minorCost` is the new
+// exposure — Infinity plus a finite number is still Infinity (checked, not
+// assumed), so one poisoned side cannot smuggle a NaN through the other.
+const missZeroDivClean = sb4Agg([jobA], sb4Config({ qc: { missDivisor: 0 } }));
+assertTrue(Number.isNaN(missZeroDivClean.qc) === false, "fix: a walk with ZERO misses under missDivisor:0 is not NaN (the 0/0 case on the new dial)", `got ${missZeroDivClean.qc}`);
+assertEq(missZeroDivClean.qc, 0.975, "fix: zero misses under missDivisor:0 costs nothing from the miss side — jobA still scores its 1-minor 0.975, untouched");
+const missZeroDivHit = sb4Agg([jobMissPlusMinors], sb4Config({ qc: { missDivisor: 0 } }));
+assertTrue(Number.isNaN(missZeroDivHit.qc) === false, "fix: a walk WITH a miss under missDivisor:0 is not NaN — Infinity + a finite minor cost is still Infinity, and Math.min resolves it to the cap", `got ${missZeroDivHit.qc}`);
+assertEq(missZeroDivHit.qc, 0, "fix: a miss under missDivisor:0 clamps to the full maxCost => 0");
+const bothZeroDiv = sb4Agg([jobC], sb4Config({ qc: { missDivisor: 0, minorDivisor: 0 } }));
+assertEq(bothZeroDiv.qc, 1, "fix: a CLEAN walk with BOTH divisors at 0 is a perfect 1 — two independent 0/0 short-circuits, neither leaking into the sum");
 
 // Case 3 — a mixed aggregate (jobC clean + jobA 1-minor) under
 // minorDivisor:0 must stay finite and equal the mean of the two walk
-// scores above (1 and 0.5) — proves the fix doesn't just handle isolated
+// scores above (1 and 0) — proves the fix doesn't just handle isolated
 // single-job cases but the real multi-walk aggregation path.
 const mixedZeroDiv = sb4Agg([jobC, jobA], sb4Config({ qc: { minorDivisor: 0 } }));
 assertTrue(Number.isNaN(mixedZeroDiv.qc) === false, "fix: mixed aggregate (1 clean + 1 minor walk) under minorDivisor:0 is not NaN", `got ${mixedZeroDiv.qc}`);
-assertEq(mixedZeroDiv.qc, 0.75, "fix: mixed aggregate = mean(1, 0.5) = 0.75");
+assertEq(mixedZeroDiv.qc, 0.5, "fix: mixed aggregate = mean(1, 0) = 0.5");
 
 // Non-regression — divisor > 0 must be byte-identical to before this fix.
 // Re-run two of the existing (already-passing) cases through the exact same
@@ -542,7 +588,7 @@ assertEq(sb4Agg([jobA], sb4Config({ qc: { minorDivisor: 2 } })).qc, 0.5, "fix: n
 // No-walk case: qc (and the display fields) must stay null, not 0 — a person
 // with zero QC walks is undiagnosed, not "perfect."
 assertEq(sb4Agg([]).qc, null, "empty jobs list: qc stays null (no walks, not a perfect score)");
-assertEq(sb4Agg([]).qcSeriousPct, null, "empty jobs list: qcSeriousPct stays null");
+assertEq(sb4Agg([]).qcMissPct, null, "empty jobs list: qcMissPct stays null");
 assertEq(sb4Agg([]).qcMinorAvg, null, "empty jobs list: qcMinorAvg stays null");
 assertEq(sb4Agg([]).qcWalks, 0, "empty jobs list: qcWalks is 0");
 
@@ -1027,16 +1073,24 @@ assertEq(typeof NORM, "function", "NORM is now a factory function (cfg => normal
 // (`typeof s.X === "number" ? s.X : default`). A corrupted/hand-edited
 // doc's non-numeric qc.* must fall back to its own default, not reach
 // sb4Agg's arithmetic, and a valid sibling in the SAME patch must survive. ──
-const qcBadDivisor = sb4Config({ qc: { minorDivisor: "bad", seriousCredit: 10 } });
+const qcBadDivisor = sb4Config({ qc: { minorDivisor: "bad", missDivisor: 10 } });
 assertEq(qcBadDivisor.qc.minorDivisor, 40, "fix: a non-numeric qc.minorDivisor (string) falls back to SB4_DEFAULTS.qc.minorDivisor (40)");
-assertEq(qcBadDivisor.qc.seriousCredit, 10, "fix: a VALID sibling in the same patch (seriousCredit) is still kept, not collateral damage from minorDivisor's fallback");
-assertEq(qcBadDivisor.qc.minorMaxCost, 50, "fix: an untouched sibling (minorMaxCost) falls back to its own default independently");
+assertEq(qcBadDivisor.qc.missDivisor, 10, "fix: a VALID sibling in the same patch (missDivisor) is still kept, not collateral damage from minorDivisor's fallback");
+assertEq(qcBadDivisor.qc.maxCost, 100, "fix: an untouched sibling (maxCost) falls back to its own default independently");
 
-const qcBadCredit = sb4Config({ qc: { seriousCredit: "x", minorMaxCost: 30 } });
-assertEq(qcBadCredit.qc.seriousCredit, 0, "fix: a non-numeric qc.seriousCredit (string) falls back to SB4_DEFAULTS.qc.seriousCredit (0)");
-assertEq(qcBadCredit.qc.minorMaxCost, 30, "fix: a valid sibling (minorMaxCost) in the same patch is kept");
+const qcBadCredit = sb4Config({ qc: { missDivisor: "x", maxCost: 30 } });
+assertEq(qcBadCredit.qc.missDivisor, 4, "fix: a non-numeric qc.missDivisor (string) falls back to SB4_DEFAULTS.qc.missDivisor (4)");
+assertEq(qcBadCredit.qc.maxCost, 30, "fix: a valid sibling (maxCost) in the same patch is kept");
 
-assertEq(sb4Config({ qc: { minorMaxCost: null } }).qc.minorMaxCost, 50, "fix: a non-numeric qc.minorMaxCost (null) falls back to SB4_DEFAULTS.qc.minorMaxCost (50) — typeof null is \"object\", not \"number\"");
+assertEq(sb4Config({ qc: { maxCost: null } }).qc.maxCost, 100, "fix: a non-numeric qc.maxCost (null) falls back to SB4_DEFAULTS.qc.maxCost (100) — typeof null is \"object\", not \"number\"");
+
+// A doc still carrying the RETIRED keys (Koy's live settings doc does — Firestore
+// {merge:true} never deletes, so seriousCredit/minorMaxCost linger there from
+// before this round) must be inert: ignored entirely, and unable to disturb the
+// live keys sitting beside them.
+const qcLegacyKeys = sb4Config({ qc: { seriousCredit: 0, minorMaxCost: 50, minorDivisor: 25 } });
+assertEq(qcLegacyKeys.qc, { missDivisor: 4, minorDivisor: 25, maxCost: 100 }, "retired qc keys (seriousCredit/minorMaxCost) are dropped entirely, and the live sibling in the same doc (minorDivisor 25) still reads correctly");
+assertEq(sb4Agg([jobA], qcLegacyKeys).qc, 0.96, "a doc carrying the retired keys still SCORES off the new formula — jobA = 1 - 1/25 = 0.96, not the old minorMaxCost-capped math");
 
 // qc entirely non-object (worse corruption than a bad sub-field) must not
 // throw and must fall back to full defaults, not partially crash.
@@ -1045,7 +1099,7 @@ assertEq(sb4Config({ qc: null }).qc, SB4_DEFAULTS.qc, "fix: qc itself as null fa
 
 // Non-regression — a FULLY valid qc object still round-trips exactly (proves
 // the per-field rewrite didn't change behavior for well-formed input).
-assertEq(sb4Config({ qc: { seriousCredit: 15, minorDivisor: 25, minorMaxCost: 60 } }).qc, { seriousCredit: 15, minorDivisor: 25, minorMaxCost: 60 }, "non-regression: a fully valid qc object still round-trips exactly, field for field");
+assertEq(sb4Config({ qc: { missDivisor: 8, minorDivisor: 25, maxCost: 60 } }).qc, { missDivisor: 8, minorDivisor: 25, maxCost: 60 }, "non-regression: a fully valid qc object still round-trips exactly, field for field");
 
 // ── DEFECT 3 (BACKWARD COMPATIBILITY — load-bearing, the most important
 // assertion in this task): the settings/scoreboardV4Weights doc in
