@@ -1,0 +1,259 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map (QC severity system, SW v377-v379). To replace with a recorded guide:
+     drop a SOP Recorder Standalone HTML export over this file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QC Walks — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  table.st{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:12px 0;font-size:13.5px}
+  table.st th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:9px 12px;border-bottom:1px solid var(--border)}
+  table.st td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  table.st tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700;white-space:nowrap}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>QC Walks</h1>
+  <p class="sub">Walk it, call every item honestly, pick the verdict, decide who fixes it</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>A QC walk is the quality gate on a phase. You walk the job, write down
+    <b>every item you find</b>, and tag each one as a <b>minor QC item</b> or a
+    <b>QC miss or bigger item</b>. Called items? The app suggests the verdict —
+    passed with items or fail. A clean walk gets no suggestion: you pick <b>QC Pass</b>
+    yourself. Then the one question that matters:
+    <b>is a return trip needed, or does the crew on site have it?</b></p>
+  </div>
+
+  <h2 class="sec">The walk, start to finish</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Get it on the calendar</h3>
+      <p>The job carries a QC status per phase: <b>QC Needs to be Scheduled</b> →
+      <b>QC Scheduled</b> (with the date) → <b>QC Completed</b>. Unscheduled QC shows up
+      in the nags until it has a date — schedule it, don't let it ride.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Walk and write — every item, as you find it</h3>
+      <p>Add items on the walk screen the moment you see them. One item per real problem,
+      written so someone who wasn't there can find it: "Master bath — GFI dead" beats
+      "bathroom issue." Photo anything that's faster to show than tell.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Tag the severity on every item</h3>
+      <p>Each item has a one-tap chip: <b>Minor QC item</b> (the default) or
+      <b>QC miss or bigger item</b>. A miss is something that genuinely has to be made
+      right before the phase can be called good — not a nitpick.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Confirm the verdict</h3>
+      <p>If you called items, the app suggests a verdict from your severity tags — confirm
+      it or override it. The picker is yours; the suggestion is just math. A clean walk
+      gets no suggestion at all: pick <b>QC Pass</b> yourself in the status select. The
+      walk doesn't record itself.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">5</div>
+    <div class="body">
+      <h3>Answer the return-trip question</h3>
+      <p>On anything that isn't a clean pass, the app asks: <b>Create return trip</b> or
+      <b>Crew on site has it</b>. The rule: <b>nobody on site → it's a return trip, every
+      time.</b> Crew still working the job → they take the list, no RT needed.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">The three verdicts</h2>
+
+  <table class="st">
+    <tr><th>Verdict</th><th>When</th></tr>
+    <tr><td><span class="pill" style="background:#46916A18;color:#46916A">QC Pass</span></td>
+        <td>Clean walk — nothing called.</td></tr>
+    <tr><td><span class="pill" style="background:#B0892C18;color:#B0892C">QC Passed with Items</span></td>
+        <td>You called items, but none was a miss. Not a fail — but the list still has to get worked.</td></tr>
+    <tr><td><span class="pill" style="background:#B23A3A18;color:#B23A3A">QC Fail</span></td>
+        <td>At least one QC miss or bigger item. One real miss fails the walk — that's the rule, no matter how clean the rest was.</td></tr>
+  </table>
+
+  <p style="font-size:13.5px;color:var(--dim);margin:10px 0 0">When the items later get
+  fixed and checked off, the status moves to
+  <span class="pill" style="background:#46916A18;color:#46916A">QC Items Fixed — Pass</span>
+  — and "checked off" means the walk's actual items, wherever they landed: on the
+  return trip if one was made, with the on-site crew if they kept the list. Closing
+  the last item is what earns the green, not the passage of time.</p>
+
+  <div class="call warn">
+    <span class="lbl">Why the severity chip is not optional</span>
+    <p>The chip decides two things at once: whether this walk can pass, and how the walk
+    scores. A real miss tagged "minor" hides a return visit until it's an angry phone call
+    — and minors aren't free either: they count now too, so forty little items is no longer
+    the same as none. Call it what it is, both directions.</p>
+  </div>
+
+  <h2 class="sec">After the walk — who fixes what</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Return trip path</h3>
+      <p>Choosing <b>Create return trip</b> builds the RT with the walk's items on it.
+      It shows on the Return Trips tab, and until someone gives it a date it sits on the
+      Unscheduled Return Trips list and in the Forecast's Attention view under
+      <b>READY TO SCHEDULE</b> — the items get closed on the RT like any punch list.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Crew-on-site path</h3>
+      <p>Choosing <b>Crew on site has it</b> leaves the items with the working crew. Close
+      them like punch items — check off, photo where it proves the fix.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Failed walk, no RT yet? The fail banner has your back</h3>
+      <p>Any phase sitting at QC Fail shows a red <b>QC FAIL — RETURN TRIP REQUIRED</b>
+      banner on the QC tab. It tells you where the return trip stands at a glance — none
+      created, queued but needs a date, or scheduled — and when no RT exists yet it gives
+      you a <b>Create Return Trip</b> button. One tap builds the RT with every open QC
+      item, photos, severity, and material info carried over.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Item turns out not to be a real failure? Void it</h3>
+      <p>Taken out during rough-in, out of scope, GC declined it — don't delete the item
+      and don't check it off. Void it. Void asks for a reason (quick picks: <b>Removed
+      during rough-in</b>, <b>Not in scope</b>, <b>Fixed elsewhere</b>, <b>GC declined</b>)
+      and stamps who and when. A voided item drops out of the verdict, the return trip,
+      and the QC counts, but stays in the punch list with a grey <b>Voided</b> pill and
+      collects in the <b>Voided (N)</b> drawer on the walk screen. Wrong call?
+      <b>Restore</b> brings it back in one tap.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">The safety net</span>
+    <p>Answered <b>Crew on site has it</b> and the items are still open days later with
+    no return trip covering them? The job flags them as <b>Stranded QC Items</b> in the
+    Activity tab's to-do list. But the net only watches walks that gave that answer — a
+    walk where the RT question never got answered can't trip it. So don't make the net
+    do your job: answer the RT question honestly at walk time.</p>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Write every item, even the small stuff — minors count now</li>
+        <li>Tag severity honestly, both directions</li>
+        <li>Photo anything a fixer would need to see</li>
+        <li>Make the RT call at walk time — nobody on site means RT</li>
+        <li>Schedule QC instead of letting it ride undated</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Tag a real miss as minor to keep the walk green</li>
+        <li>Fail a walk that's all minor items — that's Passed with Items</li>
+        <li>Write "misc fixes" — nobody can find that on a slab</li>
+        <li>Leave the return-trip question for later</li>
+        <li>Delete or check off an item that wasn't a real failure — void it with a reason</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">The app suggested Fail but I think it's a pass-with-items.</p>
+      <p class="a">The suggestion comes from your own severity tags — if there's a miss
+      marked, it suggests Fail. Either fix the tag (it wasn't really a miss) or trust the
+      call. You can override the picker, but the tags should match the verdict.</p>
+    </div>
+    <div class="row">
+      <p class="q">Minor items — do they really matter?</p>
+      <p class="a">Yes. They count on the walk's score now, item by item. A walk with one
+      miss and thirty minors is worse than one miss alone, and the numbers show it.</p>
+    </div>
+    <div class="row">
+      <p class="q">Crew said they'd fix it, then rolled off. Now what?</p>
+      <p class="a">Make the return trip then — better late than lost. On a failed walk the
+      QC tab shows the red QC FAIL — RETURN TRIP REQUIRED banner with a Create Return Trip
+      button that carries the open items, photos, and severity over. Left sitting long
+      enough, those items also surface as Stranded QC Items on the Activity tab's
+      to-do list.</p>
+    </div>
+    <div class="row">
+      <p class="q">Rough QC vs Finish QC?</p>
+      <p class="a">Each phase gets its own walk, own status, own verdict. A rough walk
+      never concludes the finish walk.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · QC Walks — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map (JobOpenItems + stranded-QC net v379). To replace with a recorded
+     guide: drop a SOP Recorder Standalone HTML export over this file, same
+     filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Open Items — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Open Items</h1>
+  <p class="sub">The job's note front door — jot it here, triage it into real work, sign off return trips</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Open Items is two things. On top: <b>Job Notes</b> — every note on the job, rough,
+    finish, and general, in one list. Below: the job's <b>return trips</b>, with
+    <b>✓ Sign Off</b> right on the row. Jot scratch notes here, then flip on <b>Triage</b>
+    and promote the real ones to Punch, Return Trip, Change Order, PO, or Question.
+    Looking for everything still owed on the job? That rollup lives on the
+    <b>Activity tab</b> — not here.</p>
+  </div>
+
+  <h2 class="sec">What's on this tab</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Job Notes — all of them</h3>
+      <p>Rough-scoped, finish-scoped, and general notes in one place. The Rough and
+      Finish tabs each show only their own phase's notes — this is the one view with
+      everything, and the fastest read when you're picking up a job you've never
+      walked.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Return trips</h3>
+      <p>Every RT on the job — each row shows its punch-item count, photo count, the
+      assigned foreman, and the scheduled date. Unscheduled ones are the red flags.
+      <b>✓ Sign Off</b> and <b>Reopen</b> sit right on the row.</p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">What's NOT here</span>
+    <p>Open punch, change orders, inspections, materials, and open questions never show
+    on this tab — so an empty Open Items does <b>not</b> mean the job is done. The
+    everything-outstanding rollup — <b>"To do on this job"</b> with COs, return trips,
+    stranded QC, punch, inspections, Matterport, materials, and questions — is on the
+    <b>Activity tab</b>. Check there before any handoff or "done" call to a GC.</p>
+  </div>
+
+  <h2 class="sec">Turn a note into real work</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Jot it</h3>
+      <p>Free-form scratch lines, right here. This is the job's capture front door —
+      get it out of your head and onto the job before it rides home in the truck.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Flip on Triage</h3>
+      <p>Then multi-select the lines that describe real work.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Promote</h3>
+      <p>Pick what each one actually is: <b>Punch, Return Trip, Change Order, PO, or
+      Question</b>. The line becomes that item.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Follow the chip</h3>
+      <p>A promoted line gets a linked chip that jumps straight to the item it created.
+      Tap it to finish the details on its home tab.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Don't let notes age</span>
+    <p>A note that describes real work shouldn't sit here as a note. Triage it the same
+    day — a scratch line nobody promoted is work nobody scheduled.</p>
+  </div>
+
+  <h2 class="sec">Sign off a return trip</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Check the row first</h3>
+      <p>The punch-item count and photo count on the row tell you whether the trip is
+      actually complete before you close it.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Tap ✓ Sign Off</h3>
+      <p>Same write path as the Return Trips tab, so it counts everywhere.
+      Fat-fingered it? <b>Reopen</b> puts it right back.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Where's the full list of everything still owed on this job?</p>
+      <p class="a">The Activity tab — "To do on this job" rolls up COs, return trips,
+      stranded QC, punch, inspections, Matterport, materials, and questions. Open Items
+      is notes and return trips only.</p>
+    </div>
+    <div class="row">
+      <p class="q">Where do open questions live?</p>
+      <p class="a">Not here. Work them on the Questions tab; the rough-plus-finish
+      open-questions rollup is on the Activity tab.</p>
+    </div>
+    <div class="row">
+      <p class="q">Where do I check Stranded QC Items?</p>
+      <p class="a">On the Activity tab's "To do on this job" list. If that row has
+      anything in it, QC items lost their crew — make the return trip now.</p>
+    </div>
+    <div class="row">
+      <p class="q">Is this the same as the punch list?</p>
+      <p class="a">No — punch lives on Rough/Finish. But a note that IS a punch item
+      gets promoted from here: Triage it to Punch and follow the chip.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Open Items — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

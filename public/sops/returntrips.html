@@ -1,0 +1,264 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map (RT statuses v375, QC RT-choice v379, CO convert flow). To replace with
+     a recorded guide: drop a SOP Recorder Standalone HTML export over this
+     file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Return Trips — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  table.st{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:12px 0;font-size:13.5px}
+  table.st th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:9px 12px;border-bottom:1px solid var(--border)}
+  table.st td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  table.st tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700;white-space:nowrap}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Return Trips</h1>
+  <p class="sub">A scheduled trip back for known work — with the list riding on the card</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>A Return Trip is how we go back to a job for <b>known, written-down work</b> —
+    QC items after the crew rolled off, an approved change order with nobody on site,
+    <b>something the GC needs done</b>, a failed inspection, punch that got stranded, or
+    anything else that needs a trip back. The RT card carries the scope, the item list,
+    and photos. It gets a date, the work gets done, the items get checked off, the RT
+    gets marked complete. Nothing rides on memory.</p>
+  </div>
+
+  <h2 class="sec">Where RTs come from</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Made directly — anything that needs a trip back</h3>
+      <p><b>+ Add Return Trip</b> on this tab. The GC calls with something they need
+      done, a warranty item surfaces, work turns up after the crew rolled off — you
+      don't need a change order or a QC walk to justify the trip. Give it a scope,
+      put the items on its list, get it a date. If it's billable work, pair it with a
+      CO; if it's just work owed, the RT alone is the record.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>A QC walk that wasn't clean</h3>
+      <p>When a walk ends Passed with Items or Fail and nobody's on site, the walker picks
+      <b>Create return trip</b> — the RT is built with the walk's items already on it.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>An approved Change Order with no crew on site</h3>
+      <p><b>Convert to Return Trip</b> on the CO — scope, tasks, materials, and time
+      pre-fill from the CO. From that moment the work lives on the RT; the CO grays out as
+      history.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>A failed inspection</h3>
+      <p>Nothing spawns on its own. While a failed 4-way or final still has open
+      inspection items, its card shows <b>→ Create Return Trip</b> — tap it and the RT
+      is built carrying "Failed 4-way inspection items" or "Failed final inspection
+      items". Nobody taps it, no trip. Same as QC: return trips are made by choice,
+      never automatically.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Punch items linked by hand</h3>
+      <p>The punch linker attaches existing rough/finish punch items to an RT — for
+      collecting stragglers into one trip instead of three.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Promoted from Job Notes</h3>
+      <p>Field notes that turn out to be trip-back work don't get retyped. In Job
+      Notes, multi-select the lines and hit <b>Promote to Return Trip</b> (the button
+      counts the lines you picked) — they land on a brand-new RT or onto an existing
+      RT's item list, your choice.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">The status ladder</h2>
+
+  <table class="st">
+    <tr><th>Status</th><th>What it means</th></tr>
+    <tr><td><span class="pill" style="background:#B23A3A18;color:#B23A3A">RT Needs to be Scheduled</span></td>
+        <td>Work is known, no date yet. Can carry a "schedule by" target — undated RTs surface on the Forecast's Attention view under READY TO SCHEDULE, so an undated RT is never invisible.</td></tr>
+    <tr><td><span class="pill" style="background:#6A5E9718;color:#6A5E97">RT Scheduled</span></td>
+        <td>Date set. Shows on the calendar and the Crew Planner under the job's foreman.</td></tr>
+    <tr><td><span class="pill" style="background:#46916A18;color:#46916A">RT Complete</span></td>
+        <td>The trip happened, the list is closed out, and it's signed off. A signed-off RT collapses to a green "Completed by" row and drops to the bottom of the list.</td></tr>
+  </table>
+
+  <div class="call key">
+    <span class="lbl">Every trip has a name on it</span>
+    <p>The <b>ASSIGNED TO</b> picker on the RT card puts a foreman or lead on the trip.
+    Once it's assigned and still open, a <b>Remind</b> button sends that person a
+    "Return trip reminder" push carrying the scope — the app can chase the trip so
+    nobody has to.</p>
+  </div>
+
+  <h2 class="sec">Working an RT</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Read the card before you roll</h3>
+      <p>Scope, the item list, and the photos are the whole assignment. If something on it
+      doesn't make sense, ask <b>before</b> the drive, not from the driveway.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Close items as you finish them</h3>
+      <p>Check each item off on the RT. Linked punch items are the same item in both
+      places — closing it on the RT closes the real thing, no double entry.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Photos where they prove the fix</h3>
+      <p>Attach them to the RT. For QC-born items especially — the photo is what lets the
+      office close the loop without another drive. If the RT has linked items, use the
+      <b>PHOTO GOES TO:</b> chooser to drop the shot straight onto that item instead of
+      the RT's general strip.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Sign it off</h3>
+      <p>All items closed → fill in the name and date in the <b>SIGN OFF</b> box and hit
+      the green <b>Sign Off</b> button (it stays disabled until both are filled). One tap
+      marks the RT signed off and flips it to RT Complete. Don't just flip the status by
+      hand — an unsigned RT keeps sorting with the active trips, and a QC-born job stays
+      flagged until the RT is signed off.</p>
+      <p>Completing the RT is what fires the office's "Return Trip #N Complete — merge or
+      invoice" task — an RT left open is money not billed. It doesn't touch the CO: a
+      converted CO stays grayed as Converted to RT no matter what happens on the RT.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Send the trip, don't retype it</span>
+    <p><b>Chat</b>, <b>Text Trip</b>, <b>Email Trip</b>, and <b>Simpro</b> buttons on the
+    RT card send a formatted summary — scope, material needed, open punch items, and who
+    it's assigned to. Whoever's driving out gets the whole list without anyone typing it
+    twice.</p>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">The RT is a snapshot, not a mirror</span>
+    <p>An RT converted from a change order copies the CO at that moment. Edits on the RT
+    don't flow back to the CO, and CO photos don't carry over — attach what the crew needs
+    directly to the RT.</p>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Get every RT a date — undated RTs are the ones that rot</li>
+        <li>Close items on the RT as you go, not from the truck later</li>
+        <li>Photo the fixes, especially QC items</li>
+        <li>Sign the RT off the day the work's done</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Make a return trip for a job that still has crew on site — hand them the list instead</li>
+        <li>Do RT work without opening the card — the list is the assignment</li>
+        <li>Leave a finished RT unsigned — the merge-or-invoice task never fires and the work doesn't get billed</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">When is it an RT vs just doing the work?</p>
+      <p class="a">Crew on site → do it now, no RT. Nobody on site → RT, every time. Same
+      rule the QC prompt asks.</p>
+    </div>
+    <div class="row">
+      <p class="q">The RT has no date. Who schedules it?</p>
+      <p class="a">Unscheduled RTs sit on the Forecast's Attention view under READY TO
+      SCHEDULE — the office works that list. If it's urgent, say so; don't assume the
+      date will find itself.</p>
+    </div>
+    <div class="row">
+      <p class="q">I signed off the RT — why does the CO still say Converted to RT?</p>
+      <p class="a">That's correct, and it never changes. Completing the RT doesn't touch
+      the CO — the grayed card is history. The billing moves through the RT's own "merge
+      or invoice" office task, which fires when the RT completes. If something looks
+      wrong, tell the office rather than editing the CO by hand.</p>
+    </div>
+    <div class="row">
+      <p class="q">A converted CO was a mistake.</p>
+      <p class="a">The CO card has Undo Convert — it goes back to Approved. The RT it made
+      stays and gets deleted separately.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Return Trips — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

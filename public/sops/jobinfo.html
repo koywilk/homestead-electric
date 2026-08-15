@@ -1,0 +1,180 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map. Replace by dropping a SOP Recorder Standalone HTML export over this
+     file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Job Info — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Job Info</h1>
+  <p class="sub">The job's basics — who, where, what stage, and who to call</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Job Info is the cover page: job name, address, the GC with their contact and
+    phone, Simpro number, who's running it (foreman + lead), the Status Update, the
+    Matterport scan links, and the access notes. When any of it is wrong — a new GC
+    contact, a gate code that changed — <b>fix it here</b>, because every other screen
+    in the app reads from this one. One thing that's NOT here: rough and finish status
+    and their dates. Those are set on the Rough and Finish tabs.</p>
+  </div>
+
+  <h2 class="sec">What lives here</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>The basics</h3>
+      <p>Job Name, Address, General Contractor, GC Contact, GC Phone, and the Simpro
+      Job # (Simpro Quote # on a quote). The address is what maps and share links
+      use — typos here follow the job everywhere.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Let Simpro do the typing</span>
+    <p>Enter the Simpro number and tab out — the app auto-fills the blank fields from
+    Simpro (site address + site contact). The <b>Pull</b> button next to the number
+    forces a refresh. It fills <b>blank fields only</b> and never overwrites typed
+    text — so a wrong typed value won't fix itself. Clear the field, then Pull again.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Who's on it</h3>
+      <p>Foreman and lead. This drives whose Crew Planner the job shows in and who the
+      notifications go to.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>GC contact + phone</h3>
+      <p>The name AND number of the person to actually call — so nobody's texting around
+      asking "who's the GC on this one?" After a Simpro pull, the <b>GC Contacts</b> list
+      shows every contact on the GC — supers, billing, PM — with tap-to-call phone and
+      email links. Tap a name to mark them "Running this job"; it drops their name and
+      number into the GC Contact / GC Phone boxes (tap again to clear). Give contacts a
+      label like Super or Billing — labels survive re-pulls.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Status Update box</h3>
+      <p>A free-text status for the whole company — "needs a lift", "waiting on framer".
+      It shows on every job card (Board, Forecast, Upcoming), stamped with who set it
+      and when. Hit <b>Clear</b> when it's handled. If you learn something about the job
+      that everyone should see at a glance, this is where it goes.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Matterport scans</h3>
+      <p>The job's 3D scan links live here — add as many as you need with labels
+      (<b>+ Add</b>), and <b>Open</b> jumps straight into a scan. Below the links sits
+      the Scan Status dropdown with its date: "Scan Needs to be Scheduled" / "Scan
+      Scheduled" / "Scan Complete". When rough hits 100% the status flips to needs-scheduled
+      on its own and kicks off a task. The scan is the record of what's behind the
+      drywall — at finish, open it here to answer "where does that wire run" without
+      cutting holes. GCs see the scan status on their portal, so keep it honest.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Pre-Job Prep + Admin</h3>
+      <p>The office's prep checklist lives here too — it ends in "✓ Prep Complete —
+      Handed Off to Foreman", so a foreman can see whether prep finished before the crew
+      rolls. Admin holds the job-account and pre-lien checkboxes, plus the "Temp pedestal
+      on site" toggle with its ped # picker — flip it and pick the number when a
+      pedestal lands on your site.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Access notes</h3>
+      <p>Gate codes, lockbox, "dog in the yard", "park on the street" — the stuff that
+      saves the first twenty minutes of a stranger's visit. If you learned it the hard
+      way, write it down for the next guy.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Why this tab matters more than it looks</span>
+    <p>Every dashboard, packet, and share link starts from what's typed here. A stale GC
+    number or a wrong address doesn't stay on this tab — it goes out in emails and
+    handoffs with the company's name on it.</p>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">The GC gave us a new super.</p>
+      <p class="a">If they're in the GC Contacts list, tap their name — it marks them
+      "Running this job" and drops name + number into the GC Contact / GC Phone boxes.
+      Not in the list yet? Type it. Either way, do it right then — the old number stops
+      being called the moment it's replaced.</p>
+    </div>
+    <div class="row">
+      <p class="q">I need to move a rough or finish date.</p>
+      <p class="a">Not on this tab. The pill in the job header here is read-only — it
+      just shows where the job sits. Status and date windows are set on the Rough and
+      Finish tabs.</p>
+    </div>
+    <div class="row">
+      <p class="q">Where do I put the gate code?</p>
+      <p class="a">Access note on this tab — not a text thread, not your memory.</p>
+    </div>
+    <div class="row">
+      <p class="q">Whose job is it to keep this current?</p>
+      <p class="a">Whoever learns the new fact first. It's a 20-second edit that saves
+      everyone else the phone call.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Job Info — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

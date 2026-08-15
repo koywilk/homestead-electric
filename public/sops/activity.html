@@ -1,0 +1,160 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map. Replace by dropping a SOP Recorder Standalone HTML export over this
+     file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Activity — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Activity</h1>
+  <p class="sub">Everything still open on the job, plus its running story</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Activity is two things on one screen. Top half: <b>To do on this job</b> — every
+    open item rolled up in one place: change orders, return trips, punch, inspections,
+    materials, questions. Bottom half: the timeline — CO status flips, return trips,
+    job statuses, notes, and daily updates, newest first. <b>Read it before you drive
+    out</b> and you arrive knowing what's open and what changed.</p>
+  </div>
+
+  <h2 class="sec">To do on this job — the top half</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>One screen, everything open</h3>
+      <p>Collapsible groups roll up whatever's still outstanding: open change orders,
+      open return trips, open punch across Rough, Finish, and QC, scheduled or failed
+      inspections with open items, a Matterport scan that's needed, materials that need
+      ordering or are awaiting pickup, open questions, and stranded QC items. Tap a
+      group to expand it.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Watch the WAITING badges</h3>
+      <p>The punch group shows a count, and if items are blocked you'll see an amber
+      "N waiting" pill on the group plus a WAITING badge on each stuck item. Those are
+      the ones you can't just knock out — find out what they're waiting on.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Green means done</h3>
+      <p>If the job is truly clear, the top half shows a green "Nothing outstanding"
+      state. That's the goal. Anything else is your worklist.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Every row is a shortcut</span>
+    <p>Tap any to-do row or any timeline event and the app jumps you straight to the tab
+    it came from — a punch row opens Rough, a CO row opens Change Orders. See it, tap it,
+    land where you fix it. No hunting through tabs.</p>
+  </div>
+
+  <h2 class="sec">The timeline — the bottom half</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Catch up before you roll</h3>
+      <p>Two minutes here replaces the "so where are we at?" phone call. The timeline
+      shows CO status flips, return trips scheduled and signed off, job statuses, notes,
+      and daily updates — newest first. Punch and photos don't post here; those live in
+      their own tabs.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Answer "when did that change?"</h3>
+      <p>GC asks about the added cans? The timeline shows the CO's latest status flip
+      with a date — but no name, and it's the status date, not when the CO was created.
+      For who added it and when, open the Change Orders tab. That's where the full
+      record lives.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Going back further than 60 days</h3>
+      <p>The timeline shows the last 60 days by default. Proving something from months
+      ago? Tap <b>Load older events</b> at the bottom — the full history opens up,
+      grouped by month.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Status times are approximate</span>
+    <p>Status rows show the job's <b>last update time</b>, not when that status actually
+    flipped — the app doesn't keep per-flip timestamps. A rough status set weeks ago can
+    show yesterday's date because someone edited anything on the job. Don't quote a
+    status row's time as proof of when the status changed.</p>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Do I have to post to this feed?</p>
+      <p class="a">No — it writes itself from what you do in the app. Flip a CO, schedule
+      a return trip, post a daily update: the timeline is the byproduct.</p>
+    </div>
+    <div class="row">
+      <p class="q">I closed punch and it's not in the timeline. Broken?</p>
+      <p class="a">No — punch closes and photos don't post to this timeline. Closed punch
+      drops off the To do rollup up top, and the item itself lives on the phase tab it
+      belongs to.</p>
+    </div>
+    <div class="row">
+      <p class="q">The timeline shows nothing for days. Is the app broken?</p>
+      <p class="a">More likely nothing changed in the app — which is its own signal. If
+      work IS happening on site but the timeline is quiet, the work isn't being captured,
+      and that's worth fixing.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Activity — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

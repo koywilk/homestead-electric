@@ -5559,6 +5559,256 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 );
 
 
+// ── In-app help: a "?" on a section opens that section's SOP ───────────────
+// Koy's idea (2026-08-10): put the training for a section ON the section, so
+// the answer lives where the confusion is instead of in a doc nobody opens.
+//
+// THE FILENAME IS THE WIRING (2026-08-12). To publish a guide, Koy records it
+// in SOP Recorder, exports Standalone HTML, and drops the file in
+// `public/sops/` named after the tab — `homeruns.html` lights the "?" up on
+// Home Runs, and capitalization doesn't matter (HomeRuns.html works too: the
+// scan lowercases the KEY but keeps the exact filename for the fetch, because
+// prod hosting is case-sensitive even though this Mac's filesystem is not).
+// No code edit, no entry to add here, no export to hand-doctor.
+//
+// SOP_FILES_INLINE below is GENERATED at build time by
+// scripts/version-from-sw.js, which scans that folder and reads each guide's
+// own <title> (a SOP Recorder export already sets it from the recording's
+// name). Never edit the block by hand — the next build overwrites it. That
+// script also WARNS when a filename matches no tab, which is the only thing
+// standing between a typo and a "?" that silently never appears.
+//
+// Only this tiny index is bundled; the guides themselves are fetched on tap.
+// That split is deliberate: a recorded guide bakes its screenshots in as data
+// URIs (~2–5MB each), fine to pull once on demand and completely wrong in the
+// JS bundle every phone downloads on every cold start.
+//
+// If guides ever move to Firebase Storage + a `sops` collection so Koy can
+// publish with no deploy at all, only the `file` line below changes — no
+// button, no tab, no caller.
+/* SOPS_START */
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+/* SOPS_END */
+
+// Optional polish only. A guide needs NO entry here — its title comes from the
+// recording itself. This is just for a subtitle under the title in the viewer.
+const SOP_SUBTITLES = {
+  questions: "How to ask, tag, share, and answer job questions",
+  homeruns: "Track every circuit — what's pulled, what's left",
+  changeorders: "Any work outside the bid, captured before it's done",
+  qc: "Walk it, call every item honestly, decide who fixes it",
+  returntrips: "A scheduled trip back for known, written-down work",
+  rough: "Stage status, punch list, questions, inspection",
+  finish: "Same system as Rough — with the QC gate at the end",
+  openitems: "Everything still owed on this job, in one place",
+  jobinfo: "The basics — who, where, what stage, who to call",
+  planslinks: "Plans, files, and every link the job depends on",
+  photos: "Every photo on the job, one gallery",
+  activity: "The job's running story — who did what, when",
+  panelizedlighting: "Loads, keypads, and the plan-changes loop",
+  tapelight: "Every run tracked — location, length, driver",
+  questionlinks: "One named link per person — questions flow, answers come back",
+  crewlink: "Live marked-up plans for the whole crew — pins come home",
+  liveviewlink: "Real-time pull status for whoever keeps asking",
+  generatorlink: "The homeowner picks their generator loads themselves",
+  lightinglinks: "Collab, hub, and loads — which link for which company",
+  gcportal: "One portal per GC — all their jobs and questions in one place",
+};
+
+const SOP_MAP = Object.fromEntries((SOP_FILES_INLINE || []).map(f => [f.key, {
+  title: f.title,
+  subtitle: SOP_SUBTITLES[f.key] || "",
+  // f.file carries the EXACT filename from the scan — never rebuild the path
+  // from the key, which is lowercased for matching (see the header comment).
+  file: f.file || `/sops/${f.key}.html`,
+}]));
+
+// Tab label → guide key: lowercase, drop everything that isn't a letter or
+// digit. "Home Runs" → homeruns, "Plans & Links" → planslinks, "QC" → qc.
+// This is the naming rule Koy follows when saving an export, and the same rule
+// scripts/version-from-sw.js uses to check filenames, so the two can't drift.
+const sopKeyForTab = (t) => String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// The guide gate. It exists because both Vercel and firebase.json rewrite
+// `**` → /index.html, so a missing or misspelled guide comes back as the
+// ENTIRE APP with a 200 — `res.ok` alone would cheerfully render Homestead
+// inside a modal inside Homestead. The SW's navigate fallback does the same.
+//
+// The gate REJECTS THE SHELL rather than requiring a marker, and that choice is
+// the whole reason a raw SOP Recorder export can be dropped into public/sops/
+// with zero editing: that exporter (~/Desktop/sop-recorder, lib/exporters.js)
+// is a separate project that knows nothing about this app and stamps no marker.
+// Demanding one would have meant hand-doctoring every recording — exactly the
+// friction this feature is supposed to remove.
+//
+// `homestead-sop` is still honoured as an explicit "definitely a guide"
+// override, for a file that ever needs to opt in past this check.
+const SOP_MARKER = "homestead-sop";
+const looksLikeAppShell = (head) =>
+  head.includes('id="root"') && /\/static\/js\/main\.[^"]*\.js/.test(head);
+const isRenderableSop = (text) => {
+  const head = text.slice(0, 4000);
+  if (!/<!doctype html|<html[\s>]/i.test(head)) return false; // not a document at all
+  return head.includes(SOP_MARKER) || !looksLikeAppShell(head);
+};
+
+// Full-screen SOP viewer. The guide renders in a sandboxed iframe so its own
+// stylesheet can never collide with the app's, and (no allow-same-origin) so
+// guide markup can never reach app storage, auth, or Firestore.
+function SopModal({ sopKey, onClose }) {
+  const sop = SOP_MAP[sopKey] || null;
+  const [state, setState] = useState("loading"); // loading | ready | missing | offline
+  const [blobUrl, setBlobUrl] = useState(null);
+
+  useEffect(() => {
+    if (!sop) { setState("missing"); return; }
+    let dead = false, made = null;
+    (async () => {
+      try {
+        // Goes through the service worker: network-first, cached on success.
+        // So the first tap needs signal, and every tap after that works in a
+        // basement. A JS fetch is mode:"cors", never "navigate", so the SW's
+        // index.html fallback can't answer this — a cache miss offline throws
+        // and lands in the "offline" state below, which is what we want.
+        const res = await fetch(sop.file);
+        if (dead) return;
+        // Not-OK splits two ways, and conflating them tells the crew the wrong
+        // thing. A 404 really is a guide nobody published. Anything else is our
+        // own service worker's /sops/ guard answering 504 because the device is
+        // offline and has never cached this guide — "open it on signal first",
+        // not "ask Koy to record it".
+        if (!res.ok) { setState(res.status === 404 ? "missing" : "offline"); return; }
+        const text = await res.text();
+        if (dead) return;
+        if (!isRenderableSop(text)) { setState("missing"); return; }
+        made = URL.createObjectURL(new Blob([text], { type: "text/html" }));
+        setBlobUrl(made);
+        setState("ready");
+      } catch {
+        if (!dead) setState("offline");
+      }
+    })();
+    return () => { dead = true; if (made) URL.revokeObjectURL(made); };
+  }, [sop]);
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const msg = (icon, head, body) => (
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",
+      justifyContent:"center",gap:10,padding:"40px 26px",textAlign:"center"}}>
+      <Icon name={icon} size={26} color={C.dim}/>
+      <div style={{fontSize:15,fontWeight:700,color:C.text}}>{head}</div>
+      <div style={{fontSize:13,color:C.dim,maxWidth:320,lineHeight:1.5}}>{body}</div>
+    </div>
+  );
+
+  return createPortal(
+    <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}
+      style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:100000,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:"clamp(0px,3vh,28px)"}}>
+      <div style={{background:C.bg,width:"100%",maxWidth:860,height:"100%",maxHeight:"100%",
+        borderRadius:14,overflow:"hidden",display:"flex",flexDirection:"column",
+        boxShadow:"0 18px 60px rgba(0,0,0,0.45)"}}>
+
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
+          background:C.card,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+          <Icon name="help" size={17} color={C.blue}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.text,whiteSpace:"nowrap",
+              overflow:"hidden",textOverflow:"ellipsis"}}>{sop?.title || "Guide"}</div>
+            {sop?.subtitle&&<div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",
+              overflow:"hidden",textOverflow:"ellipsis"}}>{sop.subtitle}</div>}
+          </div>
+          {state==="ready"&&sop&&(
+            <a href={sop.file} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
+              style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,
+                textDecoration:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                padding:"5px 9px",whiteSpace:"nowrap"}}>
+              <Icon name="external" size={12}/> Open
+            </a>
+          )}
+          <button onClick={onClose} aria-label="Close guide"
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              color:C.dim,cursor:"pointer",padding:"5px 12px",fontSize:13,fontFamily:"inherit"}}>✕</button>
+        </div>
+
+        {state==="loading"&&(
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",
+            justifyContent:"center",gap:10,color:C.dim,fontSize:13}}>
+            <Spinner size={22} color={C.blue}/>
+            <div>Loading guide…</div>
+          </div>
+        )}
+        {state==="ready"&&(
+          <iframe src={blobUrl} title={sop?.title || "Guide"}
+            sandbox="allow-scripts allow-popups"
+            style={{flex:1,width:"100%",border:"none",background:C.bg}}/>
+        )}
+        {state==="offline"&&msg("wifiOff","Guide isn't downloaded yet",
+          "Open this once where you have signal and it stays on your phone — it'll work in a basement after that.")}
+        {state==="missing"&&msg("fileText","Guide isn't published yet",
+          "Nobody has recorded this one. Ask Koy to add it.")}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// The "?" itself. Bare dot by default; pass `label` for a wider pill.
+// Renders NOTHING when the section has no guide in SOP_MAP — so a "?" can be
+// wired onto a section ahead of its recording without leaving a dead button.
+//
+// THE ONE-TIME HINT is the reason a bare dot is safe to ship. A dot nobody
+// taps because nobody SAW it looks exactly like a dot nobody wanted, and that
+// false negative would get the whole feature scrapped on bad data. So the dot
+// says what it is once per device, then never again — same per-device
+// localStorage pattern as the `qaSeenAns_*` stamps this tab already uses for
+// its NEW-answer badges, and same failure posture: a throwing localStorage
+// (Safari private mode) means NO hint rather than a hint that never retires.
+// Read once at mount so it can't vanish mid-look. Suppressed when `label` is
+// passed, since a labelled pill already announces itself.
+function HelpDot({ section, label = "", color = C.blue }) {
+  const [open, setOpen] = useState(false);
+  const hintKey = `sopHintSeen_${section}`;
+  const [showHint, setShowHint] = useState(() => {
+    try { return !localStorage.getItem(hintKey); } catch { return false; }
+  });
+  if (!SOP_MAP[section]) return null;
+  const retireHint = () => {
+    if (!showHint) return;
+    try { localStorage.setItem(hintKey, new Date().toISOString()); } catch {}
+    setShowHint(false);
+  };
+  return (
+    <>
+      {/* One layout unit regardless of what the parent flex looks like. */}
+      <span style={{display:"inline-flex",alignItems:"center",gap:7}}>
+        {!label&&showHint&&(
+          <span style={{fontSize:10.5,color:C.dim,fontStyle:"italic",whiteSpace:"nowrap"}}>
+            new — tap for the guide
+          </span>
+        )}
+        <button onClick={e=>{ e.stopPropagation(); retireHint(); setOpen(true); }}
+          title={`Guide: ${SOP_MAP[section].title}`}
+          aria-label={`Open the ${SOP_MAP[section].title} guide`}
+          style={{display:"inline-flex",alignItems:"center",gap:5,cursor:"pointer",
+            background:`${color}0F`,border:`1px solid ${color}44`,color,
+            borderRadius:99,padding:label?"4px 11px 4px 8px":"4px",lineHeight:1,
+            fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          <Icon name="help" size={14} stroke={2.2}/>
+          {label}
+        </button>
+      </span>
+      {open&&<SopModal sopKey={section} onClose={()=>setOpen(false)}/>}
+    </>
+  );
+}
+
+
 // ── Re-nudge button (shared) ───────────────────────────────────────────────
 // One reusable bell that re-pings a person about an open item (question / CO /
 // punch / RT). Click opens a small picker so you can choose WHO to nudge —
@@ -16324,6 +16574,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
             Preview
           </button>
+          <HelpDot section="generatorlink"/>
           {!hoResponse?.submitted&&(
             <button onClick={checkResponse}
               style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
@@ -16411,6 +16662,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           Share ↗
         </button>
         <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
+        <HelpDot section="liveviewlink"/>
       </div>
 
       {/* Panels */}
@@ -22363,7 +22615,12 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>LIVE PLANS — FIELDINK</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>LIVE PLANS — FIELDINK</div>
+          {/* "?" at the link-creation spot — the Crew link buttons live on the
+              plan rows below; one dot for the section, not one per row. */}
+          <HelpDot section="crewlink"/>
+        </div>
         {hidden.length > 0 && (
           <button onClick={() => setShowHidden(s => !s)}
             style={{ background: "none", border: "none", color: C.dim, cursor: "pointer",
@@ -25852,6 +26109,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               stage-trigger primitives, and a slimmed one-liner can be resurfaced
               later by re-mounting <UpNextPanel/> here. */}
 
+          {/* In-app help — ONE bare "?" per TAB (Koy, 2026-08-12: "only one per
+              tab is necessary"), mounted ONCE here rather than inside each of
+              the 14 tab blocks: this wrapper is shared by every tab, so the
+              guide for whichever tab is open resolves by name. Adding a guide
+              to a new tab therefore takes NO code at all — see SOP_MAP. The row
+              is omitted entirely (not just emptied) when the open tab has no
+              guide, so tabs without one keep their exact current spacing. */}
+          {SOP_MAP[sopKeyForTab(tab)]&&(
+            <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}>
+              <HelpDot section={sopKeyForTab(tab)}/>
+            </div>
+          )}
+
           {tab==="Rough"&&(
 
             <div>
@@ -26623,6 +26893,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   Share ↗
                 </button>
                 <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
+                <HelpDot section="lightinglinks"/>
                 {(job.lightingSystem||"Control 4")==="Lutron" && (
                   <>
                     <span style={{width:1,height:16,background:C.border}}/>
@@ -26773,6 +27044,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:C.purple,color:"#fff",border:"none",display:"inline-flex",alignItems:"center",gap:5}}>
                     Share loads
                   </button>
+                )}
+                {(job.lightingSystem||"Control 4")!=="Lutron" && (
+                  <HelpDot section="lightinglinks"/>
                 )}
               </>}/>
 
@@ -28670,9 +28944,15 @@ function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThre
   }));
   return (
     <Section label={label} color={color} defaultOpen={defaultOpen} action={
-      <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={color}
-        filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
-        questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
+      <>
+        {/* "?" at the link-creation spot (Koy 2026-08-12) — the Share picker
+            right here is where question links get minted, so THAT link's own
+            guide sits beside the button, not just on the tab. */}
+        <HelpDot section="questionlinks" color={color}/>
+        <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={color}
+          filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
+          questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
+      </>
     }>
       <QASection questions={qs||{upper:[],main:[],basement:[]}} onChange={v=>u(rough?{roughQuestions:v}:{finishQuestions:v})} color={color} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder={phase} fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>
       {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
@@ -42917,6 +43197,7 @@ function GCPortalManager({ jobs, identity }) {
         <GCLogoFinder contacts={contacts} value={logoUrl} onPick={setLogoUrl} gcCall={gc} B={B}/>
 
         <button onClick={create} disabled={!gcName.trim()||busy==="create"} style={{...B.btn,opacity:(!gcName.trim()||busy==="create")?0.5:1}}>{busy==="create"?"Creating…":"Create portal link"}</button>
+        {" "}<HelpDot section="gcportal"/>
         {created ? (
           <div style={{marginTop:10,background:"#ECF2EE",border:"1px solid #CDE6D7",borderRadius:8,padding:"9px 11px",fontSize:12.5}}>
             <div style={{fontWeight:700,color:"#2C5C40",marginBottom:4}}>Link created — {created.jobCount} job{created.jobCount!==1?"s":""} on it.</div>
@@ -46126,7 +46407,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-11 · App SW version: v379
+**Last manifest update:** 2026-08-11 · App SW version: v380
 
 ---
 
@@ -46272,6 +46553,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - GC answer map (for sharing)
   - Home Runs inner groups collapse too · 'shipped 2026-07-20' · 'SW v348' · the groups INSIDE the Home Runs section start collapsed as tappable index rows — By Panel's panel groups ("Panel A · 25 of 28 pulled", 'openPanels' Set state) and By Floor's floor levels (label + pulled count; 'hrHasContent' filters blank seeded rows out of the counts). Also converged root 'node_modules' onto the '.nosync' symlink pattern (build-env only, gitignored)
   - All sections start collapsed on the Questions + Home Runs tabs · 'shipped 2026-07-20' · 'SW v347' · Rough/Finish Questions sections and every Home Runs tab section (Panel Schedules — now a real collapsible 'Section' wrapping 'ElectricalPanelSchedules', header deduped — Generator Load Selection, Panels, Home Runs, Load Mapping Notes) open collapsed so the tab reads as a scannable index first
+  - In-app "?" help · 'shipped 2026-08-11' · 'SW v380' · Koy: put the training for a section ON the section, so the answer lives where the confusion is instead of in a doc nobody opens. A small bare "?" at the top of the Questions tab opens the crew guide in a full-screen viewer without leaving the job. **One per TAB, not per section header** (Koy, 2026-08-12: "only one per tab is necessary") — the guide covers the whole tab, and section headers already carry Share/Filter plus a collapse chevron. 'HelpDot' takes an optional 'label' for a wider pill; the shipped call passes none. **One-time hint** — the bare dot shows a dim "new — tap for the guide" beside it until the first tap, then never again on that device ('sopHintSeen_<section>' in localStorage, the same per-device pattern as the 'qaSeenAns_*' NEW-answer stamps; a throwing localStorage yields NO hint rather than one that never retires). That is what makes a bare dot safe to ship: a dot nobody taps because nobody SAW it is indistinguishable from a dot nobody wanted, and that false negative would scrap the feature on bad data. Suppressed when 'label' is passed, since a pill announces itself. **Questions first on purpose** — it's the most confusing surface in the app (crew answers vs link answers vs the GC portal, reopening, adopting a late answer); this is a proof on ONE section, not a sweep of all ~31. **THE FILENAME IS THE WIRING** — publishing a guide takes NO code edit at all. Koy records it, exports Standalone HTML, and drops the file in 'public/sops/' named after the tab (tab label with spaces/symbols stripped: 'Home Runs' → 'homeruns.html', 'Plans & Links' → 'planslinks.html', 'QC' → 'qc.html' — capitalization doesn't matter, 'HomeRuns.html' works too: the scan lowercases the KEY for matching but bakes the EXACT filename into the fetch path, because prod hosting is case-sensitive while the dev Mac's filesystem is not, the classic works-locally-404s-in-prod trap); the "?" turns on for that tab on the next build. Prebuild job 5 in 'scripts/version-from-sw.js' scans the folder and bakes 'SOP_FILES_INLINE' into 'src/App.js' (never hand-edit that block), reading each guide's own '<title>' for the viewer header — a SOP Recorder export already sets it from the recording's name, and the five 'escapeHtml' entities are decoded so a guide called "Home Runs & Panels" doesn't render as '&amp;'. A filename matching no tab emits a loud build NOTE, which is the only thing standing between a typo and a "?" that silently never appears — and the valid-key list is extracted from the real 'TABS' const in 'src/App.js' at build time (baked fallback only if that regex ever breaks), so renaming or adding a tab can't strand the warning list. Two files collapsing to one key (possible only on Vercel's case-sensitive checkout — the dev Mac's filesystem physically can't host both spellings) keep the first alphabetically, with a NOTE naming the ignored file. 'SOP_SUBTITLES' is optional polish, not a requirement. Four pieces: that generated manifest → 'SOP_MAP', 'sopKeyForTab' (the shared naming rule, used by both the app and the scan so they cannot drift), 'HelpDot' (the button; renders **nothing** when no guide exists, so no dead controls), and 'SopModal' (the viewer). The '<HelpDot>' is mounted **once** in the shared job-tab body wrapper rather than inside each of the 14 tab blocks, which is why a new tab's guide needs no JSX either. Guides are standalone HTML in 'public/sops/', fetched on demand and **never bundled** — a guide recorded in SOP Recorder bakes its screenshots in as data URIs (~2–5MB each), fine to pull once on a tap and completely wrong in the JS bundle every phone downloads on every cold start. They render in an iframe with 'sandbox="allow-scripts allow-popups"' and **no** 'allow-same-origin', so a guide's own stylesheet can't collide with the app's and its markup can't reach app storage, auth, or Firestore. Offline: the SW caches the guide on first successful fetch, so tap-once-on-signal makes it work in a basement forever after; a cache miss offline shows "Guide isn't downloaded yet" instead of hanging. **The shell gate is load-bearing** — both Vercel and 'firebase.json' rewrite '**' → '/index.html', so a missing or misspelled guide returns the ENTIRE APP with a 200 and 'res.ok' alone would render Homestead inside a modal inside Homestead. 'isRenderableSop' therefore REJECTS THE SHELL ('id="root"' + a '/static/js/main.*.js' tag) rather than requiring a marker — that direction is deliberate and is what lets a **raw SOP Recorder export be dropped in untouched**, since that exporter is a separate project that stamps no marker and demanding one would mean hand-doctoring every recording. 'homestead-sop' survives as an optional explicit opt-in. The SW also now answers an uncached '/sops/*' navigate with a 504 instead of the index.html fallback (opening a guide in its own tab IS a navigate, and would otherwise render Homestead where the guide should be). **All 15 guides shipped as Claude-written text drafts (2026-08-12)** — every tab has one (grounded in the App Map, the vault trainings, and live code; the Change Orders draft deliberately drops the retired "Task Made in SimPro" status the older vault guide still shows), plus **six individual link guides** (Koy: "an individual training for all the different links… going over the specifics of each") — 'questionlinks', 'crewlink', 'liveviewlink', 'generatorlink', 'lightinglinks' (collab + Lutron hub + AV loads in one, since they share an audience area), 'gcportal' — each opened by a bare "?" at its OWN creation spot: the Questions share picker action, the LIVE PLANS — FIELDINK section header (one dot for the section, not per plan row), the Home Runs live-view share row, the generator homeowner link row, the lighting collab share row + the non-Lutron Share loads button, and the GC portal's Create button. Each opens with the same condensed universal-rules card (one link per person · send the link not a screenshot · scoped view · delete kills instantly) then goes deep on its own link. The Return Trips guide also gained the two missing RT sources (direct '+ Add Return Trip' — a GC ask, warranty, anything needing a trip — and failed 4-way/final inspections, RT created by the manual → Create Return Trip button), and a completeness pass added the NEW-answer badges + teammate-reminder bell to the Questions guide, printable schedules + the stale-manual-count Refresh banner to Home Runs, and materials/POs/add-to-PO-from-punch to Rough and Finish. **Verified by a 21-agent adversarial pass (2026-08-12)** — one independent verifier per guide + a cross-guide critic, each reading the guide cold against FEATURES.md and App.js — which surfaced 39 errors and 84 gaps (all line-cited), applied by 19 per-guide fix agents: headline corrections include the v366 Submit Change Order step, the crewOnSiteToday gate replacing the old In-Progress rule, FILL's REPLACE confirm (hand-typed circuits ARE replaced on confirm; only the background auto-refill is byte-identical-safe), the Open Items and Activity guides rewritten around their real tab bodies (Open Items = Job Notes capture front door + RT sign-off; Activity = "To do on this job" rollup + timeline), the GC portal's requests-inbox review step (portal answers never auto-apply), and the re-nudge bell corrected to a teammate reminder. Non-tab keys are validated by the scan against mounted '<HelpDot section="...">' literals in the source — self-maintaining, no list to update. Replacing any draft with a real recording is a file drop, no code change. **Standing rule (Koy): guides track the app** — any ship changing how a feature works updates that feature's guide in the same ship (rule recorded in CLAUDE.md + memory + the vault checklist '11-Trainings/In-App SOP Recordings - Checklist'). Why it can't lose data: **read-only feature** — no Firestore read or write, no new field, no rules change, no data shape touched; the only app-code additions are three presentational components and one button
   - Dedicated Questions tab · 'shipped 2026-07-18' · 'SW v346' · "Questions" tab between Finish and Home Runs stacking both phases always-open ('PhaseQuestionsSection' — one shared component now mounted by the Rough tab, Finish tab, and this tab, replacing the duplicated inline gc-map IIFEs); tab label carries a green "N NEW" unseen-answers pill ('countUnseenAnswers' over the v345 'qaSeenAns_*' seen stamps); header "open questions" pill, Job Notes promoted-question jumps, and Activity question todos all retarget to the tab; '?section=Questions' deep links work via the existing TABS.includes guard. Display-only — no new writes, no data-shape change
   - New-answer visibility + sort by date answered · 'shipped 2026-07-17' · 'SW v345' · answered list sorts newest-'answeredAt' first (undated legacy answers sink); per-device seen stamps ('qaSeenAns_<jobId>_<phase>-<floor>' in localStorage, share-page 'prevVisitAt' pattern) drive a "N NEW" pill on the ANSWERED header + the phase Answered chip, a "NEW ANSWER" badge + green border per question, and a relative time on the answered stamp; expanding the answered section marks seen (badges persist for the visit, clear next visit). Display-only — no job-doc writes
 - **Plans tab** · 'shipped' · 'PlansTab'

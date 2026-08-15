@@ -1,0 +1,213 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map + vault trainings. To replace with a recorded guide: drop a SOP
+     Recorder Standalone HTML export over this file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Finish Tab — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Finish Tab</h1>
+  <p class="sub">Same system as Rough — with the QC gate and the homeowner at the end</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>The Finish tab works exactly like Rough — stage status, punch by floor and room,
+    Questions with tags, same rules. The difference is what's waiting at the end:
+    <b>finish is what the homeowner sees</b>, the punch is device-by-device, the phase
+    closes through a <b>QC walk</b>, not just a checkbox — and the <b>final inspection</b>
+    gets recorded right on this tab, pass or fail. Everything in the Rough guide
+    applies here; this one covers what's different.</p>
+  </div>
+
+  <h2 class="sec">Same as Rough — the short list</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Status ladder, punch rules, questions, materials, notes, updates</h3>
+      <p>Awaiting Start Date → Start Date Set → Scheduled → In Progress → On Hold →
+      Complete. Close punch the day you do it (it feeds the Daily Update). Never delete
+      rooms or lists. Tag every question with who it's for. Finish materials, POs, and
+      the tally work exactly like rough's — including adding a part to the PO straight
+      from a punch item. Daily Updates work the same too: closed punch rolls in on its
+      own, you can add a manual update for anything else that happened, and the update
+      can be emailed out. Same with Job Notes — jot things on the tab during the walk,
+      then multi-select notes and promote them to punch, a return trip, or a PO. If any
+      of that is fuzzy, open the "?" on the Rough tab.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">What's different on finish</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>The punch is device-level — write it that way</h3>
+      <p>"Master bath — 2nd sconce crooked" closes; "fix bathroom lights" doesn't. Trim,
+      plates, devices, fixtures: one item per real thing, named by room, so anyone can
+      close it without a tour guide.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Fixture picks and client answers land here</h3>
+      <p>Finish questions carry the designer / homeowner answers — fixture picks, trim
+      colors, mounting heights. Check the amber <b>Incoming from Links</b> panel when you
+      open the job; an unread answer is a wrong install waiting to happen.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>The phase ends with a QC walk</h3>
+      <p>Finish doesn't close on the last punch check — it closes when the <b>finish QC
+      walk</b> comes back clean (or its items are fixed). Get QC scheduled before the crew
+      rolls off, not after. The QC tab's "?" has the full walk guide.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Leave-it-clean photos</h3>
+      <p>Finish is the phase where photos earn their keep — panels labeled, rooms trimmed,
+      anything the GC might question later. Thirty seconds of photos beats a return
+      trip.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">The finish stage status carries the handoff</span>
+    <p>"Finish Complete" tells the office to line up QC and the close-out — flip it when
+    the work is actually done. And the app holds this gate itself: with finish punch or
+    QC items still open, both the Complete status and the 100% stage setting refuse with
+    a "Cannot mark Finish as complete" warning until the open items are cleared. Open
+    QC-walk items count against it too, not just your finish punch.</p>
+  </div>
+
+  <h2 class="sec">The final inspection lives on this tab</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Set the target date, record the result</h3>
+      <p>The FINAL INSPECTION block sits right in the Finish stage section. Put the
+      target date in as soon as it's known, and when the inspector leaves, hit
+      <b>Pass</b> or <b>Fail</b> — same day, either way. Every result snapshots into
+      the attempt history, so the office sees exactly what happened and when. Don't
+      leave the office blind on the job's biggest gate.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Failed? List the items, photo the report</h3>
+      <p>A fail gets a failed-items checklist — one line per thing the inspector
+      called — plus photos of the inspection report. Write it standing there, while
+      the inspector's words are fresh.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>One tap turns the fail into a return trip</h3>
+      <p>The <b>→ Create Return Trip</b> button takes the open failed items and builds
+      the return trip for you — scope reads "Failed final inspection items." Hit it
+      before you leave the site, so the fix gets scheduled instead of remembered.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Write punch device-by-device, by room</li>
+        <li>Read Incoming answers before you install</li>
+        <li>Get the QC walk scheduled before roll-off</li>
+        <li>Record the final inspection result the day it happens — pass or fail</li>
+        <li>Photo the finished rooms and labeled panels</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Try to force Finish Complete past open punch or QC items — the app refuses</li>
+        <li>Install a fixture with an unread answer sitting in the panel</li>
+        <li>Leave QC for "whenever" — it's the gate, not a formality</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Rough punch is still open — does it block finish?</p>
+      <p class="a">It doesn't block you from working, but it shows on the Job Activity
+      tab's to-do list and as an open count on the phase tabs — it reads as unfinished
+      work on the job. Close what's real, flag what's stale.</p>
+    </div>
+    <div class="row">
+      <p class="q">The QC walk called items on my finish work.</p>
+      <p class="a">If you're still on site, the list is yours — close the items like
+      punch. If the crew's rolled off, it becomes a return trip. That call gets made at
+      the walk.</p>
+    </div>
+    <div class="row">
+      <p class="q">Homeowner asked for a change while I'm trimming.</p>
+      <p class="a">That's a Change Order, before the work — the Change Orders tab's "?"
+      has the whole flow. Don't eat scope on finish.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Finish Tab — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

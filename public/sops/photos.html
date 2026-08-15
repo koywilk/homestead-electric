@@ -1,0 +1,198 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map (PhotoAttacher + ZoomableImage v372). Replace by dropping a SOP
+     Recorder Standalone HTML export over this file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Photos — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Photos</h1>
+  <p class="sub">Every photo on the job, one gallery — and how to shoot ones worth keeping</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Photos get attached where the work is — on a punch item, a change order, a return
+    trip, an inspection, a question. The <b>Photos tab</b> rolls up nearly all of them into
+    one gallery — punch, return trips, COs, plan files, Matterport, inspections, notes,
+    daily updates. One catch: <b>question photos stay on the question</b> and don't show
+    here. Tap any photo to go full screen — <b>pinch, scroll, or double-tap to zoom</b> —
+    and <b>Go to source &#8594;</b> takes you to the tab it came from.</p>
+  </div>
+
+  <h2 class="sec">Attaching photos</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Attach at the source, not "somewhere"</h3>
+      <p>Use <b>Add photo</b> on the thing itself — the punch item, the CO, the RT, the
+      question. The picker takes multiple photos at once, so grab the whole batch in one
+      select. A photo attached to its item explains itself forever; a photo floating in
+      a text thread is lost by Friday.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Shoot so a stranger could find it</h3>
+      <p>Step back far enough to show WHERE it is, then close enough to show WHAT it is.
+      Two photos beat one when the one makes someone guess the room.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">The gallery</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Find one photo in hundreds</h3>
+      <p>On a photo-heavy job, don't scroll — use the search box up top (<b>Search by
+      filename, source, or uploader&hellip;</b>) or tap the source chips (Punch, Return
+      Trips, Change Orders, Plan files, and the rest) to hide or show whole groups. Each
+      chip shows its count, and the header keeps an "N of M" tally so you know what's
+      filtered out.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>It's more than photos</h3>
+      <p>The header says <b>All photos &amp; files</b> for a reason — plan files,
+      Matterport scans, and inspection reports show up as tappable cards here too. Tap
+      <b>Open file &#8599;</b> and it's one stop for the plans or a scan, no hunting
+      through other tabs.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Question photos don't land here</span>
+    <p>Photos attached to a job question (or its answer) stay on the question — they
+    never show in this gallery. If you attached to a question and can't find it here,
+    it's not lost. Go back to the question to see it.</p>
+  </div>
+
+  <h2 class="sec">The viewer</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Zoom works everywhere</h3>
+      <p>Pinch on the phone, scroll on a computer, or <b>double-tap to jump in and back
+      out</b>. Drag to pan while zoomed. Open-original is there when you need the full
+      file.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>The source chip tells you where it came from</h3>
+      <p>In the viewer, each shot carries its source chip — that's a label, not a button;
+      tapping it does nothing. To go there, tap <b>Go to source &#8594;</b> right next to
+      it. That switches you to the source tab — punch, COs, RTs — and you scroll to the
+      item from there. Arrows move you through the whole job's photos without backing
+      out.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">When photos pay for themselves</span>
+    <p>Before drywall. Panel labeled and torqued. The fix on any QC or inspector item.
+    Anything a GC might question in six months. Thirty seconds of photos is the cheapest
+    insurance the company buys.</p>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Attach to the item the photo is about</li>
+        <li>Wide shot for where, close shot for what</li>
+        <li>Shoot walls before they close up</li>
+        <li>Photo the fix when you close a called item</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Let job photos live only on your phone</li>
+        <li>Text photos that belong on an item</li>
+        <li>Shoot one blurry close-up and call it documented</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Where did my photo go?</p>
+      <p class="a">To the item you attached it on — and for almost every source it also
+      shows in this tab's gallery automatically. The exception is question photos: those
+      stay on the question only and never show here.</p>
+    </div>
+    <div class="row">
+      <p class="q">Uploaded a blurry or wrong-item photo — can I delete it?</p>
+      <p class="a">Yes — go back to the item you attached it on and tap the <b>&times;</b>
+      on that thumbnail. The gallery is read-only; you remove photos at the source.</p>
+    </div>
+    <div class="row">
+      <p class="q">Zoom isn't doing anything.</p>
+      <p class="a">Tap the photo first so it opens full screen — zoom lives in the
+      viewer, not on thumbnails. Then pinch, scroll, or double-tap.</p>
+    </div>
+    <div class="row">
+      <p class="q">Can I attach a PDF the same way?</p>
+      <p class="a">Yes — non-photo files attach the same way and open in a new tab
+      instead of the zoom viewer.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Photos — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

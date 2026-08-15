@@ -1,0 +1,456 @@
+<!doctype html>
+<!--homestead-sop-->
+<!--
+  Homestead Electric · in-app SOP · section key: "questions"
+
+  This file is served from public/sops/ and opened by the "?" button on the
+  Questions tab (SOP_MAP in src/App.js). It is deliberately a STANDALONE html
+  document with its own CSS — it renders inside a sandboxed iframe, so nothing
+  here can collide with the app's styles and nothing here can touch the app.
+
+  TO REPLACE WITH A RECORDED GUIDE:
+  Record the walkthrough in SOP Recorder (~/Desktop/sop-recorder), export
+  "Standalone HTML", and drop the export straight over this file. It does NOT
+  need editing — the viewer accepts any HTML document that is not this app's
+  own index.html shell, precisely so a raw export works untouched. Only the
+  filename matters: keep public/sops/questions.html, or update SOP_MAP.
+
+  The marker comment on line 2 (the "homestead-sop" one) is an optional
+  explicit opt-in, not a requirement. NOTE: never write that marker out in
+  full inside another comment — HTML comments do not nest, so its closing
+  delimiter ends the OUTER comment early and dumps the rest onto the page.
+
+  Content source: Command Center vault, 11-Trainings/Crew/Job Questions - Crew Guide.md
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Job Questions — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* App tokens (src/App.js `C`) so the guide reads as part of the app. */
+  :root{
+    --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9;
+    --text:#1B1F24; --dim:#5E6670; --blue:#3B5BA5; --green:#3E7D5A;
+    --red:#B23A3A; --orange:#B06A2C;
+    --head:'Bebas Neue','Oswald','Haettenschweiler','Arial Narrow',sans-serif;
+    --body:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text); font-family:var(--body);
+    font-size:15px; line-height:1.55;
+    -webkit-text-size-adjust:100%; /* phone landscape must not inflate this */
+    padding:18px 16px 64px;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+
+  /* ── header ─────────────────────────────────────────────────────────── */
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;
+    margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+
+  /* ── the 30-second version ──────────────────────────────────────────── */
+  .tldr{background:var(--card);border:1px solid var(--border);
+    border-left:4px solid var(--blue);border-radius:10px;
+    padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;
+    margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+
+  /* ── section heads ──────────────────────────────────────────────────── */
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;
+    margin:34px 0 4px;font-weight:400;padding-bottom:7px;
+    border-bottom:2px solid rgba(59,91,165,.27)}
+
+  /* ── steps ──────────────────────────────────────────────────────────── */
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);
+    color:#fff;font-size:13px;font-weight:700;display:flex;
+    align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700;letter-spacing:-.005em}
+  .step p{margin:0;font-size:14px;color:var(--text)}
+  .step p + p{margin-top:7px}
+
+
+  /* ── callouts ───────────────────────────────────────────────────────── */
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}
+  .call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}
+  .call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}
+  .call.tip .lbl{color:var(--green)}
+
+  /* ── do / don't ─────────────────────────────────────────────────────── */
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);
+    border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}
+  .dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;
+    letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}
+  .dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}
+  .dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}
+  .dd li:last-child{margin-bottom:0}
+  @media (max-width:560px){ .dd{grid-template-columns:1fr} }
+
+  /* ── quick answers ──────────────────────────────────────────────────── */
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}
+  .qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}
+  .qa .a{margin:0;font-size:14px;color:var(--dim)}
+
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);
+    color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+  code{background:var(--surface);border:1px solid var(--border);border-radius:4px;
+    padding:1px 5px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Job Questions</h1>
+  <p class="sub">How to ask, tag, share, and answer job questions</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Every job has Questions under <b>Rough</b> and <b>Finish</b>, split by floor. When
+    you hit something you need an answer on — panel location, fixture pick, anything —
+    you type it in and <b>tag WHO it is for</b>. The moment it's tagged, it shows up on
+    that person's live link. Their answer comes back automatically and lands in the amber
+    <b>Incoming from Links</b> panel at the top. That's the whole loop.</p>
+  </div>
+
+  <!-- ── adding ──────────────────────────────────────────────────────── -->
+  <h2 class="sec">Adding a question</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Open the job and find the right floor</h3>
+      <p>Go to the <b>Questions</b> tab (or the Rough / Finish tab) and find the section
+      for the floor you're on — Upper, Main, or Basement.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Type the question and press Enter</h3>
+      <p>Use the <b>"Add a question…"</b> box. Write it the way you'd say it out loud.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Tag who it's for</h3>
+      <p>Tap the <b>+ recipient</b> tag on the question and pick or type who it's for —
+      Designer, GC name, homeowner. <b>This is the single most important step.</b></p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">Why the tag matters</span>
+    <p>A tagged question appears on that person's live link within seconds — no
+    re-sharing, no new link, nothing else to do. An <b>untagged question goes nowhere</b>.
+    It sits in the app until somebody shares it by hand. To sweep them, tap the
+    <b>Unassigned (N)</b> chip up top — one tap shows every untagged question.</p>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Questions can also come off the plans</span>
+    <p>Question or Problem pins dropped on a live plan (the FieldInk crew link) flow
+    into this same Questions list. Those rows carry a plan badge — blue
+    <b>Pinned on plan</b> means it's located on the plan but not answered yet; green
+    <b>Answered on plan</b> means it is.</p>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Shortcut</span>
+    <p>If you're already viewing one person's questions (their filter chip is active up
+    top), anything you add is tagged to them automatically.</p>
+  </div>
+
+  <!-- ── sharing ─────────────────────────────────────────────────────── -->
+  <h2 class="sec">Getting questions to the designer / GC / client</h2>
+
+  <p style="font-size:14px;margin:12px 0 0">Each person gets <b>ONE link</b> for the job,
+  made once, used the whole job.</p>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Open the Share picker</h3>
+      <p>It's in the Questions area, at the top of the section.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Pick that person's questions</h3>
+      <p>Questions are grouped by recipient — use <b>Select all</b> on their group, or
+      hand-pick.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Save it as a NAMED link</h3>
+      <p>Name it after the person — "Dusty", "Designer Sarah". <b>The name is what makes
+      future tagged questions flow to it automatically.</b></p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Copy it and send it once</h3>
+      <p>Text or email it to them. Done — that link is theirs for the life of the job.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">You never re-send the link</span>
+    <p>New questions you tag for them appear on their existing link automatically. The
+    <b>Saved Links</b> list shows every link that's out — deleting one kills it
+    immediately and they see nothing. The <b>Shared / Not shared</b> badge on each
+    question tells you whether the link people can currently see it. Each saved link
+    also has a <b>Preview</b> button next to Copy link — it opens that person's exact
+    page in the app, read-only, so you can check what they see before you text it,
+    or when a designer says "I don't see that question."</p>
+  </div>
+
+  <!-- ── incoming ────────────────────────────────────────────────────── -->
+  <h2 class="sec">The Incoming from Links panel — your inbox</h2>
+
+  <p style="font-size:14px;margin:12px 0">At the top of each phase's Questions there's an
+  amber panel: <b>INCOMING FROM LINKS</b>. Everything the link people just sent collects
+  here, so you never scroll floor-by-floor hunting for it:</p>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Answers they submitted</h3>
+      <p>Green box — applies to the question automatically.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>"Ask for more info" notes</h3>
+      <p>They need something from you before they can answer.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Discussion replies where they spoke last</h3>
+      <p>The ball is in your court.</p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">The one subtle rule: answers only auto-apply to OPEN questions</span>
+    <p>A link answer lands on a question that's still open → it applies itself, done.
+    But if you already closed the question yourself and THEIR answer arrives after,
+    the app will not overwrite your answer — the late answer <b>shows on the question
+    for you to adopt or ignore</b>. Nothing is lost, nothing is clobbered silently;
+    when two answers exist, a human picks.</p>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">How you know you're clear</span>
+    <p>Handle the item — reply, answer, or check it off — and the card drops out of the
+    panel back to its floor. <b>Empty panel = nothing waiting on you.</b></p>
+  </div>
+
+  <!-- ── navigating ──────────────────────────────────────────────────── -->
+  <h2 class="sec">Finding your way around</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Status chips</h3>
+      <p>All / Open / Needs reply / Answered. Tap <b>Needs reply</b> to see only the
+      questions where someone is waiting on the crew.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Answered is collapsed</h3>
+      <p>Answered questions fold into one <b>✓ ANSWERED (N)</b> line. Tap to expand.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Compact cards</h3>
+      <p>Open questions show just the question and the answer box. Tap <b>More</b> for
+      the note-to-GC, photo attach, reminder, or to start a discussion.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>The green NEW badges know what you've seen</h3>
+      <p>The Questions tab label carries a green <b>"N NEW"</b> pill and answered
+      questions get a <b>NEW ANSWER</b> badge — counted since YOUR last visit on YOUR
+      device, so what's new to you is exactly what's flagged. Expanding the answered
+      list marks it seen.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>The bell reminds a TEAMMATE — not the link person</h3>
+      <p>The bell on a question opens a <b>REMIND WHO?</b> picker of Homestead team
+      members and sends that person an in-app reminder. It <b>cannot reach the designer,
+      GC, or homeowner</b> the question is tagged to. Use it to put a stalled question
+      in front of whoever on the crew or office needs to chase it.</p>
+    </div>
+  </div>
+
+  <!-- ── answering ───────────────────────────────────────────────────── -->
+  <h2 class="sec">Answering a question yourself</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Type it in the ANSWER box</h3>
+      <p>Plain language is fine.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Record how you got it</h3>
+      <p>Under <b>More → HOW ANSWERED</b>, tap how you got the answer — in person, phone,
+      text — and add context if it's useful. <b>That's the paper trail.</b></p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Check the box to close it</h3>
+      <p>Unchecking reopens it. Nothing is lost either way.</p>
+    </div>
+  </div>
+
+  <!-- ── photos ──────────────────────────────────────────────────────── -->
+  <h2 class="sec">Photos, files, and discussions</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Photo on a question</h3>
+      <p><b>More → Add photo.</b> Snap the area in question so the person on the link
+      sees exactly what you mean instead of guessing which wall.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Photos on their answer</h3>
+      <p>When they attach photos or files, those show right under the answer. Their
+      answer stays live to their link — if they edit the text or pull a photo later,
+      the change syncs into the app, and clearing everything reopens the question.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Discussion</h3>
+      <p>Every question has a reply thread — both sides can go back and forth with
+      attachments, unlimited turns. Their replies light up <b>Needs reply</b> and the
+      Incoming panel.</p>
+    </div>
+  </div>
+
+  <!-- ── do / don't ──────────────────────────────────────────────────── -->
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Tag every question with who it's for</li>
+        <li>Make ONE named link per person and reuse it all job</li>
+        <li>Check the amber Incoming panel when you open the job</li>
+        <li>Add a photo when the question is about something physical</li>
+        <li>Use the discussion thread for back-and-forth</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Leave questions untagged — they go nowhere</li>
+        <li>Make a new link every time you have a question</li>
+        <li>Let GC answers and notes sit unread</li>
+        <li>Make the designer guess which wall you mean</li>
+        <li>Answer over text message where nobody else can see it</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ── quick answers ───────────────────────────────────────────────── -->
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Do I re-share when I add a question?</p>
+      <p class="a">No — if it's tagged to them, it's already on their link.</p>
+    </div>
+    <div class="row">
+      <p class="q">No link exists for that person yet?</p>
+      <p class="a">Make one in the Share picker, name it after them, send it once.</p>
+    </div>
+    <div class="row">
+      <p class="q">What happens when they answer?</p>
+      <p class="a">It applies automatically — the question goes green, marked answered
+      "via link," with their attachments included.</p>
+    </div>
+    <div class="row">
+      <p class="q">They couldn't answer and asked us something instead?</p>
+      <p class="a">That's the "Ask for more info" note. It lands in your Incoming panel —
+      reply in the discussion.</p>
+    </div>
+    <div class="row">
+      <p class="q">The GC says they answered on their portal?</p>
+      <p class="a">Questions shared to a GC also show on their GC Portal. The office
+      applies portal answers from its inbox — the answer lands on the exact question,
+      marked answered via the portal.</p>
+    </div>
+    <div class="row">
+      <p class="q">Need to cut someone off?</p>
+      <p class="a">Delete their link in Saved Links. It stops working immediately.</p>
+    </div>
+  </div>
+
+  <p class="foot">
+    Homestead Electric · Job Questions — Crew Guide · updated August 2026<br>
+    Companion guide for the GC / client side: <b>Answering Job Questions</b>.
+  </p>
+
+</div>
+</body>
+</html>

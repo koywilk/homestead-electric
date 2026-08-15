@@ -1,0 +1,329 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map + vault trainings (Closing Punch Items, Job Questions). To replace with
+     a recorded guide: drop a SOP Recorder Standalone HTML export over this
+     file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rough Tab — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  table.st{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:12px 0;font-size:13.5px}
+  table.st th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:9px 12px;border-bottom:1px solid var(--border)}
+  table.st td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  table.st tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700;white-space:nowrap}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Rough Tab</h1>
+  <p class="sub">The rough phase's home: stage status &amp; %, punch list, questions, job notes, daily updates, 4-way inspection</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Everything about the rough phase lives on this tab. Keep the <b>stage status and
+    stage %</b> honest (that's what the whole company plans off), work the <b>punch
+    list</b> by floor and room, put anything you can't answer into <b>Questions</b> with
+    a tag, jot the rest in <b>Job Notes</b>, and record the <b>4-way inspection</b> when
+    it happens. If it's true on this tab, the office never has to call you to ask.</p>
+  </div>
+
+  <h2 class="sec">The stage status — keep it honest</h2>
+
+  <table class="st">
+    <tr><th>Status</th><th>What it tells everyone</th></tr>
+    <tr><td><span class="pill" style="background:#B0892C18;color:#B0892C">Awaiting Start Date</span></td>
+        <td>We don't have a date from the GC yet.</td></tr>
+    <tr><td><span class="pill" style="background:#B06A2C18;color:#B06A2C">Start Date Set</span></td>
+        <td>GC gave a date — it's on the pill.</td></tr>
+    <tr><td><span class="pill" style="background:#3B5BA518;color:#3B5BA5">Scheduled</span></td>
+        <td>Crew is assigned for that date. Shows in the Crew Planner.</td></tr>
+    <tr><td><span class="pill" style="background:#6A7BAA18;color:#6A7BAA">In Progress</span></td>
+        <td>Crew is on it. (The CO "Mark Work Completed" button does NOT key off this —
+        it shows when crew is on the job in today's Crew Planner.)</td></tr>
+    <tr><td><span class="pill" style="background:#B0892C18;color:#B0892C">On Hold</span></td>
+        <td>Stopped — weather, GC, materials. Say why in a note or update.</td></tr>
+    <tr><td><span class="pill" style="background:#46916A18;color:#46916A">Complete</span></td>
+        <td>Rough is done. QC and inspection ride on this being real.</td></tr>
+  </table>
+
+  <div class="call key">
+    <span class="lbl">Why it matters more than it looks</span>
+    <p>Forecast, Crew Planner, the Huddle, and half the office's planning read this one
+    pill. A job sitting on "Scheduled" while the crew is mid-pull tells everyone the wrong
+    story. Flip it the day it changes.</p>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">The stage % is the real planning signal</span>
+    <p>Right next to the status sits the <b>Rough Stage %</b> selector (0–100%). The
+    Forecast reads the % — not just the pill — so move it as the work moves. It also does
+    real work on its own: any % above 0 flips the status to In Progress for you,
+    <b>80%</b> fires the Schedule-QC task, <b>85%</b> fires ready-to-invoice, and
+    <b>100%</b> sets the status to Complete (blocked while punch is still open). A pill
+    kept honest with a stale % still leaves the company planning off bad numbers.</p>
+  </div>
+
+  <h2 class="sec">The punch list</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Find your floor, then your room</h3>
+      <p>Punch is organized Main / Upper / Basement, then by room. Work your room's list
+      top to bottom.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Close items as you finish them — same day</h3>
+      <p>Check the box the day the work happens. Closed items roll into the day's Daily
+      Update automatically, so closing punch IS your paperwork.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Blocked? Say so on the item</h3>
+      <p>If you can't close it — waiting on another trade, missing material — note that on
+      the item instead of leaving it silently open. An open item with no note reads as
+      "nobody got to it."</p>
+      <p>Rolling off the job with it still open? <b>Convert the item to a Return Trip</b>
+      so it gets scheduled instead of forgotten. The row keeps a chip for its linked trip
+      — tap it to jump straight there.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Photo where it proves the work</h3>
+      <p>Attach a photo on anything someone else will want to see closed — inspector
+      items, GC callouts, anything behind drywall soon.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">5</div>
+    <div class="body">
+      <h3>Hand out work by assigning items to a name</h3>
+      <p>A punch item can be assigned to a person — that's how a foreman splits up the
+      list. Everything assigned to you collects under the <b>Assigned</b> tab in the
+      foreman view, across all your jobs, so check it before you pick a room at random.</p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">Never delete a room or a list</span>
+    <p>Mark items done instead. Deleting has destroyed lists before, and the office relies
+    on the history. If a room genuinely doesn't apply, tell the office — don't clean it up
+    yourself.</p>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Share the list — don't screenshot it</span>
+    <p>The punch list can go out to the GC as a live share link — filter it first so they
+    only see what's theirs. And it works both ways: items the GC adds land in their own
+    external section on this tab, so rows you didn't write aren't a glitch — they're the
+    GC talking to you.</p>
+  </div>
+
+  <h2 class="sec">Questions — get answers without a phone tree</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Hit something you can't answer? Type it in, tag who it's for</h3>
+      <p>The Questions section here is the same system as the Questions tab: add the
+      question on the right floor, <b>tag the person it's for</b>, and it lands on their
+      live link in seconds. Their answer comes back to the amber Incoming panel. Full
+      details are in the Questions tab's own "?" guide.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Job Notes — write it down while you walk</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Anything that comes up in the field goes in Job Notes</h3>
+      <p>The <b>Job Notes</b> section sits right in the Rough Stage section. Jot a line
+      the moment something comes up — extra cans, a wall that moved, a part you're short.
+      Notes here are rough-scoped, so they stay with this phase.</p>
+      <p>Then promote: multi-select the lines and send them where they belong — a
+      <b>CO</b>, a <b>Return Trip</b>, a <b>Punch</b> item, or a <b>PO</b>. A note in the
+      app becomes real work in two taps; a note in a text thread becomes a callback.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Materials &amp; POs</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>The rough materials list lives here too</h3>
+      <p>Materials for the phase, the <b>POs</b> against them, and the <b>material
+      tally</b>. When a punch item needs a part, <b>add it to the PO straight from the
+      punch item</b> — that's how "we're out of straps" becomes an order instead of a
+      memory. If it's not on the list, it's not coming on the truck.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Daily Job Updates</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Closed punch writes itself — the rest you type</h3>
+      <p>The <b>Daily Job Updates</b> section on this tab is the day's story. Punch you
+      closed today rolls in automatically. Anything beyond that — inspector came by, GC
+      moved a wall, weather stopped the pull — add it as a manual update.</p>
+      <p>Then email it: the section can send the daily update to the office or the GC,
+      so "what happened out there today" never turns into a phone call.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">The 4-way inspection</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Set the 4-Way Target date as soon as you have it</h3>
+      <p>Put the inspection date in the <b>4-Way Target</b> field the moment you know it.
+      That's what lets the office plan around the inspection instead of finding out after
+      the fact.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Record Pass or Fail the day it happens</h3>
+      <p>Don't sit on a result — mark it the same day. Every attempt gets kept in the
+      history, so a second or third try shows up as exactly that.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Failed? YOU type the list — nothing builds itself</h3>
+      <p>A fail does not turn anything into punch on its own. Use the <b>+ Item</b>
+      button to type each thing the inspector called, one per line. Record a fail and
+      walk away, and the re-walk list is empty.</p>
+      <p>Attach the inspector's report (photo or PDF) under <b>Inspection Report</b> too
+      — it gets copied onto the return trip built from the fail, so the fix crew has it
+      on site.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Tap "→ Create Return Trip" to make the fix trip real</h3>
+      <p>Once the failed items are typed in, hit <b>→ Create Return Trip</b>. That puts
+      the open items on a new Return Trip's punch list — that's where the re-walk lives,
+      not on this tab's punch. No tap, no trip.</p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">A fail doesn't schedule itself</span>
+    <p>Recording a fail creates nothing by itself. Type the items, attach the report, and
+    tap → Create Return Trip before you leave the driveway — otherwise the fail sits
+    there with no fix trip behind it.</p>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Flip the stage status — and move the stage % — the day it changes</li>
+        <li>Close punch the day you do the work</li>
+        <li>Note WHY on anything blocked; convert it to a Return Trip if you're rolling off</li>
+        <li>Tag every question with who it's for</li>
+        <li>Set the 4-Way Target date as soon as you have it</li>
+        <li>Record inspections same day, pass or fail</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Delete rooms or lists — mark items done instead</li>
+        <li>Batch a week of punch closes on Friday</li>
+        <li>Leave the status on Scheduled while you're mid-pull</li>
+        <li>Carry answers in your head that belong in Questions or Job Notes</li>
+        <li>Expect a failed inspection to build its own list — you type the items and
+        create the Return Trip</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Who sees what I close here?</p>
+      <p class="a">Everyone who needs to — closed punch rolls into the Daily Update, and
+      the office dashboards read this tab live.</p>
+    </div>
+    <div class="row">
+      <p class="q">The GC moved the date. What do I touch?</p>
+      <p class="a">Update the date on the status pill (or tell the office). That one edit
+      moves the Forecast and Crew Planner with it.</p>
+    </div>
+    <div class="row">
+      <p class="q">An item was assigned to me specifically.</p>
+      <p class="a">It also shows under the Assigned tab in the foreman view — every item
+      assigned to you, across all your jobs. Knock those out first.</p>
+    </div>
+    <div class="row">
+      <p class="q">We failed the 4-way and I made the Return Trip. Where's the re-walk list?</p>
+      <p class="a">On that Return Trip's punch list — the Return Trips tab, not this tab's
+      punch. If you never tapped → Create Return Trip, there is no list yet.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Rough Tab — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

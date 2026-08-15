@@ -1,0 +1,140 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude. Individual
+     link guide (lighting collab / Lutron hub / AV loads). Replace by dropping
+     a SOP Recorder export over this file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lighting Links — Collab, Hub &amp; Loads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 22px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  .rules{background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:10px 14px;margin:0 0 22px;font-size:12.5px;color:var(--dim)}
+  .rules b{color:var(--text)}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  table.st{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:12px 0;font-size:13.5px}
+  table.st th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:9px 12px;border-bottom:1px solid var(--border)}
+  table.st td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  table.st tr:last-child td{border-bottom:none}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Link Guide</div>
+  <h1>Lighting Links</h1>
+  <p class="sub">Three links, three outside companies — which one goes to whom</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>The Panelized Lighting tab can mint <b>three different links</b>, each for a
+    different partner: the <b>collab link</b> (the LV company works IN it), the
+    <b>Lutron hub link</b> (the plans company sees EVERY Lutron job on one page), and
+    the <b>loads link</b> (a read-only list for an AV programmer). Send the wrong one
+    and the right person can't do their job — this page is the sorting hat.</p>
+  </div>
+
+  <div class="rules"><b>Link rules (same as every link):</b> one link per company ·
+  send once, it stays current · each shows only its own slice of the job.</div>
+
+  <h2 class="sec">The three, side by side</h2>
+
+  <table class="st">
+    <tr><th>Link</th><th>Goes to</th><th>They can</th></tr>
+    <tr><td><b>Collab link</b><br>(Share ↗)</td><td>The low-voltage company on THIS job</td>
+        <td>View the load/keypad assignments and <b>add their own module &amp; channel
+        info</b> — it's a two-way work surface, not a read-only page.</td></tr>
+    <tr><td><b>Hub link</b><br>(Lutron jobs)</td><td>The plans company</td>
+        <td>See <b>every Lutron job in one list</b> — new jobs appear on it by
+        themselves. Send it ONE time, ever; it's a company-level link, not a job
+        link.</td></tr>
+    <tr><td><b>Loads link</b><br>(Share loads, non-Lutron)</td><td>The AV programmer
+        (Control 4 / Crestron)</td>
+        <td>Read the load list. Nothing else — it's their programming reference.</td></tr>
+  </table>
+
+  <div class="call warn">
+    <span class="lbl">Why Lutron jobs have no loads link</span>
+    <p>Lutron designed the system — <b>they sent US the loads list</b>. Sharing it back
+    at them is noise, so the button only shows on Control 4 / Crestron jobs where
+    Homestead does the engineering and a programmer genuinely needs it.</p>
+  </div>
+
+  <h2 class="sec">Using them</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Collab link — when the LV company comes aboard</h3>
+      <p>Send it as soon as they're on the job. Their module/channel entries land in
+      the app's lists — nobody retypes a spreadsheet later.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Hub link — once, ever</h3>
+      <p>The plans company gets it one time. When a new Lutron job starts, it's already
+      on their hub — <b>do not send them per-job links</b>, that's the exact problem the
+      hub kills.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Loads link — when the programmer asks for the list</h3>
+      <p>Copy, send, done. It stays current as loads change, so they're never
+      programming off a stale export.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">The LV company emailed a spreadsheet of modules instead.</p>
+      <p class="a">Point them back at the collab link — entered there, it lands in the
+      app where the crew works from. A spreadsheet is retyping debt.</p>
+    </div>
+    <div class="row">
+      <p class="q">New Lutron job — does the plans company need anything?</p>
+      <p class="a">No. It's on their hub already. That's the feature.</p>
+    </div>
+    <div class="row">
+      <p class="q">Which link for the GC?</p>
+      <p class="a">None of these — GCs get question links and the portal. These three
+      are for the lighting partners only.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Lighting Links · updated August 2026</p>
+
+</div>
+</body>
+</html>

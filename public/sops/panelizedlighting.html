@@ -1,0 +1,192 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map (system pills v310, Plan Changes log v313-317, bulk paste v363).
+     Replace by dropping a SOP Recorder Standalone HTML export over this file,
+     same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Panelized Lighting — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Panelized Lighting</h1>
+  <p class="sub">Lighting control systems — loads, keypads, and the plan-changes loop</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Jobs with a lighting control system get tracked here: pick the <b>system</b> from
+    the pills (Control 4, Lutron, Savant, Crestron, or Other), hit <b>Lock system</b>,
+    then keep three lists true — <b>Loads</b>, <b>Keypads</b>,
+    and <b>Panel Loads</b>. On Lutron jobs, the <b>Changes From Original Plan</b> log at
+    the top is how the field and Tech Lighting stay honest with each other about what
+    moved — every change gets a line, and Tech Lighting marks it green when it's folded
+    into the plans and quote.</p>
+  </div>
+
+  <h2 class="sec">The system pick</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Pick the system, then lock it yourself</h3>
+      <p>Five pills at the top: <b>Control 4</b>, <b>Lutron</b>, <b>Savant</b>,
+      <b>Crestron</b>, <b>Other</b> — the pick colors the whole tab (Lutron rides blue).
+      Pick <b>Other</b> and a <b>System Name</b> field appears for the oddball platforms.
+      Nothing locks on its own: until someone hits the <b>Lock system</b> button next to
+      the pills, one stray tap flips the whole job to another system. Hit it — once it
+      reads <b>Locked</b>, the other pills go dead. If the job genuinely changed
+      platforms, that's an office conversation, not a re-tap.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Savant jobs get a different screen</span>
+    <p>This guide describes the Lutron / Control 4 / Crestron layout. Pick <b>Savant</b>
+    and the whole tab swaps to a per-panel <b>slot list</b> instead — tap an empty slot
+    to add a load, tap an occupied slot to edit it, tandem feeders handled right in the
+    list. The keep-it-true discipline is the same; the screen is just built around
+    panels and slots.</p>
+  </div>
+
+  <h2 class="sec">Changes From Original Plan — the log that keeps everyone honest</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Every change gets a line, in the right room</h3>
+      <p>Rooms match the plan labels. Each change is typed as <b>Added</b>, <b>Moved</b>
+      (with from → to), <b>Removed</b>, or <b>Changed</b> — written at the moment it
+      happens on site, not reconstructed at trim.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Mislabeled a line? Pencil it</h3>
+      <p>Every logged change has a pencil — inline edit fixes the change type, item
+      type, location, from-location, and notes after the fact. A removal tagged Added
+      doesn't have to stand, and don't delete-and-retype either — fix the line and the
+      thread stays intact. Edits show on Tech Lighting's link too.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Use the discussion thread on a change</h3>
+      <p>Tech Lighting asks, crew answers — with photos and files, right on the change.
+      That thread replaces the email chains where this stuff used to get lost. Questions
+      that aren't about one change — schedule, whole-plan stuff — go in the
+      <b>job-level thread</b>, same photo and file attach.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Green "Incorporated" = the loop is closed</h3>
+      <p>When Tech Lighting folds a change into the plans and the quote, the line goes
+      green. A change without that line isn't done — it's just written down.</p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">Why the log matters</span>
+    <p>An unlogged lighting change is a keypad that's wrong at trim and a quote that's
+    wrong at billing. If a load moved and there's no line for it, the plans are now
+    fiction — the log line takes thirty seconds.</p>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Need the list in an email? One tap</span>
+    <p>The <b>Copy</b> button on the Changes From Original Plan header copies the whole
+    room-by-room change list as formatted text — paste it straight into an email to the
+    builder or Tech Lighting instead of retyping it. You'll see "Copied — ready to paste
+    into an email" when it's on the clipboard.</p>
+  </div>
+
+  <h2 class="sec">Loads, keypads, panel loads</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Keep the three lists true to the wall</h3>
+      <p><b>Loads</b> — every controlled load. <b>Keypads</b> — buttons per floor
+      section. <b>Panel Loads</b> — what lands in the lighting panel. Status flows with
+      the work; update as you pull and terminate. The <b>Set baseline / Update
+      baseline</b> button on the Loads header snapshots the current loads as the
+      original-plans baseline — the read-only loads share the AV programmer gets is
+      locked to that snapshot, so refresh it once the list is real.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Migrating a list from a doc? Bulk paste</span>
+    <p>Next to Add Load and on each keypad section there's a <b>Bulk paste</b> — it takes
+    tables copied straight out of Google Docs (tabs and all), bullets, or one-name-per-line,
+    and it <b>skips what's already on the list</b>, so pasting the full doc twice can't
+    double anything. If it detects nothing, it says so instead of quietly adding zero.</p>
+    <p><b>The one gotcha:</b> LCP <b>module numbers</b> in a paste show in the preview
+    but do NOT stick to the loads — the modal says so right there. After the paste,
+    run the <b>Assign to module</b> flow to put loads on their modules. Paste gets the
+    names in; assignment is its own step.</p>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">The job has no panelized lighting.</p>
+      <p class="a">Flip the "no panelized lighting" toggle — it just pushes the tab to
+      the end of the bar. Nothing is deleted; anything already typed stays.</p>
+    </div>
+    <div class="row">
+      <p class="q">A change I logged is still not green weeks later.</p>
+      <p class="a">Poke it in that change's discussion thread — that's exactly what the
+      thread is for. Green is Tech Lighting's move, not yours.</p>
+    </div>
+    <div class="row">
+      <p class="q">Whose tab is this — ours or Tech Lighting's?</p>
+      <p class="a">Both, on purpose. Crew writes what happened on site; Tech Lighting
+      answers, updates plans, and closes the loop. The tab is the meeting point.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Panelized Lighting — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

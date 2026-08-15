@@ -1,4 +1,4 @@
-const CACHE = "homestead-v379";
+const CACHE = "homestead-v380";
 
 // Install — skip waiting immediately
 self.addEventListener("install", e => {
@@ -37,6 +37,16 @@ self.addEventListener("fetch", e => {
       .catch(() => {
         return caches.match(e.request).then(cached => {
           if (cached) return cached;
+          // SOP guides (/sops/*.html, the in-app "?" help) are real documents,
+          // not app routes. Handing back index.html for one — which the line
+          // below would do, since opening a guide in its own tab IS a navigate
+          // — renders the whole app where the guide should be. Fail honestly
+          // instead so the caller can say "not downloaded yet".
+          if (new URL(e.request.url).pathname.startsWith("/sops/")) {
+            return new Response("Guide not cached on this device yet.", {
+              status: 504, headers: { "Content-Type": "text/plain" }
+            });
+          }
           if (e.request.mode === "navigate") {
             return caches.match("/index.html");
           }

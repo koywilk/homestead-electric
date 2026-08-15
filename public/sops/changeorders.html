@@ -1,0 +1,313 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the
+     vault Change Orders training + live code (CO_STATUSES_NEW — note: the old
+     "Task Made in SimPro" status was retired 2026-05-25 and is deliberately
+     absent here). To replace with a recorded guide: drop a SOP Recorder
+     Standalone HTML export over this file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Change Orders — Crew &amp; Office Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  table.st{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:12px 0;font-size:13.5px}
+  table.st th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding:9px 12px;border-bottom:1px solid var(--border)}
+  table.st td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  table.st tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700;white-space:nowrap}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew &amp; Office Guide</div>
+  <h1>Change Orders</h1>
+  <p class="sub">Any work outside the bid gets captured here — before it gets done</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>A customer asks for anything that's not in the bid → you make a <b>Change Order on
+    the job, before you do the work</b>. Field captures it (who it's for, what it is, time,
+    tasks, materials, photos) and hits <b>Submit Change Order</b> — the office gets the
+    push, sends it, tracks the yes/no, and bills it. The status pill row is the whole
+    system: set it right and everyone downstream knows what to do next.</p>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">The one rule</span>
+    <p>Capture the change <b>the moment it comes up — before the work happens</b>. An
+    unwritten change becomes free work: nobody remembers the details, and the office can't
+    bill what was never written down.</p>
+  </div>
+
+  <h2 class="sec">Is it even a change order?</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Check Bid Items first</h3>
+      <p>Open the job's <b>Bid Items</b> panel and search the part or task. A match → it's
+      in scope, no CO. "No match — looks like this would be a change order" → the app just
+      answered for you.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Field: creating a CO on site</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>+ Add Change Order</h3>
+      <p>Bottom of the Change Order log. A new card appears, already on
+      <b>Needs to be Sent</b> (red).</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Who and what</h3>
+      <p><b>Send CO To</b> — the customer or GC contact name. <b>Description of Task</b> —
+      ONE line, e.g. "Add 4 cans in dining room." That line becomes the email subject and
+      what everyone sees on dashboards, so keep it short and specific.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Time, tasks, materials</h3>
+      <p><b>Estimated Time</b> — "2 hrs", "half day". <b>Task (In Field)</b> — one bullet
+      per real task; that's what the crew reads when the work goes live.
+      <b>Material Needed</b> — parts list, and set the source (Shop, Home Depot, CED,
+      Platt, Amazon) so the office knows whether to pull stock or cut a PO.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Photos / files</h3>
+      <p>Snap the area or the existing condition — photos travel with the CO email. Got a
+      spec sheet, cut sheet, or supplier quote PDF? <b>Add photo / file</b> takes PDFs and
+      Word/Excel docs too — no need to photograph a screen.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">5</div>
+    <div class="body">
+      <h3>Hit Submit Change Order</h3>
+      <p>The amber bar on the card reads <b>"Draft — add a description, then submit"</b>
+      until the description has text, then <b>"Ready — submit so the office picks it
+      up"</b> — that's also what unlocks the green <b>Submit Change Order</b> button. Tap
+      it: you'll see "Change Order submitted — the office has it," the job's coordinator
+      and Jeromy get the push, and the card shows a green submitted-by line with your name
+      and the date. You don't email anyone.</p>
+      <p><b>Saving is not submitting.</b> A CO left as a draft gets flagged
+      <b>DRAFT — NOT SUBMITTED</b> on the office CO board with a Chase button, and the
+      8am chase calls out any crew draft a day old. Submit before you leave.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">The better way: promote from a Job Note</span>
+    <p>Wrote the change down in a Job Note during the walk? Select the lines →
+    <b>Convert → Change Order</b> → New CO (or Add to existing). Bullets become the Task
+    list, materials merge in, and the note stays linked. The chip on the note line shows
+    the CO's status color forever — glance at the note weeks later and see whether the
+    CO went through.</p>
+    <p><b>The undo has two speeds, on purpose:</b> the 10-second toast fully undoes the
+    promote. After that, the small × on the note's chip removes <b>just that line's
+    contribution</b> — and if the office already edited the CO or moved its status,
+    the CO itself survives the ×. You can't accidentally torch office work by cleaning
+    up a note.</p>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Show it on the plan</span>
+    <p>Drew the CO on a plan in FieldInk? The CO card grows a blue <b>Marked up on
+    plan — view</b> chip — one tap opens the marked-up sheet. Way better than describing
+    the spot in words, and the office sees exactly where the work goes.</p>
+  </div>
+
+  <h2 class="sec">The status ladder</h2>
+
+  <table class="st">
+    <tr><th>Status</th><th>What it means</th></tr>
+    <tr><td><span class="pill" style="background:#B23A3A18;color:#B23A3A">Needs to be Sent</span></td>
+        <td>Drafted, not sent. Every new CO starts here — and it stays a crew draft until Submit Change Order is tapped. A Send-By date can be set — it drives the office reminder.</td></tr>
+    <tr><td><span class="pill" style="background:#B0892C18;color:#B0892C">Sent — Pending Approval</span></td>
+        <td>Email went out; waiting on the yes/no.</td></tr>
+    <tr><td><span class="pill" style="background:#3E7D5A18;color:#3E7D5A">Approved</span></td>
+        <td>Customer said yes. From here: crew on site closes it, or it converts to a Return Trip.</td></tr>
+    <tr><td><span class="pill" style="background:#3B5BA518;color:#3B5BA5">Scheduled</span></td>
+        <td>Approved with a date set (usually via its Return Trip). Shows on the calendar and Crew Planner.</td></tr>
+    <tr><td><span class="pill" style="background:#46916A18;color:#46916A">Work Completed</span></td>
+        <td>Physically done. Card collapses to a green bar; an invoice task fires for the office.</td></tr>
+    <tr><td><span class="pill" style="background:#6E768218;color:#6E7682">Converted to RT</span></td>
+        <td>The work now lives on a Return Trip card. The CO stays in the log as history — edits on the RT don't flow back.</td></tr>
+    <tr><td><span class="pill" style="background:#B23A3A18;color:#B23A3A">Denied</span></td>
+        <td>Customer said no. Work does not happen; the CO stays on record. This is NOT the same as Remove.</td></tr>
+  </table>
+
+  <h2 class="sec">Office: send, track, bill</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Polish the draft</h3>
+      <p>The push lands the moment the field hits <b>Submit Change Order</b>. Read the
+      description, tasks, materials, photos — sharpen anything thin. The email goes out
+      next, as-is. A CO sitting unsubmitted shows <b>DRAFT — NOT SUBMITTED</b> on the CO
+      board — hit its Chase button instead of waiting.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Send it</h3>
+      <p><b>Email CO</b> pre-fills the whole thing (Chat for an internal heads-up;
+      <b>Simpro</b> copies a clean summary and opens the SimPro page). Then set
+      <b>Sent — Pending Approval</b>.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Stamp the Quote #</h3>
+      <p>Once the CO is sent from Simpro, type the Simpro quote number into the
+      <b>Quote #</b> field right next to the CO title. It stamps who added it and when,
+      and it's how COs get found by number later. Clearing the field clears the stamp.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Record the answer</h3>
+      <p>Yes → <b>Approved</b> (lead + foreman get the push). No → <b>Denied</b> — never
+      Remove; denied stays on the record.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">5</div>
+    <div class="body">
+      <h3>Get the work done</h3>
+      <p>Crew on the job <b>today</b>, per the Crew Planner? A green <b>Mark Work
+      Completed</b> button sits on the approved CO — one tap in the field closes it.
+      Nobody scheduled today, or it's a weekend? <b>Convert to Return Trip</b> — the RT
+      pre-fills from the CO; schedule it through the Crew Planner.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">6</div>
+    <div class="body">
+      <h3>Bill it</h3>
+      <p>On <b>Work Completed</b>, a "merge or invoice" task lands on the Tasks dashboard.
+      Pull the CO into the SimPro invoice, dismiss the task.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Create the CO before the work happens</li>
+        <li>Promote from Job Notes when the change is already written there</li>
+        <li>One line in the description, real bullets in the task list</li>
+        <li>Photos of the area — they ride with the email</li>
+        <li>Hit Submit Change Order — a saved draft isn't submitted</li>
+        <li>Use Denied for a customer no</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Do the work first and "write it up later"</li>
+        <li>Remove a denied CO — Remove is only for created-in-error</li>
+        <li>Handle approval over text where nobody can see it</li>
+        <li>Forget the status pill — it's how the office knows what's next</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">Mark Work Completed isn't showing.</p>
+      <p class="a">It only appears when the CO is Approved AND a crew is on the job TODAY
+      per the Crew Planner. Nobody scheduled today (or a weekend) shows Convert to Return
+      Trip instead. Phase status doesn't matter — flipping rough or finish changes
+      nothing.</p>
+    </div>
+    <div class="row">
+      <p class="q">I completed / converted by accident.</p>
+      <p class="a">Both have undo. Completed: the <b>↩ Undo Complete</b> button sits on the
+      collapsed green bar itself — don't expand the card looking for it (once expanded,
+      tap the Approved status pill instead). Converted: on the gray card → Undo Convert
+      (the created RT stays — delete it separately).</p>
+    </div>
+    <div class="row">
+      <p class="q">Can I edit after it's been sent?</p>
+      <p class="a">Every field stays editable until Completed — but the customer has the
+      version they got. Re-tap Email CO to send the current one.</p>
+    </div>
+    <div class="row">
+      <p class="q">Who gets notified?</p>
+      <p class="a">Submit → the job's coordinator + Jeromy. Approved → lead + foreman.
+      Work Completed → foreman, admins, managers. It's automatic — nobody has to ping
+      anyone.</p>
+    </div>
+    <div class="row">
+      <p class="q">My CO is stalled — not sent, or no answer yet.</p>
+      <p class="a">Tap the remind bell on the card — one tap sends a "Change order
+      reminder" push to Jeromy, pre-filled with the job and the CO description. No
+      texting needed.</p>
+    </div>
+    <div class="row">
+      <p class="q">The CO isn't on the calendar.</p>
+      <p class="a">Calendar shows COs with a scheduled date that aren't Completed, Denied,
+      or Converted. Set the date or schedule its RT.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Change Orders — Crew &amp; Office Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>

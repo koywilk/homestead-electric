@@ -1,0 +1,318 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-08-12 by Claude from the App
+     Map + live code (v376/v378 Home Runs work). To replace with a recorded
+     guide: drop a SOP Recorder Standalone HTML export over this file, same
+     filename. No editing of the export needed. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Home Runs — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .step p+p{margin-top:7px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}.dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}.dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}.dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}.dd li:last-child{margin-bottom:0}
+  @media(max-width:560px){.dd{grid-template-columns:1fr}}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Home Runs</h1>
+  <p class="sub">Track every circuit from the panel — what's pulled, what's left</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>Every circuit on the job gets a row here: name, wire size, which panel it lands in.
+    As you pull them, check them off. The card at the very top of the tab always shows the
+    honest score — <b>how many pulled, how many left</b> — and the office reads the same
+    number you do. Panels and their printable breaker schedules live on this tab too.</p>
+  </div>
+
+  <h2 class="sec">The pull card at the top</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>It's the whole job in one line</h3>
+      <p><b>"X pulled · Y left."</b> Tap the card and it expands into one flat A-to-Z list
+      of every named home run on the job — no digging into a panel or floor first.
+      <b>Not Pulled</b> is listed first because that's your work; every row shows its wire
+      size, panel, and floor so you don't have to open anything.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Two ways to view the list</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>By Floor — the default</h3>
+      <p>Rows grouped by Main / Upper / Basement — plus any areas you add yourself.
+      Detached garage, shop, ADU? Hit <b>+ Add Floor / Area</b> and give it its own group
+      instead of shoehorning runs into the wrong floor. Its rows flow into every count
+      and the top pull list like any other. <b>This is where you add new home runs</b>
+      and where most day-to-day checking off happens.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>By Panel</h3>
+      <p>The same rows grouped by which panel they land in, with a pulled count per panel —
+      use it when you're standing at the panel trimming it out.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Adding home runs</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>By Floor → your floor → add a row</h3>
+      <p>Add the run on the floor it feeds.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Name it — the name is what makes it count</h3>
+      <p>"Kitchen counters east", "Master bath GFI". <b>A row with no name doesn't show up
+      in any count</b> — not the top card, not the panel totals. Name it the way you'd say
+      it on the phone.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Wire size + panel</h3>
+      <p>Pick the wire size — the breaker comes from the wire automatically. Pick the panel
+      from the dropdown so the schedule and counts know where it lands.</p>
+      <p>There's no breaker field on the row — a row is just panel, wire, name, status,
+      and the 240V toggle where it applies. Need to correct a breaker count? That
+      happens per <b>panel</b>: hit <b>Edit</b> on the panel's breaker summary card to
+      adjust the breaker groups by hand (amps, poles, count), and use the panel's
+      <b>Space count override</b> if the space count needs a hand-set number. Those are
+      for the exceptions, not the routine.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>240V on 14/2 or 12/2? Flip the 240V flag</h3>
+      <p>The 240V toggle only shows on <b>14/2 and 12/2</b> rows — a 2-wire cable run
+      240V-only. Flip it and the run counts as a 2-pole everywhere: the panel schedule
+      <b>and</b> the breaker count cards. Every other 240V circuit — 10/3 dryer, 6/3
+      range — is already a 2-pole straight from its wire size. No flag to remember
+      there.</p>
+    </div>
+  </div>
+
+  <div class="call tip">
+    <span class="lbl">Big list to enter? Bulk paste</span>
+    <p>The <b>Bulk paste</b> button takes a pasted list and lands the runs as rows so
+    you're not typing forty names on a phone. <b>Every run has to lead with its wire
+    size</b> — "12/2 Kitchen counters east", "10/3 Dryer" — split by new lines, commas,
+    or pipes. A bare list of names with no wire sizes comes back <b>"0 rows detected"</b>
+    and nothing lands. Use the <b>DEFAULT PANEL</b> dropdown in the modal to assign a
+    panel as you paste, or set panels on the rows after.</p>
+  </div>
+
+  <h2 class="sec">Marking pulled</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Check the row off the day you pull it</h3>
+      <p>The top card, the floor counts, and the panel counts all update from that one
+      check. If it's checked, the office believes it's in the wall — so keep it honest,
+      both directions.</p>
+      <p>Can't pull a run because the specs aren't in? Set its status to
+      <b>Need Specs</b> instead — the row goes red so nobody mistakes it for forgotten.
+      Every status change stamps <b>who set it and the date</b> right under the row.
+      That stamp is the accountability behind the count.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>GC keeps asking "how many are pulled?" — send the link</h3>
+      <p>The share row on this tab makes a <b>read-only live page</b> of pull status you
+      can send a GC or builder — real-time pull status for whoever keeps asking. It
+      replaces the daily phone call. They see the numbers as they change; they can't
+      touch the rows.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Panels &amp; panel schedules</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Add a panel ONCE — you get both pieces</h3>
+      <p>Adding a panel in the Panels section also creates its blank breaker schedule, and
+      adding one on the schedules side adds the name to every row's panel dropdown. You
+      never type the same panel twice.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>FILL builds the schedule from your home runs</h3>
+      <p>A new schedule stays blank until someone hits <b>FILL</b> — then it lays the
+      breakers out from the home-run rows assigned to that panel. The finished schedule
+      is the <b>printable sheet</b> for the panel cover.</p>
+      <p>If you've typed a manual breaker count and the rows drift away from it, a
+      <b>"Manual count is stale"</b> banner shows up with a Refresh — tap it and the
+      count catches up to reality instead of quietly lying.</p>
+      <p><b>Know what's protected and what isn't.</b> The automatic background re-fill
+      only ever touches a schedule that still matches exactly what FILL wrote last time.
+      The moment you hand-type a circuit, the auto side leaves that panel alone forever —
+      the button just turns into an orange <b>RE-FILL</b> alert. But pressing that
+      button yourself is a different story: the app warns
+      <b>"Fill from home runs? This will REPLACE any circuit names you've typed in this
+      panel."</b> — and it means it. Confirm, and your hand-typed circuits are gone.
+      Don't tap through that confirm unless you're ready to lose the hand edits.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>The breaker count cards tell you what to order</h3>
+      <p>Each panel's breaker count card totals the breakers its rows need. Overflow the
+      panel — say 46 circuits into a 40-space can — and the card puts up a banner with
+      the fix: how many <b>tandem breakers</b> and <b>quad breakers</b> to order, and a
+      warning if circuits still won't fit even then. Then <b>+ Add to PO</b> pushes that
+      exact breaker order onto a purchase order — pick the source, check the line
+      preview, done. No math in the truck.</p>
+    </div>
+  </div>
+
+  <div class="call warn">
+    <span class="lbl">Deleting never cleans up for you — on purpose</span>
+    <p>Deleting a panel chip does NOT delete its schedule, and deleting a schedule does NOT
+    remove the panel from the dropdowns. A schedule holds typed circuits and rows may still
+    point at the name — so nothing cascades. Don't delete to "tidy up."</p>
+  </div>
+
+  <h2 class="sec">Generator load selection</h2>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Pick what's on the generator</h3>
+      <p>Check the loads that ride the generator. <b>Select all</b> does the whole list in
+      one tap and flips to <b>Deselect all</b> once everything's on. The readout —
+      "<b>N of M on the generator</b>" — is what lands in front of the homeowner, so make
+      it match reality.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Or let the homeowner pick — send them the link</h3>
+      <p>This section can <b>send the homeowner a link</b> to choose their generator
+      loads themselves — they submit it with a <b>signature</b>. Check the response
+      right here to see if they've answered, and resend if the link needs to go out
+      again. If they already submitted, the app asks <b>"Homeowner already submitted.
+      Reset and resend?"</b> before it wipes their answer — so a resend never clobbers
+      a signed response by accident.</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Do / Don't</h2>
+  <div class="dd">
+    <div class="col do">
+      <h4>Do</h4>
+      <ul>
+        <li>Name every row — blank rows count for nothing</li>
+        <li>Check off pulls the same day you make them</li>
+        <li>Flip the 240V flag on 14/2 and 12/2 runs used at 240V</li>
+        <li>Add a panel once and let it create its schedule</li>
+        <li>Use bulk paste for big lists — lead every run with its wire size</li>
+      </ul>
+    </div>
+    <div class="col dont">
+      <h4>Don't</h4>
+      <ul>
+        <li>Track pulls on paper and "enter them later"</li>
+        <li>Confirm a FILL / RE-FILL on a schedule with hand-typed circuits unless you
+        mean to replace them</li>
+        <li>Delete panels or schedules to clean up the tab</li>
+        <li>Leave a run unnamed and wonder why counts are off</li>
+        <li>Check off runs you haven't pulled yet</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">I added a run but the counts didn't move.</p>
+      <p class="a">It needs a name. Unnamed rows don't count anywhere.</p>
+    </div>
+    <div class="row">
+      <p class="q">My 14/2 run is 240V but it's showing as a 1-pole.</p>
+      <p class="a">Flip the 240V toggle on the row — it only exists on 14/2 and 12/2.
+      Bigger 240V wire (10/3, 6/3) is a 2-pole automatically, no flag needed.</p>
+    </div>
+    <div class="row">
+      <p class="q">Where do load-mapping details go that don't fit a row?</p>
+      <p class="a">The Load Mapping Notes box at the bottom of the tab — free text,
+      write it the way you'd explain it on the phone.</p>
+    </div>
+    <div class="row">
+      <p class="q">The panel schedule is empty.</p>
+      <p class="a">New schedules start blank on purpose. Hit FILL to build it from the
+      home runs assigned to that panel.</p>
+    </div>
+    <div class="row">
+      <p class="q">Why does the tab open on By Floor?</p>
+      <p class="a">That's the default — it's where adding lives. The By Panel toggle is
+      right there when you're working at a panel.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Home Runs — Crew Guide · updated August 2026</p>
+
+</div>
+</body>
+</html>
