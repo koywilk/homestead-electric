@@ -13146,12 +13146,19 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
   const convertToRT = (o, i) => {
     // Mark CO as converted
     upd(o.id, {coStatus:"converted"});
-    // Build a new return trip pre-filled from CO data
+    // Build a new return trip carrying EVERYTHING the CO holds — desc, task,
+    // material (+ source), est. time, scheduling window, and photos. The CO
+    // card hides its fields once converted, so anything not carried here is
+    // invisible until an Undo Convert. Photos ride along as refs to the SAME
+    // Storage files ({...p}, nothing re-uploaded or moved) with fresh list
+    // ids so the RT's copy has its own identity — same pattern as the Job
+    // Notes promote flow.
     const newRT = {
       id: uid(),
       scope: o.desc||"",
       task: o.task||"",
       material: o.material||"",
+      materialSource: o.materialSource||"",
       time: o.time||"",
       assignedTo: "",
       rtStatus: "needs",
@@ -13159,9 +13166,10 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
       needsHardDate: o.needsHardDate||false,
       needsByStart: o.needsByStart||"",
       needsByEnd: o.needsByEnd||"",
-      notes: `Converted from Change Order #${i+1}${o.desc?" — "+o.desc:""}`,
+      notes: `Converted from Change Order #${i+1}${o.quoteNumber?` · Quote #${o.quoteNumber}`:""}${o.desc?" — "+o.desc:""}`,
+      fromCOId: o.id,
       punch: [],
-      photos: [],
+      photos: Array.isArray(o.photos) ? o.photos.map(p=>({...p, id:uid()})) : [],
     };
     // We signal the parent to add the RT — pass via a special onChange shape
     onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT, true); // true = add to top
@@ -13665,6 +13673,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
     const openPunch = (t.punch||[]).filter(p => !p.done).map(p => stripPunchHtml(p.text)).filter(Boolean);
     const donePunch = (t.punch||[]).filter(p => p.done).map(p => stripPunchHtml(p.text)).filter(Boolean);
     const scope    = htmlToText(t.scope);
+    const task     = htmlToText(t.task);
     const material = htmlToText(t.material);
     const photoUrls = opts.includePhotos
       ? (Array.isArray(t.photos) ? t.photos.map(p => p?.url).filter(Boolean) : [])
@@ -13675,7 +13684,9 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
     out.push(`Scheduled: ${t.date || "not yet set"}`);
     out.push(`Assigned:  ${t.assignedTo || "unassigned"}`);
     if (scope)    { out.push("", "SCOPE", scope); }
+    if (task)     { out.push("", "TASK", task); }
     if (material) { out.push("", "MATERIAL", material); }
+    if (t.time)   { out.push("", `ESTIMATED TIME: ${t.time}`); }
     if (openPunch.length) {
       out.push("", `WORK TO DO (${openPunch.length} open)`);
       openPunch.forEach(l => out.push(`• ${l}`));
@@ -13782,8 +13793,14 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
     .map(usr => usr.name).filter(Boolean).sort();
 
   const deletePhoto = async (tripId, photo) => {
-    // Delete from Firebase Storage if it has a storagePath (new photos)
-    if(photo.storagePath) {
+    // Delete from Firebase Storage if it has a storagePath (new photos) —
+    // EXCEPT photos borrowed from a Change Order by Convert→RT (their path
+    // lives under the CO's co-photos/ folder). The CO still references that
+    // file, so deleting here only drops the RT's copy; the file stays put
+    // for the CO's history (same ref-only semantics as the CO card's own
+    // remove button in PhotoAttacher).
+    const borrowedFromCO = /\/co-photos\//.test(photo.storagePath||"");
+    if(photo.storagePath && !borrowedFromCO) {
       try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){}
     }
     const trip = trips.find(t=>t.id===tripId);
@@ -13925,7 +13942,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
               )}
               {jobSimproNo&&<Btn onClick={()=>{
                 const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n")||"None";
-                const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${stripHtml(t.scope)||"—"}\nMaterial Needed: ${stripHtml(t.material)||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
+                const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${stripHtml(t.scope)||"—"}\n${t.task?`Task: ${stripHtml(t.task)}\n`:""}Material Needed: ${stripHtml(t.material)||"—"}${t.time?`\nEstimated Time: ${t.time}`:""}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
                 navigator.clipboard.writeText(msg).catch(()=>{});
                 window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
               }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
@@ -13941,6 +13958,20 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
           </div>
 
+          {/* Converted-from-CO provenance — renders the notes stamp written
+              by convertToRT (also covers RTs converted before this shipped;
+              they've carried notes/task/time all along, just never shown).
+              Est. time rides here — it has no other home on the RT card. */}
+          {!!t.notes && (
+            <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:8,
+              padding:"6px 10px",borderRadius:7,background:`${C.purple}0c`,
+              border:`1px solid ${C.purple}22`}}>
+              <span style={{color:C.purple,display:"inline-flex",flexShrink:0}}><Icon name="rotateCw" size={11}/></span>
+              <span style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{t.notes}</span>
+              {!!t.time && <span style={{fontSize:11,color:C.purple,fontWeight:700,marginLeft:"auto",whiteSpace:"nowrap"}}>Est. {t.time}</span>}
+            </div>
+          )}
+
           <div style={{marginBottom:8}}>
 
             <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Scope of Work</div>
@@ -13948,6 +13979,16 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
             <TA value={t.scope} onChange={e=>upd(t.id,{scope:e.target.value})} placeholder="Describe return trip scope…" rows={2}/>
 
           </div>
+
+          {/* Task (In Field) — carried from the CO on convert. Only renders
+              when there's content, so RTs that never had a task keep the
+              exact card they have today. */}
+          {!!t.task && (
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task (In Field)</div>
+              <TA value={t.task} onChange={e=>upd(t.id,{task:e.target.value})} rows={2}/>
+            </div>
+          )}
 
           <div style={{marginBottom:8}}>
 
@@ -31803,9 +31844,16 @@ function buildJobPhotos(job) {
     (rt.photos||[]).forEach(p => addPhoto(p, `RT #${i+1}${stripHtml(rt.scope)?` · ${stripHtml(rt.scope).slice(0,40)}`:""}`, "Return Trips", rt.id));
   });
 
-  // Change order photos
+  // Change order photos — a photo carried onto a Return Trip by Convert→RT
+  // is already listed under the RT above (same url, the RT copy has its own
+  // id), so skip it here to keep the gallery to one card per shot. COs
+  // converted before photos carried over — and COs never converted — still
+  // list theirs normally.
+  const rtPhotoUrls = new Set(
+    (job.returnTrips||[]).flatMap(rt => (rt.photos||[]).map(p => p?.url).filter(Boolean))
+  );
   (job.changeOrders||[]).forEach((co, i) => {
-    (co.photos||[]).forEach(p => addPhoto(p, `CO #${i+1}`, "Change Orders", co.id));
+    (co.photos||[]).forEach(p => { if (!rtPhotoUrls.has(p?.url)) addPhoto(p, `CO #${i+1}`, "Change Orders", co.id); });
   });
 
   // Plan files — images render as photos, non-images render as "Plan file" cards
@@ -46407,7 +46455,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-11 · App SW version: v380
+**Last manifest update:** 2026-08-17 · App SW version: v381
 
 ---
 
@@ -46514,6 +46562,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Schedule RT
   - Photos per RT
   - Punch items linked to RT (PunchLinker)
+  - Convert CO → RT carries everything, photos included · 'shipped 2026-08-17' · 'SW v381' · Koy: "when a change order is converted to return trip it needs to take all the information with it including any pictures." Convert to Return Trip built the RT from the CO's text fields but hard-coded 'photos: []' — and the CO card hides its whole editable body (PhotoAttacher included) once converted, so the crew's pictures went invisible EVERYWHERE except the Photos gallery the moment a CO converted. Worse, the fields it DID copy ('task', 'time', the 'notes' provenance stamp) were dead data: no RT surface ever rendered them. Now: **(1) the conversion carries the full CO** — photos ride along as refs to the SAME Storage files ('{...p}', nothing re-uploaded or moved) with fresh list ids (keeps gallery per-entry ids unique), plus 'materialSource' (was silently dropped), the quote # folded into the provenance note ("Converted from Change Order #2 · Quote #4512 — …"), and a 'fromCOId' back-pointer. **(2) the RT card SHOWS the carried info** — a purple provenance strip (notes stamp + "Est. …" time chip) above Scope, and a "Task (In Field)" editable box between Scope and Material; both render only when content exists, so plain RTs keep today's exact card — and both retro-light-up on RTs converted before this ship, which have carried notes/task/time invisibly all along. **(3) share parity** — chat/email/text ('buildTripShareText') gain TASK + ESTIMATED TIME sections; the Simpro clipboard msg gains Task / Estimated Time lines. **(4) borrowed photos are hard-delete-proof** — RT 'deletePhoto' normally 'deleteObject's Storage; for photos living under the CO's 'co-photos/' folder it now removes only the RT's ref, so a crew cleanup on the RT can't destroy the CO's history (mirrors PhotoAttacher's own ref-only remove — the CO side can't hard-delete either, so neither side can strand the other). **(5) gallery stays one-card-per-shot** — 'buildJobPhotos' skips a CO photo only when its exact url already lists under an RT; legacy converted COs (photos never carried) and unconverted COs list theirs exactly as before. Guides updated in the same ship per the standing rule: 'returntrips.html' (the "CO photos don't carry over" workaround line is gone; the snapshot call-out now explains ref-only removal) + 'changeorders.html'. Why it can't lose data: conversion is ADDITIVE — the CO keeps every field it had including its own photos array (convert never cleared them, still doesn't); the RT gains ref copies and nothing in Storage is moved, re-uploaded, or deleted at convert time; the delete-guard strictly REDUCES what can be deleted (one 'deleteObject' call site now skips CO-owned paths — a photo that would have been destroyed now survives); gallery dedupe is read-side display only; and all new/changed fields ('fromCOId', 'materialSource', richer 'notes') are additive inside 'data.returnTrips[]', which the loader passes through wholesale — no loader, rules, or write-path change
 - **Inspections** · 'shipped'
   - Rough inspection (pass/fail + items)
   - 4-way inspection (rules 14/15/16)
