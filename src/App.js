@@ -1535,6 +1535,20 @@ const WALK_COLUMN_BY_STATUS = {
 };
 const walkColumn = (w) => WALK_COLUMN_BY_STATUS[(w && w.status) || "scheduled"] || WALK_COL;
 
+// A CO counts as converted when its status says so — OR when a Return Trip
+// still points back at it (rt.fromCOId, stamped by Convert→RT since v381)
+// and nobody deliberately undid the conversion. The RT link is the durable
+// signal: coStatus alone can be silently flipped back (Bukhshtaber
+// 2026-08-17 — a stray tap on Undo Convert inside the save debounce meant
+// "converted" never even reached Firestore, while the RT it created lived
+// on). A deliberate Undo Convert stamps convertUndoneAt, which wins here;
+// converting again clears the stamp. Used by the CO card AND the CO board
+// so both surfaces agree.
+const coIsConverted = (co, returnTrips) =>
+  !!co && (co.coStatus === "converted" ||
+    (!co.convertUndoneAt && Array.isArray(returnTrips) &&
+      returnTrips.some(rt => rt && rt.fromCOId === co.id)));
+
 // The effective Simpro JOB number for any job-scoped Simpro lookup — financials,
 // cost centers, schedule matching, the Drive plans push. Empty for a quote.
 //
@@ -6341,7 +6355,7 @@ function NeedsAttention({jobs, onSelectJob}) {
   const flatQuestions = (qs) => {
     const items = [];
     ['upper','main','basement'].forEach(floor => {
-      (qs?.[floor]||[]).forEach(q=>{ if(!q.done && !(q.answer||'').trim()) items.push({question:q.question,floor}); });
+      (qs?.[floor]||[]).forEach(q=>{ if(!q.done && !stripHtml(q.answer||'')) items.push({question:q.question,floor}); });
     });
     return items;
   };
@@ -13048,7 +13062,7 @@ function crewOnSiteToday(jobId) {
   return !!(c && (c.lead || (Array.isArray(c.crew) && c.crew.length)));
 }
 
-function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = [], ccFieldink = {}}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = [], returnTrips = [], ccFieldink = {}}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
   const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
@@ -13144,8 +13158,9 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
 
   // Convert CO → Return Trip
   const convertToRT = (o, i) => {
-    // Mark CO as converted
-    upd(o.id, {coStatus:"converted"});
+    // Mark CO as converted. convertUndoneAt cleared so a re-convert after a
+    // deliberate undo makes the RT-link badge (coIsConverted) live again.
+    upd(o.id, {coStatus:"converted", convertUndoneAt:""});
     // Build a new return trip carrying EVERYTHING the CO holds — desc, task,
     // material (+ source), est. time, scheduling window, and photos. The CO
     // card hides its fields once converted, so anything not carried here is
@@ -13172,7 +13187,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
       photos: Array.isArray(o.photos) ? o.photos.map(p=>({...p, id:uid()})) : [],
     };
     // We signal the parent to add the RT — pass via a special onChange shape
-    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT, true); // true = add to top
+    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted", convertUndoneAt:""} : co), newRT, true); // true = add to top
   };
 
   // Sort newest first — use createdAt date desc, fall back to insertion order (reversed)
@@ -13191,7 +13206,9 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
     <div>
       {sortedOrders.map((o, i) => {
         const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
-        const isConverted  = o.coStatus === "converted";
+        // Derived, not just coStatus — the RT back-link keeps the converted
+        // state alive even if coStatus gets flipped back (see coIsConverted).
+        const isConverted  = coIsConverted(o, returnTrips);
         const isCompleted  = o.coStatus === "completed";
         const isApproved   = o.coStatus === "approved";
         const showConvert  = (isApproved || o.coStatus==="needs") && !crewOnSite;
@@ -13367,7 +13384,16 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 <div style={{fontSize:11,color:"#6E7682",fontStyle:"italic"}}>
                   Converted to Return Trip — see Return Trips tab.
                 </div>
-                <button onClick={()=>upd(o.id,{coStatus:"approved"})}
+                <button onClick={async ()=>{
+                    // Confirm — a silent stray tap here is exactly what erased
+                    // the converted state on Bukhshtaber (2026-08-17): the card
+                    // collapses the instant Convert is tapped, shifting this
+                    // button up under the finger. convertUndoneAt records that
+                    // a HUMAN chose this, so coIsConverted lets the card
+                    // un-convert instead of self-healing right back.
+                    if(!await showConfirm("Undo the conversion? This CO goes back to Approved — the Return Trip it created stays on the Return Trips tab.")) return;
+                    upd(o.id,{coStatus:"approved", convertUndoneAt:new Date().toISOString()});
+                  }}
                   style={{background:"none",border:"1px solid #B0892C55",borderRadius:7,
                     color:"#B0892C",fontSize:11,padding:"4px 10px",cursor:"pointer",
                     fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
@@ -25405,7 +25431,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     // one — so an office clear/reject can't be resurrected by
                     // the same old field answer; only a genuinely newer field
                     // edit re-adopts.
-                    const should = (!String(q.answer||'').trim() && !q.done && ts > (q.fieldinkAnsweredAtMs||0))
+                    // stripHtml: an html-empty office answer ("<br>") must not
+                    // block a genuine field answer from adopting.
+                    const should = (!stripHtml(q.answer||'') && !q.done && ts > (q.fieldinkAnsweredAtMs||0))
                       || (q.answeredVia === 'fieldink' && ts > (q.fieldinkAnsweredAtMs||0));
                     if (!should) return q;
                     changed = true;
@@ -25797,7 +25825,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // "Open" matches NeedsAttention: not done and no GC answer yet.
   const openQ = ['roughQuestions','finishQuestions'].reduce((t,k)=>{
     const qs = job[k]||{};
-    return t + ['upper','main','basement'].reduce((a,fl)=>a + (qs[fl]||[]).filter(q=>q && !q.done && !((q.answer||'').trim())).length, 0);
+    return t + ['upper','main','basement'].reduce((a,fl)=>a + (qs[fl]||[]).filter(q=>q && !q.done && !stripHtml(q.answer||'')).length, 0);
   }, 0);
 
   // Route the header punch/question pills to the Rough or Finish tab (both hold
@@ -27806,6 +27834,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
                 <ChangeOrders
                   orders={job.changeOrders}
+                  returnTrips={job.returnTrips||[]}
                   onChange={(updatedCOs, newRT) => {
                     if(newRT) {
                       u({changeOrders:updatedCOs, returnTrips:[...(job.returnTrips||[]), newRT]});
@@ -31537,7 +31566,8 @@ function buildJobActivity(job, cfg) {
 
   // ── CHANGE ORDERS ─────────────────────────────────────────────────
   const openCOs = (job.changeOrders || []).filter(co =>
-    co && !["completed","converted"].includes(co.coStatus));
+    co && !["completed","converted"].includes(co.coStatus) &&
+    !coIsConverted(co, job.returnTrips));
   if (openCOs.length) {
     groups.push({
       key:"changeOrders", label:"Change Orders",
@@ -46011,7 +46041,11 @@ function QuestionsSharePage({ jobId }) {
   // phases (was two duplicated ~50-line blocks); open questions stay up top,
   // answered ones collapse into a compact section at the bottom; answers can
   // now carry photo/file attachments.
-  const isAnsQ = (q) => answeredIds.has(q.id) || !!q.done || !!(q.answer?.trim()) || (ansPhotos[q.id]||[]).length > 0;
+  // q.answer is crew-side RICH TEXT: an "empty" contentEditable saves "<br>"
+  // (truthy, content-free), which filed open questions under Answered here
+  // (Skyridge Lot 208 — Travis's link). Classify on the text a reader SEES
+  // (stripHtml), same as this page's own answer-box prefill already does.
+  const isAnsQ = (q) => answeredIds.has(q.id) || !!q.done || !!stripHtml(q.answer||'') || (ansPhotos[q.id]||[]).length > 0;
   const renderShareCard = (q, i, accent, phaseLabel) => {
     const isAns = isAnsQ(q);
     return (
@@ -46455,7 +46489,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-17 · App SW version: v381
+**Last manifest update:** 2026-08-18 · App SW version: v382
 
 ---
 
@@ -46557,6 +46591,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Send to Simpro
   - Submit Change Order · 'shipped 2026-08-06' · 'SW v366' · crew feedback: making a CO "feels like they didn't do it right because there's no sort of submit or anything" — every field autosaves through the debounced job save, so filling one out just… ended, with no moment that said the office has it. New COs (and job-note promotes) still autosave exactly as before — nothing typed is ever lost by NOT submitting — but an unsubmitted 'needs_sending' CO now shows an amber dashed draft bar ("Draft — add a description, then submit" → "Ready — submit so the office picks it up") with a green **Submit Change Order** button, disabled until the description has text so blank COs can't be fired at the office. Submit stamps 'submittedAt' (ISO) + 'submittedBy' (identity, falls back to 'createdBy'), toasts "Change Order submitted — the office has it," swaps the draft bar for a green check "submitted by X · date" line in the card header, and leaves every field editable after. The bar keys strictly off 'coStatus==="needs_sending" && !submittedAt': legacy COs whose status the office already advanced never see a draft bar, and the retired empty/'simpro_task' statuses are deliberately excluded so historical cards don't sprout buttons. Both stamps are additive fields inside 'changeOrders[]' items — 'normalizeJob' spreads '...o', so they survive the loader untouched, and no write path or rules change was needed
   - CO submit follow-ups: office push + draft chase · 'shipped 2026-08-06' · 'SW v367' · Koy: "yes i think we need the follow up items as well." Two halves. **Push (server, rides the pending functions deploy):** new 'co_submitted' pref ("CO submitted by crew (ready to review)", default admin/manager; 'wantsNotif' treats the missing key as ON so nobody has to re-save prefs) — 'onJobUpdate' fires it on the 'submittedAt' transition to the job's coordinator + Jeromy, via a shared 'coSubmittedSends' helper that ALSO covers the offline case where a CO arrives already-submitted in its creation write (created+filled+submitted offline, synced as one write — the prev-diff loop can't see it because no 'prev' exists; the new-CO branch catches it, disjoint by construction so no double-fire). 'co_new' still fires at creation, deliberately untouched — Jeromy can now mute 'co_new' and keep 'co_submitted' to hear only about ready COs instead of empty just-created drafts; that's his toggle, not a code decision. 'dailyCoChase' body now calls out how many of the waiting COs are unsubmitted crew drafts (1+ day old), so the 8am number distinguishes "stuck on Jeromy" from "stuck on the crew". **Board (client, live now):** 'allCOs' stitches 'submittedAt/By' through (the projection whitelists fields — without this the board can never see the stamp), and a 'needs_sending' CO with no stamp created **on/after 2026-08-07** shows an amber dashed "DRAFT — NOT SUBMITTED" chip (same language as the in-job draft bar, one state two surfaces), a "(N unsubmitted crew drafts)" callout inside the header's need-sending count, and a **Chase** RemindButton pre-picked to the job's foreman — reuses the deployed 'reNudge' path (renudge pref-gated on the recipient), so chasing works immediately with no functions deploy. The date gate is the same reasoning as the in-job bar's status gate: every pre-v366 CO lacks the stamp by definition, not by neglect — flagging the legacy backlog would make the office chase COs it already triages (D32 Payne CO #2, filed the morning of the ship, is exactly the card that must NOT get flagged). Why it can't lose data: board + header are pure read-side derivations; the chase button writes nothing (reNudge sends a push); the functions changes only ADD sends on a field transition and enrich one chase body — no write path, no schema, no rules touched
+  - Converted badge is self-healing + Undo Convert confirms · 'shipped 2026-08-18' · 'SW v382' · Koy: "why is the co not showing as converted now?" PITR forensics on Bukhshtaber: the sconces CO (quote #3148) converted fine, but 'coStatus:"converted"' NEVER reached Firestore — within the save debounce a stray tap landed on ↩ Undo Convert (tapping Convert collapses the card instantly, so the layout shifts Undo up under the finger) and silently rewrote the pending status back to "approved". The RT survived with the full v381 carry; only the converted state died. Ruled out first: the re-enabled Simpro watcher (its eligibility guard skips everything but needs_sending/pending, and run logs show zero flips from "converted") and cross-tab echo clobber (that would have wiped the new RT too). Fix, two halves: **(1)** 'coIsConverted(co, returnTrips)' — the CO card, the CO board column, and the open-COs summary now treat a CO as converted when 'coStatus==="converted"' OR a Return Trip still points back via 'fromCOId' (v381 stamp) with no deliberate undo recorded. The RT link is the durable signal, so a status clobber can't erase the converted state — and Bukhshtaber's CO shows CONVERTED again with no data write. Pre-v381 conversions (no 'fromCOId') keep working off 'coStatus' alone. **(2)** Undo Convert now confirms ('showConfirm', same pattern as CO Remove) and stamps 'convertUndoneAt' (ISO) — the stamp is what separates "a human chose this" from "the status got clobbered", so deliberate undos still un-convert the card; converting again clears it. Why it can't lose data: badge/column/summary changes are pure read-side derivation; the only write changes are additive fields inside 'data.changeOrders[]' items ('convertUndoneAt' stamped on undo, cleared to '""' on convert), which the loader passes through wholesale — no loader, rules, or write-path change, and no existing field is removed or rewritten
 - **Return Trips** · 'shipped' · 'ReturnTrips'
   - Items list per RT
   - Schedule RT
@@ -46659,6 +46694,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Plan Changes share** · 'shipped 2026-07-09' · 'SW v313' · 'LutronAdditionsSharePage' · '?lutronshare=<jobId>' · per-job change list, Mark incorporated (+ undo, plan-rev note), questions with attachments, job discussion; honors the On-their-link switch
 - **Punch share** · 'shipped' · 'PunchSharePage'
 - **Questions share** · 'shipped' · 'QuestionsSharePage'
+  - Html-empty answers no longer read as "answered" · 'shipped 2026-08-18' · 'SW v382' · Gage (via Koy): Skyridge Lot 208's Travis link filed open questions under ANSWERED with blank answer boxes instead of putting them up top to answer. Forensics on the live doc: the crew-side answer box is rich text, and tapping into it without typing saves '"<br>"' — content-free but truthy — so every classifier keyed on raw '(q.answer||'').trim()' called the question answered ("Coach light heights", added for Travis that same morning, and "Finished staircase details" both carried 'answer:"<br>"' with 'done:false'). Four sites now classify on 'stripHtml(q.answer||'')' — the text a reader actually SEES, and the same normalization the share page's own answer-box prefill already applied (which is exactly why the misfiled "answered" cards rendered empty boxes): the share page's 'isAnsQ', the job-summary open-questions collector ('flatQuestions'), the job-header open-questions pill, and the FieldInk adopt guard — where a stray '<br>' didn't just miscount, it BLOCKED a genuine field answer from adopting. Verified against the live Skyridge doc on the local production build: Travis's link reads "3 need your answer" (Coach light heights on top) / "8 answered" — 11 total, matching the crew's own open/done state exactly. Retroactive with no data write: existing '<br>' answers reclassify as open everywhere on deploy. Why it can't lose data: read-side classification only — 'q.answer' values are never rewritten, no write path, schema, or rules change; the FieldInk change only WIDENS when an arriving field answer may adopt (previously wrongly blocked by the artifact), under the same newer-timestamp rule as before
   - Answers/notes/photos AUTO-SAVE as recipients type (no Submit needed); Submit stays the formal "done" that closes questions · 'shipped 2026-07-09' · 'SW v314'
   - Discussion replies live in 'homeowner_requests.questionThreads' (side doc — crew saves can never wipe them) · 'SW v313'
   - Respondent name badges (replaces hardcoded "GC") · 'SW v316'
@@ -48617,7 +48653,10 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
         out.push({
           coId:         co.id,
           coIndex:      idx + 1,
-          coStatus:     co.coStatus || "needs_sending",
+          // Same derived rule as the CO card (coIsConverted): an RT pointing
+          // back via fromCOId keeps the CO in the Converted column even if
+          // coStatus got flipped back — the two surfaces must agree.
+          coStatus:     coIsConverted(co, job.returnTrips) ? "converted" : (co.coStatus || "needs_sending"),
           coStatusDate: co.coStatusDate || "",
           createdAt:    co.createdAt || "",
           createdBy:    co.createdBy || "",
