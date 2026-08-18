@@ -1495,7 +1495,12 @@ const CO_STATUSES_NEW = [
 // redline CO for the items added. Buckets match the CO-tab board. `hasDate` marks
 // the stages that carry a date (the scheduled walk, and the walk-done/CO-owed date).
 const REDLINE_STATUSES = [
-  {value:"scheduled", label:"Walk Scheduled",       color:"#3B5BA5", hasDate:true},
+  {value:"scheduled",  label:"Walk Scheduled",       color:"#3B5BA5", hasDate:true},
+  // Koy 2026-08-18: "walk completed but plans not ready for co to be made
+  // yet" — the walk is done but the marked-up plan needs cleanup BEFORE it
+  // goes to Jeromy. Own column (Koy's pick), so his send queue only ever
+  // holds walks that are actually ready to write up.
+  {value:"plans_prep", label:"Walk Done — Cleaning Plans", color:"#B06A2C"},
   {value:"co_owed",   label:"Walk Done — CO Owed",  color:"#B23A3A", hasDate:true},
   {value:"co_sent",   label:"Redline CO Sent",      color:"#B0892C"},
   {value:"signed",    label:"CO Signed",            color:"#46916A"},
@@ -1520,6 +1525,7 @@ const RL_EDGE  = "#DCD6EA";
 const WALK_COL = "walk_scheduled";           // head column, walks only
 const CO_BOARD_STATUSES = [
   { value: WALK_COL, label: "Walk Scheduled", color: RL_COLOR, walksOnly: true },
+  { value: "plans_prep", label: "Cleaning Plans", color: "#B06A2C", walksOnly: true },
   ...CO_STATUSES_NEW,
 ];
 // Which column an UNQUOTED walk renders in, keyed by its own REDLINE_STATUSES
@@ -1528,10 +1534,11 @@ const CO_BOARD_STATUSES = [
 // using the raw value is what keeps a walk out of the CO "Scheduled" column.
 // Once a walk has a quote # it stops using this and flows by coStatus.
 const WALK_COLUMN_BY_STATUS = {
-  scheduled: WALK_COL,
-  co_owed:   "needs_sending",
-  co_sent:   "pending",
-  signed:    "approved",
+  scheduled:  WALK_COL,
+  plans_prep: "plans_prep",
+  co_owed:    "needs_sending",
+  co_sent:    "pending",
+  signed:     "approved",
 };
 const walkColumn = (w) => WALK_COLUMN_BY_STATUS[(w && w.status) || "scheduled"] || WALK_COL;
 
@@ -46489,7 +46496,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-18 · App SW version: v382
+**Last manifest update:** 2026-08-18 · App SW version: v383
 
 ---
 
@@ -46734,6 +46741,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Needs board** · 'shipped' · coordinator board for deadline-bound contractor call-ins ('needs' collection)
 - **Redline walks → CO tracking** · 'shipped 2026-07-08' · 'SW v306' · quoted walks surface in the Change Orders board
 - **Red line walks and COs on one board** · 'shipped 2026-08-05' · 'SW v365' · Jeromy asked for the red line walks and the change orders to be **one page, not two sub-tabs** inside the CO tab. They merge cleanly because **a red line walk is a change order that doesn't have a quote number yet** — that was already the app's behavior (a walk surfaced on the CO board the moment 'coQuoteNumber' was set), so the sub-tab only ever covered the stretch *before* that number existed. The two status vocabularies chain rather than compete: 'Walk Scheduled → [Walk Done — CO Owed] → Needs to be Sent → Sent — Pending → Approved → Scheduled → Work Completed → Converted to RT'. So the board gains **one** head column ('walk_scheduled', walks only) and — Koy's call — "Walk Done — CO Owed" **folds into Needs to be Sent** rather than getting its own column, with the card flagged instead. 'RedlineWalkBoard' and the 'subView' state are deleted; its add form moved into the header and delete moved onto the walk card (it had the only create/delete path in the whole view — dropping the component without them would have silently removed the capability). **No Firestore migration, and no doc is rewritten:** 'REDLINE_STATUSES' is left intact and 'walk.status' remains the walk's own lifecycle — only the *column* is derived, through 'WALK_COLUMN_BY_STATUS'. That indirection is load-bearing: 'scheduled' exists in **both** vocabularies with different meanings (walk-scheduled vs CO-work-scheduled), so keying columns off the raw value would file walks into the CO "Scheduled" column; and an unknown/legacy status falls back to the walk column instead of vanishing (the failure the retired 'simpro_task' coStatus already demonstrates). A walk carries **two independent, never-synced status fields**, so 'handleSetStatus' forks: an **unquoted** walk offers 'REDLINE_STATUSES' and writes 'status'; a **quoted** one offers 'CO_STATUSES_NEW' and writes 'coStatus' — writing the wrong field would place the row by one field while the picker edited another, and the card would appear not to move. Fixed in passing: **the status pill rendered the enclosing column's label and colour, not the row's own** — harmless when every card in a column shared its status, wrong the moment walk rows joined. Clearing a quote # now returns the walk to a walk column instead of making the row vanish from the board entirely. Walks with no quote # are counted **separately** in the header ("N red line walks") and excluded from the CO figures — an un-quoted walk folded into Needs to be Sent must not inflate Jeromy's red triage number when nothing has been written to send yet; a quoted walk does count as a CO, because by then it is one. The walk date stays **editable** on the card (an adversarial review pass caught that the deleted board held the app's only date editor — rendering it read-only would have made a mistyped or defaulted date permanently uncorrectable, with delete-and-recreate the only recovery, losing status, quote # and attribution); it is keyed on its current value so another device's snapshot can't leave a stale date sitting in the input, and the label reads "walk" vs "walked" off the walk's own status rather than always claiming past tense. The empty state keys off the full row set (a board holding only walks would otherwise claim to be empty) and now names the search term instead of saying "none yet" when a query simply didn't match. Cards click through to the job **or quote** behind them for plan access ('onSelectJob' re-resolves from 'jobs'; quotes are jobs with 'type==="quote"', so it already worked — job-less walks keep their existing inert-cursor guard). Card treatment: tinted ground + a spelled-out "Red Line Walk" label in 'C.purple', the one palette colour that collides with none of the six CO status colours; **the left edge stays the foreman colour** on every card, since that is the board's existing who-owns-this signal. **Deliberately untouched: change orders inside jobs** — Koy: "that function is working perfectly right now." **Why it can't lose data:** no Firestore write shape changed and no migration ran; the redline write path still re-finds the live walk from the 'redlineWalks' prop at commit time before spreading it ('onUpdateRedline' is a whole-document 'setDoc' with no merge, so patching from a stale row would clobber the record); job COs still route through the field-scoped 'onUpdateCO'; and verified exhaustively that 'redlineWalks' is read **nowhere** outside the CO tab — no badge, Today task, nudge, huddle, scoreboard, report or Cloud Function touches the collection, so 'dailyCoChase'/'dailyBookDigest' counts are unaffected
+- **"Walk Done — Cleaning Plans" walk status + column** · 'shipped 2026-08-18' · 'SW v383' · Koy: "walk completed but plans not ready for co to be made yet… I need some time to clean the plan up sometimes before handing it to jeromy to make a co." New 'REDLINE_STATUSES' value 'plans_prep' between Walk Scheduled and CO Owed, with its own walks-only board column ("Cleaning Plans" — Koy's pick over folding it into Walk Scheduled or the send queue) between Walk Scheduled and Needs to be Sent, so Jeromy's queue only ever holds walks actually ready to write up. The chain is now 'Walk Scheduled → [Walk Done — Cleaning Plans] → Walk Done — CO Owed → Needs to be Sent → …'. Zero new render code — the walk pill/popover maps 'REDLINE_STATUSES' and the columns map 'CO_BOARD_STATUSES' generically, so the whole feature is three table entries (status def, column def, and the 'WALK_COLUMN_BY_STATUS' mapping — the v365 load-bearing indirection, kept intact). Unquoted-walk counting ("N red line walks"), the quote-# handoff to CO statuses, and every CO figure are untouched. Devices still on the old bundle file a 'plans_prep' walk into the Walk Scheduled column via 'walkColumn()''s existing unknown-status fallback — visible, never vanished — until they pull v382. Why it can't lose data: display tables only — no write-path change ('handleSetStatus' already writes any 'REDLINE_STATUSES' value through the live-walk re-find funnel), no new field shape, no loader or rules change
 - **Huddle Sheet** · 'shipped' · 'HuddleSheet' · content revisit (auto-tasks instead of dead manual tasks) · 'SW v321'
 - **Job Activity (per job)** · 'shipped' · 'JobActivity'
 - **Job Photos (per job)** · 'shipped' · 'JobPhotos'
