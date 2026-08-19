@@ -4353,6 +4353,100 @@ exports.createJobDriveFolder = functions.https.onCall(async (data, context) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// CALLABLE — getFieldinkOrgKey  (KC1 stage-B fleet provisioning)
+// CREW-LINK-CC-SIDE-SPEC item 2 / ORG_MEMBERSHIP_CC_SIDE_HANDOFF-2026-07-29.
+// Returns the 32-hex value of fieldink.editorkey.json from the company Drive
+// so every logged-in browser self-provisions its field-ink org membership
+// (the client caches it in localStorage; _getOrgKey in src/App.js calls this
+// only when that cache is empty). The key must NEVER ship in the CRA bundle
+// (REACT_APP_* is inlined into publicly downloadable JS) and this app's
+// Firestore is world-readable — the Drive file is the one store both apps
+// already share, so FieldInk's key-mint/rotation flow stays the single
+// source of truth and a rotation propagates here with zero deploys.
+//
+// ONE-TIME OPS PREREQUISITE: share fieldink.editorkey.json (or its parent
+// FieldInk Data folder) with this project's service account
+// (homestead-electric@appspot.gserviceaccount.com) as Viewer. Until then
+// this returns not-found and devices stay on per-device _hsSetOrgKey.
+//
+// Mirrors FieldInk's own reader (src/utils/drive.js ensureEditorKey): by-name
+// search across ALL drives; if a first-mint race ever left TWO files, pick
+// the lexicographically-smallest file id so every reader converges on the
+// SAME key; JSON shape is { key: "<32-hex>" }. Uses drive.readonly — the
+// drive.file scope of _driveClient() cannot see files this service account
+// didn't create. Never logs the key VALUE; logs WHO fetched it.
+// ─────────────────────────────────────────────────────────────
+// The key file's Drive id. NOT a secret (it's an id, not the key — same posture
+// as JOBS_PARENT_FOLDER_ID above); used only as a FALLBACK when the by-name
+// search comes up empty. Verified 2026-08-19: the file lives in a SHARED DRIVE
+// and this service account is on its ACL as reader.
+const FIELDINK_ORG_KEY_FILE_ID = "1UyEgBdNtggtkVCMaHegk3sVz8lUYYhZD";
+let _fiOrgKeyCache = { key: "", at: 0 };
+exports.getFieldinkOrgKey = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  // Identity leg of the gate: _appKey proves "the app", `by` names the
+  // logged-in user for the audit log. Client-asserted (this app has no
+  // Firebase Auth to verify against — see the requireAppKey note at the top),
+  // but it keeps the key off never-logged-in browsers and makes every issue
+  // of the secret attributable in the function logs.
+  const by   = String((data && data.by)   || "").trim().slice(0, 60);
+  const byId = String((data && data.byId) || "").trim().slice(0, 120);
+  if (!by) {
+    throw new functions.https.HttpsError("permission-denied", "Log in to the app first — the org key is only issued to identified users.");
+  }
+  const wantFresh = !!(data && data.refresh === true); // key-rotation path: client refresh bypasses this cache too
+  if (!wantFresh && _fiOrgKeyCache.key && (Date.now() - _fiOrgKeyCache.at) < 10 * 60 * 1000) {
+    functions.logger.info("getFieldinkOrgKey issued (memory cache)", { by, byId });
+    return { key: _fiOrgKeyCache.key };
+  }
+  try {
+    const auth = new google.auth.GoogleAuth({
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    });
+    const drive = google.drive({ version: "v3", auth });
+    const listRes = await drive.files.list({
+      q: "name='fieldink.editorkey.json' and trashed=false",
+      fields: "files(id)",
+      pageSize: 10,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const files = (listRes.data && listRes.data.files) || [];
+    // Deterministic winner on duplicates — the SAME rule as FieldInk's reader,
+    // so both apps converge on one key no matter which file they saw first.
+    const named = files.length ? files.reduce((a, b) => (a.id <= b.id ? a : b)).id : "";
+    // A global by-name list is the one step here that shared-drive scoping can
+    // quietly return empty for, so fall back to the known id. Fallback ONLY on
+    // an empty name search: a re-minted key (new id, same name) is still found
+    // by name first, so this can never serve a stale key over a live one.
+    const fileId = named || FIELDINK_ORG_KEY_FILE_ID;
+    let getRes;
+    try {
+      getRes = await drive.files.get({ fileId, alt: "media", supportsAllDrives: true });
+    } catch (e) {
+      if (!named) {
+        throw new functions.https.HttpsError("not-found",
+          "fieldink.editorkey.json is not readable by the app's service account (homestead-electric@appspot.gserviceaccount.com) — share the file, or its FieldInk Data folder, with it as Viewer.");
+      }
+      throw e; // found by name but unreadable → surfaces as unavailable below
+    }
+    let body = getRes.data;
+    if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = null; } }
+    const key = (body && typeof body.key === "string") ? body.key.trim() : "";
+    if (key.length < 16) {
+      throw new functions.https.HttpsError("failed-precondition", "fieldink.editorkey.json was read but carries no usable key value.");
+    }
+    _fiOrgKeyCache = { key, at: Date.now() };
+    functions.logger.info("getFieldinkOrgKey issued (Drive read)", { by, byId, fileId, viaName: !!named });
+    return { key };
+  } catch (e) {
+    if (e instanceof functions.https.HttpsError) throw e;
+    functions.logger.error("getFieldinkOrgKey drive error", { by, error: e.message });
+    throw new functions.https.HttpsError("unavailable", "Could not read the org key from Drive: " + e.message);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // CALLABLE — sendTestNotification
 // Fires a test push to every token registered for the caller's user record.
 // Also reports how many tokens are currently registered and how many were

@@ -257,18 +257,55 @@ const FIELDINK_ORG_KEY_LS = "he_fi_orgkey";
 // would undercut stage B for BOTH apps (it's one company-wide secret). Prefer
 // the per-device localStorage value, or the callable described in the handoff.
 const FIELDINK_ORG_KEY_ENV = process.env.REACT_APP_FIELDINK_ORG_KEY || "";
-// Single choke point for key resolution, so swapping in a Drive read or a
-// cloud-function callable later is a one-function change. Never logs the VALUE.
+// Single choke point for key resolution. Never logs the VALUE.
+// Order: localStorage → build env → the getFieldinkOrgKey callable → stale
+// cache. The callable leg (CREW-LINK-CC-SIDE-SPEC item 2) is what makes
+// provisioning FLEET-WIDE: any logged-in browser self-provisions on its first
+// join attempt and caches the key in localStorage, so stage B no longer waits
+// on per-device _hsSetOrgKey pastes. The callable requires a logged-in
+// identity BY DESIGN — the key only reaches browsers someone has PIN'd into,
+// and the server logs who fetched it (never the value).
+let _orgKeySource = "none";    // "localStorage" | "build env" | "callable" | "none" — _hsOrgStatus reporting only
+let _orgKeyCallPromise = null; // in-flight dedupe: concurrent join attempts share one fetch
+let _orgKeyCallFailedAt = 0;   // 60s backoff — boot joins + the 10s _ccDenied rejoin loop must not stampede the function
+function _fetchOrgKeyFromCallable(refresh) {
+  if (_orgKeyCallPromise) return _orgKeyCallPromise;
+  if (Date.now() - _orgKeyCallFailedAt < 60000) return Promise.resolve(null);
+  const who = getIdentity();
+  if (!who || !who.name) return Promise.resolve(null); // not logged in yet → stay inert (same posture as no-key)
+  _orgKeyCallPromise = httpsCallable(functions, "getFieldinkOrgKey")({
+    by: String(who.name).slice(0, 60),
+    byId: who.id != null ? String(who.id).slice(0, 120) : "",
+    refresh: !!refresh, // refresh:true also bypasses the function's memory cache (key-rotation path)
+  })
+    .then(r => {
+      const k = (typeof r?.data?.key === "string") ? r.data.key.trim() : "";
+      if (k.length < 16) { _orgKeyCallFailedAt = Date.now(); return null; }
+      try { localStorage.setItem(FIELDINK_ORG_KEY_LS, k); } catch {}
+      return k;
+    })
+    .catch(e => {
+      _orgKeyCallFailedAt = Date.now();
+      console.warn("[fieldink] org key fetch failed (will retry later):", e?.message);
+      return null;
+    })
+    .finally(() => { _orgKeyCallPromise = null; });
+  return _orgKeyCallPromise;
+}
 async function _getOrgKey(opts = {}) {
   if (!opts.refresh) {
-    try { const c = localStorage.getItem(FIELDINK_ORG_KEY_LS); if (typeof c === "string" && c.length >= 16) return c; } catch {}
+    try { const c = localStorage.getItem(FIELDINK_ORG_KEY_LS); if (typeof c === "string" && c.length >= 16) { _orgKeySource = "localStorage"; return c; } } catch {}
   }
   if (FIELDINK_ORG_KEY_ENV && FIELDINK_ORG_KEY_ENV.length >= 16) {
     try { localStorage.setItem(FIELDINK_ORG_KEY_LS, FIELDINK_ORG_KEY_ENV); } catch {}
+    _orgKeySource = "build env";
     return FIELDINK_ORG_KEY_ENV;
   }
-  // refresh:true with no fresh source → fall back to whatever is cached.
-  try { const c = localStorage.getItem(FIELDINK_ORG_KEY_LS); if (typeof c === "string" && c.length >= 16) return c; } catch {}
+  const fetched = await _fetchOrgKeyFromCallable(!!opts.refresh);
+  if (fetched) { _orgKeySource = "callable"; return fetched; }
+  // No fresh source (offline, function not deployed, not logged in) → fall
+  // back to whatever is cached rather than dropping a provisioned device.
+  try { const c = localStorage.getItem(FIELDINK_ORG_KEY_LS); if (typeof c === "string" && c.length >= 16) { _orgKeySource = "localStorage"; return c; } } catch {}
   return null;
 }
 // Keyed by uid: an anonymous uid is NOT stable across a browser-data clear, and
@@ -628,17 +665,25 @@ if (typeof window !== "undefined") {
       : "key stored, but the join was denied — check the key value, or the orgauth rules aren't live yet";
   };
   // Report state WITHOUT ever printing the key value (spec: never log the key).
+  // Resolves the key through the REAL chain (localStorage → env → callable) and
+  // kicks the join when a key materializes — so on a fresh logged-in browser
+  // this one command self-provisions, joins, and reports. That makes the
+  // CREW-LINK-CC-SIDE-SPEC item-2 acceptance test a single paste, and it's the
+  // same self-heal posture the bridge already uses everywhere else.
   //   await _hsOrgStatus()
   window._hsOrgStatus = async () => {
-    let cached = null; try { cached = localStorage.getItem(FIELDINK_ORG_KEY_LS); } catch {}
     const u = fieldinkAuth.currentUser || await ensureFieldinkAuth();
+    const key = await _getOrgKey();
+    if (key && u && !_orgJoinPromise) _kickOrgJoin(u); // key just materialized → join now, not on the next bridge call
+    const joined = _orgJoinPromise ? await _orgJoinPromise.catch(() => false) : false;
     return {
       uid: u?.uid || null,
       memberDocPath: u?.uid ? `orgauth/company/members/${u.uid}` : null,
-      keyPresent: !!(cached && cached.length >= 16),
-      keySource: (cached && cached.length >= 16) ? "localStorage" : (FIELDINK_ORG_KEY_ENV ? "build env" : "none"),
+      keyPresent: !!(key && key.length >= 16),
+      keySource: key ? _orgKeySource : "none",
+      loggedIn: !!getIdentity(), // the callable leg needs a logged-in identity — false explains keyPresent:false on a fresh profile
       joinAttemptedForUid: _orgJoinUid,
-      joinSettledTruthy: !!_orgJoinPromise,
+      joinSettledTruthy: !!joined,
     };
   };
 
@@ -22631,6 +22676,22 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   const stripPdf = (n) => String(n || "Plan").replace(/\.pdf$/i, "");
   const setHidden = (ids) => onUpdate({ hiddenPlanShares: ids });
 
+  // Real identity on Open (CREW-LINK-CC-SIDE-SPEC item 1): a logged-in user
+  // opens the viewer AS themselves, so their Question/Problem pins forward to
+  // this job's Questions attributed to their real name — instead of browsing
+  // as an anonymous client whose pins never forward at all. The params ride
+  // INSIDE the hash fragment (the base already contains #/v/) — that is the
+  // contract: FieldInk parses them from the hash (crewTagFromLocation, caps
+  // crewId≤120 / crewName≤60, mirrored here), persists the tag per share and
+  // pre-fills the pin name from crewName (v536). A tagged OFFICE session is
+  // fine — the tag is triage attribution, not a permission. No identity
+  // (edge case) → untagged URL, exactly today's behavior.
+  const openIdentity = getIdentity();
+  const openTag = (openIdentity && openIdentity.id != null && openIdentity.name)
+    ? "?crew=" + encodeURIComponent(String(openIdentity.id).slice(0, 120))
+      + "&crewName=" + encodeURIComponent(String(openIdentity.name).slice(0, 60))
+    : "";
+
   const planRow = (p, isHiddenRow) => (
     <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
       padding: "9px 12px", borderRadius: 9, marginBottom: 6, opacity: isHiddenRow ? 0.55 : 1,
@@ -22645,7 +22706,7 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: 6 }}>
-        <a href={FIELDINK_VIEWER_BASE + p.id} target="_blank" rel="noreferrer"
+        <a href={FIELDINK_VIEWER_BASE + p.id + openTag} target="_blank" rel="noreferrer"
           style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff", textDecoration: "none",
             fontSize: 11, fontWeight: 700, padding: "6px 14px", fontFamily: "inherit" }}>
           Open
@@ -22656,7 +22717,10 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
             the tagged link). Only meaningful on job-assigned shares: FieldInk
             forwards notes only when the share carries ccJobId. The sender
             types their name on each note, so one shared link serves the
-            whole crew/sub. */}
+            whole crew/sub. DELIBERATELY GENERIC (spec item 1): this link is
+            for texting to subs who never log into this app — a sub's pins
+            must not inherit the copier's identity. The personalized tag
+            lives on Open above. */}
         {p.ccJobId && !isHiddenRow && (
           <button onClick={() => {
             const link = FIELDINK_VIEWER_BASE + p.id + "?crew=crew";
@@ -46496,7 +46560,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-18 · App SW version: v383
+**Last manifest update:** 2026-08-19 · App SW version: v384
 
 ---
 
@@ -46824,6 +46888,8 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Always-current auto-update** · 'shipped 2026-07-10' · 'SW v318' · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
 - **Link Safety funnel** · 'shipped 2026-07-09' · 'SW v313' · every 'homeowner_requests' write goes through 'saveHomeownerRequest' with version snapshots (last 10 per job, 'versions' subcollection) — any clobber is a 2-minute restore
 - **Nightly Firestore backup** · 'shipped 2026-07-09 (deployed)' · 1:00 AM MT cloud function, 30-day retention in Storage 'backups/', 'runBackupNow' manual trigger, 'settings/backupStatus' stamp feeding the in-app banner
+- **Fleet org-key provisioning — 'getFieldinkOrgKey'** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 2 — the v362 join leg was inert without a key ('_getOrgKey' only read localStorage, and only Koy's browser was provisioned), which parked stage B for the whole company. New callable returns the 32-hex value of 'fieldink.editorkey.json' from the company Drive via the service account (**drive.readonly** — the 'drive.file' scope of '_driveClient()' can't see files the SA didn't create), behind 'requireAppKey' plus a required 'by' identity for the audit log; 10-min memory cache, 'refresh:true' bypasses it (key-rotation path); mirrors FieldInk's own reader exactly — by-name search across all drives, lexicographically-smallest file id wins a duplicate race, '{key}' JSON shape — and never logs the key value, only who fetched it. The key file lives in a **Shared Drive**, where a global by-name list is the one step shared-drive scoping can quietly return empty for, so a known-file-id fallback backs it up; a by-name hit always wins, so a re-minted key can never go stale behind the fallback. Client: '_getOrgKey' gains the callable leg (localStorage → build env → callable → stale cache), in-flight-deduped with a 60s failure backoff so boot joins and the 10s '_ccDenied' rejoin can't stampede the function, and it only fetches once a real identity is PIN'd in — the key never reaches a never-logged-in browser and never enters the CRA bundle. '_hsOrgStatus()' now resolves through the real chain and kicks the join itself, so the item-2 acceptance test is a single console paste. **Ops prerequisite — VERIFIED DONE 2026-08-19:** 'fieldink.editorkey.json' (and its parent folder) carry 'homestead-electric@appspot.gserviceaccount.com' as 'reader' on the Drive ACL, and exactly one such file exists. Remaining step is the deploy: 'firebase deploy --only functions:getFieldinkOrgKey'. Unblocks the stage-B ordered deploy ('RULES-DEPLOY-GUIDE.md', FieldInk repo). Why it can't lose data: additive — a new callable plus a new resolution leg inside the existing choke point; localStorage and env still win first, a failed fetch falls back to the cached key instead of dropping a provisioned device, and the join stays fire-and-forget/inert-without-key exactly as v362 shipped it.
+- **Personalized Open on Live Plans** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 1 — the LIVE PLANS rows' **Open** link now carries the logged-in user's real identity ('?crew=<id>&crewName=<name>' riding inside the hash fragment — the base already contains '#/v/'; FieldInk parses it with 'crewTagFromLocation', caps 120/60, persists it per share and pre-fills the pin name since v536), so a crew member's Question/Problem pins forward to this job's Questions attributed to their real name instead of browsing as an anonymous client whose pins never forward at all. Office sessions get tagged too — the tag is triage attribution, not a permission. No identity (edge case) → today's untagged URL. The copyable **Crew link** button deliberately keeps the generic '?crew=crew' tag: it exists for texting subs who never log into this app, and a sub's pins must not inherit the copier's identity. Same ship also answers **D8** for FieldInk: plan discovery is and stays the direct 'shares' query ('ccJobId' primary at the section's listener, 'jobFolderId' fallback) — 'ccjoblinks' has zero readers here, so FieldInk can retire its writer. Why it can't lose data: URL construction only — no write path, no new field, no rules change; the crew-tag hash contract is the one FieldInk v534/v536 already honors, and an untagged link behaves exactly as before.
 - **Org membership join (KC1 stage-B prerequisite)** · 'shipped 2026-07-29' · 'SW v362' · CC-side leg of 'CC-SIDE SPEC — Org Membership Join'; pairs with FieldInk v511. The six cc* bridge collections move from "any authenticated session" to **org members only**, so this app's field-ink session must JOIN the org once per session or every gated read/write starts failing 'permission-denied' — the live CO loop, on a real job. Writes exactly the two spec'd write-only docs: 'orgauth/company/meta/security' (create-once claim, '{orgKey,by,at}') and 'orgauth/company/members/<uid>' ('{key,by,at}'); rules verify membership server-side via 'exists()'. Mirrors FieldInk's 'ensureOrgMembership'/'_joinOrg': claim-then-join, **swallow the already-claimed denial** (FieldInk usually claims first — expected, not an error), refresh the key once on a denied join. Hooked into 'ensureFieldinkAuth' rather than the 8 cc* call sites because every bridge read AND write already funnels through it — including the listeners' self-healing re-attach, so a failed join retries for free. Joined **per session and per uid** (an anonymous field-ink uid isn't stable across a browser-data clear, and a fresh uid needs its own members doc); a settled FALSE is never memoized, so a pre-stage-A denial stays retryable. '_ccDenied' self-heals the 5 write paths + the 2 protective pre-reads on 'permission-denied', throttled to once per 10s so a hard denial can't stampede. **FIRE-AND-FORGET BY CONTRACT** — never awaited, nothing gates on it, and with no key provisioned it is completely inert (zero writes), which is the "safe to ship anytime" posture the spec's build order step 1 asks for. Key resolution is one choke point ('_getOrgKey') so a Drive read or a callable can replace it in one function; provision per-device with '_hsSetOrgKey("<32-hex>")' and inspect with '_hsOrgStatus()' (neither ever prints the key value). 'ccjoblinks' is **not used by this app**, so that row of the spec's table doesn't apply. Verified by a 29-assertion harness driving the real extracted join block against stubbed Firestore/auth. ⚠️ 'REACT_APP_FIELDINK_ORG_KEY' exists but CRA inlines env vars into the **publicly downloadable** bundle — setting it publishes the one company-wide secret and would undercut stage B for both apps; see the handoff doc
 - **FieldInk bridge hardening** · 'shipped 2026-07-10' · 'SW v323' · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.
 - **Crew link (FieldInk)** · 'shipped 2026-07-10' · 'SW v323' · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the '?crew=' tagged link). Senders type their name per note, so one link serves a whole crew/sub.
