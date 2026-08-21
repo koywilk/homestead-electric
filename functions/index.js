@@ -4410,6 +4410,11 @@ exports.getFieldinkOrgKey = functions.https.onCall(async (data) => {
       pageSize: 10,
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
+      // Observed in prod 2026-08-19: without corpora the by-name search returns
+      // EMPTY for this service account (logs showed viaName:false on every
+      // call) because the key file lives in a Shared Drive and the default
+      // corpus is the SA's own. allDrives is the documented fix.
+      corpora: "allDrives",
     });
     const files = (listRes.data && listRes.data.files) || [];
     // Deterministic winner on duplicates — the SAME rule as FieldInk's reader,
@@ -4420,14 +4425,30 @@ exports.getFieldinkOrgKey = functions.https.onCall(async (data) => {
     // an empty name search: a re-minted key (new id, same name) is still found
     // by name first, so this can never serve a stale key over a live one.
     const fileId = named || FIELDINK_ORG_KEY_FILE_ID;
+    const shareHint = "fieldink.editorkey.json is not readable by the app's service account (homestead-electric@appspot.gserviceaccount.com) — share the file, or its FieldInk Data folder, with it as Viewer.";
+    // Serving via the PINNED id means the by-name search couldn't see the file.
+    // Confirm the pinned file is still the live key file before trusting it:
+    // if FieldInk re-mints the key as a NEW file, a blind read of the old id
+    // would hand every browser a dead key with no way to notice. Fail loudly
+    // instead — clients then keep their cached key and log a warning.
+    if (!named) {
+      let meta;
+      try {
+        meta = await drive.files.get({ fileId, fields: "name,trashed", supportsAllDrives: true });
+      } catch (e) {
+        throw new functions.https.HttpsError("not-found", shareHint);
+      }
+      const m = (meta && meta.data) || {};
+      if (m.trashed || String(m.name || "") !== "fieldink.editorkey.json") {
+        throw new functions.https.HttpsError("failed-precondition",
+          "The pinned org-key file is trashed or renamed — the key was probably re-minted. Point FIELDINK_ORG_KEY_FILE_ID (functions/index.js) at the new file id.");
+      }
+    }
     let getRes;
     try {
       getRes = await drive.files.get({ fileId, alt: "media", supportsAllDrives: true });
     } catch (e) {
-      if (!named) {
-        throw new functions.https.HttpsError("not-found",
-          "fieldink.editorkey.json is not readable by the app's service account (homestead-electric@appspot.gserviceaccount.com) — share the file, or its FieldInk Data folder, with it as Viewer.");
-      }
+      if (!named) throw new functions.https.HttpsError("not-found", shareHint);
       throw e; // found by name but unreadable → surfaces as unavailable below
     }
     let body = getRes.data;
