@@ -1850,9 +1850,13 @@ const PREP_CHECKLIST_ITEMS = [
   {key:"readyToHandOff", label:"Ready to Hand Off to Foreman"},
 ];
 const allPrepChecked = (job) => {
-  if (job.prepChecklist) {
-    const c = job.prepChecklist;
-    return !!(c.redlinePlans && c.cabinetPlans && c.applianceSpecs && c.plansUploaded && c.readyToHandOff);
+  // v388: an item marked Not Needed (prepNA map) counts as handled — some jobs
+  // legitimately skip cabinet plans/appliance specs (or all of prep). NOTE:
+  // functions/index.js keeps its own pre-NA copy of this check (accepted v1:
+  // fully-N/A'd jobs still get the prep nudges until the functions fast-follow).
+  if (job.prepChecklist || job.prepNA) {
+    const c = job.prepChecklist || {}, na = job.prepNA || {};
+    return PREP_CHECKLIST_ITEMS.every(i => c[i.key] || na[i.key]);
   }
   return (job.prepStage||"") === "Job Prep Complete";
 };
@@ -28722,19 +28726,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {PREP_CHECKLIST_ITEMS.map((item,i)=>{
                     const checked=!!((job.prepChecklist||{})[item.key]);
+                    const itemNA=!checked&&!!((job.prepNA||{})[item.key]);
                     const isLast=item.key==="readyToHandOff";
                     return(
                       <label key={item.key} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",
                         ...(isLast?{marginTop:6,paddingTop:10,borderTop:`1px solid ${C.border}`}:{})}}>
                         <input type="checkbox" checked={checked}
                           onChange={e=>{
-                            const newChecklist={...(job.prepChecklist||{}),[item.key]:e.target.checked};
-                            u({prepChecklist:newChecklist});
+                            // v388: unchecking must return the item to OUTSTANDING, so it also
+                            // clears any lingering prepNA flag (same rule as the tab's menu).
+                            u(prepItemPatch(job, item.key, e.target.checked ? "done" : "todo"));
                           }}
                           style={{accentColor:C.teal,width:16,height:16,flexShrink:0}}/>
-                        <span style={{fontSize:13,color:checked?C.teal:C.text,fontWeight:checked?600:400,
-                          textDecoration:checked&&!isLast?"line-through":"none"}}>
-                          {item.label}
+                        <span style={{fontSize:13,color:checked?C.teal:(itemNA?C.dim:C.text),fontWeight:checked?600:400,
+                          textDecoration:(checked&&!isLast)||itemNA?"line-through":"none"}}>
+                          {item.label}{itemNA?" — not needed":""}
                         </span>
                       </label>
                     );
@@ -31363,16 +31369,19 @@ function computeTasks(jobs) {
     // Pre Job Prep — always assigned to Koy regardless of job foreman
     if(!job.tempPed && job.type!=="quote" && !allPrepChecked(job)) {
       const c=job.prepChecklist||{};
+      const na=job.prepNA||{};
       const items=PREP_CHECKLIST_ITEMS;
-      const doneCount=items.filter(i=>c[i.key]).length;
-      const nextItem=items.find(i=>!c[i.key]);
+      // v388: N/A items don't count against the job — denominator shrinks, NEXT skips them.
+      const requiredItems=items.filter(i=>!na[i.key]);
+      const doneCount=requiredItems.filter(i=>c[i.key]).length;
+      const nextItem=requiredItems.find(i=>!c[i.key]);
       const ovr = job.prepOverride && job.prepOverride.on;
       tasks.push({
         id: job.id+"_prep", jobId: job.id, jobName: job.name,
         type: "auto", category: "prep", foreman: "Koy",
         prepStage: job.prepStage||"",
         title: `Pre Job Prep: ${job.name||"Untitled"}`,
-        desc: (doneCount===0?"Not started":`${doneCount}/${items.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`)
+        desc: (doneCount===0?"Not started":`${doneCount}/${requiredItems.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`)
               + (ovr ? " — OVERRIDE ACTIVE (job cleared to start)" : ""),
         color: "#3E7D7A", cleared: false,
       });
@@ -46621,6 +46630,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
     - **Question-share links: forwarding no longer misfiles answers** · 'shipped 2026-07-28' · 'SW v358' · Koy forwarded Haley's named share link to a designer and hit two bugs sharing one root cause — the share's LABEL (who the link was *made for*) was being used as *who is typing now*. (1) The name box **pre-filled "Haley"** ('useEffect' on 'shareName'), so an unedited submit would have filed the designer's answers under Haley — real misattribution, same family as the 7/13 Kweller relabeling. (2) The banner told every visitor "You previously submitted answers as Haley." Now a per-device record ('he_qsub_{jobId}_{shareId}') drives both: the name box fills **only** from this browser's own prior submit, "You previously submitted…" shows **only** to the device that actually did, and anyone else sees a neutral "Some of these were already answered by Haley — put your own name at the bottom and your answers are filed under you." Display + prefill only; no write-path or data-shape change (per-question 'answeredBy' attribution was already correct)
     - **Logo auto-pull from the contractor's own website** · 'shipped 2026-07-28' · 'SW v358' · 'gcFindLogo' + 'GCLogoFinder' · new read-only 'requireAdmin' callable that derives the domain from a contact's email ('Luke@citypointutah.com' → 'citypointutah.com', editable) and reads that site's '<head>' for logo candidates — **apple-touch-icon** first (on small-builder sites it's nearly always the real mark, already square), then 'og:image', 'msapplication-TileImage', '<link rel=icon>', with the keyless Google favicon ('sz=128') always appended as a floor. Candidates are shown as thumbnails in the create AND edit forms and **picked by hand** — auto-applying would put a bad crop or a hero photo in a contractor's header; picking only fills 'logoUrl', nothing saves until the form saves. Chose site-scraping over a logo database deliberately: Clearbit's free logo API shut down 2025-12-08 and the successors skew to big brands, while small Utah builders always have a site. Hardened by live testing against Koy's real GCs: **14s timeout** (Ivory Homes exceeded 9s), **HTML-entity decoding** of attribute values (City Point ships '&#038;ssl=1', which would have produced a broken image URL), and an **exact** 'og:image' match (the loose one also caught 'og:image:width'/':type', yielding junk like '/900'). Rejects private/internal hosts and non-domains; https-only output, matching 'cleanLogoUrl'. Verified: City Point → 4 real logo candidates, Symphony → site favicon, Homestead → apple-touch-icon + og:image. **Known limit:** Ivory Homes' site blocks automated fetches entirely (hangs at 20s even with a browser UA), so it falls back to the Google favicon — paste a URL by hand for sites like that
     - **Contractor convenience trio** · 'shipped 2026-07-28' · 'SW v358' · from the contractor-UX review lens: (1) **sent requests persist** — "✓ Sent" + the office's "Homestead has acted on this" readback used to live only in component state, so closing a job erased every trace and invited double-sends; now stored per link+job+flow in 'localStorage' ('gcportal_sent_v1', capped 200, oldest-trimmed) with a live status line ("Sent 2h ago — awaiting review") and a **Send another** escape hatch. Applied to the one-shot flows (dates, Matterport, return trips, question answers); the general message box stays repeatable by design. (2) **A way to reach a human** — 'HOMESTEAD_CONTACT' + '_gcContactLine' render in the portal footer AND every dead-end (revoked link, connection trouble), and the email footer now says **"You can reply straight to this email — it reaches our office"** (true since 'gc_config/mail.replyTo' was set) plus a direct address. *Phone deliberately left blank until Koy supplies the number he wants contractors calling.* (3) **Per-job deep links** — instant alerts append '&job=<id>', and the portal opens that job once, only after the mirror confirms the id is on this portal (unknown/stale ids just land on the board). Digests stay on the root since they span jobs
+- **Job Prep tab — collapsible lanes, cleared-to-start group, prep N/A** · 'shipped 2026-08-28' · 'SW v388' · both lanes now start **collapsed** (tap the lane header to open; count pills stay visible, and an active search/foreman filter force-shows both lanes so results never hide). Inside Pre-Job Prep, override-cleared jobs move out of the main list into their own amber **"CLEARED TO START — N with outstanding items"** sub-dropdown, so the open list is purely what's still held. Prep items gained the same **Not needed (N/A)** tri-state as the admin items (new additive 'prepNA' map; ▾ menu per chip), progress reads 'done/required' with N/A items out of the denominator, NEXT hints and the override modal's outstanding list skip N/A items, and a **PREP NOT NEEDED** button (inline confirm) marks all remaining items N/A for jobs that skip prep entirely — a fully-N/A'd job counts as prep-complete across every gate consumer (stage board, auto-task, drawer, tab; the legacy prepStage-keyed surfaces — PrepTaskList, starting-soon — still read the old stage field by design). Known v1 gap: the Cloud Functions prep nudges keep their own pre-N/A check, so fully-N/A'd jobs still nudge until the functions fast-follow. Why it can't lose data: additive only — one new nested 'prepNA' map written through the existing saveJob patch funnel with spread-merges; 'allPrepChecked' is unchanged for every job with no 'prepNA'; no loader, rules, functions, or existing-field changes.
 - **Job Prep tab** · 'shipped 2026-08-28' · 'SW v387' · new office-only nav tab (gated admin/manager) splitting job-readiness work into two lanes: **Office Admin** (Justin — job account, pre-lien, and temp ped chips, each with a per-item **Not needed** toggle stored in a new 'adminNA' map so an item that doesn't apply to a given job drops off the outstanding count without faking it done) and **Pre-Job Prep** (Koy — the 5 'prepChecklist' items, tappable right on the board). Both lanes sort by parsed 'roughProjectedStart' (soonest first); the tab header shows company-wide readiness counts (held in prep / started on override / cleared to start) while each lane's pill counts the filtered view's outstanding items.
   - **Start-without-full-prep override** · same ship · a 'prepOverride {on, by, at, note}' audit stamp lets a job start on the board before every prep item is checked — recorded forever and cleared only by an explicit Undo, never by re-checking items or by time passing. The readiness gate splits in two: 'allPrepChecked' (strict — every item done) stays the truth for the auto-task engine, the job drawer's Pre-Job Prep section, and the tab's own outstanding lanes; 'prepClearedToStart' (strict OR override) is the new, looser gate the STAGE BOARD reads, so an overridden job can move to rough/in-progress on the board while the tab and drawer keep chasing the outstanding items honestly. Setting the override on a job that has never had a 'prepChecklist' also initializes it to '{}' — guards the rough-stage 'prepStage' auto-flip logic, which assumes the map exists once a job is in progress. Confirming an override (on either the tab or the drawer's Pre-Job Prep section) shows the outstanding-item list and takes an optional note before it stamps.
   - New SOP guide 'public/sops/jobprep.html' behind the tab's "?" (HelpDot), per the standing guides-track-the-app rule.
@@ -48744,6 +48754,20 @@ const jobPrepRowStyle = (edge) => ({ background:"#fff", border:`1px solid ${C.bo
   borderRadius:10, padding:"14px 16px", marginBottom:10, boxShadow:"0 4px 16px rgba(15,31,61,0.08)",
   display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" });
 const jobPrepLocalDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+// v388: prep items are tri-state like the admin items — done / outstanding / Not Needed.
+// prepNA is a separate additive map; "Mark outstanding" must clear BOTH fields.
+const prepItemState = (job, key) =>
+  (job.prepChecklist||{})[key] ? "done" : ((job.prepNA||{})[key] ? "na" : "todo");
+const prepItemPatch = (job, key, target) => {
+  const na = { ...(job.prepNA||{}) };
+  if (target === "na") na[key] = true; else na[key] = false;
+  return { prepChecklist: { ...(job.prepChecklist||{}), [key]: target === "done" }, prepNA: na };
+};
+// Items still genuinely owed (not done, not N/A) — feeds NEXT hints + override modal lists.
+const prepMissingItems = (job) => {
+  const c = job.prepChecklist||{}, na = job.prepNA||{};
+  return PREP_CHECKLIST_ITEMS.filter(i => !c[i.key] && !na[i.key]);
+};
 const jobPrepSoon = (j) => {
   const d = parseAnyDate(j.roughProjectedStart);
   const days = d ? (d - new Date()) / 86400000 : NaN;
@@ -48817,14 +48841,17 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
   );
 }
 
-function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, canOverride, onStartOverride, onUndoOverride }) {
-    const c = job.prepChecklist || {};
+function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride, onStartOverride, onUndoOverride }) {
+    const [confirmSkip, setConfirmSkip] = useState(false);   // "prep not needed" two-step
     const done = allPrepChecked(job);
-    const legacy = done && !job.prepChecklist;
+    const legacy = done && !job.prepChecklist && !job.prepNA;
     const stage = job.prepStage || "";
     const stageCol = prepStageColor(stage);
-    const nDone = PREP_CHECKLIST_ITEMS.filter(i=>c[i.key]).length;
-    const next = PREP_CHECKLIST_ITEMS.find(i=>!c[i.key]);
+    const naCount = PREP_CHECKLIST_ITEMS.filter(i=>prepItemState(job,i.key)==="na").length;
+    const required = PREP_CHECKLIST_ITEMS.length - naCount;
+    const nDone = PREP_CHECKLIST_ITEMS.filter(i=>prepItemState(job,i.key)==="done").length;
+    const missing = prepMissingItems(job);
+    const next = missing[0];
     const ovrOn = !!(job.prepOverride && job.prepOverride.on);
     const edge = done ? "#46916A" : (ovrOn ? "#B0892C" : C.red);
     return (
@@ -48836,7 +48863,9 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, canOverride, onStartOve
               whiteSpace:"nowrap", color:stageCol, background:`${stageCol}14`, border:`1px solid ${stageCol}44`}}>
               {stage || "No stage set"}
             </span>
-            {!legacy && <span style={{fontSize:11, fontWeight:700, color:C.teal}}>{nDone}/5</span>}
+            {!legacy && <span style={{fontSize:11, fontWeight:700, color:C.teal}}>
+              {nDone}/{required}{naCount > 0 ? <span style={{color:C.dim, fontWeight:600}}> · {naCount} N/A</span> : null}
+            </span>}
           </div>
           {legacy ? (
             <div style={{fontSize:11, color:C.dim, fontStyle:"italic"}}>Completed by stage — per-item checklist wasn't used on this job</div>
@@ -48844,15 +48873,20 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, canOverride, onStartOve
             <>
               <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
                 {PREP_CHECKLIST_ITEMS.map(item => {
-                  const on = !!c[item.key];
-                  const s = on ? JOBPREP_CHIP_STATES.done : JOBPREP_CHIP_STATES.todo;
+                  const state = prepItemState(job, item.key);
+                  const s = JOBPREP_CHIP_STATES[state];
                   return (
-                    <span key={item.key}
-                      onClick={()=>onUpdateJob(job.id, { prepChecklist: { ...(job.prepChecklist||{}), [item.key]: !on } })}
-                      style={{display:"inline-flex", alignItems:"center", borderRadius:99, fontSize:10, fontWeight:700,
-                        letterSpacing:"0.05em", cursor:"pointer", userSelect:"none", border:`1px solid ${s.border}`,
-                        background:s.bg, color:s.fg, minHeight:32, padding:"9px 12px", whiteSpace:"nowrap"}}>
-                      {s.mark}{item.label}
+                    <span key={item.key} style={{display:"inline-flex", alignItems:"center", borderRadius:99, fontSize:10,
+                      fontWeight:700, letterSpacing:"0.05em", cursor:"pointer", userSelect:"none",
+                      border:`1px ${state==="na" ? "dashed" : "solid"} ${s.border}`,
+                      background:s.bg, color:s.fg, minHeight:32, overflow:"hidden"}}>
+                      <span onClick={(e)=> state==="na"
+                          ? onOpenMenu(e, job.id, item.key, "prep")   // leaving N/A is deliberate — menu only
+                          : onUpdateJob(job.id, prepItemPatch(job, item.key, state === "done" ? "todo" : "done"))}
+                        style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
+                          textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.label}</span>
+                      <span onClick={(e)=>onOpenMenu(e, job.id, item.key, "prep")}
+                        style={{padding:"9px 10px 9px 5px", opacity:0.55, fontSize:9}}>▾</span>
                     </span>
                   );
                 })}
@@ -48872,6 +48906,24 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, canOverride, onStartOve
               OVERRIDE · READY TO START
             </span>
           )}
+          {!done && !ovrOn && canOverride && (confirmSkip
+            ? <span style={{display:"inline-flex", alignItems:"center", gap:6, fontSize:10, fontWeight:700, color:C.dim}}>
+                Mark all {missing.length} remaining Not Needed?
+                <button onClick={()=>{
+                    onUpdateJob(job.id, { prepNA: { ...(job.prepNA||{}),
+                      ...Object.fromEntries(prepMissingItems(job).map(i=>[i.key,true])) } });
+                    setConfirmSkip(false);
+                  }}
+                  style={{padding:"6px 11px", borderRadius:99, fontSize:10, fontWeight:700, border:`1px solid ${C.teal}66`,
+                    background:`${C.teal}14`, color:C.teal, cursor:"pointer", fontFamily:"inherit"}}>✓ Confirm</button>
+                <button onClick={()=>setConfirmSkip(false)}
+                  style={{padding:"6px 11px", borderRadius:99, fontSize:10, fontWeight:600, border:`1px solid ${C.border}`,
+                    background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>Cancel</button>
+              </span>
+            : <button onClick={()=>setConfirmSkip(true)}
+                style={{padding:"8px 13px", borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em",
+                  border:`1px solid ${C.muted}`, background:"#fff", color:C.dim, cursor:"pointer",
+                  fontFamily:"inherit", whiteSpace:"nowrap"}}>PREP NOT NEEDED</button>)}
           {!done && canOverride && (ovrOn
             ? <button onClick={onUndoOverride}
                 style={{padding:"8px 13px", borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em",
@@ -48919,7 +48971,7 @@ function JobPrepDrawerOverride({ job, identity, u }) {
         border:"1px solid #B0892C66", background:"#B0892C0D", color:"#B0892C", cursor:"pointer", fontFamily:"inherit"}}>
       START WITHOUT FULL PREP</button>
   );
-  const missing = PREP_CHECKLIST_ITEMS.filter(i=>!(job.prepChecklist||{})[i.key]);
+  const missing = prepMissingItems(job);   // N/A items are not outstanding
   return (
     <div style={{marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08"}}>
       <div style={{fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5}}>
@@ -48944,14 +48996,14 @@ function JobPrepDrawerOverride({ job, identity, u }) {
   );
 }
 
-function JobPrepCompleteStrip({ open, onToggle, count, children }) {
+function JobPrepCompleteStrip({ open, onToggle, count, children, color = "#46916A", label }) {
   if (count === 0) return null;
   return (
-    <div style={{border:"1px dashed #46916A55", borderRadius:10, marginTop:4, overflow:"hidden"}}>
+    <div style={{border:`1px dashed ${color}55`, borderRadius:10, marginTop:4, overflow:"hidden"}}>
       <div onClick={onToggle}
-        style={{padding:"9px 14px", fontSize:11, fontWeight:700, color:"#46916A", cursor:"pointer",
-          display:"flex", alignItems:"center", background:"#46916A08"}}>
-        <span>✓ {count} complete</span><span style={{marginLeft:"auto", opacity:0.6, fontSize:10}}>▾</span>
+        style={{padding:"9px 14px", fontSize:11, fontWeight:700, color, cursor:"pointer",
+          display:"flex", alignItems:"center", background:`${color}08`}}>
+        <span>{label || `✓ ${count} complete`}</span><span style={{marginLeft:"auto", opacity:0.6, fontSize:10}}>{open?"▾":"▸"}</span>
       </div>
       {open && <div style={{padding:"6px 10px 10px"}}>{children}</div>}
     </div>
@@ -48961,6 +49013,12 @@ function JobPrepCompleteStrip({ open, onToggle, count, children }) {
 function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
   const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
   const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
+  // Lanes start collapsed (Koy 2026-08-28) — header pills keep the counts visible;
+  // an active search/foreman filter force-shows both lanes so results never hide.
+  const [laneOpen, setLaneOpen] = useState({ admin:false, prep:false });
+  // Sub-dropdown inside Pre-Job Prep for override-cleared jobs (Koy 2026-08-28:
+  // "different drop downs for cleared to start w/outstanding items ... to organize better")
+  const [ovrOpen, setOvrOpen] = useState(false);
   const [ovr, setOvr] = useState(null);            // { jobId, note } while modal open
   const canOverride = can(identity, "jobprep.view");
   const confirmOverride = () => {
@@ -48986,11 +49044,11 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
     return () => { document.removeEventListener("click", close); window.removeEventListener("scroll", closeOnScroll, true); };
   }, [menu]);
 
-  const openMenu = (e, jobId, itemKey) => {
+  const openMenu = (e, jobId, itemKey, lane = "admin") => {
     e.stopPropagation();
     const r = e.currentTarget.getBoundingClientRect();
     setMenu(m => (m && m.jobId===jobId && m.itemKey===itemKey) ? null   // re-tap same caret = close
-      : { jobId, itemKey,
+      : { jobId, itemKey, lane,
           x: Math.min(r.left, window.innerWidth - 180),
           y: Math.min(r.bottom + 4, window.innerHeight - 110) });      // clamp so a bottom-row menu stays on-screen
   };
@@ -49014,6 +49072,9 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
 
   const aOpen = vis.filter(j => !adminAllHandled(j)), aDone = vis.filter(adminAllHandled);
   const pOpen = vis.filter(j => !allPrepChecked(j)), pDone = vis.filter(allPrepChecked);
+  // Prep lane organizes into two groups: still held vs cleared-on-override (outstanding items).
+  const pOvr  = pOpen.filter(j => j.prepOverride && j.prepOverride.on);
+  const pHeld = pOpen.filter(j => !(j.prepOverride && j.prepOverride.on));
 
   // Header counts — ALWAYS over the full included set (company-wide), never the filtered one.
   const held    = included.filter(j => !prepClearedToStart(j)).length;
@@ -49046,7 +49107,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
             <option value="">All foremen</option>
             {foremenList.map(f=><option key={f} value={f}>{f}</option>)}
           </select>
-          <button onClick={()=>{ const v=!showComplete; setShowComplete(v); setStripOpen({admin:v,prep:v}); }}
+          <button onClick={()=>{ const v=!showComplete; setShowComplete(v); setStripOpen({admin:v,prep:v});
+              if(v) setLaneOpen({admin:true,prep:true}); }}
             style={{padding:"6px 12px",borderRadius:7,fontSize:12,border:`1px solid ${C.border}`,
               background: showComplete ? C.accent : "#fff", color: showComplete ? "#fff" : C.dim,
               cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{showComplete?"Hide complete":"Show complete"}</button>
@@ -49055,8 +49117,9 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
 
       {/* ══ LANE 1 — OFFICE ADMIN ══ */}
       <div style={{marginBottom:28}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
-          borderBottom:"2px solid #3B5BA522",flexWrap:"wrap"}}>
+        <div onClick={()=>setLaneOpen(o=>({...o,admin:!o.admin}))}
+          style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
+          borderBottom:"2px solid #3B5BA522",flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.blue}}>OFFICE ADMIN</div>
           <span style={{borderRadius:99,padding:"2px 10px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",
             background:"#B23A3A14",border:"1px solid #B23A3A33",color:"#B23A3A"}}>
@@ -49065,7 +49128,9 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
             {" · "}{vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[2])==="todo").length} no ped
           </span>
           <div style={{marginLeft:"auto",fontSize:10,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase"}}>Justin's lane</div>
+          <span style={{fontSize:11,color:C.blue,opacity:0.6}}>{(laneOpen.admin || filtered)?"▾":"▸"}</span>
         </div>
+        {(laneOpen.admin || filtered) && (<>
         {aOpen.length === 0
           ? <div style={{fontSize:12,color:C.dim,textAlign:"center",padding:"18px 0"}}>
               {filtered && vis.length===0 ? "No jobs match the search / filter" : "✓ Every job has account, pre-lien, and ped handled"}
@@ -49074,12 +49139,14 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
         <JobPrepCompleteStrip open={stripOpen.admin} onToggle={()=>setStripOpen(s=>({...s,admin:!s.admin}))} count={aDone.length}>
           {aDone.map(j => <JobPrepAdminRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu}/>)}
         </JobPrepCompleteStrip>
+        </>)}
       </div>
 
       {/* ══ LANE 2 — PRE-JOB PREP ══ */}
       <div style={{marginBottom:28}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
-          borderBottom:"2px solid #3E7D7A22",flexWrap:"wrap"}}>
+        <div onClick={()=>setLaneOpen(o=>({...o,prep:!o.prep}))}
+          style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
+          borderBottom:"2px solid #3E7D7A22",flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>PRE-JOB PREP</div>
           <span style={{borderRadius:99,padding:"2px 10px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",
             background:"#3E7D7A14",border:"1px solid #3E7D7A33",color:"#3E7D7A"}}>
@@ -49087,25 +49154,38 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
               ? ` · ${pOpen.filter(j=>j.prepOverride&&j.prepOverride.on).length} overridden` : ""}
           </span>
           <div style={{marginLeft:"auto",fontSize:10,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase"}}>Koy's lane</div>
+          <span style={{fontSize:11,color:C.teal,opacity:0.6}}>{(laneOpen.prep || filtered)?"▾":"▸"}</span>
         </div>
-        {pOpen.length === 0
+        {(laneOpen.prep || filtered) && (<>
+        {pHeld.length === 0
           ? <div style={{fontSize:12,color:C.dim,textAlign:"center",padding:"18px 0"}}>
-              {filtered && vis.length===0 ? "No jobs match the search / filter" : "✓ All prep complete"}
+              {filtered && vis.length===0 ? "No jobs match the search / filter"
+                : pOvr.length > 0 ? "✓ Nothing held in prep — overridden jobs below" : "✓ All prep complete"}
             </div>
-          : pOpen.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
-        <JobPrepCompleteStrip open={stripOpen.prep} onToggle={()=>setStripOpen(s=>({...s,prep:!s.prep}))} count={pDone.length}>
-          {pDone.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+          : pHeld.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+        <JobPrepCompleteStrip open={ovrOpen || filtered} onToggle={()=>setOvrOpen(v=>!v)} count={pOvr.length}
+          color="#B0892C" label={`CLEARED TO START — ${pOvr.length} with outstanding items`}>
+          {pOvr.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
         </JobPrepCompleteStrip>
+        <JobPrepCompleteStrip open={stripOpen.prep} onToggle={()=>setStripOpen(s=>({...s,prep:!s.prep}))} count={pDone.length}>
+          {pDone.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+        </JobPrepCompleteStrip>
+        </>)}
       </div>
 
-      {/* menu popover */}
+      {/* menu popover — serves both lanes; menu.lane picks the item table + patch */}
       {menu && (() => {
         const job = jobs.find(j=>j.id===menu.jobId);
-        const item = JOBPREP_ADMIN_ITEMS.find(i=>i.key===menu.itemKey);
+        const isPrep = menu.lane === "prep";
+        const item = isPrep
+          ? PREP_CHECKLIST_ITEMS.find(i=>i.key===menu.itemKey)
+          : JOBPREP_ADMIN_ITEMS.find(i=>i.key===menu.itemKey);
         if (!job || !item) return null;
-        const state = adminItemState(job, item);
+        const state = isPrep ? prepItemState(job, item.key) : adminItemState(job, item);
         const opt = (label, target) => (
-          <button key={target} onClick={()=>{ onUpdateJob(job.id, adminItemPatch(job, item, target)); setMenu(null); }}
+          <button key={target} onClick={()=>{
+              onUpdateJob(job.id, isPrep ? prepItemPatch(job, item.key, target) : adminItemPatch(job, item, target));
+              setMenu(null); }}
             style={{display:"block",width:"100%",textAlign:"left",padding:"10px 12px",fontSize:12,fontFamily:"inherit",
               border:"none",background:"none",borderRadius:6,cursor:"pointer",color:C.text}}>{label}</button>
         );
@@ -49121,7 +49201,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
 
       {ovr && (() => {
         const job = jobs.find(j=>j.id===ovr.jobId); if (!job) return null;
-        const missing = PREP_CHECKLIST_ITEMS.filter(i=>!(job.prepChecklist||{})[i.key]);
+        const missing = prepMissingItems(job);   // N/A items are not outstanding
         return (
           <div onClick={(e)=>{ if(e.target===e.currentTarget) setOvr(null); }}
             style={{position:"fixed", inset:0, background:"rgba(20,24,33,0.45)", zIndex:90,
