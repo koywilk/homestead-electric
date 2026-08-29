@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Job Prep — Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  /* ── App tokens (mirrors const C / const D in App.js) ── */
+  :root{
+    --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9;
+    --muted:#CDD3DB; --text:#1B1F24; --dim:#5E6670; --accent:#3B5BA5;
+    --blue:#3B5BA5; --green:#3E7D5A; --red:#B23A3A; --purple:#6A5E97;
+    --orange:#B06A2C; --teal:#3E7D7A; --amber:#B0892C; --done:#46916A;
+    --d-bg1:#141821; --d-bg2:#1B2030; --d-hair:#2A2F3A;
+    --d-text:#9AA3B2; --d-bright:#E6EAF1; --d-chipbg:#222732; --d-chipline:#2E3440;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  body{margin:0; background:var(--bg); color:var(--text);
+    font-family:'DM Sans',-apple-system,sans-serif; font-size:14px;}
+  .bebas{font-family:'Bebas Neue',sans-serif;}
+
+  /* ── Fake app command header (orientation only) ── */
+  .cmdbar{background:linear-gradient(180deg,var(--d-bg1),var(--d-bg2));
+    border-bottom:1px solid var(--d-hair); padding:10px 18px 12px;}
+  .cmdbar .brand{font-family:'Bebas Neue',sans-serif; font-size:19px; letter-spacing:0.1em;
+    color:var(--d-bright); display:flex; align-items:center; gap:10px;}
+  .cmdbar .brand .mock{font-family:'DM Sans'; font-size:9px; font-weight:700; letter-spacing:0.08em;
+    background:var(--purple); color:#fff; border-radius:99px; padding:2px 8px;}
+  .tabs{display:flex; gap:6px; margin-top:8px; overflow-x:auto; scrollbar-width:none;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tab{padding:7px 16px; font-size:12px; font-weight:500; color:#9AA3B2; border-radius:8px;
+    letter-spacing:0.02em; white-space:nowrap; cursor:default; transition:all 0.15s;}
+  .tab.on{background:var(--accent); color:#fff; font-weight:700;
+    box-shadow:0 6px 18px rgba(59,91,165,.5);}
+
+  .wrap{padding:16px 18px 80px; max-width:1120px; margin:0 auto;}
+
+  /* ── Page header (CO-tracker pattern) ── */
+  .pagehead{display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap;
+    gap:12px; margin-bottom:14px;}
+  .pagehead h1{font-family:'Bebas Neue',sans-serif; font-size:28px; letter-spacing:0.06em;
+    color:var(--text); line-height:1; margin:0; font-weight:400;}
+  .subcounts{font-size:12px; color:var(--dim); margin-top:4px;}
+  .subcounts b{font-weight:700;}
+  .controls{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .controls input[type=text], .controls select{padding:6px 10px; border-radius:7px;
+    border:1px solid var(--border); font-size:12px; background:#fff; color:var(--text);
+    font-family:inherit; outline:none;}
+  .controls input[type=text]{min-width:240px;}
+  .btn{padding:6px 12px; border-radius:7px; font-size:12px; border:1px solid var(--border);
+    background:#fff; color:var(--dim); cursor:pointer; font-family:inherit; font-weight:600;}
+  .btn.on{background:var(--accent); color:#fff; border-color:var(--accent);}
+
+  /* ── Lane headers (PrepTaskList pattern) ── */
+  .lane{margin-bottom:28px;}
+  .lanehead{display:flex; align-items:center; gap:10px; margin-bottom:16px; padding-bottom:10px;
+    flex-wrap:wrap;}
+  .lanehead .t{font-family:'Bebas Neue',sans-serif; font-size:18px; letter-spacing:0.08em;}
+  .pill{border-radius:99px; padding:2px 10px; font-size:11px; font-weight:700; white-space:nowrap;}
+  .lane.admin .lanehead{border-bottom:2px solid #3B5BA522;}
+  .lane.admin .t{color:var(--blue);}
+  .lane.prep .lanehead{border-bottom:2px solid #3E7D7A22;}
+  .lane.prep .t{color:var(--teal);}
+  .lanehead .who{margin-left:auto; font-size:10px; font-weight:700; letter-spacing:0.06em;
+    color:var(--dim); text-transform:uppercase;}
+
+  /* ── Job rows ── */
+  .row{background:var(--card); border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px; margin-bottom:10px; box-shadow:0 4px 16px rgba(15,31,61,0.08);
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+  .row.needs{border-left:3px solid var(--red);}
+  .row.ok{border-left:3px solid var(--done);}
+  .row.overridden{border-left:3px solid var(--amber);}
+  .jobinfo{min-width:200px; flex:1 1 200px;}
+  .jobname{font-weight:700; font-size:14px; color:var(--text); cursor:pointer;}
+  .jobname:hover{color:var(--accent); text-decoration:underline;}
+  .jobmeta{display:flex; align-items:center; gap:8px; margin-top:3px; font-size:11px;
+    color:var(--dim); flex-wrap:wrap;}
+  .fdot{width:7px; height:7px; border-radius:99px; display:inline-block; margin-right:4px;}
+  .startdate{font-weight:600;}
+  .startdate.soon{color:var(--orange);}
+
+  /* ── Chips: the core control ── */
+  .chips{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .chip{display:flex; align-items:center; border-radius:99px; font-size:10px; font-weight:700;
+    letter-spacing:0.05em; cursor:pointer; user-select:none; border:1px solid; overflow:hidden;
+    position:relative; background:#fff; min-height:32px;}
+  .chip .lab{padding:9px 5px 9px 12px; white-space:nowrap; align-self:stretch;
+    display:flex; align-items:center;}
+  .chip .caret{padding:9px 10px 9px 5px; opacity:0.55; font-size:9px; align-self:stretch;
+    display:flex; align-items:center;}
+  .chip .caret:hover{opacity:1;}
+  .chip.todo{border-color:#B23A3A55; background:#B23A3A0A; color:var(--red);}
+  .chip.done{border-color:#46916A55; background:#46916A0F; color:var(--done);}
+  .chip.na{border-color:var(--muted); background:var(--surface); color:var(--dim);
+    border-style:dashed;}
+  .chip.na .lab{text-decoration:line-through; text-decoration-thickness:1px;}
+  .pedsel{padding:6px 10px; border-radius:7px; border:1px solid var(--border); font-size:12px;
+    font-family:inherit; background:var(--surface); outline:none; cursor:pointer;}
+  .pedsel.set{color:var(--blue); font-weight:700;}
+  .pedsel.unset{color:var(--dim); font-weight:400;}
+
+  /* chip popover */
+  .pop{position:absolute; z-index:40; background:#fff; border:1px solid var(--border);
+    border-radius:9px; box-shadow:0 8px 28px rgba(15,31,61,0.16); padding:4px; min-width:150px;}
+  .pop button{display:block; width:100%; text-align:left; padding:10px 12px; font-size:12px;
+    font-family:inherit; border:none; background:none; border-radius:6px; cursor:pointer; color:var(--text);}
+  .pop button:hover{background:var(--surface);}
+
+  /* ── Prep lane specifics ── */
+  .stagepill{font-size:10px; font-weight:700; border-radius:99px; padding:3px 9px;
+    letter-spacing:0.04em; white-space:nowrap;}
+  .progress{font-size:11px; font-weight:700; color:var(--teal); white-space:nowrap;}
+  .nexthint{font-size:10.5px; color:var(--dim); margin-top:3px;}
+  .nexthint b{color:var(--orange); font-weight:700;}
+  .rowactions{display:flex; align-items:center; gap:8px; margin-left:auto; flex-wrap:wrap;}
+  .ovrbtn{padding:8px 13px; border-radius:99px; font-size:10px; font-weight:700; letter-spacing:0.05em;
+    border:1px solid #B0892C66; background:#B0892C0D; color:var(--amber); cursor:pointer;
+    font-family:inherit; white-space:nowrap;}
+  .ovrbtn:hover{background:#B0892C1A;}
+  .ovrbtn.undo{border-color:var(--muted); background:var(--surface); color:var(--dim);}
+  .ovrbadge{display:inline-flex; align-items:center; gap:5px; background:#B0892C18;
+    border:1px solid #B0892C55; color:var(--amber); border-radius:99px; padding:3px 10px;
+    font-size:9.5px; font-weight:800; letter-spacing:0.07em; white-space:nowrap;}
+  .ovrnote{flex-basis:100%; font-size:11px; color:var(--dim); font-style:italic;
+    border-top:1px dashed var(--border); padding-top:7px; margin-top:2px;}
+  .ovrnote b{color:var(--amber); font-style:normal;}
+
+  /* ── Complete strips ── */
+  .completestrip{border:1px dashed #46916A55; border-radius:10px; margin-top:4px; overflow:hidden;}
+  .completestrip>header{padding:9px 14px; font-size:11px; font-weight:700; color:var(--done);
+    cursor:pointer; display:flex; align-items:center; gap:8px; background:#46916A08;}
+  .completestrip>header .arr{margin-left:auto; opacity:0.6; font-size:10px;}
+  .completestrip .body{padding:6px 10px 10px; display:none;}
+  .completestrip.open .body{display:block;}
+  .completestrip .row{box-shadow:none; margin-bottom:6px; opacity:0.82;}
+
+  .empty{font-size:12px; color:var(--dim); text-align:center; padding:18px 0;}
+
+  /* ── Override modal ── */
+  .overlay{position:fixed; inset:0; background:rgba(20,24,33,0.45); z-index:90;
+    display:none; align-items:center; justify-content:center; padding:18px;}
+  .overlay.open{display:flex;}
+  .modal{background:#fff; border-radius:14px; max-width:430px; width:100%;
+    box-shadow:0 20px 60px rgba(15,31,61,0.35); padding:20px 22px;}
+  .modal h3{font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:0.06em;
+    margin:0 0 4px; font-weight:400; color:var(--text);}
+  .modal .sub{font-size:12px; color:var(--dim); margin-bottom:12px; line-height:1.5;}
+  .modal .missing{background:#B23A3A0A; border:1px solid #B23A3A33; border-radius:9px;
+    padding:9px 12px; margin-bottom:12px;}
+  .modal .missing .h{font-size:9.5px; font-weight:700; letter-spacing:0.05em; color:var(--red);
+    text-transform:uppercase; margin-bottom:5px;}
+  .modal .missing li{font-size:12px; color:var(--text); margin-left:16px;}
+  .modal label{font-size:9.5px; color:var(--dim); text-transform:uppercase; font-weight:700;
+    letter-spacing:0.03em; display:block;}
+  .modal textarea{width:100%; padding:7px 9px; border-radius:7px; border:1px solid var(--border);
+    font-size:12.5px; font-family:inherit; color:var(--text); outline:none; margin-top:4px;
+    resize:vertical; min-height:52px;}
+  .modal .acts{display:flex; gap:8px; justify-content:flex-end; margin-top:14px;}
+  .modal .go{padding:9px 16px; border-radius:8px; border:1px solid #B0892C88; background:#B0892C18;
+    color:var(--amber); font-weight:700; font-size:12.5px; font-family:inherit; cursor:pointer;}
+  .modal .go:hover{background:#B0892C28;}
+  .modal .cxl{padding:8px 14px; border-radius:8px; border:1px solid var(--border); background:#fff;
+    color:var(--dim); font-weight:600; font-size:12.5px; font-family:inherit; cursor:pointer;}
+  .modal .fine{font-size:10.5px; color:var(--dim); margin-top:10px; line-height:1.5;}
+
+  /* ── Toast ── */
+  .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px);
+    background:var(--d-bg2); color:var(--d-bright); font-size:12.5px; font-weight:600;
+    border-radius:99px; padding:10px 20px; opacity:0; pointer-events:none;
+    transition:all .25s ease; z-index:120; box-shadow:0 10px 30px rgba(0,0,0,0.3);
+    max-width:88vw; text-align:center;}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  /* ── Design-note annotations (toggle) ── */
+  .note{display:none; font-size:10.5px; color:var(--purple); background:#6A5E970D;
+    border:1px dashed #6A5E9766; border-radius:8px; padding:7px 10px; margin:2px 0 10px;
+    line-height:1.5;}
+  body.notes .note{display:block;}
+
+  @media (max-width:640px){
+    .wrap{padding:12px 10px 80px;}
+    .row{padding:11px 12px; gap:10px;}
+    .jobinfo{flex-basis:100%;}
+    .rowactions{margin-left:0;}
+    .controls input[type=text]{min-width:0; flex:1;}
+    .pagehead h1{font-size:24px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- Fake command header: shows where the tab lands in the nav -->
+<div class="cmdbar">
+  <div class="brand">HOMESTEAD ELECTRIC <span class="mock">MOCKUP — FAKE DATA</span></div>
+  <div class="tabs">
+    <div class="tab">Job Board</div><div class="tab">Today</div><div class="tab">Upcoming</div>
+    <div class="tab">COs</div><div class="tab on">Job Prep</div><div class="tab">Scoreboard</div>
+    <div class="tab">Crew Planner</div><div class="tab">Tasks</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="pagehead">
+    <div>
+      <h1>JOB PREP</h1>
+      <div class="subcounts" id="subcounts"></div>
+    </div>
+    <div class="controls">
+      <input type="text" id="search" placeholder="Search jobs…" oninput="render()"/>
+      <select id="foremanFilter" onchange="render()"><option value="">All foremen</option></select>
+      <button class="btn" id="completeBtn" onclick="toggleComplete()">Show complete</button>
+      <button class="btn" id="notesBtn" onclick="toggleNotes()">Design notes</button>
+    </div>
+  </div>
+
+  <div class="note">This whole tab is a cross-job lens over fields that already live on each job —
+    same data as the Job Info drawer, no new collections. Office-only (admin + manager).
+    Sorted by projected start, next job to break ground on top — sort key is the real
+    <b>job.roughProjectedStart</b>, PARSED with parseAnyDate (the app stores M/D/YYYY, with legacy
+    YYYY-MM-DD mixed in — never string-compare; this mockup's ISO field is a simplification).
+    Header totals are always company-wide; the lane pills count what the search/foreman filter shows.</div>
+
+  <!-- ══ LANE 1 — OFFICE ADMIN ══ -->
+  <div class="lane admin">
+    <div class="lanehead">
+      <div class="t">OFFICE ADMIN</div>
+      <span class="pill" id="adminPills"></span>
+      <div class="who">Justin's lane</div>
+    </div>
+    <div class="note">Chip tap = toggle done. The little ▾ opens a menu with <b>Not needed</b> (N/A) —
+      gray dashed chip, counts as complete, nothing falsely marked done. Temp Ped done keeps the
+      Ped # picker. Row turns green &amp; drops to the complete strip when all three are done-or-N/A.</div>
+    <div id="adminRows"></div>
+    <div class="completestrip" id="adminComplete">
+      <header onclick="toggleStrip('admin')">
+        <span id="adminCompleteCount"></span><span class="arr">▾</span>
+      </header>
+      <div class="body" id="adminCompleteRows"></div>
+    </div>
+  </div>
+
+  <!-- ══ LANE 2 — PRE-JOB PREP ══ -->
+  <div class="lane prep">
+    <div class="lanehead">
+      <div class="t">PRE-JOB PREP</div>
+      <span class="pill" id="prepPills"></span>
+      <div class="who">Koy's lane</div>
+    </div>
+    <div class="note">The five checklist chips are tappable right here — no drawer needed (they're
+      binary, so no ▾ menu like Justin's lane). <b>Start without full prep</b> stamps who/when
+      (+ optional note) and advances the job to "Rough — Not Started" on Upcoming Jobs, but the row
+      STAYS here with an amber OVERRIDE badge and its red chips until every box is actually checked.
+      Override is never forgotten OR auto-deleted: <b>prepOverride stays on the job as an audit
+      stamp</b> — the badge just hides once all 5 are truly checked (and honestly reappears if a
+      box gets unchecked later). Stage pills here show 3 sample stages; the real build colors all
+      8 prepStage values with the app's existing PrepTaskList stageColor ramp (spec has the table).</div>
+    <div id="prepRows"></div>
+    <div class="completestrip" id="prepComplete">
+      <header onclick="toggleStrip('prep')">
+        <span id="prepCompleteCount"></span><span class="arr">▾</span>
+      </header>
+      <div class="body" id="prepCompleteRows"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Override modal -->
+<div class="overlay" id="ovrOverlay" onclick="if(event.target===this)closeOvr()">
+  <div class="modal">
+    <h3>START WITHOUT FULL PREP</h3>
+    <div class="sub" id="ovrJobLine"></div>
+    <div class="missing">
+      <div class="h">Still outstanding — stays tracked</div>
+      <ul id="ovrMissing"></ul>
+    </div>
+    <label>Note (optional)
+      <textarea id="ovrNote" placeholder="e.g. cabinet plans due 9/15 — GC confirmed"></textarea>
+    </label>
+    <div class="acts">
+      <button class="cxl" onclick="closeOvr()">Cancel</button>
+      <button class="go" onclick="confirmOvr()">Mark Ready to Start</button>
+    </div>
+    <div class="fine">Stamps your name + date automatically. The job advances to
+      <b>Rough — Not Started</b> on Upcoming Jobs; the outstanding items above stay red on this
+      board until checked. Undo any time.</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────
+   MOCKUP ONLY — hardcoded fake data, nothing saves anywhere.
+   Field names mirror the real data model on purpose:
+   admin.account / admin.prelien / admin.ped ∈ 'todo'|'done'|'na'
+   (real app: jobAccount/preLien/hasTempPed booleans + adminNA map)
+   prep.* booleans mirror job.prepChecklist keys exactly.
+   override mirrors prepOverride {by, at, note}.
+
+   XSS note: all dynamic values rendered into markup pass through
+   esc() below — including the two real user inputs (search box is
+   never interpolated; the override note is escaped).
+   ───────────────────────────────────────────────────────────── */
+const FOREMEN = { "Marcus":"#3B5BA5", "Danny":"#6A5E97", "Cole":"#3E7D7A", "Trevor":"#B06A2C" };
+const PREP_ITEMS = [
+  {key:"redlinePlans",   chip:"REDLINE PLANS",   label:"Redline Plans Up to Date"},
+  {key:"cabinetPlans",   chip:"CABINET PLANS",   label:"Cabinet Plans Received"},
+  {key:"applianceSpecs", chip:"APPLIANCE SPECS", label:"Appliance Specs Received"},
+  {key:"plansUploaded",  chip:"UPLOADED",        label:"Plans Uploaded to App & SimPro"},
+  {key:"readyToHandOff", chip:"HAND-OFF",        label:"Ready to Hand Off to Foreman"},
+];
+const ADMIN_ITEMS = [
+  {key:"account", chip:"ACCOUNT",  label:"Job account created"},
+  {key:"prelien", chip:"PRE-LIEN", label:"Pre-lien filed"},
+  {key:"ped",     chip:"TEMP PED", label:"Temp pedestal on site"},
+];
+// Colors match the app's REDLINE_STATUSES exactly (App.js ~L1542) — amber on
+// "Redline CO Sent" is the app's own established stage color, not override amber.
+const STAGES = {
+  walkSched:{label:"Walk Scheduled", color:"#3B5BA5"},
+  coSent:{label:"Redline CO Sent", color:"#B0892C"},
+  coSigned:{label:"CO Signed", color:"#46916A"},
+  none:{label:"No stage set", color:"#5E6670"},
+};
+
+// projStartISO = the sortable date. In the real app this is job.roughProjectedStart
+// (already an ISO string) — the display string is derived, never the sort key.
+const TODAY_ISO = "2026-08-28";
+let jobs = [
+  { id:"j1", name:"Silver Creek Lot 42", simproNo:"2481", foreman:"Marcus", gc:"Hearthstone Homes",
+    projStart:"Sep 2", projStartISO:"2026-09-02", admin:{account:"done", prelien:"todo", ped:"todo"}, pedNumber:"",
+    prep:{redlinePlans:true, cabinetPlans:false, applianceSpecs:true, plansUploaded:true, readyToHandOff:false},
+    stage:"coSigned", override:null },
+  { id:"j2", name:"Hartley Residence", simproNo:"2476", foreman:"Danny", gc:"Owner build",
+    projStart:"Sep 8", projStartISO:"2026-09-08", admin:{account:"done", prelien:"done", ped:"todo"}, pedNumber:"",
+    prep:{redlinePlans:true, cabinetPlans:false, applianceSpecs:false, plansUploaded:true, readyToHandOff:false},
+    stage:"coSent", override:{by:"Koy", at:"Aug 26", note:"cabinet plans due 9/15 — GC confirmed"} },
+  { id:"j3", name:"Copper Ridge 118", simproNo:"2490", foreman:"Cole", gc:"Bar W Builders",
+    projStart:"Sep 15", projStartISO:"2026-09-15", admin:{account:"todo", prelien:"todo", ped:"na"}, pedNumber:"",
+    prep:{redlinePlans:false, cabinetPlans:false, applianceSpecs:false, plansUploaded:false, readyToHandOff:false},
+    stage:"walkSched", override:null },
+  { id:"j4", name:"Meadowbrook Custom", simproNo:"2470", foreman:"Marcus", gc:"KLR Construction",
+    projStart:"Sep 22", projStartISO:"2026-09-22", admin:{account:"done", prelien:"todo", ped:"done"}, pedNumber:"7",
+    prep:{redlinePlans:true, cabinetPlans:true, applianceSpecs:true, plansUploaded:false, readyToHandOff:false},
+    stage:"coSigned", override:null },
+  { id:"j5", name:"Juniper Bend Lot 7", simproNo:"2494", foreman:"Trevor", gc:"Hearthstone Homes",
+    projStart:"Oct 1", projStartISO:"2026-10-01", admin:{account:"todo", prelien:"todo", ped:"todo"}, pedNumber:"",
+    prep:{redlinePlans:false, cabinetPlans:false, applianceSpecs:false, plansUploaded:false, readyToHandOff:false},
+    stage:"none", override:null },
+  { id:"j6", name:"Wagner Remodel", simproNo:"2455", foreman:"Danny", gc:"Direct",
+    projStart:"Aug 30", projStartISO:"2026-08-30", admin:{account:"done", prelien:"done", ped:"na"}, pedNumber:"",
+    prep:{redlinePlans:true, cabinetPlans:true, applianceSpecs:true, plansUploaded:true, readyToHandOff:true},
+    stage:"coSigned", override:null },
+];
+
+let showComplete = false;
+let stripOpen = { admin:false, prep:false };  // per-strip manual expand state
+let popEl = null;      // open chip popover
+let popKey = null;     // which chip's popover is open (for toggle-close)
+let ovrJobId = null;   // job in the override modal
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const adminDone = j => ADMIN_ITEMS.every(it => j.admin[it.key] !== "todo");
+const prepChecked = j => PREP_ITEMS.every(it => j.prep[it.key]);          // strict — allPrepChecked
+const clearedToStart = j => prepChecked(j) || !!j.override;               // prepClearedToStart
+const missingPrep = j => PREP_ITEMS.filter(it => !j.prep[it.key]);
+
+function toast(msg){
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._tm); t._tm = setTimeout(()=>t.classList.remove("show"), 2600);
+}
+function closePop(){ if(popEl){ popEl.remove(); popEl = null; popKey = null; } }
+document.addEventListener("click", e => { if(popEl && !popEl.contains(e.target)) closePop(); });
+
+/* ── chip actions ─────────────────────────────────────────── */
+function tapAdmin(ev, jobId, key){
+  const j = jobs.find(x=>x.id===jobId); if(!j) return;
+  const cur = j.admin[key];
+  if(cur === "na"){ openMenu(ev, jobId, key); return; }   // N/A is deliberate — go through menu
+  j.admin[key] = (cur === "done") ? "todo" : "done";
+  if(key === "ped" && j.admin.ped !== "done") j.pedNumber = "";
+  if(adminDone(j)) toast(j.name + " — office admin complete");
+  render();
+}
+function openMenu(ev, jobId, key){
+  ev.stopPropagation();
+  const thisKey = jobId + ":" + key;
+  if(popKey === thisKey){ closePop(); return; }   // re-tap the same caret = close
+  closePop();
+  const j = jobs.find(x=>x.id===jobId); if(!j) return;
+  const cur = j.admin[key];
+  const pop = document.createElement("div");
+  pop.className = "pop";
+  const opts = [];
+  if(cur !== "done") opts.push(["✓ Mark done", ()=>{ j.admin[key]="done"; }]);
+  if(cur !== "todo") opts.push(["○ Mark outstanding", ()=>{ j.admin[key]="todo"; if(key==="ped") j.pedNumber=""; }]);
+  if(cur !== "na")   opts.push(["— Not needed (N/A)", ()=>{ j.admin[key]="na"; if(key==="ped") j.pedNumber=""; }]);
+  opts.forEach(([lab, fn])=>{
+    const b = document.createElement("button"); b.textContent = lab;
+    b.onclick = ()=>{ fn(); closePop(); if(adminDone(j)) toast(j.name + " — office admin complete"); render(); };
+    pop.appendChild(b);
+  });
+  document.body.appendChild(pop);
+  const r = ev.target.closest(".chip").getBoundingClientRect();
+  // Document coords on both axes, clamped to the viewport (incl. below-fold flip)
+  pop.style.left = (window.scrollX + Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + "px";
+  const below = r.bottom + 4, h = pop.offsetHeight;
+  pop.style.top = (window.scrollY + (below + h > window.innerHeight ? Math.max(4, r.top - h - 4) : below)) + "px";
+  popEl = pop; popKey = jobId + ":" + key;
+}
+function setPed(jobId, val){
+  const j = jobs.find(x=>x.id===jobId); if(j){ j.pedNumber = val; render(); }
+}
+function tapPrep(jobId, key){
+  const j = jobs.find(x=>x.id===jobId); if(!j) return;
+  j.prep[key] = !j.prep[key];
+  if(prepChecked(j)){
+    // Design decision: prepOverride is RETAINED as an audit stamp (who started
+    // early + why), never auto-cleared. The badge simply hides once all 5 are
+    // truly checked — and honestly reappears if a box gets unchecked later.
+    toast(j.name + " — prep complete, handed off" + (j.override ? " (override stamp kept for history)" : ""));
+  }
+  render();
+}
+
+/* ── override flow ────────────────────────────────────────── */
+function openOvr(jobId){
+  const j = jobs.find(x=>x.id===jobId); if(!j) return;
+  ovrJobId = jobId;
+  $("ovrJobLine").innerHTML = `<b>${esc(j.name)}</b> · ${esc(j.foreman)} · projected start ${esc(j.projStart)}`;
+  $("ovrMissing").innerHTML = missingPrep(j).map(it=>`<li>${esc(it.label)}</li>`).join("");
+  $("ovrNote").value = "";
+  $("ovrOverlay").classList.add("open");
+  $("ovrNote").focus();
+}
+function closeOvr(){ $("ovrOverlay").classList.remove("open"); ovrJobId = null; }
+function confirmOvr(){
+  const j = jobs.find(x=>x.id===ovrJobId); if(!j) return;
+  j.override = { by:"Koy", at:"Aug 28", note: $("ovrNote").value.trim() };
+  closeOvr();
+  toast(j.name + " advances to Rough — Not Started on Upcoming Jobs");
+  render();
+}
+function undoOvr(jobId){
+  const j = jobs.find(x=>x.id===jobId); if(!j) return;
+  j.override = null;
+  toast(j.name + " — override removed, back to Pre Job Prep gate");
+  render();
+}
+
+/* ── render ───────────────────────────────────────────────── */
+function jobInfoHtml(j){
+  const days = (Date.parse(j.projStartISO) - Date.parse(TODAY_ISO)) / 86400000;
+  const soon = Number.isFinite(days) && days <= 10;   // orange when start is close
+  return `<div class="jobinfo">
+    <div class="jobname" onclick="toast('Real app: opens the ' + this.textContent + ' job drawer')">${esc(j.name)}</div>
+    <div class="jobmeta">
+      <span>#${esc(j.simproNo)}</span>
+      <span><span class="fdot" style="background:${FOREMEN[j.foreman]||'#5E6670'}"></span>${esc(j.foreman)}</span>
+      <span class="startdate ${soon?'soon':''}">Start ${esc(j.projStart)}</span>
+      <span>${esc(j.gc)}</span>
+    </div>
+  </div>`;
+}
+function adminRowHtml(j){
+  const cls = adminDone(j) ? "ok" : "needs";
+  const chips = ADMIN_ITEMS.map(it => {
+    const state = j.admin[it.key];
+    const mark = state==="done" ? "✓ " : state==="na" ? "" : "○ ";
+    return `<span class="chip ${state}">
+      <span class="lab" onclick="tapAdmin(event,'${j.id}','${it.key}')">${mark}${it.chip}</span>
+      <span class="caret" onclick="openMenu(event,'${j.id}','${it.key}')">▾</span></span>`;
+  }).join("");
+  const ped = (j.admin.ped==="done") ? `<select class="pedsel ${j.pedNumber?"set":"unset"}" onchange="setPed('${j.id}',this.value)">
+      <option value="">— select —</option>${Array.from({length:100},(_,i)=>i+1).map(n=>
+      `<option value="${n}" ${String(n)===j.pedNumber?"selected":""}>Ped #${n}</option>`).join("")}</select>` : "";
+  return `<div class="row ${cls}">${jobInfoHtml(j)}<div class="chips">${chips}${ped}</div></div>`;
+}
+function prepRowHtml(j){
+  const done = prepChecked(j);
+  const cls = done ? "ok" : (j.override ? "overridden" : "needs");
+  const st = STAGES[j.stage] || STAGES.none;
+  const nDone = PREP_ITEMS.filter(it=>j.prep[it.key]).length;
+  const next = missingPrep(j)[0];
+  const chips = PREP_ITEMS.map(it => {
+    const state = j.prep[it.key] ? "done" : "todo";
+    const mark = j.prep[it.key] ? "✓ " : "○ ";
+    return `<span class="chip ${state}"><span class="lab" style="padding-right:10px"
+      onclick="tapPrep('${j.id}','${it.key}')">${mark}${it.chip}</span></span>`;
+  }).join("");
+  const badge = j.override && !done ? `<span class="ovrbadge">OVERRIDE · READY TO START</span>` : "";
+  const action = done ? "" : (j.override
+    ? `<button class="ovrbtn undo" onclick="undoOvr('${j.id}')">UNDO OVERRIDE</button>`
+    : `<button class="ovrbtn" onclick="openOvr('${j.id}')">START WITHOUT FULL PREP</button>`);
+  const noteLine = j.override && !done ? `<div class="ovrnote"><b>Override by ${esc(j.override.by)} · ${esc(j.override.at)}</b>${
+    j.override.note ? ` — ${esc(j.override.note)}` : ""} · job shows as Rough — Not Started on Upcoming Jobs</div>` : "";
+  return `<div class="row ${cls}">
+    ${jobInfoHtml(j)}
+    <div style="flex:1 1 260px">
+      <div class="chips" style="margin-bottom:4px">
+        <span class="stagepill" style="color:${st.color};background:${st.color}14;border:1px solid ${st.color}44">${esc(st.label)}</span>
+        <span class="progress">${nDone}/5</span>
+      </div>
+      <div class="chips">${chips}</div>
+      ${!done && next ? `<div class="nexthint">NEXT: <b>${esc(next.label)}</b></div>` : ""}
+    </div>
+    <div class="rowactions">${badge}${action}</div>
+    ${noteLine}
+  </div>`;
+}
+
+function render(){
+  closePop();
+  const q = $("search").value.trim().toLowerCase();
+  const ff = $("foremanFilter").value;
+  const filtered = !!(q || ff);
+  const vis = jobs.filter(j =>
+    (!q || (j.name + " " + j.gc + " " + j.simproNo + " " + j.foreman).toLowerCase().includes(q)) &&
+    (!ff || j.foreman === ff))
+    // Next job to break ground on top; jobs with no date sink to the bottom.
+    .sort((a,b) => (a.projStartISO || "9999") < (b.projStartISO || "9999") ? -1 : 1);
+  const noMatch = `<div class="empty">No jobs match the search / filter</div>`;
+
+  // Lane 1 — office admin
+  const aOpen = vis.filter(j=>!adminDone(j)), aDone = vis.filter(adminDone);
+  $("adminRows").innerHTML = aOpen.map(adminRowHtml).join("") ||
+    (filtered && !vis.length ? noMatch
+      : `<div class="empty">✓ Every job has account, pre-lien, and ped handled</div>`);
+  $("adminCompleteRows").innerHTML = aDone.map(adminRowHtml).join("");
+  $("adminCompleteCount").textContent = `✓ ${aDone.length} complete`;
+  $("adminComplete").style.display = aDone.length ? "" : "none";
+  const missA = k => vis.filter(j=>j.admin[k]==="todo").length;
+  $("adminPills").style.cssText = "background:#B23A3A14;border:1px solid #B23A3A33;color:#B23A3A";
+  $("adminPills").textContent =
+    `${missA("account")} no account · ${missA("prelien")} no pre-lien · ${missA("ped")} no ped`;
+
+  // Lane 2 — prep
+  const pOpen = vis.filter(j=>!prepChecked(j)), pDone = vis.filter(prepChecked);
+  $("prepRows").innerHTML = pOpen.map(prepRowHtml).join("") ||
+    (filtered && !vis.length ? noMatch : `<div class="empty">✓ All prep complete</div>`);
+  $("prepCompleteRows").innerHTML = pDone.map(prepRowHtml).join("");
+  $("prepCompleteCount").textContent = `✓ ${pDone.length} prep complete`;
+  $("prepComplete").style.display = pDone.length ? "" : "none";
+  const nOvr = vis.filter(j=>j.override && !prepChecked(j)).length;
+  $("prepPills").style.cssText = "background:#3E7D7A14;border:1px solid #3E7D7A33;color:#3E7D7A";
+  $("prepPills").textContent =
+    `${pOpen.length} not complete${nOvr ? ` · ${nOvr} overridden` : ""}`;
+
+  // Header counts — always company-wide (all jobs), labeled when a filter narrows the lanes
+  const held = jobs.filter(j=>!clearedToStart(j)).length;
+  const onOvr = jobs.filter(j=>j.override && !prepChecked(j)).length;
+  $("subcounts").innerHTML =
+    `${jobs.length} active jobs · <b style="color:var(--red)">${held} held in prep</b>` +
+    ` · <b style="color:var(--amber)">${onOvr} started on override</b>` +
+    ` · <b style="color:var(--done)">${jobs.filter(clearedToStart).length} cleared to start</b>` +
+    (filtered ? ` · <span style="color:var(--dim)">totals are all jobs — lanes below are filtered</span>` : "");
+
+  // strips: manual per-strip state (the Show complete button sets both)
+  $("adminComplete").classList.toggle("open", stripOpen.admin);
+  $("prepComplete").classList.toggle("open", stripOpen.prep);
+}
+
+function toggleStrip(k){
+  stripOpen[k] = !stripOpen[k];
+  render();
+}
+
+function toggleComplete(){
+  showComplete = !showComplete;
+  stripOpen.admin = stripOpen.prep = showComplete;
+  $("completeBtn").classList.toggle("on", showComplete);
+  $("completeBtn").textContent = showComplete ? "Hide complete" : "Show complete";
+  render();
+}
+function toggleNotes(){
+  document.body.classList.toggle("notes");
+  $("notesBtn").classList.toggle("on", document.body.classList.contains("notes"));
+}
+
+// foreman filter options
+Object.keys(FOREMEN).forEach(f=>{
+  const o = document.createElement("option"); o.value = o.textContent = f;
+  $("foremanFilter").appendChild(o);
+});
+render();
+</script>
+</body>
+</html>

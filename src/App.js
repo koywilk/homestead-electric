@@ -1849,13 +1849,17 @@ const PREP_CHECKLIST_ITEMS = [
   {key:"plansUploaded",  label:"Plans Uploaded to App & SimPro"},
   {key:"readyToHandOff", label:"Ready to Hand Off to Foreman"},
 ];
-const allPrepDone = (job) => {
+const allPrepChecked = (job) => {
   if (job.prepChecklist) {
     const c = job.prepChecklist;
     return !!(c.redlinePlans && c.cabinetPlans && c.applianceSpecs && c.plansUploaded && c.readyToHandOff);
   }
   return (job.prepStage||"") === "Job Prep Complete";
 };
+// Cleared to break ground: strictly checked, OR a standing "start without full
+// prep" override. The override NEVER makes allPrepChecked true — outstanding
+// items keep their tracking (Job Prep tab row, auto prep task) until checked.
+const prepClearedToStart = (job) => allPrepChecked(job) || !!(job.prepOverride && job.prepOverride.on);
 
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
@@ -3680,6 +3684,7 @@ const PERMISSIONS = {
   // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
   // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
   "jobprep.own":            [],
+  "jobprep.view":    ["admin","manager"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -5653,7 +5658,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -28713,7 +28718,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );})()}
               </div>
 
-              <Section label="Pre-Job Prep" color={C.teal} defaultOpen={!allPrepDone(job)}>
+              <Section label="Pre-Job Prep" color={C.teal} defaultOpen={!allPrepChecked(job)}>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {PREP_CHECKLIST_ITEMS.map((item,i)=>{
                     const checked=!!((job.prepChecklist||{})[item.key]);
@@ -28735,9 +28740,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     );
                   })}
                 </div>
-                {allPrepDone(job)&&(
+                {allPrepChecked(job)&&(
                   <div style={{marginTop:10,fontSize:11,fontWeight:700,color:C.teal}}>✓ Prep Complete — Handed Off to Foreman</div>
                 )}
+                <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
 
               <Section label="Admin" color={C.dim} defaultOpen={!(job.jobAccount && job.preLien)}>
@@ -30303,10 +30309,10 @@ const STAGE_SECTIONS = [
 
   // Full Jobs
   { key:"prep",         label:"Pre Job Prep",              color:"#3E7D7A",
-    test: j => !j.tempPed && !j.quickJob && !allPrepDone(j) },
+    test: j => !j.tempPed && !j.quickJob && !prepClearedToStart(j) },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#5E6670",
-    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && allPrepDone(j) && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && prepClearedToStart(j) && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#B0892C",
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "waiting" },
@@ -31355,17 +31361,19 @@ function computeTasks(jobs) {
     });
 
     // Pre Job Prep — always assigned to Koy regardless of job foreman
-    if(!job.tempPed && job.type!=="quote" && !allPrepDone(job)) {
+    if(!job.tempPed && job.type!=="quote" && !allPrepChecked(job)) {
       const c=job.prepChecklist||{};
       const items=PREP_CHECKLIST_ITEMS;
       const doneCount=items.filter(i=>c[i.key]).length;
       const nextItem=items.find(i=>!c[i.key]);
+      const ovr = job.prepOverride && job.prepOverride.on;
       tasks.push({
         id: job.id+"_prep", jobId: job.id, jobName: job.name,
         type: "auto", category: "prep", foreman: "Koy",
         prepStage: job.prepStage||"",
         title: `Pre Job Prep: ${job.name||"Untitled"}`,
-        desc: doneCount===0?"Not started":`${doneCount}/${items.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`,
+        desc: (doneCount===0?"Not started":`${doneCount}/${items.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`)
+              + (ovr ? " — OVERRIDE ACTIVE (job cleared to start)" : ""),
         color: "#3E7D7A", cleared: false,
       });
     }
@@ -46560,7 +46568,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-19 · App SW version: v385
+**Last manifest update:** 2026-08-25 · App SW version: v386
 
 ---
 
@@ -46613,6 +46621,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
     - **Question-share links: forwarding no longer misfiles answers** · 'shipped 2026-07-28' · 'SW v358' · Koy forwarded Haley's named share link to a designer and hit two bugs sharing one root cause — the share's LABEL (who the link was *made for*) was being used as *who is typing now*. (1) The name box **pre-filled "Haley"** ('useEffect' on 'shareName'), so an unedited submit would have filed the designer's answers under Haley — real misattribution, same family as the 7/13 Kweller relabeling. (2) The banner told every visitor "You previously submitted answers as Haley." Now a per-device record ('he_qsub_{jobId}_{shareId}') drives both: the name box fills **only** from this browser's own prior submit, "You previously submitted…" shows **only** to the device that actually did, and anyone else sees a neutral "Some of these were already answered by Haley — put your own name at the bottom and your answers are filed under you." Display + prefill only; no write-path or data-shape change (per-question 'answeredBy' attribution was already correct)
     - **Logo auto-pull from the contractor's own website** · 'shipped 2026-07-28' · 'SW v358' · 'gcFindLogo' + 'GCLogoFinder' · new read-only 'requireAdmin' callable that derives the domain from a contact's email ('Luke@citypointutah.com' → 'citypointutah.com', editable) and reads that site's '<head>' for logo candidates — **apple-touch-icon** first (on small-builder sites it's nearly always the real mark, already square), then 'og:image', 'msapplication-TileImage', '<link rel=icon>', with the keyless Google favicon ('sz=128') always appended as a floor. Candidates are shown as thumbnails in the create AND edit forms and **picked by hand** — auto-applying would put a bad crop or a hero photo in a contractor's header; picking only fills 'logoUrl', nothing saves until the form saves. Chose site-scraping over a logo database deliberately: Clearbit's free logo API shut down 2025-12-08 and the successors skew to big brands, while small Utah builders always have a site. Hardened by live testing against Koy's real GCs: **14s timeout** (Ivory Homes exceeded 9s), **HTML-entity decoding** of attribute values (City Point ships '&#038;ssl=1', which would have produced a broken image URL), and an **exact** 'og:image' match (the loose one also caught 'og:image:width'/':type', yielding junk like '/900'). Rejects private/internal hosts and non-domains; https-only output, matching 'cleanLogoUrl'. Verified: City Point → 4 real logo candidates, Symphony → site favicon, Homestead → apple-touch-icon + og:image. **Known limit:** Ivory Homes' site blocks automated fetches entirely (hangs at 20s even with a browser UA), so it falls back to the Google favicon — paste a URL by hand for sites like that
     - **Contractor convenience trio** · 'shipped 2026-07-28' · 'SW v358' · from the contractor-UX review lens: (1) **sent requests persist** — "✓ Sent" + the office's "Homestead has acted on this" readback used to live only in component state, so closing a job erased every trace and invited double-sends; now stored per link+job+flow in 'localStorage' ('gcportal_sent_v1', capped 200, oldest-trimmed) with a live status line ("Sent 2h ago — awaiting review") and a **Send another** escape hatch. Applied to the one-shot flows (dates, Matterport, return trips, question answers); the general message box stays repeatable by design. (2) **A way to reach a human** — 'HOMESTEAD_CONTACT' + '_gcContactLine' render in the portal footer AND every dead-end (revoked link, connection trouble), and the email footer now says **"You can reply straight to this email — it reaches our office"** (true since 'gc_config/mail.replyTo' was set) plus a direct address. *Phone deliberately left blank until Koy supplies the number he wants contractors calling.* (3) **Per-job deep links** — instant alerts append '&job=<id>', and the portal opens that job once, only after the mirror confirms the id is on this portal (unknown/stale ids just land on the board). Digests stay on the root since they span jobs
+- **Job Prep tab** · 'shipped 2026-08-28' · 'SW v387' · new office-only nav tab (gated admin/manager) splitting job-readiness work into two lanes: **Office Admin** (Justin — job account, pre-lien, and temp ped chips, each with a per-item **Not needed** toggle stored in a new 'adminNA' map so an item that doesn't apply to a given job drops off the outstanding count without faking it done) and **Pre-Job Prep** (Koy — the 5 'prepChecklist' items, tappable right on the board). Both lanes sort by parsed 'roughProjectedStart' (soonest first); the tab header shows company-wide readiness counts (held in prep / started on override / cleared to start) while each lane's pill counts the filtered view's outstanding items.
+  - **Start-without-full-prep override** · same ship · a 'prepOverride {on, by, at, note}' audit stamp lets a job start on the board before every prep item is checked — recorded forever and cleared only by an explicit Undo, never by re-checking items or by time passing. The readiness gate splits in two: 'allPrepChecked' (strict — every item done) stays the truth for the auto-task engine, the job drawer's Pre-Job Prep section, and the tab's own outstanding lanes; 'prepClearedToStart' (strict OR override) is the new, looser gate the STAGE BOARD reads, so an overridden job can move to rough/in-progress on the board while the tab and drawer keep chasing the outstanding items honestly. Setting the override on a job that has never had a 'prepChecklist' also initializes it to '{}' — guards the rough-stage 'prepStage' auto-flip logic, which assumes the map exists once a job is in progress. Confirming an override (on either the tab or the drawer's Pre-Job Prep section) shows the outstanding-item list and takes an optional note before it stamps.
+  - New SOP guide 'public/sops/jobprep.html' behind the tab's "?" (HelpDot), per the standing guides-track-the-app rule.
+  - Why it can't lose data: additive only — two new nested fields, 'adminNA' and 'prepOverride', live inside 'job.data' and ride the existing 'saveJob' patch funnel; the gate rename is behavior-identical for every job that has never used an override; no loader, rules, functions, or existing-field changes; the override's 'prepChecklist' init only ever creates an empty object where none existed, never overwrites one that's already there.
 - **Scoreboard** · 'shipped' · 'ScoreboardV2' · admin-only, behavior-driven scoring (info + quality)
   - Foreman board
   - Lead board
@@ -46806,6 +46818,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Redline walks → CO tracking** · 'shipped 2026-07-08' · 'SW v306' · quoted walks surface in the Change Orders board
 - **Red line walks and COs on one board** · 'shipped 2026-08-05' · 'SW v365' · Jeromy asked for the red line walks and the change orders to be **one page, not two sub-tabs** inside the CO tab. They merge cleanly because **a red line walk is a change order that doesn't have a quote number yet** — that was already the app's behavior (a walk surfaced on the CO board the moment 'coQuoteNumber' was set), so the sub-tab only ever covered the stretch *before* that number existed. The two status vocabularies chain rather than compete: 'Walk Scheduled → [Walk Done — CO Owed] → Needs to be Sent → Sent — Pending → Approved → Scheduled → Work Completed → Converted to RT'. So the board gains **one** head column ('walk_scheduled', walks only) and — Koy's call — "Walk Done — CO Owed" **folds into Needs to be Sent** rather than getting its own column, with the card flagged instead. 'RedlineWalkBoard' and the 'subView' state are deleted; its add form moved into the header and delete moved onto the walk card (it had the only create/delete path in the whole view — dropping the component without them would have silently removed the capability). **No Firestore migration, and no doc is rewritten:** 'REDLINE_STATUSES' is left intact and 'walk.status' remains the walk's own lifecycle — only the *column* is derived, through 'WALK_COLUMN_BY_STATUS'. That indirection is load-bearing: 'scheduled' exists in **both** vocabularies with different meanings (walk-scheduled vs CO-work-scheduled), so keying columns off the raw value would file walks into the CO "Scheduled" column; and an unknown/legacy status falls back to the walk column instead of vanishing (the failure the retired 'simpro_task' coStatus already demonstrates). A walk carries **two independent, never-synced status fields**, so 'handleSetStatus' forks: an **unquoted** walk offers 'REDLINE_STATUSES' and writes 'status'; a **quoted** one offers 'CO_STATUSES_NEW' and writes 'coStatus' — writing the wrong field would place the row by one field while the picker edited another, and the card would appear not to move. Fixed in passing: **the status pill rendered the enclosing column's label and colour, not the row's own** — harmless when every card in a column shared its status, wrong the moment walk rows joined. Clearing a quote # now returns the walk to a walk column instead of making the row vanish from the board entirely. Walks with no quote # are counted **separately** in the header ("N red line walks") and excluded from the CO figures — an un-quoted walk folded into Needs to be Sent must not inflate Jeromy's red triage number when nothing has been written to send yet; a quoted walk does count as a CO, because by then it is one. The walk date stays **editable** on the card (an adversarial review pass caught that the deleted board held the app's only date editor — rendering it read-only would have made a mistyped or defaulted date permanently uncorrectable, with delete-and-recreate the only recovery, losing status, quote # and attribution); it is keyed on its current value so another device's snapshot can't leave a stale date sitting in the input, and the label reads "walk" vs "walked" off the walk's own status rather than always claiming past tense. The empty state keys off the full row set (a board holding only walks would otherwise claim to be empty) and now names the search term instead of saying "none yet" when a query simply didn't match. Cards click through to the job **or quote** behind them for plan access ('onSelectJob' re-resolves from 'jobs'; quotes are jobs with 'type==="quote"', so it already worked — job-less walks keep their existing inert-cursor guard). Card treatment: tinted ground + a spelled-out "Red Line Walk" label in 'C.purple', the one palette colour that collides with none of the six CO status colours; **the left edge stays the foreman colour** on every card, since that is the board's existing who-owns-this signal. **Deliberately untouched: change orders inside jobs** — Koy: "that function is working perfectly right now." **Why it can't lose data:** no Firestore write shape changed and no migration ran; the redline write path still re-finds the live walk from the 'redlineWalks' prop at commit time before spreading it ('onUpdateRedline' is a whole-document 'setDoc' with no merge, so patching from a stale row would clobber the record); job COs still route through the field-scoped 'onUpdateCO'; and verified exhaustively that 'redlineWalks' is read **nowhere** outside the CO tab — no badge, Today task, nudge, huddle, scoreboard, report or Cloud Function touches the collection, so 'dailyCoChase'/'dailyBookDigest' counts are unaffected
 - **"Walk Done — Cleaning Plans" walk status + column** · 'shipped 2026-08-18' · 'SW v383' · Koy: "walk completed but plans not ready for co to be made yet… I need some time to clean the plan up sometimes before handing it to jeromy to make a co." New 'REDLINE_STATUSES' value 'plans_prep' between Walk Scheduled and CO Owed, with its own walks-only board column ("Cleaning Plans" — Koy's pick over folding it into Walk Scheduled or the send queue) between Walk Scheduled and Needs to be Sent, so Jeromy's queue only ever holds walks actually ready to write up. The chain is now 'Walk Scheduled → [Walk Done — Cleaning Plans] → Walk Done — CO Owed → Needs to be Sent → …'. Zero new render code — the walk pill/popover maps 'REDLINE_STATUSES' and the columns map 'CO_BOARD_STATUSES' generically, so the whole feature is three table entries (status def, column def, and the 'WALK_COLUMN_BY_STATUS' mapping — the v365 load-bearing indirection, kept intact). Unquoted-walk counting ("N red line walks"), the quote-# handoff to CO statuses, and every CO figure are untouched. Devices still on the old bundle file a 'plans_prep' walk into the Walk Scheduled column via 'walkColumn()''s existing unknown-status fallback — visible, never vanished — until they pull v382. Why it can't lose data: display tables only — no write-path change ('handleSetStatus' already writes any 'REDLINE_STATUSES' value through the live-walk re-find funnel), no new field shape, no loader or rules change
+- **Walk note on the CO board** · 'shipped 2026-08-25' · 'SW v386' · Koy: "can we add ability to make a little note or something whne i put in a redline walk." The walk factory has carried a 'notes:""' field since v365 with **zero UI** — this wires it up end to end: a "Note (optional)" input on the **+ Add red line walk** form (gate code, what to look at, who to meet), the board projection stitches 'walkNotes: w.notes' through (v367 lesson — the row whitelist is the only way card code can see a walk field), and **every walk card, quoted or not** ('source==="redline"'), renders an inline editable note line under the meta row. The editor is the walk-date editor's exact idiom: uncontrolled input, 'key'-remount when another device's snapshot lands (no stale text), blur-commit only on a changed value, and the commit **re-finds the LIVE walk** before the whole-doc 'onUpdateRedline' write (patching from the render row would clobber concurrent edits — the v365 rule). Empty state is a quiet "+ note" placeholder, so the affordance is discoverable without another button; clearing the text clears the note. Why it can't lose data: the field already exists on every walk doc (factory default '""', spread-preserved by every existing walk write), so no schema or migration; writes ride the existing live-re-find funnel; display is read-side; no loader (own collection, fields pass through), rules, or CO-side change
 - **Huddle Sheet** · 'shipped' · 'HuddleSheet' · content revisit (auto-tasks instead of dead manual tasks) · 'SW v321'
 - **Job Activity (per job)** · 'shipped' · 'JobActivity'
 - **Job Photos (per job)** · 'shipped' · 'JobPhotos'
@@ -48686,6 +48699,467 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
   );
 }
 
+// ── Job Prep tab — cross-job board for office admin items + pre-job prep ──
+// Spec: docs/superpowers/specs/2026-08-28-job-prep-tab-design.md
+// Visual reference: jobprep-mockup.html (approved 2026-08-28)
+const JOBPREP_ADMIN_ITEMS = [
+  { key:"jobAccount", boolKey:"jobAccount",  chip:"ACCOUNT",  label:"Job account created" },
+  { key:"preLien",    boolKey:"preLien",     chip:"PRE-LIEN", label:"Pre-lien filed" },
+  { key:"tempPed",    boolKey:"hasTempPed",  chip:"TEMP PED", label:"Temp pedestal on site" },
+];
+// done = existing boolean true; N/A = adminNA flag (boolean false); else outstanding.
+const adminItemState = (job, item) =>
+  job[item.boolKey] ? "done" : ((job.adminNA||{})[item.key] ? "na" : "todo");
+const adminAllHandled = (job) => JOBPREP_ADMIN_ITEMS.every(it => adminItemState(job, it) !== "todo");
+// The tab's job universe: full jobs only, until finish completes; next start on top.
+// roughProjectedStart is M/D/YYYY (DateInp storage) with legacy YYYY-MM-DD mixed in —
+// parseAnyDate handles both; NEVER string-compare these.
+const jobPrepIncluded = (jobs) => (jobs||[])
+  .filter(j => j && !j.tempPed && !j.quickJob && j.type !== "quote" && effFS(j) !== "complete")
+  .sort((a,b) => {
+    const da = parseAnyDate(a.roughProjectedStart), db = parseAnyDate(b.roughProjectedStart);
+    if (!da && !db) return (a.name||"").localeCompare(b.name||"");
+    if (!da) return 1;
+    if (!db) return -1;
+    return da - db;
+  });
+
+// target: "done" | "todo" | "na". Returns the saveJob patch for one admin item.
+const adminItemPatch = (job, item, target) => {
+  const na = { ...(job.adminNA||{}) };
+  if (target === "na") na[item.key] = true; else na[item.key] = false;
+  return {
+    [item.boolKey]: target === "done",
+    adminNA: na,
+    ...(item.key === "tempPed" && target !== "done" ? { tempPedNumber: "" } : {}),
+  };
+};
+
+const JOBPREP_CHIP_STATES = {
+  todo: { border:"#B23A3A55", bg:"#B23A3A0A", fg:"#B23A3A", mark:"○ " },
+  done: { border:"#46916A55", bg:"#46916A0F", fg:"#46916A", mark:"✓ " },
+  na:   { border:"#CDD3DB",   bg:"#F4F6F8",   fg:"#5E6670", mark:"" },
+};
+const jobPrepRowStyle = (edge) => ({ background:"#fff", border:`1px solid ${C.border}`, borderLeft:`3px solid ${edge}`,
+  borderRadius:10, padding:"14px 16px", marginBottom:10, boxShadow:"0 4px 16px rgba(15,31,61,0.08)",
+  display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" });
+const jobPrepLocalDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+const jobPrepSoon = (j) => {
+  const d = parseAnyDate(j.roughProjectedStart);
+  const days = d ? (d - new Date()) / 86400000 : NaN;
+  return Number.isFinite(days) && days >= 0 && days <= 10;
+};
+// Separate from PrepTaskList's local stageColor (~L32540) — deliberate, per spec.
+const prepStageColor = (stage) => {
+  if (stage === PREP_STAGE_ALERT) return "#B23A3A";
+  if (stage === "Job Prep Complete") return "#3E7D5A";
+  const idx = PREP_STAGES.indexOf(stage);
+  if (idx === -1) return "#5E6670";                 // unset/unknown → gray
+  const pct = idx / (PREP_STAGES.length - 1);
+  if (pct < 0.3) return "#B0892C";
+  if (pct < 0.7) return "#3B5BA5";
+  return "#3E7D7A";
+};
+
+function JobPrepJobInfo({ job, onSelectJob }) {
+  return (
+    <div style={{minWidth:200, flex:"1 1 200px"}}>
+      <div onClick={()=>onSelectJob(job)}
+        style={{fontWeight:700, fontSize:14, color:C.text, cursor:"pointer"}}>{job.name||"Untitled Job"}</div>
+      <div style={{display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:11, color:C.dim, flexWrap:"wrap"}}>
+        {job.simproNo && <span>#{job.simproNo}</span>}
+        {job.foreman && <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+          <span style={{width:7,height:7,borderRadius:99,background:C.dim,display:"inline-block"}}/>{job.foreman}</span>}
+        <span style={{fontWeight:600, color: jobPrepSoon(job) ? C.orange : C.dim}}>
+          {job.roughProjectedStart ? `Start ${job.roughProjectedStart}` : "No start date"}
+        </span>
+        {job.gc && <span>{job.gc}</span>}
+      </div>
+    </div>
+  );
+}
+
+function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
+  const ped = JOBPREP_ADMIN_ITEMS[2];
+  return (
+    <div style={jobPrepRowStyle(adminAllHandled(job) ? "#46916A" : C.red)}>
+      <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
+      <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
+        {JOBPREP_ADMIN_ITEMS.map(item => {
+          const state = adminItemState(job, item);
+          const s = JOBPREP_CHIP_STATES[state];
+          return (
+            <span key={item.key} style={{display:"inline-flex", alignItems:"center", borderRadius:99, fontSize:10,
+              fontWeight:700, letterSpacing:"0.05em", cursor:"pointer", userSelect:"none",
+              border:`1px ${state==="na" ? "dashed" : "solid"} ${s.border}`, background:s.bg, color:s.fg,
+              minHeight:32, overflow:"hidden"}}>
+              <span onClick={(e)=> state==="na"
+                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A is deliberate — menu only
+                  : onUpdateJob(job.id, adminItemPatch(job, item, state === "done" ? "todo" : "done"))}
+                style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
+                  textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.chip}</span>
+              <span onClick={(e)=>onOpenMenu(e, job.id, item.key)}
+                style={{padding:"9px 10px 9px 5px", opacity:0.55, fontSize:9}}>▾</span>
+            </span>
+          );
+        })}
+        {adminItemState(job, ped) === "done" && (
+          <select value={job.tempPedNumber||""} onChange={e=>onUpdateJob(job.id,{tempPedNumber:e.target.value})}
+            style={{padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12,
+              fontFamily:"inherit", background:C.surface, outline:"none", cursor:"pointer",
+              color: job.tempPedNumber ? C.blue : C.dim, fontWeight: job.tempPedNumber ? 700 : 400}}>
+            <option value="">— select —</option>
+            {Array.from({length:100},(_,i)=>String(i+1)).map(n=><option key={n} value={n}>Ped #{n}</option>)}
+          </select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, canOverride, onStartOverride, onUndoOverride }) {
+    const c = job.prepChecklist || {};
+    const done = allPrepChecked(job);
+    const legacy = done && !job.prepChecklist;
+    const stage = job.prepStage || "";
+    const stageCol = prepStageColor(stage);
+    const nDone = PREP_CHECKLIST_ITEMS.filter(i=>c[i.key]).length;
+    const next = PREP_CHECKLIST_ITEMS.find(i=>!c[i.key]);
+    const ovrOn = !!(job.prepOverride && job.prepOverride.on);
+    const edge = done ? "#46916A" : (ovrOn ? "#B0892C" : C.red);
+    return (
+      <div style={jobPrepRowStyle(edge)}>
+        <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
+        <div style={{flex:"1 1 260px"}}>
+          <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:4}}>
+            <span style={{fontSize:10, fontWeight:700, borderRadius:99, padding:"3px 9px", letterSpacing:"0.04em",
+              whiteSpace:"nowrap", color:stageCol, background:`${stageCol}14`, border:`1px solid ${stageCol}44`}}>
+              {stage || "No stage set"}
+            </span>
+            {!legacy && <span style={{fontSize:11, fontWeight:700, color:C.teal}}>{nDone}/5</span>}
+          </div>
+          {legacy ? (
+            <div style={{fontSize:11, color:C.dim, fontStyle:"italic"}}>Completed by stage — per-item checklist wasn't used on this job</div>
+          ) : (
+            <>
+              <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
+                {PREP_CHECKLIST_ITEMS.map(item => {
+                  const on = !!c[item.key];
+                  const s = on ? JOBPREP_CHIP_STATES.done : JOBPREP_CHIP_STATES.todo;
+                  return (
+                    <span key={item.key}
+                      onClick={()=>onUpdateJob(job.id, { prepChecklist: { ...(job.prepChecklist||{}), [item.key]: !on } })}
+                      style={{display:"inline-flex", alignItems:"center", borderRadius:99, fontSize:10, fontWeight:700,
+                        letterSpacing:"0.05em", cursor:"pointer", userSelect:"none", border:`1px solid ${s.border}`,
+                        background:s.bg, color:s.fg, minHeight:32, padding:"9px 12px", whiteSpace:"nowrap"}}>
+                      {s.mark}{item.label}
+                    </span>
+                  );
+                })}
+              </div>
+              {!done && next && (
+                <div style={{fontSize:10.5, color:C.dim, marginTop:3}}>
+                  NEXT: <b style={{color:C.orange, fontWeight:700}}>{next.label}</b>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div style={{display:"flex", alignItems:"center", gap:8, marginLeft:"auto", flexWrap:"wrap"}}>
+          {ovrOn && !done && (
+            <span style={{background:"#B0892C18", border:"1px solid #B0892C55", color:"#B0892C", borderRadius:99,
+              padding:"3px 10px", fontSize:9.5, fontWeight:800, letterSpacing:"0.07em", whiteSpace:"nowrap"}}>
+              OVERRIDE · READY TO START
+            </span>
+          )}
+          {!done && canOverride && (ovrOn
+            ? <button onClick={onUndoOverride}
+                style={{padding:"8px 13px", borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em",
+                  border:`1px solid ${C.muted}`, background:C.surface, color:C.dim, cursor:"pointer",
+                  fontFamily:"inherit", whiteSpace:"nowrap"}}>UNDO OVERRIDE</button>
+            : <button onClick={onStartOverride}
+                style={{padding:"8px 13px", borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em",
+                  border:"1px solid #B0892C66", background:"#B0892C0D", color:"#B0892C", cursor:"pointer",
+                  fontFamily:"inherit", whiteSpace:"nowrap"}}>START WITHOUT FULL PREP</button>)}
+        </div>
+        {ovrOn && !done && (
+          <div style={{flexBasis:"100%", fontSize:11, color:C.dim, fontStyle:"italic",
+            borderTop:`1px dashed ${C.border}`, paddingTop:7, marginTop:2}}>
+            <b style={{color:"#B0892C", fontStyle:"normal"}}>Override by {job.prepOverride.by||"?"} · {job.prepOverride.at||""}</b>
+            {job.prepOverride.note ? ` — ${job.prepOverride.note}` : ""} · job shows as Rough — Not Started on Upcoming Jobs
+          </div>
+        )}
+      </div>
+    );
+}
+
+// Drawer-side override control. Self-contained (own confirm state) so the giant
+// drawer component doesn't need new state; renders the SAME confirm content as
+// the tab's modal: outstanding items + optional note.
+function JobPrepDrawerOverride({ job, identity, u }) {
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState("");
+  if (!can(identity, "jobprep.view") || allPrepChecked(job) || job.type === "quote" || job.quickJob || job.tempPed) return null;
+  const ovrOn = !!(job.prepOverride && job.prepOverride.on);
+  if (ovrOn) return (
+    <div style={{marginTop:10, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+      <span style={{background:"#B0892C18", border:"1px solid #B0892C55", color:"#B0892C", borderRadius:99,
+        padding:"3px 10px", fontSize:9.5, fontWeight:800, letterSpacing:"0.07em"}}>OVERRIDE · READY TO START</span>
+      <span style={{fontSize:11, color:C.dim, fontStyle:"italic"}}>
+        by {job.prepOverride.by||"?"} · {job.prepOverride.at||""}{job.prepOverride.note?` — ${job.prepOverride.note}`:""}
+      </span>
+      <button onClick={()=>{ u({ prepOverride:null }); toast.success(`${job.name||"Job"} — override removed, back behind the prep gate.`); }}
+        style={{padding:"5px 10px", borderRadius:99, fontSize:9.5, fontWeight:700, border:`1px solid ${C.muted}`,
+          background:C.surface, color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>UNDO</button>
+    </div>
+  );
+  if (!confirming) return (
+    <button onClick={()=>{ setConfirming(true); setNote(""); }}
+      style={{marginTop:10, padding:"8px 13px", borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em",
+        border:"1px solid #B0892C66", background:"#B0892C0D", color:"#B0892C", cursor:"pointer", fontFamily:"inherit"}}>
+      START WITHOUT FULL PREP</button>
+  );
+  const missing = PREP_CHECKLIST_ITEMS.filter(i=>!(job.prepChecklist||{})[i.key]);
+  return (
+    <div style={{marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08"}}>
+      <div style={{fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5}}>
+        Still outstanding — stays tracked</div>
+      {missing.map(i=><div key={i.key} style={{fontSize:12, color:C.text, marginLeft:4}}>· {i.label}</div>)}
+      <textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Note (optional) — e.g. cabinet plans due 9/15"
+        style={{width:"100%", padding:"7px 9px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12.5,
+          fontFamily:"inherit", color:C.text, outline:"none", marginTop:8, resize:"vertical", minHeight:44}}/>
+      <div style={{display:"flex", gap:8, justifyContent:"flex-end", marginTop:8}}>
+        <button onClick={()=>setConfirming(false)} style={{padding:"6px 12px", borderRadius:8, border:`1px solid ${C.border}`,
+          background:"#fff", color:C.dim, fontWeight:600, fontSize:12, fontFamily:"inherit", cursor:"pointer"}}>Cancel</button>
+        <button onClick={()=>{
+            u({ prepOverride:{ on:true, by:(identity&&identity.name)||"", at:jobPrepLocalDate(), note:note.trim() },
+                prepChecklist:{ ...(job.prepChecklist||{}) } });   // REQUIRED auto-flip guard — same as the tab
+            toast.success(`${job.name||"Job"} — cleared to start. Outstanding prep items stay tracked on the Job Prep tab.`);
+            setConfirming(false);
+          }}
+          style={{padding:"7px 14px", borderRadius:8, border:"1px solid #B0892C88", background:"#B0892C18",
+            color:"#B0892C", fontWeight:700, fontSize:12, fontFamily:"inherit", cursor:"pointer"}}>Mark Ready to Start</button>
+      </div>
+    </div>
+  );
+}
+
+function JobPrepCompleteStrip({ open, onToggle, count, children }) {
+  if (count === 0) return null;
+  return (
+    <div style={{border:"1px dashed #46916A55", borderRadius:10, marginTop:4, overflow:"hidden"}}>
+      <div onClick={onToggle}
+        style={{padding:"9px 14px", fontSize:11, fontWeight:700, color:"#46916A", cursor:"pointer",
+          display:"flex", alignItems:"center", background:"#46916A08"}}>
+        <span>✓ {count} complete</span><span style={{marginLeft:"auto", opacity:0.6, fontSize:10}}>▾</span>
+      </div>
+      {open && <div style={{padding:"6px 10px 10px"}}>{children}</div>}
+    </div>
+  );
+}
+
+function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
+  const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
+  const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
+  const [ovr, setOvr] = useState(null);            // { jobId, note } while modal open
+  const canOverride = can(identity, "jobprep.view");
+  const confirmOverride = () => {
+    const job = jobs.find(j=>j.id===ovr.jobId); if (!job) { setOvr(null); return; }
+    onUpdateJob(job.id, {
+      prepOverride: { on:true, by:(identity&&identity.name)||"", at:jobPrepLocalDate(), note:(ovr.note||"").trim() },
+      prepChecklist: { ...(job.prepChecklist||{}) },   // REQUIRED guard — see Interfaces
+    });
+    setOvr(null);
+    toast.success(`${job.name||"Job"} — cleared to start. Outstanding prep items stay tracked here.`);
+  };
+  const undoOverride = (job) => {
+    onUpdateJob(job.id, { prepOverride: null });
+    toast.success(`${job.name||"Job"} — override removed, back behind the prep gate.`);
+  };
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e) => { if (e && e.target && e.target.closest && e.target.closest("[data-jobprep-menu]")) return; setMenu(null); };
+    const closeOnScroll = () => setMenu(null);     // fixed-position menu detaches on scroll — just close it
+    document.addEventListener("click", close);
+    window.addEventListener("scroll", closeOnScroll, true);
+    return () => { document.removeEventListener("click", close); window.removeEventListener("scroll", closeOnScroll, true); };
+  }, [menu]);
+
+  const openMenu = (e, jobId, itemKey) => {
+    e.stopPropagation();
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu(m => (m && m.jobId===jobId && m.itemKey===itemKey) ? null   // re-tap same caret = close
+      : { jobId, itemKey,
+          x: Math.min(r.left, window.innerWidth - 180),
+          y: Math.min(r.bottom + 4, window.innerHeight - 110) });      // clamp so a bottom-row menu stays on-screen
+  };
+
+  const included = useMemo(() => jobPrepIncluded(jobs), [jobs]);
+
+  const [search, setSearch] = useState("");
+  const [foremanFilter, setForemanFilter] = useState("");
+  const [showComplete, setShowComplete] = useState(false);
+
+  const foremenList = useMemo(() => {
+    const s = new Set(); included.forEach(j => { if (j.foreman) s.add(j.foreman); });
+    return Array.from(s).sort();
+  }, [included]);
+
+  const q = search.trim().toLowerCase();
+  const filtered = !!(q || foremanFilter);
+  const vis = included.filter(j =>
+    (!q || `${j.name||""} ${j.gc||""} ${j.simproNo||""} ${j.foreman||""}`.toLowerCase().includes(q)) &&
+    (!foremanFilter || j.foreman === foremanFilter));
+
+  const aOpen = vis.filter(j => !adminAllHandled(j)), aDone = vis.filter(adminAllHandled);
+  const pOpen = vis.filter(j => !allPrepChecked(j)), pDone = vis.filter(allPrepChecked);
+
+  // Header counts — ALWAYS over the full included set (company-wide), never the filtered one.
+  const held    = included.filter(j => !prepClearedToStart(j)).length;
+  const onOvr   = included.filter(j => j.prepOverride && j.prepOverride.on && !allPrepChecked(j)).length;
+  const cleared = included.filter(prepClearedToStart).length;
+
+  return (
+    <div style={{padding:"16px 18px 40px", maxWidth:1120, margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:14}}>
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>JOB PREP</div>
+            <HelpDot section="jobprep"/>
+          </div>
+          <div style={{fontSize:12,color:C.dim,marginTop:4}}>
+            {included.length} active jobs
+            {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
+            {onOvr > 0 && <span style={{color:"#B0892C",fontWeight:700}}> · {onOvr} started on override</span>}
+            <span style={{color:"#3E7D5A",fontWeight:700}}> · {cleared} cleared to start</span>
+            {filtered && <span> · totals are all jobs — lanes below are filtered</span>}
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs…"
+            style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,fontSize:12,background:"#fff",
+              color:C.text,fontFamily:"inherit",outline:"none",minWidth:240}}/>
+          <select value={foremanFilter} onChange={e=>setForemanFilter(e.target.value)}
+            style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,fontSize:12,background:"#fff",
+              color:C.text,fontFamily:"inherit",outline:"none"}}>
+            <option value="">All foremen</option>
+            {foremenList.map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+          <button onClick={()=>{ const v=!showComplete; setShowComplete(v); setStripOpen({admin:v,prep:v}); }}
+            style={{padding:"6px 12px",borderRadius:7,fontSize:12,border:`1px solid ${C.border}`,
+              background: showComplete ? C.accent : "#fff", color: showComplete ? "#fff" : C.dim,
+              cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{showComplete?"Hide complete":"Show complete"}</button>
+        </div>
+      </div>
+
+      {/* ══ LANE 1 — OFFICE ADMIN ══ */}
+      <div style={{marginBottom:28}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
+          borderBottom:"2px solid #3B5BA522",flexWrap:"wrap"}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.blue}}>OFFICE ADMIN</div>
+          <span style={{borderRadius:99,padding:"2px 10px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",
+            background:"#B23A3A14",border:"1px solid #B23A3A33",color:"#B23A3A"}}>
+            {vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[0])==="todo").length} no account
+            {" · "}{vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[1])==="todo").length} no pre-lien
+            {" · "}{vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[2])==="todo").length} no ped
+          </span>
+          <div style={{marginLeft:"auto",fontSize:10,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase"}}>Justin's lane</div>
+        </div>
+        {aOpen.length === 0
+          ? <div style={{fontSize:12,color:C.dim,textAlign:"center",padding:"18px 0"}}>
+              {filtered && vis.length===0 ? "No jobs match the search / filter" : "✓ Every job has account, pre-lien, and ped handled"}
+            </div>
+          : aOpen.map(j => <JobPrepAdminRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu}/>)}
+        <JobPrepCompleteStrip open={stripOpen.admin} onToggle={()=>setStripOpen(s=>({...s,admin:!s.admin}))} count={aDone.length}>
+          {aDone.map(j => <JobPrepAdminRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu}/>)}
+        </JobPrepCompleteStrip>
+      </div>
+
+      {/* ══ LANE 2 — PRE-JOB PREP ══ */}
+      <div style={{marginBottom:28}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
+          borderBottom:"2px solid #3E7D7A22",flexWrap:"wrap"}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>PRE-JOB PREP</div>
+          <span style={{borderRadius:99,padding:"2px 10px",fontSize:11,fontWeight:700,whiteSpace:"nowrap",
+            background:"#3E7D7A14",border:"1px solid #3E7D7A33",color:"#3E7D7A"}}>
+            {pOpen.length} not complete{pOpen.filter(j=>j.prepOverride&&j.prepOverride.on).length>0
+              ? ` · ${pOpen.filter(j=>j.prepOverride&&j.prepOverride.on).length} overridden` : ""}
+          </span>
+          <div style={{marginLeft:"auto",fontSize:10,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase"}}>Koy's lane</div>
+        </div>
+        {pOpen.length === 0
+          ? <div style={{fontSize:12,color:C.dim,textAlign:"center",padding:"18px 0"}}>
+              {filtered && vis.length===0 ? "No jobs match the search / filter" : "✓ All prep complete"}
+            </div>
+          : pOpen.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+        <JobPrepCompleteStrip open={stripOpen.prep} onToggle={()=>setStripOpen(s=>({...s,prep:!s.prep}))} count={pDone.length}>
+          {pDone.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+        </JobPrepCompleteStrip>
+      </div>
+
+      {/* menu popover */}
+      {menu && (() => {
+        const job = jobs.find(j=>j.id===menu.jobId);
+        const item = JOBPREP_ADMIN_ITEMS.find(i=>i.key===menu.itemKey);
+        if (!job || !item) return null;
+        const state = adminItemState(job, item);
+        const opt = (label, target) => (
+          <button key={target} onClick={()=>{ onUpdateJob(job.id, adminItemPatch(job, item, target)); setMenu(null); }}
+            style={{display:"block",width:"100%",textAlign:"left",padding:"10px 12px",fontSize:12,fontFamily:"inherit",
+              border:"none",background:"none",borderRadius:6,cursor:"pointer",color:C.text}}>{label}</button>
+        );
+        return (
+          <div data-jobprep-menu style={{position:"fixed", left:menu.x, top:menu.y, zIndex:60, background:"#fff",
+            border:`1px solid ${C.border}`, borderRadius:9, boxShadow:"0 8px 28px rgba(15,31,61,0.16)", padding:4, minWidth:150}}>
+            {state !== "done" && opt("✓ Mark done", "done")}
+            {state !== "todo" && opt("○ Mark outstanding", "todo")}
+            {state !== "na" && opt("— Not needed (N/A)", "na")}
+          </div>
+        );
+      })()}
+
+      {ovr && (() => {
+        const job = jobs.find(j=>j.id===ovr.jobId); if (!job) return null;
+        const missing = PREP_CHECKLIST_ITEMS.filter(i=>!(job.prepChecklist||{})[i.key]);
+        return (
+          <div onClick={(e)=>{ if(e.target===e.currentTarget) setOvr(null); }}
+            style={{position:"fixed", inset:0, background:"rgba(20,24,33,0.45)", zIndex:90,
+              display:"flex", alignItems:"center", justifyContent:"center", padding:18}}>
+            <div style={{background:"#fff", borderRadius:14, maxWidth:430, width:"100%",
+              boxShadow:"0 20px 60px rgba(15,31,61,0.35)", padding:"20px 22px"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:20, letterSpacing:"0.06em", color:C.text}}>START WITHOUT FULL PREP</div>
+              <div style={{fontSize:12, color:C.dim, margin:"4px 0 12px"}}>
+                <b>{job.name||"Untitled Job"}</b>{job.foreman?` · ${job.foreman}`:""}{job.roughProjectedStart?` · projected start ${job.roughProjectedStart}`:""}
+              </div>
+              <div style={{background:"#B23A3A0A", border:"1px solid #B23A3A33", borderRadius:9, padding:"9px 12px", marginBottom:12}}>
+                <div style={{fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5}}>Still outstanding — stays tracked</div>
+                {missing.map(i=><div key={i.key} style={{fontSize:12, color:C.text, marginLeft:4}}>· {i.label}</div>)}
+              </div>
+              <label style={{fontSize:9.5, color:C.dim, textTransform:"uppercase", fontWeight:700, letterSpacing:"0.03em", display:"block"}}>Note (optional)
+                <textarea value={ovr.note} onChange={e=>setOvr(o=>({...o, note:e.target.value}))}
+                  placeholder="e.g. cabinet plans due 9/15 — GC confirmed"
+                  style={{width:"100%", padding:"7px 9px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12.5,
+                    fontFamily:"inherit", color:C.text, outline:"none", marginTop:4, resize:"vertical", minHeight:52}}/>
+              </label>
+              <div style={{display:"flex", gap:8, justifyContent:"flex-end", marginTop:14}}>
+                <button onClick={()=>setOvr(null)} style={{padding:"8px 14px", borderRadius:8, border:`1px solid ${C.border}`,
+                  background:"#fff", color:C.dim, fontWeight:600, fontSize:12.5, fontFamily:"inherit", cursor:"pointer"}}>Cancel</button>
+                <button onClick={confirmOverride} style={{padding:"9px 16px", borderRadius:8, border:"1px solid #B0892C88",
+                  background:"#B0892C18", color:"#B0892C", fontWeight:700, fontSize:12.5, fontFamily:"inherit", cursor:"pointer"}}>Mark Ready to Start</button>
+              </div>
+              <div style={{fontSize:10.5, color:C.dim, marginTop:10, lineHeight:1.5}}>
+                Stamps your name + date automatically. The job advances to <b>Rough — Not Started</b> on Upcoming Jobs;
+                the outstanding items above stay red on this board until checked. Undo any time.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ── Change Order Tracker ─────────────────────────────────────────────
 // Office-only view (cos.view permission) that pulls every CO across every
 // job into one kanban board. Jeromy sends most COs and needs one place to
@@ -48713,7 +49187,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   // v365: the "cos" | "redline" sub-view is gone — one board (Jeromy). What
   // remains of the old Redline Walks tab is its add form, opened from the header.
   const [addingWalk, setAddingWalk]       = useState(false);
-  const [walkDraft,  setWalkDraft]        = useState({ jobId:"", address:"", walkDate:"" });
+  const [walkDraft,  setWalkDraft]        = useState({ jobId:"", address:"", walkDate:"", notes:"" });
 
   // Aggregate: every CO across every job, with job context stitched on.
   // Quotes (job.type === "quote") are skipped — they don't have COs in the
@@ -48788,6 +49262,9 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
         quoted:       !!q,                    // drives which status vocabulary the pill offers
         walkStatus:   w.status || "scheduled",
         walkDate:     w.walkDate || "",
+        // Stitched through the projection on purpose (v367 lesson: the row
+        // whitelist is the only way card code can ever see a walk field).
+        walkNotes:    w.notes || "",
         isQuoteJob:   !!(linked && linked.type === "quote"),
       });
     });
@@ -48964,8 +49441,9 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
       jobId: walkDraft.jobId || "", address: name,
       walkDate: walkDraft.walkDate || new Date().toISOString().slice(0, 10),
       status: "scheduled", statusDate: walkDraft.walkDate || "",
+      notes: (walkDraft.notes || "").trim(),
     });
-    setWalkDraft({ jobId: "", address: "", walkDate: "" });
+    setWalkDraft({ jobId: "", address: "", walkDate: "", notes: "" });
     setAddingWalk(false);
   };
 
@@ -49052,11 +49530,19 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                 onChange={e=>setWalkDraft(d=>({...d,walkDate:e.target.value}))} style={wInp}/>
             </label>
           </div>
+          {/* Koy 2026-08-25: "a little note or something when i put in a
+              redline walk" — gate code, what to look at, who to meet. Writes
+              the walk's existing `notes` field (factory default since v365,
+              never had a UI). Stays editable on the card afterward. */}
+          <label style={{...wLbl,display:"block",marginTop:10}}>Note (optional)
+            <input value={walkDraft.notes} onChange={e=>setWalkDraft(d=>({...d,notes:e.target.value}))}
+              placeholder="e.g. gate code 4412 · meet framer at 9 · check island lighting" style={wInp}/>
+          </label>
           <div style={{display:"flex",gap:8,marginTop:14}}>
             <button onClick={submitAddWalk}
               style={{padding:"8px 16px",borderRadius:8,border:"none",background:RL_COLOR,color:"#fff",
                 fontWeight:700,fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>Add walk</button>
-            <button onClick={()=>{setAddingWalk(false);setWalkDraft({jobId:"",address:"",walkDate:""});}}
+            <button onClick={()=>{setAddingWalk(false);setWalkDraft({jobId:"",address:"",walkDate:"",notes:""});}}
               style={{padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",
                 color:C.dim,fontWeight:600,fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>Cancel</button>
           </div>
@@ -49245,6 +49731,32 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         )}
                         {co.jobGc && <span style={{color:C.muted}}>· {co.jobGc}</span>}
                       </div>
+
+                      {/* Walk note — EDITABLE on every walk card (quoted or
+                          not), same idiom as the walk-date editor above:
+                          uncontrolled input, `key`-remount when another
+                          device's snapshot lands, blur-commit that re-finds
+                          the LIVE walk (onUpdateRedline replaces the whole
+                          doc — patching from this render's row would clobber
+                          concurrent edits). Empty renders a quiet "+ note"
+                          placeholder, so the affordance is discoverable
+                          without adding a button. */}
+                      {isWalk && (
+                        <input
+                          key={`wn_${co.walkNotes || "none"}`}
+                          defaultValue={co.walkNotes || ""}
+                          placeholder="+ note (gate code, what to look at…)"
+                          onClick={e=>e.stopPropagation()}
+                          onBlur={e=>{
+                            const v = e.target.value.trim();
+                            if (v === (co.walkNotes || "")) return;
+                            const w = (redlineWalks || []).find(x => x && x.id === co.redlineId);
+                            if (w) onUpdateRedline && onUpdateRedline({ ...w, notes: v });
+                          }}
+                          style={{width:"100%",border:"none",background:"none",color:C.dim,
+                            fontSize:10.5,fontStyle:"italic",fontFamily:"inherit",
+                            padding:"0 0 5px",margin:0,outline:"none",boxSizing:"border-box"}}/>
+                      )}
 
                       {/* v367: chase a stuck draft without opening the job —
                           reuses the existing reNudge path (renudge pref-gated
@@ -53587,6 +54099,7 @@ function App() {
               ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
               ...(can(identity,"board.view")?[{key:"needs",label:"Needs"}]:[]),
               ...(can(identity,"cos.view")?[{key:"cos",label:"COs"}]:[]),
+              ...(can(identity,"jobprep.view")?[{key:"jobprep",label:"Job Prep"}]:[]),
               ...(can(identity,"users.manage")?[{key:"contractors",label:"Contractors"}]:[]),
               {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
@@ -55178,6 +55691,15 @@ function App() {
             setJobs(prev => prev.map(j => j.id === jobId ? updated : j));
             saveJob(updated, { changeOrders: nextCOs });
           }}/>
+      )}
+
+      {view==="jobprep"&&can(identity,"jobprep.view")&&(
+        <JobPrepTracker
+          jobs={jobs}
+          identity={identity}
+          onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
+          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+        />
       )}
 
       {view==="contractors"&&can(identity,"users.manage")&&(
