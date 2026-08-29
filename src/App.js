@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
@@ -630,6 +630,95 @@ async function answerFieldNote(jobId, noteId, answerText, answeredBy) {
     console.log(`[fieldink] answered field note ${noteId} on job ${jobId}`);
     return true;
   } catch (e) { _ccDenied(e); console.warn("[fieldink] field-note answer failed (rules deployed?):", e?.message); return false; }
+}
+
+// ── FieldInk CREW ROSTER seed + CREW TOKEN mint (CC-SIDE SPEC P4.2 Instant
+// Grants) ───────────────────────────────────────────────────────────────────
+// Two zero-tap grants layered on the personalized Open link (item 1, SW v384):
+//
+//   1. SEED — mirror the whole employee roster into FieldInk's crewroster so
+//      Koy's Employees panel shows every current user immediately instead of
+//      filling one access-request at a time. CREATE-ONLY BY CONTRACT: Koy edits
+//      role/active/name from that panel, and FieldInk's rules technically let an
+//      org member UPDATE a crewroster row too — so a blind write from here would
+//      silently undo whatever he just toggled. The guard is OURS to keep: every
+//      write getDoc-checks first and BAILS if the row exists. Fresh seeds
+//      default to 'viewer'; Koy flips people to Editor himself (nobody gets
+//      write access to a live plan without him tapping the toggle once).
+//
+//   2. MINT — when a logged-in crew member taps Open, mint a short-lived,
+//      single-use crewtokens/<id> and append ?ct= to the personalized link; the
+//      device self-binds in FieldInk with no request and no bell. ANY failure
+//      here (rules not deployed, offline, not org-joined) just means "no instant
+//      grant this time" — never block Open, never surface an error, fall back to
+//      the plain tagged link exactly as before this feature existed.
+//
+// Both ride the SAME org membership (isOrgMember(), live since SW v384/385) that
+// already gates the cc* bridges, so ensureFieldinkAuth() — which kicks the join
+// — is the only prerequisite. Writes match FieldInk's rules field-for-field:
+//   crewroster/<crewId> = { name(<=60), role:'viewer', active:true, by, at }
+//   crewtokens/<id>     = { crewId(<=120), crewName(<=60), exp, by, at }
+
+// CREATE-ONLY: never touches an existing row (not role, not active, not name).
+async function seedCrewRosterRow(crewId, name) {
+  try {
+    if (crewId == null) return;
+    const user = await ensureFieldinkAuth();
+    if (!user) return;
+    const ref = doc(fieldinkDb, "crewroster", String(crewId));
+    const existing = await getDoc(ref);
+    if (existing.exists()) return;                       // ← the one rule that matters
+    await setDoc(ref, {
+      name: String(name || crewId).slice(0, 60),
+      role: "viewer", active: true,
+      by: user.uid, at: serverTimestamp(),
+    });
+  } catch (e) { _ccDenied(e); /* create-only + fire-and-forget: a denial just means "not org-joined yet", retried next session */ }
+}
+
+// Backfill every current employee. Create-only, so it's a no-op for everyone
+// already seeded — safe to re-run opportunistically once per CC session, which
+// also self-heals a missed on-add. Skips deactivated people (active:false).
+let _crewRosterBackfilledFor = "";       // id-set signature already handled this session — dedupe
+async function backfillCrewRoster(users) {
+  try {
+    const roster = (users || []).filter(u => u && u.id != null && u.active !== false);
+    if (!roster.length) return;
+    const sig = roster.map(u => String(u.id)).sort().join(",");
+    if (sig === _crewRosterBackfilledFor) return;        // same set already done this session
+    _crewRosterBackfilledFor = sig;
+    for (const u of roster) { await seedCrewRosterRow(u.id, u.name); }   // serial: create-only, never a stampede
+  } catch (e) { console.warn("[fieldink] crew roster backfill failed (will retry next session):", e?.message); }
+}
+
+// Mint a fresh, single-use token on EVERY Open click — not per-session, not
+// cached. It only needs to survive the seconds between the tap and the viewer's
+// first write; FieldInk consumes it on first bind and its rules independently
+// cap exp at 30m past the SERVER's clock, so even a bug here can't produce a
+// long-lived token. Returns the token id, or null on ANY failure (the caller
+// falls back to the plain tagged link).
+async function mintCrewToken(identity) {
+  try {
+    if (!identity || identity.id == null || !identity.name) return null;
+    const user = await ensureFieldinkAuth();
+    if (!user) return null;
+    // 128 bits: 16 random bytes → 2 base36 chars each = 32 chars. Keep them ALL
+    // — slicing shorter would quietly shed entropy.
+    const a = new Uint8Array(16);
+    window.crypto.getRandomValues(a);
+    const tokenId = Array.from(a, b => b.toString(36).padStart(2, "0")).join("");
+    await setDoc(doc(fieldinkDb, "crewtokens", tokenId), {
+      crewId: String(identity.id).slice(0, 120),
+      crewName: String(identity.name || "").slice(0, 60),
+      exp: Timestamp.fromMillis(Date.now() + 10 * 60 * 1000),   // 10 min (rules cap at 30)
+      by: user.uid, at: serverTimestamp(),
+    });
+    return tokenId;
+  } catch (e) {
+    _ccDenied(e);   // permission-denied → kick a rejoin so the NEXT Open works
+    console.warn("[fieldink] crew token mint failed (falling back):", e?.message);
+    return null;
+  }
 }
 
 // Debug helpers exposed to window so we can run one-off scripts from the
@@ -22716,6 +22805,26 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
       </div>
       <div style={{ display: "flex", gap: 6 }}>
         <a href={FIELDINK_VIEWER_BASE + p.id + openTag} target="_blank" rel="noreferrer"
+          onClick={(e) => {
+            // Instant grant (P4.2 item 2): mint a single-use token and append
+            // ?ct= so this device self-binds in FieldInk — zero taps on any
+            // bell. Only for a real identity and a plain left-click; modifier /
+            // middle clicks fall through to the href (plain tagged link, no ct)
+            // so native "open in new tab" still works. The href stays the plain
+            // tagged link, so a mint failure or JS-off degrades cleanly.
+            if (!openIdentity || !openTag) return;
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            const base = FIELDINK_VIEWER_BASE + p.id;
+            const w = window.open("", "_blank");   // opened inside the gesture → not popup-blocked
+            mintCrewToken(openIdentity)
+              .then(ct => base + openTag + (ct ? "&ct=" + encodeURIComponent(ct) : ""))
+              .catch(() => base + openTag)
+              .then(url => {
+                if (w && !w.closed) { try { w.opener = null; } catch {} w.location = url; }
+                else window.open(url, "_blank", "noopener");
+              });
+          }}
           style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff", textDecoration: "none",
             fontSize: 11, fontWeight: 700, padding: "6px 14px", fontFamily: "inherit" }}>
           Open
@@ -46577,7 +46686,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-25 · App SW version: v386
+**Last manifest update:** 2026-08-28 · App SW version: v389
 
 ---
 
@@ -46914,6 +47023,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Org-key resolution hardening (live-test finding)** · 'shipped 2026-08-19' · 'SW v385' · The item-2 acceptance test against the deployed callable showed the by-name Drive search returns **empty for the service account on every call** — 'viaName:false' in the function logs on both a real browser fetch (Koy's, self-provisioning off v384) and a forced cache-bypassing read. Cause: the key file lives in a **Shared Drive** and 'files.list' defaults to the SA's own corpus, so a global name query can't see it; only the v384 known-file-id fallback was delivering the key, and without it the deploy would have returned 'not-found'. Two fixes: **'corpora:"allDrives"'** on the list (the documented way to reach shared-drive files, restoring by-name as the primary path), and — the net that matters either way — the pinned-id path now **validates the file ('name' + 'trashed') before reading it**, so if FieldInk ever re-mints the key as a NEW file, the callable fails loudly with 'failed-precondition' naming the fix instead of silently handing every browser a dead key that 'refresh:true' could never heal (the by-name leg being blind is exactly what would have made that stale read invisible). Verified by 43 assertions against the real extracted callable, incl. trashed/renamed pinned files, meta-then-media call ordering, and by-name-hit skipping the validation round-trip. Why it can't lose data: read-only callable — one extra Drive metadata read on the fallback path only; every new branch either returns the same key as before or refuses to serve one, and a refusal leaves clients on their cached key exactly as an outage already did.
 - **Fleet org-key provisioning — 'getFieldinkOrgKey'** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 2 — the v362 join leg was inert without a key ('_getOrgKey' only read localStorage, and only Koy's browser was provisioned), which parked stage B for the whole company. New callable returns the 32-hex value of 'fieldink.editorkey.json' from the company Drive via the service account (**drive.readonly** — the 'drive.file' scope of '_driveClient()' can't see files the SA didn't create), behind 'requireAppKey' plus a required 'by' identity for the audit log; 10-min memory cache, 'refresh:true' bypasses it (key-rotation path); mirrors FieldInk's own reader exactly — by-name search across all drives, lexicographically-smallest file id wins a duplicate race, '{key}' JSON shape — and never logs the key value, only who fetched it. The key file lives in a **Shared Drive**, so the global by-name search is backed by a known-file-id fallback — which the live acceptance test proved to be load-bearing rather than belt-and-braces (see the 'SW v385' entry below). Client: '_getOrgKey' gains the callable leg (localStorage → build env → callable → stale cache), in-flight-deduped with a 60s failure backoff so boot joins and the 10s '_ccDenied' rejoin can't stampede the function, and it only fetches once a real identity is PIN'd in — the key never reaches a never-logged-in browser and never enters the CRA bundle. '_hsOrgStatus()' now resolves through the real chain and kicks the join itself, so the item-2 acceptance test is a single console paste. **Ops prerequisite — VERIFIED DONE 2026-08-19:** 'fieldink.editorkey.json' (and its parent folder) carry 'homestead-electric@appspot.gserviceaccount.com' as 'reader' on the Drive ACL, and exactly one such file exists. Remaining step is the deploy: 'firebase deploy --only functions:getFieldinkOrgKey'. Unblocks the stage-B ordered deploy ('RULES-DEPLOY-GUIDE.md', FieldInk repo). Why it can't lose data: additive — a new callable plus a new resolution leg inside the existing choke point; localStorage and env still win first, a failed fetch falls back to the cached key instead of dropping a provisioned device, and the join stays fire-and-forget/inert-without-key exactly as v362 shipped it.
 - **Personalized Open on Live Plans** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 1 — the LIVE PLANS rows' **Open** link now carries the logged-in user's real identity ('?crew=<id>&crewName=<name>' riding inside the hash fragment — the base already contains '#/v/'; FieldInk parses it with 'crewTagFromLocation', caps 120/60, persists it per share and pre-fills the pin name since v536), so a crew member's Question/Problem pins forward to this job's Questions attributed to their real name instead of browsing as an anonymous client whose pins never forward at all. Office sessions get tagged too — the tag is triage attribution, not a permission. No identity (edge case) → today's untagged URL. The copyable **Crew link** button deliberately keeps the generic '?crew=crew' tag: it exists for texting subs who never log into this app, and a sub's pins must not inherit the copier's identity. Same ship also answers **D8** for FieldInk: plan discovery is and stays the direct 'shares' query ('ccJobId' primary at the section's listener, 'jobFolderId' fallback) — 'ccjoblinks' has zero readers here, so FieldInk can retire its writer. Why it can't lose data: URL construction only — no write path, no new field, no rules change; the crew-tag hash contract is the one FieldInk v534/v536 already honors, and an untagged link behaves exactly as before.
+- **Instant Grants — crew roster seed + Open-link token mint** · 'shipped 2026-08-28' · 'SW v389' · CC-SIDE SPEC P4.2 (pairs with FieldInk v571). Two zero-tap grants layered on the Personalized Open link (item 1, v384). **(1) Roster seed** — the whole employee roster is mirrored into FieldInk's 'crewroster/<crewId>' (crewId = the 'he_identity' user id) so Koy's Employees panel shows everyone immediately instead of filling one access-request at a time. 'seedCrewRosterRow' is **CREATE-ONLY BY CONTRACT**: FieldInk's rules technically let an org member *update* a roster row, so a blind write would silently undo whatever Koy just toggled — every write 'getDoc'-checks first and bails if the row exists. Fresh seeds default to **'viewer'**; Koy flips people to Editor himself from the panel (nobody gets write access to a live plan without him tapping the toggle once). Two passes: a once-per-session **backfill** ('backfillCrewRoster', fired +8s off the users load like 'publishCcJobsIndex', only the real loaded roster — never 'DEFAULT_USERS', skips 'active:false') and an **on-add** hook in 'saveUsers' that seeds only newly-added ids so new hires appear without a second step. **(2) Token mint** — on a plain left-click of **Open**, 'mintCrewToken' writes a single-use 'crewtokens/<id>' (128-bit id, 'exp' 10m — FieldInk's rules independently cap it at 30m past the *server* clock) and appends '&ct=' to the personalized link; the device self-binds in FieldInk with no request and no bell. Fresh mint every click, never cached. Popup-safe: the click opens a blank tab **inside the gesture**, then navigates it once the mint resolves; **any** mint failure (rules not live, offline, not org-joined) falls through to the plain tagged link — the '<a href>' stays that link, so modifier/middle-clicks and JS-off degrade cleanly and no error ever surfaces. Both ride the same 'isOrgMember()' gate (live since v384/385) that already guards the cc* bridges, so 'ensureFieldinkAuth()' is the only prerequisite; a 'permission-denied' kicks a rejoin via '_ccDenied' so the next attempt works. The generic copyable **Crew link** button is untouched — it carries no real identity (for texting subs) so there's nothing to mint against. Why it can't lose data: additive, cross-app writes to FieldInk's own project only ('crewroster'/'crewtokens', governed by FieldInk's v571 rules) — no CC Firestore doc, field, loader, or rule changed; the roster write is create-only so Koy's toggles are never overwritten, and a token is inert until redeemed and single-use by FieldInk's own rules. Item 2 is safe to ship before FieldInk v571 is live — it just fails soft into today's plain tagged link until then.
 - **Org membership join (KC1 stage-B prerequisite)** · 'shipped 2026-07-29' · 'SW v362' · CC-side leg of 'CC-SIDE SPEC — Org Membership Join'; pairs with FieldInk v511. The six cc* bridge collections move from "any authenticated session" to **org members only**, so this app's field-ink session must JOIN the org once per session or every gated read/write starts failing 'permission-denied' — the live CO loop, on a real job. Writes exactly the two spec'd write-only docs: 'orgauth/company/meta/security' (create-once claim, '{orgKey,by,at}') and 'orgauth/company/members/<uid>' ('{key,by,at}'); rules verify membership server-side via 'exists()'. Mirrors FieldInk's 'ensureOrgMembership'/'_joinOrg': claim-then-join, **swallow the already-claimed denial** (FieldInk usually claims first — expected, not an error), refresh the key once on a denied join. Hooked into 'ensureFieldinkAuth' rather than the 8 cc* call sites because every bridge read AND write already funnels through it — including the listeners' self-healing re-attach, so a failed join retries for free. Joined **per session and per uid** (an anonymous field-ink uid isn't stable across a browser-data clear, and a fresh uid needs its own members doc); a settled FALSE is never memoized, so a pre-stage-A denial stays retryable. '_ccDenied' self-heals the 5 write paths + the 2 protective pre-reads on 'permission-denied', throttled to once per 10s so a hard denial can't stampede. **FIRE-AND-FORGET BY CONTRACT** — never awaited, nothing gates on it, and with no key provisioned it is completely inert (zero writes), which is the "safe to ship anytime" posture the spec's build order step 1 asks for. Key resolution is one choke point ('_getOrgKey') so a Drive read or a callable can replace it in one function; provision per-device with '_hsSetOrgKey("<32-hex>")' and inspect with '_hsOrgStatus()' (neither ever prints the key value). 'ccjoblinks' is **not used by this app**, so that row of the spec's table doesn't apply. Verified by a 29-assertion harness driving the real extracted join block against stubbed Firestore/auth. ⚠️ 'REACT_APP_FIELDINK_ORG_KEY' exists but CRA inlines env vars into the **publicly downloadable** bundle — setting it publishes the one company-wide secret and would undercut stage B for both apps; see the handoff doc
 - **FieldInk bridge hardening** · 'shipped 2026-07-10' · 'SW v323' · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.
 - **Crew link (FieldInk)** · 'shipped 2026-07-10' · 'SW v323' · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the '?crew=' tagged link). Senders type their name per note, so one link serves a whole crew/sub.
@@ -51497,6 +51607,12 @@ function App() {
       // BAD_IDS stays read-side only: its old write-back was unstamped too,
       // and saveUsers persists the cleaned list on the next real team edit.
       setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+      // P4.2: mirror the real employee roster into FieldInk's crewroster so the
+      // Employees panel shows everyone immediately. Create-only + once-per-set,
+      // and only the ACTUAL loaded roster (never the hardcoded DEFAULT_USERS).
+      // Delayed off the load like publishCcJobsIndex so anon auth + the org
+      // join have settled first, and so it never competes with UI work.
+      if (cleaned.length) setTimeout(() => backfillCrewRoster(cleaned), 8000);
     }).catch(()=>{});
 
     // ── Load color overrides only from settings/main ───────────
@@ -51548,6 +51664,16 @@ function App() {
         device: localStorage.getItem('he_device_id') || "",
       });
       usersBaseTsRef.current = now;
+      // P4.2: seed any NEWLY-ADDED employee into FieldInk's crewroster right
+      // away (create-only, so existing rows — and Koy's role/active toggles —
+      // are never touched). Fire-and-forget; the once-per-session backfill
+      // self-heals anyone this misses.
+      try {
+        const before = new Set((users || []).map(u => u && u.id).filter(Boolean));
+        for (const u of list) {
+          if (u && u.id != null && u.active !== false && !before.has(u.id)) seedCrewRosterRow(u.id, u.name);
+        }
+      } catch {}
       try { toast.success("Team saved"); } catch {}
       return true;
     } catch(e) {
