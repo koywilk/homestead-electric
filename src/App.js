@@ -46686,7 +46686,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-28 · App SW version: v389
+**Last manifest update:** 2026-08-29 · App SW version: v390
 
 ---
 
@@ -46739,6 +46739,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
     - **Question-share links: forwarding no longer misfiles answers** · 'shipped 2026-07-28' · 'SW v358' · Koy forwarded Haley's named share link to a designer and hit two bugs sharing one root cause — the share's LABEL (who the link was *made for*) was being used as *who is typing now*. (1) The name box **pre-filled "Haley"** ('useEffect' on 'shareName'), so an unedited submit would have filed the designer's answers under Haley — real misattribution, same family as the 7/13 Kweller relabeling. (2) The banner told every visitor "You previously submitted answers as Haley." Now a per-device record ('he_qsub_{jobId}_{shareId}') drives both: the name box fills **only** from this browser's own prior submit, "You previously submitted…" shows **only** to the device that actually did, and anyone else sees a neutral "Some of these were already answered by Haley — put your own name at the bottom and your answers are filed under you." Display + prefill only; no write-path or data-shape change (per-question 'answeredBy' attribution was already correct)
     - **Logo auto-pull from the contractor's own website** · 'shipped 2026-07-28' · 'SW v358' · 'gcFindLogo' + 'GCLogoFinder' · new read-only 'requireAdmin' callable that derives the domain from a contact's email ('Luke@citypointutah.com' → 'citypointutah.com', editable) and reads that site's '<head>' for logo candidates — **apple-touch-icon** first (on small-builder sites it's nearly always the real mark, already square), then 'og:image', 'msapplication-TileImage', '<link rel=icon>', with the keyless Google favicon ('sz=128') always appended as a floor. Candidates are shown as thumbnails in the create AND edit forms and **picked by hand** — auto-applying would put a bad crop or a hero photo in a contractor's header; picking only fills 'logoUrl', nothing saves until the form saves. Chose site-scraping over a logo database deliberately: Clearbit's free logo API shut down 2025-12-08 and the successors skew to big brands, while small Utah builders always have a site. Hardened by live testing against Koy's real GCs: **14s timeout** (Ivory Homes exceeded 9s), **HTML-entity decoding** of attribute values (City Point ships '&#038;ssl=1', which would have produced a broken image URL), and an **exact** 'og:image' match (the loose one also caught 'og:image:width'/':type', yielding junk like '/900'). Rejects private/internal hosts and non-domains; https-only output, matching 'cleanLogoUrl'. Verified: City Point → 4 real logo candidates, Symphony → site favicon, Homestead → apple-touch-icon + og:image. **Known limit:** Ivory Homes' site blocks automated fetches entirely (hangs at 20s even with a browser UA), so it falls back to the Google favicon — paste a URL by hand for sites like that
     - **Contractor convenience trio** · 'shipped 2026-07-28' · 'SW v358' · from the contractor-UX review lens: (1) **sent requests persist** — "✓ Sent" + the office's "Homestead has acted on this" readback used to live only in component state, so closing a job erased every trace and invited double-sends; now stored per link+job+flow in 'localStorage' ('gcportal_sent_v1', capped 200, oldest-trimmed) with a live status line ("Sent 2h ago — awaiting review") and a **Send another** escape hatch. Applied to the one-shot flows (dates, Matterport, return trips, question answers); the general message box stays repeatable by design. (2) **A way to reach a human** — 'HOMESTEAD_CONTACT' + '_gcContactLine' render in the portal footer AND every dead-end (revoked link, connection trouble), and the email footer now says **"You can reply straight to this email — it reaches our office"** (true since 'gc_config/mail.replyTo' was set) plus a direct address. *Phone deliberately left blank until Koy supplies the number he wants contractors calling.* (3) **Per-job deep links** — instant alerts append '&job=<id>', and the portal opens that job once, only after the mirror confirms the id is on this portal (unknown/stale ids just land on the board). Digests stay on the root since they span jobs
+- **Job Prep tab — redline walk strip** · 'shipped 2026-08-29' · 'SW v390' · the Pre-Job Prep lane now surfaces each job's **redline walk** as a strip below the checklist chips, backed by the **same** 'redlineWalks' record the Change Orders board edits (linked by 'jobId') — so a walk touched in prep mirrors the CO board both ways. States: no record → **＋ SCHEDULE REDLINE WALK** (creates one linked to the job, status 'scheduled', today's date); 'scheduled' → **REDLINE WALK** + an editable **date** (display-only, no nudges) + a **WALK DONE** action that advances 'scheduled → plans_prep' ("Walk Done — Cleaning Plans", Koy's "walk done, now cleaning plans"); 'plans_prep' → a ✓ chip + date + a ↩ revert; 'co_owed'/'co_sent'/'signed' → **read-only tail** (that's Jeromy's territory) showing the status + CO #. **Visible tracking only** — the strip never touches 'allPrepChecked'/'prepClearedToStart'; "Redline Plans Up to Date" + the 5 items stay the completion gate. New pure helper 'activeRedlineWalk' picks the newest still-open (unsigned, unquoted) walk; repeat walks are still created from the CO board to avoid prep dupes. Writes go through the existing 'onAddRedline'/'onUpdateRedline' whole-doc funnel. Why it can't lose data: additive UI over an existing collection — no new field, no new collection, no migration, no gate change; the only invariant deliberately extended is that 'redlineWalks' (previously read only in the CO tab) is now also read in the Job Prep tab, and no Cloud Function/nudge reads the collection so nothing server-side changes.
 - **Job Prep tab — collapsible lanes, cleared-to-start group, prep N/A** · 'shipped 2026-08-28' · 'SW v388' · both lanes now start **collapsed** (tap the lane header to open; count pills stay visible, and an active search/foreman filter force-shows both lanes so results never hide). Inside Pre-Job Prep, override-cleared jobs move out of the main list into their own amber **"CLEARED TO START — N with outstanding items"** sub-dropdown, so the open list is purely what's still held. Prep items gained the same **Not needed (N/A)** tri-state as the admin items (new additive 'prepNA' map; ▾ menu per chip), progress reads 'done/required' with N/A items out of the denominator, NEXT hints and the override modal's outstanding list skip N/A items, and a **PREP NOT NEEDED** button (inline confirm) marks all remaining items N/A for jobs that skip prep entirely — a fully-N/A'd job counts as prep-complete across every gate consumer (stage board, auto-task, drawer, tab; the legacy prepStage-keyed surfaces — PrepTaskList, starting-soon — still read the old stage field by design). Known v1 gap: the Cloud Functions prep nudges keep their own pre-N/A check, so fully-N/A'd jobs still nudge until the functions fast-follow. Why it can't lose data: additive only — one new nested 'prepNA' map written through the existing saveJob patch funnel with spread-merges; 'allPrepChecked' is unchanged for every job with no 'prepNA'; no loader, rules, functions, or existing-field changes.
 - **Job Prep tab** · 'shipped 2026-08-28' · 'SW v387' · new office-only nav tab (gated admin/manager) splitting job-readiness work into two lanes: **Office Admin** (Justin — job account, pre-lien, and temp ped chips, each with a per-item **Not needed** toggle stored in a new 'adminNA' map so an item that doesn't apply to a given job drops off the outstanding count without faking it done) and **Pre-Job Prep** (Koy — the 5 'prepChecklist' items, tappable right on the board). Both lanes sort by parsed 'roughProjectedStart' (soonest first); the tab header shows company-wide readiness counts (held in prep / started on override / cleared to start) while each lane's pill counts the filtered view's outstanding items.
   - **Start-without-full-prep override** · same ship · a 'prepOverride {on, by, at, note}' audit stamp lets a job start on the board before every prep item is checked — recorded forever and cleared only by an explicit Undo, never by re-checking items or by time passing. The readiness gate splits in two: 'allPrepChecked' (strict — every item done) stays the truth for the auto-task engine, the job drawer's Pre-Job Prep section, and the tab's own outstanding lanes; 'prepClearedToStart' (strict OR override) is the new, looser gate the STAGE BOARD reads, so an overridden job can move to rough/in-progress on the board while the tab and drawer keep chasing the outstanding items honestly. Setting the override on a job that has never had a 'prepChecklist' also initializes it to '{}' — guards the rough-stage 'prepStage' auto-flip logic, which assumes the map exists once a job is in progress. Confirming an override (on either the tab or the drawer's Pre-Job Prep section) shows the outstanding-item list and takes an optional note before it stamps.
@@ -48895,6 +48896,76 @@ const prepStageColor = (stage) => {
   return "#3E7D7A";
 };
 
+// The one redline walk a job's prep row surfaces: the newest still-open walk
+// (unsigned, unquoted) linked to this job, else the newest walk of any status,
+// else null (the row shows "＋ Schedule Redline Walk"). Repeat walks are created
+// from the CO board, not prep — prep only ever edits the active one.
+const activeRedlineWalk = (job, redlineWalks) => {
+  const linked = (redlineWalks || []).filter(w => w && w.jobId === job.id);
+  if (!linked.length) return null;
+  const open = linked.filter(w => w.status !== "signed" && !w.coQuoteNumber);
+  const pool = open.length ? open : linked;
+  const ts = w => { const d = parseAnyDate(w.walkDate) || parseAnyDate(w.createdAt); return d ? d.getTime() : 0; };
+  return pool.slice().sort((a, b) => ts(b) - ts(a))[0];
+};
+
+// Redline-walk strip on a Pre-Job Prep row. Reads/writes the SHARED redlineWalks
+// record (same doc the CO board edits) via the passed handlers — visible tracking
+// only, never touches the prep gate. Prep owns scheduled↔plans_prep; co_owed+ is
+// Jeromy's and shows read-only. onUpdateRedline gets the WHOLE live walk spread
+// with the change (the CO board's clobber-safe whole-doc write contract).
+function JobPrepWalkStrip({ job, walk, onAddRedline, onUpdateRedline }) {
+  const RL = "#6A5E97";                                   // C.purple — matches the CO board walk chip
+  const wrap = { marginTop:6, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" };
+  if (!walk) {
+    return (
+      <button onClick={() => onAddRedline && onAddRedline({
+          jobId: job.id, address: job.name || "", status: "scheduled", walkDate: jobPrepLocalDate() })}
+        style={{ marginTop:6, background:"none", border:`1px dashed ${RL}66`, color:RL, borderRadius:8,
+          fontSize:10.5, fontWeight:700, letterSpacing:"0.04em", padding:"6px 10px", cursor:"pointer",
+          fontFamily:"inherit" }}>
+        ＋ SCHEDULE REDLINE WALK
+      </button>
+    );
+  }
+  const st = REDLINE_STATUSES.find(s => s.value === walk.status) || REDLINE_STATUSES[0];
+  const set = (patch) => onUpdateRedline && onUpdateRedline({ ...walk, ...patch });
+  const pill = (color) => ({ fontSize:10, fontWeight:800, letterSpacing:"0.06em", color,
+    background:`${color}14`, border:`1px solid ${color}44`, borderRadius:99, padding:"4px 10px" });
+  if (walk.status === "scheduled") {
+    return (
+      <div style={wrap}>
+        <span style={{ fontSize:10, fontWeight:800, letterSpacing:"0.06em", color:RL }}>REDLINE WALK</span>
+        <input type="date" value={walk.walkDate || ""} onChange={e => set({ walkDate: e.target.value })}
+          style={{ border:`1px solid ${RL}44`, background:`${RL}0C`, color:RL, borderRadius:7,
+            fontSize:11, fontWeight:700, padding:"5px 8px", fontFamily:"inherit", cursor:"pointer" }}/>
+        <button onClick={() => set({ status: "plans_prep" })}
+          style={{ background:RL, border:"none", color:"#fff", borderRadius:7, fontSize:10.5, fontWeight:700,
+            letterSpacing:"0.04em", padding:"6px 12px", cursor:"pointer", fontFamily:"inherit" }}>
+          WALK DONE
+        </button>
+      </div>
+    );
+  }
+  if (walk.status === "plans_prep") {
+    return (
+      <div style={wrap}>
+        <span style={pill(st.color)}>✓ {st.label}</span>
+        {walk.walkDate && <span style={{ fontSize:10.5, color:C.dim }}>{walk.walkDate}</span>}
+        <span onClick={() => set({ status: "scheduled" })} title="Back to scheduled"
+          style={{ fontSize:12, color:C.dim, cursor:"pointer", padding:"2px 6px" }}>↩</span>
+      </div>
+    );
+  }
+  // co_owed / co_sent / signed — Jeromy's territory: read-only tail.
+  return (
+    <div style={wrap}>
+      <span style={pill(st.color)}>{st.label}</span>
+      {walk.coQuoteNumber && <span style={{ fontSize:10.5, color:C.dim }}>CO #{walk.coQuoteNumber}</span>}
+    </div>
+  );
+}
+
 function JobPrepJobInfo({ job, onSelectJob }) {
   return (
     <div style={{minWidth:200, flex:"1 1 200px"}}>
@@ -48951,7 +49022,7 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
   );
 }
 
-function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride, onStartOverride, onUndoOverride }) {
+function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride, onStartOverride, onUndoOverride, walk, onAddRedline, onUpdateRedline }) {
     const [confirmSkip, setConfirmSkip] = useState(false);   // "prep not needed" two-step
     const done = allPrepChecked(job);
     const legacy = done && !job.prepChecklist && !job.prepNA;
@@ -49008,6 +49079,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
               )}
             </>
           )}
+          <JobPrepWalkStrip job={job} walk={walk} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline}/>
         </div>
         <div style={{display:"flex", alignItems:"center", gap:8, marginLeft:"auto", flexWrap:"wrap"}}>
           {ovrOn && !done && (
@@ -49120,7 +49192,7 @@ function JobPrepCompleteStrip({ open, onToggle, count, children, color = "#46916
   );
 }
 
-function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
+function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redlineWalks = [], onAddRedline, onUpdateRedline }) {
   const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
   const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
   // Lanes start collapsed (Koy 2026-08-28) — header pills keep the counts visible;
@@ -49131,6 +49203,12 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
   const [ovrOpen, setOvrOpen] = useState(false);
   const [ovr, setOvr] = useState(null);            // { jobId, note } while modal open
   const canOverride = can(identity, "jobprep.view");
+  // Active redline walk per job (jobId → walk), for the Pre-Job Prep row strip.
+  const walksByJob = useMemo(() => {
+    const m = new Map();
+    (jobs || []).forEach(j => { const w = activeRedlineWalk(j, redlineWalks); if (w) m.set(j.id, w); });
+    return m;
+  }, [jobs, redlineWalks]);
   const confirmOverride = () => {
     const job = jobs.find(j=>j.id===ovr.jobId); if (!job) { setOvr(null); return; }
     onUpdateJob(job.id, {
@@ -49272,13 +49350,13 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob }) {
               {filtered && vis.length===0 ? "No jobs match the search / filter"
                 : pOvr.length > 0 ? "✓ Nothing held in prep — overridden jobs below" : "✓ All prep complete"}
             </div>
-          : pHeld.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+          : pHeld.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)} walk={walksByJob.get(j.id)||null} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline}/>)}
         <JobPrepCompleteStrip open={ovrOpen || filtered} onToggle={()=>setOvrOpen(v=>!v)} count={pOvr.length}
           color="#B0892C" label={`CLEARED TO START — ${pOvr.length} with outstanding items`}>
-          {pOvr.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+          {pOvr.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)} walk={walksByJob.get(j.id)||null} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline}/>)}
         </JobPrepCompleteStrip>
         <JobPrepCompleteStrip open={stripOpen.prep} onToggle={()=>setStripOpen(s=>({...s,prep:!s.prep}))} count={pDone.length}>
-          {pDone.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)}/>)}
+          {pDone.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)} walk={walksByJob.get(j.id)||null} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline}/>)}
         </JobPrepCompleteStrip>
         </>)}
       </div>
@@ -55903,6 +55981,9 @@ function App() {
         <JobPrepTracker
           jobs={jobs}
           identity={identity}
+          redlineWalks={redlineWalks}
+          onAddRedline={addRedlineWalk}
+          onUpdateRedline={updateRedlineWalk}
           onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
           onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
         />
