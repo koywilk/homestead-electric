@@ -11328,7 +11328,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
 // ── QC Walk Section ──────────────────────────────────────────────────────────
 
-function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAllDone, onVoidItem }) {
+function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVoidItem }) {
   const [addOpen,      setAddOpen]      = useState(false);
   const [addFloor,     setAddFloor]     = useState('main');
   const [addTarget,    setAddTarget]    = useState('general');
@@ -11365,16 +11365,6 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
       [floorKey]: newFloorData,
     };
     onChange(updated);
-    const allQC = [];
-    floorKeys.forEach(fk => {
-      const f = normFloor(fk===floorKey ? newFloorData : safePunch[fk]);
-      // Voided items are excluded from the QC all-done roll-up — they're no
-      // longer considered QC items (see void handler below).
-      allQC.push(...f.general.filter(i=>i.fromQC && !i.voided));
-      f.rooms.forEach(r => allQC.push(...(r.items||[]).filter(i=>i.fromQC && !i.voided)));
-      if(showHotcheck) allQC.push(...(f.hotcheck||[]).filter(i=>i.fromQC && !i.voided));
-    });
-    if(allQC.length > 0 && allQC.every(i=>i.done)) onAllDone && onAllDone();
   };
 
   const toggleItem = (floorKey, roomId, itemId) => {
@@ -25895,18 +25885,38 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if (f.changed) u({finishQuestions: f.updated});
   }, [gcAnswers]);
 
-  // Auto-pass QC when all fromQC items are checked, even if the user didn't just
-  // toggle one (e.g. job reopens with all items already done from a prior session).
-  // Only fires when qcStatus is in a pre-pass state — never overrides a manual pass/fail/completed.
+  // Auto-pass QC when all of a phase's fromQC items are checked, even if the user
+  // didn't just toggle one (e.g. the job reopens with everything already done from a
+  // prior session, or a return trip synced the last item closed).
+  // Only fires when THAT PHASE's status is in a pre-pass state — never overrides a
+  // manual pass/fail/completed.
+  //
+  // PER-PHASE (2026-08-31, Koy: "when all items called out on a qc are marked off and
+  // fixed it needs to auto flip to qc pass - items fixed ... on both finish and rough").
+  // This used to pool rough+finish items into ONE list and write only the job-wide
+  // `qcStatus`, which predates `finishQcStatus` existing as its own field (its own
+  // picker, its own row on the QC board). Two bugs fell out of that: closing every
+  // FINISH item flipped the ROUGH pill while finish's own pill never advanced at all,
+  // and either phase's flip was blocked until the OTHER phase was also clear — which
+  // is why it read as "it just doesn't flip". Each phase now advances its own status
+  // off its own items. Phase scoping matches deriveQcVerdict(job, phase) exactly:
+  // rough reads roughPunch, finish reads finishPunch, and qcPunch ("Legacy QC Items")
+  // is excluded from BOTH for the reason documented there — it carries no rough/finish
+  // attribution, so counting it per-phase lets one phase's evidence decide another's.
   //
   // ONE-SHOT GUARD (bug fix): this used to re-fire on every qcStatus change,
   // which CLAMPED the status — on any job whose fromQC items were all done,
   // picking needs/scheduled/fail in the QC tab instantly snapped back to
   // "fixed", so the select looked broken. The ref makes the auto-advance fire
   // once per "all items done" episode: it re-arms only if an item reopens
-  // (or the job changes), so manual selections stick afterwards.
+  // (or the job changes), so manual selections stick afterwards. One ref PER PHASE —
+  // a shared ref would let rough's advance consume finish's turn and vice versa.
   const qcAutoAdvancedRef = useRef(false);
-  useEffect(() => { qcAutoAdvancedRef.current = false; }, [job.id]);
+  const finishQcAutoAdvancedRef = useRef(false);
+  useEffect(() => {
+    qcAutoAdvancedRef.current = false;
+    finishQcAutoAdvancedRef.current = false;
+  }, [job.id]);
   useEffect(() => {
     const collectQC = p => {
       const out = [];
@@ -25917,18 +25927,35 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       });
       return out;
     };
-    const all = [...collectQC(job.roughPunch), ...collectQC(job.finishPunch)];
-    if(all.length === 0) return;
-    if(!all.every(i=>i.done)) { qcAutoAdvancedRef.current = false; return; }
-    if(qcAutoAdvancedRef.current) return;
-    qcAutoAdvancedRef.current = true; // consumed for this all-done episode
-    // Only auto-advance from walk-active states; leave manual pass/fail/completed/fixed alone.
-    // "passed_items" (Task 5) is a non-terminal, non-fail verdict — same as "fail", once its
-    // items all close the job should reach "fixed" too, so it belongs in this list alongside it.
-    const advanceable = ["", "needs", "scheduled", "fail", "passed_items"];
-    if(!advanceable.includes(job.qcStatus||"")) return;
-    u({qcStatus:'fixed'});
-  }, [job.roughPunch, job.finishPunch, job.qcStatus]);
+    // Only auto-advance from walk-active states; leave manual pass/fail/completed/fixed
+    // alone. "passed_items" is a non-terminal, non-fail verdict — same as "fail", once
+    // its items all close the phase should reach "fixed" too, so it belongs here.
+    const ADVANCEABLE = ["", "needs", "scheduled", "fail", "passed_items"];
+    const patch = {};
+    // A phase with no QC items can never flip, so re-arm its guard instead of
+    // leaving it consumed — otherwise a job whose items were all voided (or a
+    // phase walked a second time) would find the guard stuck true and never
+    // advance again for the NEXT batch of items.
+    const rough = collectQC(job.roughPunch);
+    if (!rough.length) qcAutoAdvancedRef.current = false;
+    else {
+      if (!rough.every(i => i.done)) qcAutoAdvancedRef.current = false;
+      else if (!qcAutoAdvancedRef.current) {
+        qcAutoAdvancedRef.current = true; // consumed for this all-done episode
+        if (ADVANCEABLE.includes(job.qcStatus || "")) patch.qcStatus = 'fixed';
+      }
+    }
+    const finish = collectQC(job.finishPunch);
+    if (!finish.length) finishQcAutoAdvancedRef.current = false;
+    else {
+      if (!finish.every(i => i.done)) finishQcAutoAdvancedRef.current = false;
+      else if (!finishQcAutoAdvancedRef.current) {
+        finishQcAutoAdvancedRef.current = true;
+        if (ADVANCEABLE.includes(job.finishQcStatus || "")) patch.finishQcStatus = 'fixed';
+      }
+    }
+    if (Object.keys(patch).length) u(patch);
+  }, [job.roughPunch, job.finishPunch, job.qcStatus, job.finishQcStatus]);
 
   const refreshJob = async () => {
 
@@ -28463,17 +28490,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <Section label="Rough QC Walk" color={C.blue} defaultOpen={true}>
                 <QCWalkSection phase="Rough" punch={job.roughPunch} jobId={job.id}
                   onChange={v=>handlePhasePunchChange("rough", v)}
-                  onAllDone={()=>{
-                    const finQC=[];
-                    const fp=job.finishPunch||{};
-                    ['upper','main','basement',...(fp.extras||[]).map(e=>e.key)].forEach(fk=>{
-                      const fl=normFloor(fp[fk]);
-                      finQC.push(...fl.general.filter(i=>i.fromQC && !i.voided));
-                      fl.rooms.forEach(r=>finQC.push(...(r.items||[]).filter(i=>i.fromQC && !i.voided)));
-                      finQC.push(...(fl.hotcheck||[]).filter(i=>i.fromQC && !i.voided));
-                    });
-                    if(finQC.length===0||finQC.every(i=>i.done)) u({qcStatus:'fixed'});
-                  }}
                   onVoidItem={handleVoidQCItem}/>
               </Section>
               </div>
@@ -28482,16 +28498,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <QCWalkSection phase="Finish" punch={job.finishPunch} jobId={job.id}
                   showHotcheck={true}
                   onChange={v=>handlePhasePunchChange("finish", v)}
-                  onAllDone={()=>{
-                    const rghQC=[];
-                    const rp=job.roughPunch||{};
-                    ['upper','main','basement',...(rp.extras||[]).map(e=>e.key)].forEach(fk=>{
-                      const fl=normFloor(rp[fk]);
-                      rghQC.push(...fl.general.filter(i=>i.fromQC && !i.voided));
-                      fl.rooms.forEach(r=>rghQC.push(...(r.items||[]).filter(i=>i.fromQC && !i.voided)));
-                    });
-                    if(rghQC.length===0||rghQC.every(i=>i.done)) u({qcStatus:'fixed'});
-                  }}
                   onVoidItem={handleVoidQCItem}/>
               </Section>
               </div>
@@ -46686,7 +46692,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-29 · App SW version: v390
+**Last manifest update:** 2026-08-31 · App SW version: v391
 
 ---
 
@@ -46808,6 +46814,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Final inspection (rules 23/24)
   - QC walks ('QCWalkSection')
   - **QC severity + scoreboard fairness** · 'shipped 2026-08-10' · 'SW v379' · Koy: *"the scoreboard feels a little unfair… on QCs there needs to be a different option besides QC fail — sometimes it's not a fail, it's just some items we need to take care of."* Diagnosed against live data: the board scored QC as a RAW COUNT of walk items normalized '1 − items/8', so it hit zero at 8 items and punished job SIZE rather than craftsmanship — Gage Lund had the best profit margin in the company (55.8%) and scored **0 of 25 QC points** because his walks average 10.6 items. Five changes, one system: **(1) Per-item severity.** QC punch items carry 'severity' ('"serious"', or absent = minor — zero migration, and unmarking writes 'undefined' so 'sanitize()' drops the key back to the legacy shape). A one-tap chip reading exactly "Minor QC item" / "QC miss or bigger item" sits on BOTH surfaces that show QC items — the punch row and 'QCWalkSection''s own walk screen, which is where items are created and where the walker actually stands. RT clones copy severity at all three 'fromQCFail' sites. **(2) Derived three-tier verdict.** New 'QC_STATUSES' entry 'passed_items' → "QC Passed with Items" (amber '#B0892C'), between pass and fail. 'deriveQcVerdict(job, phase)' walks the phase's own tree ('qcPunch' excluded from phase mode — attributing a shared tree to both phases is what let a rough walk conclude a finish walk) and returns pass / passed_items / fail. It is a pre-selected suggestion the walker confirms; the manual picker is untouched and nothing auto-writes. Audit extended 'passed_items' to five surfaces that would otherwise have misbehaved: both "schedule a QC walk" nags, the Forecast calendar exclusion, 'sb4Agg''s walk detection, and the huddle recap + label formatter. **(3) Return trips by choice.** Auto-creation on fail is REMOVED. Both non-clean verdicts now prompt "Create return trip" vs "Crew on site has it" — Koy's rule: *"if there's nobody on site, it for sure needs to be a return trip… if there are already crews on site, it doesn't need to be a return trip automatically."* The choice is recorded per phase ('qcRtChoiceRough'/'Finish' + 'By'/'At') in the SAME 'u()' patch as the verdict. RT construction is byte-for-byte what auto-creation produced. **(4) The safety net that makes removing auto-RT safe.** A read-only "Stranded QC Items" row on Open Items flags open QC items that are **not covered by any un-signed-off RT** (matched per item via 'originItemId', not "does this job have any RT" — a review caught that the job-level version silently missed the ordinary rough-then-finish sequence) when that phase's crew answer is older than 'strandedDays'. **(5) Severity-based scoring, per-job density, small-sample handling, and every constant on a dial.** QC walk scoring is a WEIGHTED ITEM COUNT: 'walkScore = 1 − min(maxCost, misses/missDivisor + minors/minorDivisor)', so at the defaults one QC miss costs a quarter of a walk and one minor item a fortieth, and four misses (or forty minors, or any mix summing to one) wipes it out. This replaced an all-or-nothing gate — Koy, 2026-08-11: *"minor QC items should be counted as well"* — under which any miss scored a flat 'seriousCredit' and the walk's minors were DISCARDED, so 1 miss + 30 minors scored identically to 1 miss alone; and because that credit defaulted to 0, no amount of subtracting could ever have made the minors matter. Proven by test: a miss walk carrying 4 extra minor items now scores 0.65 against 0.75 for the same walk without them, a comparison that was impossible when both were pinned to 0. The wording changed with it — "Serious QC item" reads "QC miss or bigger item" everywhere, on the field chip, the stat card ("Walks with a QC miss") and all three dials — but the STORED value is still '"serious"', so nothing already marked is stranded. The verdict rule is deliberately NOT the scoring rule: one miss still fails the walk verdict outright, because "does this need to go back?" and "how clean was it?" are different questions and only the first is all-or-nothing. **App Usage stops counting raw volume and counts DENSITY — entries per job** (Koy: *"keegan uses the app far more than anyone else in the company. look at the desnity of the kweller job compared to any other"* — Kweller is 591 entries, the densest job in the company by 64%). Raw volume rewarded HOLDING MORE JOBS, which is roster luck; per-job completeness saturates the moment a job has one of each, so a deeply documented job scored identically to a token one. 'appDensity = entries / completeness-eligible jobs' shares completeness's exact eligibility gate (temp peds and quick jobs contribute to neither the numerator nor the denominator), blends against completeness via 'appMix', and normalizes at the new 'appDenseCap' dial (default 150/job; the old whole-book 'appCap' is gone — different units, unmigratable, a saved value is simply ignored). Where every eligible job is excluded, 'app' is now **null** and 'overallOf' drops the dimension and re-weights across the other three, instead of falling back to volume counted on the very jobs the dimension excludes. **'sb4Shrink' adds small-sample handling to margin** (Koy: *"gage doesnt make sense whys hes so high i guess just his profitmargin with fewer jobs"*): a median of five jobs is a rumor, so each row's SCORED margin is pulled toward the board's own median at the standard 'n/(n+k)' weight, 'k = marginPriorJobs' (default 5 jobs, 0 disables it byte-for-byte). The **displayed** margin is never shrunk — the card still shows the real median and discloses the scored figure and sample size beneath it ("scored 41.3% on 5 jobs") whenever the two diverge by half a point. A one-row board is a mathematical no-op (the baseline is that row's own margin), so a thin Leads board cannot be distorted by being small, and shrinkage only ever compresses toward the middle — it cannot invent a lead. All 15 constants live on 'settings/scoreboardV4Weights' behind the existing admin 'scoreboard.editWeights' gate, in a grouped Scoring panel that re-ranks the board live. Effect on the real board at the shipped defaults: **Keegan 95, Daegan 91, Gage 90, Vasa 79, Abraham 77, Colby 72** — Gage falls off the top (his 55.75% median scores as 41.3% on five jobs) and Daegan rises to a slim second, both of which Koy called for by name. **A caveat recorded honestly:** at 'marginDivisor' 30 both 55.75% and 41.3% clamp to full margin credit, so shrinkage does not move Gage's RANK at today's settings — its protection binds whenever a thin book lands below the full-credit bar, and it is what stops a future one-job hot streak from topping the board (proven by test: a 30-job 40% book now outranks a 1-job 60% streak, which is exactly backwards from how the board read it before). **Why it can't lose data:** every new field is additive inside the 'data' envelope (item 'severity'; job 'qcRtChoice*') — no loader change, no rules change, no field removed or repurposed; a legacy weights-only config doc is proven by test to produce byte-identical scoring output to the defaults, so the board does not move until a dial is moved; historical '"fail"'/'"pass"' values keep their exact meaning; and the removed auto-RT is replaced by an explicit prompt plus a read-only tripwire rather than by nothing. Verified by a 273-assertion node harness driving the real functions extracted from 'src/App.js', with per-gate mutation testing, across 8 tasks each gated by an independent adversarial review (which caught, among others, a 'NaN' that would have corrupted a foreman's whole score, a normalizer inversion, and the stranded-items blind spot). The density/shrinkage round adds its own wiring trap: the harness extracts 'overallOf' itself and pins it to 33 for a row whose real margin is 60% and whose shrunk margin is 10%, because 'sb4Shrink' can be flawless and the board still ignore it — reading 'r.margin' there instead of 'r.marginScore' scores 100, and nothing else in the suite would notice. Three mutations were run to prove the new gates bite: reverting density to raw volume fails 9 assertions, unwiring 'overallOf' fails 2, and removing the 'marginPriorJobs' off-switch fails 2 (a negative dial value would otherwise become a sign-flipped amplifier, scoring a foreman at −100)
+  - **QC status flips per phase when that phase's items close** · 'shipped 2026-08-31' · 'SW v391' · Koy: *"when all items called out on a qc are marked off and fixed it needs to auto flip to qc pass - items fixed ... on both finish and rough in qcs."* The auto-advance to "QC Items Fixed — Pass" predates 'finishQcStatus' existing as its own field: it pooled rough + finish 'fromQC' items into ONE list and wrote only the job-wide 'qcStatus'. Two bugs fell out of that single stale assumption — closing every FINISH item flipped the ROUGH pill (finish's own pill, its own picker and its own QC-board row never advanced at all), and either phase's flip was gated on the OTHER phase also being clear, which is why it read in the field as "it just doesn't flip." Each phase now advances its own status off its own items, each with its own one-shot guard (a shared ref would let one phase consume the other's turn). Phase scoping matches 'deriveQcVerdict(job, phase)' exactly — rough reads 'roughPunch', finish reads 'finishPunch', and 'qcPunch' ("Legacy QC Items") is excluded from BOTH for the reason documented there: it carries no rough/finish attribution, so counting it per phase lets one phase's evidence decide another's verdict. The manual-selection guard is unchanged and now applies per phase — a status the walker set by hand ('pass'/'completed'/'fixed') is never overwritten; only the walk-active states ('""', 'needs', 'scheduled', 'fail', 'passed_items') advance. Also removes two superseded 'onAllDone' cross-check callbacks that wrote the wrong field, and with them the now-dead 'allQC' roll-up that recomputed on every punch keystroke plus the orphaned 'onAllDone' prop (orphan-swept — zero references remain). **Why it can't lose data:** no new field, no schema change, no loader change, no rules change; the effect writes only the two status strings that already existed, through the existing 'u()' → 'saveJob' funnel; per phase it writes strictly less eagerly than before (the 'ADVANCEABLE' check on 'finishQcStatus' is a new guard, not a new write path), and it can only move a status the walker has not set by hand. QC guide ('public/sops/qc.html') updated in the same ship per the standing rule
   - Status labels carry their own domain word · 'shipped 2026-08-10' · 'SW v375' · Koy: "make sure its all labeled better like qc needs to be included where it applies." 'RT_STATUSES', 'QC_STATUSES' and 'MATTERPORT_STATUSES' all rendered the IDENTICAL bare label **"Needs to be Scheduled"** — and those pills sit side by side on job cards, Open Items and the Forecast, so the reader couldn't tell which thing needed scheduling. QC was the worst offender because 5 of its 6 labels already said "QC" and only that one didn't. Now every label names its own system: QC → **"QC Needs to be Scheduled"** (completing the set), Matterport → **"Scan Needs to be Scheduled"** (matching its existing "Scan Scheduled"/"Scan Complete"), and Return Trips → **"RT Needs to be Scheduled" / "RT Scheduled" / "RT Complete"** (RT previously had no domain word at all on any of its three). Also deleted a hardcoded '"Needs to be Scheduled"' duplicate in the Forecast event builder that shadowed the registry and would have gone stale — that surface now reads the registry like everything else, so there is one source of truth per label. Verified no code compares against label TEXT: every status lookup keys off 'value', so this is display-only and inert. Deliberately left alone: Temp Ped and Quick Job status sets, which render on their own dedicated cards where the domain is never ambiguous
   - Failed inspection → punch items
 - **Photos** · 'shipped' · 'PhotoAttacher' · shared upload+thumbnail component
