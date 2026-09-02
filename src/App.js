@@ -34074,6 +34074,17 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
     try { localStorage.setItem("he_forecast_collapsed", JSON.stringify([...nx])); } catch {}
     return nx;
   });
+  // Per-TYPE fold within every Kanban column, board-wide. Default: the "noise"
+  // types (QC / RT / CO / Invoice) start folded; Rough/Finish/Quick stay open.
+  const [typeCollapsed, setTypeCollapsed] = useState(() => {
+    try { const s = localStorage.getItem("he_forecast_typeCollapsed"); if (s !== null) return new Set(JSON.parse(s)); } catch {}
+    return new Set(["qc","rt","co","invoice"]);
+  });
+  const toggleType = (key) => setTypeCollapsed(prev => {
+    const nx = new Set(prev); nx.has(key) ? nx.delete(key) : nx.add(key);
+    try { localStorage.setItem("he_forecast_typeCollapsed", JSON.stringify([...nx])); } catch {}
+    return nx;
+  });
 
   // ── Coordinator "book" filter ────────────────────────────────
   // Foremen are assigned a coordinator (office scheduler) in Settings → Team.
@@ -35401,6 +35412,19 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
     {key:"nodate",   label:"Needs Date", color:"#B0892C"},
   ];
 
+  // Type sub-sections inside each Kanban column (v393). Order = planning-first,
+  // billing last; the default fold set above (`typeCollapsed`) folds the last four.
+  const FORECAST_TYPE_ORDER=["rough","finish","quick","qc","rt","co","invoice"];
+  const FORECAST_TYPE_META={
+    rough:  {label:"Rough",           color:"#3B5BA5"},
+    finish: {label:"Finish",          color:"#6A7BAA"},
+    quick:  {label:"Quick Jobs",      color:"#B0892C"},
+    qc:     {label:"QC Walks",        color:"#3E7D7A"},
+    rt:     {label:"Return Trips",    color:"#6A5E97"},
+    co:     {label:"Change Orders",   color:"#3E7D5A"},
+    invoice:{label:"Ready to Invoice",color:"#B06A2C"},
+  };
+
   // ── Event pill (compact, used in calendar cells) ──────────────
   const EventPill=({ev,mini})=>{
     const over=isOverdue(ev.startDate,ev.status);
@@ -35781,21 +35805,32 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
                       ?<div style={{fontSize:11,color:"var(--muted)",fontStyle:"italic",padding:"16px 0",
                           textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Empty</div>
                       :(()=>{
-                        // Scheduling cards read first; invoice notifications collect
-                        // at the bottom under their own divider (Koy: bottom of column).
-                        const sched=bEvs.filter(ev=>ev.type!=="invoice");
-                        const inv=bEvs.filter(ev=>ev.type==="invoice");
-                        return (<>
-                          {sched.map(ev=><EventCard key={ev.id} ev={ev}/>)}
-                          {inv.length>0&&(
-                            <div style={{display:"flex",alignItems:"center",gap:7,margin:"10px 2px 6px",
-                              fontSize:9.5,fontWeight:800,letterSpacing:"0.09em",color:"#B06A2C"}}>
-                              READY TO INVOICE ({inv.length})
-                              <span style={{flex:1,height:1,background:"#B06A2C40"}}/>
+                        // Group each column's cards into foldable type sub-sections (v393):
+                        // Rough/Finish/Quick open, QC/RT/CO/Invoice folded by default;
+                        // folding a type hides it in EVERY column (board-wide typeCollapsed).
+                        return FORECAST_TYPE_ORDER.map(tk=>{
+                          const items=bEvs.filter(ev=>ev.type===tk);
+                          if(items.length===0) return null;
+                          const meta=FORECAST_TYPE_META[tk];
+                          const folded=typeCollapsed.has(tk);
+                          return (
+                            <div key={tk} style={{marginBottom:4}}>
+                              <div onClick={()=>toggleType(tk)}
+                                style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
+                                  padding:"5px 2px",marginTop:6,userSelect:"none"}}>
+                                <span style={{display:"inline-flex",fontSize:10,color:meta.color,
+                                  transition:"transform 0.18s",transform:folded?"rotate(-90deg)":"none"}}>▾</span>
+                                <span style={{width:6,height:6,borderRadius:"50%",background:meta.color,flexShrink:0}}/>
+                                <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",
+                                  color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
+                                <span style={{fontSize:10,fontWeight:600,color:"var(--dim)"}}>({items.length})</span>
+                              </div>
+                              {!folded && items.map(ev=> tk==="invoice"
+                                ? <InvoiceNote key={ev.id} ev={ev}/>
+                                : <EventCard key={ev.id} ev={ev}/>)}
                             </div>
-                          )}
-                          {inv.map(ev=><InvoiceNote key={ev.id} ev={ev}/>)}
-                        </>);
+                          );
+                        });
                       })()
                     )}
                   </div>
@@ -46843,7 +46878,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-02 · App SW version: v392
+**Last manifest update:** 2026-09-02 · App SW version: v393
 
 ---
 
@@ -46868,6 +46903,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Safety** · 'shipped' · safety meetings / topics
 - **Forecast** · 'shipped' · 'SchedulingForecast' · upcoming work calendar view
   - Kanban inline cleanup · 'shipped 2026-09-02' · 'SW v392' · Koy: the Kanban clogged with overdue cards and you had to open each job (under its foreman) to clear anything. Three changes, layout unchanged. **(1) Ready-to-Invoice demoted** from a date-bucket task to a slim amber notification, grouped under a 'Ready to invoice (N)' divider at the **bottom** of its column, with one-tap **Dismiss** = '{invoiceDismissed:true}' (reversible; 'readyToInvoice' untouched, so the job card / Today still show it as a notification). The same flag now also hides a phase stuck at 'status:"invoice"' (the rough/finish 'isInv' pushes gained a '!invoiceDismissed' gate matching the job-level invoice event). **(2) Scheduling cards gain inline Clear → Snooze** (3 days / 1 week / pick a date) writing a per-job 'forecastSnooze' map keyed by the event's id suffix ('rough'/'finish'/'qc'/'rt_<id>'/'co_<id>'/'quick'); a snoozed card leaves **every** Forecast view + the foreman-tab counts and **returns on its own** once the date passes — nothing schedulable is deleted. **(3) Collapsible columns** — tap a header to fold it, persisted per browser in 'localStorage' ('he_forecast_collapsed'). Every clear has a 10-second **Undo** (mirrors the PhaseInstruction 'undoToast'). Writes ride the existing 'onUpdateJob → saveJob' funnel and are gated on 'schedule.edit' (read-only users see the board exactly as before). **Why it can't lose data:** additive — 'forecastSnooze' lives inside the job 'data' envelope so the loader auto-unwraps it with no spread change (follows the 'taskDueDates' whole-map precedent); Dismiss reuses the reversible 'invoiceDismissed' flag; no loader change, no 'firestore.rules' change, no field removed. Verified by 'scripts/forecast-snooze-dryrun.js' (12 assertions) + the 'no-undef' gate (which caught a missing 'canEdit' prop pre-ship) + CI build.
+  - Kanban type sub-sections · 'shipped 2026-09-02' · 'SW v393' · follow-up to v392: Koy wanted each column split into foldable sections *"like COs, RTs, etc. and they all start collapsed so it doesn't look as busy."* Within each date column the cards now group into type sub-sections in a fixed order (**Rough / Finish / Quick / QC / Return Trips / Change Orders / Ready to Invoice**), each a collapsible header with a type-color dot + count. **Default: Rough/Finish/Quick open, QC/RT/CO/Invoice folded** (the follow-up/billing "noise") — so the board opens as a compact index of the starts you're planning, everything else one tap away. Folding a type is **board-wide** ('typeCollapsed', localStorage 'he_forecast_typeCollapsed'): hiding COs hides them in every column at once. The v392 "Ready to invoice (N)" divider is now just the last (folded) section, so invoice still sits at the bottom. Pure render + one localStorage set — no data model, no new writes, no loader change.
   - Starts view mode · 'shipped 2026-07-20' · 'SW v349' · 'StartsReport' · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = 'roughStartConfirmed' / 'finishStartConfirmed', or a 'scheduled' / 'date_confirmed' status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
     - Date-format fix · 'shipped 2026-07-20' · 'SW v350' · v349 parsed only ISO 'YYYY-MM-DD', but real job start dates are US slash ('3/19/26', '6/4/2026') — so every row's date failed to parse and the report rendered empty. '_parseStartDate' now handles both slash and ISO; bucket sort compares parsed dates (was buggy string compare); already-'inprogress' phases excluded (a start that already happened isn't upcoming)
     - Needs Date section + Past due moved to the bottom · 'shipped 2026-07-29' · 'SW v359' · from Koy + Justin talking through the Starts view. Group order is now **This week / Next week / Later / Past due**, so the week you're planning reads first and the problems collect at the end. New gold **Needs date** section closes the report and fills the view's blind spot: the event builder did 'if(!ps) return', so **a job with no projected start never became a row at all** — every unscheduled job was invisible in the one view meant to answer "what's starting?" Now surfaced for the phase that's actually next: rough not started and no rough date, or rough complete and finish unscheduled ("in between"). Deliberately **one row per job** — an unscheduled rough doesn't also nag for a finish date nobody could know yet, and a phase already 'inprogress' needs no start date (Koy: chasing the finish date while the rough is still going is too early). Reads 'effRS'/'effFS', not raw 'roughStatus' — 'effRS' derives 'inprogress' from 'roughStage:"40"' with no status field, so keying off the raw field would have dragged every actively-roughing job into the chase list. Excludes archived / deleted / quotes / quick jobs / temp peds. Each row shows **why** it has no date (its status label — "Awaiting Start Date", "On Hold", "No status set") and opens the job so the date can be set on the spot. **Upcoming pipeline included** (Koy: "a clear view of all the jobs") — entries with no 'projectedStart' were being dropped by 'if(!u.projectedStart) return', so the report only ever showed *part* of the pipeline; they now land here too, sorted after board jobs (those are the ones you can open and fix) and non-clickable like every other Upcoming row. Also folds in starts whose date string won't parse: '_weekBucket' returned 'null' and the render loop **silently dropped the row**, so a typo'd date deleted the job from the report — it now shows with its raw text and a "Date unreadable" reason. Colour '#B0892C' is the app's own 'waiting_date' gold, so the section reads as a concept the status pills already use. Read-only — no writes, no new fields, no loader change
