@@ -31522,6 +31522,23 @@ const parseAnyDate = (str) => {
   const d = new Date(str);
   return isNaN(d.getTime()) ? null : d;
 };
+// ── Forecast snooze/dismiss helpers ─────────────────────────────────────────
+// Forecast cards are DERIVED from job state, so "snooze" is a per-job map keyed
+// by the event's id suffix (the part after `${job.id}_`): rough / finish / qc /
+// rt_<id> / co_<id> / quick. Value is a date; the card hides until it passes,
+// then returns. Invoice-flavored events never snooze — they use invoiceDismissed.
+const forecastEventSuffix = (ev) => ev.id.slice(ev.job.id.length + 1);
+const isForecastSnoozed = (job, suffix, todayMidnight) => {
+  const sd = job?.forecastSnooze?.[suffix];
+  if (!sd) return false;
+  const d = parseAnyDate(sd);
+  if (!d) return false;
+  const c = new Date(d); c.setHours(0, 0, 0, 0);
+  return c > todayMidnight;
+};
+const forecastSnoozePatch = (job, suffix, isoDate) => ({
+  forecastSnooze: { ...(job.forecastSnooze || {}), [suffix]: isoDate },
+});
 const URGENCY = (dueDateStr) => {
   if(!dueDateStr) return null;
   const due = parseAnyDate(dueDateStr); if(!due) return null;
@@ -34036,11 +34053,27 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
   );
 }
 
-function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, foremenList: _allForemen, identity, onUpdateJob, users=[], upcoming=[] }) {
+function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, foremenList: _allForemen, identity, onUpdateJob, canEdit=false, users=[], upcoming=[] }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("crew"); // crew | kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
+  // Inline-clear reversible undo (mirrors the PhaseInstruction undoToast pattern).
+  const [undoToast, setUndoToast] = useState(null); // {label, job, prevPatch, timer}
+  useEffect(() => () => { if (undoToast?.timer) clearTimeout(undoToast.timer); }, [undoToast]);
+  // Snooze-menu open state, lifted to the parent because EventCard is defined
+  // inline (React remounts it each parent render, so per-card useState would reset).
+  const [openSnoozeId, setOpenSnoozeId] = useState(null); // ev.id or null
+  // Collapsed Kanban columns — persisted per browser so a folded Overdue stays folded.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("he_forecast_collapsed") || "[]")); }
+    catch { return new Set(); }
+  });
+  const toggleCollapsed = (key) => setCollapsed(prev => {
+    const nx = new Set(prev); nx.has(key) ? nx.delete(key) : nx.add(key);
+    try { localStorage.setItem("he_forecast_collapsed", JSON.stringify([...nx])); } catch {}
+    return nx;
+  });
 
   // ── Coordinator "book" filter ────────────────────────────────
   // Foremen are assigned a coordinator (office scheduler) in Settings → Team.
@@ -35168,6 +35201,32 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   const isOverdue=(str,status)=>{ if(status==="inprogress") return false; const d=parseAnyDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
   const fmtYMD=(d)=>{ if(!d) return ''; const dt=new Date(d); return isNaN(dt)?'':dt.toISOString().split("T")[0]; };
 
+  // ── Inline clear: gated write + reversible undo helpers ──────────────────
+  const patchJob = (job, patch) => { if (canEdit && onUpdateJob) onUpdateJob({ ...job, ...patch }, patch); };
+  const isoPlusDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+  const stageUndo = (label, job, prevPatch) => {
+    if (undoToast?.timer) clearTimeout(undoToast.timer);
+    const timer = setTimeout(() => setUndoToast(null), 10000);
+    setUndoToast({ label, job, prevPatch, timer });
+  };
+  const commitUndo = () => {
+    if (!undoToast) return;
+    const { job, prevPatch, timer } = undoToast;
+    if (timer) clearTimeout(timer);
+    patchJob(job, prevPatch);
+    setUndoToast(null);
+  };
+  const dismissInvoice = (ev) => {
+    const prevPatch = { invoiceDismissed: !!ev.job.invoiceDismissed }; // pre-image (false)
+    patchJob(ev.job, { invoiceDismissed: true });
+    stageUndo(`Dismissed ${ev.job.name || "invoice"}`, ev.job, prevPatch);
+  };
+  const snoozeEvent = (ev, isoDate) => {
+    const prevPatch = { forecastSnooze: { ...(ev.job.forecastSnooze || {}) } }; // pre-image map
+    patchJob(ev.job, forecastSnoozePatch(ev.job, forecastEventSuffix(ev), isoDate));
+    stageUndo(`Snoozed ${ev.job.name || "card"}`, ev.job, prevPatch);
+  };
+
   // ── Build "events" — one per schedulable item (not per job) ──────────────
   // Each event: { id, job, type, label, color, startDate, endDate, status, desc, hardDate }
   const buildEvents=(jobList)=>{
@@ -35207,7 +35266,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
           ? (job.roughStatusDate||job.roughProjectedStart||"")
           : (job.roughProjectedStart||job.roughStatusDate||"");
         const isInv=rs==="invoice";
-        if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) events.push({
+        if((start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) && !(isInv && job.invoiceDismissed)) events.push({
           id:job.id+"_rough", job, type:"rough",
           label:"ROUGH", color:isInv?"#B06A2C":rsDef.color||C.rough, fc,
           startDate:isInv?job.readyToInvoiceDate||start:start,
@@ -35235,7 +35294,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
           ? (job.finishStatusDate||job.finishProjectedStart||"")
           : (job.finishProjectedStart||job.finishStatusDate||"");
         const isInv=fs==="invoice";
-        if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) events.push({
+        if((start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) && !(isInv && job.invoiceDismissed)) events.push({
           id:job.id+"_finish", job, type:"finish",
           label:"FINISH", color:isInv?"#B06A2C":fsDef.color||C.finish, fc,
           startDate:isInv?job.readyToInvoiceDate||start:start,
@@ -35309,7 +35368,8 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
         });
       }
     });
-    return events;
+    // Drop snoozed scheduling cards from EVERY forecast view + the tab counts.
+    return events.filter(ev => !isForecastSnoozed(ev.job, forecastEventSuffix(ev), today));
   };
 
   const foremanTabs=["All",...(foremenList||getForemenList()),"Unassigned"];
@@ -35381,12 +35441,12 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
     const notScheduled=sno&&!inSimpro;
     return (
       <div onClick={()=>onSelectJob(ev.job)}
-        style={{background:"var(--card)",borderRadius:12,padding:"11px 13px",marginBottom:6,cursor:"pointer",
+        style={{position:"relative",background:"var(--card)",borderRadius:12,padding:"11px 13px",marginBottom:6,cursor:"pointer",
           border:`1px solid ${over?C.red+"44":col+"22"}`,borderLeft:`3px solid ${col}`,
           transition:"transform 0.1s,box-shadow 0.1s"}}
         onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${col}18`;}}
         onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap",rowGap:4}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap",rowGap:4,paddingRight:canEdit?24:0}}>
           {over&&<span style={{fontSize:9,fontWeight:800,color:C.red,background:C.red+"18",borderRadius:99,
             padding:"2px 8px",border:`1px solid ${C.red}33`,letterSpacing:"0.07em",flexShrink:0,
             whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3}}>
@@ -35441,9 +35501,68 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
             </span>
           )}
         </div>
+        {canEdit && ev.type!=="invoice" && (
+          <div style={{position:"absolute",top:8,right:8}} onClick={e=>e.stopPropagation()}>
+            <button title="Clear / snooze this card" aria-label="Clear this card"
+              onClick={()=>setOpenSnoozeId(id=>id===ev.id?null:ev.id)}
+              style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
+                width:24,height:24,borderRadius:7,border:`1px solid ${C.border}`,
+                background:"var(--surface)",color:"var(--dim)",cursor:"pointer"}}>
+              <Icon name="clock" size={13}/>
+            </button>
+            {openSnoozeId===ev.id && (
+              <div style={{position:"absolute",top:28,right:0,zIndex:30,minWidth:190,
+                background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:11,
+                boxShadow:"0 6px 18px rgba(0,0,0,0.18)",padding:6}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:"var(--dim)",
+                  textTransform:"uppercase",padding:"6px 8px 4px"}}>Snooze — comes back if still open</div>
+                {[{l:"Snooze 3 days",n:3},{l:"Snooze 1 week",n:7}].map(o=>(
+                  <button key={o.n} onClick={()=>{ setOpenSnoozeId(null); snoozeEvent(ev, isoPlusDays(o.n)); }}
+                    style={{display:"flex",width:"100%",alignItems:"center",gap:8,textAlign:"left",
+                      font:"inherit",fontSize:12.5,color:"var(--text)",background:"none",border:"none",
+                      borderRadius:7,padding:8,cursor:"pointer"}}>
+                    {o.l}<span style={{marginLeft:"auto",fontSize:10,color:"var(--dim)"}}>{fmtDate(isoPlusDays(o.n))}</span>
+                  </button>
+                ))}
+                <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,color:C.accent,
+                  padding:8,cursor:"pointer",fontWeight:600}}>
+                  Pick a date…
+                  <input type="date" style={{marginLeft:"auto"}}
+                    onChange={(e)=>{ if(e.target.value){ setOpenSnoozeId(null); snoozeEvent(ev, e.target.value); } }}/>
+                </label>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   };
+
+  // ── Invoice notification (demoted: not a scheduling task) ─────
+  // Ready-to-Invoice is a billing signal, not schedulable work, so it renders
+  // as a slim notification row (grouped at the bottom of its bucket) with a
+  // one-tap Dismiss = {invoiceDismissed:true}. Reversible; leaves readyToInvoice
+  // untouched so the job card / Today still show it as a notification.
+  const InvoiceNote = ({ ev }) => (
+    <div onClick={()=>onSelectJob(ev.job)}
+      style={{position:"relative",display:"flex",alignItems:"center",gap:9,cursor:"pointer",
+        background:"#B06A2C10",border:"1px solid #B06A2C33",borderLeft:"2px solid #B06A2C",
+        borderRadius:10,padding:"8px 10px",marginBottom:6}}>
+      <span style={{width:22,height:22,borderRadius:6,flexShrink:0,display:"inline-flex",
+        alignItems:"center",justifyContent:"center",background:"#B06A2C22",color:"#B06A2C",
+        fontWeight:800,fontSize:13}}>$</span>
+      <div style={{minWidth:0,flex:1}}>
+        <div style={{fontSize:8.5,fontWeight:800,letterSpacing:"0.08em",color:"#B06A2C"}}>READY TO INVOICE · {ev.job.foreman||"Koy"}</div>
+        <div style={{fontSize:12,fontWeight:600,color:"var(--text)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
+      </div>
+      {canEdit && (
+        <button title="Dismiss — off the board" aria-label="Dismiss invoice notification"
+          onClick={(e)=>{ e.stopPropagation(); dismissInvoice(ev); }}
+          style={{width:22,height:22,borderRadius:6,flexShrink:0,border:"1px solid transparent",
+            background:"none",color:"var(--dim)",cursor:"pointer",fontSize:15,lineHeight:1}}>✕</button>
+      )}
+    </div>
+  );
 
   // ── CALENDAR helpers ──────────────────────────────────────────
   // Returns true if an event "covers" a given date (for window events)
@@ -35564,6 +35683,20 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
 
   return (
     <div>
+      {/* ── Inline-clear undo bar (Dismiss / Snooze) — reversible for 10s ── */}
+      {undoToast && (
+        <div style={{position:"fixed",left:"50%",bottom:20,transform:"translateX(-50%)",zIndex:200,
+          display:"flex",alignItems:"center",gap:10,background:"#1B1F24",color:"#EEF0F3",
+          borderRadius:9,padding:"9px 13px",border:`1px solid ${C.border}`,
+          boxShadow:"0 8px 24px rgba(0,0,0,0.35)",fontSize:12,maxWidth:"92vw"}}>
+          <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{undoToast.label}</span>
+          <button onClick={commitUndo}
+            style={{background:C.blue,color:"#fff",border:"none",borderRadius:6,
+              padding:"4px 12px",fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+          <button onClick={()=>{ if(undoToast.timer) clearTimeout(undoToast.timer); setUndoToast(null); }}
+            style={{background:"none",border:"none",color:"#8A929D",cursor:"pointer",fontSize:14,padding:"0 4px"}}>✕</button>
+        </div>
+      )}
       {/* ── Header ── */}
       <div style={{padding:"20px 26px 0",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
@@ -35632,8 +35765,10 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
                 const bEvs=allEvents.filter(ev=>getBucketForEvent(ev)===bucket.key);
                 return (
                   <div key={bucket.key}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
-                      paddingBottom:8,borderBottom:`2px solid ${bucket.color}55`}}>
+                    <div onClick={()=>toggleCollapsed(bucket.key)} style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
+                      paddingBottom:8,borderBottom:`2px solid ${bucket.color}55`,cursor:"pointer"}}>
+                      <span style={{display:"inline-flex",transition:"transform 0.18s",
+                        transform:collapsed.has(bucket.key)?"rotate(-90deg)":"none",color:bucket.color,fontSize:12}}>▾</span>
                       <div style={{width:8,height:8,borderRadius:"50%",background:bucket.color,flexShrink:0}}/>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,
                         letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
@@ -35642,11 +35777,27 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
                         {bEvs.length}
                       </div>
                     </div>
-                    {bEvs.length===0
+                    {!collapsed.has(bucket.key) && (bEvs.length===0
                       ?<div style={{fontSize:11,color:"var(--muted)",fontStyle:"italic",padding:"16px 0",
                           textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Empty</div>
-                      :bEvs.map(ev=><EventCard key={ev.id} ev={ev}/>)
-                    }
+                      :(()=>{
+                        // Scheduling cards read first; invoice notifications collect
+                        // at the bottom under their own divider (Koy: bottom of column).
+                        const sched=bEvs.filter(ev=>ev.type!=="invoice");
+                        const inv=bEvs.filter(ev=>ev.type==="invoice");
+                        return (<>
+                          {sched.map(ev=><EventCard key={ev.id} ev={ev}/>)}
+                          {inv.length>0&&(
+                            <div style={{display:"flex",alignItems:"center",gap:7,margin:"10px 2px 6px",
+                              fontSize:9.5,fontWeight:800,letterSpacing:"0.09em",color:"#B06A2C"}}>
+                              READY TO INVOICE ({inv.length})
+                              <span style={{flex:1,height:1,background:"#B06A2C40"}}/>
+                            </div>
+                          )}
+                          {inv.map(ev=><InvoiceNote key={ev.id} ev={ev}/>)}
+                        </>);
+                      })()
+                    )}
                   </div>
                 );
               })}
@@ -46692,7 +46843,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-08-31 · App SW version: v391
+**Last manifest update:** 2026-09-02 · App SW version: v392
 
 ---
 
@@ -46716,6 +46867,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
   - Accuracy rebuild: worked ≠ viewed · 'shipped 2026-08-09' · 'SW v368' · Koy: "it needs to pull information more accurately." Every band now derives from Today's own normalized event stream instead of 'lastActivityAt'/'saved_by' — those get stamped by the presence ping on merely OPENING a job (it rides the 'u()' → 'saveJob' funnel), so a look counted as work: it inflated "Jobs today", silenced the no-work signal for any stale job someone checked on, and handed a foreman's morning to whoever viewed his job last ("Foremen on app today" also counted office viewers). Presence rows stay in the feed as honest "Opened X" entries; they just never count as work, and heartbeat status ("on the app") still counts them while its tallies count work only. Active jobs now uses the canonical Huddle / Crew Planner definition ('effRS'/'effFS', minus temp peds + quick jobs) and the whole tab filters out Simpro quotes + archived/deleted docs — quotes share the jobs collection, so the old 'finishStatus !== "complete"' guess counted every quote as an active job and listed them all as "never touched". Pulse counters (punches closed, COs added) count the same events the feed renders, so a tile can never disagree with its own expanded rows (the old string-equality counters — 'checkedAt === "8/9/2026"' — could, and missed non-locale formats). Photos tile + strip show photos actually TAKEN today; the old version collected every photo ever attached to any job touched today, so one save on a photo-heavy job read as a big photo day. Heartbeat roster + coordinator Book pills (Today AND Forecast — same memo pattern) exclude deactivated users per the v366 convention, so laid-off foremen stop sitting as forever-quiet cards; Book JOB-scoping deliberately does NOT filter, so a laid-off foreman's not-yet-reassigned jobs stay visible in his coordinator's book (deactivation hides people from rosters, never jobs from views). Feed honesty: date-only events (CO created, inspection attempts, pre-v180 punch closes) show "—" instead of a fake 12:00 AM, future-dated RT appointment "events" no longer float to the top of today's feed (5-minute clock-skew grace), and Simpro imports emit "Job imported" off 'imported_at' instead of reading "never touched" the day they arrive. Why it can't lose data: read-side derivation rebuild — no loader change, no field removed, no rules change, presence write path untouched; the single write change is additive: the RT sign-off cascade now stamps 'checkedAtTs' (ISO) beside its date-only 'checkedAt', the identical pair the other four punch-close paths already write, and never overwrites an existing value ('p.checkedAtTs || nowISO')
 - **Safety** · 'shipped' · safety meetings / topics
 - **Forecast** · 'shipped' · 'SchedulingForecast' · upcoming work calendar view
+  - Kanban inline cleanup · 'shipped 2026-09-02' · 'SW v392' · Koy: the Kanban clogged with overdue cards and you had to open each job (under its foreman) to clear anything. Three changes, layout unchanged. **(1) Ready-to-Invoice demoted** from a date-bucket task to a slim amber notification, grouped under a 'Ready to invoice (N)' divider at the **bottom** of its column, with one-tap **Dismiss** = '{invoiceDismissed:true}' (reversible; 'readyToInvoice' untouched, so the job card / Today still show it as a notification). The same flag now also hides a phase stuck at 'status:"invoice"' (the rough/finish 'isInv' pushes gained a '!invoiceDismissed' gate matching the job-level invoice event). **(2) Scheduling cards gain inline Clear → Snooze** (3 days / 1 week / pick a date) writing a per-job 'forecastSnooze' map keyed by the event's id suffix ('rough'/'finish'/'qc'/'rt_<id>'/'co_<id>'/'quick'); a snoozed card leaves **every** Forecast view + the foreman-tab counts and **returns on its own** once the date passes — nothing schedulable is deleted. **(3) Collapsible columns** — tap a header to fold it, persisted per browser in 'localStorage' ('he_forecast_collapsed'). Every clear has a 10-second **Undo** (mirrors the PhaseInstruction 'undoToast'). Writes ride the existing 'onUpdateJob → saveJob' funnel and are gated on 'schedule.edit' (read-only users see the board exactly as before). **Why it can't lose data:** additive — 'forecastSnooze' lives inside the job 'data' envelope so the loader auto-unwraps it with no spread change (follows the 'taskDueDates' whole-map precedent); Dismiss reuses the reversible 'invoiceDismissed' flag; no loader change, no 'firestore.rules' change, no field removed. Verified by 'scripts/forecast-snooze-dryrun.js' (12 assertions) + the 'no-undef' gate (which caught a missing 'canEdit' prop pre-ship) + CI build.
   - Starts view mode · 'shipped 2026-07-20' · 'SW v349' · 'StartsReport' · a 6th Forecast view (alongside Kanban / Week / Attention / Calendar / Crew): one compiled read-only list of every projected & confirmed start — rough + finish across live jobs, plus Upcoming jobs carrying a projected start. Projected / Confirmed / All filter (confidence = 'roughStartConfirmed' / 'finishStartConfirmed', or a 'scheduled' / 'date_confirmed' status), grouped by week (Past due / This week / Next week / Later); respects the coordinator book filter; tapping a live-job row opens it, Upcoming rows are dashed-gold and non-clickable. Suggestion #3 (Justin Cloward)
     - Date-format fix · 'shipped 2026-07-20' · 'SW v350' · v349 parsed only ISO 'YYYY-MM-DD', but real job start dates are US slash ('3/19/26', '6/4/2026') — so every row's date failed to parse and the report rendered empty. '_parseStartDate' now handles both slash and ISO; bucket sort compares parsed dates (was buggy string compare); already-'inprogress' phases excluded (a start that already happened isn't upcoming)
     - Needs Date section + Past due moved to the bottom · 'shipped 2026-07-29' · 'SW v359' · from Koy + Justin talking through the Starts view. Group order is now **This week / Next week / Later / Past due**, so the week you're planning reads first and the problems collect at the end. New gold **Needs date** section closes the report and fills the view's blind spot: the event builder did 'if(!ps) return', so **a job with no projected start never became a row at all** — every unscheduled job was invisible in the one view meant to answer "what's starting?" Now surfaced for the phase that's actually next: rough not started and no rough date, or rough complete and finish unscheduled ("in between"). Deliberately **one row per job** — an unscheduled rough doesn't also nag for a finish date nobody could know yet, and a phase already 'inprogress' needs no start date (Koy: chasing the finish date while the rough is still going is too early). Reads 'effRS'/'effFS', not raw 'roughStatus' — 'effRS' derives 'inprogress' from 'roughStage:"40"' with no status field, so keying off the raw field would have dragged every actively-roughing job into the chase list. Excludes archived / deleted / quotes / quick jobs / temp peds. Each row shows **why** it has no date (its status label — "Awaiting Start Date", "On Hold", "No status set") and opens the job so the date can be set on the spot. **Upcoming pipeline included** (Koy: "a clear view of all the jobs") — entries with no 'projectedStart' were being dropped by 'if(!u.projectedStart) return', so the report only ever showed *part* of the pipeline; they now land here too, sorted after board jobs (those are the ones you can open and fix) and non-clickable like every other Upcoming row. Also folds in starts whose date string won't parse: '_weekBucket' returned 'null' and the render loop **silently dropped the row**, so a typo'd date deleted the job from the report — it now shows with its raw text and a "Date unreadable" reason. Colour '#B0892C' is the app's own 'waiting_date' gold, so the section reads as a concept the status pills already use. Read-only — no writes, no new fields, no loader change
