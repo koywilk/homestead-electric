@@ -632,6 +632,31 @@ async function answerFieldNote(jobId, noteId, answerText, answeredBy) {
   } catch (e) { _ccDenied(e); console.warn("[fieldink] field-note answer failed (rules deployed?):", e?.message); return false; }
 }
 
+// ── ccloads OFFICE write-back (v580 lighting-loads bridge) ──────────────────
+// FieldInk (TraceVault v580) publishes each roped lighting load to
+// ccloads/<jobId> as a MAP keyed by load id, writing only the FIELD-owned keys.
+// The office owns ONLY each load's `office` sub-object (assignment, floor
+// override, fixture-name overrides, dismissed). This is a TARGETED merge write:
+// Firestore merge:true DEEP-merges nested MAPS (it only replaces arrays), so
+// writing loads.<id>.office.<field> preserves every field-owned key AND every
+// other load with no pre-read — the read-then-merge dance the array-shaped
+// cccos/ccquestions bridges need does not apply here (loads is a map, not an
+// array). One-shot, user-triggered (no debounce/hash gate). Requires the
+// field-ink `ccloads` rules block (ships with TraceVault v580).
+async function publishCcLoadOffice(jobId, loadId, officePatch) {
+  try {
+    if (jobId == null || !loadId) return false;
+    const user = await ensureFieldinkAuth();
+    if (!user) return false;
+    await setDoc(
+      doc(fieldinkDb, "ccloads", String(jobId)),
+      { loads: { [loadId]: { office: { ...officePatch, officeUpdatedAt: serverTimestamp() } } }, updatedAt: serverTimestamp(), updatedBy: "office" },
+      { merge: true }
+    );
+    return true;
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] ccloads office write failed (rules deployed?):", e?.message); return false; }
+}
+
 // ── FieldInk CREW ROSTER seed + CREW TOKEN mint (CC-SIDE SPEC P4.2 Instant
 // Grants) ───────────────────────────────────────────────────────────────────
 // Two zero-tap grants layered on the personalized Open link (item 1, SW v384):
@@ -25669,6 +25694,37 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
   }, [job.id]);
 
+  // ── FieldInk LIGHTING LOADS inbox (v580) ──────────────────────────────────
+  // FieldInk publishes each roped lighting load to ccloads/<jobId> — a MAP keyed
+  // by load id (field-owned keys). Listen and hand the Loads section an inbox of
+  // incoming field loads to review/dismiss. (Assigning one to a panel output is
+  // the next increment; this read-only view proves the bridge end-to-end.)
+  // Same self-healing attach as the cccos listener above; inert until the office
+  // is job-linked AND the field-ink `ccloads` rules are deployed.
+  const [ccLoadInbox, setCcLoadInbox] = useState({});
+  useEffect(() => {
+    let dead = false, unsub = null, retryTimer = null;
+    setCcLoadInbox({});
+    const attach = () => { if (dead) return; ensureFieldinkAuth().then(u2 => {
+      if (dead) return;
+      if (!u2) { retryTimer = setTimeout(attach, 20000); return; }
+      try {
+        unsub = onSnapshot(doc(fieldinkDb, "ccloads", String(job.id)), snap => {
+          const d = snap.exists() ? snap.data() : null;
+          const m = {};
+          for (const [id, l] of Object.entries(d?.loads || {})) if (l && typeof l === "object") m[id] = { ...l, id };
+          setCcLoadInbox(m);
+        }, (err) => {
+          console.warn("[fieldink] ccloads listener error — retrying in 15s:", err?.message);
+          try { unsub && unsub(); } catch {}
+          if (!dead) retryTimer = setTimeout(attach, 15000);
+        });
+      } catch {}
+    }); };
+    attach();
+    return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
+  }, [job.id]);
+
   // ── CREW FIELD QUESTIONS → the job's Questions ────────────────────────────
   // A crew drops a Question/Problem on a live plan link (?crew=) → FieldInk
   // forwards it to field-ink ccfieldnotes/<jobId>/notes. Fold each one into the
@@ -27301,6 +27357,49 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
 
               )}
+
+              {/* v580 ── INCOMING FROM FIELDINK ── the lighting loads the crew
+                  roped on the plan, streamed from ccloads/<jobId>. Read-only for
+                  now (Dismiss writes only the office-owned `dismissed` flag back
+                  to the bridge — never the job). Assigning a load to a panel
+                  output is the next increment. */}
+              {(()=>{
+                const incoming = Object.values(ccLoadInbox || {}).filter(l => l && !(l.office && l.office.dismissed));
+                if (!incoming.length) return null;
+                const active = incoming.filter(l => !l.removedAt);
+                const gone = incoming.filter(l => l.removedAt);
+                const fixtxt = (l) => (Array.isArray(l.fixtures) ? l.fixtures : []).filter(Boolean).map(f => `${f.n} ${f.name}`).join(", ");
+                const ctrlLabel = (l) => l.control === "dimmer" ? "Dimmer" : l.control === "tape" ? "Tape" : l.control === "panel" ? "Panel" : "Switched";
+                return (
+                  <div style={{marginBottom:16,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",background:C.card}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:C.surface,borderBottom:`1px solid ${C.border}`}}>
+                      <Icon name="inbox" size={14} stroke={2.25}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:sysAccentColor(job)}}>Incoming from FieldInk</div>
+                      <div style={{fontSize:11,color:C.dim,fontWeight:700}}>{active.length}</div>
+                      <div style={{flex:1}}/>
+                      <div style={{fontSize:10,color:C.dim}}>roped on the plan — assign to a panel output (coming next)</div>
+                    </div>
+                    <div>
+                      {[...active, ...gone].map(l => (
+                        <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderTop:`1px solid ${C.border}`}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:700,color:l.removedAt?C.dim:C.text}}>
+                              {l.name || l.loadId || "Load"}
+                              {l.removedAt && <span style={{marginLeft:8,fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
+                            </div>
+                            <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                              {[l.room, l.sheet, fixtxt(l)].filter(Boolean).join("  ·  ")}
+                            </div>
+                          </div>
+                          <div style={{fontSize:10,fontWeight:700,color:C.dim,border:`1px solid ${C.border}`,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>{ctrlLabel(l)}</div>
+                          <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this incoming load"
+                            style={{padding:"5px 9px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <SectionHead label="Loads" color={sysAccentColor(job)} action={<>
                 <button title={job.panelizedLighting?.baseline ? "Re-snapshot the current loads as the new baseline" : "Snapshot the current loads as the original-plans baseline"}
