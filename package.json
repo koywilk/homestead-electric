@@ -16,7 +16,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "prebuild": "node scripts/version-from-sw.js && node scripts/gcportal-test.js && node scripts/gcnotify-test.js && node scripts/sanitize-test.js && node scripts/pending-queue-test.js",
+    "prebuild": "node scripts/version-from-sw.js && node scripts/gcportal-test.js && node scripts/gcnotify-test.js && node scripts/sanitize-test.js && node scripts/pending-queue-test.js && node scripts/leadprep-test.js",
     "build": "react-scripts build",
     "test": "react-scripts test"
   },

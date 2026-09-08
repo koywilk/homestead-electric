@@ -4021,6 +4021,113 @@ exports.sendTestFridayPacket = functions
   });
 
 // ─────────────────────────────────────────────────────────────
+// SCHEDULED — Tuesday 6:00am Mountain Time
+// Lead Meeting Prep — a pre-filled sheet (Rough / Finish / Upcoming / crew out /
+// inspection highlights / what shipped / last week's action items) for the
+// Wednesday 6:30 Weekly Lead Meeting. Koy only ("just for me to pull from",
+// 2026-09-08). Content comes from the PURE builder ./leadMeetingPrep.js so
+// scripts/leadprep-dryrun.js renders byte-identical output for sign-off.
+// Data safety: read-only on Firestore (jobs, upcoming_jobs, crewPTO, users);
+// ZERO Firestore writes; one Drive doc per run in the packet folder.
+// ─────────────────────────────────────────────────────────────
+const leadPrepLib = require("./leadMeetingPrep.js");
+// "Notes - Weekly Lead Meeting" — the Calendar-attached notes doc. Koy shares it
+// Viewer with <project>@appspot.gserviceaccount.com; unreadable ⇒ the Action
+// items section degrades to a share hint, never a failed run.
+const LEAD_NOTES_DOC_ID = "1gn8CcqImvP2Zra_0gC8xAhUTzV8M8UGOrw44ipLwFKg";
+// The repo is public, so the Training section reads FEATURES.md straight from
+// GitHub (the function can't see the bundle's inlined copy).
+const FEATURES_MD_RAW_URL = "https://raw.githubusercontent.com/koywilk/homestead-electric/main/FEATURES.md";
+
+async function runLeadMeetingPrep({ testRun = false } = {}) {
+  const now = new Date();
+
+  // 1 · Firestore reads (jobs are wrapped {data:{...}}; settings docs are not).
+  const [snap, upSnap, ptoSnap] = await Promise.all([
+    db.collection("jobs").get(),
+    db.doc("settings/upcoming_jobs").get(),
+    db.doc("settings/crewPTO").get(),
+  ]);
+  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; });
+  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
+  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+
+  // 2 · FEATURES.md — Training section. Failure ⇒ null ⇒ section degrades.
+  let featuresMd = null;
+  try {
+    const resp = await fetch(FEATURES_MD_RAW_URL, { signal: AbortSignal.timeout(15000) });
+    if (resp.ok) featuresMd = await resp.text();
+    else functions.logger.warn("leadMeetingPrep FEATURES.md fetch failed", { status: resp.status });
+  } catch (e) { functions.logger.warn("leadMeetingPrep FEATURES.md fetch error", { error: e.message }); }
+
+  // 3 · Last week's action items from the notes doc (Docs API, read-only).
+  let notesDoc = null;
+  try {
+    const docsAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
+    const docs = google.docs({ version: "v1", auth: docsAuth });
+    const res = await docs.documents.get({ documentId: LEAD_NOTES_DOC_ID });
+    notesDoc = res.data || null;
+  } catch (e) { functions.logger.warn("leadMeetingPrep notes doc read failed", { error: e.message }); }
+
+  // 4 · Build + render (pure — no I/O inside).
+  const model = leadPrepLib.buildModel({ jobs, upcoming, pto, featuresMd, notesDoc, now });
+  const html = leadPrepLib.renderHtml(model);
+  const docTitle = `Lead Meeting Prep — ${model.docDate}`;
+
+  // 5 · Upload to Drive as a Google Doc (same folder + mechanism as the Friday Packet).
+  let docLink = "", docId = "";
+  try {
+    const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file"] });
+    const drive = google.drive({ version: "v3", auth });
+    const createRes = await drive.files.create({
+      requestBody: { name: docTitle, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" },
+      media: { mimeType: "text/html", body: html },
+      fields: "id, webViewLink",
+      supportsAllDrives: true,
+    });
+    docId = createRes.data.id || "";
+    docLink = createRes.data.webViewLink || "";
+  } catch (e) {
+    functions.logger.error("leadMeetingPrep Drive upload failed", { error: e.message });
+    // Ops alert — intentionally ungated plain sendToName (can't be muted).
+    await sendToName("Koy", {
+      title: "⚠️ Lead Meeting Prep failed",
+      body: `Drive upload error: ${e.message.slice(0, 120)}`,
+    });
+    return { ok: false, error: e.message };
+  }
+
+  // 6 · Announce — Koy only, ungated (personal ops send).
+  await sendToName("Koy", {
+    title: testRun ? "📝 Lead Meeting Prep (test) ready" : "📝 Lead Meeting Prep ready",
+    body: `${docTitle} is in Drive — open it there`,
+    jobId: "",
+    section: "",
+  });
+
+  functions.logger.info("leadMeetingPrep saved to Drive", { docId, docLink, testRun, ...model.counts });
+  return { ok: true, docLink, docId, counts: model.counts };
+}
+
+exports.leadMeetingPrep = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .pubsub.schedule("0 6 * * 2")
+  .timeZone(TZ)
+  .onRun(async () => {
+    await runLeadMeetingPrep();
+    return null;
+  });
+
+// Manual trigger — a full real run any day (Drive doc + push to Koy) so the
+// pipeline can be verified without waiting for a Tuesday.
+exports.sendTestLeadMeetingPrep = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    return await runLeadMeetingPrep({ testRun: true });
+  });
+
+// ─────────────────────────────────────────────────────────────
 // DRIVE — shared helpers for auto-folder-create & nightly sync
 // ─────────────────────────────────────────────────────────────
 
