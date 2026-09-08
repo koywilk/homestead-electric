@@ -2,7 +2,7 @@
 // All push notification logic lives here.
 // Deploy with: firebase deploy --only functions
 
-const functions  = require("firebase-functions");
+const functions  = require("firebase-functions/v1"); // v6+: root entrypoint is v2; this file is all v1 API (runWith/pubsub.schedule/https.onCall)
 const admin      = require("firebase-admin");
 admin.initializeApp();
 
