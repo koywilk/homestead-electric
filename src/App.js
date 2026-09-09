@@ -10199,6 +10199,44 @@ function normFloor(v) {
 
 }
 
+// Question room grouping (2026-09-09) — questions carry an optional `room`
+// string (absent/blank = General). Pure; safe to call from render. Floors are
+// unchanged; this only orders questions WITHIN a floor's array: General first,
+// then rooms A-Z (case-insensitive, first-seen casing kept), in-group order
+// preserved, empty groups dropped.
+function groupQuestionsByRoom(arr) {
+  const list = Array.isArray(arr) ? arr : [];
+  const general = [];
+  const byKey = new Map(); // lowercase room -> { room, label, questions }
+  list.forEach(q => {
+    const room = (q && typeof q.room === 'string') ? q.room.trim() : '';
+    if (!room) { general.push(q); return; }
+    const k = room.toLowerCase();
+    if (!byKey.has(k)) byKey.set(k, { room, label: room, questions: [] });
+    byKey.get(k).questions.push(q);
+  });
+  const rooms = [...byKey.values()].sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
+  return [{ room: '', label: 'General', questions: general }, ...rooms].filter(g => g.questions.length);
+}
+
+// Room-name suggestions for the question add box: this phase+floor's punch
+// rooms UNION every room already typed on this job's questions. Best-effort
+// (reads defensively, never throws), de-duped case-insensitively (first-seen
+// casing), sorted A-Z. Shares vocabulary with Punch so "Kitchen" stays one room.
+function roomSuggestions(job, phase, floorKey) {
+  if (!job) return [];
+  const seen = new Map(); // lowercase -> first-seen casing
+  const add = (n) => { const s = String(n || '').trim(); if (s && !seen.has(s.toLowerCase())) seen.set(s.toLowerCase(), s); };
+  const punch = phase === 'rough' ? job.roughPunch : job.finishPunch;
+  const rooms = punch && punch[floorKey] && Array.isArray(punch[floorKey].rooms) ? punch[floorKey].rooms : [];
+  rooms.forEach(r => add(r && r.name));
+  ['roughQuestions', 'finishQuestions'].forEach(f => {
+    const fl = job[f] || {};
+    ['upper', 'main', 'basement'].forEach(k => (Array.isArray(fl[k]) ? fl[k] : []).forEach(q => add(q && q.room)));
+  });
+  return [...seen.values()].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
 // J7 — Small pill shown on destination records (Punch item, RT, CO line, manualTask)
 // indicating they were created via a Job Note promote. Looks up the source note
 // by id from `job.jobNotes[]` so the title stays fresh if the user renames the note.
@@ -29321,7 +29359,7 @@ function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThre
           questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
       </>
     }>
-      <QASection questions={qs||{upper:[],main:[],basement:[]}} onChange={v=>u(rough?{roughQuestions:v}:{finishQuestions:v})} color={color} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder={phase} fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>
+      <QASection questions={qs||{upper:[],main:[],basement:[]}} onChange={v=>u(rough?{roughQuestions:v}:{finishQuestions:v})} color={color} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder={phase} fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))} job={job}/>
       {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
       </div>}
     </Section>
@@ -29347,7 +29385,7 @@ const countUnseenAnswers = (job) => {
   return n;
 };
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy=''}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy='', groupMode='flat', roomOptions=[]}) {
 
   // guard: old data may be a string instead of array
 
@@ -29363,6 +29401,10 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   const threadOf = (q) => [...(q.thread||[]), ...((questionThreads||{})[`${qtPhase}_${qtFloor}_${q.id}`]||[])];
 
   const [draft, setDraft] = useState("");
+  // Room-by-room grouping (2026-09-09): optional room typed alongside a new
+  // question (roomDraft), and which room groups are collapsed in the list.
+  const [roomDraft, setRoomDraft] = useState("");
+  const [collapsedRooms, setCollapsedRooms] = useState(()=>new Set());
   const [editRecip, setEditRecip] = useState(null); // q.id whose recipient tag is being edited
   // 2026-07-06 cleanup: open cards show just the question + answer box by
   // default; the secondary controls (note, how-answered, reminder, photo
@@ -29398,9 +29440,11 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
     const who = getIdentity();
 
-    onChange([...questions, {id:uid(), question:q, answer:"", done:false, for:defaultFor, addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
+    const roomVal = roomDraft.trim();
 
-    setDraft("");
+    onChange([...questions, {id:uid(), question:q, answer:"", done:false, for:defaultFor, ...(roomVal?{room:roomVal}:{}), addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
+
+    setDraft(""); setRoomDraft("");
 
   };
 
@@ -29521,6 +29565,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
           {(q.addedBy||q.addedAt)&&<span style={{fontSize:9,color:C.dim}}>
             {q.addedBy?`added by ${q.addedBy}`:"added"}{q.addedAt?` · ${new Date(q.addedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} (${timeAgo(q.addedAt)})`:""}
           </span>}
+          {(q.room||"").trim()&&<span style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',border:`1px solid ${color}55`,background:`${color}14`,color}}>{q.room.trim()}</span>}
           {(()=>{ const cur=(q.for||"").trim(); const isEd=editRecip===q.id; const others=recipients.filter(r=>r&&r!==cur);
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRecip(q.id)} title="Set who this question is for"
@@ -29828,7 +29873,21 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       )}
 
-      {showOpenSection && open.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
+      {showOpenSection && (groupMode==='room' ? groupQuestionsByRoom(open).map(g=>{
+        const rk=g.room.toLowerCase(), collapsed=collapsedRooms.has(rk);
+        return (
+          <div key={rk||'__gen'} style={{marginBottom:10}}>
+            <div onClick={()=>setCollapsedRooms(p=>{const n=new Set(p); n.has(rk)?n.delete(rk):n.add(rk); return n;})}
+              style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'5px 8px',borderRadius:8,marginBottom:8,
+                background:g.room?`${color}0D`:C.surface,border:`1px ${g.room?'dashed':'solid'} ${g.room?color+'59':C.border}`}}>
+              <span style={{fontSize:10,color:g.room?color:C.dim,display:'inline-block',transform:collapsed?'rotate(-90deg)':'none'}}>▾</span>
+              <span style={{fontSize:12,fontWeight:800,color:g.room?color:C.dim}}>{g.label}</span>
+              <span style={{fontSize:10,color:C.dim,fontWeight:600}}>{g.questions.length}</span>
+            </div>
+            {!collapsed && g.questions.map(q=>renderQ(q,questions.indexOf(q),questions.indexOf(q)))}
+          </div>
+        );
+      }) : open.map((q,i)=>renderQ(q,i,questions.indexOf(q))))}
 
       {/* Answered — collapsed by default (2026-07-06 cleanup) so the list
           reads as "what's still open". Header click expands; the Answered
@@ -29853,14 +29912,23 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
       )}
 
       {!hideAdd && (
-      <div style={{display:"flex",gap:6,marginTop:8}}>
+      <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
 
         <Inp value={draft} onChange={e=>setDraft(e.target.value)}
 
-          placeholder="Add a question…" style={{flex:1}}
+          placeholder="Add a question…" style={{flex:1,minWidth:160}}
 
           onKeyDown={e=>e.key==='Enter'&&add()}
-          onBlur={add}/>
+          onBlur={e=>{ if(e&&e.relatedTarget&&e.relatedTarget.getAttribute&&e.relatedTarget.getAttribute('data-roomfield')==='1') return; add(); }}/>
+
+        {/* Room (optional) — pick a known room on this job/floor or type a new
+            one. data-roomfield guards the question's blur-to-add above so
+            clicking in here never submits the question with an empty room. */}
+        <input list={`rooms-${jobId||'x'}-${photoFolder}`} value={roomDraft} onChange={e=>setRoomDraft(e.target.value)}
+          data-roomfield="1" placeholder="Room (optional)"
+          onKeyDown={e=>e.key==='Enter'&&add()}
+          style={{fontSize:12,padding:'6px 10px',border:`1px solid ${C.border}`,borderRadius:7,fontFamily:'inherit',outline:'none',width:150,background:C.surface,color:C.text}}/>
+        <datalist id={`rooms-${jobId||'x'}-${photoFolder}`}>{roomOptions.map(r=><option key={r} value={r}/>)}</datalist>
 
         <Btn onClick={add} variant="primary">+</Btn>
 
@@ -29874,7 +29942,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null, job=null}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -29935,6 +30003,9 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
   // Thread state reads the MERGED view (legacy + side-doc) via threadOf.
   const needsReplyQ = (q, k) => { const t = threadOf(q, k); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
   const [statusFilter, setStatusFilter] = useState(null); // null | 'open' | 'needs' | 'answered'
+  // Room grouping (2026-09-09): 'room' groups each floor's open list by room
+  // (General first, then A-Z); 'flat' is today's ungrouped-by-room list.
+  const [groupMode, setGroupMode] = useState('room');
   const openCount  = allQs.filter(q=>!q.done).length;
   const needsCount = allQs.filter(q=>needsReplyQ(q)).length;
   const ansCount   = allQs.filter(q=>q.done).length;
@@ -29955,6 +30026,18 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
   return (
 
     <div>
+
+      {allQs.length>0 && (
+        <div style={{display:'flex',justifyContent:'flex-end',marginBottom:8}}>
+          <div style={{display:'flex',border:`1px solid ${C.border}`,borderRadius:99,overflow:'hidden'}}>
+            {[['room','By room'],['flat','Flat']].map(([m,l])=>(
+              <button key={m} type="button" onClick={()=>setGroupMode(m)}
+                style={{border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:11,fontWeight:700,padding:'5px 12px',
+                  background:groupMode===m?color:C.card, color:groupMode===m?'#fff':C.dim}}>{l}</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {filterIds!=null&&allQIds.length>0&&(
         <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.muted,marginBottom:8}}>
@@ -30102,6 +30185,8 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             excludeIds={statusFilter==null ? new Set((Array.isArray(questions[k])?questions[k]:[]).filter(q=>needsReplyQ(q,k)).map(q=>q.id)) : null}
             questionThreads={questionThreads}
             gcAnsweredBy={gcAnsweredBy}
+            groupMode={groupMode}
+            roomOptions={roomSuggestions(job, photoFolder, k)}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -46539,7 +46624,7 @@ function QuestionsSharePage({ jobId }) {
     return (
       <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#3E7D5A':accent}`,transition:'opacity 0.2s,border-color 0.2s'}}>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3,flexWrap:'wrap'}}>
-          <div style={{fontSize:10,color:'#99A0AA',fontWeight:600}}>{phaseLabel} · {q.floor}</div>
+          <div style={{fontSize:10,color:'#99A0AA',fontWeight:600}}>{phaseLabel} · {q.floor}{(q.room||'').trim()?` · ${q.room.trim()}`:''}</div>
           {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
           {isNewQ(q)&&<div style={{fontSize:10,fontWeight:800,color:'#8A6A1E',background:'#F3E9CF',border:'1px solid #E3D3A6',borderRadius:99,padding:'1px 8px'}}>NEW</div>}
           {!isNewQ(q)&&newReplyQ(q)&&<div style={{fontSize:10,fontWeight:800,color:'#3B5BA5',background:'#E7ECF7',border:'1px solid #3B5BA544',borderRadius:99,padding:'1px 8px'}}>New reply from Homestead</div>}
@@ -46977,7 +47062,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-02 · App SW version: v394
+**Last manifest update:** 2026-09-09 · App SW version: v395
 
 ---
 
@@ -47133,6 +47218,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - Questions grouped by room · 'shipped 2026-09-09' · 'SW v395' · Request from the crews (via Koy): *"in the questions have them be sorted by room names and floor, right now we cannot add rooms only floors on questions."* Questions were stored floor-only ('{upper,main,basement}'); each floor's list was one long undifferentiated column on a big custom. Now each question carries an **optional 'room' string** (absent/blank = "General") and the open list groups **by floor → room**: General first, then rooms A–Z (case-insensitive), each a collapsible subheader with a count. The add row gains a **Room box** — a pick-known-or-type-new datalist whose suggestions are the union of that phase+floor's **punch-list rooms** and rooms already used on the job's questions (shared vocabulary with Punch, so "Kitchen" stays one room), free text still allowed. A **By room / Flat** toggle (top of the phase, default By room) drops back to today's ungrouped list; the room also shows as a chip on each card so nothing is lost in Flat. Two pure helpers do the work — 'groupQuestionsByRoom' (General-first, A–Z, first-seen casing, empty groups dropped) and 'roomSuggestions' — both verified by a node harness ('scripts/questions-room-dryrun.js') driving the real functions extracted from source. The answer link ('QuestionsSharePage') is need-first, not floor-grouped, so it surfaces the room read-only on each card's sub-line ('Rough · Main Level · Kitchen') rather than restructuring the answerer's flow. **Why it can't lose data:** additive only — one optional 'room' string inside each question object, inside the 'data' envelope (never written as '""' — omitted when blank, so 'sanitize()' keeps legacy questions byte-identical). No loader change, no rules change, '{upper,main,basement}' and the 'phase_floor_id' thread key / 'qaSeenAns' stamp all unchanged; a question with no room renders under General exactly like today, and the Flat toggle preserves the current view. Question count on the scoreboard ('_sb3QCount' over the floor arrays) is untouched. The Questions SOP ('public/sops/questions.html') updated in the same ship
   - Home Runs inner groups collapse too · 'shipped 2026-07-20' · 'SW v348' · the groups INSIDE the Home Runs section start collapsed as tappable index rows — By Panel's panel groups ("Panel A · 25 of 28 pulled", 'openPanels' Set state) and By Floor's floor levels (label + pulled count; 'hrHasContent' filters blank seeded rows out of the counts). Also converged root 'node_modules' onto the '.nosync' symlink pattern (build-env only, gitignored)
   - All sections start collapsed on the Questions + Home Runs tabs · 'shipped 2026-07-20' · 'SW v347' · Rough/Finish Questions sections and every Home Runs tab section (Panel Schedules — now a real collapsible 'Section' wrapping 'ElectricalPanelSchedules', header deduped — Generator Load Selection, Panels, Home Runs, Load Mapping Notes) open collapsed so the tab reads as a scannable index first
   - In-app "?" help · 'shipped 2026-08-11' · 'SW v380' · Koy: put the training for a section ON the section, so the answer lives where the confusion is instead of in a doc nobody opens. A small bare "?" at the top of the Questions tab opens the crew guide in a full-screen viewer without leaving the job. **One per TAB, not per section header** (Koy, 2026-08-12: "only one per tab is necessary") — the guide covers the whole tab, and section headers already carry Share/Filter plus a collapse chevron. 'HelpDot' takes an optional 'label' for a wider pill; the shipped call passes none. **One-time hint** — the bare dot shows a dim "new — tap for the guide" beside it until the first tap, then never again on that device ('sopHintSeen_<section>' in localStorage, the same per-device pattern as the 'qaSeenAns_*' NEW-answer stamps; a throwing localStorage yields NO hint rather than one that never retires). That is what makes a bare dot safe to ship: a dot nobody taps because nobody SAW it is indistinguishable from a dot nobody wanted, and that false negative would scrap the feature on bad data. Suppressed when 'label' is passed, since a pill announces itself. **Questions first on purpose** — it's the most confusing surface in the app (crew answers vs link answers vs the GC portal, reopening, adopting a late answer); this is a proof on ONE section, not a sweep of all ~31. **THE FILENAME IS THE WIRING** — publishing a guide takes NO code edit at all. Koy records it, exports Standalone HTML, and drops the file in 'public/sops/' named after the tab (tab label with spaces/symbols stripped: 'Home Runs' → 'homeruns.html', 'Plans & Links' → 'planslinks.html', 'QC' → 'qc.html' — capitalization doesn't matter, 'HomeRuns.html' works too: the scan lowercases the KEY for matching but bakes the EXACT filename into the fetch path, because prod hosting is case-sensitive while the dev Mac's filesystem is not, the classic works-locally-404s-in-prod trap); the "?" turns on for that tab on the next build. Prebuild job 5 in 'scripts/version-from-sw.js' scans the folder and bakes 'SOP_FILES_INLINE' into 'src/App.js' (never hand-edit that block), reading each guide's own '<title>' for the viewer header — a SOP Recorder export already sets it from the recording's name, and the five 'escapeHtml' entities are decoded so a guide called "Home Runs & Panels" doesn't render as '&amp;'. A filename matching no tab emits a loud build NOTE, which is the only thing standing between a typo and a "?" that silently never appears — and the valid-key list is extracted from the real 'TABS' const in 'src/App.js' at build time (baked fallback only if that regex ever breaks), so renaming or adding a tab can't strand the warning list. Two files collapsing to one key (possible only on Vercel's case-sensitive checkout — the dev Mac's filesystem physically can't host both spellings) keep the first alphabetically, with a NOTE naming the ignored file. 'SOP_SUBTITLES' is optional polish, not a requirement. Four pieces: that generated manifest → 'SOP_MAP', 'sopKeyForTab' (the shared naming rule, used by both the app and the scan so they cannot drift), 'HelpDot' (the button; renders **nothing** when no guide exists, so no dead controls), and 'SopModal' (the viewer). The '<HelpDot>' is mounted **once** in the shared job-tab body wrapper rather than inside each of the 14 tab blocks, which is why a new tab's guide needs no JSX either. Guides are standalone HTML in 'public/sops/', fetched on demand and **never bundled** — a guide recorded in SOP Recorder bakes its screenshots in as data URIs (~2–5MB each), fine to pull once on a tap and completely wrong in the JS bundle every phone downloads on every cold start. They render in an iframe with 'sandbox="allow-scripts allow-popups"' and **no** 'allow-same-origin', so a guide's own stylesheet can't collide with the app's and its markup can't reach app storage, auth, or Firestore. Offline: the SW caches the guide on first successful fetch, so tap-once-on-signal makes it work in a basement forever after; a cache miss offline shows "Guide isn't downloaded yet" instead of hanging. **The shell gate is load-bearing** — both Vercel and 'firebase.json' rewrite '**' → '/index.html', so a missing or misspelled guide returns the ENTIRE APP with a 200 and 'res.ok' alone would render Homestead inside a modal inside Homestead. 'isRenderableSop' therefore REJECTS THE SHELL ('id="root"' + a '/static/js/main.*.js' tag) rather than requiring a marker — that direction is deliberate and is what lets a **raw SOP Recorder export be dropped in untouched**, since that exporter is a separate project that stamps no marker and demanding one would mean hand-doctoring every recording. 'homestead-sop' survives as an optional explicit opt-in. The SW also now answers an uncached '/sops/*' navigate with a 504 instead of the index.html fallback (opening a guide in its own tab IS a navigate, and would otherwise render Homestead where the guide should be). **All 15 guides shipped as Claude-written text drafts (2026-08-12)** — every tab has one (grounded in the App Map, the vault trainings, and live code; the Change Orders draft deliberately drops the retired "Task Made in SimPro" status the older vault guide still shows), plus **six individual link guides** (Koy: "an individual training for all the different links… going over the specifics of each") — 'questionlinks', 'crewlink', 'liveviewlink', 'generatorlink', 'lightinglinks' (collab + Lutron hub + AV loads in one, since they share an audience area), 'gcportal' — each opened by a bare "?" at its OWN creation spot: the Questions share picker action, the LIVE PLANS — FIELDINK section header (one dot for the section, not per plan row), the Home Runs live-view share row, the generator homeowner link row, the lighting collab share row + the non-Lutron Share loads button, and the GC portal's Create button. Each opens with the same condensed universal-rules card (one link per person · send the link not a screenshot · scoped view · delete kills instantly) then goes deep on its own link. The Return Trips guide also gained the two missing RT sources (direct '+ Add Return Trip' — a GC ask, warranty, anything needing a trip — and failed 4-way/final inspections, RT created by the manual → Create Return Trip button), and a completeness pass added the NEW-answer badges + teammate-reminder bell to the Questions guide, printable schedules + the stale-manual-count Refresh banner to Home Runs, and materials/POs/add-to-PO-from-punch to Rough and Finish. **Verified by a 21-agent adversarial pass (2026-08-12)** — one independent verifier per guide + a cross-guide critic, each reading the guide cold against FEATURES.md and App.js — which surfaced 39 errors and 84 gaps (all line-cited), applied by 19 per-guide fix agents: headline corrections include the v366 Submit Change Order step, the crewOnSiteToday gate replacing the old In-Progress rule, FILL's REPLACE confirm (hand-typed circuits ARE replaced on confirm; only the background auto-refill is byte-identical-safe), the Open Items and Activity guides rewritten around their real tab bodies (Open Items = Job Notes capture front door + RT sign-off; Activity = "To do on this job" rollup + timeline), the GC portal's requests-inbox review step (portal answers never auto-apply), and the re-nudge bell corrected to a teammate reminder. Non-tab keys are validated by the scan against mounted '<HelpDot section="...">' literals in the source — self-maintaining, no list to update. Replacing any draft with a real recording is a file drop, no code change. **Standing rule (Koy): guides track the app** — any ship changing how a feature works updates that feature's guide in the same ship (rule recorded in CLAUDE.md + memory + the vault checklist '11-Trainings/In-App SOP Recordings - Checklist'). Why it can't lose data: **read-only feature** — no Firestore read or write, no new field, no rules change, no data shape touched; the only app-code additions are three presentational components and one button
