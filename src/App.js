@@ -3803,6 +3803,24 @@ const PERMISSIONS = {
   // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
   "jobprep.own":            [],
   "jobprep.view":    ["admin","manager"],
+  // Head of Residential — ONE person runs every crew's scheduling, QC, starts
+  // and needs (2026-09: coordinators/books retired, it's just Koy). Same
+  // per-user hat mechanism as jobprep.own so it's delegatable for a sick week
+  // without a code change. resiHead(users) resolves the holder; NEVER a
+  // hardcoded name. Default assignee for new needs/tasks, owner of the
+  // "On <name>" section on My Day, recipient of bodies requests.
+  "resi.head":              [],
+  // My Day — everyone's identity-scoped list (what's on ME + what's on the
+  // head for my jobs). All tiers incl. lead/crew so they finally see their own
+  // punch items. Creating needs/tasks stays gated to board.add (foreman+).
+  "myday.view":             ["admin","manager","standard","limited"],
+  // Creating a need / task / bodies-request from My Day (the + sheet). Everyone
+  // internal (Koy, 2026-09-09): the punch assignee picker has never been tier
+  // gated, and a crew member's "need material at X" is the highest-value capture
+  // in the company. Default routing follows the chain of command
+  // (defaultAssigneeFor), so opening creation doesn't flood the head. The Needs
+  // page's own add button keeps board.add (that page is foreman+ anyway).
+  "tasks.create":           ["admin","manager","standard","limited"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -3995,6 +4013,10 @@ const NOTIF_CATEGORIES = [
     { key:"job_assigned",      label:"Job assigned to you",                  roles:["foreman","lead","crew"] },
     { key:"lead_assigned",     label:"Lead assigned to job",                 roles:["admin","manager","foreman"] },
     { key:"punch_assigned",    label:"Punch item assigned to you",           roles:["admin","manager","foreman","lead","crew"] },
+    // Task loop (My Day). Both gated server-side in functions/onNeedWrite —
+    // real toggles, not placebos (2026-07-10 rule).
+    { key:"need_assigned",     label:"Task or need assigned to you",         roles:["admin","manager","foreman","lead","crew"] },
+    { key:"need_done",         label:"A task you added was finished",        roles:["admin","manager","foreman","lead","crew"] },
     { key:"quote_converted",   label:"Quote converted to job",               roles:["admin","manager"] },
   ]},
   { label:"Job Status", items:[
@@ -4176,7 +4198,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["jobprep.own","Job prep & redlines"]].map(([cap,label])=>{
+                        {[["jobprep.own","Job prep & redlines"],["resi.head","Head of Residential"]].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -4977,38 +4999,176 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 // Detect mobile once at module level
 const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
-// Plain-text bottom-sheet for single-line Inp fields on mobile
-const MobileInpSheet = ({initialValue, placeholder, onDone, onCancel, addMode}) => {
-  const [draft, setDraft] = useState(initialValue || "");
+// Shared sheet chrome: full-screen scrim, Cancel/Done bar, safe-area spacer.
+// Bottom sheet on a phone; a centered card on a laptop. Extracted from
+// MobileInpSheet (behavior-neutral there) so the My Day quick-add can reuse
+// the exact same shell instead of a second look-alike.
+function SheetShell({ title, onCancel, onDone, doneLabel = "Done", doneDisabled = false, children }) {
+  const centered = !ON_MOBILE;
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
-      display:"flex",flexDirection:"column",justifyContent:"flex-end",
-      WebkitTapHighlightColor:"transparent"}}
+      display:"flex",flexDirection:"column",justifyContent:centered?"center":"flex-end",
+      alignItems:centered?"center":"stretch",WebkitTapHighlightColor:"transparent"}}
       onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
-      <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
-        overflow:"hidden",boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
+      <div style={{background:C.surface,borderRadius:centered?16:"18px 18px 0 0",
+        width:centered?"min(480px, calc(100vw - 32px))":"100%",maxHeight:"92vh",overflowY:"auto",
+        boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-          padding:"13px 16px",borderBottom:`1px solid ${C.border}`}}>
+          padding:"13px 16px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.surface,zIndex:1}}>
           <button onClick={onCancel}
             style={{background:"none",border:"none",color:C.dim,fontSize:15,
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
             Cancel
           </button>
-          <button onClick={()=>onDone(draft)}
-            style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
-              fontFamily:"inherit",fontWeight:700,cursor:"pointer",padding:"6px 22px",borderRadius:8}}>
-            {addMode ? "Add" : "Done"}
+          {title && <span style={{fontSize:13,fontWeight:700,color:C.dim,letterSpacing:"0.06em",textTransform:"uppercase"}}>{title}</span>}
+          <button onClick={onDone} disabled={doneDisabled}
+            style={{background:doneDisabled?C.border:C.accent,border:"none",color:"#fff",fontSize:15,
+              fontFamily:"inherit",fontWeight:700,cursor:doneDisabled?"default":"pointer",padding:"6px 22px",borderRadius:8}}>
+            {doneLabel}
           </button>
         </div>
-        <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
-          placeholder={placeholder}
-          style={{display:"block",width:"100%",boxSizing:"border-box",padding:"16px",fontSize:17,
-            fontFamily:"inherit",background:"transparent",border:"none",outline:"none",color:C.text}}/>
+        {children}
         <div style={{height:"env(safe-area-inset-bottom,16px)"}}/>
       </div>
     </div>
   );
+}
+
+// Plain-text bottom-sheet for single-line Inp fields on mobile
+const MobileInpSheet = ({initialValue, placeholder, onDone, onCancel, addMode}) => {
+  const [draft, setDraft] = useState(initialValue || "");
+  return (
+    <SheetShell onCancel={onCancel} onDone={()=>onDone(draft)} doneLabel={addMode ? "Add" : "Done"}>
+      <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+        placeholder={placeholder}
+        style={{display:"block",width:"100%",boxSizing:"border-box",padding:"16px",fontSize:17,
+          fontFamily:"inherit",background:"transparent",border:"none",outline:"none",color:C.text}}/>
+    </SheetShell>
+  );
 };
+
+// ── My Day quick-add: the "+" for needs and tasks ──────────────────────────
+// Two taps on the fast path: tap +, type, Save. Every chip has a default —
+// kind Need, To: one level up the chain of command (defaultAssigneeFor), no
+// job unless opened from one, due Tomorrow. Only the text is required. Chips
+// are tap-to-edit with quick-picks; onMouseDown+preventDefault so the text
+// input's blur can't clobber the pick (same idiom as the Questions room chip).
+// Writes the unified need/task shape through the one saveNeed funnel.
+function NeedQuickAdd({ identity, users, jobs, preset, onSave, onClose }) {
+  const me = identity?.name || "";
+  const first = (n) => String(n || "").split(" ")[0];
+  const [text, setText] = useState("");
+  const [kind, setKind] = useState("need");
+  const [assignedTo, setAssignedTo] = useState(() => defaultAssigneeFor(identity, users));
+  const [job, setJob] = useState(() => (preset && preset.job) || null);
+  const [due, setDue] = useState({ bucket: "tomorrow", date: "" });
+  const [open, setOpen] = useState(null); // "to" | "job" | "due" | null
+  const [other, setOther] = useState(false);
+  const head = resiHead(users);
+  const headName = (head && head.name) || "";
+  const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
+  const myTitle = myRec.title || myRec.role || "";
+  const myForemanName = myTitle === "foreman" ? "" : (myRec.foremanId ? (((users || []).find(u => u && u.id === myRec.foremanId) || {}).name || "") : "");
+  const roster = useMemo(() => (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort(), [users]);
+  const myJobs = useMemo(() => myJobsFor(identity, users, jobs), [identity, users, jobs]);
+  const allJobs = useMemo(() => (jobs || []).filter(j => j && j.name && !j.tempPed).slice().sort((a, b) => String(a.name).localeCompare(String(b.name))), [jobs]);
+  const toPicks = [];
+  if (headName && !sameName(headName, me)) toPicks.push([headName, `${first(headName)} (office)`]);
+  toPicks.push([me, "Me"]);
+  if (myForemanName && !sameName(myForemanName, me) && !sameName(myForemanName, headName)) toPicks.push([myForemanName, `${first(myForemanName)} (foreman)`]);
+
+  const save = () => {
+    const t = text.trim(); if (!t) return;
+    const now = new Date().toISOString();
+    const need = {
+      id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+      kind, text: t,
+      dueBucket: due.date ? (dueBucketFromDate(due.date) || "week") : due.bucket,
+      dueDate: due.date || "",
+      snoozedUntil: "",
+      assignedTo: assignedTo || "", assignedBy: me, assignedAt: now,
+      foreman: job ? (job.foreman || "") : (myTitle === "foreman" ? me : (myForemanName || "")),
+      jobId: job ? job.id : "", jobName: job ? (job.name || "") : "",
+      status: "open", createdBy: me, createdAt: now, doneAt: "", doneBy: "",
+    };
+    onSave && onSave(need);
+    toast.success(!assignedTo ? "Added — unassigned" : sameName(assignedTo, me) ? "Added to your day" : `Added to ${first(assignedTo)}'s day`);
+    onClose && onClose();
+  };
+
+  const chip = (label, on, onClick, ghost) => (
+    <button onMouseDown={e => e.preventDefault()} onClick={onClick}
+      style={{ fontSize: 13, padding: "8px 12px", minHeight: 36, borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
+        border: `1px ${ghost ? "dashed" : "solid"} ${on ? C.accent : C.border}`, background: on ? C.accent : C.card, color: on ? "#fff" : C.dim, fontWeight: on ? 700 : 500 }}>
+      {label}
+    </button>
+  );
+  const sub = (t) => <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", color: C.dim, margin: "12px 0 6px" }}>{t}</div>;
+  const row = { display: "flex", gap: 6, flexWrap: "wrap" };
+  const sel = { width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 16, padding: "10px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, marginTop: 6 };
+  const toLabel = !assignedTo ? "To: unassigned" : sameName(assignedTo, me) ? "To: me" : `To: ${first(assignedTo)}`;
+  const dueLabel = due.date ? `Due ${due.date.slice(5).replace("-", "/")}` : (due.bucket === "tomorrow" ? "Tomorrow" : "This week");
+  const goes = !assignedTo ? "Saves unassigned — anyone can pick it up from Needs." : sameName(assignedTo, me) ? "Goes on your own day." : `Goes to ${first(assignedTo)}'s day — they get a push.`;
+
+  return (
+    <SheetShell title="New need" onCancel={onClose} onDone={save} doneLabel="Save" doneDisabled={!text.trim()}>
+      <div style={{ padding: "12px 16px 6px" }}>
+        <input autoFocus value={text} onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") save(); }}
+          placeholder="What's needed? e.g. Set panel at Kesse before framers"
+          style={{ display: "block", width: "100%", boxSizing: "border-box", padding: "12px 14px", fontSize: 17,
+            fontFamily: "inherit", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, outline: "none", color: C.text }} />
+        <div style={{ ...row, marginTop: 10 }}>
+          {chip(kind === "task" ? "Task" : "Need", true, () => setKind(k => k === "need" ? "task" : "need"))}
+          {chip(toLabel, open === "to", () => setOpen(o => o === "to" ? null : "to"))}
+          {chip(job ? `Job: ${String(job.name).slice(0, 22)}` : "+ job", open === "job", () => setOpen(o => o === "job" ? null : "job"), !job)}
+          {chip(dueLabel, open === "due", () => setOpen(o => o === "due" ? null : "due"))}
+        </div>
+        {open === "to" && (
+          <div>
+            {sub("To")}
+            <div style={row}>
+              {toPicks.map(([nm, lbl]) => chip(lbl, sameName(assignedTo, nm) && !other, () => { setAssignedTo(nm); setOther(false); }))}
+              {chip("Someone else…", other, () => setOther(o => !o), true)}
+              {assignedTo && chip("Unassign", false, () => { setAssignedTo(""); setOther(false); }, true)}
+            </div>
+            {other && (
+              <select value={roster.includes(assignedTo) ? assignedTo : ""} onChange={e => setAssignedTo(e.target.value)} style={sel}>
+                <option value="">Pick a person…</option>
+                {roster.map(nm => <option key={nm} value={nm}>{nm}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+        {open === "job" && (
+          <div>
+            {sub("Job")}
+            <div style={row}>
+              {myJobs.slice(0, 6).map(j => chip(String(j.name).slice(0, 24), !!(job && job.id === j.id), () => setJob({ id: j.id, name: j.name, foreman: j.foreman || "" })))}
+              {job && chip("No job", false, () => setJob(null), true)}
+            </div>
+            <select value={job ? job.id : ""} onChange={e => { const j = allJobs.find(x => x.id === e.target.value); setJob(j ? { id: j.id, name: j.name, foreman: j.foreman || "" } : null); }} style={sel}>
+              <option value="">All jobs…</option>
+              {allJobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+            </select>
+          </div>
+        )}
+        {open === "due" && (
+          <div>
+            {sub("Due")}
+            <div style={row}>
+              {chip("Tomorrow", !due.date && due.bucket === "tomorrow", () => setDue({ bucket: "tomorrow", date: "" }))}
+              {chip("This week", !due.date && due.bucket === "week", () => setDue({ bucket: "week", date: "" }))}
+              {chip(due.date ? `Date: ${due.date}` : "Pick date", !!due.date, () => {}, !due.date)}
+            </div>
+            <input type="date" value={due.date} onChange={e => setDue({ bucket: due.bucket, date: e.target.value })} style={sel} />
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>{goes}</div>
+      </div>
+    </SheetShell>
+  );
+}
 
 // onAdd: optional — when provided, button label becomes "Add" and fires onAdd after saving
 const Inp = ({value, onChange, placeholder, style={}, onAdd, onBlur, onKeyDown}) => {
@@ -5776,7 +5936,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -5802,6 +5962,8 @@ const SOP_SUBTITLES = {
   generatorlink: "The homeowner picks their generator loads themselves",
   lightinglinks: "Collab, hub, and loads — which link for which company",
   gcportal: "One portal per GC — all their jobs and questions in one place",
+  myday: "What's on you, what's on the office, and the + to ask for anything",
+  needs: "Every open need company-wide, who it's on, and when",
 };
 
 const SOP_MAP = Object.fromEntries((SOP_FILES_INLINE || []).map(f => [f.key, {
@@ -14149,6 +14311,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                             </div>
                             <DateInp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
                               style={{width:140,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
+                            {t.gcTimeNote ? <div title="Time the contractor asked for via their portal" style={{fontSize:10,fontWeight:700,color:"#2E477D"}}>GC prefers: {t.gcTimeNote}</div> : null}
                           </div>
                         )}
                       </div>
@@ -25025,7 +25188,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -26418,6 +26581,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </button>
             )}
 
+            {onQuickAdd && can(identity,"tasks.create") && (
+              <button onClick={()=>onQuickAdd({job:{id:job.id,name:job.name,foreman:job.foreman||""}})} title="Add a need or task on this job"
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.accent,cursor:"pointer",padding:"5px 10px",
+                  display:"inline-flex",alignItems:"center",gap:5,fontFamily:"inherit",fontSize:12,fontWeight:700}}>
+                <Icon name="plus" size={13} stroke={2.5}/> Need
+              </button>
+            )}
             <button onClick={refreshJob} title="Refresh"
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
@@ -31298,10 +31468,18 @@ const matchesForeman = (job, name) => {
   return false;
 };
 
-function computeTasks(jobs) {
+// Who owns auto-tasks on a job with no foreman, and every pre-job prep task:
+// the Head of Residential (resi.head hat). Fed from the app root whenever the
+// team list changes (same module-level pattern as _setNudgeRoster) so the
+// callers that have no `users` in scope (office Tasks view, Huddle) stay
+// behavior-identical — just no hardcoded name anymore.
+let _taskOwnerFallback = "";
+function _setTaskOwnerFallback(name) { _taskOwnerFallback = name || ""; }
+function computeTasks(jobs, opts) {
+  const unassignedOwner = (opts && opts.unassignedOwner !== undefined) ? opts.unassignedOwner : _taskOwnerFallback;
   const tasks = [];
   jobs.forEach(job => {
-    const foreman = job.foreman || "Koy";
+    const foreman = job.foreman || unassignedOwner;
     const rs = job.roughStatus || "";
     const fs = job.finishStatus || "";
 
@@ -31720,7 +31898,7 @@ function computeTasks(jobs) {
       const ovr = job.prepOverride && job.prepOverride.on;
       tasks.push({
         id: job.id+"_prep", jobId: job.id, jobName: job.name,
-        type: "auto", category: "prep", foreman: "Koy",
+        type: "auto", category: "prep", foreman: unassignedOwner,
         prepStage: job.prepStage||"",
         title: `Pre Job Prep: ${job.name||"Untitled"}`,
         desc: (doneCount===0?"Not started":`${doneCount}/${requiredItems.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`)
@@ -43225,12 +43403,79 @@ function SettingsSection({ title, accent, defaultOpen = false, children }) {
 // the gcPortal* callables (client can't touch gc_links directly — see rules).
 const _gcKeyOf = (gc) => String(gc||"").trim().toLowerCase().replace(/\s+/g," ");
 
+// ── GC request → job apply helpers (pure; covered by scratchpad gc-apply-test) ──
+// Root cause these exist for (2026-09-09): the office inbox's "Mark handled"
+// on a DATE request flipped it to applied and hid it — and wrote NOTHING to the
+// job, while the contractor's portal read that status as "✓ Homestead has acted
+// on this." Rose had two such requests from 7/17. Apply now means "accept and
+// schedule", writing exactly the fields the office's own date controls write.
+//
+// Resolve a request's date to the app's M/D/YYYY storage format. Prefers the
+// machine date the portal sends (dateIso, v397+); falls back to parsing the
+// human string older/pending requests carry ("Fri, 7/31 — afternoon (PM)",
+// "9/13 is more realistic", "7/25"). A bare M/D with no year is taken as the
+// NEXT occurrence — a contractor never proposes a date that already passed.
+function _gcReqToMDY(req, now) {
+  const r = req || {}; const today = now instanceof Date ? now : new Date();
+  const iso = String(r.dateIso || "").trim();
+  let m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) { const y=+m[1], mo=+m[2], d=+m[3]; const dt=new Date(y,mo-1,d); if (dt.getFullYear()===y && dt.getMonth()===mo-1 && dt.getDate()===d) return mo+"/"+d+"/"+y; }
+  const str = String(r.date || "");
+  m = str.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (!m) return "";
+  const mo=+m[1], d=+m[2]; let y = m[3] ? +m[3] : 0; if (y && y<100) y+=2000;
+  if (mo<1||mo>12||d<1||d>31) return "";
+  if (!y) { y = today.getFullYear(); const t0=new Date(today.getFullYear(),today.getMonth(),today.getDate()); if (new Date(y,mo-1,d) < t0) y+=1; }
+  const dt=new Date(y,mo-1,d); if (dt.getMonth()!==mo-1 || dt.getDate()!==d) return "";
+  return mo+"/"+d+"/"+y;
+}
+// Build the job patch for accepting a date request. Mirrors the office UI's own
+// setters byte-for-byte (finish DateInp + CONFIRM button; Matterport status
+// select; the RT status select which clears needsBy* when scheduling). Refuses
+// — with a reason the office can act on — instead of silently marking applied.
+function _gcApplyDatePatch(job, req, who, now) {
+  const j = job || {}; const r = req || {};
+  const mdy = _gcReqToMDY(r, now);
+  if (!mdy) return { ok:false, reason:"Couldn't read a date from \""+String(r.date||"")+"\" — set it on the job by hand, then Dismiss." };
+  const note = String(r.timeNote||"").trim();
+  const id = String(r.itemId||"");
+  if (id === "finish_start") {
+    return { ok:true, patch:{ finishProjectedStart: mdy, finishStartConfirmed: true, finishStatus: "date_confirmed" }, summary:"Finish start set to "+mdy+" (confirmed)"+(note?" · "+note:"") };
+  }
+  if (id === "matterport") {
+    return { ok:true, patch:{ matterportStatus:"scheduled", matterportStatusDate: mdy }, summary:"Matterport scan scheduled for "+mdy+(note?" · "+note:"") };
+  }
+  const trips = Array.isArray(j.returnTrips) ? j.returnTrips : [];
+  const idx = trips.findIndex(t => t && String(t.id) === id);
+  if (idx < 0) return { ok:false, reason:"That return trip is no longer on the job — Dismiss this." };
+  const t = trips[idx];
+  if (t.signedOff || t.rtStatus === "complete") return { ok:false, reason:"That return trip was already completed"+(t.signedOffDate?" on "+t.signedOffDate:"")+" — Dismiss this." };
+  const next = trips.slice();
+  // Both date fields: the RT editor binds rtStatusDate ("SCHEDULED FOR"); the
+  // portal projection + Starts/calendar read scheduledDate. Writing one alone
+  // leaves the other surface blank.
+  next[idx] = { ...t, rtStatus:"scheduled", rtScheduled:true, needsSchedule:false, scheduledDate: mdy, rtStatusDate: mdy, needsByStart:"", needsByEnd:"", needsHardDate:false, scheduledBy: who||"", ...(note ? { gcTimeNote: note } : {}) };
+  return { ok:true, patch:{ returnTrips: next }, summary:"Return trip scheduled for "+mdy+(note?" ("+note+")":"") };
+}
+// Where a contractor-added item belongs, by where the job actually is. Before
+// this everything went to ROUGH punch — Halo Crest (rough + finish complete)
+// got "smoke detectors chirping" into a list nobody was working.
+function _gcPunchDestination(job) {
+  const j = job || {};
+  const roughDone = j.roughStatus === "complete" || j.roughStage === "100%";
+  const finishDone = j.finishStatus === "complete" || j.finishStage === "100%";
+  if (j.quickJob) return roughDone ? "rt" : "rough";
+  if (roughDone && finishDone) return "rt";
+  if (roughDone) return "finish";
+  return "rough";
+}
+
 // ── Office review inbox for two-way GC requests (Piece 4b) ───────────────────
 // Reads gc_requests via the admin callable, and APPLYING a request mutates the
 // real job through the app's merge-safe patch path (onUpdateJob) — tagged fromGC
 // so the crew sees provenance. answer → fills the question; punch → adds a crew
 // punch item; date/thread/file → informational (office acts, then marks handled).
-function GCPortalInbox({ jobs, identity, onUpdateJob }) {
+function GCPortalInbox({ jobs, identity, onUpdateJob, onSelectJob }) {
   const [reqs, setReqs]   = useState(null);   // null=loading
   const [err, setErr]     = useState("");
   const [busy, setBusy]   = useState("");     // request id in flight
@@ -43266,7 +43511,11 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
       // must NOT flip the request to "applied" unless the mutation truly landed
       // (job present + question matched) — otherwise a stale itemId or an
       // unloaded job would silently swallow the GC's input (review finding).
-      const structural = req.type === "answer" || req.type === "punch";
+      // v397: "date" is structural too — Apply now WRITES the accepted date to the
+      // job (finish start / Matterport / return trip) instead of just hiding the
+      // request. Requires the job loaded, like answer/punch.
+      const structural = req.type === "answer" || req.type === "punch" || req.type === "date";
+      let applied = "";
       if (structural && !job) {
         setErr("That job isn't in your current list (archived, or still loading). Open it directly, or Dismiss."); setBusy(""); return;
       }
@@ -43312,15 +43561,32 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
         }
         if (field) { const patch = { [field]: next }; onUpdateJob({ ...job, ...patch }, patch); mutated = true; }
       } else if (job && req.type === "punch" && (req.text || gcPhotos.length)) {
-        const rp = job.roughPunch ? { ...job.roughPunch } : {};
-        const main = rp.main ? { ...rp.main } : { rooms: [], general: [], hotcheck: [] };
-        main.general = (Array.isArray(main.general) ? [...main.general] : []).concat({
-          id: uid(), text: req.text || "(see attached photo)", done: false, fromGC: true, addedBy: who, ...punchStamp(),
-          ...(gcPhotos.length ? { photos: gcPhotos } : {}),
-        });
-        rp.main = main;
-        const patch = { roughPunch: rp };
-        onUpdateJob({ ...job, ...patch }, patch); mutated = true;
+        // Route by where the job actually is (v397): rough punch while rough is
+        // open, finish punch once rough is done, and a NEW return trip once the
+        // job is past finish — the only bucket anyone is still working then.
+        const dest = _gcPunchDestination(job);
+        const item = { id: uid(), text: req.text || "(see attached photo)", done: false, fromGC: true, addedBy: who, ...punchStamp(),
+          ...(gcPhotos.length ? { photos: gcPhotos } : {}) };
+        if (dest === "rt") {
+          const newRT = { id: uid(), date: "", scope: String(req.text || ("Item from " + (req.gcLabel || "contractor"))).slice(0, 300), material: "",
+            punch: [item], photos: [], assignedTo: "", signedOff: false, signedOffBy: "", signedOffDate: "",
+            needsSchedule: true, needsScheduleDate: "", rtScheduled: false, scheduledDate: "", rtStatus: "needs",
+            fromGC: true, addedBy: who, ...punchStamp() };
+          const patch = { returnTrips: [ ...(job.returnTrips || []), newRT ] };
+          onUpdateJob({ ...job, ...patch }, patch); mutated = true; applied = "Return trip created (needs scheduling)";
+        } else {
+          const key = dest === "finish" ? "finishPunch" : "roughPunch";
+          const rp = job[key] ? { ...job[key] } : {};
+          const main = rp.main ? { ...rp.main } : { rooms: [], general: [], hotcheck: [] };
+          main.general = (Array.isArray(main.general) ? [...main.general] : []).concat(item);
+          rp.main = main;
+          const patch = { [key]: rp };
+          onUpdateJob({ ...job, ...patch }, patch); mutated = true; applied = "Added to the " + dest + " punch list";
+        }
+      } else if (job && req.type === "date") {
+        const res = _gcApplyDatePatch(job, req, who, new Date());
+        if (!res.ok) { setErr(res.reason); setBusy(""); return; }
+        onUpdateJob({ ...job, ...res.patch }, res.patch); mutated = true; applied = res.summary;
       }
       if (structural && !mutated) {
         setErr(req.type === "answer"
@@ -43329,6 +43595,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
         setBusy(""); return;
       }
       await handle(req.id, "applied");
+      if (applied) toast.success(applied + (req.jobName ? " — " + req.jobName : ""));
       await refresh();
     } catch (e) { setErr(e.message || "Apply failed"); }
     setBusy("");
@@ -43352,7 +43619,25 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
     if (r.type === "answer") return "Question";
     return "";
   };
-  const applyLabel = (t) => (t==="answer"||t==="punch") ? "Apply to job" : (t==="contact") ? "Apply roster change" : "Mark handled";
+  const applyLabel = (t) => (t==="answer"||t==="punch") ? "Apply to job" : (t==="date") ? "Accept date" : (t==="contact") ? "Apply roster change" : "Mark seen";
+  // What Apply will actually DO, shown before the click (v397) — the old
+  // "Mark handled" hid a request while changing nothing, and nobody could tell.
+  const previewOf = (r) => {
+    const job = (jobs||[]).find(j => j.id === r.jobId);
+    if (r.type === "date") {
+      if (!job) return { warn: "Job isn't loaded here — open it directly, or Dismiss." };
+      const res = _gcApplyDatePatch(job, r, "", new Date());
+      return res.ok ? { text: "Accept → " + res.summary } : { warn: res.reason };
+    }
+    if (r.type === "punch") {
+      if (!job) return { warn: "Job isn't loaded here — open it directly, or Dismiss." };
+      const d = _gcPunchDestination(job);
+      return { text: "Apply → " + (d === "rt" ? "creates a Return Trip (job is past finish)" : d === "finish" ? "adds to the Finish punch list" : "adds to the Rough punch list") };
+    }
+    if (r.type === "answer") return { text: "Apply → marks the question answered on the job" + ((r.attachments||[]).length ? " (with their photo)" : "") };
+    if (r.type === "contact") return { text: "Apply → replaces the link's contact roster with the proposed one" };
+    return { text: "Mark seen → tells the contractor you've read it; nothing changes on the job" };
+  };
   const B = { btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
     gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"5px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
   const openReqs = (reqs||[]).filter(r => showDone || r.status === "new");
@@ -43400,12 +43685,17 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
               ))}
             </div>
           ) : null}
-          {r.status==="new" ? (
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              <button disabled={busy===r.id} onClick={()=>apply(r)} style={{...B.btn,opacity:busy===r.id?0.5:1}}>{busy===r.id?"…":applyLabel(r.type)}</button>
-              <button disabled={busy===r.id} onClick={()=>dismiss(r)} style={B.gbtn}>Dismiss</button>
-            </div>
-          ) : null}
+          {r.status==="new" ? (() => { const p = previewOf(r); const job = (jobs||[]).find(j => j.id === r.jobId); return (
+            <Fragment>
+              {p.warn ? <div style={{fontSize:12,color:"#8A2A2A",marginBottom:6}}>⚠ {p.warn}</div>
+                      : <div style={{fontSize:11.5,color:"#5E6670",marginBottom:6}}>{p.text}</div>}
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                <button disabled={busy===r.id||!!p.warn} onClick={()=>apply(r)} style={{...B.btn,opacity:(busy===r.id||p.warn)?0.5:1}}>{busy===r.id?"…":applyLabel(r.type)}</button>
+                <button disabled={busy===r.id} onClick={()=>dismiss(r)} style={B.gbtn}>Dismiss</button>
+                {job && onSelectJob ? <button onClick={()=>onSelectJob(job)} style={B.gbtn}>Open job</button> : null}
+              </div>
+            </Fragment>
+          ); })() : null}
         </div>
       ))}
     </div>
@@ -47105,11 +47395,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-09 · App SW version: v396
+**Last manifest update:** 2026-09-09 · App SW version: v398
 
 ---
 
 ## Top-Level Views (Nav Tabs)
+
+- **My Day** ('myday') · 'shipped 2026-09-09' · 'SW v398' · the landing screen for every field role (foreman, lead, crew) and the first nav tab for everyone internal. **One task object:** a 'needs' doc now carries a real person 'assignedTo' (+ 'assignedBy'/'assignedAt'), 'kind' (need|task|bodies), a real 'dueDate' ('dueBucket' kept for the lanes), 'foreman', 'snoozedUntil', 'doneBy' — all additive, all inside 'data', so the needs loader is untouched and the 12 pre-existing docs are read at run time ('assignedTo' absent ⇒ the legacy 'coordinator' is the assignee). **Mine** = task docs on me ∪ punch items assigned to me (the foreman card's Assigned walk, lifted to 'punchAssignedTo(name, jobs)' and keyed to the logged-in identity so leads/crew finally see their own items) ∪ (foremen) auto-tasks for my jobs; **On <head>** = what the Head of Residential owes on my jobs (task docs + read-only 'getCoordinatorDuties'/'getCompanyDuties' rows). Ordered overdue → today → this week → later; every row Done / Snooze (3d · 1wk · date) / 10s Undo. **Quick-add** ('NeedQuickAdd', the round + on phones, '+ Need' on laptops and inside Job Detail): two taps on the fast path — type, Save; chips for kind, **To:** (full roster; default one level up the chain of command via 'defaultAssigneeFor': crew/lead → their foreman, foreman → head, head → self), job, due. **Head of Residential** is a company hat ('resi.head', per-user cap like 'jobprep.own', Settings → Team → COMPANY HATS) resolved by 'resiHead(users)' (falls back to the 'jobprep.own' holder) — never a hardcoded name; coordinators/books are retired in every surface this touched (Needs page: no book transfer, a **To:** roster select instead; no 'coordinator' written on new docs). Auto-task owner for unassigned jobs and prep tasks = the hat holder ('_setTaskOwnerFallback'), replacing the '"Koy"' literals in 'computeTasks'. **Notify:** new 'onNeedWrite' trigger diffs 'assignedTo' old→new → 'need_assigned' push+inbox to the assignee (self-assign and no-op rewrites are silent; deep-links 'view:"myday"', no jobId so same-job pushes can't collapse), and 'need_done' back to the creator when someone else closes it; both keys are real server gates in the registry. Deep-link branches for 'myday' / 'needs' / 'schedule' in 'pendingView' + 'openInboxItem'. Perms: 'myday.view' + 'tasks.create' (all four tiers), 'resi.head' (hat). Harness 'scripts/needs-dryrun.js' (vm-extracts the shipped helpers; in the prebuild chain). Guides 'public/sops/myday.html' + 'needs.html' mounted via '<HelpDot>'. **Why it won't lose data:** every new field lives inside the existing 'data' map (loader returns it verbatim); nothing is renamed or removed; 'patchNeed' writes only touched 'data.<field>' paths (narrower than the previous full-doc setDoc); 'saved_by' on the envelope is read only by the server ledger; existing docs are never rewritten; 'ledgerNeeds' + nightly backups already cover 'needs'; jobs loader / 'saveJob' / job docs untouched (auto-task Done/Snooze use the existing 'clearedTasks' / 'taskDueDates' whole-map precedents; punch Done uses the existing 'togglePunchItemDone' RT cross-sync); delete restores the identical doc id on Undo; no Firestore rules change. Needs 'firebase deploy --only functions:onNeedWrite'. Flip-day step: tick **Head of Residential** on Koy in Settings → Team.
 
 - **Job Board** · 'shipped' · the home screen
   - Grouped by stage with collapsible sections
@@ -47158,6 +47450,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
     - **Pull Simpro contacts into an EXISTING link** · 'shipped 2026-07-28' · 'SW v358' · the v354 pull only ran from the discovery panel (GCs with no portal yet), so links already created — incl. Robison — had no way to import contacts. The link **Edit** form now has **"+ Pull contacts from Simpro"** ('pullIntoEdit'), sourcing the customer from the first Simpro-linked job on that link (name-matched or force-included). **MERGE-ONLY:** existing contacts are left byte-identical (their ids are load-bearing for 'supersByJob' + email routing — replacing them would orphan assignments), deduped by email then by name, and only genuinely new people are appended with 'email/text:false' (same staged-rollout rule as the create pull). Nothing persists until Save; reports "no new contacts" vs "added N" vs Simpro 'failedCount'
     - **Contractor date picker** · 'shipped 2026-07-28' · 'SW v358' · all three date flows (finish start, Matterport scan, return trips) swap free text for a real **calendar + time choice** ('GCSendBox dateMode'): native '<input type=date>' (min = today, so no past dates), then **Any time that day / Morning / Afternoon / Pick a time** ('<input type=time>'), with a live "Sending: Thu 7/30 — morning (AM)" preview. Kills the "which Thursday?" ambiguity the review flagged and gives the office something schedulable. Composes into the same 'req.date' string the server already stores — no backend change; 'dateKind' confirm-vs-suggest logic untouched
     - **Question-share links: forwarding no longer misfiles answers** · 'shipped 2026-07-28' · 'SW v358' · Koy forwarded Haley's named share link to a designer and hit two bugs sharing one root cause — the share's LABEL (who the link was *made for*) was being used as *who is typing now*. (1) The name box **pre-filled "Haley"** ('useEffect' on 'shareName'), so an unedited submit would have filed the designer's answers under Haley — real misattribution, same family as the 7/13 Kweller relabeling. (2) The banner told every visitor "You previously submitted answers as Haley." Now a per-device record ('he_qsub_{jobId}_{shareId}') drives both: the name box fills **only** from this browser's own prior submit, "You previously submitted…" shows **only** to the device that actually did, and anyone else sees a neutral "Some of these were already answered by Haley — put your own name at the bottom and your answers are filed under you." Display + prefill only; no write-path or data-shape change (per-question 'answeredBy' attribution was already correct)
+    - **Office inbox: Accept/Apply actually lands on the job** · 'shipped 2026-09-09' · 'SW v397' · fixes Koy's "I click handled and it just disappears." Root cause: 'GCPortalInbox.apply()' had no 'date' branch — "Mark handled" flipped a date request to 'applied' and hid it while writing **nothing** to the job, and the contractor's portal then read that status as "✓ Homestead has acted on this" (Rose had two such requests from 7/17, 'applied', no job write). Now **Accept date** writes exactly what the office's own controls write, per anchor: finish start → 'finishProjectedStart' + 'finishStartConfirmed' + 'finishStatus:"date_confirmed"'; Matterport → 'matterportStatus:"scheduled"' + 'matterportStatusDate'; return trip → 'rtStatus:"scheduled"', 'rtScheduled', 'needsSchedule:false', BOTH 'scheduledDate' (projection/calendar) and 'rtStatusDate' (RT editor), 'needsBy*' cleared, 'scheduledBy', plus the contractor's time preference as 'gcTimeNote' (rendered "GC prefers: afternoon (PM)" under SCHEDULED FOR). Second bug in the same family: **punch apply always went to ROUGH punch** — Halo Crest (rough + finish complete) got "smoke detectors chirping" into a list nobody worked; '_gcPunchDestination' now routes rough → finish → **new Return Trip** by job phase. The inbox shows a **preview of what Apply will do before you click** ("Accept → Finish start set to 9/13/2026 (confirmed)", "Apply → creates a Return Trip (job is past finish)"), refuses with a reason instead of silently applying (unparseable date, RT already signed off, job not loaded), adds **Open job**, and toasts what landed. Portal now sends 'dateIso' + 'timeNote' (server-validated in 'gcPortalSubmit'; old/pending requests still parse from the human string, bare M/D = next occurrence) and the readback says "✓ Homestead accepted this date — it's on the schedule." Pure helpers '_gcReqToMDY' / '_gcApplyDatePatch' / '_gcPunchDestination' covered by 18 tests (scratchpad 'gc-apply-test.js'). Accepting a date closes the loop on its own: the job write fires the existing 'schedule' / 'returntrip' instant triggers, so the contractor gets the confirmation email and their portal card updates live. Three flow gaps from the same audit fixed in-ship: **(a)** office alerts for portal requests went to one hardcoded name (Koy) → now 'sendToRoles(["admin","manager"])' honoring the 'gc_request' pref, so a request never sits unseen; **(b)** a contractor re-suggesting a date while one was pending was silently DROPPED by the dedupe while the portal said "✓ Sent" → the open request is now updated in place (same id, newest date wins, 'revisions' counter); **(c)** the office had no signal anything was waiting → a red **open-request count badge** on the Contractors tab, driven by 'settings/gcInbox' which 'gcRecountInbox()' rewrites from a 'count()' over 'status=="new"' on every file/handle (recounted, never incremented, so it can't drift). Needs 'firebase deploy --only functions:gcPortalSubmit,functions:gcPortalHandleRequest'
     - **Logo auto-pull from the contractor's own website** · 'shipped 2026-07-28' · 'SW v358' · 'gcFindLogo' + 'GCLogoFinder' · new read-only 'requireAdmin' callable that derives the domain from a contact's email ('Luke@citypointutah.com' → 'citypointutah.com', editable) and reads that site's '<head>' for logo candidates — **apple-touch-icon** first (on small-builder sites it's nearly always the real mark, already square), then 'og:image', 'msapplication-TileImage', '<link rel=icon>', with the keyless Google favicon ('sz=128') always appended as a floor. Candidates are shown as thumbnails in the create AND edit forms and **picked by hand** — auto-applying would put a bad crop or a hero photo in a contractor's header; picking only fills 'logoUrl', nothing saves until the form saves. Chose site-scraping over a logo database deliberately: Clearbit's free logo API shut down 2025-12-08 and the successors skew to big brands, while small Utah builders always have a site. Hardened by live testing against Koy's real GCs: **14s timeout** (Ivory Homes exceeded 9s), **HTML-entity decoding** of attribute values (City Point ships '&#038;ssl=1', which would have produced a broken image URL), and an **exact** 'og:image' match (the loose one also caught 'og:image:width'/':type', yielding junk like '/900'). Rejects private/internal hosts and non-domains; https-only output, matching 'cleanLogoUrl'. Verified: City Point → 4 real logo candidates, Symphony → site favicon, Homestead → apple-touch-icon + og:image. **Known limit:** Ivory Homes' site blocks automated fetches entirely (hangs at 20s even with a browser UA), so it falls back to the Google favicon — paste a URL by hand for sites like that
     - **Contractor convenience trio** · 'shipped 2026-07-28' · 'SW v358' · from the contractor-UX review lens: (1) **sent requests persist** — "✓ Sent" + the office's "Homestead has acted on this" readback used to live only in component state, so closing a job erased every trace and invited double-sends; now stored per link+job+flow in 'localStorage' ('gcportal_sent_v1', capped 200, oldest-trimmed) with a live status line ("Sent 2h ago — awaiting review") and a **Send another** escape hatch. Applied to the one-shot flows (dates, Matterport, return trips, question answers); the general message box stays repeatable by design. (2) **A way to reach a human** — 'HOMESTEAD_CONTACT' + '_gcContactLine' render in the portal footer AND every dead-end (revoked link, connection trouble), and the email footer now says **"You can reply straight to this email — it reaches our office"** (true since 'gc_config/mail.replyTo' was set) plus a direct address. *Phone deliberately left blank until Koy supplies the number he wants contractors calling.* (3) **Per-job deep links** — instant alerts append '&job=<id>', and the portal opens that job once, only after the mirror confirms the id is on this portal (unknown/stale ids just land on the board). Digests stay on the root since they span jobs
 - **Job Prep tab — redline walk strip** · 'shipped 2026-08-29' · 'SW v390' · the Pre-Job Prep lane now surfaces each job's **redline walk** as a strip below the checklist chips, backed by the **same** 'redlineWalks' record the Change Orders board edits (linked by 'jobId') — so a walk touched in prep mirrors the CO board both ways. States: no record → **＋ SCHEDULE REDLINE WALK** (creates one linked to the job, status 'scheduled', today's date); 'scheduled' → **REDLINE WALK** + an editable **date** (display-only, no nudges) + a **WALK DONE** action that advances 'scheduled → plans_prep' ("Walk Done — Cleaning Plans", Koy's "walk done, now cleaning plans") + a two-tap **✕ Remove** that deletes a walk scheduled by mistake (scheduled state only, before any quote — 'co_owed'+ stays read-only); 'plans_prep' → a ✓ chip + date + a ↩ revert; 'co_owed'/'co_sent'/'signed' → **read-only tail** (that's Jeromy's territory) showing the status + CO #. **Visible tracking only** — the strip never touches 'allPrepChecked'/'prepClearedToStart'; "Redline Plans Up to Date" + the 5 items stay the completion gate. New pure helper 'activeRedlineWalk' picks the newest still-open (unsigned, unquoted) walk; repeat walks are still created from the CO board to avoid prep dupes. Writes go through the existing 'onAddRedline'/'onUpdateRedline' whole-doc funnel. Why it can't lose data: additive UI over an existing collection — no new field, no new collection, no migration, no gate change; the only invariant deliberately extended is that 'redlineWalks' (previously read only in the CO tab) is now also read in the Job Prep tab, and no Cloud Function/nudge reads the collection so nothing server-side changes.
@@ -47487,6 +47780,9 @@ Pages designed to be opened by people outside the company via share links (no au
   - 'scoreboard.editWeights' (admin only)
   - 'cos.view' / 'worklist.view' (office)
   - 'jobprep.own' (company-hats checkbox: job prep & redlines)
+  - 'resi.head' (company-hats checkbox: Head of Residential — default assignee, "On <head>" owner; resolved by 'resiHead(users)', never hardcoded)
+  - 'myday.view' (all four tiers) · My Day tab + landing for field roles
+  - 'tasks.create' (all four tiers) · the My Day quick-add / + button (default To: one level up the chain)
   - 'today.view' (admin/manager/standard) · 'shipped 2026-05-21'
   - 'board.view' / 'board.add' (admin/manager/standard) · Needs board
   - 'lutron.view' (everyone) · Plan Changes nav tab
@@ -50797,6 +51093,348 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
   );
 }
 
+// ── TASK LOOP — pure helpers (needs = the unified task object) ───────────────
+// Every need doc is the one task primitive: `assignedTo` is a PERSON (name),
+// `kind` is need|task|bodies, `dueDate` is a real date (dueBucket kept for the
+// lanes). All new fields live INSIDE `data` — the needs loader returns `data`
+// verbatim, so nothing here needs a loader spread. Legacy docs (no assignedTo)
+// are interpreted at read time: their `coordinator` IS the assignee.
+// Top-level `function` declarations on purpose — scripts/needs-dryrun.js pulls
+// them verbatim into a vm sandbox, so the logic under test is what ships.
+function localYmd(d) {
+  const x = d ? new Date(d) : new Date();
+  if (isNaN(x)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`;
+}
+function sameName(a, b) {
+  const x = String(a || "").trim().toLowerCase(), y = String(b || "").trim().toLowerCase();
+  if (!x || !y) return false;
+  return x === y || x.startsWith(y + " ") || y.startsWith(x + " ");
+}
+function needKind(n) { return (n && n.kind) || "need"; }
+// `??` on purpose: an explicit "" (unassigned) is honored; an ABSENT field falls
+// to the legacy book owner. This one line is what keeps the pre-existing docs
+// working without a rewrite.
+function needAssignee(n) { return String((n && (n.assignedTo ?? n.coordinator)) || "").trim(); }
+function needForeman(n, jobs) {
+  if (!n) return "";
+  if (n.foreman) return n.foreman;
+  const j = n.jobId && (jobs || []).find(x => x && x.id === n.jobId);
+  return (j && j.foreman) || "";
+}
+// "" → null so a caller keeps whatever bucket it already had.
+function dueBucketFromDate(ymd, now) {
+  if (!ymd) return null;
+  const d = new Date(ymd + "T00:00:00"); if (isNaN(d)) return null;
+  const t = now ? new Date(now) : new Date(); t.setHours(0, 0, 0, 0); t.setDate(t.getDate() + 1);
+  return d <= t ? "tomorrow" : "week";
+}
+// ISO YYYY-MM-DD strings compare lexically. Snoozed rows leave every list and
+// come back on their own the morning of snoozedUntil (v392 pattern).
+function isSnoozed(n, todayYmd) { return !!(n && n.snoozedUntil) && n.snoozedUntil > todayYmd; }
+function needIsOpen(n, todayYmd) { return !!n && n.status !== "done" && !isSnoozed(n, todayYmd); }
+// The Head of Residential = whoever holds the resi.head hat (Settings → Team →
+// COMPANY HATS). Falls back to the jobprep.own holder so nothing routes to
+// nobody before the hat is ticked on flip day. Deactivated users never win.
+function resiHead(users) {
+  const live = (users || []).filter(u => u && u.active !== false);
+  return live.find(u => can(u, "resi.head")) || live.find(u => can(u, "jobprep.own")) || null;
+}
+function resiHeadName(users) { const h = resiHead(users); return (h && h.name) || ""; }
+// Default To: for a new task follows the chain of command, one level up:
+// crew/lead → their foreman (foremanId); foreman → the head; the head → self;
+// any other office user → the head. Anyone can still pick anyone in the chip —
+// this only decides where the two-tap fast path lands (Koy, 2026-09-09).
+function defaultAssigneeFor(identity, users) {
+  if (!identity) return "";
+  const rec = (users || []).find(u => u && (u.id === identity.id || sameName(u.name, identity.name))) || identity;
+  const head = resiHead(users);
+  if (head && (head.id === rec.id || sameName(head.name, rec.name))) return head.name || "";
+  const title = rec.title || rec.role || "";
+  if (title === "foreman") return (head && head.name) || "";
+  if (rec.foremanId) { const fm = (users || []).find(u => u && u.id === rec.foremanId); if (fm && fm.name) return fm.name; }
+  return (head && head.name) || "";
+}
+// MINE: it's on me. Explicit assignee wins; unassigned/legacy → whoever typed it.
+function isMine(n, identity) {
+  const me = identity && identity.name; if (!n || !me) return false;
+  const a = needAssignee(n);
+  return a ? sameName(a, me) : sameName(n.createdBy, me);
+}
+// ON <HEAD>: assigned to the head AND about my jobs (foreman stamp, else job match).
+function onHead(n, identity, users, jobs) {
+  const me = identity && identity.name; if (!n || !me) return false;
+  const head = resiHeadName(users); if (!head) return false;
+  if (!sameName(needAssignee(n), head)) return false;
+  const fm = needForeman(n, jobs);
+  if (fm) return sameName(fm, me);
+  const job = n.jobId && (jobs || []).find(x => x && x.id === n.jobId);
+  return !!job && matchesForeman(job, me);
+}
+// The head's own queue = isMine for the head: explicit assignments plus legacy
+// book items with no assignee. Real docs only; derived duties merge separately.
+function headQueue(needs, identity, todayYmd) {
+  return (needs || []).filter(n => needIsOpen(n, todayYmd) && isMine(n, identity));
+}
+// Read-only rows for a foreman's My Day: the head's stage-triggered duties on
+// THIS foreman's jobs (same engine the office worklist uses). Company prep
+// duties only if the head holds the jobprep.own hat (mirrors the worklist).
+// Composite ids so they can't collide with need_* docs. Nothing is stored.
+function derivedDutiesForForeman(jobs, identity, users) {
+  const me = identity && identity.name; if (!me) return [];
+  const mine = (jobs || []).filter(j => j && !j.quickJob && matchesForeman(j, me));
+  const head = resiHead(users);
+  const rows = mine.flatMap(getCoordinatorDuties);
+  const company = can(head, "jobprep.own") ? mine.flatMap(getCompanyDuties) : [];
+  return [...rows, ...company].map(d => ({ ...d, derived: true, id: `${d.jobId}_${d.id}` }));
+}
+// Open, non-voided punch items assigned to `name` across every job — the SAME
+// walk the foreman card's Assigned tab uses (lifted so My Day can key it to
+// the logged-in identity instead of the tapped card). Full-name match first;
+// first-name tolerant only for legacy single-name assignments (additive: more
+// rows, never fewer). Walks rough/finish/qc × upper/main/basement/extras ×
+// general/hotcheck/rooms; skips voided + done, tempPed + quickJob jobs.
+function punchAssignedTo(name, jobs) {
+  if (!name) return [];
+  const out = [];
+  const eatFloor = (fl, floorLabel, phase, jobId, jobName) => {
+    if (!fl) return;
+    const push = (i, room, isHotcheck) => {
+      if (!i || i.voided || i.done) return;
+      if (!sameName(i.assignedTo, name)) return;
+      out.push({ ...i, room, floor: floorLabel, phase, isHotcheck, jobId, jobName });
+    };
+    (fl.general || []).forEach(i => push(i, "General", false));
+    (fl.hotcheck || []).forEach(i => push(i, "Hot Check", true));
+    (fl.rooms || []).forEach(r => (r.items || []).forEach(i => push(i, r.name, false)));
+  };
+  (jobs || []).forEach(j => {
+    if (!j || j.tempPed || j.quickJob) return;
+    const jobName = j.name || "Untitled";
+    [["Rough", j.roughPunch], ["Finish", j.finishPunch], ["QC", j.qcPunch]].forEach(([phase, punch]) => {
+      if (!punch) return;
+      ["upper", "main", "basement"].forEach(k => eatFloor(punch[k], { upper: "Upper", main: "Main", basement: "Basement" }[k], phase, j.id, jobName));
+      // Custom extras live on punch.extras = [{key,label}] with floor data at punch[key].
+      (punch.extras || []).forEach(e => { if (e && e.key) eatFloor(punch[e.key], e.label || e.key, phase, j.id, jobName); });
+    });
+  });
+  return out;
+}
+// Which jobs are "mine" for My Day: a foreman → their jobs; lead/crew → their
+// foreman's jobs (via foremanId); office → none (the My jobs strip hides).
+function myJobsFor(identity, users, jobs) {
+  if (!identity) return [];
+  const rec = (users || []).find(u => u && (u.id === identity.id || sameName(u.name, identity.name))) || identity;
+  const title = rec.title || rec.role || "";
+  let fmName = "";
+  if (title === "foreman") fmName = rec.name || "";
+  else if (rec.foremanId) { const fm = (users || []).find(u => u && u.id === rec.foremanId); fmName = (fm && fm.name) || ""; }
+  if (!fmName) return [];
+  return (jobs || []).filter(j => j && !j.tempPed && matchesForeman(j, fmName));
+}
+
+
+// ── MY DAY ───────────────────────────────────────────────────────────────────
+// The landing screen for every field role and the first nav tab for everyone
+// internal. Identity-scoped: MINE = task docs on me ∪ punch items assigned to
+// me ∪ (foremen) auto-tasks for my jobs; ON <HEAD> = what the Head of
+// Residential owes on my jobs (task docs + read-only derived duties). For the
+// head, Mine is the whole queue. Push, not filter: ordered overdue → today →
+// this week → later; every row clears or snoozes in one tap with a 10s Undo.
+function bucketOfYmd(ymd, todayYmd) {
+  if (!ymd) return "later";
+  if (ymd < todayYmd) return "overdue";
+  if (ymd === todayYmd) return "today";
+  const t = new Date(todayYmd + "T00:00:00"); t.setDate(t.getDate() + 7);
+  return ymd <= localYmd(t) ? "week" : "later";
+}
+function needBucket(n, todayYmd) { return n.dueDate ? bucketOfYmd(n.dueDate, todayYmd) : (n.dueBucket === "tomorrow" ? "today" : "week"); }
+// Map the app's URGENCY levels (any date format via parseAnyDate) onto the
+// four My Day buckets. No date → "later", never "today" — a derived row with no
+// date is the v392 overdue-noise failure waiting to happen.
+function urgencyBucket(dateStr) {
+  const u = URGENCY(dateStr); if (!u) return "later";
+  if (u.level === "overdue") return "overdue";
+  if (u.level === "critical") return "today";
+  if (u.level === "warning" || u.level === "soon") return "week";
+  return "later";
+}
+function autoBucket(t) { return urgencyBucket(t.dueDate); }
+function plainText(s) { return String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
+function addDaysYmd(todayYmd, days) { const t = new Date(todayYmd + "T00:00:00"); t.setDate(t.getDate() + days); return localYmd(t); }
+const MYDAY_BUCKETS = { overdue: ["Overdue", "#B23A3A"], today: ["Today", "#3B5BA5"], week: ["This week", "#5E6670"], later: ["Later", "#8A929D"] };
+const MYDAY_ORDER = ["overdue", "today", "week", "later"];
+
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+  const narrow = winW < 900;
+  const todayYmd = localYmd();
+  const me = identity?.name || "";
+  const head = resiHead(users);
+  const headName = (head && head.name) || "";
+  const headFirst = headName ? headName.split(" ")[0] : "the office";
+  const iAmHead = !!(head && sameName(head.name, me));
+  const myJobs = myJobsFor(identity, users, jobs);
+  const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
+  const myTitle = myRec.title || myRec.role || "";
+  const crewForeman = myTitle === "foreman" ? me : (myRec.foremanId ? (((users || []).find(u => u && u.id === myRec.foremanId) || {}).name || "") : "");
+  const [openGroups, setOpenGroups] = useState(() => new Set(["mine"]));
+  const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const [snoozeFor, setSnoozeFor] = useState(null);
+  const [undo, setUndo] = useState(null);
+  const stage = (label, revert) => { if (undo && undo.timer) clearTimeout(undo.timer); const timer = setTimeout(() => setUndo(null), 10000); setUndo({ label, revert, timer }); };
+  const runUndo = () => { if (!undo) return; if (undo.timer) clearTimeout(undo.timer); undo.revert(); setUndo(null); };
+  const jobById = (id) => (jobs || []).find(j => j && j.id === id);
+  const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
+  const first = (n) => String(n || "").split(" ")[0];
+
+  const needRow = (n, readOnly) => {
+    const k = needKind(n);
+    const from = n.assignedBy && !sameName(n.assignedBy, me) ? n.assignedBy : (n.createdBy && !sameName(n.createdBy, me) ? n.createdBy : "");
+    return { key: "need_" + n.id, kind: "need", bucket: needBucket(n, todayYmd), title: n.text || "(no text)",
+      tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need", tagColor: k === "task" ? C.teal : C.orange,
+      sub: [n.jobName, readOnly ? (sameName(n.createdBy, me) ? "you asked" : "") : (from ? `from ${first(from)}` : "")].filter(Boolean),
+      jobId: n.jobId, section: null, canDone: !readOnly, canSnooze: !readOnly,
+      onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n)); },
+      onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); } };
+  };
+  const dutyRow = (d, readOnly) => {
+    const job = jobById(d.jobId);
+    const isPO = d.dutyType === "po" && !!d.markField && !!job;
+    // QC walks + start POs are due by construction (the stage just hit 100% /
+    // the start is inside the PO window) → Today. Prep tracks the rough start
+    // date; a job with no start yet sits under Later instead of shouting.
+    const bucket = d.dutyType === "prep" ? urgencyBucket(job && job.roughScheduledDate) : "today";
+    return { key: "duty_" + d.jobId + "_" + d.id, kind: "duty", bucket, title: d.label,
+      tag: d.dutyType === "qc" ? "QC" : d.dutyType === "po" ? "Start" : "Prep", tagColor: d.dutyType === "qc" ? C.purple : C.teal,
+      sub: [d.jobName, readOnly ? `${headFirst}'s duty` : (d.foreman && !sameName(d.foreman, me) ? first(d.foreman) : "")].filter(Boolean),
+      jobId: d.jobId, section: d.targetTab || null, canDone: !readOnly && isPO, canSnooze: false,
+      onDone: () => { if (!isPO) return; onUpdateJob({ ...job, [d.markField]: true }, { [d.markField]: true }); stage("Marked sent", () => onUpdateJob({ ...job, [d.markField]: false }, { [d.markField]: false })); } };
+  };
+
+  const openNeeds = (needs || []).filter(n => needIsOpen(n, todayYmd));
+  const mineRows = [];
+  (iAmHead ? headQueue(needs, identity, todayYmd) : openNeeds.filter(n => isMine(n, identity))).forEach(n => mineRows.push(needRow(n, false)));
+  punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
+    tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
+    onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
+  if (myTitle === "foreman" || iAmHead) {
+    computeTasks(jobs || []).filter(t => t.category !== "prep" && sameName(t.foreman, me) && !cleared.has(t.id)).forEach(t => {
+      const job = jobById(t.jobId);
+      mineRows.push({ key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+        sub: [t.jobName, t.desc].filter(Boolean), jobId: t.jobId, section: null, canDone: !!job, canSnooze: !!job,
+        onDone: () => { if (!job) return; const prev = job.clearedTasks || []; const next = [...prev, t.id]; onUpdateJob({ ...job, clearedTasks: next }, { clearedTasks: next }); stage("Cleared", () => onUpdateJob({ ...job, clearedTasks: prev }, { clearedTasks: prev })); },
+        onSnooze: (ymd) => { if (!job) return; const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); } });
+    });
+  }
+  if (iAmHead) {
+    const live = (jobs || []).filter(j => j && !j.tempPed && !j.quickJob);
+    [...live.flatMap(getCoordinatorDuties), ...(can(head, "jobprep.own") ? live.flatMap(getCompanyDuties) : [])].forEach(d => mineRows.push(dutyRow(d, false)));
+  }
+  const headRows = iAmHead ? [] : [
+    ...openNeeds.filter(n => onHead(n, identity, users, jobs)).map(n => needRow(n, true)),
+    ...derivedDutiesForForeman(jobs, identity, users).map(d => dutyRow(d, true)),
+  ];
+  const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
+  const groups = [
+    { key: "mine", title: "Mine", rows: sortRows(mineRows), empty: "All clear — nothing on you right now." },
+    ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: sortRows(headRows), empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
+  ];
+
+  const Row = (r) => {
+    const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
+    const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
+    return (
+      <div key={r.key} style={{ display: "flex", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44 }}>
+        <div onClick={() => { if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: 1, minWidth: 0, cursor: r.jobId ? "pointer" : "default" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
+            {r.sub.map((s, i) => <span key={i}>{s}</span>)}
+            {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
+          </div>
+        </div>
+        {r.canDone && (
+          <button onClick={r.onDone} title="Done" style={{ ...ib, color: C.green }}><Icon name="check" size={20} stroke={2.25} /></button>
+        )}
+        {r.canSnooze && (
+          <button onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)} title="Snooze" style={ib}><Icon name="clock" size={19} stroke={2} /></button>
+        )}
+        {snoozeFor === r.key && (
+          <div style={{ position: "absolute", right: 10, top: "calc(100% + 4px)", zIndex: 5, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(20,30,50,.12)", padding: 6, display: "flex", flexDirection: "column", minWidth: 170 }}>
+            {[["3 days", 3], ["1 week", 7]].map(([lbl, d]) => (
+              <button key={lbl} onClick={() => { setSnoozeFor(null); r.onSnooze(addDaysYmd(todayYmd, d)); }}
+                style={{ textAlign: "left", fontFamily: "inherit", fontSize: 13, background: "none", border: "none", padding: "9px 10px", borderRadius: 7, cursor: "pointer", color: C.text }}>{lbl}</button>
+            ))}
+            <input type="date" min={todayYmd} onChange={e => { if (e.target.value) { setSnoozeFor(null); r.onSnooze(e.target.value); } }}
+              style={{ fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.bg, color: C.text, margin: "2px 4px 4px" }} />
+          </div>
+        )}
+      </div>
+    );
+  };
+  const Group = (g) => {
+    const isOpen = openGroups.has(g.key) || (groups.length === 1);
+    const overdue = g.rows.filter(r => r.bucket === "overdue").length;
+    return (
+      <div key={g.key} style={{ marginBottom: 14 }}>
+        <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
+          <span style={{ display: "inline-flex", transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+          <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
+          <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
+          {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
+          <span style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+        {isOpen && (g.rows.length
+          ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(Row)}</div>
+          : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)}
+      </div>
+    );
+  };
+  const link = (label, fn) => <span onClick={fn} style={{ fontSize: 12, color: C.accent, fontWeight: 600, cursor: "pointer" }}>{label}</span>;
+
+  return (
+    <div style={{ padding: narrow ? "12px 12px 110px" : "16px 18px 60px", maxWidth: 1120, margin: "0 auto" }} onClick={() => { if (snoozeFor) setSnoozeFor(null); }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 28, letterSpacing: "0.06em", color: C.text, lineHeight: 1 }}>MY DAY</div>
+        <HelpDot section="myday" />
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginLeft: "auto", flexWrap: "wrap" }}>
+          {onGoHome && link("Job Board", onGoHome)}
+          {crewForeman && onOpenCrew && link("My Crew", () => onOpenCrew(crewForeman))}
+          {canBoard && onOpenBoard && link("Needs", onOpenBoard)}
+          {canCreate && !ON_MOBILE && openQuickAdd && (
+            <button onClick={() => openQuickAdd({})} style={{ background: C.accent, border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="plus" size={14} stroke={2.5} /> Need
+            </button>
+          )}
+        </div>
+      </div>
+      {myJobs.length > 0 && (
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", margin: "0 0 12px", paddingBottom: 2, scrollbarWidth: "none" }}>
+          {myJobs.map(j => (
+            <span key={j.id} onClick={() => onOpenJob && onOpenJob(j.id, null)}
+              style={{ flex: "none", fontSize: 12, padding: "6px 10px", borderRadius: 9, background: C.card, border: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer" }}>
+              <b style={{ fontWeight: 600 }}>{j.name}</b>
+              {(j.roughStage || j.finishStage) && <span style={{ fontSize: 10.5, color: C.dim, marginLeft: 6 }}>{parseStage(j.roughStage) < 100 ? `Rough ${parseStage(j.roughStage) || 0}%` : `Finish ${parseStage(j.finishStage) || 0}%`}</span>}
+            </span>
+          ))}
+        </div>
+      )}
+      {narrow || groups.length === 1
+        ? groups.map(Group)
+        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{Group(groups[0])}</div><div>{Group(groups[1])}</div></div>}
+      {undo && (
+        <div style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${ON_MOBILE ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8995, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 520, margin: "0 auto" }}>
+          <span>{undo.label}</span>
+          <button onClick={runUndo} style={{ fontFamily: "inherit", fontWeight: 700, color: "#66A8FF", background: "transparent", border: "none", cursor: "pointer", fontSize: 13 }}>Undo</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── NEEDS BOARD ──────────────────────────────────────────────────────────────
 // Coordinator-facing board for deadline-bound contractor call-in needs.
 // Each need is its OWN doc in the `needs` collection (data envelope, same shape
@@ -50822,29 +51460,24 @@ function NeedPlan({ value, onSave }) {
   );
 }
 
-function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, onDeleteNeed, onSelectJob, onUpdateJob }) {
+function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, onPatchNeed, onDeleteNeed, onSelectJob, onUpdateJob, onQuickAdd }) {
   const canAdd = can(identity, "board.add");
   const myName = identity?.name || "";
-  const coordinators = useMemo(
-    () => [...new Set((users || []).filter(u => (u.title || u.role) === "foreman" && u.coordinator).map(u => u.coordinator))].sort(),
-    [users]
-  );
-  // Auto-assigned book: if the person entering IS a coordinator, their own name;
-  // otherwise the coordinator they're under (their foreman record's `coordinator`).
-  const myUser = useMemo(() => (users || []).find(u => u.id === identity?.id || u.name === myName) || null, [users, identity, myName]);
-  const myBook = coordinators.includes(myName) ? myName : (myUser?.coordinator || myName);
-  const jobNames = useMemo(() => (jobs || []).map(j => j.name).filter(Boolean).sort(), [jobs]);
+  // No books (2026-09-09): a need is on a PERSON. The To: control is the full
+  // internal roster, same as punch assignment. Adding goes through the shared
+  // My Day quick-add sheet (onQuickAdd) so there is one add flow everywhere.
+  const roster = useMemo(() => (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort(), [users]);
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+  const narrow = winW < 640;
 
   const [scope, setScope]   = useState("mine");      // mine | all
-  const [adding, setAdding] = useState(false);
-  const [dText, setDText]   = useState("");
-  const [dDue,  setDDue]    = useState("tomorrow");   // tomorrow | week
-  const [dJob,  setDJob]    = useState("");
 
   const startToday = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
-  const mine = (n) => n && (n.coordinator === myName || n.createdBy === myName);
+  const todayYmd = localYmd();
+  const mine = (n) => isMine(n, identity);
 
-  const open    = (needs || []).filter(n => n && n.status !== "done");
+  const open    = (needs || []).filter(n => needIsOpen(n, todayYmd));
   const scoped  = scope === "all" ? open : open.filter(mine);
   const lane    = (b) => scoped.filter(n => (b === "tomorrow" ? n.dueBucket === "tomorrow" : n.dueBucket !== "tomorrow"));
   const tomorrow = lane("tomorrow");
@@ -50856,36 +51489,16 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
 
   const aged = (n) => n.createdAt && (Date.now() - new Date(n.createdAt).getTime()) > 36 * 3600 * 1000;
 
-  const coordColor = (c) => {
-    const pal = [C.blue, C.teal, C.orange, C.purple, C.green, C.red];
-    const i = coordinators.indexOf(c);
-    return pal[(i < 0 ? 0 : i) % pal.length];
-  };
-
-  const submit = () => {
-    const t = dText.trim();
-    if (!t) return;
-    const job = (jobs || []).find(j => j.name === dJob);
-    const need = {
-      id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
-      text: t,
-      dueBucket: dDue,
-      coordinator: myBook || "",
-      jobId: job ? job.id : "",
-      jobName: dJob || "",
-      status: "open",
-      createdBy: myName,
-      createdAt: new Date().toISOString(),
-      doneAt: "",
-    };
-    onSaveNeed && onSaveNeed(need);
-    setDText(""); setDJob(""); setDDue("tomorrow"); setAdding(false);
-  };
-
-  const patch     = (n, p) => onSaveNeed && onSaveNeed({ ...n, ...p });
-  const markDone  = (n) => patch(n, { status: "done", doneAt: new Date().toISOString() });
-  const reopen    = (n) => patch(n, { status: "open", doneAt: "" });
-  const remove    = (n) => { if (window.confirm("Delete this need?")) onDeleteNeed && onDeleteNeed(n.id); };
+  // Field-surgical when the funnel offers it (two devices editing different
+  // fields of one need can't revert each other); falls back to a full save.
+  const patch     = (n, p) => onPatchNeed ? onPatchNeed(n.id, p, n) : (onSaveNeed && onSaveNeed({ ...n, ...p }));
+  const markDone  = (n) => patch(n, { status: "done", doneAt: new Date().toISOString(), doneBy: myName });
+  const reopen    = (n) => patch(n, { status: "open", doneAt: "", doneBy: "" });
+  // Delete is instant with a 10s Undo (no confirm popup). saveNeed re-creates
+  // the identical doc id, so Undo is a byte-identical restore.
+  const [undoDel, setUndoDel] = useState(null);
+  const remove    = (n) => { onDeleteNeed && onDeleteNeed(n.id); if (undoDel && undoDel.timer) clearTimeout(undoDel.timer); const timer = setTimeout(() => setUndoDel(null), 10000); setUndoDel({ need: n, timer }); };
+  const undoRemove = () => { if (!undoDel) return; if (undoDel.timer) clearTimeout(undoDel.timer); onSaveNeed && onSaveNeed(undoDel.need); setUndoDel(null); };
 
   const pill = (text, bg, fg, icon, onClick) => (
     <span onClick={onClick}
@@ -50910,16 +51523,15 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
           {n.dueBucket === "tomorrow"
             ? pill("Move to week", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "week" }))
             : pill("Pull to tomorrow", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "tomorrow" }))}
-          {coordinators.length > 0 && (canAdd
-            ? <select value={coordinators.includes(n.coordinator) ? n.coordinator : ""}
-                onChange={e => patch(n, { coordinator: e.target.value })}
-                title="Transfer to another book"
-                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontFamily: "inherit", cursor: "pointer",
-                  border: `1px solid ${coordColor(n.coordinator)}55`, background: `${coordColor(n.coordinator)}18`, color: coordColor(n.coordinator) }}>
-                {!coordinators.includes(n.coordinator) && <option value="">{n.coordinator ? n.coordinator.split(" ")[0] : "Unassigned"}</option>}
-                {coordinators.map(c => <option key={c} value={c}>{c.split(" ")[0]}'s book</option>)}
+          {canAdd
+            ? <select value={needAssignee(n)} onChange={e => patch(n, { assignedTo: e.target.value })} title="Who this is on"
+                style={{ fontSize: 12, padding: "4px 8px", minHeight: 30, borderRadius: 99, fontFamily: "inherit", cursor: "pointer", maxWidth: 170,
+                  border: `1px solid ${C.accent}55`, background: `${C.accent}18`, color: C.accent }}>
+                <option value="">Unassigned</option>
+                {needAssignee(n) && !roster.includes(needAssignee(n)) && <option value={needAssignee(n)}>To: {needAssignee(n).split(" ")[0]}</option>}
+                {roster.map(nm => <option key={nm} value={nm}>To: {nm.split(" ")[0]}</option>)}
               </select>
-            : (n.coordinator && pill(n.coordinator.split(" ")[0], `${coordColor(n.coordinator)}18`, coordColor(n.coordinator), "user")))}
+            : (needAssignee(n) && pill(`To: ${needAssignee(n).split(" ")[0]}`, `${C.accent}18`, C.accent, "user"))}
         </div>
         {canAdd
           ? <NeedPlan value={n.plan} onSave={(t) => patch(n, { plan: t })} />
@@ -50928,14 +51540,14 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         {canAdd && (
           <button onClick={() => markDone(n)} title="Mark done"
-            style={{ width: 30, height: 30, border: `1px solid ${C.border}`, background: "none", borderRadius: 8,
+            style={{ width: 44, height: 44, border: `1px solid ${C.border}`, background: C.bg, borderRadius: 10,
               display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.green }}>
             <Icon name="check" size={16} stroke={2.25} />
           </button>
         )}
         {canAdd && (
           <button onClick={() => remove(n)} title="Delete"
-            style={{ width: 30, height: 30, border: `1px solid ${C.border}`, background: "none", borderRadius: 8,
+            style={{ width: 44, height: 44, border: `1px solid ${C.border}`, background: C.bg, borderRadius: 10,
               display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.dim }}>
             <Icon name="trash" size={15} stroke={2.25} />
           </button>
@@ -50960,12 +51572,13 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   );
 
   return (
-    <div style={{ padding: "20px 26px", maxWidth: 1000, margin: "0 auto" }}>
+    <div style={{ padding: narrow ? "12px 12px 110px" : "20px 26px", maxWidth: 1000, margin: "0 auto" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Icon name="clipboard" size={22} stroke={2.25} color={C.dim} />
-          <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Needs Board</span>
+          <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Needs</span>
+          <HelpDot section="needs" />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
@@ -50978,44 +51591,21 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
               </button>
             ))}
           </div>
-          {canAdd && (
-            <button onClick={() => setAdding(a => !a)}
-              style={{ padding: "7px 14px", fontSize: 12, fontFamily: "inherit", border: `1px solid ${C.border}`,
-                borderRadius: 8, background: C.surface, color: C.text, cursor: "pointer",
-                display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
-              <Icon name="plus" size={14} stroke={2.5} />Add need
+          {canAdd && !ON_MOBILE && (
+            <button onClick={() => onQuickAdd && onQuickAdd({})}
+              style={{ padding: "7px 14px", fontSize: 12, fontFamily: "inherit", border: "none",
+                borderRadius: 8, background: C.accent, color: "#fff", cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700 }}>
+              <Icon name="plus" size={14} stroke={2.5} />Need
             </button>
           )}
         </div>
       </div>
 
-      {/* Quick-add */}
-      {canAdd && adding && (
-        <div style={{ background: C.bg, borderRadius: 12, padding: 14, marginBottom: 18 }}>
-          <input value={dText} onChange={e => setDText(e.target.value)} autoFocus
-            onKeyDown={e => { if (e.key === "Enter") submit(); }}
-            placeholder="What's needed? e.g. Set panel at Webb before framers"
-            style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", fontSize: 14, fontFamily: "inherit",
-              border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 10 }} />
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <select value={dDue} onChange={e => setDDue(e.target.value)}
-              style={{ flex: "1 1 130px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }}>
-              <option value="tomorrow">Due tomorrow</option>
-              <option value="week">Due this week</option>
-            </select>
-            <input list="needs-job-list" value={dJob} onChange={e => setDJob(e.target.value)}
-              placeholder="Link a job (optional)"
-              style={{ flex: "1 1 160px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }} />
-            <datalist id="needs-job-list">{jobNames.map(n => <option key={n} value={n} />)}</datalist>
-            <button onClick={submit}
-              style={{ padding: "8px 18px", fontSize: 13, fontFamily: "inherit", border: "none", borderRadius: 8,
-                background: C.accent, color: "#000", cursor: "pointer", fontWeight: 700 }}>Save</button>
-          </div>
-          {myBook && (
-            <div style={{ fontSize: 12, color: C.dim, marginTop: 8 }}>
-              Adds to <b style={{ color: C.text }}>{(myBook || "").split(" ")[0]}'s book</b>
-            </div>
-          )}
+      {undoDel && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 13 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Deleted “{undoDel.need.text}”</span>
+          <button onClick={undoRemove} style={{ fontFamily: "inherit", fontWeight: 700, color: "#66A8FF", background: "transparent", border: "none", cursor: "pointer", fontSize: 13, flexShrink: 0 }}>Undo</button>
         </div>
       )}
 
@@ -51045,11 +51635,12 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         </div>
       </div>
 
-      {/* Coordinator Book Worklist — relocated from Today, collapsed by default.
-          Scopes to the viewer's book in "Mine", all books in "All". Office only. */}
+      {/* Office worklist — stage-triggered duties (QC walks, start POs, prep)
+          the app derives from job state. One company, no books (2026-09-09),
+          so it always scopes to "all". Collapsed by default. Office only. */}
       {can(identity, "worklist.view") && (
         <CoordinatorWorklist allJobs={jobs} users={users} identity={identity}
-          book={scope === "all" ? "all" : (myBook || "all")}
+          book="all"
           onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} defaultCollapsed={true} />
       )}
     </div>
@@ -51584,7 +52175,7 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
       <div style={{ fontSize:12, color:"#2C5C40", fontWeight:700, marginTop:6 }}>
         {doneText || "✓ Sent to Homestead — we’ll follow up."}
         <span style={{display:"block",fontWeight:600,color:(P&&P.dim)||"#5E6670",marginTop:2}}>
-          {st && st.status==="applied" ? "✓ Homestead has acted on this."
+          {st && st.status==="applied" ? (dateMode ? "✓ Homestead accepted this date — it's on the schedule." : "✓ Homestead has acted on this.")
             : st && st.status==="dismissed" ? "Homestead reviewed this — no further action needed."
             : "Sent " + (_gcAgo(_priorSent.at) || "recently") + " — awaiting review."}
         </span>
@@ -51600,7 +52191,7 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
         {doneText || "✓ Sent to Homestead — we’ll follow up."}
         {st ? (
           <span style={{display:"block",fontWeight:600,color:(P&&P.dim)||"#5E6670",marginTop:2}}>
-            {st.status==="applied" ? "✓ Homestead has acted on this." : st.status==="dismissed" ? "Homestead reviewed this — no further action needed." : ""}
+            {st.status==="applied" ? (dateMode ? "✓ Homestead accepted this date — it's on the schedule." : "✓ Homestead has acted on this.") : st.status==="dismissed" ? "Homestead reviewed this — no further action needed." : ""}
           </span>
         ) : null}
       </div>
@@ -51631,7 +52222,11 @@ function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneT
         attachments.push({ name: f.name, url: f.uploadedUrl });
       }
       setSendMsg("");
-      const r = await onSend(text, attachments);
+      // dateMode (v397): also send the machine date + time preference so the
+      // office can ACCEPT it into the job with one click — the human string
+      // alone ("Fri, 7/31 — afternoon (PM)") has no year to write.
+      const meta = dateMode ? { dateIso: dateVal, timeNote: (timeMode==="am" ? "morning (AM)" : timeMode==="pm" ? "afternoon (PM)" : (timeMode==="at" && timeVal) ? composedDate().split(" — ").pop() : "any time that day") } : undefined;
+      const r = await onSend(text, attachments, meta);
       const newId = (r && r.data && r.data.requestId) || null;
       setReqId(newId); _rememberSent(newId); setState("done");
       files.forEach(f=>{ if(f.preview) URL.revokeObjectURL(f.preview); }); setFiles([]);
@@ -51833,7 +52428,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                     label={Fn.projectedStart ? "Confirm date or suggest a different one" : "Plan finish — suggest a start"}
                     cta="Send date"
                     doneText="✓ Date sent to Homestead — we’ll confirm and hold crew"
-                    onSend={(text)=>gcSubmit({ type:"date", itemId:"finish_start", date:text, dateKind: Fn.projectedStart?"confirm":"suggest" })}/>
+                    onSend={(text,_a,meta)=>gcSubmit({ type:"date", ...(meta||{}), itemId:"finish_start", date:text, dateKind: Fn.projectedStart?"confirm":"suggest" })}/>
                 </div>
               ) : null}
               {mpSuggest ? (
@@ -51843,7 +52438,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                     label={j.matterport.status==="scheduled" ? "Confirm date or suggest a different one" : "Suggest a scan date"}
                     cta="Send date"
                     doneText="✓ Date sent to Homestead — we’ll confirm"
-                    onSend={(text)=>gcSubmit({ type:"date", itemId:"matterport", date:text, dateKind: j.matterport.status==="scheduled"?"confirm":"suggest" })}/>
+                    onSend={(text,_a,meta)=>gcSubmit({ type:"date", ...(meta||{}), itemId:"matterport", date:text, dateKind: j.matterport.status==="scheduled"?"confirm":"suggest" })}/>
                 </div>
               ) : null}
             </Fragment>
@@ -51892,7 +52487,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                   label={rt.scheduled ? "Confirm or request a different date" : "Suggest a date that works"}
                   cta="Send date"
                   doneText="✓ Date sent to Homestead — we’ll confirm"
-                  onSend={(text)=>gcSubmit({ type:"date", itemId:rt.id, date:text, dateKind: rt.scheduled?"confirm":"suggest" })}/>
+                  onSend={(text,_a,meta)=>gcSubmit({ type:"date", ...(meta||{}), itemId:rt.id, date:text, dateKind: rt.scheduled?"confirm":"suggest" })}/>
               ) : null}
             </div>
           ))
@@ -52115,6 +52710,7 @@ function App() {
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
   useEffect(() => { _setNudgeRoster(users); }, [users]);  // feed the RemindButton roster cache
+  useEffect(() => { _setTaskOwnerFallback(resiHeadName(users)); }, [users]);  // auto-task owner = Head of Residential hat
   // Timestamp of the team doc this device loaded. saveUsers' stale-write guard
   // compares against the live doc so an out-of-date device can't silently
   // overwrite a newer team list (the failure that wiped the coordinator setup).
@@ -53517,9 +54113,36 @@ function App() {
 
   // Needs Board writes — same envelope as manualTasks. Optimistic local update so
   // the board reflects instantly; the onSnapshot listener reconciles from Firestore.
+  // Normalize on the way out so every doc in `needs` is self-consistent no
+  // matter which UI wrote it. Additive: only fills derived/default keys.
+  const normalizeNeed = (need) => {
+    const n = { ...need };
+    if (!n.kind) n.kind = "need";
+    if (n.dueDate) { const b = dueBucketFromDate(n.dueDate); if (b) n.dueBucket = b; }
+    if (!n.dueBucket) n.dueBucket = "week";
+    return n;
+  };
   const saveNeed = async (need) => {
-    setNeeds(prev => { const i=(prev||[]).findIndex(n=>n.id===need.id); if(i>=0){ const nx=[...prev]; nx[i]=need; return nx; } return [...(prev||[]), need]; });
-    try { await setDoc(doc(db,"needs",need.id),{data:need,updated_at:new Date().toISOString()}); } catch(e){ console.error("saveNeed error:",e); }
+    const n = normalizeNeed(need);
+    setNeeds(prev => { const i=(prev||[]).findIndex(x=>x.id===n.id); if(i>=0){ const nx=[...prev]; nx[i]=n; return nx; } return [...(prev||[]), n]; });
+    // `saved_by` is envelope meta — only the server ledger reads it (it logged
+    // "?" for every need before); the loader returns `data` and ignores it.
+    try { await setDoc(doc(db,"needs",n.id),{data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""}); } catch(e){ console.error("saveNeed error:",e); }
+  };
+  // Field-surgical update: dotted `data.<field>` paths so two devices editing
+  // different fields of one need can't last-write-wins each other. `current`
+  // (the caller's copy) lets us fall back to the full funnel if the doc doesn't
+  // exist yet (need created offline, not yet flushed).
+  const patchNeed = async (id, patch, current) => {
+    const p = { ...patch };
+    const nowIso = new Date().toISOString();
+    if ("assignedTo" in p) { p.assignedBy = identity?.name || ""; p.assignedAt = nowIso; }
+    if (p.dueDate) { const b = dueBucketFromDate(p.dueDate); if (b) p.dueBucket = b; }
+    setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, ...p } : n));
+    const upd = { updated_at: nowIso, saved_by: identity?.name || "" };
+    Object.keys(p).forEach(k => { upd["data."+k] = p[k]; });
+    try { await updateDoc(doc(db,"needs",id), upd); }
+    catch(e){ if (current) { await saveNeed({ ...current, ...p }); } else { console.error("patchNeed error:",e); } }
   };
   const deleteNeed = async (id) => {
     setNeeds(prev => (prev||[]).filter(n=>n.id!==id));
@@ -53987,6 +54610,11 @@ function App() {
   // view: "home" = main page, "foreman" = foreman-specific page
 
   const [view, setView] = useState("home");
+  // v397: open contractor-request count for the Contractors tab badge. The
+  // server mirrors it into settings/gcInbox on every file/handle (gc_requests
+  // itself is function-only). Display only — the inbox recounts from source.
+  const [gcInboxOpen, setGcInboxOpen] = useState(0);
+  useEffect(() => onSnapshot(doc(db,"settings","gcInbox"), s => setGcInboxOpen((s.exists() && Number(s.data().open)) || 0), () => {}), []);
   const [moreOpen, setMoreOpen] = useState(false);  // top-nav "More" dropdown
   const [morePos, setMorePos] = useState({top:0,right:8});  // fixed-pos anchor (nav has overflow:auto, can't use absolute)
   const [activeForeman, setActiveForeman] = useState(null);
@@ -53995,19 +54623,23 @@ function App() {
   // drop them into their foreman's crew view instead of the full office board.
   // Reuses the existing foreman drilldown (view==="foreman" + activeForeman).
   // One-time per session; the lead can still navigate elsewhere afterward.
-  const [leadLandingApplied, setLeadLandingApplied] = useState(false);
+  // My Day landing (Koy, 2026-09-09): every FIELD role — foremen, leads AND
+  // crew — opens the app to their own day, not the office-wide Job Board.
+  // Job Board and My Crew stay one tap away in the My Day header (this
+  // supersedes the v217 lead "My Crew" landing). Office lands on the Job Board
+  // as before; contractors are forced to their own view below. Once per session.
+  const [landingApplied, setLandingApplied] = useState(false);
   useEffect(() => {
-    if (leadLandingApplied) return;
+    if (landingApplied) return;
     if (!identity?.id || !Array.isArray(users) || users.length === 0) return;
-    if (getTitle(identity) === "lead" && identity.foremanId) {
-      const fm = users.find(uu => uu.id === identity.foremanId);
-      if (fm?.name) { setActiveForeman(fm.name); setView("foreman"); }
-    }
-    setLeadLandingApplied(true);
-  }, [identity, users, leadLandingApplied]);
+    const t = getTitle(identity);
+    if ((t === "foreman" || t === "lead" || t === "crew") && can(identity, "myday.view")) setView("myday");
+    setLandingApplied(true);
+  }, [identity, users, landingApplied]);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [activeBook, setActiveBook] = useState(null); // coordinator name whose whole book is open, or null
+  const [quickAdd, setQuickAdd] = useState(null);     // My Day quick-add sheet: null | {job?} preset
   const [showBookCompleted, setShowBookCompleted] = useState(false); // book page: completed jobs hidden by default
   const openBook     = (coord) => { setActiveBook(coord); setActiveForeman(null); setView("book"); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
@@ -54019,10 +54651,12 @@ function App() {
   const openNav           = () =>  { setView("nav");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSettings      = () =>  { setView("settings");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSubcontractor = () =>  { setView("subcontractors");setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openMyDay         = () =>  { setView("myday");         setActiveForeman(null); setActiveBook(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   // Shared top-nav click handler (used by both the main tab row and the "More"
   // dropdown). Every open* helper just setView(key), so this covers all tabs.
   const navClick = (key) => {
     if(key==="home") return goHome();
+    if(key==="myday") return openMyDay();
     if(key==="schedule") return openSchedule();
     if(key==="upcoming") return openUpcoming();
     if(key==="tasks") return openTasks();
@@ -54132,42 +54766,11 @@ function App() {
   // Used by the foreman tab "Assigned" to give them one place to see what's
   // theirs without hopping between jobs. Walks rough/finish/qc punches and
   // skips voided + done items.
-  const assignedToActive = useMemo(() => {
-    if(!activeForeman) return [];
-    const out = [];
-    const eatFloor = (fl, floorLabel, phase, jobId, jobName) => {
-      if(!fl) return;
-      const push = (i, room, isHotcheck) => {
-        if(!i || i.voided || i.done) return;
-        if(i.assignedTo !== activeForeman) return;
-        out.push({ ...i, room, floor:floorLabel, phase, isHotcheck, jobId, jobName });
-      };
-      (fl.general||[]).forEach(i => push(i, "General", false));
-      (fl.hotcheck||[]).forEach(i => push(i, "Hot Check", true));
-      (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => push(i, r.name, false)));
-    };
-    jobs.forEach(j => {
-      if(j.tempPed || j.quickJob) return;
-      const jobName = j.name || "Untitled";
-      const phases = [
-        ["Rough", j.roughPunch],
-        ["Finish", j.finishPunch],
-        ["QC", j.qcPunch],
-      ];
-      phases.forEach(([phase, punch]) => {
-        if(!punch) return;
-        ["upper","main","basement"].forEach(k => eatFloor(punch[k], {upper:"Upper",main:"Main",basement:"Basement"}[k], phase, j.id, jobName));
-        // Custom extras live on punch.extras = [{key,label}] with floor data
-        // at punch[key]. Old code read non-existent `punch.extraFloors`,
-        // dropping every extra-area item from the cross-job rollup.
-        (punch.extras||[]).forEach(e => {
-          if (!e || !e.key) return;
-          eatFloor(punch[e.key], e.label || e.key, phase, j.id, jobName);
-        });
-      });
-    });
-    return out;
-  }, [jobs, activeForeman]);
+  // Walk lifted to the module-level punchAssignedTo() so My Day can run the
+  // exact same rollup keyed to the logged-in identity. This card stays keyed to
+  // the tapped foreman — behavior unchanged (plus first-name tolerance for
+  // legacy single-name assignments: additive, never fewer rows).
+  const assignedToActive = useMemo(() => activeForeman ? punchAssignedTo(activeForeman, jobs) : [], [jobs, activeForeman]);
 
 
   const filtered = viewJobs.filter(j=>{
@@ -54507,6 +55110,10 @@ function App() {
     if (!pendingView || !identity) return;
     if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (pendingView === "cos" && can(identity, "cos.view")) setView("cos");
+    // Task-loop deep-links (need_assigned / need_done → My Day; bodies → Forecast).
+    else if (pendingView === "myday" && can(identity, "myday.view")) setView("myday");
+    else if (pendingView === "needs" && can(identity, "board.view")) setView("needs");
+    else if (pendingView === "schedule" && can(identity, "schedule.view")) setView("schedule");
     setPendingView(null);
   }, [pendingView, identity]);
 
@@ -54535,6 +55142,10 @@ function App() {
     if (item.jobId) { openJobById(item.jobId, item.section); return; }
     if (item.view === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (item.view === "cos" && can(identity, "cos.view")) setView("cos");
+    // Task-loop items carry `view`, never jobId (so they land on the list, not a job).
+    else if (item.view === "myday" && can(identity, "myday.view")) setView("myday");
+    else if (item.view === "needs" && can(identity, "board.view")) setView("needs");
+    else if (item.view === "schedule" && can(identity, "schedule.view")) setView("schedule");
   }, [identity, openJobById, markInboxRead]);
 
   // ── Listen for postMessage from SW (app was already open when notif tapped) ─
@@ -54603,6 +55214,23 @@ function App() {
           </div>
         );
       })()}
+
+      {/* My Day quick-add. Phone: a floating "+" bottom-right on the list
+          views (lifts above the SIMPRO pill when that is showing; hidden while
+          a job is open — Job Detail has its own "+ Need"). Laptop: the "+ Need"
+          buttons in My Day / Needs / Job Detail open the same sheet. */}
+      {!isContractor && can(identity,"tasks.create") && ON_MOBILE && !selected && ["myday","home","foreman","needs"].includes(view) && (
+        <button onClick={()=>setQuickAdd({})} aria-label="Add a need or task"
+          style={{position:"fixed", right:20,
+            bottom:`calc(${(getAccess(identity)==="admin" && simproCandidates.filter(c=>!c.ignored).length>0) ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`,
+            zIndex:8990, width:56, height:56, borderRadius:"50%", background:C.accent, color:"#fff", border:"none", cursor:"pointer",
+            boxShadow:"0 8px 20px rgba(59,91,165,0.45)", display:"flex", alignItems:"center", justifyContent:"center"}}>
+          <Icon name="plus" size={26} stroke={2.5}/>
+        </button>
+      )}
+      {quickAdd && can(identity,"tasks.create") && (
+        <NeedQuickAdd identity={identity} users={users} jobs={jobs} preset={quickAdd} onSave={saveNeed} onClose={()=>setQuickAdd(null)}/>
+      )}
 
       {/* Update pill — bottom-left (SIMPRO owns bottom-right). Shows when a
           newer bundle is deployed and the safe auto-reload couldn't fire yet
@@ -54837,12 +55465,13 @@ function App() {
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
           : [
+              ...(can(identity,"myday.view")?[{key:"myday",label:"My Day"}]:[]),
               {key:"home",label:"Job Board"},
               ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
               ...(can(identity,"board.view")?[{key:"needs",label:"Needs"}]:[]),
               ...(can(identity,"cos.view")?[{key:"cos",label:"COs"}]:[]),
               ...(can(identity,"jobprep.view")?[{key:"jobprep",label:"Job Prep"}]:[]),
-              ...(can(identity,"users.manage")?[{key:"contractors",label:"Contractors"}]:[]),
+              ...(can(identity,"users.manage")?[{key:"contractors",label:"Contractors",badge:gcInboxOpen}]:[]),
               {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
@@ -54850,7 +55479,7 @@ function App() {
               ...((getAccess(identity)==="admin"||getAccess(identity)==="manager")?[{key:"qc",label:"QC"}]:[]),
               {key:"appmap",label:"App Map"},
             ]
-        ).map(({key,label,icon})=>{
+        ).map(({key,label,icon,badge})=>{
           const active = view===key;
           return (
             <button key={key} onClick={()=>navClick(key)}
@@ -54864,6 +55493,7 @@ function App() {
                 display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
+              {badge ? <span title={badge+" contractor request"+(badge===1?"":"s")+" waiting"} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#B23A3A",color:"#fff",font:"700 10px/16px system-ui",textAlign:"center"}}>{badge}</span> : null}
             </button>
           );
         })}
@@ -55826,11 +56456,14 @@ function App() {
 
             {/* ── Jobs | Tasks tab bar ── */}
             {(()=>{
-              const isKoy = activeForeman === "Koy";
+              // "isKoy" = this card's person holds the prep hat (jobprep.own) — the
+              // prep queue shows on whoever holds it, not a hardcoded name. Variable
+              // name kept for the downstream refs.
+              const isKoy = can((users||[]).find(u=>u&&sameName(u.name,activeForeman)),"jobprep.own");
               const _clearedTab = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
               const fTasks = computeTasks(jobs)
                 .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedTab.has(t.id));
-              const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedTab.has(t.id));
+              const prepTasks = computeTasks(jobs).filter(t=>t.category==="prep"&&sameName(t.foreman,activeForeman)&&!_clearedTab.has(t.id));
               const taskCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
               const fc = _foremanColors[activeForeman]||"#6E7682";
               const assignedCount = assignedToActive.length;
@@ -55932,11 +56565,11 @@ function App() {
           {foremanViewTab==="tasks"&&(
             <div style={{padding:"14px 26px"}}>
               {(()=>{
-                const isKoy = activeForeman === "Koy";
+                const isKoy = can((users||[]).find(u=>u&&sameName(u.name,activeForeman)),"jobprep.own");
                 const _clearedFTC = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
                 const fTasks = computeTasks(jobs)
                   .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedFTC.has(t.id));
-                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedFTC.has(t.id));
+                const prepTasks = computeTasks(jobs).filter(t=>t.category==="prep"&&sameName(t.foreman,activeForeman)&&!_clearedFTC.has(t.id));
                 return (
                   <ForemanTaskCard
                     isKoy={isKoy}
@@ -56057,6 +56690,7 @@ function App() {
             canConvertQuote={can(identity,"quotes.convert")}
             initialTab={openTab} users={users} identity={identity}
             jobs={jobs}
+            onQuickAdd={(preset)=>setQuickAdd(preset||{})}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
@@ -56398,12 +57032,19 @@ function App() {
         />
       )}
 
+      {view==="myday"&&can(identity,"myday.view")&&(
+        <MyDay identity={identity} users={users} jobs={jobs} needs={needs}
+          onPatchNeed={patchNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
+          onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
+          openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}/>
+      )}
+
       {view==="today"&&can(identity,"today.view")&&(
         <Today jobs={jobs} users={users} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected} onUpdateJob={updateJob}/>
       )}
 
       {view==="needs"&&can(identity,"board.view")&&(
-        <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected} onUpdateJob={updateJob}/>
+        <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onPatchNeed={patchNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected} onUpdateJob={updateJob} onQuickAdd={(preset)=>setQuickAdd(preset||{})}/>
       )}
 
       {view==="lutron"&&can(identity,"lutron.view")&&(
@@ -56451,7 +57092,7 @@ function App() {
       {view==="contractors"&&can(identity,"users.manage")&&(
         <div style={{maxWidth:1120,margin:"0 auto",padding:"14px 12px 60px"}}>
           <SettingsSection title="CONTRACTOR PORTAL — REQUESTS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
-            <GCPortalInbox jobs={jobs} identity={identity} onUpdateJob={updateJob}/>
+            <GCPortalInbox jobs={jobs} identity={identity} onUpdateJob={updateJob} onSelectJob={setSelected}/>
           </SettingsSection>
           <SettingsSection title="CONTRACTOR PORTAL LINKS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
             <GCPortalManager jobs={jobs} identity={identity}/>

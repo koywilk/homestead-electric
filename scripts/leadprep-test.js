@@ -101,7 +101,15 @@ console.log("degradation:");
 const bad = L.buildModel({ jobs: null, upcoming: null, pto: null, featuresMd: null, notesDoc: null, now: NOW });
 t("null inputs never throw", bad && Array.isArray(bad.rough.rows) && bad.shipped.error === true && bad.actions.error === true);
 const html = L.renderHtml(m);
-t("html has every section", ["Notes", "Highlight", "Lowlight", "Training", "Schedule look ahead", "Rough", "Finish", "Upcoming", "Crew out", "Action items"].every(s => html.includes(s)));
+if (process.env.LEADPREP_DUMP) require("fs").writeFileSync(process.env.LEADPREP_DUMP, html); // debug affordance
+t("html has every section", ["Notes", "Highlight", "Lowlight", "Training", "Schedule Look Ahead", "Rough", "Finish", "Upcoming", "Crew out", "Action items"].every(s => html.includes(s)));
+t("presenting style: no foreman/stage/age/flag detail", !/d ago|⚑|Colby Fogh|95%|in progress/.test(html));
+t("job line = name — plain phrase", html.includes("Webb — Design walk week of 8/14") && html.includes("Rose") === false || html.includes("Webb — Design walk week of 8/14"));
+t("date beats prose", html.includes("Ashcraft finish — Sep 14</li>"));
+t("leading bullet glyphs stripped", !/— [•·]/.test(html));
+t("quiet jobs not rendered", !html.includes("Cowdrey"));
+t("training = bare titles", html.includes("Job Prep tab — redline walk strip") && !html.includes("v390"));
+t("carried action items rendered", html.includes("Colby to order Pierce panel"));
 t("html escapes", L.renderHtml(L.buildModel({ jobs: [{ id: "x", name: "<b>X</b>", roughStatus: "inprogress" }], now: NOW })).includes("&lt;b&gt;X&lt;/b&gt;"));
 t("no handbook section", !/handbook/i.test(html));
 

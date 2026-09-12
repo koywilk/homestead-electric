@@ -1348,6 +1348,57 @@ exports.ledgerRedlineWalks = makeLedgerTrigger("redlineWalks",       { onUpdates
 // rules, so in practice this only ever records overwrites.
 exports.ledgerHomeowner    = makeLedgerTrigger("homeowner_requests", { onUpdates: true });
 
+// ── Needs / tasks (My Day loop): push-on-assign + done-echo ─────────────────
+// Sibling of ledgerNeeds above (two triggers on one path is fine). A need is
+// the app's ONE task object: `data.assignedTo` is a person. Diffs the assignee
+// old→new so the client's full-doc setDoc rewrites (every edit) never re-ping.
+// Legacy docs (no assignedTo) treat `coordinator` as the implicit assignee, so
+// a legacy book transfer still lands on the new owner.
+// Payload deliberately carries NO jobId: openInboxItem opens the job first when
+// jobId is set, and same-job pushes would collapse under one FCM tag. `view`
+// deep-links to My Day (the assignee's own list) instead.
+const _needAssigneeOf = (d) =>
+  String((d && (d.assignedTo !== undefined ? d.assignedTo : d.coordinator)) || "").trim();
+exports.onNeedWrite = functions.firestore
+  .document("needs/{needId}")
+  .onWrite(async (change, context) => {
+    if (!change.after.exists) return null;                       // delete → nothing
+    const before = change.before.exists ? (change.before.data().data || {}) : null;
+    const after  = change.after.data().data || {};
+    const text   = _stripHtml(after.text || "").slice(0, 80) || "a task";
+    const onJob  = after.jobName ? ` on ${after.jobName}` : "";
+    const tasks  = [];
+
+    // 1. Assigned → the assignee. Skip self-assign and unchanged assignee.
+    const prevA = before ? _needAssigneeOf(before) : "";
+    const nextA = _needAssigneeOf(after);
+    const by    = String(after.assignedBy || after.createdBy || "").trim();
+    const isBodies = after.kind === "bodies";
+    if (nextA && nextA.toLowerCase() !== prevA.toLowerCase() && nextA.toLowerCase() !== by.toLowerCase()) {
+      tasks.push(sendToNameIfWanted(nextA, "need_assigned", isBodies
+        ? { title: "Bodies requested",
+            body:  `${by || "Someone"} needs ${after.count || "a"} ${after.count === 1 ? "body" : "bodies"}${onJob}${after.note ? ` — ${after.note}` : ""}`,
+            view:  "schedule" }
+        : { title: "Task assigned to you",
+            body:  `${by || "Someone"} assigned you${onJob}: ${text}`,
+            view:  "myday" }));
+    }
+    // 2. Done → the person who asked (only on the open→done flip, only when
+    //    someone ELSE closed it; legacy closes have no doneBy → silent).
+    const wasDone = !!(before && before.status === "done");
+    const isDone  = after.status === "done";
+    const doneBy  = String(after.doneBy || "").trim();
+    const creator = String(after.createdBy || "").trim();
+    if (!wasDone && isDone && creator && doneBy && doneBy.toLowerCase() !== creator.toLowerCase()) {
+      tasks.push(sendToNameIfWanted(creator, "need_done", isBodies
+        ? { title: "Bodies covered", body: `${doneBy} covered${onJob}: ${text}`, view: "myday" }
+        : { title: "Task done",      body: `${doneBy} finished${onJob}: ${text}`, view: "myday" }));
+    }
+    if (tasks.length) functions.logger.info("[onNeedWrite]", { id: context.params.needId, prevA, nextA, isDone, sends: tasks.length });
+    await Promise.all(tasks);
+    return null;
+  });
+
 // ── One-call restore: undo any delete or overwrite from the newest ledger
 // entry for a doc. Callable from the app (admin/manager UI) via the shared
 // _appKey gate. Single-field equality on `key` → no composite index needed.
@@ -5985,11 +6036,14 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
     };
     const ref = await db.collection("gc_requests").add(req);
     try {
-      await sendToNameIfWanted("Koy", "gc_request", {
+      // v397: whole office, not one person — a request sat unseen whenever Koy
+      // wasn't the one working the inbox. Honors each user's gc_request pref.
+      await sendToRoles(["admin", "manager"], {
         title: "📥 " + (req.gcLabel || "Contractor") + " — portal request",
         body: "proposed a team roster change" + (req.by ? " (" + req.by + ")" : ""),
-      });
+      }, [], "gc_request");
     } catch (e) { functions.logger.warn("[gcPortal] office alert failed (non-fatal)", e.message); }
+    await gcRecountInbox();
     return { ok: true, requestId: ref.id, filed: "contact", pendingReview: true };
   }
 
@@ -6021,6 +6075,11 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
     by: clip(data.by, 60),
     text: clip(data.text, 4000),
     date: clip(data.date, 40),
+    // v397: machine-readable date + time preference from the portal's picker,
+    // so the office can ACCEPT a date straight into the job. Validated shape;
+    // the human `date` string above stays for display.
+    dateIso: /^\d{4}-\d{2}-\d{2}$/.test(String(data.dateIso || "")) ? String(data.dateIso) : "",
+    timeNote: clip(data.timeNote, 40),
     dateKind,                             // suggest | needs-by | confirm
     itemId: clip(data.itemId, 60),        // question id / rt id / finish_start / matterport
     fileName: clip(data.fileName, 200),
@@ -6063,24 +6122,48 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
       return x.type === "date" && x.itemId === itemId && x.portalId === link.portalId;
     });
     if (dup) {
-      functions.logger.info("[gcPortal] date request deduped", { type, jobId, itemId, requestId: dup.id });
-      return { ok: true, requestId: dup.id, filed: type, deduped: true };
+      // v397: the contractor changed their mind while the first suggestion was
+      // still open. Dedupe used to DROP the new date on the floor while the
+      // portal said "✓ Sent". Now the open request is updated in place — same
+      // id (so their receipt/readback still matches), newest date wins, and
+      // the office sees one request with the latest ask.
+      await dup.ref.update({
+        date: req.date, dateIso: req.dateIso, timeNote: req.timeNote, dateKind: req.dateKind || (dup.data() || {}).dateKind || "",
+        by: req.by || (dup.data() || {}).by || "", text: req.text || "",
+        attachments: req.attachments, updatedAt: new Date().toISOString(),
+        revisions: ((dup.data() || {}).revisions || 0) + 1,
+      });
+      functions.logger.info("[gcPortal] date request superseded", { type, jobId, itemId, requestId: dup.id });
+      return { ok: true, requestId: dup.id, filed: type, superseded: true };
     }
   }
   const ref = await db.collection("gc_requests").add(req);
   functions.logger.info("[gcPortal] request filed", { type, jobId, gcKey: link.gcKey });
+  await gcRecountInbox();
   // Alert the office so a contractor request never sits unseen (push — Koy has
   // the app; the review inbox lives in Settings). Fire-and-forget, non-fatal.
   try {
     const verb = { date: "suggested a date", thread: "sent a message", punch: "added an item",
       answer: "answered a question", file: "shared a file", rsvp: "replied" }[type] || "sent a request";
-    await sendToNameIfWanted("Koy", "gc_request", {
+    await sendToRoles(["admin", "manager"], {
       title: "📥 " + (req.gcLabel || "Contractor") + " — portal request",
       body: verb + " on " + (req.jobName || "a job") + (req.by ? " (" + req.by + ")" : ""),
-    });
+    }, [], "gc_request");
   } catch (e) { functions.logger.warn("[gcPortal] office alert failed (non-fatal)", e.message); }
   return { ok: true, requestId: ref.id, filed: type };
 });
+
+// Live count of open requests for the Contractors tab badge (v397). gc_requests
+// is function-only, so the office can't count it directly; keep a tiny mirror
+// in settings/gcInbox (client-readable). Recounted from the source of truth on
+// every file/handle — never incremented — so it can't drift. Non-fatal.
+async function gcRecountInbox() {
+  try {
+    const agg = await db.collection("gc_requests").where("status", "==", "new").count().get();
+    const open = (agg.data() || {}).count || 0;
+    await db.collection("settings").doc("gcInbox").set({ open, updatedAt: new Date().toISOString() }, { merge: true });
+  } catch (e) { functions.logger.warn("[gcPortal] inbox recount failed (non-fatal)", e.message); }
+}
 
 // Office: list open GC requests (admin SDK — client list denied).
 exports.gcPortalListRequests = functions.https.onCall(async (data) => {
@@ -6123,6 +6206,7 @@ exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
     });
   }
   await ref.update({ status, handledBy: String(data.by || ""), handledAt: new Date().toISOString() });
+  await gcRecountInbox();
   // Contractor-visible confirmation (Phase 0 fix) — write a compact status
   // marker onto the LINK doc, which the portal already subscribes to live
   // (GCPortalPage's onSnapshot), so "did they see my request" is never

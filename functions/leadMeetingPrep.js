@@ -15,6 +15,9 @@
 // Calendar-attached notes doc (Notes · Highlight · Lowlight · Training ·
 // Schedule Look Ahead · Action items). Koy only. Every section degrades
 // independently: a thrown section renders empty and never kills the sheet.
+// Simplified 2026-09-09 (Koy: "a lot of info on here… needs to be just general
+// for ease of presenting to group") — the model keeps the detail, the render
+// shows one plain line per job.
 //
 // Work signal: the crew's daily updates (roughUpdates/finishUpdates) and the
 // office statusUpdate line. NOT lastActivityAt — that is stamped by merely
@@ -325,62 +328,62 @@ function buildModel(inputs) {
 }
 
 // ── render ───────────────────────────────────────────────────────────────────
+// Presentation contract (Koy, 2026-09-09): "just general for ease of presenting
+// to the group during the meeting." One short line per job — name, dash, plain
+// status — in the notes doc's own section order. No foreman/lead/stage/ages/
+// flags, no sub-headers, no counts; every section ends with an empty bullet so
+// Koy can type straight into it.
 
-const INK = "#111827", GREY = "#6b7280", FAINT = "#9ca3af", AMBER = "#b45309";
+const INK = "#111827", GREY = "#6b7280";
 const SA_HINT = "share it (Viewer) with homestead-electric@appspot.gserviceaccount.com";
-const h2 = (t) => `<h2 style="font-size:15px;margin:22px 0 6px;padding-top:10px;border-top:2px solid ${INK};color:${INK};text-transform:uppercase;letter-spacing:.04em">${t}</h2>`;
-const h3 = (t) => `<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px;color:#374151">${t}</h3>`;
-const li = (s) => `<li style="margin:3px 0">${s}</li>`;
-const g = (s) => `<span style="color:${GREY};font-size:12px">${s}</span>`;
-const blank = () => `<ul><li style="color:${FAINT}">&nbsp;</li></ul>`;
-const greyLi = (s) => li(g(esc(s)));
+const h2 = (t) => `<h2 style="font-size:15px;margin:20px 0 4px;color:${INK}">${t}</h2>`;
+const h3 = (t) => `<h3 style="font-size:13px;margin:10px 0 2px 12px;color:${INK}">${t}</h3>`;
+const li = (s) => `<li style="margin:2px 0">${s}</li>`;
+const EMPTY_LI = `<li style="margin:2px 0">&nbsp;</li>`;
+const grey = (s) => `<span style="color:${GREY}">${esc(s)}</span>`;
+const ul = (items, indent) => `<ul style="margin:0 0 4px ${indent ? 24 : 0}px;padding-left:20px">${items.join("")}${EMPTY_LI}</ul>`;
 
-function jobLi(r) {
-  const who = [r.foreman, r.lead && r.lead !== r.foreman ? r.lead : ""].filter(Boolean).join(" / ");
-  const when = r.start
-    ? (r.startsIn > 0 ? `starts ${fmtShort(r.start)}` : r.startsIn === 0 ? "starts today" : `started ${fmtShort(r.start)}`) + (r.end ? `–${fmtShort(r.end)}` : "")
-    : "";
-  const meta = [who, r.status + (r.stage ? " " + r.stage : ""), when].filter(Boolean).join(" · ");
-  const upd = r.update
-    ? `<div style="margin-left:2px">${esc(r.update)} ${g(`— ${esc(r.updateBy)}${r.updateAge != null ? `, ${r.updateAge}d ago` : ""}`)}</div>`
-    : `<div>${g("no status update on file")}</div>`;
-  const fl = r.flags.length ? ` <span style="color:${AMBER};font-size:12px">⚑ ${esc(r.flags.join(", "))}</span>` : "";
-  return li(`<b>${esc(r.name)}</b> ${g(esc(meta))}${fl}${upd}`);
+// One plain phrase per job: a real date beats prose ("starts Sep 14"), otherwise
+// the first sentence of the freshest crew/office update, otherwise nothing.
+function blurb(r) {
+  if (r.start && r.startsIn != null && r.startsIn >= 0 && r.startsIn <= START_WINDOW) {
+    return r.startsIn === 0 ? "starts today" : `starts ${fmtShort(r.start)}`;
+  }
+  if (r.update) {
+    // Crew text often starts with its own bullets ("• Basement done • …") — strip them.
+    const clean = r.update.replace(/^[\s•·\-–—*]+/, "").replace(/\s*[•·]\s*/g, ", ");
+    const first = clean.split(/(?<=[.!?])\s+/)[0].replace(/[.,\s]+$/, "");
+    return first.length > 70 ? first.slice(0, 67).replace(/\s+\S*$/, "") + "…" : first;
+  }
+  return "";
 }
-
+const jobLi = (r) => { const b = blurb(r); return li(`${esc(r.name)}${b ? ` — ${esc(b)}` : ""}`); };
 function upLi(u) {
-  const when = u.start ? (u.startsIn >= 0 ? `${fmtShort(u.start)} (${u.startsIn}d)` : `${fmtShort(u.start)} — past`) : "no date";
-  const meta = [u.kind, u.who, u.customer, when].filter(Boolean).join(" · ");
-  const note = u.note ? ` — ${esc(u.note)}` : "";
-  const fu = u.followAge != null ? g(` last follow-up ${u.followAge}d ago`) : "";
-  return li(`<b>${esc(u.name)}</b> ${g(esc(meta))}${note}${fu}`);
+  const when = u.start ? (u.startsIn >= 0 ? fmtShort(u.start) : `${fmtShort(u.start)} (past)`) : "";
+  const name = /\(finish\)$/.test(u.name) ? u.name.replace(/\s*\(finish\)$/, " finish") : u.name;
+  // A date is the general fact; the note only fills in when there is no date.
+  const note = u.note ? u.note.replace(/^[\s•·\-–—*]+/, "").split(/(?<=[.!?])\s+/)[0].replace(/[.,\s]+$/, "").slice(0, 70) : "";
+  const tail = when || note;
+  return li(`${esc(name)}${tail ? ` — ${esc(tail)}` : ""}`);
 }
 
 function renderHtml(m) {
-  const quietLine = (rows) => rows.length
-    ? `<div style="color:${FAINT};font-size:12px;margin:6px 0 0 4px">Also on the board, quiet ${ACTIVE_DAYS}+ days: ${rows.map(r => esc(r.name) + (r.touchAge != null ? ` (${r.touchAge}d)` : "")).join(" · ")}</div>`
-    : "";
-  const shipped = m.shipped.error
-    ? greyLi("FEATURES.md unavailable this week")
-    : (m.shipped.rows.length ? m.shipped.rows.map(s => li(`${esc(s.title)} ${g(esc([s.version, fmtShort(s.date)].filter(Boolean).join(", ")))}`)).join("") : greyLi("nothing shipped this week"));
+  const training = m.shipped.error ? [] : m.shipped.rows.map(s => li(esc(s.title)));
   const actions = m.actions.error
-    ? greyLi(`Couldn't read the notes doc — ${SA_HINT}`)
-    : (m.actions.rows.length ? m.actions.rows.map(s => li(esc(s))).join("") : greyLi("none recorded last week"));
-  const actionsHead = m.actions.fromDate ? `Carried from ${fmtShort(m.actions.fromDate)}` : "Carried from last week";
-
-  return `<div style="font-family:Arial,Helvetica,sans-serif;color:${INK};max-width:720px;margin:0 auto;padding:8px 12px">
-  <h1 style="font-size:20px;margin:0 0 2px">${esc(m.meetingLabel)} | Weekly Lead Meeting</h1>
-  <div style="color:${GREY};font-size:12px">Prep sheet · pre-filled from the app ${esc(m.generated)} · everything below is a draft to pull from</div>
-  ${h2("Notes")}${blank()}
-  ${h2("Highlight")}<ul>${m.highlights.length ? m.highlights.map(s => li(esc(s))).join("") : greyLi("suggestion: nothing passed inspection in the app this week — add your own")}</ul>
-  ${h2("Lowlight")}<ul>${m.lowlights.length ? m.lowlights.map(s => li(esc(s))).join("") : greyLi("suggestion: no failed inspections in the app this week — add your own")}</ul>
-  ${h2("Training")}${h3("New in the app since last meeting")}<ul>${shipped}</ul>${h3("Your topics")}${blank()}
-  ${h2("Schedule look ahead")}
-  ${h3(`Rough (${m.rough.rows.length})`)}<ul>${m.rough.rows.length ? m.rough.rows.map(jobLi).join("") : greyLi("nothing in rough")}</ul>
-  ${h3(`Finish (${m.finish.moving.length})`)}<ul>${m.finish.moving.length ? m.finish.moving.map(jobLi).join("") : greyLi("nothing moving in finish")}</ul>${quietLine(m.finish.quiet)}
-  ${h3(`Upcoming (${m.upcoming.length})`)}<ul>${m.upcoming.length ? m.upcoming.map(upLi).join("") : greyLi("nothing in the pipeline")}</ul>
-  ${h3("Crew out (next 2 weeks)")}<ul>${m.pto.length ? m.pto.map(p => li(`<b>${esc(p.name)}</b> ${g(esc(p.label))}${p.note ? " — " + esc(p.note) : ""}`)).join("") : greyLi("no time off on the books")}</ul>
-  ${h2("Action items")}${h3(actionsHead)}<ul>${actions}</ul>${h3("New")}${blank()}
+    ? [li(grey(`Couldn't read last week's action items — ${SA_HINT}`))]
+    : m.actions.rows.map(s => li(esc(s)));
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:${INK};font-size:14px;max-width:720px;margin:0 auto;padding:8px 12px">
+  <h1 style="font-size:18px;margin:0 0 12px">${esc(m.meetingLabel)} | Weekly Lead Meeting</h1>
+  ${h2("Notes")}${ul([])}
+  ${h2("Highlight")}${ul(m.highlights.map(s => li(esc(s))))}
+  ${h2("Lowlight")}${ul(m.lowlights.map(s => li(esc(s))))}
+  ${h2("Training")}${ul(training)}
+  ${h2("Schedule Look Ahead")}
+  ${h3("Rough")}${ul(m.rough.rows.map(jobLi), true)}
+  ${h3("Finish")}${ul(m.finish.moving.map(jobLi), true)}
+  ${h3("Upcoming")}${ul(m.upcoming.map(upLi), true)}
+  ${h3("Crew out")}${ul(m.pto.map(p => li(`${esc(p.name)} — ${esc(p.label)}${p.note ? `, ${esc(p.note)}` : ""}`)), true)}
+  ${h2("Action items")}${ul(actions)}
   </div>`;
 }
 

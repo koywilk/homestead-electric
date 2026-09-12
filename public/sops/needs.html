@@ -1,0 +1,167 @@
+<!doctype html>
+<!--homestead-sop-->
+<!--
+  Homestead Electric · in-app SOP · section key: "needs"
+
+  This file is served from public/sops/ and opened by the "?" button on the
+  Needs view (SOP_MAP in src/App.js). It is deliberately a STANDALONE html
+  document with its own CSS — it renders inside a sandboxed iframe, so nothing
+  here can collide with the app's styles and nothing here can touch the app.
+
+  TO REPLACE WITH A RECORDED GUIDE:
+  Record the walkthrough in SOP Recorder (~/Desktop/sop-recorder), export
+  "Standalone HTML", and drop the export straight over this file. It does NOT
+  need editing — the viewer accepts any HTML document that is not this app's
+  own index.html shell, precisely so a raw export works untouched. Only the
+  filename matters: keep public/sops/needs.html, or update SOP_MAP.
+
+  The marker comment on line 2 (the "homestead-sop" one) is an optional
+  explicit opt-in, not a requirement. NOTE: never write that marker out in
+  full inside another comment — HTML comments do not nest, so its closing
+  delimiter ends the OUTER comment early and dumps the rest onto the page.
+
+  Content source: Command Center vault, 11-Trainings/Crew (My Day + Needs, written 2026-09-09)
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Needs — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* App tokens (src/App.js `C`) so the guide reads as part of the app. */
+  :root{
+    --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9;
+    --text:#1B1F24; --dim:#5E6670; --blue:#3B5BA5; --green:#3E7D5A;
+    --red:#B23A3A; --orange:#B06A2C;
+    --head:'Bebas Neue','Oswald','Haettenschweiler','Arial Narrow',sans-serif;
+    --body:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--text); font-family:var(--body);
+    font-size:15px; line-height:1.55;
+    -webkit-text-size-adjust:100%; /* phone landscape must not inflate this */
+    padding:18px 16px 64px;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+
+  /* ── header ─────────────────────────────────────────────────────────── */
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;
+    margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+
+  /* ── the 30-second version ──────────────────────────────────────────── */
+  .tldr{background:var(--card);border:1px solid var(--border);
+    border-left:4px solid var(--blue);border-radius:10px;
+    padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;
+    margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+
+  /* ── section heads ──────────────────────────────────────────────────── */
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;
+    margin:34px 0 4px;font-weight:400;padding-bottom:7px;
+    border-bottom:2px solid rgba(59,91,165,.27)}
+
+  /* ── steps ──────────────────────────────────────────────────────────── */
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);
+    color:#fff;font-size:13px;font-weight:700;display:flex;
+    align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700;letter-spacing:-.005em}
+  .step p{margin:0;font-size:14px;color:var(--text)}
+  .step p + p{margin-top:7px}
+
+
+  /* ── callouts ───────────────────────────────────────────────────────── */
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}
+  .call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}
+  .call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}
+  .call.tip .lbl{color:var(--green)}
+
+  /* ── do / don't ─────────────────────────────────────────────────────── */
+  .dd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+  .dd .col{background:var(--card);border:1px solid var(--border);
+    border-radius:10px;padding:13px 14px}
+  .dd .col.do{border-top:3px solid var(--green)}
+  .dd .col.dont{border-top:3px solid var(--red)}
+  .dd h4{margin:0 0 8px;font-family:var(--head);font-size:16px;
+    letter-spacing:.09em;font-weight:400}
+  .dd .col.do h4{color:var(--green)}
+  .dd .col.dont h4{color:var(--red)}
+  .dd ul{margin:0;padding-left:17px}
+  .dd li{font-size:13.5px;margin-bottom:7px;line-height:1.45}
+  .dd li:last-child{margin-bottom:0}
+  @media (max-width:560px){ .dd{grid-template-columns:1fr} }
+
+  /* ── quick answers ──────────────────────────────────────────────────── */
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}
+  .qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}
+  .qa .a{margin:0;font-size:14px;color:var(--dim)}
+
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);
+    color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+  code{background:var(--surface);border:1px solid var(--border);border-radius:4px;
+    padding:1px 5px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Needs</h1>
+  <p class="sub">Every open need company-wide, who it's on, and when</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p><b>Needs</b> is the office view of every open need and task in the company. <b>Mine</b> shows
+    what's on you; <b>All</b> shows everything. Each card says <b>who it's on</b> &mdash; change the
+    <b>To:</b> to hand it to anyone and they get a push. Two lanes: <b>Tomorrow</b> and <b>This week</b>.
+    Check it off when it's done; it moves to <b>Done today</b> and clears overnight.</p>
+  </div>
+
+  <h2 class="sec">Working the board</h2>
+  <div class="step"><div class="num">1</div><div class="body"><h3>Mine vs All</h3>
+    <p><b>Mine</b> = needs on you. <b>All</b> = every open need company-wide, whoever it's on.
+    Use All to see what the field is waiting on before the morning call.</p></div></div>
+  <div class="step"><div class="num">2</div><div class="body"><h3>Hand it to someone</h3>
+    <p>The <b>To:</b> dropdown on each card is the whole roster. Pick a name and it lands on that
+    person's <b>My Day</b> with a push. Pick <b>Unassigned</b> to put it back in the pool.</p></div></div>
+  <div class="step"><div class="num">3</div><div class="body"><h3>Plan, move, close</h3>
+    <p>Type a plan in the box on the card (saves when you tap away). <b>Move to week</b> /
+    <b>Pull to tomorrow</b> changes the lane. The <b>check</b> closes it; the <b>x</b> deletes it with a
+    ten-second <b>Undo</b> &mdash; no confirm popup.</p></div></div>
+  <div class="step"><div class="num">4</div><div class="body"><h3>Adding one from here</h3>
+    <p>The <b>+ Need</b> button (or the round <b>+</b> on a phone) opens the same sheet as My Day.
+    Type it, check the <b>To:</b> chip, Save.</p></div></div>
+
+  <div class="call warn"><span class="lbl">Carried over</span>
+    <p>A red stripe and a <b>Carried over</b> pill means it's older than a day and a half. Either
+    close it, move it, or hand it to someone who can.</p></div>
+  <div class="call key"><span class="lbl">Office worklist</span>
+    <p>Below the lanes is the folded office worklist: QC walks, start POs, and job prep the app
+    derives from each job's stage. Those aren't cards you can delete &mdash; they clear when the job
+    moves.</p></div>
+
+  <div class="foot">Homestead Electric · in-app guide · My Day and Needs shipped SW v398.</div>
+</div>
+</body>
+</html>
