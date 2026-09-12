@@ -33709,23 +33709,6 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     }).filter(fc => fc.staffNames.length > 0);
   }, [users, foremanColors, allStaff]);
 
-  // Coordinator "books" — each coordinator's staff = the union of all their
-  // foremen's crews. Lets you filter / default the schedule to a whole book
-  // (Koy / Brady / Josh) instead of one foreman's crew. Derived from the
-  // coordinator field on foreman user docs (Settings → Team).
-  const coordinatorBooks = useMemo(() => {
-    const byCoord = {};
-    (users||[]).filter(u => (u.title||u.role)==="foreman" && u.coordinator).forEach(f => {
-      const fc = foremanCrews.find(c => c.foremanId === f.id);
-      if (!byCoord[f.coordinator]) byCoord[f.coordinator] = new Set();
-      if (fc) fc.staffNames.forEach(n => byCoord[f.coordinator].add(n));
-    });
-    return Object.entries(byCoord)
-      .map(([coordinator, set]) => ({ coordinator, staffNames: [...set] }))
-      .filter(b => b.staffNames.length > 0)
-      .sort((a,b) => a.coordinator.localeCompare(b.coordinator));
-  }, [users, foremanCrews]);
-
   const [personFilter, setPersonFilter] = useState("all");
   const [prefApplied,  setPrefApplied]  = useState(false);
 
@@ -33744,12 +33727,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       if (hasMyCrew) { setPersonFilter("mycrew"); setPrefApplied(true); }
       return; // wait for crew to resolve before marking applied
     }
-    // Explicit "coord_<coordinatorName>" — pick that coordinator's book
-    if (pref.startsWith("coord_")) {
-      const match = coordinatorBooks.find(b => "coord_" + b.coordinator === pref);
-      if (match) { setPersonFilter(pref); setPrefApplied(true); return; }
-      if (coordinatorBooks.length === 0) return; // wait for books to populate
-    }
+    // A saved "coord_<name>" book default (pre-2026-09, books retired) falls
+    // through to Auto below — the person's own crew.
     // Explicit "crew_<foremanId>" — pick that crew
     if (pref.startsWith("crew_")) {
       const match = foremanCrews.find(fc => "crew_" + fc.foremanId === pref);
@@ -33781,10 +33760,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     if (!schedule) return {};
     const jobEntries = schedule.filter(s => s.Type === "job");
     const crewMatch  = personFilter.startsWith("crew_")  ? foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter) : null;
-    const coordMatch = personFilter.startsWith("coord_") ? coordinatorBooks.find(b => "coord_"+b.coordinator === personFilter) : null;
     const filtered = personFilter === "all" ? jobEntries
       : personFilter === "mycrew" ? jobEntries.filter(s => myCrewNames.includes(s.Staff?.Name))
-      : coordMatch ? jobEntries.filter(s => coordMatch.staffNames.includes(s.Staff?.Name))
       : crewMatch ? jobEntries.filter(s => crewMatch.staffNames.includes(s.Staff?.Name))
       : jobEntries.filter(s => s.Staff?.Name === personFilter);
     const map = {};
@@ -33793,7 +33770,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       map[s.Date].push(s);
     });
     return map;
-  }, [schedule, personFilter, myCrewNames, foremanCrews, coordinatorBooks]);
+  }, [schedule, personFilter, myCrewNames, foremanCrews]);
 
   // For each date, one block per job showing all crew with earliest start → latest end
   const crewByDateAndJob = useMemo(() => {
@@ -33851,14 +33828,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
                 color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
               <option value="all">Everyone</option>
-              {coordinatorBooks.length > 0 && (
-                <optgroup label="Books (coordinator)">
-                  {coordinatorBooks.map(b => (
-                    <option key={"coord_"+b.coordinator} value={"coord_"+b.coordinator}>{(b.coordinator||"").split(" ")[0]}'s Book</option>
-                  ))}
-                </optgroup>
-              )}
-              <optgroup label="Crews (foreman)">
+              <optgroup label="Crews">
                 {foremanCrews.map(fc => (
                   <option key={fc.foremanId} value={"crew_"+fc.foremanId}>{fc.foremanName}'s Crew</option>
                 ))}
@@ -33898,8 +33868,6 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                 const isToday = ymd === todayYMD;
                 const activeCrew = personFilter.startsWith("crew_")
                   ? (foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter)?.staffNames || [])
-                  : personFilter.startsWith("coord_")
-                  ? (coordinatorBooks.find(b => "coord_"+b.coordinator === personFilter)?.staffNames || [])
                   : [];
                 const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
                   personFilter === "all" ? true
@@ -44530,9 +44498,6 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
             <option value="">Auto — my own crew</option>
             <option value="all">All crews</option>
             <option value="mycrew">My crew (foreman + crewmates)</option>
-            {[...new Set((users||[]).filter(u=>(u.title||u.role)==="foreman"&&u.coordinator).map(u=>u.coordinator))].sort().map(cn => (
-              <option key={"coord_"+cn} value={"coord_"+cn}>{(cn||"").split(" ")[0]}'s book (whole coordinator)</option>
-            ))}
             {foremanUsers.map(f => (
               <option key={f.id} value={"crew_"+f.id}>{(f.name||"").split(" ")[0]}'s crew</option>
             ))}
@@ -47395,12 +47360,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-09 · App SW version: v398
+**Last manifest update:** 2026-09-12 · App SW version: v399
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Job Board — crews, not books** · 'shipped 2026-09-12' · 'SW v399' · the reorg cleanup slice Koy asked to see ("it's still showing all the coordinators and books"). The three "…'s Book" bands, the "No coordinator" band, and the "Show all jobs →" **book page** ('view==="book"', 'openBook', 'activeBook', 'showBookCompleted') are gone; the board's own ALL JOBS section already lists the whole company by stage. In their place one **Crews** band ('N foremen · M job sites') with a sort — **Most jobs** first (the head's where's-the-load read) or **A–Z** ('crewSort') — and every foreman card exactly as it was; Paul and Zane are just crews now. The Crew Schedule filter drops its "Books (coordinator)" group ('coordinatorBooks' memo, 'coord_' pref branch, 'coordMatch', and the day-column 'activeCrew' branch removed; the Crews group keeps its options), and Settings → Default schedule view drops the "…'s book (whole coordinator)" options — a previously saved 'coord_…' default now falls through to Auto (own crew). **Why it won't lose data:** read-side / UI only — no Firestore writes added or changed, no loader change, no rules change; the per-foreman 'coordinator' values in 'settings/users' are untouched (Scoreboard's coordinators board, Huddle chips and the functions' 'coordUserOf' routing still read them until their own cleanup); a user's saved 'defaultScheduleView' string is not rewritten, it just resolves differently.
 - **My Day** ('myday') · 'shipped 2026-09-09' · 'SW v398' · the landing screen for every field role (foreman, lead, crew) and the first nav tab for everyone internal. **One task object:** a 'needs' doc now carries a real person 'assignedTo' (+ 'assignedBy'/'assignedAt'), 'kind' (need|task|bodies), a real 'dueDate' ('dueBucket' kept for the lanes), 'foreman', 'snoozedUntil', 'doneBy' — all additive, all inside 'data', so the needs loader is untouched and the 12 pre-existing docs are read at run time ('assignedTo' absent ⇒ the legacy 'coordinator' is the assignee). **Mine** = task docs on me ∪ punch items assigned to me (the foreman card's Assigned walk, lifted to 'punchAssignedTo(name, jobs)' and keyed to the logged-in identity so leads/crew finally see their own items) ∪ (foremen) auto-tasks for my jobs; **On <head>** = what the Head of Residential owes on my jobs (task docs + read-only 'getCoordinatorDuties'/'getCompanyDuties' rows). Ordered overdue → today → this week → later; every row Done / Snooze (3d · 1wk · date) / 10s Undo. **Quick-add** ('NeedQuickAdd', the round + on phones, '+ Need' on laptops and inside Job Detail): two taps on the fast path — type, Save; chips for kind, **To:** (full roster; default one level up the chain of command via 'defaultAssigneeFor': crew/lead → their foreman, foreman → head, head → self), job, due. **Head of Residential** is a company hat ('resi.head', per-user cap like 'jobprep.own', Settings → Team → COMPANY HATS) resolved by 'resiHead(users)' (falls back to the 'jobprep.own' holder) — never a hardcoded name; coordinators/books are retired in every surface this touched (Needs page: no book transfer, a **To:** roster select instead; no 'coordinator' written on new docs). Auto-task owner for unassigned jobs and prep tasks = the hat holder ('_setTaskOwnerFallback'), replacing the '"Koy"' literals in 'computeTasks'. **Notify:** new 'onNeedWrite' trigger diffs 'assignedTo' old→new → 'need_assigned' push+inbox to the assignee (self-assign and no-op rewrites are silent; deep-links 'view:"myday"', no jobId so same-job pushes can't collapse), and 'need_done' back to the creator when someone else closes it; both keys are real server gates in the registry. Deep-link branches for 'myday' / 'needs' / 'schedule' in 'pendingView' + 'openInboxItem'. Perms: 'myday.view' + 'tasks.create' (all four tiers), 'resi.head' (hat). Harness 'scripts/needs-dryrun.js' (vm-extracts the shipped helpers; in the prebuild chain). Guides 'public/sops/myday.html' + 'needs.html' mounted via '<HelpDot>'. **Why it won't lose data:** every new field lives inside the existing 'data' map (loader returns it verbatim); nothing is renamed or removed; 'patchNeed' writes only touched 'data.<field>' paths (narrower than the previous full-doc setDoc); 'saved_by' on the envelope is read only by the server ledger; existing docs are never rewritten; 'ledgerNeeds' + nightly backups already cover 'needs'; jobs loader / 'saveJob' / job docs untouched (auto-task Done/Snooze use the existing 'clearedTasks' / 'taskDueDates' whole-map precedents; punch Done uses the existing 'togglePunchItemDone' RT cross-sync); delete restores the identical doc id on Undo; no Firestore rules change. Needs 'firebase deploy --only functions:onNeedWrite'. Flip-day step: tick **Head of Residential** on Koy in Settings → Team.
 
 - **Job Board** · 'shipped' · the home screen
@@ -54638,20 +54604,18 @@ function App() {
   }, [identity, users, landingApplied]);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const [activeBook, setActiveBook] = useState(null); // coordinator name whose whole book is open, or null
   const [quickAdd, setQuickAdd] = useState(null);     // My Day quick-add sheet: null | {job?} preset
-  const [showBookCompleted, setShowBookCompleted] = useState(false); // book page: completed jobs hidden by default
-  const openBook     = (coord) => { setActiveBook(coord); setActiveForeman(null); setView("book"); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const [crewSort, setCrewSort] = useState("jobs");   // Job Board crews band: "jobs" (most first) | "az"
   const [crewView, setCrewView] = useState(null); // foreman name or null
   const [showUtilMenu, setShowUtilMenu] = useState(false);
-  const goHome            = () =>  { setView("home");           setActiveForeman(null); setActiveBook(null); setSearch(""); setStageF("All"); setFlagOnly(false); setPillFilter(null); };
+  const goHome            = () =>  { setView("home");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); setPillFilter(null); };
   const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openTasks         = () =>  { setView("tasks");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openNav           = () =>  { setView("nav");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSettings      = () =>  { setView("settings");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSubcontractor = () =>  { setView("subcontractors");setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openMyDay         = () =>  { setView("myday");         setActiveForeman(null); setActiveBook(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openMyDay         = () =>  { setView("myday");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   // Shared top-nav click handler (used by both the main tab row and the "More"
   // dropdown). Every open* helper just setView(key), so this covers all tabs.
   const navClick = (key) => {
@@ -55795,7 +55759,7 @@ function App() {
 
       {/* ── HOME PAGE ── */}
 
-      {pillFilter && (view==="home"||view==="foreman"||view==="book") && (
+      {pillFilter && (view==="home"||view==="foreman") && (
         <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 26px",background:`${C.accent}10`,borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
           <Icon name="flag" size={12} stroke={2.25}/>
           <span style={{fontSize:12,color:C.dim}}>Showing only:</span>
@@ -56102,39 +56066,34 @@ function App() {
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
 
               {(()=>{
-                // Org-chart grouping: sort foreman cards by their coordinator
-                // (Settings → Team) and drop a full-width header band before each
-                // coordinator's cards. Falls back to the flat layout until any
-                // coordinator is assigned, so nothing changes pre-config.
-                const coordOf = (fname) => { const u=(users||[]).find(x=>x.name===fname&&((x.title||x.role)==="foreman")); return (u&&u.coordinator)||""; };
-                const anyCoord = _foremen.some(f=>coordOf(f));
-                const sortedForemen = anyCoord
-                  ? [..._foremen].sort((a,b)=>{ const ca=coordOf(a)||"￿", cb=coordOf(b)||"￿"; return ca!==cb?ca.localeCompare(cb):a.localeCompare(b); })
-                  : _foremen;
-                let _prevCoord = null, _headerShown = false;
-                return sortedForemen.map(f=>{
+                // One company, no books (2026-09): a single "Crews" band, then every
+                // foreman card flat. Sort = most jobs first (the head's "where's the
+                // load" read) or A–Z. The coordinator field is not read here anymore.
+                const _count = {}; _foremen.forEach(f=>{ _count[f] = jobs.filter(j=>matchesForeman(j,f)).length; });
+                const sortedForemen = [..._foremen].sort(crewSort==="az" ? (a,b)=>a.localeCompare(b) : (a,b)=>((_count[b]||0)-(_count[a]||0))||a.localeCompare(b));
+                const _totalSites = jobs.filter(j=>!j.tempPed&&!j.quickJob).length;
+                return sortedForemen.map((f,_i)=>{
                 const fc    = getPersonColor(f);
                 const fJobs = jobs.filter(j=>matchesForeman(j,f));
                 const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
                 const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
-                const _coordKey = coordOf(f);
-                const _showHeader = anyCoord && _coordKey !== _prevCoord;
-                const _isFirstHeader = _showHeader && !_headerShown;
-                if (_showHeader) _headerShown = true;
-                _prevCoord = _coordKey;
-                const _headerColor = _coordKey ? (getPersonColor(_coordKey)||C.accent) : "#6E7682";
                 return (
                   <Fragment key={f}>
-                    {_showHeader && (
-                      <div onClick={_coordKey?()=>openBook(_coordKey):undefined} style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,
-                        marginTop:_isFirstHeader?0:8,marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${_headerColor}33`,cursor:_coordKey?"pointer":"default"}}>
-                        <span style={{width:9,height:9,borderRadius:"50%",background:_headerColor,flexShrink:0}}/>
-                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:_headerColor,lineHeight:1}}>
-                          {_coordKey ? `${_coordKey}'s Book` : "No coordinator"}
+                    {_i===0 && (
+                      <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
+                        marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${C.accent}33`}}>
+                        <span style={{width:9,height:9,borderRadius:"50%",background:C.accent,flexShrink:0}}/>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.accent,lineHeight:1}}>Crews</span>
+                        <span style={{fontSize:11,color:C.dim}}>{_foremen.length} foremen · {_totalSites} job sites</span>
+                        <span style={{marginLeft:"auto",display:"inline-flex",gap:6}}>
+                          {[["jobs","Most jobs"],["az","A–Z"]].map(([k,l])=>(
+                            <button key={k} onClick={(e)=>{e.stopPropagation();setCrewSort(k);}}
+                              style={{fontSize:11,fontWeight:crewSort===k?700:500,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                                border:`1px solid ${crewSort===k?C.accent:C.border}`,background:crewSort===k?C.accent:C.card,color:crewSort===k?"#fff":C.dim}}>{l}</button>
+                          ))}
                         </span>
-                        {_coordKey&&<button onClick={(e)=>{e.stopPropagation();openBook(_coordKey);}} style={{fontSize:11,fontWeight:700,color:"#fff",background:_headerColor,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Show all jobs →</button>}
                       </div>
                     )}
                   <div>
@@ -56182,16 +56141,8 @@ function App() {
                 const fc    = "#6E7682";
                 const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
                 const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
-                const _anyCoord = (users||[]).some(u=>(u.title||u.role)==="foreman"&&u.coordinator);
                 return (
                   <Fragment>
-                    {_anyCoord && (
-                      <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,
-                        marginTop:8,marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${fc}33`}}>
-                        <span style={{width:9,height:9,borderRadius:"50%",background:fc,flexShrink:0}}/>
-                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc,lineHeight:1}}>Unassigned</span>
-                      </div>
-                    )}
                   <div>
                     <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
                       style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
@@ -56773,78 +56724,7 @@ function App() {
           />)}
 
       {/* ── BOOK PAGE (all of a coordinator's foremen's jobs in one spot) ── */}
-      {view==="book"&&(()=>{
-        const coordOf = (fname) => { const u=(users||[]).find(x=>x.name===fname&&((x.title||x.role)==="foreman")); return (u&&u.coordinator)||""; };
-        const bookForemen = (_foremen||[]).filter(f=>coordOf(f)===activeBook).sort((a,b)=>a.localeCompare(b));
-        const bookColor = getPersonColor(activeBook)||C.accent;
-        const s = (search||"").toLowerCase();
-        const passFilters = (j) => {
-          const matchesQuoteNo = !!s && (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s));
-          const ms = !s||j.name.toLowerCase().includes(s)||j.address.toLowerCase().includes(s)||j.gc.toLowerCase().includes(s)||matchesQuoteNo;
-          const mf = !flagOnly||j.flagged;
-          const rPct=parseStage(j.roughStage), fPct=parseStage(j.finishStage);
-          const mt = stageF==="All"?true:stageF==="rough"?(rPct>0&&rPct<100&&fPct===0):stageF==="between"?(rPct===100&&fPct===0):stageF==="finish"?(fPct>0&&fPct<100):true;
-          const mp = !pillFilter || (()=>{ try { return pillFilter.test(j); } catch { return true; } })();
-          return ms&&mf&&mt&&mp;
-        };
-        const totalShown = jobs.filter(j=>bookForemen.some(f=>matchesForeman(j,f))).filter(passFilters).length;
-        return (
-        <div>
-          <div style={{padding:"18px 26px 0",borderBottom:`1px solid ${C.border}`}}>
-            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16,flexWrap:"wrap"}}>
-              <button onClick={goHome} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
-              <span style={{width:10,height:10,borderRadius:"50%",background:bookColor,flexShrink:0}}/>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:bookColor,lineHeight:1}}>{activeBook}'s Book</div>
-              <div style={{fontSize:11,color:C.dim}}>{bookForemen.length} {bookForemen.length===1?"foreman":"foremen"} · {totalShown} job site{totalShown!==1?"s":""}</div>
-              <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-                <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
-              </div>
-            </div>
-            <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
-              <select value={stageF} onChange={e=>setStageF(e.target.value)}
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none"}}>
-                <option value="All">All Jobs</option>
-                <option value="rough">Rough In Progress</option>
-                <option value="between">In Between</option>
-                <option value="finish">Finish In Progress</option>
-              </select>
-              <button onClick={()=>setFlagOnly(f=>!f)}
-                style={{background:flagOnly?`${C.accent}22`:C.surface,border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",display:"inline-flex",alignItems:"center",gap:6}}>
-                <Icon name="flag" size={12} stroke={2.25}/> {flagOnly?"Flagged Only":"All Jobs"}
-              </button>
-            </div>
-          </div>
-          <div style={{padding:"10px 26px 40px"}}>
-            {bookForemen.length===0?(
-              <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No foremen are assigned to {activeBook}'s book yet. Assign coordinators in Settings → Team.</div>
-            ):(()=>{
-              // Flat, by-stage across the whole book. No fc passed → each row shows
-              // its foreman tag. Completed hidden by default (biggest noise source);
-              // a toggle reveals them.
-              const bookJobs = jobs.filter(j=>bookForemen.some(f=>matchesForeman(j,f))).filter(passFilters);
-              const completedCount = bookJobs.filter(j=>parseStage(j.finishStage)===100).length;
-              const shown = showBookCompleted ? bookJobs : bookJobs.filter(j=>parseStage(j.finishStage)!==100);
-              return (
-                <>
-                  {shown.length===0?(
-                    <div style={{textAlign:"center",padding:"50px 0",color:C.muted,fontSize:13}}>No {showBookCompleted?"":"active "}jobs match the current filters.</div>
-                  ):(
-                    <StageSectionList jobs={shown} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>
-                  )}
-                  {completedCount>0&&(
-                    <button onClick={()=>setShowBookCompleted(v=>!v)} style={{marginTop:14,background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
-                      {showBookCompleted?`Hide completed (${completedCount})`:`Show completed (${completedCount})`}
-                    </button>
-                  )}
-                </>
-              );
-            })()}
-          </div>
-        </div>
-        );
-      })()}
+      {/* Book page removed 2026-09-12 — one company, no books; ALL JOBS below covers it. */}
 
       {/* ── SUBCONTRACTORS TAB ── */}
       {view==="subcontractors"&&(()=>{
