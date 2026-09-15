@@ -657,6 +657,54 @@ async function publishCcLoadOffice(jobId, loadId, officePatch) {
   } catch (e) { _ccDenied(e); console.warn("[fieldink] ccloads office write failed (rules deployed?):", e?.message); return false; }
 }
 
+// ── ccloads SUGGEST derivations (v400 panelized ⇄ regular switching) ─────────
+// Office half of FieldInk v619. Koy: "office toggle is a SUGGESTION, with option
+// to accept all [FieldInk only] … when a load is switched with no switch placed
+// on the plan it needs to be obvious." The office NEVER changes a load's kind —
+// it writes loads.<id>.office.{suggestedKind,suggestedAt,suggestedBy} through
+// publishCcLoadOffice and FieldInk answers in its OWN namespace,
+// loads.<id>.suggestionAck {at, resolution, by, resolvedAt} (never written here).
+// Pending = office.suggestedAt > (suggestionAck.at || 0), so re-suggesting after
+// a dismiss is just a newer suggestedAt. `needsSwitch` (field-owned) marks a
+// regular-switching load whose fixtures are mapped but no switch is on the plan
+// yet — read-only here. Kept pure (no React, no Firestore) so
+// scripts/ccloads-suggest-test.js can extract + run these bodies verbatim.
+// Concurrency: two office users suggesting opposite kinds within seconds =
+// LAST WRITE WINS (plain merge-set, non-transactional) — same precedent as the
+// v394 `dismissed` flag; the field sees one pending suggestion either way.
+const CC_LOAD_SUGGEST_KINDS = ["switched", "panel"];
+// The load's kind AS THE PLAN HAS IT: 'panel' or 'switched' (dimmer is a display
+// value of regular switching). Tape has no kind concept → null (hide the control).
+function ccLoadCurrentKind(load) {
+  const c = load && load.control;
+  if (c === "tape") return null;
+  return c === "panel" ? "panel" : "switched";
+}
+// The exact office patch for a suggestion, or null when the kind is invalid or
+// the load can't take one (tape). Re-suggesting the same kind re-stamps `at`.
+function ccLoadSuggestPatch(load, kind, byName, now = Date.now()) {
+  if (!CC_LOAD_SUGGEST_KINDS.includes(kind)) return null;
+  if (ccLoadCurrentKind(load) == null) return null;
+  return { suggestedKind: kind, suggestedAt: Number(now) || Date.now(), suggestedBy: String(byName || "office").slice(0, 60) };
+}
+// Status of the office's suggestion on one load record, or null when none.
+// {state:'pending'|'accepted'|'dismissed'|'matched'|'resolved', kind, at, by, resolvedBy, resolvedAt}
+function ccLoadSuggestionStatus(load) {
+  const o = load && load.office;
+  if (!o || !CC_LOAD_SUGGEST_KINDS.includes(o.suggestedKind)) return null;
+  const at = Number(o.suggestedAt) || 0;
+  if (!at) return null;
+  const ack = load.suggestionAck && typeof load.suggestionAck === "object" ? load.suggestionAck : null;
+  const ackAt = Number(ack && ack.at) || 0;
+  const base = { kind: o.suggestedKind, at, by: String(o.suggestedBy || "") };
+  if (at > ackAt) return { ...base, state: "pending" };
+  const res = ack && ack.resolution;
+  // An ack the office doesn't recognize (newer FieldInk) is still an ack — never re-show it as pending.
+  const state = res === "accepted" || res === "dismissed" || res === "matched" ? res : "resolved";
+  return { ...base, state, resolvedBy: String((ack && ack.by) || ""), resolvedAt: Number(ack && ack.resolvedAt) || 0 };
+}
+// ── end ccloads SUGGEST derivations ─────────────────────────────────────────
+
 // ── FieldInk CREW ROSTER seed + CREW TOKEN mint (CC-SIDE SPEC P4.2 Instant
 // Grants) ───────────────────────────────────────────────────────────────────
 // Two zero-tap grants layered on the personalized Open link (item 1, SW v384):
@@ -27567,43 +27615,110 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               )}
 
               {/* v580 ── INCOMING FROM FIELDINK ── the lighting loads the crew
-                  roped on the plan, streamed from ccloads/<jobId>. Read-only for
-                  now (Dismiss writes only the office-owned `dismissed` flag back
-                  to the bridge — never the job). Assigning a load to a panel
-                  output is the next increment. */}
+                  roped on the plan, streamed from ccloads/<jobId>. Dismiss writes
+                  only the office-owned `dismissed` flag back to the bridge — never
+                  the job. v400 (FieldInk v619 pair): each non-tape row gets a
+                  "Suggest: Switched | Panel" control that writes ONLY
+                  office.suggestedKind/suggestedAt/suggestedBy — a SUGGESTION the
+                  field accepts/dismisses on the plan (Accept-all lives in FieldInk;
+                  the office never changes a load's kind) — plus a status tag read
+                  from FieldInk's suggestionAck and an obvious "needs a switch on
+                  the plan" marker on field-flagged rows. Assigning a load to a
+                  panel output is still the next increment. */}
               {(()=>{
                 const incoming = Object.values(ccLoadInbox || {}).filter(l => l && !(l.office && l.office.dismissed));
                 if (!incoming.length) return null;
                 const active = incoming.filter(l => !l.removedAt);
                 const gone = incoming.filter(l => l.removedAt);
+                const needSwitch = active.filter(l => l.needsSwitch === true).length;
                 const fixtxt = (l) => (Array.isArray(l.fixtures) ? l.fixtures : []).filter(Boolean).map(f => `${f.n} ${f.name}`).join(", ");
                 const ctrlLabel = (l) => l.control === "dimmer" ? "Dimmer" : l.control === "tape" ? "Tape" : l.control === "panel" ? "Panel" : "Switched";
+                const KIND_LABEL = { switched: "Switched", panel: "Panel" };
+                const whoWhen = (who, at) => [who, at ? timeAgo(at) : ""].filter(Boolean).join(" · ");
+                const statusTag = (st) => {
+                  if (!st) return null;
+                  const kind = KIND_LABEL[st.kind] || st.kind;
+                  const tone = st.state === "pending" ? { color: C.blue, border: C.blue } : st.state === "accepted" ? { color: C.green, border: C.green } : { color: C.dim, border: C.border };
+                  const text = st.state === "pending" ? `Suggested ${kind} — pending` : st.state === "accepted" ? `${kind} accepted` : st.state === "dismissed" ? `${kind} suggestion dismissed` : st.state === "matched" ? `${kind} — plan already agrees` : `${kind} suggestion resolved`;
+                  const meta = st.state === "pending" ? whoWhen(st.by, st.at) : whoWhen(st.resolvedBy === "auto" ? "" : st.resolvedBy, st.resolvedAt);
+                  return (
+                    <span title={`Suggested by ${st.by || "office"} ${st.at ? timeAgo(st.at) : ""}`.trim()}
+                      style={{fontSize:10,fontWeight:700,color:tone.color,border:`1px solid ${tone.border}`,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>
+                      {text}{meta ? <span style={{fontWeight:500,opacity:.8}}> · {meta}</span> : null}
+                    </span>
+                  );
+                };
+                const suggest = (l, kind) => {
+                  // Last write wins between two office users (non-transactional merge-set, matches the dismiss precedent).
+                  const patch = ccLoadSuggestPatch(l, kind, identity?.name);
+                  if (patch) publishCcLoadOffice(job.id, l.id, patch);
+                };
+                const seg = (l, cur, st, kind, first) => {
+                  const isCur = cur === kind;
+                  const isPend = !!(st && st.state === "pending" && st.kind === kind);
+                  const label = KIND_LABEL[kind];
+                  return (
+                    <button key={kind} disabled={isCur} onClick={()=>suggest(l, kind)}
+                      title={isCur ? `${label} — that's what the plan has now` : isPend ? `Re-send the ${label} suggestion (re-stamps it)` : `Suggest ${label} to the field — they accept it on the plan`}
+                      style={{padding:"4px 9px",fontSize:11,fontFamily:"inherit",fontWeight:700,cursor:isCur?"default":"pointer",
+                        background:isCur?C.surface:isPend?C.blue:"transparent",color:isCur?C.muted:isPend?"#fff":C.blue,
+                        border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{label}</button>
+                  );
+                };
                 return (
                   <div style={{marginBottom:16,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",background:C.card}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:C.surface,borderBottom:`1px solid ${C.border}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:C.surface,borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
                       <Icon name="inbox" size={14} stroke={2.25}/>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:sysAccentColor(job)}}>Incoming from FieldInk</div>
                       <div style={{fontSize:11,color:C.dim,fontWeight:700}}>{active.length}</div>
+                      {needSwitch > 0 && (
+                        <div style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,fontWeight:700,color:C.orange,border:`1px solid ${C.orange}`,borderRadius:999,padding:"2px 8px"}}>
+                          <Icon name="alertTriangle" size={11} stroke={2.5}/>{needSwitch} need{needSwitch===1?"s":""} a switch on the plan
+                        </div>
+                      )}
                       <div style={{flex:1}}/>
-                      <div style={{fontSize:10,color:C.dim}}>roped on the plan — assign to a panel output (coming next)</div>
+                      <div style={{fontSize:10,color:C.dim}}>Suggest a kind — the field accepts it on the plan</div>
                     </div>
                     <div>
-                      {[...active, ...gone].map(l => (
-                        <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderTop:`1px solid ${C.border}`}}>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:13,fontWeight:700,color:l.removedAt?C.dim:C.text}}>
-                              {l.name || l.loadId || "Load"}
-                              {l.removedAt && <span style={{marginLeft:8,fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
+                      {[...active, ...gone].map(l => {
+                        const cur = ccLoadCurrentKind(l);
+                        const st = ccLoadSuggestionStatus(l);
+                        const canSuggest = cur != null && !l.removedAt;
+                        const needs = l.needsSwitch === true && !l.removedAt;
+                        return (
+                          <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderTop:`1px solid ${C.border}`,flexWrap:"wrap",
+                            borderLeft:needs?`4px solid ${C.orange}`:"4px solid transparent",background:needs?"rgba(176,106,44,0.06)":"transparent"}}>
+                            <div style={{flex:1,minWidth:180}}>
+                              <div style={{fontSize:13,fontWeight:700,color:l.removedAt?C.dim:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                                <span>{l.name || l.loadId || "Load"}</span>
+                                {l.removedAt && <span style={{fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
+                                {needs && (
+                                  <span title="The field switched this load to regular switching but hasn't placed its switch on the plan yet — read-only here; it clears when they place one"
+                                    style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,fontWeight:700,color:"#fff",background:C.orange,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>
+                                    <Icon name="alertTriangle" size={11} stroke={2.5}/>needs a switch on the plan
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                                {[l.room, l.sheet, fixtxt(l)].filter(Boolean).join("  ·  ")}
+                              </div>
                             </div>
-                            <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                              {[l.room, l.sheet, fixtxt(l)].filter(Boolean).join("  ·  ")}
+                            <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                              <div style={{fontSize:10,fontWeight:700,color:C.dim,border:`1px solid ${C.border}`,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>{ctrlLabel(l)}</div>
+                              {canSuggest && (
+                                <div style={{display:"inline-flex",alignItems:"center",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                                  <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"4px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Suggest</span>
+                                  {seg(l, cur, st, "switched", true)}
+                                  {seg(l, cur, st, "panel", false)}
+                                </div>
+                              )}
+                              {statusTag(st)}
+                              <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this incoming load"
+                                style={{padding:"5px 9px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
                             </div>
                           </div>
-                          <div style={{fontSize:10,fontWeight:700,color:C.dim,border:`1px solid ${C.border}`,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>{ctrlLabel(l)}</div>
-                          <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this incoming load"
-                            style={{padding:"5px 9px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -47710,6 +47825,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Personalized Open on Live Plans** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 1 — the LIVE PLANS rows' **Open** link now carries the logged-in user's real identity ('?crew=<id>&crewName=<name>' riding inside the hash fragment — the base already contains '#/v/'; FieldInk parses it with 'crewTagFromLocation', caps 120/60, persists it per share and pre-fills the pin name since v536), so a crew member's Question/Problem pins forward to this job's Questions attributed to their real name instead of browsing as an anonymous client whose pins never forward at all. Office sessions get tagged too — the tag is triage attribution, not a permission. No identity (edge case) → today's untagged URL. The copyable **Crew link** button deliberately keeps the generic '?crew=crew' tag: it exists for texting subs who never log into this app, and a sub's pins must not inherit the copier's identity. Same ship also answers **D8** for FieldInk: plan discovery is and stays the direct 'shares' query ('ccJobId' primary at the section's listener, 'jobFolderId' fallback) — 'ccjoblinks' has zero readers here, so FieldInk can retire its writer. Why it can't lose data: URL construction only — no write path, no new field, no rules change; the crew-tag hash contract is the one FieldInk v534/v536 already honors, and an untagged link behaves exactly as before.
 - **Instant Grants — crew roster seed + Open-link token mint** · 'shipped 2026-08-28' · 'SW v389' · CC-SIDE SPEC P4.2 (pairs with FieldInk v571). Two zero-tap grants layered on the Personalized Open link (item 1, v384). **(1) Roster seed** — the whole employee roster is mirrored into FieldInk's 'crewroster/<crewId>' (crewId = the 'he_identity' user id) so Koy's Employees panel shows everyone immediately instead of filling one access-request at a time. 'seedCrewRosterRow' is **CREATE-ONLY BY CONTRACT**: FieldInk's rules technically let an org member *update* a roster row, so a blind write would silently undo whatever Koy just toggled — every write 'getDoc'-checks first and bails if the row exists. Fresh seeds default to **'viewer'**; Koy flips people to Editor himself from the panel (nobody gets write access to a live plan without him tapping the toggle once). Two passes: a once-per-session **backfill** ('backfillCrewRoster', fired +8s off the users load like 'publishCcJobsIndex', only the real loaded roster — never 'DEFAULT_USERS', skips 'active:false') and an **on-add** hook in 'saveUsers' that seeds only newly-added ids so new hires appear without a second step. **(2) Token mint** — on a plain left-click of **Open**, 'mintCrewToken' writes a single-use 'crewtokens/<id>' (128-bit id, 'exp' 10m — FieldInk's rules independently cap it at 30m past the *server* clock) and appends '&ct=' to the personalized link; the device self-binds in FieldInk with no request and no bell. Fresh mint every click, never cached. Popup-safe: the click opens a blank tab **inside the gesture**, then navigates it once the mint resolves; **any** mint failure (rules not live, offline, not org-joined) falls through to the plain tagged link — the '<a href>' stays that link, so modifier/middle-clicks and JS-off degrade cleanly and no error ever surfaces. Both ride the same 'isOrgMember()' gate (live since v384/385) that already guards the cc* bridges, so 'ensureFieldinkAuth()' is the only prerequisite; a 'permission-denied' kicks a rejoin via '_ccDenied' so the next attempt works. The generic copyable **Crew link** button is untouched — it carries no real identity (for texting subs) so there's nothing to mint against. Why it can't lose data: additive, cross-app writes to FieldInk's own project only ('crewroster'/'crewtokens', governed by FieldInk's v571 rules) — no CC Firestore doc, field, loader, or rule changed; the roster write is create-only so Koy's toggles are never overwritten, and a token is inert until redeemed and single-use by FieldInk's own rules. Item 2 is safe to ship before FieldInk v571 is live — it just fails soft into today's plain tagged link until then.
 - **Org membership join (KC1 stage-B prerequisite)** · 'shipped 2026-07-29' · 'SW v362' · CC-side leg of 'CC-SIDE SPEC — Org Membership Join'; pairs with FieldInk v511. The six cc* bridge collections move from "any authenticated session" to **org members only**, so this app's field-ink session must JOIN the org once per session or every gated read/write starts failing 'permission-denied' — the live CO loop, on a real job. Writes exactly the two spec'd write-only docs: 'orgauth/company/meta/security' (create-once claim, '{orgKey,by,at}') and 'orgauth/company/members/<uid>' ('{key,by,at}'); rules verify membership server-side via 'exists()'. Mirrors FieldInk's 'ensureOrgMembership'/'_joinOrg': claim-then-join, **swallow the already-claimed denial** (FieldInk usually claims first — expected, not an error), refresh the key once on a denied join. Hooked into 'ensureFieldinkAuth' rather than the 8 cc* call sites because every bridge read AND write already funnels through it — including the listeners' self-healing re-attach, so a failed join retries for free. Joined **per session and per uid** (an anonymous field-ink uid isn't stable across a browser-data clear, and a fresh uid needs its own members doc); a settled FALSE is never memoized, so a pre-stage-A denial stays retryable. '_ccDenied' self-heals the 5 write paths + the 2 protective pre-reads on 'permission-denied', throttled to once per 10s so a hard denial can't stampede. **FIRE-AND-FORGET BY CONTRACT** — never awaited, nothing gates on it, and with no key provisioned it is completely inert (zero writes), which is the "safe to ship anytime" posture the spec's build order step 1 asks for. Key resolution is one choke point ('_getOrgKey') so a Drive read or a callable can replace it in one function; provision per-device with '_hsSetOrgKey("<32-hex>")' and inspect with '_hsOrgStatus()' (neither ever prints the key value). 'ccjoblinks' is **not used by this app**, so that row of the spec's table doesn't apply. Verified by a 29-assertion harness driving the real extracted join block against stubbed Firestore/auth. ⚠️ 'REACT_APP_FIELDINK_ORG_KEY' exists but CRA inlines env vars into the **publicly downloadable** bundle — setting it publishes the one company-wide secret and would undercut stage B for both apps; see the handoff doc
+- **Incoming from FieldInk — Suggest Switched | Panel + "needs a switch" marker** · 'shipped 2026-09-14' · 'SW v400' · the office half of FieldInk v619 "panelized ⇄ regular switching" (Koy: *"office toggle is a suggestion, with option to accept all"* — Accept-all lives in FieldInk only; *"when a load is switched with no switch placed on the plan it needs to be obvious"*). Every non-tape row in the Panelized Lighting **Incoming from FieldInk** inbox now carries a two-segment **Suggest: Switched | Panel** control: the segment matching the load's CURRENT plan kind ('control==='panel'' → Panel; switched/dimmer/anything else → Switched) is greyed as *what the plan has now*, tapping the other writes ONLY 'loads.<id>.office.{suggestedKind,suggestedAt,suggestedBy}' through the existing 'publishCcLoadOffice' merge-set ('ccloads/<jobId>' on the field-ink project). The office **never** changes a load's kind — FieldInk answers in its OWN 'loads.<id>.suggestionAck {at, resolution:'accepted'|'dismissed'|'matched', by, resolvedAt}' (never written here) and a per-row status tag derives from the shared contract: **pending** = 'suggestedAt > (suggestionAck.at||0)' (blue, who/when), **accepted** (green, who/when), **dismissed** / **matched** (grey; matched = the plan already agreed, auto). Re-tapping a pending segment re-stamps 'suggestedAt', which is how a dismissed suggestion is reopened. Tape rows hide the control (no kind concept); gone-from-plan rows keep their status but lose the control. **Needs-a-switch marker:** a field-owned 'needsSwitch:true' (regular-switching load whose fixtures are mapped but no switch is placed on the plan yet) paints the row's left edge + a white-on-orange *needs a switch on the plan* pill, and the panel header counts them — read-only; it clears when the crew places the switch. Pure derivations ('ccLoadCurrentKind' / 'ccLoadSuggestPatch' / 'ccLoadSuggestionStatus', top-level next to 'publishCcLoadOffice') are extracted verbatim and run by the new prebuild gate 'scripts/ccloads-suggest-test.js' (31 checks: valid kinds, exact patch shape, pending/accepted/dismissed/matched/newer-reopens). Two office users suggesting opposite kinds within seconds = last write wins (plain non-transactional merge-set, the same precedent as the v394 'dismissed' flag). No Firestore rules change ('isOrgMember()' read+write already covers both sides). Why it can't lose data: **writes only 'loads.<id>.office.suggested*' on 'ccloads/<jobId>' (field-ink project); never job data** — the patch is three new keys inside the office-owned sub-object via the same targeted 'merge:true' write v394 proved (loads is a MAP, so the deep merge preserves every field-owned key, FieldInk's 'suggestionAck', and every other load with no pre-read); no CC Firestore doc/field/loader/rule changed; a denied write self-heals via '_ccDenied' and no-ops.
 - **Incoming from FieldInk — lighting loads inbox** · 'shipped 2026-09-02' · 'SW v394' · Part B step one of the lighting-loads bridge (pairs with TraceVault/FieldInk v580). FieldInk publishes each lighting load the crew ropes on the plan to 'ccloads/<jobId>' on the field-ink project (a MAP keyed by load id, field-owned keys only); the Panelized Lighting tab now shows an **Incoming from FieldInk (N)** panel above the Loads section streaming those loads — name, room, sheet, fixtures, switched/dimmer, with a "gone from plan" tag when a load is removed on the plan. **Read-only this increment:** the only action is **Dismiss**, which writes ONLY the office-owned 'office.dismissed' flag back via 'publishCcLoadOffice' — a targeted 'merge:true' write on 'loads.<id>.office' (safe because 'loads' is a MAP, so the merge preserves every field-owned key AND every other load with no pre-read; the read-then-merge dance the array-shaped cccos/ccquestions bridges need doesn't apply). The 'ccLoadInbox' listener mirrors the cccos listener (auth-gated, self-healing 15s retry, '[job.id]'). Assigning a load to a Savant panel output + the clean client Load Sheet are the next increment (reconciled model in 'LIGHTING-LOADS-BRIDGE.md': Savant outputs are DERIVED/whitelisted, so assign writes name/room/type via one 'handleSaveSlot' patch + stores fieldLoadId/fixtures/tapeFt in new sparse maps). Adversarially reviewed — no critical/high. Why it can't lose data: **writes NO job data** — the only write is to the SEPARATE field-ink project's 'ccloads/<jobId>.loads.<id>.office', so it cannot touch 'panelizedLighting' or any job field; no CC Firestore doc/field/loader/rule changed; inert until the job is FieldInk-linked AND the field-ink 'ccloads' rules are deployed (a denied read/write self-heals via '_ccDenied' and no-ops).
 - **FieldInk bridge hardening** · 'shipped 2026-07-10' · 'SW v323' · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.
 - **Crew link (FieldInk)** · 'shipped 2026-07-10' · 'SW v323' · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the '?crew=' tagged link). Senders type their name per note, so one link serves a whole crew/sub.
