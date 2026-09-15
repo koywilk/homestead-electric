@@ -48,8 +48,9 @@ function stripHtml(s) {
 // whose stamp is older is rebuilt automatically the next time the office opens
 // the Contractors tab or the nightly digest runs (gcPortalHealStaleMirrors in
 // index.js) — Koy 2026-09-15: "make it so they all auto rebuild". v1 = the
-// pre-stamp era (no plans key); v2 = plans added (SW v405).
-const PROJECTION_VERSION = 2;
+// pre-stamp era (no plans key); v2 = plans added (SW v405); v3 =
+// hiddenPlanShares added (SW v406).
+const PROJECTION_VERSION = 3;
 
 const cap = (arr, n) => (Array.isArray(arr) ? arr.slice(0, n) : []);
 const str = (v, max) => stripHtml(v).slice(0, max || 300);
@@ -331,6 +332,10 @@ function projectJobForPortal(jobId, job) {
     },
     matterport: matterportView(job),
     plans: plansView(job),
+    // v406: ids of FieldInk shares the office hid on the job (Plans & Links →
+    // hide). The portal reads live shares from field-ink itself and uses this
+    // list to honor the hide. Ids only — opaque share ids, no content.
+    hiddenPlanShares: cap((Array.isArray(job.hiddenPlanShares) ? job.hiddenPlanShares : []).filter((x) => typeof x === "string").map((x) => x.slice(0, 64)), 50),
     returnTrips: returnTripsView(job.returnTrips),
     questions: questionsView(job),
     changeOrders: {

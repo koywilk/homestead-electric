@@ -44218,15 +44218,19 @@ function GCPortalManager({ jobs, identity }) {
   const gc = (name, payload) => gcAdminCallable(name, identity)(payload);
 
   const refresh = () => gc("gcPortalListLinks",{})
-    .then(r => {
-      setLinks(r.data.links||[]); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null });
-      // v405: the server auto-rebuilt portals whose mirror predated the current
-      // projection shape — say so, once, so nobody hunts for a Rebuild button.
-      const n = Number(r.data.healedPortals||0);
-      if (n > 0) toast.info("Refreshed " + n + " contractor portal" + (n===1?"":"s") + " to the current layout");
-    })
+    .then(r => { setLinks(r.data.links||[]); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null }); })
     .catch(e => { setErr(e.message||"Failed to load links"); setLinks([]); });
-  useEffect(() => { refresh(); }, []);
+  // v405.1: mirror auto-heal runs AFTER the list loads, in its own long-timeout
+  // callable (running it inside gcPortalListLinks timed that call out at 60s on
+  // first open after v405). Once per tab mount; toast + reload only if it
+  // actually rebuilt something. A failure here never touches the list.
+  const healMirrors = () => gc("gcPortalHealMirrors",{})
+    .then(r => {
+      const n = Number((r.data && r.data.healed)||0), left = Number((r.data && r.data.remaining)||0);
+      if (n > 0) { toast.info("Refreshed " + n + " contractor portal" + (n===1?"":"s") + " to the current layout" + (left ? " — " + left + " more next time" : "")); return refresh(); }
+    })
+    .catch(() => {});
+  useEffect(() => { refresh().then(healMirrors); }, []);
 
   const activeJobs = (jobs||[]).filter(j => !j.archived && !j.deleted);
   const matched = gcName.trim() ? activeJobs.filter(j => _gcKeyOf(j.gc) === _gcKeyOf(gcName)) : [];
@@ -47813,6 +47817,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Huddle** · 'shipped' · 'HuddleSheet' · weekly team huddle prep
 - **Subcontractors** · 'shipped' · external contractor view
 - **Contractors** · 'shipped 2026-07-21' · 'SW v352' · 'GCPortalManager' + 'GCPortalInbox' · the GC/contractor portal management promoted out of Settings into its own top-level nav tab (gated 'users.manage') — per-contractor link create/edit/revoke, contacts, per-job super assignment, send-test-digest, and the two-way requests inbox all in one place. Settings keeps a one-line pointer to the tab. Phase 1 of the Contractors build; the SimPro-derived GC auto-list (from 'job.gc') + per-job super auto-fill is the next phase — spec in '08-Specs/Contractors Tab Spec.md'
+  - **Live FieldInk plans on the portal + auto-heal moved off the list call** · 'shipped 2026-09-15' · 'SW v406' · Koy, minutes after v405 hit: *"I would like the live link plans built into these as well"* — and the first Contractors-tab open after v405 showed an **"internal"** banner with an empty link list. **(1) The heal bug:** v405 ran 'gcPortalHealStaleMirrors' INSIDE 'gcPortalListLinks'; seven portals × ~18s (each rebuild re-read the whole jobs collection) blew that callable's 60s timeout, so the office got 'internal' and 'links=[]' (which also made every linked GC reappear in the discovery panel as "no portal yet"). The writes it managed before the kill were sound (six of seven stamped). Fix: the healer takes ONE shared jobs snapshot, runs under a **time budget** and reports '{healed, remaining}'; it lives in a new dedicated callable **'gcPortalHealMirrors'** ('runWith timeoutSeconds 540') that the Contractors tab calls right AFTER the list loads (once per mount; toast + reload only if something was rebuilt; a failure never touches the list), and the nightly digest keeps a 20s-budgeted pass. 'gcPortalListLinks' is fast again. **(2) Live plans:** the portal's Documents section now lists the job's **live FieldInk plans** — the same source as the office's LIVE PLANS — FIELDINK section, the field-ink project's 'shares' collection by 'ccJobId', which FieldInk's own rules make world-readable — as a **live client listener** on the portal page (one per mirrored job, re-attached only when the job set changes), NOT a projection: a plan shared or revoked in FieldInk appears/disappears within seconds, no rebuild, no version churn. Each row opens the FieldInk viewer with a **GC-attributed crew tag** in the hash ('?crew=gc:<gcKey>&crewName=<link label>', the same 'crewTagFromLocation' contract as the office's personalized Open) so a Question/Problem pin a GC drops forwards to the job's Questions attributed to their company. The office **hide** on the job ('hiddenPlanShares') is honored: the mirror now projects those ids ('PROJECTION_VERSION' 3, key-list check updated) and the portal filters them out. Only ccJobId-assigned shares show (legacy folder-inferred shares don't). Deploy: 'functions:gcPortalHealMirrors,functions:gcPortalListLinks,functions:gcPortalDailyDigest,functions:gcPortalBackfill,functions:onJobUpdate,functions:gcPortalCreateLink,functions:gcPortalSetRevoked,functions:gcPortalUpdateLink' BEFORE the push. Why it can't lose data: no new write path — the heal rewrites only derived 'gc_portal' mirror docs (rebuilt from jobs by design) and now does less of it per call; the portal's FieldInk read is a read on a collection FieldInk already exposes publicly; 'hiddenPlanShares' is an additive, ids-only mirror key; no rules change on either project, no loader change, no job field touched.
   - **Office sets their super per job + portal plans + un-removable super fix** · 'shipped 2026-09-15' · 'SW v405' · Koy: *"you cannot remove a selected super from their side, and when a super is selected on the CC they should be made the super on that side as well. CC is the source of truth always."* and *"no plans are appearing there at all."* Three things, one ship. **(1) Office-side super picker** ('GCOfficeSuperAssign', on every link card under Contacts): each job on the portal (name-matched + force-included − hidden) lists its current super chips with **Assign / Change** → chips of the link's contacts → **Save**, which calls 'gcPortalUpdateLink' with a new 'supersByJobPatch: {jobId: ids}' — the server ('gcPortal.cleanSupersPatch', same limits as the GC's own 'assign': ≤6 ids/job, ≤40 chars, deduped, tag-stripped, job id ≤64 with no field-path specials) writes ONE field path 'supersByJob.<jobId>' per save, never the whole map, so an office click can't clobber a super the GC set on another job a moment earlier; the portal's live 'gc_links' listener repaints the contractor's chips as it lands. This is the Phase 2b "per-job super assignment" from the Contractors Tab Spec, minus the SimPro seed. The old read-only "Per-job assignments" lines are gone (replaced by the picker). **(2) Root cause of "can't remove"** — found in live data: the Robison link still carries pre-P0-2 NAME-keyed entries ('"Austin"', '"Robison Office"') that match no contact id, so 'GCSuperAssign' rendered them as raw chips in view mode but hid them in edit mode (the roster only lists contacts) — they rode along in the draft and could never be unticked, on either side. Both pickers now render such orphans (legacy names, or a contact the office since removed) as their own removable chip: amber **"· old entry"** in the office, **"· not on your team list"** on the portal; Save with none left clears the job. **(3) Plans on the portal** — the Documents section had only a placeholder; nothing was ever projected. 'projectJobForPortal' now carries 'plans: plansView(job)' = the job's **plans folder link** ('planLink', https-only) + its **uploaded plan files** ('planFiles' from the Plans & Links tab — ONLY 'name'+'url' cross the wall; 'storagePath'/'size'/'type' are leak-guarded in 'gcportal-test'; https-only; 12 max; names tag-stripped). Not projected on purpose: lighting/panel schedule links and FieldInk live-plan shares (add deliberately if wanted). Portal renders **Plans folder** and **Plans — <file>** links above the Matterport rows; a pre-v405 mirror with no 'plans' key falls back to the old placeholder. **(4) Mirrors auto-rebuild** (Koy: *"can you make it so they all auto rebuild?"*): 'gcPortal.PROJECTION_VERSION' (now 2) is stamped on the mirror meta doc by every rebuild; 'gcPortalHealStaleMirrors' rebuilds any ACTIVE portal whose stamp is older, run by 'gcPortalListLinks' (so opening the Contractors tab heals everything and toasts *"Refreshed N contractor portals to the current layout"*) and by the nightly 'gcPortalDailyDigest' before it builds digests — one rebuild per shared portalId, capped at 25, failures logged never thrown. Bump the version whenever the projection's shape changes; a prebuild check pins the top-level key list to the version so a shape change without a bump fails the build. No more Rebuild-per-link after a deploy (the button stays for membership fixes). 20 new prebuild checks. Deploy: 'functions:gcPortalUpdateLink,functions:gcPortalListLinks,functions:gcPortalDailyDigest,functions:gcPortalBackfill,functions:onJobUpdate,functions:gcPortalCreateLink,functions:gcPortalSetRevoked' (every function that projects, patches, or heals a link) BEFORE the app push, or the office Save is a server no-op. Why it can't lose data: the only new write is a per-job 'supersByJob.<jobId>' field-path update on 'gc_links/{token}' — the exact shape the GC-side 'assign' has used since v340 — behind the live-PIN 'requireAdmin' gate; the projection change is additive (a new 'plans' key on the mirror doc, no existing key touched, 'jobs/{id}' never written); no rules change ('gc_links' stays client-write-denied), no loader change, no job field added or renamed.
   - **Discovery: contractors on your jobs with no portal yet** · 'shipped 2026-07-21' · 'SW v353' · a panel atop the Contractors tab that groups live jobs by the normalized '_gcKeyOf(job.gc)' (byte-identical to the server membership key 'gcKeyOf' in 'functions/gcPortal.js'), drops GCs that already have a non-revoked link, and lists the rest **most-jobs-first** so repeat GCs float up and one-off names sink. "Create portal" pre-fills the create form and the new link auto-matches those jobs via the same key. Client-only (reads the 'gc' field already on every job), no backend change. Near-duplicate variants (e.g. "City Point" vs "City Point Homes") list separately by design — merge them with 'jobIdsInclude' when creating the link (manual curation, per Koy's "portals first so I can clean it up")
     - **Contacts pull from Simpro on Create** · 'shipped 2026-07-22' · 'SW v354' · "Create portal" in the discovery panel prefills the create form's name AND pulls that GC's **customer contacts** from Simpro into the contact editor. New read-only callable 'gcSimproCustomerContacts' (job → 'Customer.ID' → '/customers/{id}/contacts/' list → per-contact '/customers/{id}/contacts/{cid}' detail for Email/CellPhone), returns app-shaped '{name,role,emailAddr,phone}' with **PrimaryJobContact/JobContact floated to the top**. ONE customer lookup per GC (all of a GC's jobs share a customer). Endpoints + field shape confirmed against Koy's live tenant via a temporary probe (job SiteContacts were empty; contacts live on the customer, e.g. City Point Homes #303 → Luke/Sam Norman). Read-only over Simpro/Firestore; **office reviews every pulled contact before Create.** 'requireAdmin'-gated (live-PIN, like every gc* office callable — review pass hardened this from the app-key-only first cut; also chunked the detail fetches ×5 for Simpro rate limits, surfaced 'failedCount' + the Simpro 'customerName' in the office toast, and fixed a create-form state-leak/race so one GC's pulled contacts can never survive into another GC's form)
@@ -52078,6 +52083,36 @@ function GCPortalPage({ token, deepJobId }) {
     if (jobs.some(j => j && String(j.id) === String(deepJobId))) setOpenId(String(deepJobId));
   }, [deepJobId, jobs]);
   const [superFilter, setSuperFilter] = useState(null);
+  // Live FieldInk plans per job (v406 — Koy: "I would like the live link plans
+  // built into these as well"). Same source as the office's LIVE PLANS —
+  // FIELDINK section: the field-ink project's `shares` collection, keyed by
+  // ccJobId, which FieldInk's own rules make world-readable (`allow read: if
+  // true`) — so this is a live client listener, not a projection: a plan
+  // published or revoked in FieldInk shows/hides here within seconds, no
+  // rebuild. Only ccJobId-assigned shares (the v307+ standard; legacy
+  // folder-inferred shares aren't visible here). Office "hide" on the job
+  // (`hiddenPlanShares`, projected in the mirror) is honored. Listeners are
+  // bounded by the portal's own job list (≤ a few dozen) and re-attach only
+  // when the set of job ids changes.
+  const [livePlans, setLivePlans] = useState({}); // jobId → [{id, name, ms}]
+  const liveJobKey = Array.isArray(jobs) ? jobs.map(j => j && j.id).filter(Boolean).sort().join("|") : "";
+  useEffect(() => {
+    if (!liveJobKey) { setLivePlans({}); return; }
+    const ids = liveJobKey.split("|").slice(0, 60);
+    const unsubs = [];
+    ids.forEach(jobId => {
+      try {
+        unsubs.push(onSnapshot(query(collection(fieldinkDb, "shares"), where("ccJobId", "==", String(jobId))), snap => {
+          const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .filter(p => p && !p.revoked && String(p.ccJobId || "") === String(jobId))
+            .map(p => ({ id: p.id, name: String(p.planName || p.name || "Plan").replace(/\.pdf$/i, "").slice(0, 120), ms: (p.updatedAt && p.updatedAt.toMillis ? p.updatedAt.toMillis() : 0) || Number(p.version) || 0 }))
+            .sort((a, b) => b.ms - a.ms);
+          setLivePlans(prev => ({ ...prev, [jobId]: rows }));
+        }, () => { /* keep whatever we had; the portal never blocks on FieldInk */ }));
+      } catch (e) {}
+    });
+    return () => { unsubs.forEach(u => { try { u(); } catch (e) {} }); };
+  }, [liveJobKey]);
   const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
   // P0-10 fix: a transient onSnapshot error used to collapse into the SAME
   // state as "link revoked" (setLink(null)) / "no jobs" (setJobs([])) — a
@@ -52354,7 +52389,7 @@ function GCPortalPage({ token, deepJobId }) {
         <div style={{marginTop:8}}>{_gcContactLine(P)}</div>
       </div>
 
-      {detail ? <GCPortalDetail job={detail} link={link} P={P} onClose={()=>setOpenId(null)}/> : null}
+      {detail ? <GCPortalDetail job={detail} link={link} P={P} livePlans={livePlans[detail.id] || []} onClose={()=>setOpenId(null)}/> : null}
     </Fragment>
   );
 }
@@ -52728,7 +52763,7 @@ function GCSuperAssign({ P, link, jobId, onAssign }) {
   );
 }
 
-function GCPortalDetail({ job, link, P, onClose }) {
+function GCPortalDetail({ job, link, P, livePlans, onClose }) {
   const j = job;
   const token = link && link.token;
   // Who's submitting — remembered per portal so the office sees a name on
@@ -52894,8 +52929,26 @@ function GCPortalDetail({ job, link, P, onClose }) {
         {/* documents: plans (folder link + uploaded plan PDFs — v405, projected
             from the job's Plans & Links tab) + matterport links (real hrefs).
             A mirror written before v405 has no `plans` key → guard. */}
-        {(()=>{ const plans = Array.isArray(j.plans) ? j.plans : []; const mp = (j.matterport && j.matterport.links) || []; return sec("Documents", (
+        {(()=>{
+          const plans = Array.isArray(j.plans) ? j.plans : [];
+          const mp = (j.matterport && j.matterport.links) || [];
+          // Live FieldInk plans (v406): opened with a GC-attributed crew tag in
+          // the hash (FieldInk's crewTagFromLocation contract — caps 120/60),
+          // so a Question/Problem pin a GC drops forwards to this job's
+          // Questions attributed to THEM, not to an anonymous client. Hidden
+          // shares (office "hide" on the job) are filtered by the mirror's list.
+          const hiddenSet = new Set(Array.isArray(j.hiddenPlanShares) ? j.hiddenPlanShares : []);
+          const lp = (Array.isArray(livePlans) ? livePlans : []).filter(p => p && p.id && !hiddenSet.has(p.id));
+          const gcTag = "?crew=" + encodeURIComponent(("gc:" + String(link && link.gcKey || "gc")).slice(0, 120)) + "&crewName=" + encodeURIComponent(String(link && link.label || "Contractor").slice(0, 60));
+          const ago = (ms) => { if (!ms) return ""; const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); if (m < 2) return "just updated"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; const d = Math.round(h / 24); return d < 30 ? d + "d ago" : Math.round(d / 30) + "mo ago"; };
+          return sec("Documents", (
           <Fragment>
+            {lp.map((p)=>(
+              <div key={"lp"+p.id} style={{marginBottom:6}}>
+                <a href={safeUrl(FIELDINK_VIEWER_BASE + p.id + gcTag)} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>Live plan — {_gcTxt(p.name)} ↗</a>
+                <span style={{fontSize:11.5,color:P.muted}}> (our crew's live redlines{p.ms ? " · " + ago(p.ms) : ""})</span>
+              </div>
+            ))}
             {plans.map((p,i)=>(
               <div key={"pl"+i} style={{marginBottom:6}}>
                 <a href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>{p.kind==="link" ? "Plans folder" : "Plans — "+_gcTxt(p.label)} ↗</a>
@@ -52908,7 +52961,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
                 <span style={{fontSize:11.5,color:P.muted}}> (a 3D as-built of your walls)</span>
               </div>
             ))}
-            {!plans.length && !mp.length ? line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.") : null}
+            {!lp.length && !plans.length && !mp.length ? line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.") : null}
           </Fragment>
         )); })()}
 

@@ -172,8 +172,9 @@ t("plans: only label/kind/url cross", Object.keys(v.plans[1]).sort().join(",") =
 t("plans: empty when the job has none", projectJobForPortal("x", { ...FIXTURE, planLink: "", planFiles: [] }).plans.length === 0);
 t("plans: http folder link dropped, missing fields safe", plansView({ planLink: "http://drive.google.com/x" }).length === 0 && plansView({}).length === 0);
 t("projection shape is stamped: PROJECTION_VERSION must be bumped when the top-level keys change",
-  PROJECTION_VERSION === 2 && Object.keys(v).sort().join(",") === "address,changeOrders,finish,id,matterport,name,plans,qc,questions,quickJob,quickJobStatus,returnTrips,rough,simproNo,tempPed,updatedAt",
+  PROJECTION_VERSION === 3 && Object.keys(v).sort().join(",") === "address,changeOrders,finish,hiddenPlanShares,id,matterport,name,plans,qc,questions,quickJob,quickJobStatus,returnTrips,rough,simproNo,tempPed,updatedAt",
   "keys=" + Object.keys(v).sort().join(",") + " version=" + PROJECTION_VERSION);
+t("hiddenPlanShares: string ids only, capped", (() => { const r = projectJobForPortal("x", { ...FIXTURE, hiddenPlanShares: ["s1", 7, null, "s2"] }).hiddenPlanShares; return r.length === 2 && r[0] === "s1" && projectJobForPortal("x", FIXTURE).hiddenPlanShares.length === 0; })());
 t("plans: files capped at 12", plansView({ planFiles: Array.from({ length: 20 }, (_, i) => ({ name: "f" + i, url: "https://x/" + i })) }).length === 12);
 
 console.log("cleanSupersPatch (office per-job super patch, v405):");

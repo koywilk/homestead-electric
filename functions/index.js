@@ -5750,12 +5750,15 @@ async function gcPortalGcMembership(gcKey) {
 // Rebuild a GC's whole mirror: full jobs scan → project members → write
 // subdocs → delete stale ones. Uses GC-LEVEL union membership so the shared
 // mirror is consistent regardless of which link triggered the rebuild.
-async function gcPortalRebuildMirror(link) {
+async function gcPortalRebuildMirror(link, jobsSnap) {
   // Resolve GC-level membership (union across all active links); fall back to
   // the passed link if the query somehow returns nothing (e.g. mid-create race).
   const m = (await gcPortalGcMembership(link.gcKey)) || link;
   const portalId = m.portalId || link.portalId;
-  const all = await db.collection("jobs").get();
+  // v405.1: the healer passes ONE jobs snapshot for every portal it rebuilds —
+  // the full-collection read was the slow part (~18s per portal ×7 blew the
+  // 60s callable timeout on the first Contractors-tab open after v405).
+  const all = jobsSnap || await db.collection("jobs").get();
   const wanted = {};
   all.docs.forEach((d) => {
     const job = (d.data() || {}).data;
@@ -5781,20 +5784,46 @@ async function gcPortalRebuildMirror(link) {
 // nightly digest runs — whichever comes first. One rebuild per portalId (links
 // sharing a GC share a mirror), capped, and a failure is logged, never thrown:
 // listing links must not break because one rebuild did. Returns the count.
-async function gcPortalHealStaleMirrors(activeLinks) {
+// v405.1 (same-day fix): the first cut ran this INSIDE gcPortalListLinks and
+// blew that callable's 60s timeout (7 portals × ~18s) — the Contractors tab
+// showed "internal" and an empty link list. Now: (a) the jobs collection is
+// read ONCE and shared across every rebuild, (b) a time budget stops the loop
+// early and reports what's left (the stamp is written only after a portal's
+// commit, so a portal cut off mid-rebuild is simply picked up next time), and
+// (c) the caller is the dedicated long-timeout gcPortalHealMirrors callable or
+// the nightly digest — never the list call. Returns { healed, remaining }.
+async function gcPortalHealStaleMirrors(activeLinks, opts) {
+  const budgetMs = Math.max(5000, Number(opts && opts.budgetMs) || 25000);
+  const t0 = Date.now();
   const byPortal = new Map();
   (activeLinks || []).forEach((l) => { if (l && l.portalId && l.gcKey && l.revoked !== true && !byPortal.has(l.portalId)) byPortal.set(l.portalId, l); });
-  let healed = 0;
-  for (const [portalId, link] of [...byPortal.entries()].slice(0, 25)) {
+  const stale = [];
+  for (const [portalId, link] of [...byPortal.entries()].slice(0, 50)) {
     try {
       const meta = (await db.collection("gc_portal").doc(portalId).get()).data() || {};
-      if (meta.projectionVersion === gcPortal.PROJECTION_VERSION) continue;
-      await gcPortalRebuildMirror(link);
-      healed++;
-    } catch (e) { console.error("gcPortalHealStaleMirrors", portalId, e && e.message); }
+      if (meta.projectionVersion !== gcPortal.PROJECTION_VERSION) stale.push({ portalId, link });
+    } catch (e) { console.error("gcPortalHealStaleMirrors meta", portalId, e && e.message); }
   }
-  return healed;
+  let healed = 0, remaining = stale.length;
+  if (!stale.length) return { healed, remaining };
+  const jobsSnap = await db.collection("jobs").get();
+  for (const { portalId, link } of stale) {
+    if (Date.now() - t0 > budgetMs) break;
+    try { await gcPortalRebuildMirror(link, jobsSnap); healed++; remaining--; }
+    catch (e) { console.error("gcPortalHealStaleMirrors rebuild", portalId, e && e.message); }
+  }
+  console.log("gcPortalHealStaleMirrors", { healed, remaining, ms: Date.now() - t0 });
+  return { healed, remaining };
 }
+
+// Office-triggered heal: the Contractors tab calls this right after the link
+// list loads (not blocking it), then refreshes if anything was rebuilt. Long
+// timeout so a big backlog finishes in one go; the budget leaves headroom.
+exports.gcPortalHealMirrors = functions.runWith({ timeoutSeconds: 540, memory: "512MB" }).https.onCall(async (data) => {
+  await requireAdmin(data);
+  const snap = await db.collection("gc_links").where("revoked", "==", false).limit(300).get();
+  return gcPortalHealStaleMirrors(snap.docs.map((d) => d.data()), { budgetMs: 480000 });
+});
 
 // Shared contact normalizer (office create + GC self-service via the portal).
 // emailAddr is where the daily digest / instant alerts go; email/text are the
@@ -6273,10 +6302,8 @@ exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
 exports.gcPortalListLinks = functions.https.onCall(async (data) => {
   await requireAdmin(data);
   const snap = await db.collection("gc_links").orderBy("createdAt", "desc").limit(300).get();
-  // v405: rebuild any active portal whose mirror predates the current
-  // projection shape, BEFORE the office sees the list (so "Last digest" /
-  // counts reflect the healed state). Never throws.
-  const healedPortals = await gcPortalHealStaleMirrors(snap.docs.map((d) => d.data()));
+  // v405.1: the mirror auto-heal does NOT run here (it blew this call's 60s
+  // timeout on 2026-09-15) — the office calls gcPortalHealMirrors separately.
   // Digest observability (review finding): the office had no way to see when a
   // portal's digest last went out or that a run failed. Batch-read each unique
   // portal's meta + the run-health doc and return them alongside the links.
@@ -6293,7 +6320,7 @@ exports.gcPortalListLinks = functions.https.onCall(async (data) => {
   // Return ONLY the soak fields; never the mail doc itself (it holds the API key).
   let soakLive = null;
   try { const m = (await db.collection("gc_config").doc("mail").get()).data() || {}; soakLive = { soak: !!m.soakTo, soakTo: String(m.soakTo || "") }; } catch (e) {}
-  return { lastDigestByPortal, mailHealth, soakLive, healedPortals, links: snap.docs.map((d) => {
+  return { lastDigestByPortal, mailHealth, soakLive, links: snap.docs.map((d) => {
     const l = d.data();
     return {
       token: l.token, slug: l.slug, label: l.label, gc: l.gc, gcKey: l.gcKey, portalId: l.portalId,
@@ -6565,7 +6592,9 @@ exports.gcPortalDailyDigest = functions.pubsub
     const links = await db.collection("gc_links").where("revoked", "==", false).get();
     // v405: heal any mirror still on an older projection shape before building
     // digests from it (a digest read off a stale mirror would omit new fields).
-    await gcPortalHealStaleMirrors(links.docs.map((d) => d.data()));
+    // Budgeted (this scheduled fn has the default 60s timeout); whatever is
+    // left heals on the next office tab open or tomorrow's run.
+    try { await gcPortalHealStaleMirrors(links.docs.map((d) => d.data()), { budgetMs: 20000 }); } catch (e) {}
     const byPortal = {};
     links.docs.forEach((d) => { const l = d.data(); if (l.portalId) (byPortal[l.portalId] = byPortal[l.portalId] || []).push(l); });
     let sent = 0, portals = 0, failed = 0;
