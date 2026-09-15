@@ -2,7 +2,7 @@
 // Guards the outbound wall (functions/gcPortal.js). Exit 0 = all pass.
 "use strict";
 const {
-  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, projectJobForPortal, jobBelongsToLink,
+  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, punchView, jobIdsViewFor, projectJobForPortal, jobBelongsToLink,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -63,8 +63,9 @@ const FIXTURE = {
       rooms: [{
         name: "Garage",
         items: [
-          { id: "1", text: "Outlets <div>different heights</div>&nbsp;", done: true, fromQC: true, checkedBy: "Gage Lund", addedBy: "Koy Wilkinson" },
-          { id: "2", text: "normal crew punch item", done: false },
+          { id: "1", text: "Outlets <div>different heights</div>&nbsp;", done: true, fromQC: true, checkedBy: "Gage Lund", addedBy: "Koy Wilkinson", checkedAt: "9/14/2026", checkedAtTs: "2026-09-14T18:00:00.000Z", photos: [{ url: "https://x/PHOTOSECRET.jpg" }], note: "PUNCHNOTESECRET" },
+          { id: "2", text: "normal crew punch item", done: false, waiting: true, waitingOn: "countertop install by GC" },
+          { id: "2b", text: "GC asked for this one", done: false, fromGC: true, addedBy: "Austin" },
         ],
       }],
       general: [{ id: "3", text: "Move wafers&nbsp;closet", done: true, fromQC: true, checkedBy: "Trever Worley" }],
@@ -157,11 +158,12 @@ const json = JSON.stringify(v).toLowerCase();
   ["30' 12/2", "material contents"], ["keegan", "foreman name"], ["dailyupdates", "daily updates"],
   ["panelbeforegen", "panel snapshot"], ["side mount secret", "answer text (answers not in v1 mirror)"],
   ["storagepath", "plan file storage path"], ["275954", "plan file size"], ["insecurefile", "http plan file"],
+  ["photosecret", "punch item photo"], ["punchnotesecret", "punch item note"], ["gage lund", "punch checkedBy (full name)"], ["addedby", "punch addedBy"],
 ].forEach(([needle, label]) => t("no leak: " + label, !json.includes(needle), "found '" + needle + "'"));
 
 console.log("allowlist content present:");
 t("rough phase", v.rough.stage === "60%" && v.rough.inspection === "pass");
-t("punch open counts", v.rough.punchOpen === 2 && v.finish.punchOpen === 0, JSON.stringify([v.rough.punchOpen, v.finish.punchOpen]));
+t("punch open counts", v.rough.punchOpen === 3 && v.finish.punchOpen === 0, JSON.stringify([v.rough.punchOpen, v.finish.punchOpen]));
 t("qc items = fromQC only", v.qc.items.length === 2 && v.qc.items.every((q) => q.text && !q.text.includes("<")));
 t("qc fixer first-name only", v.qc.items[0].fixedBy === "Gage" && v.qc.items[1].fixedBy === "Trever");
 t("matterport keeps https links only", v.matterport.links.length === 1 && v.matterport.links[0].url.startsWith("https://"), JSON.stringify(v.matterport.links));
@@ -172,9 +174,32 @@ t("plans: only label/kind/url cross", Object.keys(v.plans[1]).sort().join(",") =
 t("plans: empty when the job has none", projectJobForPortal("x", { ...FIXTURE, planLink: "", planFiles: [] }).plans.length === 0);
 t("plans: http folder link dropped, missing fields safe", plansView({ planLink: "http://drive.google.com/x" }).length === 0 && plansView({}).length === 0);
 t("projection shape is stamped: PROJECTION_VERSION must be bumped when the top-level keys change",
-  PROJECTION_VERSION === 3 && Object.keys(v).sort().join(",") === "address,changeOrders,finish,hiddenPlanShares,id,matterport,name,plans,qc,questions,quickJob,quickJobStatus,returnTrips,rough,simproNo,tempPed,updatedAt",
+  PROJECTION_VERSION === 4 && Object.keys(v).sort().join(",") === "address,changeOrders,finish,hiddenPlanShares,id,matterport,name,plans,punch,qc,questions,quickJob,quickJobStatus,returnTrips,rough,simproNo,tempPed,updatedAt",
   "keys=" + Object.keys(v).sort().join(",") + " version=" + PROJECTION_VERSION);
 t("hiddenPlanShares: string ids only, capped", (() => { const r = projectJobForPortal("x", { ...FIXTURE, hiddenPlanShares: ["s1", 7, null, "s2"] }).hiddenPlanShares; return r.length === 2 && r[0] === "s1" && projectJobForPortal("x", FIXTURE).hiddenPlanShares.length === 0; })());
+console.log("punch lists (v407):");
+t("punch: counts (open incl. waiting, done, waiting)", v.punch.rough.open === 3 && v.punch.rough.done === 2 && v.punch.rough.waiting === 1, JSON.stringify([v.punch.rough.open, v.punch.rough.done, v.punch.rough.waiting]));
+t("punch: item keys are exactly the allowlist", (() => { const keys = "done,doneDate,doneTs,fromGC,text,waiting,waitingOn,where,zone"; return v.punch.rough.items.every((it) => Object.keys(it).sort().join(",") === keys); })(), JSON.stringify(Object.keys(v.punch.rough.items[0]).sort()));
+t("punch: waiting item carries its reason; non-waiting carries none", (() => { const w = v.punch.rough.items.find((it) => it.waiting); const o = v.punch.rough.items.find((it) => !it.waiting && !it.done); return w && w.waitingOn === "countertop install by GC" && o && o.waitingOn === ""; })());
+t("punch: done item carries date + ts, stripped text, zone label + room", (() => { const d = v.punch.rough.items.find((it) => it.done && it.doneDate === "9/14/2026"); return d && d.doneTs.startsWith("2026-09-14") && d.text === "Outlets different heights" && d.zone === "Main Level" && d.where === "Garage"; })(), JSON.stringify(v.punch.rough.items.filter((it) => it.done)));
+t("punch: from-GC marker", v.punch.rough.items.some((it) => it.fromGC && it.text === "GC asked for this one") && !v.punch.rough.items.find((it) => it.text === "normal crew punch item").fromGC);
+t("punch: general bucket has empty room, hotcheck labeled", (() => { const g = v.punch.rough.items.find((it) => it.text === "open general item"); return g && g.where === "" && g.zone === "Upper Level"; })());
+t("punch: open items first, done sorted newest first", (() => { const its = v.punch.rough.items; const firstDone = its.findIndex((it) => it.done); return its.slice(0, firstDone).every((it) => !it.done) && its.slice(firstDone).every((it) => it.done); })());
+t("punch: empty/garbage safe", punchView(null).open === 0 && punchView("x").items.length === 0 && punchView({ main: { rooms: [{ items: [null, { text: "" }] }] } }).items.length === 0);
+t("punch: caps (80 open / 60 done)", (() => { const big = { main: { general: Array.from({ length: 200 }, (_, i) => ({ text: "i" + i, done: i % 2 === 0, checkedAtTs: "2026-01-01T00:00:00.000Z" })) } }; const pv = punchView(big); return pv.open === 100 && pv.done === 100 && pv.items.length === 140; })());
+t("punch: waiting ignored on done items", punchView({ main: { general: [{ text: "x", done: true, waiting: true, waitingOn: "y" }] } }).waiting === 0);
+
+console.log("per-super link views (v407):");
+const LNK = [
+  { kind: "company", revoked: false, supersByJob: { j1: ["c_a", "c_b"], j2: ["c_b"] } },
+  { kind: "company", revoked: false, supersByJob: { j3: ["c_a"] } },
+  { kind: "company", revoked: true,  supersByJob: { j9: ["c_a"] } },
+  { kind: "super",   revoked: false, viewContactId: "c_a", supersByJob: { j8: ["c_a"] } },
+];
+t("union across active company links", jobIdsViewFor(LNK, "c_a").sort().join(",") === "j1,j3");
+t("revoked company link and super links never contribute", !jobIdsViewFor(LNK, "c_a").includes("j9") && !jobIdsViewFor(LNK, "c_a").includes("j8"));
+t("other contact", jobIdsViewFor(LNK, "c_b").sort().join(",") === "j1,j2");
+t("unknown / empty contact → []", jobIdsViewFor(LNK, "c_zzz").length === 0 && jobIdsViewFor(LNK, "").length === 0 && jobIdsViewFor(null, "c_a").length === 0);
 t("plans: files capped at 12", plansView({ planFiles: Array.from({ length: 20 }, (_, i) => ({ name: "f" + i, url: "https://x/" + i })) }).length === 12);
 
 console.log("cleanSupersPatch (office per-job super patch, v405):");

@@ -44260,6 +44260,18 @@ function GCPortalManager({ jobs, identity }) {
     setBusy("");
   };
   const copy = (txt) => { try { navigator.clipboard.writeText(txt); } catch(e){} };
+  // v407: a per-super child link (filter, not wall — see gcPortalCreateSuperLink).
+  // Idempotent server-side; the URL lands on the clipboard so it can be texted.
+  const makeSuperLink = async (l, c) => {
+    setBusy(l.token+"_super_"+c.id); setErr("");
+    try {
+      const r = await gc("gcPortalCreateSuperLink", { token: l.token, contactId: c.id, by: identity?.name || "" });
+      await refresh();
+      if (r && r.data && r.data.token) copy(urlOf(r.data.token));
+      toast.success((c.name||"Their")+"'s own link is ready — copied to your clipboard");
+    } catch(e) { setErr(e.message||"Couldn't create their link"); }
+    setBusy("");
+  };
   // v405 office-side super assignment: ONE job's field-path patch per save,
   // then reload links so the card shows exactly what the server holds. The
   // child shows the error inline; busy is cleared either way.
@@ -44573,13 +44585,15 @@ function GCPortalManager({ jobs, identity }) {
       </div>
 
       {/* existing links */}
-      <div style={{fontWeight:700,marginBottom:6,color:"#1B1F24"}}>Existing links {links?"("+links.length+")":""}</div>
+      <div style={{fontWeight:700,marginBottom:6,color:"#1B1F24"}}>Existing links {links?"("+links.filter(x=>x.kind!=="super").length+")":""}</div>
       {links===null ? <div style={{color:"#8A93A3"}}>Loading…</div> : null}
       {links && links.length===0 ? <div style={{color:"#8A93A3",fontSize:12.5}}>No portal links yet.</div> : null}
-      {(links||[]).map(l=>{
+      {(links||[]).filter(l=>l.kind!=="super").map(l=>{
         const linkJobs = activeJobs.filter(j=>(_gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id)) && !(l.jobIdsExclude||[]).includes(j.id));
         const count = linkJobs.length;
         const isEditing = editing===l.token;
+        // v407: per-super child links render nested under their company card
+        const kids = (links||[]).filter(x=>x.kind==="super" && x.gcKey===l.gcKey);
         return (
           <div key={l.token} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:l.revoked?0.6:1}}>
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -44615,9 +44629,39 @@ function GCPortalManager({ jobs, identity }) {
                 {/* P0-7: contacts + per-job super assignments, previously invisible */}
                 <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #F0F2F5",fontSize:12}}>
                   <div style={{fontWeight:600,color:"#1B1F24",marginBottom:3}}>Contacts {l.contacts&&l.contacts.length?"("+l.contacts.length+")":""}</div>
-                  {(l.contacts||[]).length ? (l.contacts||[]).map((c,i)=>(
-                    <div key={c.id||i} style={{color:"#5E6670"}}>{c.name}{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}{c.email===false?" · (no email)":""}</div>
-                  )) : <div style={{color:"#8A93A3"}}>No contacts yet — click Edit to add.</div>}
+                  {(l.contacts||[]).length ? (l.contacts||[]).map((c,i)=>{
+                    const kid = kids.find(k=>k.viewContactId===c.id && !k.revoked);
+                    const kb = l.token+"_super_"+c.id;
+                    return (
+                      <div key={c.id||i} style={{color:"#5E6670",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                        <span>{c.name}{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}{c.email===false?" · (no email)":""}</span>
+                        {!l.revoked && c.id ? (kid
+                          ? <span style={{fontSize:10.5,fontWeight:700,color:"#2E477D",background:"#E9EEF8",borderRadius:99,padding:"1px 7px"}}>has own link</span>
+                          : <button disabled={busy===kb} onClick={()=>makeSuperLink(l,c)} style={{...B.gbtn,padding:"2px 9px",fontSize:11.5}}>{busy===kb?"…":"Their own link"}</button>) : null}
+                      </div>
+                    );
+                  }) : <div style={{color:"#8A93A3"}}>No contacts yet — click Edit to add.</div>}
+                  {kids.length ? (
+                    <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:6}}>
+                      {kids.map(k=>(
+                        <div key={k.token} style={{background:"#F7F9FC",border:"1px solid #CDD9EC",borderRadius:8,padding:"7px 10px",opacity:k.revoked?0.6:1}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                            <b style={{color:"#1B1F24"}}>{k.viewName} — own link</b>
+                            <span style={{fontSize:10.5,fontWeight:700,color:"#2E477D",background:"#E9EEF8",borderRadius:99,padding:"1px 7px"}}>SUPER LINK</span>
+                            {k.revoked
+                              ? <span style={{fontSize:11,fontWeight:700,color:"#8A2A2A",background:"#FBE9E9",borderRadius:99,padding:"1px 8px"}}>REVOKED</span>
+                              : <span style={{fontSize:11.5,color:"#8A93A3"}}>shows {(k.jobIdsView||[]).length} job{(k.jobIdsView||[]).length===1?"":"s"} · no email</span>}
+                            <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                              {!k.revoked ? <button onClick={()=>copy(urlOf(k.token))} style={B.gbtn}>Copy link</button> : null}
+                              <button disabled={busy===k.token} onClick={()=>call("gcPortalSetRevoked",{token:k.token,revoked:!k.revoked},k.token)} style={{...B.gbtn,borderColor:k.revoked?"#CDE6D7":"#E5B4B4",color:k.revoked?"#2C5C40":"#8A2A2A"}}>{k.revoked?"Reactivate":"Revoke"}</button>
+                            </span>
+                          </div>
+                          {!k.revoked ? <code style={{display:"block",marginTop:6,background:"#F4F6F8",borderRadius:6,padding:"3px 7px",fontSize:11,color:"#5E6670",wordBreak:"break-all"}}>{urlOf(k.token)}</code> : null}
+                          {!k.revoked ? <div style={{fontSize:11.5,color:"#5E6670",marginTop:4}}>Follows the assignments below — assign or unassign {k.viewName} on a job and this link updates by itself.</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {/* v405: per-job supers are SET here, not just listed — what the office picks is what the portal shows */}
                   <div style={{fontWeight:600,color:"#1B1F24",margin:"8px 0 4px"}}>Their super on each job <span style={{fontWeight:400,color:"#8A93A3"}}>— what you set here is what their portal shows</span></div>
                   <GCOfficeSuperAssign link={l} jobs={linkJobs} allJobs={jobs} busy={busy===l.token+"_super"} onSave={(jobId, ids)=>saveSupers(l, jobId, ids)}/>
@@ -47817,6 +47861,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Huddle** · 'shipped' · 'HuddleSheet' · weekly team huddle prep
 - **Subcontractors** · 'shipped' · external contractor view
 - **Contractors** · 'shipped 2026-07-21' · 'SW v352' · 'GCPortalManager' + 'GCPortalInbox' · the GC/contractor portal management promoted out of Settings into its own top-level nav tab (gated 'users.manage') — per-contractor link create/edit/revoke, contacts, per-job super assignment, send-test-digest, and the two-way requests inbox all in one place. Settings keeps a one-line pointer to the tab. Phase 1 of the Contractors build; the SimPro-derived GC auto-list (from 'job.gc') + per-job super auto-fill is the next phase — spec in '08-Specs/Contractors Tab Spec.md'
+  - **Per-super links + live punch lists on the portal** · 'shipped 2026-09-15' · 'SW v407' · Koy: *"create a link for each individual super … so they only see the jobs they are in charge of"*, *"a live view of our punch lists … so they can see what we still need to do"*, closed items visible for progress, and *"making it obvious when an item is waiting so they know what we are waiting on"*. Mockup-first (clickable spec: https://claude.ai/artifact/UcyecXnMGNtrPLjZCXYVqi), decisions locked before code. **(1) Super links** — every contact on a company link card gets **"Their own link"** ('gcPortalCreateSuperLink { token, contactId }', idempotent per contact, URL copied to the clipboard). The child is a 'gc_links' doc on the SAME gcKey + portalId (same mirror) with 'kind:"super"', 'viewContactId', 'viewName', and a server-maintained **'jobIdsView'** = union over the GC's ACTIVE company links of the jobs whose per-job assignment names that contact ('gcPortal.jobIdsViewFor', pure, tested). **Filter, not wall** (Koy): the portal page subscribes to the company mirror as before and narrows to 'jobIdsView'; a curious super could see sibling jobs of their own company via the network tab, which we accepted. **No contacts on a super link** (email keeps routing through the company link's per-job assignment — no double digests), no includes/excludes (it never shapes the mirror; 'gcPortalGcMembership' skips 'kind:"super"'), and **no parent token on the doc** (the super can read their own link doc). 'gcPortalSyncSuperViews(gcKey)' rewrites every child's 'jobIdsView' after ANY assignment change — the office picker ('gcPortalUpdateLink supersByJobPatch') or the GC's own picker ('gcPortalSubmit assign') — so the slice never drifts. A super link **can't reassign** ('assign' → permission-denied; the detail shows a read-only "You're on this job" line). **Revoke cascade:** revoking the last company link revokes every child with it (mirror torn down as before; the rotation branch already moved siblings, children included); revoking a child touches only that child; a child can't be reactivated while no company link is active. Office card: contacts show "has own link" or the button; child rows nest under the company card (label, SUPER LINK pill, "shows N jobs · no email", Copy link, Revoke/Reactivate). Portal: "<Name>'s jobs" header line, "Jobs with you" tile, super filter row hidden, empty state "No jobs assigned to you yet", name prefilled on sends. **(2) Live punch lists** — 'projectJobForPortal' now carries 'punch: { rough, finish }' ('punchView', 'PROJECTION_VERSION' 4, mirrors self-heal): per item ONLY zone (Main Level / Upper Level / Basement …), room, text, 'done' + 'doneDate' (M/D/YYYY) + 'doneTs', 'waiting' + 'waitingOn', and 'fromGC' — **never photos, notes, checkedBy, or addedBy** (leak-guarded in 'gcportal-test', key list pinned). Open items all cross (cap 80); done items newest-first (cap 60) and the CLIENT applies the 14-day window so the projection hash is time-independent. Detail modal ('GCPunchSection', active phase first): progress bar (green done / amber waiting), then an amber **Waiting — N** box listing each waiting item with its reason and location, then every open item grouped by floor · room (○ open, ◐ waiting with its badge, ✓ done struck through with the date, "from <GC>" on GC-added items), "N more finished earlier · show" for older done items, and a fully-done phase collapsed to "All done — last item finished <date> · show them". Board: a **Punch items waiting** amber tile plus per-card "Rough/Finish punch · N open · M done" and "N waiting" tags; 'eachPunchItem' now passes the zone as a third arg (existing callers unaffected). Add-item keeps the existing GC request flow. Deploy: 'functions:gcPortalCreateSuperLink,functions:gcPortalCreateLink,functions:gcPortalUpdateLink,functions:gcPortalSetRevoked,functions:gcPortalSubmit,functions:gcPortalListLinks,functions:gcPortalBackfill,functions:gcPortalHealMirrors,functions:gcPortalDailyDigest,functions:onJobUpdate' BEFORE the push. Why it can't lose data: new writes are (a) a new 'gc_links' doc per super link and (b) 'jobIdsView' on those child docs only — company links are never rewritten by the sync; the cascade sets 'revoked:true' (the same reversible flag Revoke has always used); the projection change is additive (a new 'punch' key on derived mirror docs); 'jobs/{id}' is never written; no rules change ('gc_links' stays client-write-denied), no loader change, no job field touched.
   - **Live FieldInk plans on the portal + auto-heal moved off the list call** · 'shipped 2026-09-15' · 'SW v406' · Koy, minutes after v405 hit: *"I would like the live link plans built into these as well"* — and the first Contractors-tab open after v405 showed an **"internal"** banner with an empty link list. **(1) The heal bug:** v405 ran 'gcPortalHealStaleMirrors' INSIDE 'gcPortalListLinks'; seven portals × ~18s (each rebuild re-read the whole jobs collection) blew that callable's 60s timeout, so the office got 'internal' and 'links=[]' (which also made every linked GC reappear in the discovery panel as "no portal yet"). The writes it managed before the kill were sound (six of seven stamped). Fix: the healer takes ONE shared jobs snapshot, runs under a **time budget** and reports '{healed, remaining}'; it lives in a new dedicated callable **'gcPortalHealMirrors'** ('runWith timeoutSeconds 540') that the Contractors tab calls right AFTER the list loads (once per mount; toast + reload only if something was rebuilt; a failure never touches the list), and the nightly digest keeps a 20s-budgeted pass. 'gcPortalListLinks' is fast again. **(2) Live plans:** the portal's Documents section now lists the job's **live FieldInk plans** — the same source as the office's LIVE PLANS — FIELDINK section, the field-ink project's 'shares' collection by 'ccJobId', which FieldInk's own rules make world-readable — as a **live client listener** on the portal page (one per mirrored job, re-attached only when the job set changes), NOT a projection: a plan shared or revoked in FieldInk appears/disappears within seconds, no rebuild, no version churn. Each row opens the FieldInk viewer with a **GC-attributed crew tag** in the hash ('?crew=gc:<gcKey>&crewName=<link label>', the same 'crewTagFromLocation' contract as the office's personalized Open) so a Question/Problem pin a GC drops forwards to the job's Questions attributed to their company. The office **hide** on the job ('hiddenPlanShares') is honored: the mirror now projects those ids ('PROJECTION_VERSION' 3, key-list check updated) and the portal filters them out. Only ccJobId-assigned shares show (legacy folder-inferred shares don't). Deploy: 'functions:gcPortalHealMirrors,functions:gcPortalListLinks,functions:gcPortalDailyDigest,functions:gcPortalBackfill,functions:onJobUpdate,functions:gcPortalCreateLink,functions:gcPortalSetRevoked,functions:gcPortalUpdateLink' BEFORE the push. Why it can't lose data: no new write path — the heal rewrites only derived 'gc_portal' mirror docs (rebuilt from jobs by design) and now does less of it per call; the portal's FieldInk read is a read on a collection FieldInk already exposes publicly; 'hiddenPlanShares' is an additive, ids-only mirror key; no rules change on either project, no loader change, no job field touched.
   - **Office sets their super per job + portal plans + un-removable super fix** · 'shipped 2026-09-15' · 'SW v405' · Koy: *"you cannot remove a selected super from their side, and when a super is selected on the CC they should be made the super on that side as well. CC is the source of truth always."* and *"no plans are appearing there at all."* Three things, one ship. **(1) Office-side super picker** ('GCOfficeSuperAssign', on every link card under Contacts): each job on the portal (name-matched + force-included − hidden) lists its current super chips with **Assign / Change** → chips of the link's contacts → **Save**, which calls 'gcPortalUpdateLink' with a new 'supersByJobPatch: {jobId: ids}' — the server ('gcPortal.cleanSupersPatch', same limits as the GC's own 'assign': ≤6 ids/job, ≤40 chars, deduped, tag-stripped, job id ≤64 with no field-path specials) writes ONE field path 'supersByJob.<jobId>' per save, never the whole map, so an office click can't clobber a super the GC set on another job a moment earlier; the portal's live 'gc_links' listener repaints the contractor's chips as it lands. This is the Phase 2b "per-job super assignment" from the Contractors Tab Spec, minus the SimPro seed. The old read-only "Per-job assignments" lines are gone (replaced by the picker). **(2) Root cause of "can't remove"** — found in live data: the Robison link still carries pre-P0-2 NAME-keyed entries ('"Austin"', '"Robison Office"') that match no contact id, so 'GCSuperAssign' rendered them as raw chips in view mode but hid them in edit mode (the roster only lists contacts) — they rode along in the draft and could never be unticked, on either side. Both pickers now render such orphans (legacy names, or a contact the office since removed) as their own removable chip: amber **"· old entry"** in the office, **"· not on your team list"** on the portal; Save with none left clears the job. **(3) Plans on the portal** — the Documents section had only a placeholder; nothing was ever projected. 'projectJobForPortal' now carries 'plans: plansView(job)' = the job's **plans folder link** ('planLink', https-only) + its **uploaded plan files** ('planFiles' from the Plans & Links tab — ONLY 'name'+'url' cross the wall; 'storagePath'/'size'/'type' are leak-guarded in 'gcportal-test'; https-only; 12 max; names tag-stripped). Not projected on purpose: lighting/panel schedule links and FieldInk live-plan shares (add deliberately if wanted). Portal renders **Plans folder** and **Plans — <file>** links above the Matterport rows; a pre-v405 mirror with no 'plans' key falls back to the old placeholder. **(4) Mirrors auto-rebuild** (Koy: *"can you make it so they all auto rebuild?"*): 'gcPortal.PROJECTION_VERSION' (now 2) is stamped on the mirror meta doc by every rebuild; 'gcPortalHealStaleMirrors' rebuilds any ACTIVE portal whose stamp is older, run by 'gcPortalListLinks' (so opening the Contractors tab heals everything and toasts *"Refreshed N contractor portals to the current layout"*) and by the nightly 'gcPortalDailyDigest' before it builds digests — one rebuild per shared portalId, capped at 25, failures logged never thrown. Bump the version whenever the projection's shape changes; a prebuild check pins the top-level key list to the version so a shape change without a bump fails the build. No more Rebuild-per-link after a deploy (the button stays for membership fixes). 20 new prebuild checks. Deploy: 'functions:gcPortalUpdateLink,functions:gcPortalListLinks,functions:gcPortalDailyDigest,functions:gcPortalBackfill,functions:onJobUpdate,functions:gcPortalCreateLink,functions:gcPortalSetRevoked' (every function that projects, patches, or heals a link) BEFORE the app push, or the office Save is a server no-op. Why it can't lose data: the only new write is a per-job 'supersByJob.<jobId>' field-path update on 'gc_links/{token}' — the exact shape the GC-side 'assign' has used since v340 — behind the live-PIN 'requireAdmin' gate; the projection change is additive (a new 'plans' key on the mirror doc, no existing key touched, 'jobs/{id}' never written); no rules change ('gc_links' stays client-write-denied), no loader change, no job field added or renamed.
   - **Discovery: contractors on your jobs with no portal yet** · 'shipped 2026-07-21' · 'SW v353' · a panel atop the Contractors tab that groups live jobs by the normalized '_gcKeyOf(job.gc)' (byte-identical to the server membership key 'gcKeyOf' in 'functions/gcPortal.js'), drops GCs that already have a non-revoked link, and lists the rest **most-jobs-first** so repeat GCs float up and one-off names sink. "Create portal" pre-fills the create form and the new link auto-matches those jobs via the same key. Client-only (reads the 'gc' field already on every job), no backend change. Near-duplicate variants (e.g. "City Point" vs "City Point Homes") list separately by design — merge them with 'jobIdsInclude' when creating the link (manual curation, per Koy's "portals first so I can clean it up")
@@ -52241,12 +52286,19 @@ function GCPortalPage({ token, deepJobId }) {
   };
   const actionCount = (j) => tagsOf(j).filter(t=>t.k==="act").length;
 
-  const filtered = superFilter ? jobs.filter(j=>supersOf(j.id).includes(superFilter)) : jobs;
+  // v407 per-super link: the link IS the filter. Filter, not wall (Koy):
+  // the company mirror is what the page subscribes to; a super link narrows it
+  // to the jobs the server put on link.jobIdsView.
+  const isSuper = link.kind === "super";
+  const viewIds = new Set(isSuper ? (Array.isArray(link.jobIdsView) ? link.jobIdsView : []).map(String) : []);
+  const jobsV = isSuper ? jobs.filter(j => viewIds.has(String(j.id))) : jobs;
+  const filtered = (superFilter && !isSuper) ? jobsV.filter(j=>supersOf(j.id).includes(superFilter)) : jobsV;
   const actives = filtered.filter(j=>!isDone(j)).sort((a,b)=>actionCount(b)-actionCount(a));
   const dones = filtered.filter(isDone);
   // tiles scope to the active filter so counts always match the cards shown
   const needTotal = filtered.reduce((s,j)=> s + actionCount(j), 0);
   const rtNeeds = filtered.reduce((s,j)=> s + (j.returnTrips||[]).filter(rt=>rt.needsSchedule && !rt.signedOff).length, 0);
+  const punchWaiting = filtered.reduce((s,j)=> s + _gcPunchWaiting(j), 0); // v407
   // header freshness from the newest mirror doc (honest LIVE indicator)
   const newestMs = jobs.reduce((m,j)=> Math.max(m, Date.parse(j.updatedAt)||0), 0);
   const stale = newestMs && (Date.now()-newestMs > 86400000);
@@ -52254,7 +52306,7 @@ function GCPortalPage({ token, deepJobId }) {
 
   // roster of supers seen across this GC's jobs (for the filter row)
   const rosterCounts = {};
-  jobs.forEach(j => supersOf(j.id).forEach(n => { rosterCounts[n]=(rosterCounts[n]||0)+1; }));
+  jobsV.forEach(j => supersOf(j.id).forEach(n => { rosterCounts[n]=(rosterCounts[n]||0)+1; }));
 
   const tag = (t,i) => (
     <span key={i} style={{fontSize:12,fontWeight:t.k==="act"?700:600,borderRadius:8,padding:"5px 10px",
@@ -52271,7 +52323,7 @@ function GCPortalPage({ token, deepJobId }) {
   );
 
   const card = (j) => {
-    const tg = tagsOf(j); const sup = supersOf(j.id);
+    const tg = tagsOf(j); const sup = supersOf(j.id); const pt = _gcPunchTags(j);
     const bits = [];
     if(j.rough && j.rough.inspection==="pass") bits.push("Rough inspection passed");
     if(j.finish && j.finish.inspection==="pass") bits.push("Final passed");
@@ -52285,10 +52337,13 @@ function GCPortalPage({ token, deepJobId }) {
           <span style={{fontSize:12,color:P.muted}}>{j.address}</span>
           <span style={{marginLeft:"auto",fontSize:11,color:P.muted}}>updated {j.updatedAt ? _gcShortDate(j.updatedAt) : ""}</span>
         </div>
-        {(tg.length || sup.length) ? (
+        {(tg.length || sup.length || pt.length) ? (
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
             {tg.map(tag)}
             {sup.map((s,i)=><span key={"s"+i} style={{fontSize:12,fontWeight:600,borderRadius:8,padding:"5px 10px",border:"1px solid "+P.line,color:P.dim}}>Super: {s}</span>)}
+            {pt.map((t,i)=><span key={"pt"+i} style={t.k==="wait"
+              ? {fontSize:12,fontWeight:700,borderRadius:8,padding:"5px 10px",border:"1px solid #D9BC6B",background:"#F3E9CF",color:"#6E5212"}
+              : {fontSize:12,fontWeight:600,borderRadius:8,padding:"5px 10px",border:"1px solid transparent",background:accent+"14",color:accent}}>{t.text}</span>)}
           </div>
         ) : null}
         {!isDone(j) && !j.quickJob ? (
@@ -52333,23 +52388,32 @@ function GCPortalPage({ token, deepJobId }) {
         </div>
       </div>
 
+      {/* v407: whose slice this is (per-super link) */}
+      {isSuper ? (
+        <div style={{margin:"14px 0 -6px",display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:17,fontWeight:800,color:P.ink}}>{_gcTxt(link.viewName||"Your")}'s jobs</span>
+          <span style={{fontSize:12,color:P.muted}}>Only the jobs your office has you on. Ask them to change it.</span>
+        </div>
+      ) : null}
+
       {/* summary tiles */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap",margin:"16px 0"}}>
-        {[["Jobs with us", filtered.length, false],
-          ["Need your input", needTotal, needTotal>0],
-          ["Return trips — need scheduling", rtNeeds, rtNeeds>0],
-          ["Completed & closed", dones.length, false]].map(([lbl,n,hot],i)=>(
-          <div key={i} style={{background:hot?accent+"0F":P.card,border:"1px solid "+(hot?accent+"55":P.line),borderRadius:10,padding:"10px 16px",minWidth:118}}>
-            <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: hot?accent:P.ink}}>{n}</b>
-            <span style={{fontSize:11,color:P.dim,textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>{lbl}</span>
+        {[[isSuper?"Jobs with you":"Jobs with us", filtered.length, false, false],
+          ["Need your input", needTotal, needTotal>0, false],
+          ["Punch items waiting", punchWaiting, false, punchWaiting>0],
+          ["Return trips — need scheduling", rtNeeds, rtNeeds>0, false],
+          ["Completed & closed", dones.length, false, false]].map(([lbl,n,hot,warm],i)=>(
+          <div key={i} style={{background:warm?"#F3E9CF":(hot?accent+"0F":P.card),border:"1px solid "+(warm?"#D9BC6B":(hot?accent+"55":P.line)),borderRadius:10,padding:"10px 16px",minWidth:118}}>
+            <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: warm?"#6E5212":(hot?accent:P.ink)}}>{n}</b>
+            <span style={{fontSize:11,color:warm?"#6E5212":P.dim,textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>{lbl}</span>
           </div>
         ))}
       </div>
 
-      {/* super filter row */}
-      {Object.keys(rosterCounts).length ? (
+      {/* super filter row (company links only — a super link IS the filter) */}
+      {!isSuper && Object.keys(rosterCounts).length ? (
         <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:12}}>
-          {[["All jobs ("+jobs.length+")",null]].concat(Object.keys(rosterCounts).map(n=>[n+" ("+rosterCounts[n]+")",n])).map(([lbl,val],i)=>(
+          {[["All jobs ("+jobsV.length+")",null]].concat(Object.keys(rosterCounts).map(n=>[n+" ("+rosterCounts[n]+")",n])).map(([lbl,val],i)=>(
             <button key={i} onClick={()=>setSuperFilter(val)} style={{border:"1px solid "+(superFilter===val?accent:P.line),
               background:superFilter===val?accent:P.card,color:superFilter===val?"#fff":P.dim,borderRadius:99,
               padding:"5px 13px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{lbl}</button>
@@ -52359,7 +52423,7 @@ function GCPortalPage({ token, deepJobId }) {
 
       {/* cards */}
       {actives.length===0 && dones.length===0 ? (
-        <div style={{padding:"60px 0",textAlign:"center",color:P.muted}}>No jobs on your board yet — they'll appear here as we start them.</div>
+        <div style={{padding:"60px 0",textAlign:"center",color:P.muted}}>{isSuper ? "No jobs assigned to you yet — ask your office to put you on a job, and it shows up here on its own." : "No jobs on your board yet — they'll appear here as we start them."}</div>
       ) : null}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))",gap:14}}>
         {actives.map(card)}
@@ -52496,6 +52560,95 @@ function _gcBar(P, label, pct, col){
 // user hitting a network error can never break or blank the page, so each box
 // owns explicit null|sending|done|error state and swallows throws.
 const _gcField = (P) => ({ width:"100%", boxSizing:"border-box", border:"1px solid "+P.line, borderRadius:8, padding:"8px 10px", fontSize:13, color:P.ink, background:P.card, fontFamily:"inherit", resize:"vertical" });
+// v407 punch helpers (portal). A mirror written before v407 has no `punch` key.
+const _gcPunchPhase = (j, k) => { const p = j && j.punch && typeof j.punch === "object" ? j.punch[k] : null; return (p && Array.isArray(p.items)) ? p : null; };
+const _gcPunchWaiting = (j) => ["rough","finish"].reduce((s,k)=>{ const p=_gcPunchPhase(j,k); return s + (p ? (Number(p.waiting)||0) : 0); }, 0);
+const _gcPunchTags = (j) => {
+  const out = [];
+  ["rough","finish"].forEach(k => { const p = _gcPunchPhase(j,k); if (!p || (!p.open && !p.done)) return;
+    out.push({ k:"punch", text: (k==="rough"?"Rough":"Finish")+" punch · "+(p.open||0)+" open · "+(p.done||0)+" done" }); });
+  const w = _gcPunchWaiting(j); if (w) out.push({ k:"wait", text: w+" waiting" });
+  return out;
+};
+const _gcDoneMs = (it) => { const t = Date.parse(it.doneTs||""); if (t) return t; const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(it.doneDate||""); return m ? new Date(+m[3], +m[1]-1, +m[2]).getTime() : 0; };
+
+// One punch phase on the job detail (v407). Waiting items first in an amber
+// box with their reason (Koy: "obvious when an item is waiting so they know
+// what we are waiting on"), then every open item grouped by floor/room, then
+// items finished in the last 14 days struck through for progress; older ones
+// collapse into a count. A phase with nothing open collapses to its summary.
+function GCPunchSection({ P, label, v, gcLabel }) {
+  const [showOlder, setShowOlder] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const total = (Number(v.open)||0) + (Number(v.done)||0);
+  if (!total) return null;
+  const items = Array.isArray(v.items) ? v.items : [];
+  const W = { bg:"#F3E9CF", ink:"#6E5212", line:"#D9BC6B" }, G = "#2C5C40";
+  const cutoff = Date.now() - 14*86400000;
+  const openItems = items.filter(it => it && !it.done);
+  const doneAll = items.filter(it => it && it.done);
+  const doneRecent = doneAll.filter(it => _gcDoneMs(it) >= cutoff);
+  const doneOlder = doneAll.filter(it => _gcDoneMs(it) < cutoff);
+  const doneOlderCount = Math.max(0, (Number(v.done)||0) - doneRecent.length);
+  const waitingItems = openItems.filter(it => it.waiting);
+  const pctDone = Math.round((Number(v.done)||0)/total*100);
+  const pctWait = Math.round((Number(v.waiting)||0)/total*100);
+  const whereOf = (it) => [it.zone, it.where].map(_gcTxt).filter(Boolean).join(" · ") || "General";
+  const group = (list) => { const m = new Map(); list.forEach(it => { const k = whereOf(it); if (!m.has(k)) m.set(k, []); m.get(k).push(it); }); return [...m.entries()]; };
+  const linkBtn = {fontSize:11.5,color:P.accent,background:"none",border:"none",cursor:"pointer",fontWeight:700,fontFamily:"inherit",padding:0,textDecoration:"underline"};
+  const whereHead = (t) => <div style={{fontSize:11,color:P.muted,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",margin:"9px 0 4px"}}>{t}</div>;
+  const shortDate = (d) => _gcTxt(d).replace(/\/\d{4}$/,"");
+  const row = (it, i) => (
+    <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",fontSize:12.5,color:it.done?P.muted:P.dim,padding:"3px 0",flexWrap:"wrap"}}>
+      <span style={{width:16,flex:"none",fontWeight:800,color:it.done?G:(it.waiting?W.ink:P.ink)}}>{it.done?"✓":(it.waiting?"◐":"○")}</span>
+      <span style={{textDecoration:it.done?"line-through":"none"}}>{_gcTxt(it.text)}</span>
+      {it.done && it.doneDate ? <span style={{fontSize:11,color:P.muted}}>done {shortDate(it.doneDate)}</span> : null}
+      {it.waiting ? <span style={{fontSize:10.5,fontWeight:700,borderRadius:99,padding:"1px 7px",background:W.bg,color:W.ink,border:"1px solid "+W.line}}>{it.waitingOn ? "Waiting on: "+_gcTxt(it.waitingOn) : "Waiting"}</span> : null}
+      {it.fromGC ? <span style={{fontSize:10.5,fontWeight:800,borderRadius:99,padding:"1px 7px",background:P.accent+"14",color:P.accent}}>from {_gcTxt(gcLabel)}</span> : null}
+    </div>
+  );
+  const allDone = !(Number(v.open)||0);
+  const expanded = !allDone || showAll;
+  return (
+    <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"11px 14px"}}>
+      <h4 style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:P.muted,margin:"0 0 7px"}}>{label}{allDone ? "" : " — what's left on our side"}</h4>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:8}}>
+        <div style={{flex:1,minWidth:160,height:8,borderRadius:99,background:P.line,overflow:"hidden",display:"flex"}}>
+          <div style={{width:pctDone+"%",background:G}}/><div style={{width:pctWait+"%",background:W.line}}/>
+        </div>
+        <span style={{fontSize:12.5,fontWeight:700,color:P.dim,fontVariantNumeric:"tabular-nums"}}>{Number(v.done)||0} of {total} done{v.open?" · "+v.open+" open":""}{v.waiting?" · "+v.waiting+" waiting":""}</span>
+      </div>
+      {allDone ? (
+        <div style={{fontSize:12,color:P.muted}}>All done{doneAll[0]&&doneAll[0].doneDate?" — last item finished "+shortDate(doneAll[0].doneDate):""} · <button onClick={()=>setShowAll(x=>!x)} style={linkBtn}>{showAll?"hide":"show them"}</button></div>
+      ) : null}
+      {expanded ? (
+        <Fragment>
+          {waitingItems.length ? (
+            <div style={{border:"1px solid "+W.line,background:W.bg,borderRadius:9,padding:"9px 12px",margin:"6px 0 10px"}}>
+              <div style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:W.ink,fontWeight:700}}>Waiting — {waitingItems.length}</div>
+              {waitingItems.map((it,i)=>(
+                <div key={"w"+i} style={{display:"flex",gap:8,alignItems:"flex-start",fontSize:12.5,color:W.ink,marginTop:5}}>
+                  <span>◐</span>
+                  <div><b style={{fontWeight:800}}>{_gcTxt(it.text)}</b>{it.waitingOn?" · Waiting on: "+_gcTxt(it.waitingOn):""}<div style={{fontSize:11.5,opacity:.85}}>{whereOf(it)}</div></div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {group(openItems.concat(showAll ? doneAll : doneRecent)).map(([where, list]) => (
+            <div key={where}>{whereHead(where)}{list.map(row)}</div>
+          ))}
+          {!showAll && doneOlderCount > 0 ? (
+            <div style={{fontSize:12,color:P.muted,marginTop:4}}>{doneOlderCount} more finished earlier · <button onClick={()=>setShowOlder(x=>!x)} style={linkBtn}>{showOlder?"hide":"show"}</button></div>
+          ) : null}
+          {showOlder && !showAll ? group(doneOlder).map(([where, list]) => (
+            <div key={"o"+where}>{whereHead(where)}{list.map(row)}</div>
+          )) : null}
+        </Fragment>
+      ) : null}
+    </div>
+  );
+}
+
 const _gcMiniBtn = (P) => ({ border:"1px solid "+P.line, background:P.card, color:P.accent, borderRadius:8, fontSize:12, fontWeight:700, padding:"5px 11px", cursor:"pointer", fontFamily:"inherit" });
 const _gcPrimaryBtn = (P) => ({ border:"none", background:P.accent, color:"#fff", borderRadius:8, fontSize:12.5, fontWeight:700, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit" });
 
@@ -52769,7 +52922,7 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
   // Who's submitting — remembered per portal so the office sees a name on
   // requests. Optional; blank is fine (the GC company label is always on file).
   const _whoKey = "gcportal_who_" + (token || "");
-  const [who, setWho] = useState(() => { try { return localStorage.getItem(_whoKey) || ""; } catch(e){ return ""; } });
+  const [who, setWho] = useState(() => { try { return localStorage.getItem(_whoKey) || (link && link.kind==="super" ? String(link.viewName||"") : ""); } catch(e){ return ""; } });
   const setWhoP = (v) => { setWho(v); try { localStorage.setItem(_whoKey, v); } catch(e){} };
   // Fire a gcPortalSubmit. Never throws to the caller's render — GCSendBox
   // catches, but we also guard the token here.
@@ -52865,8 +53018,21 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
           ));
         })()}
 
-        {/* per-job super assignment (GC self-service — drives filter + email routing) */}
-        {sec("Your team on this job", (
+        {/* v407: live punch lists — active phase first */}
+        {(()=>{
+          const r = _gcPunchPhase(j,"rough"), f = _gcPunchPhase(j,"finish");
+          const order = (r && !r.open && f && (f.open||f.done)) ? [["finish",f,"Finish punch"],["rough",r,"Rough punch"]] : [["rough",r,"Rough punch"],["finish",f,"Finish punch"]];
+          return order.map(([k,v,lbl]) => v && (v.open||v.done) ? <GCPunchSection key={"punch"+k} P={P} label={lbl} v={v} gcLabel={link.label}/> : null);
+        })()}
+
+        {/* per-job super assignment (GC self-service — drives filter + email routing).
+            A per-super link can't reassign (server refuses too) — read-only line. */}
+        {sec("Your team on this job", link.kind==="super" ? (
+          <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+            <span style={{border:"1px solid "+P.accent,background:P.accent+"14",color:P.accent,borderRadius:999,fontSize:12,fontWeight:700,padding:"5px 12px"}}>{_gcTxt(link.viewName||"You")}</span>
+            <span style={{fontSize:12,color:P.muted}}>You're on this job. Your office sets who runs which job — ask them to change it.</span>
+          </div>
+        ) : (
           <GCSuperAssign P={P} link={link} jobId={j.id} onAssign={(supers)=>gcSubmit({ type:"assign", supers })}/>
         ))}
 

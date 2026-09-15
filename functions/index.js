@@ -5734,6 +5734,9 @@ async function gcPortalGcMembership(gcKey) {
   let portalId = null;
   ls.docs.forEach((d) => {
     const l = d.data();
+    // v407: per-super child links carry no membership of their own — they show
+    // a filtered view of the company mirror — so they never shape it.
+    if (l.kind === "super") return;
     // Excludes are a STICKY GC-level privacy decision: honor them even from a
     // REVOKED link, so revoking one link can never silently un-hide a job that
     // a sibling link still shows on the shared mirror.
@@ -5745,6 +5748,29 @@ async function gcPortalGcMembership(gcKey) {
   });
   if (!portalId) return null; // no active link → no mirror (matches teardown)
   return { gcKey, portalId, jobIdsInclude: [...inc], jobIdsExclude: [...exc] };
+}
+
+// v407: keep every per-super child link's `jobIdsView` in step with the GC's
+// assignments. Called after ANY supersByJob change (office picker, GC's own
+// picker) and on super-link create. Pure derivation (gcPortal.jobIdsViewFor)
+// over all of the GC's links; writes only child links whose list changed.
+async function gcPortalSyncSuperViews(gcKey) {
+  if (!gcKey) return 0;
+  const ls = await db.collection("gc_links").where("gcKey", "==", gcKey).get();
+  const all = ls.docs.map((d) => d.data());
+  const batch = db.batch();
+  let n = 0;
+  ls.docs.forEach((d) => {
+    const l = d.data();
+    if (l.kind !== "super" || l.revoked === true || !l.viewContactId) return;
+    const next = gcPortal.jobIdsViewFor(all, l.viewContactId);
+    const cur = Array.isArray(l.jobIdsView) ? l.jobIdsView : [];
+    if (next.length === cur.length && next.every((x, i) => x === cur[i])) return;
+    batch.update(d.ref, { jobIdsView: next, updatedAt: new Date().toISOString() });
+    n++;
+  });
+  if (n) await batch.commit();
+  return n;
 }
 
 // Rebuild a GC's whole mirror: full jobs scan → project members → write
@@ -5884,6 +5910,46 @@ exports.gcPortalCreateLink = functions.https.onCall(async (data) => {
   return { token, slug, portalId, jobCount };
 });
 
+// v407 — per-super link (Koy: "create a link for each individual super … so
+// they only see the jobs they are in charge of"). A CHILD of the company link:
+// same gcKey + portalId (same mirror), `kind:"super"`, the contact's stable id
+// as `viewContactId`, and a server-maintained `jobIdsView`. Deliberately NO
+// contacts (email keeps routing through the company link's per-job
+// assignment — no double digests), NO includes/excludes (it never shapes the
+// mirror), and NO parent token on the doc (the super can read their own link
+// doc; the company URL must never sit there). Filter, not wall (Koy 2026-09-15).
+// Idempotent per contact: an existing active super link is returned as-is.
+exports.gcPortalCreateSuperLink = functions.https.onCall(async (data) => {
+  await requireAdmin(data);
+  const parentToken = String(data.token || "");
+  const contactId = String(data.contactId || "");
+  if (!parentToken || !/^c_[a-f0-9]{6,24}$/.test(contactId)) throw new functions.https.HttpsError("invalid-argument", "token and contactId are required");
+  const parentSnap = await db.collection("gc_links").doc(parentToken).get();
+  if (!parentSnap.exists) throw new functions.https.HttpsError("not-found", "no such link");
+  const parent = parentSnap.data();
+  if (parent.revoked === true) throw new functions.https.HttpsError("failed-precondition", "company link is revoked");
+  if (parent.kind === "super") throw new functions.https.HttpsError("failed-precondition", "a super link can't have its own super links");
+  const contact = (Array.isArray(parent.contacts) ? parent.contacts : []).find((c) => c && c.id === contactId);
+  if (!contact) throw new functions.https.HttpsError("not-found", "that contact isn't on this link");
+  const existing = await db.collection("gc_links").where("gcKey", "==", parent.gcKey).where("revoked", "==", false).get();
+  const dup = existing.docs.map((d) => d.data()).find((l) => l.kind === "super" && l.viewContactId === contactId);
+  if (dup) return { token: dup.token, slug: dup.slug, existing: true };
+  const viewName = String(contact.name || "").trim().slice(0, 60) || "Super";
+  const token = gcPortal.makeToken();
+  const label = String(parent.label || "").slice(0, 80) + " — " + viewName;
+  const doc = {
+    token, slug: gcPortal.makeSlug(label), label, gc: parent.gc, gcKey: parent.gcKey, portalId: parent.portalId,
+    kind: "super", viewContactId: contactId, viewName,
+    jobIdsView: gcPortal.jobIdsViewFor(existing.docs.map((d) => d.data()), contactId),
+    contacts: [], supersByJob: {}, jobIdsInclude: [], jobIdsExclude: [],
+    accentColor: parent.accentColor || "", logoUrl: parent.logoUrl || "",
+    revoked: false, createdAt: new Date().toISOString(), createdBy: String(data.by || ""),
+  };
+  await db.collection("gc_links").doc(token).set(doc);
+  functions.logger.info("[gcPortal] super link created", { gcKey: parent.gcKey, viewName, jobs: doc.jobIdsView.length });
+  return { token, slug: doc.slug, jobCount: doc.jobIdsView.length };
+});
+
 exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
   await requireAdmin(data);
   const token = String(data.token || "");
@@ -5892,6 +5958,13 @@ exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
   if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such link");
   const { gcKey, portalId } = snap.data();
   const revoking = data.revoked === true;
+  // v407: a per-super link only makes sense under an ACTIVE company link — never
+  // bring one back on its own (it would mint a mirror for a GC whose company
+  // access is off). Reactivate the company link first.
+  if (!revoking && snap.data().kind === "super") {
+    const company = await db.collection("gc_links").where("gcKey", "==", gcKey).where("revoked", "==", false).get();
+    if (!company.docs.some((d) => d.data().kind !== "super")) throw new functions.https.HttpsError("failed-precondition", "reactivate the company link first");
+  }
   await ref.update({ revoked: revoking, revokedAt: new Date().toISOString() });
   if (revoking) {
     // Revocation MUST cut off mirror access. The mirror is gated only by its
@@ -5900,8 +5973,21 @@ exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
     // OLD portalId — either tear the mirror down (last link) or ROTATE it to a
     // fresh id the ex-holder never saw (siblings remain). Never leave the old
     // mirror readable. (Review finding: teardown-only-on-last-revoke leaked.)
-    const remaining = await db.collection("gc_links")
+    const remainingAll = await db.collection("gc_links")
       .where("gcKey", "==", gcKey).where("revoked", "==", false).get();
+    // v407 cascade: revoking the LAST company link takes every per-super child
+    // down with it (Koy: "revoke on the company link revokes every child too").
+    // Revoking a child touches only that child (it isn't a company link, so
+    // this branch never fires for it).
+    let remainingDocs = remainingAll.docs;
+    if (snap.data().kind !== "super" && !remainingDocs.some((d) => d.data().kind !== "super") && remainingDocs.length) {
+      const b = db.batch();
+      remainingDocs.forEach((d) => b.update(d.ref, { revoked: true, revokedAt: new Date().toISOString(), revokedBy: "cascade" }));
+      await b.commit();
+      functions.logger.info("[gcPortal] super links revoked with company link", { gcKey, count: remainingDocs.length });
+      remainingDocs = [];
+    }
+    const remaining = { empty: remainingDocs.length === 0, docs: remainingDocs, size: remainingDocs.length };
     const dropOldMirror = async () => {
       if (!portalId) return;
       const jobs = await db.collection("gc_portal").doc(portalId).collection("jobs").get();
@@ -6004,6 +6090,8 @@ exports.gcPortalUpdateLink = functions.https.onCall(async (data) => {
   if (!Object.keys(patch).length) return { ok: true, noop: true };
   patch.updatedAt = new Date().toISOString();
   await ref.update(patch);
+  // v407: an assignment change moves jobs on/off every per-super link of this GC
+  if (supersPatch) await gcPortalSyncSuperViews(snap.data().gcKey);
   // membership change (include/exclude) → rebuild so the mirror reflects it now
   if (membershipChanged && snap.data().revoked !== true) {
     await gcPortalRebuildMirror({ ...snap.data(), ...patch });
@@ -6072,6 +6160,9 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   // team runs a given job). `supers` is a list of CONTACT IDS, not names
   // (Phase 0 fix) — the client resolves id↔name for display.
   if (type === "assign") {
+    // v407: a per-super link shows one person's slice — it must not be able to
+    // rewrite who runs a job (that's the company link's or the office's call).
+    if (link.kind === "super") throw new functions.https.HttpsError("permission-denied", "super links can't change assignments");
     const supers = Array.isArray(data.supers) ? data.supers.map((s) => clip(s, 40)).filter(Boolean).slice(0, 6) : [];
     // jobId becomes a Firestore FIELD PATH key (supersByJob.<jobId>), so verify
     // it's a real job on THIS portal before writing — prevents arbitrary/oversized
@@ -6080,6 +6171,7 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
     const onPortal = await db.collection("gc_portal").doc(link.portalId).collection("jobs").doc(jobId).get();
     if (!onPortal.exists) throw new functions.https.HttpsError("permission-denied", "job not on this portal");
     await linkSnap.ref.update({ ["supersByJob." + jobId]: supers, updatedAt: new Date().toISOString() });
+    await gcPortalSyncSuperViews(link.gcKey); // v407: per-super links follow
     return { ok: true, applied: "assign" };
   }
   if (type === "contact") {
@@ -6332,6 +6424,10 @@ exports.gcPortalListLinks = functions.https.onCall(async (data) => {
       jobIdsExclude: Array.isArray(l.jobIdsExclude) ? l.jobIdsExclude : [],
       supersByJob: (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {},
       revoked: !!l.revoked, createdAt: l.createdAt || "", createdBy: l.createdBy || "",
+      // v407 per-super child links
+      kind: l.kind === "super" ? "super" : "company",
+      viewContactId: l.viewContactId || "", viewName: l.viewName || "",
+      jobIdsView: Array.isArray(l.jobIdsView) ? l.jobIdsView : [],
     };
   }) };
 });

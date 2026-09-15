@@ -49,8 +49,8 @@ function stripHtml(s) {
 // the Contractors tab or the nightly digest runs (gcPortalHealStaleMirrors in
 // index.js) — Koy 2026-09-15: "make it so they all auto rebuild". v1 = the
 // pre-stamp era (no plans key); v2 = plans added (SW v405); v3 =
-// hiddenPlanShares added (SW v406).
-const PROJECTION_VERSION = 3;
+// hiddenPlanShares added (SW v406); v4 = punch lists added (SW v407).
+const PROJECTION_VERSION = 4;
 
 const cap = (arr, n) => (Array.isArray(arr) ? arr.slice(0, n) : []);
 const str = (v, max) => stripHtml(v).slice(0, max || 300);
@@ -119,10 +119,10 @@ function eachPunchItem(punch, fn) {
     const z = punch[zone];
     if (!z || typeof z !== "object") return;
     (Array.isArray(z.rooms) ? z.rooms : []).forEach((room) => {
-      (Array.isArray(room && room.items) ? room.items : []).forEach((it) => fn(it, room && room.name));
+      (Array.isArray(room && room.items) ? room.items : []).forEach((it) => fn(it, room && room.name, zone));
     });
     ["general", "hotcheck"].forEach((bucket) => {
-      (Array.isArray(z[bucket]) ? z[bucket] : []).forEach((it) => fn(it, bucket));
+      (Array.isArray(z[bucket]) ? z[bucket] : []).forEach((it) => fn(it, bucket, zone));
     });
   });
 }
@@ -293,6 +293,67 @@ function cleanSupersPatch(patch) {
   return Object.keys(out).length ? out : null;
 }
 
+// Punch list for the portal (v407 — Koy: "a live view of our punch lists …
+// so they can see what we still need to do", closed items visible for
+// progress, and "making it obvious when an item is waiting so they know what
+// we are waiting on"). Per item ONLY: zone/room, text, done + the date it was
+// checked, waiting + the waiting-on note, and a from-GC marker on items they
+// added. Never photos, notes, who checked it, or who added it. Open/waiting
+// items are all included (capped); done items are the most recent by
+// checkedAtTs (capped) — the client applies the 14-day "still show it" window
+// so the projection stays time-independent (a stable hash means the mirror
+// isn't rewritten just because a day passed).
+const PUNCH_ZONE_LABEL = { main: "Main Level", upper: "Upper Level", basement: "Basement", exterior: "Exterior", garage: "Garage" };
+function punchZoneLabel(zone) {
+  const z = String(zone || "").trim();
+  if (!z) return "";
+  if (PUNCH_ZONE_LABEL[z.toLowerCase()]) return PUNCH_ZONE_LABEL[z.toLowerCase()];
+  return z.charAt(0).toUpperCase() + z.slice(1).toLowerCase();
+}
+function punchView(punch) {
+  const open = [], done = [];
+  let waiting = 0;
+  eachPunchItem(punch, (it, where, zone) => {
+    if (!it || typeof it !== "object") return;
+    const text = str(it.text, 200);
+    if (!text) return;
+    const isDone = bool(it.done);
+    const isWaiting = !isDone && bool(it.waiting);
+    if (isWaiting) waiting++;
+    const row = {
+      zone: punchZoneLabel(zone),
+      where: where === "general" ? "" : (where === "hotcheck" ? "Hotcheck" : str(where, 40)),
+      text,
+      done: isDone,
+      doneDate: isDone ? str(it.checkedAt, 12) : "",
+      doneTs: isDone ? str(it.checkedAtTs, 30) : "",
+      waiting: isWaiting,
+      waitingOn: isWaiting ? str(it.waitingOn, 120) : "",
+      fromGC: bool(it.fromGC),
+    };
+    (isDone ? done : open).push(row);
+  });
+  done.sort((a, b) => (b.doneTs || "").localeCompare(a.doneTs || ""));
+  return { open: open.length, waiting, done: done.length, items: cap(open, 80).concat(cap(done, 60)) };
+}
+
+// Which jobs a per-super link shows (v407). Union over every ACTIVE company
+// link of the GC whose per-job assignment names this contact id. Super links
+// themselves never contribute (they carry no assignments), and a revoked
+// company link's assignments don't count. Pure; the server writes the result
+// onto the super link as `jobIdsView` whenever any assignment changes.
+function jobIdsViewFor(links, contactId) {
+  const cid = String(contactId || "");
+  const out = new Set();
+  if (!cid) return [];
+  (Array.isArray(links) ? links : []).forEach((l) => {
+    if (!l || l.revoked === true || l.kind === "super") return;
+    const sbj = (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {};
+    Object.keys(sbj).forEach((jid) => { if (Array.isArray(sbj[jid]) && sbj[jid].includes(cid)) out.add(String(jid)); });
+  });
+  return [...out].slice(0, 500);
+}
+
 function projectJobForPortal(jobId, job) {
   if (!job || typeof job !== "object") return null;
   if (job.archived === true || job.deleted === true) return null;
@@ -332,6 +393,7 @@ function projectJobForPortal(jobId, job) {
     },
     matterport: matterportView(job),
     plans: plansView(job),
+    punch: { rough: punchView(job.roughPunch), finish: punchView(job.finishPunch) },
     // v406: ids of FieldInk shares the office hid on the job (Plans & Links →
     // hide). The portal reads live shares from field-ink itself and uses this
     // list to honor the hide. Ids only — opaque share ids, no content.
@@ -356,6 +418,7 @@ module.exports = {
   makeContactId,
   cleanLogoUrl,
   cleanSupersPatch,
+  jobIdsViewFor,
   jobBelongsToLink,
   projectJobForPortal,
   // exported for tests
@@ -365,4 +428,6 @@ module.exports = {
   returnTripsView,
   matterportView,
   plansView,
+  punchView,
+  eachPunchItem,
 };
