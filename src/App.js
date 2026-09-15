@@ -51768,7 +51768,7 @@ function addDaysYmd(todayYmd, days) { const t = new Date(todayYmd + "T00:00:00")
 const MYDAY_BUCKETS = { overdue: ["Overdue", "#B23A3A"], today: ["Today", "#3B5BA5"], week: ["This week", "#5E6670"], later: ["Later", "#8A929D"] };
 const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -51822,13 +51822,58 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onOpe
   punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
     tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
     onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
-  if (myTitle === "foreman" || iAmHead) {
-    computeTasks(jobs || []).filter(t => t.category !== "prep" && sameName(t.foreman, me) && !cleared.has(t.id)).forEach(t => {
-      const job = jobById(t.jobId);
-      mineRows.push({ key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
-        sub: [t.jobName, t.desc].filter(Boolean), jobId: t.jobId, section: null, canDone: !!job, canSnooze: !!job,
-        onDone: () => { if (!job) return; const prev = job.clearedTasks || []; const next = [...prev, t.id]; onUpdateJob({ ...job, clearedTasks: next }, { clearedTasks: next }); stage("Cleared", () => onUpdateJob({ ...job, clearedTasks: prev }, { clearedTasks: prev })); },
-        onSnooze: (ymd) => { if (!job) return; const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); } });
+  // v408: auto-tasks are the HEAD's, all of them. Foremen see none (Koy: they
+  // "don't really make sense for the foremans"). Each head row carries its
+  // delegation state from the joined task doc (autoDelegation).
+  const [pushFor, setPushFor] = useState(null);   // auto-task id whose "Pick person" list is open
+  const roster = (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort();
+  const delegation = autoDelegation(needs);
+  const nowIso = () => new Date().toISOString();
+  const pushTo = (t, job, who) => {
+    if (!who) return;
+    const cur = delegation.get(t.id);
+    if (cur && cur.status !== "done") { onPatchNeed(cur.id, { assignedTo: who }, cur); }
+    else if (onSaveNeed) { onSaveNeed(autoTaskDoc(t, job, who, me, nowIso())); }
+    setPushFor(null);
+    toast.success(`Pushed to ${first(who)}`);
+  };
+  const clearAuto = (t, job, openDoc) => {
+    const prev = job.clearedTasks || []; const next = [...prev, t.id];
+    onUpdateJob({ ...job, clearedTasks: next }, { clearedTasks: next });
+    // An open delegate doc is closed with the head as doneBy so it leaves their board too.
+    if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "done", doneAt: nowIso(), doneBy: me }, openDoc);
+    stage("Cleared", () => { onUpdateJob({ ...job, clearedTasks: prev }, { clearedTasks: prev }); if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "open", doneAt: "", doneBy: "" }, openDoc); });
+  };
+  if (iAmHead) {
+    const dutyKeys = new Set((jobs || []).filter(j => j && !j.tempPed && !j.quickJob).flatMap(getCoordinatorDuties).map(d => d.jobId + "_" + d.id));
+    foldDutyTwins(headAutoTasks(jobs, cleared), dutyKeys).forEach(t => {
+      const job = jobById(t.jobId); if (!job) return;
+      const st = autoRowState(t, delegation, headName);
+      const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
+      const row = { key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+        sub: [t.jobName, t.desc].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
+        onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
+        state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
+        pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
+      if (st.state === "none") {
+        row.canDone = true; row.onDone = () => clearAuto(t, job, null);
+        row.actions = [
+          ...(fm ? [{ label: `→ ${first(fm)}`, title: `Push to ${fm}, this job's foreman`, onClick: () => pushTo(t, job, fm), tone: "primary" }] : []),
+          { label: "Pick person", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
+        ];
+      } else if (st.state === "with") {
+        row.canDone = true; row.onDone = () => clearAuto(t, job, st.doc);
+        row.actions = [
+          { label: "Take back", title: "Put it back on you", onClick: () => { onPatchNeed(st.doc.id, { assignedTo: me }, st.doc); toast.success("Back on you"); }, tone: "ghost" },
+          { label: "Re-push", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
+        ];
+      } else { // verify
+        row.canDone = true; row.onDone = () => clearAuto(t, job, null);
+        row.actions = [
+          { label: "Send back", title: `Reopen it for ${first(st.who)}`, onClick: () => { onPatchNeed(st.doc.id, { status: "open", doneAt: "", doneBy: "", assignedTo: st.who }, st.doc); toast.success(`Sent back to ${first(st.who)}`); }, tone: "ghost" },
+        ];
+      }
+      mineRows.push(row);
     });
   }
   if (iAmHead) {
@@ -51851,12 +51896,31 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onOpe
     return (
       <div key={r.key} style={{ display: "flex", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44 }}>
         <div onClick={() => { if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: 1, minWidth: 0, cursor: r.jobId ? "pointer" : "default" }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
             {r.sub.map((s, i) => <span key={i}>{s}</span>)}
             {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
           </div>
+          {r.state === "with" && <div style={{ fontSize: 12, color: C.blue, fontWeight: 600, marginTop: 4 }}>with {first(r.who)}{r.age ? ` · ${r.age}` : ""}</div>}
+          {r.state === "verify" && <div style={{ fontSize: 12, color: C.green, fontWeight: 700, marginTop: 4 }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</div>}
+          {r.actions && r.actions.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              {r.actions.map(a => (
+                <button key={a.label} title={a.title} onClick={e => { e.stopPropagation(); a.onClick(); }}
+                  style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 700, padding: "6px 10px", minHeight: 32, borderRadius: 8, cursor: "pointer",
+                    background: a.tone === "primary" ? C.blue : "transparent", color: a.tone === "primary" ? "#fff" : C.blue, border: `1px solid ${C.blue}` }}>{a.label}</button>
+              ))}
+            </div>
+          )}
+          {r.pushOpen && (
+            <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, padding: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              {r.roster.filter(n => !sameName(n, me)).map(n => (
+                <button key={n} onClick={() => r.onPick(n)}
+                  style={{ fontFamily: "inherit", fontSize: 12, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer", background: C.card, color: C.text, border: `1px solid ${C.border}` }}>{n}</button>
+              ))}
+            </div>
+          )}
         </div>
         {r.canDone && (
           <button onClick={r.onDone} title="Done" style={{ ...ib, color: C.green }}><Icon name="check" size={20} stroke={2.25} /></button>
@@ -57636,7 +57700,7 @@ function App() {
 
       {view==="myday"&&can(identity,"myday.view")&&(
         <MyDay identity={identity} users={users} jobs={jobs} needs={needs}
-          onPatchNeed={patchNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
+          onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}/>
       )}
