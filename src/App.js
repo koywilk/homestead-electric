@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp, deleteField } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
@@ -656,6 +656,22 @@ async function publishCcLoadOffice(jobId, loadId, officePatch) {
     return true;
   } catch (e) { _ccDenied(e); console.warn("[fieldink] ccloads office write failed (rules deployed?):", e?.message); return false; }
 }
+// Same write, several loads at once (v400 room-level "All → Switched | Panel" and
+// "Withdraw pending" while walking a house). One merge-set naming ONLY
+// loads.<id>.office for the given ids — identical safety to the single-load
+// version; nothing outside those office sub-objects is named.
+async function publishCcLoadOfficeMany(jobId, patchesById) {
+  try {
+    const ids = Object.keys(patchesById || {}).filter(id => id && patchesById[id]);
+    if (jobId == null || !ids.length) return false;
+    const user = await ensureFieldinkAuth();
+    if (!user) return false;
+    const loads = {};
+    for (const id of ids) loads[id] = { office: { ...patchesById[id], officeUpdatedAt: serverTimestamp() } };
+    await setDoc(doc(fieldinkDb, "ccloads", String(jobId)), { loads, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
+    return true;
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] ccloads office multi-write failed (rules deployed?):", e?.message); return false; }
+}
 
 // ── ccloads SUGGEST derivations (v400 panelized ⇄ regular switching) ─────────
 // Office half of FieldInk v619. Koy: "office toggle is a SUGGESTION, with option
@@ -702,6 +718,40 @@ function ccLoadSuggestionStatus(load) {
   // An ack the office doesn't recognize (newer FieldInk) is still an ack — never re-show it as pending.
   const state = res === "accepted" || res === "dismissed" || res === "matched" ? res : "resolved";
   return { ...base, state, resolvedBy: String((ack && ack.by) || ""), resolvedAt: Number(ack && ack.resolvedAt) || 0 };
+}
+// UNDO: withdraw a pending suggestion by deleting the three office keys (`del`
+// is Firestore's deleteField, injected so this stays pure/testable). With the
+// keys gone, suggestedAt reads 0 on both sides → not pending; FieldInk's old ack
+// (if any) is left alone and simply no longer refers to anything.
+function ccLoadWithdrawPatch(del) {
+  return { suggestedKind: del(), suggestedAt: del(), suggestedBy: del() };
+}
+// Walk order, mirroring FieldInk's lighting report: sheet (page) → room (by the
+// plan's room code, then name) → load (by name, then id; gone-from-plan rows sink
+// to the bottom of their room). Deterministic on every snapshot so a suggestion
+// never makes a row move. Returns [{key,label,floor,count,rooms:[{key,code,name,loads}]}].
+function ccLoadsGrouped(loads) {
+  const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+  const sheets = new Map();
+  for (const l of loads || []) {
+    if (!l) continue;
+    const label = String(l.sheet || "").trim() || "No sheet";
+    const code = String(l.roomCode || "").trim();
+    const room = String(l.room || "").trim();
+    const rkey = code || (room ? "~" + room.toLowerCase() : "~");
+    if (!sheets.has(label)) sheets.set(label, { key: label, label, floor: null, count: 0, rooms: new Map() });
+    const sh = sheets.get(label);
+    if (sh.floor == null && l.floor) sh.floor = String(l.floor);
+    if (!sh.rooms.has(rkey)) sh.rooms.set(rkey, { key: rkey, code, name: room && room !== code ? room : (code ? "" : "No room"), loads: [] });
+    sh.rooms.get(rkey).loads.push(l);
+    sh.count++;
+  }
+  const out = [...sheets.values()].sort((a, b) => nat(a.label, b.label));
+  for (const sh of out) {
+    sh.rooms = [...sh.rooms.values()].sort((a, b) => nat(a.code || "\uffff", b.code || "\uffff") || nat(a.name, b.name));
+    for (const r of sh.rooms) r.loads.sort((a, b) => ((a.removedAt ? 1 : 0) - (b.removedAt ? 1 : 0)) || nat(a.name || "", b.name || "") || nat(a.id || a.loadId || "", b.id || b.loadId || ""));
+  }
+  return out;
 }
 // ── end ccloads SUGGEST derivations ─────────────────────────────────────────
 
@@ -25951,6 +26001,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Same self-healing attach as the cccos listener above; inert until the office
   // is job-linked AND the field-ink `ccloads` rules are deployed.
   const [ccLoadInbox, setCcLoadInbox] = useState({});
+  // v400 walk-mode UI state for the inbox: filter chip + collapsed rooms (local only).
+  const [ccLoadUi, setCcLoadUi] = useState({ filter: "all", closed: {} });
   useEffect(() => {
     let dead = false, unsub = null, retryTimer = null;
     setCcLoadInbox({});
@@ -27617,52 +27669,116 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {/* v580 ── INCOMING FROM FIELDINK ── the lighting loads the crew
                   roped on the plan, streamed from ccloads/<jobId>. Dismiss writes
                   only the office-owned `dismissed` flag back to the bridge — never
-                  the job. v400 (FieldInk v619 pair): each non-tape row gets a
-                  "Suggest: Switched | Panel" control that writes ONLY
-                  office.suggestedKind/suggestedAt/suggestedBy — a SUGGESTION the
-                  field accepts/dismisses on the plan (Accept-all lives in FieldInk;
-                  the office never changes a load's kind) — plus a status tag read
-                  from FieldInk's suggestionAck and an obvious "needs a switch on
-                  the plan" marker on field-flagged rows. Assigning a load to a
-                  panel output is still the next increment. */}
+                  the job. v400 (FieldInk v619 pair): walk-mode layout — grouped
+                  sheet → room → load in a fixed order (Koy: "it jumps all over the
+                  place"), each non-tape row a "Suggest: Switched | Panel" control
+                  that writes ONLY office.suggestedKind/suggestedAt/suggestedBy —
+                  a SUGGESTION the field accepts/dismisses on the plan (Accept-all
+                  lives in FieldInk; the office never changes a load's kind).
+                  Tapping a pending segment again WITHDRAWS it (undo); room headers
+                  carry All → Switched | Panel and Withdraw pending for walking a
+                  house with the customer. Status derives from FieldInk's
+                  suggestionAck; an obvious "needs a switch on the plan" marker sits
+                  on field-flagged rows. Assigning a load to a panel output is still
+                  the next increment. */}
               {(()=>{
                 const incoming = Object.values(ccLoadInbox || {}).filter(l => l && !(l.office && l.office.dismissed));
                 if (!incoming.length) return null;
-                const active = incoming.filter(l => !l.removedAt);
-                const gone = incoming.filter(l => l.removedAt);
-                const needSwitch = active.filter(l => l.needsSwitch === true).length;
+                const me = identity?.name;
+                const KIND_LABEL = { switched: "Switched", panel: "Panel" };
                 const fixtxt = (l) => (Array.isArray(l.fixtures) ? l.fixtures : []).filter(Boolean).map(f => `${f.n} ${f.name}`).join(", ");
                 const ctrlLabel = (l) => l.control === "dimmer" ? "Dimmer" : l.control === "tape" ? "Tape" : l.control === "panel" ? "Panel" : "Switched";
-                const KIND_LABEL = { switched: "Switched", panel: "Panel" };
                 const whoWhen = (who, at) => [who, at ? timeAgo(at) : ""].filter(Boolean).join(" · ");
-                const statusTag = (st) => {
-                  if (!st) return null;
-                  const kind = KIND_LABEL[st.kind] || st.kind;
-                  const tone = st.state === "pending" ? { color: C.blue, border: C.blue } : st.state === "accepted" ? { color: C.green, border: C.green } : { color: C.dim, border: C.border };
-                  const text = st.state === "pending" ? `Suggested ${kind} — pending` : st.state === "accepted" ? `${kind} accepted` : st.state === "dismissed" ? `${kind} suggestion dismissed` : st.state === "matched" ? `${kind} — plan already agrees` : `${kind} suggestion resolved`;
-                  const meta = st.state === "pending" ? whoWhen(st.by, st.at) : whoWhen(st.resolvedBy === "auto" ? "" : st.resolvedBy, st.resolvedAt);
-                  return (
-                    <span title={`Suggested by ${st.by || "office"} ${st.at ? timeAgo(st.at) : ""}`.trim()}
-                      style={{fontSize:10,fontWeight:700,color:tone.color,border:`1px solid ${tone.border}`,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>
-                      {text}{meta ? <span style={{fontWeight:500,opacity:.8}}> · {meta}</span> : null}
-                    </span>
-                  );
+                const tally = (list) => {
+                  const t = { active: 0, gone: 0, panel: 0, switched: 0, pending: 0, needs: 0 };
+                  for (const l of list) {
+                    if (l.removedAt) { t.gone++; continue; }
+                    t.active++;
+                    const k = ccLoadCurrentKind(l); if (k === "panel") t.panel++; else if (k === "switched") t.switched++;
+                    const st = ccLoadSuggestionStatus(l); if (st && st.state === "pending") t.pending++;
+                    if (l.needsSwitch === true) t.needs++;
+                  }
+                  return t;
                 };
-                const suggest = (l, kind) => {
-                  // Last write wins between two office users (non-transactional merge-set, matches the dismiss precedent).
-                  const patch = ccLoadSuggestPatch(l, kind, identity?.name);
-                  if (patch) publishCcLoadOffice(job.id, l.id, patch);
+                const all = tally(incoming);
+                const filter = ccLoadUi.filter;
+                const passes = (l) => filter === "pending" ? !!(ccLoadSuggestionStatus(l) && ccLoadSuggestionStatus(l).state === "pending")
+                  : filter === "needs" ? (l.needsSwitch === true && !l.removedAt) : true;
+                const groups = ccLoadsGrouped(incoming.filter(passes));
+                // Writes. Last write wins between two office users (non-transactional merge-set, matches the dismiss precedent).
+                const suggest = (l, kind) => { const patch = ccLoadSuggestPatch(l, kind, me); if (patch) publishCcLoadOffice(job.id, l.id, patch); };
+                const withdraw = (l) => publishCcLoadOffice(job.id, l.id, ccLoadWithdrawPatch(deleteField));
+                const suggestRoom = (loads, kind) => {
+                  const patches = {};
+                  for (const l of loads) {
+                    if (l.removedAt) continue;
+                    const cur = ccLoadCurrentKind(l); if (cur == null || cur === kind) continue;
+                    const st = ccLoadSuggestionStatus(l); if (st && st.state === "pending" && st.kind === kind) continue;
+                    const p = ccLoadSuggestPatch(l, kind, me); if (p) patches[l.id] = p;
+                  }
+                  if (Object.keys(patches).length) publishCcLoadOfficeMany(job.id, patches);
                 };
+                const withdrawRoom = (loads) => {
+                  const patches = {};
+                  for (const l of loads) { const st = ccLoadSuggestionStatus(l); if (st && st.state === "pending") patches[l.id] = ccLoadWithdrawPatch(deleteField); }
+                  if (Object.keys(patches).length) publishCcLoadOfficeMany(job.id, patches);
+                };
+                const toggleRoom = (key) => setCcLoadUi(u => ({ ...u, closed: { ...u.closed, [key]: !u.closed[key] } }));
+                const setFilter = (f) => setCcLoadUi(u => ({ ...u, filter: f }));
+                // Segmented "Suggest" control. Current plan kind = grey/disabled. Other
+                // kind: outline → tap suggests; filled blue (pending) → tap withdraws.
                 const seg = (l, cur, st, kind, first) => {
                   const isCur = cur === kind;
                   const isPend = !!(st && st.state === "pending" && st.kind === kind);
                   const label = KIND_LABEL[kind];
                   return (
-                    <button key={kind} disabled={isCur} onClick={()=>suggest(l, kind)}
-                      title={isCur ? `${label} — that's what the plan has now` : isPend ? `Re-send the ${label} suggestion (re-stamps it)` : `Suggest ${label} to the field — they accept it on the plan`}
-                      style={{padding:"4px 9px",fontSize:11,fontFamily:"inherit",fontWeight:700,cursor:isCur?"default":"pointer",
+                    <button key={kind} disabled={isCur} onClick={()=> isPend ? withdraw(l) : suggest(l, kind)}
+                      title={isCur ? `${label} — that's what the plan has now` : isPend ? `Suggested ${label} — tap again to withdraw` : `Suggest ${label} — the field accepts it on the plan`}
+                      style={{padding:"5px 10px",fontSize:11,fontFamily:"inherit",fontWeight:700,minWidth:66,cursor:isCur?"default":"pointer",
                         background:isCur?C.surface:isPend?C.blue:"transparent",color:isCur?C.muted:isPend?"#fff":C.blue,
                         border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{label}</button>
+                  );
+                };
+                const statusLine = (l, st) => {
+                  if (!st) return null;
+                  const kind = KIND_LABEL[st.kind] || st.kind;
+                  if (st.state === "pending") return (
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginTop:3,fontSize:11,color:C.blue,fontWeight:700}}>
+                      <span>Suggested {kind} — waiting on the field</span>
+                      <span style={{fontWeight:500,color:C.dim}}>{whoWhen(st.by, st.at)}</span>
+                      <button onClick={()=>withdraw(l)} title="Withdraw this suggestion" style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:700,color:C.blue,textDecoration:"underline"}}>Undo</button>
+                    </div>
+                  );
+                  const text = st.state === "accepted" ? `${kind} accepted on the plan` : st.state === "dismissed" ? `${kind} suggestion dismissed by the field` : st.state === "matched" ? `${kind} — plan already agreed` : `${kind} suggestion resolved`;
+                  const meta = whoWhen(st.resolvedBy === "auto" ? "" : st.resolvedBy, st.resolvedAt);
+                  return (
+                    <div style={{marginTop:3,fontSize:11,color:st.state === "accepted" ? C.green : C.dim,fontWeight:700}}>
+                      {text}{meta ? <span style={{fontWeight:500,color:C.dim}}> · {meta}</span> : null}
+                    </div>
+                  );
+                };
+                const chip = (key, label, n) => {
+                  const on = filter === key;
+                  return (
+                    <button key={key} onClick={()=>setFilter(key)}
+                      style={{padding:"3px 9px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                        background:on?C.text:"transparent",color:on?"#fff":C.dim,border:`1px solid ${on?C.text:C.border}`}}>
+                      {label}{n != null ? ` ${n}` : ""}
+                    </button>
+                  );
+                };
+                const needsPill = (
+                  <span title="The field switched this load to regular switching but hasn't placed its switch on the plan yet — read-only here; it clears when they place one"
+                    style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,fontWeight:700,color:"#fff",background:C.orange,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>
+                    <Icon name="alertTriangle" size={11} stroke={2.5}/>needs a switch on the plan
+                  </span>
+                );
+                const roomSeg = (loads, kind, first) => {
+                  const would = loads.filter(l => !l.removedAt && ccLoadCurrentKind(l) != null && ccLoadCurrentKind(l) !== kind && !(ccLoadSuggestionStatus(l) && ccLoadSuggestionStatus(l).state === "pending" && ccLoadSuggestionStatus(l).kind === kind)).length;
+                  return (
+                    <button key={kind} disabled={!would} onClick={()=>suggestRoom(loads, kind)}
+                      title={would ? `Suggest ${KIND_LABEL[kind]} for the ${would} load${would===1?"":"s"} in this room that aren't ${KIND_LABEL[kind]} yet` : `Every load here is already ${KIND_LABEL[kind]} (or suggested)`}
+                      style={{padding:"3px 8px",fontSize:10,fontFamily:"inherit",fontWeight:700,cursor:would?"pointer":"default",background:"transparent",color:would?C.blue:C.muted,border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{KIND_LABEL[kind]}</button>
                   );
                 };
                 return (
@@ -27670,56 +27786,94 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:C.surface,borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
                       <Icon name="inbox" size={14} stroke={2.25}/>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:sysAccentColor(job)}}>Incoming from FieldInk</div>
-                      <div style={{fontSize:11,color:C.dim,fontWeight:700}}>{active.length}</div>
-                      {needSwitch > 0 && (
-                        <div style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,fontWeight:700,color:C.orange,border:`1px solid ${C.orange}`,borderRadius:999,padding:"2px 8px"}}>
-                          <Icon name="alertTriangle" size={11} stroke={2.5}/>{needSwitch} need{needSwitch===1?"s":""} a switch on the plan
-                        </div>
-                      )}
+                      <div style={{fontSize:11,color:C.dim,fontWeight:700}}>{all.active}</div>
+                      <div style={{fontSize:10,color:C.dim}}>{all.panel} panel · {all.switched} switched</div>
                       <div style={{flex:1}}/>
-                      <div style={{fontSize:10,color:C.dim}}>Suggest a kind — the field accepts it on the plan</div>
+                      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                        {chip("all", "All", null)}
+                        {chip("pending", "Pending", all.pending)}
+                        {all.needs > 0 && (
+                          <button onClick={()=>setFilter("needs")}
+                            style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 9px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                              background:filter==="needs"?C.orange:"transparent",color:filter==="needs"?"#fff":C.orange,border:`1px solid ${C.orange}`}}>
+                            <Icon name="alertTriangle" size={11} stroke={2.5}/>{all.needs} need{all.needs===1?"s":""} a switch
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      {[...active, ...gone].map(l => {
-                        const cur = ccLoadCurrentKind(l);
-                        const st = ccLoadSuggestionStatus(l);
-                        const canSuggest = cur != null && !l.removedAt;
-                        const needs = l.needsSwitch === true && !l.removedAt;
-                        return (
-                          <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderTop:`1px solid ${C.border}`,flexWrap:"wrap",
-                            borderLeft:needs?`4px solid ${C.orange}`:"4px solid transparent",background:needs?"rgba(176,106,44,0.06)":"transparent"}}>
-                            <div style={{flex:1,minWidth:180}}>
-                              <div style={{fontSize:13,fontWeight:700,color:l.removedAt?C.dim:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                                <span>{l.name || l.loadId || "Load"}</span>
-                                {l.removedAt && <span style={{fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
-                                {needs && (
-                                  <span title="The field switched this load to regular switching but hasn't placed its switch on the plan yet — read-only here; it clears when they place one"
-                                    style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,fontWeight:700,color:"#fff",background:C.orange,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>
-                                    <Icon name="alertTriangle" size={11} stroke={2.5}/>needs a switch on the plan
-                                  </span>
+                    {!groups.length && <div style={{padding:"14px 12px",fontSize:12,color:C.dim}}>Nothing {filter === "pending" ? "pending" : "needs a switch"} right now.</div>}
+                    {groups.map(g => (
+                      <div key={g.key}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:C.bg,borderTop:`1px solid ${C.border}`,fontSize:11,fontWeight:700,color:C.dim,letterSpacing:"0.04em",textTransform:"uppercase"}}>
+                          <span>{g.label}</span>{g.floor && <span style={{fontWeight:500,textTransform:"none",letterSpacing:0}}>· {g.floor}</span>}
+                          <span style={{fontWeight:500,textTransform:"none",letterSpacing:0}}>· {g.count} load{g.count===1?"":"s"}</span>
+                        </div>
+                        {g.rooms.map(r => {
+                          const rkey = g.key + "|" + r.key;
+                          const closed = !!ccLoadUi.closed[rkey];
+                          const t = tally(r.loads);
+                          const suggestable = r.loads.some(l => !l.removedAt && ccLoadCurrentKind(l) != null);
+                          return (
+                            <div key={rkey}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderTop:`1px solid ${C.border}`,background:C.card,flexWrap:"wrap"}}>
+                                <button onClick={()=>toggleRoom(rkey)} title={closed ? "Expand room" : "Collapse room"}
+                                  style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:160,background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+                                  <span style={{display:"inline-flex",transform:closed?"rotate(-90deg)":"none",transition:"transform .12s",color:C.dim}}><Icon name="chevronDown" size={14} stroke={2.25}/></span>
+                                  {r.code && <span style={{fontSize:10,fontWeight:700,color:C.dim,fontFamily:"'JetBrains Mono',ui-monospace,monospace"}}>{r.code}</span>}
+                                  <span style={{fontSize:13,fontWeight:700,color:C.text}}>{r.name || (r.code ? "" : "No room")}</span>
+                                  <span style={{fontSize:10,color:C.dim,fontWeight:500}}>{t.panel} panel · {t.switched} switched{t.gone ? ` · ${t.gone} gone` : ""}</span>
+                                  {t.pending > 0 && <span style={{fontSize:10,fontWeight:700,color:C.blue}}>{t.pending} pending</span>}
+                                  {t.needs > 0 && <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:C.orange}}><Icon name="alertTriangle" size={11} stroke={2.5}/>{t.needs} need{t.needs===1?"s":""} a switch</span>}
+                                </button>
+                                {suggestable && (
+                                  <div style={{display:"inline-flex",alignItems:"center",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                                    <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"3px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Whole room</span>
+                                    {roomSeg(r.loads, "switched", true)}
+                                    {roomSeg(r.loads, "panel", false)}
+                                  </div>
+                                )}
+                                {t.pending > 0 && (
+                                  <button onClick={()=>withdrawRoom(r.loads)} title="Withdraw every pending suggestion in this room"
+                                    style={{padding:"3px 8px",borderRadius:8,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.blue,border:`1px solid ${C.blue}`}}>Withdraw {t.pending}</button>
                                 )}
                               </div>
-                              <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                                {[l.room, l.sheet, fixtxt(l)].filter(Boolean).join("  ·  ")}
-                              </div>
+                              {!closed && r.loads.map(l => {
+                                const cur = ccLoadCurrentKind(l);
+                                const st = ccLoadSuggestionStatus(l);
+                                const canSuggest = cur != null && !l.removedAt;
+                                const needs = l.needsSwitch === true && !l.removedAt;
+                                return (
+                                  <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 12px 7px 30px",borderTop:`1px solid ${C.border}`,flexWrap:"wrap",
+                                    borderLeft:needs?`4px solid ${C.orange}`:"4px solid transparent",background:needs?"rgba(176,106,44,0.06)":"transparent"}}>
+                                    <div style={{flex:1,minWidth:200}}>
+                                      <div style={{fontSize:13,fontWeight:700,color:l.removedAt?C.dim:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                                        <span>{l.name || l.loadId || "Load"}</span>
+                                        <span style={{fontSize:10,fontWeight:700,color:C.dim,border:`1px solid ${C.border}`,borderRadius:999,padding:"1px 7px",whiteSpace:"nowrap"}}>{ctrlLabel(l)}</span>
+                                        {l.removedAt && <span style={{fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
+                                        {needs && needsPill}
+                                      </div>
+                                      {fixtxt(l) && <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{fixtxt(l)}</div>}
+                                      {statusLine(l, st)}
+                                    </div>
+                                    <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                                      {canSuggest && (
+                                        <div style={{display:"inline-flex",alignItems:"center",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                                          <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"5px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Suggest</span>
+                                          {seg(l, cur, st, "switched", true)}
+                                          {seg(l, cur, st, "panel", false)}
+                                        </div>
+                                      )}
+                                      <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this incoming load"
+                                        style={{padding:"5px 8px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
-                            <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                              <div style={{fontSize:10,fontWeight:700,color:C.dim,border:`1px solid ${C.border}`,borderRadius:999,padding:"2px 8px",whiteSpace:"nowrap"}}>{ctrlLabel(l)}</div>
-                              {canSuggest && (
-                                <div style={{display:"inline-flex",alignItems:"center",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
-                                  <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"4px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Suggest</span>
-                                  {seg(l, cur, st, "switched", true)}
-                                  {seg(l, cur, st, "panel", false)}
-                                </div>
-                              )}
-                              {statusTag(st)}
-                              <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this incoming load"
-                                style={{padding:"5px 9px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    ))}
                   </div>
                 );
               })()}
@@ -47825,6 +47979,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Personalized Open on Live Plans** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 1 — the LIVE PLANS rows' **Open** link now carries the logged-in user's real identity ('?crew=<id>&crewName=<name>' riding inside the hash fragment — the base already contains '#/v/'; FieldInk parses it with 'crewTagFromLocation', caps 120/60, persists it per share and pre-fills the pin name since v536), so a crew member's Question/Problem pins forward to this job's Questions attributed to their real name instead of browsing as an anonymous client whose pins never forward at all. Office sessions get tagged too — the tag is triage attribution, not a permission. No identity (edge case) → today's untagged URL. The copyable **Crew link** button deliberately keeps the generic '?crew=crew' tag: it exists for texting subs who never log into this app, and a sub's pins must not inherit the copier's identity. Same ship also answers **D8** for FieldInk: plan discovery is and stays the direct 'shares' query ('ccJobId' primary at the section's listener, 'jobFolderId' fallback) — 'ccjoblinks' has zero readers here, so FieldInk can retire its writer. Why it can't lose data: URL construction only — no write path, no new field, no rules change; the crew-tag hash contract is the one FieldInk v534/v536 already honors, and an untagged link behaves exactly as before.
 - **Instant Grants — crew roster seed + Open-link token mint** · 'shipped 2026-08-28' · 'SW v389' · CC-SIDE SPEC P4.2 (pairs with FieldInk v571). Two zero-tap grants layered on the Personalized Open link (item 1, v384). **(1) Roster seed** — the whole employee roster is mirrored into FieldInk's 'crewroster/<crewId>' (crewId = the 'he_identity' user id) so Koy's Employees panel shows everyone immediately instead of filling one access-request at a time. 'seedCrewRosterRow' is **CREATE-ONLY BY CONTRACT**: FieldInk's rules technically let an org member *update* a roster row, so a blind write would silently undo whatever Koy just toggled — every write 'getDoc'-checks first and bails if the row exists. Fresh seeds default to **'viewer'**; Koy flips people to Editor himself from the panel (nobody gets write access to a live plan without him tapping the toggle once). Two passes: a once-per-session **backfill** ('backfillCrewRoster', fired +8s off the users load like 'publishCcJobsIndex', only the real loaded roster — never 'DEFAULT_USERS', skips 'active:false') and an **on-add** hook in 'saveUsers' that seeds only newly-added ids so new hires appear without a second step. **(2) Token mint** — on a plain left-click of **Open**, 'mintCrewToken' writes a single-use 'crewtokens/<id>' (128-bit id, 'exp' 10m — FieldInk's rules independently cap it at 30m past the *server* clock) and appends '&ct=' to the personalized link; the device self-binds in FieldInk with no request and no bell. Fresh mint every click, never cached. Popup-safe: the click opens a blank tab **inside the gesture**, then navigates it once the mint resolves; **any** mint failure (rules not live, offline, not org-joined) falls through to the plain tagged link — the '<a href>' stays that link, so modifier/middle-clicks and JS-off degrade cleanly and no error ever surfaces. Both ride the same 'isOrgMember()' gate (live since v384/385) that already guards the cc* bridges, so 'ensureFieldinkAuth()' is the only prerequisite; a 'permission-denied' kicks a rejoin via '_ccDenied' so the next attempt works. The generic copyable **Crew link** button is untouched — it carries no real identity (for texting subs) so there's nothing to mint against. Why it can't lose data: additive, cross-app writes to FieldInk's own project only ('crewroster'/'crewtokens', governed by FieldInk's v571 rules) — no CC Firestore doc, field, loader, or rule changed; the roster write is create-only so Koy's toggles are never overwritten, and a token is inert until redeemed and single-use by FieldInk's own rules. Item 2 is safe to ship before FieldInk v571 is live — it just fails soft into today's plain tagged link until then.
 - **Org membership join (KC1 stage-B prerequisite)** · 'shipped 2026-07-29' · 'SW v362' · CC-side leg of 'CC-SIDE SPEC — Org Membership Join'; pairs with FieldInk v511. The six cc* bridge collections move from "any authenticated session" to **org members only**, so this app's field-ink session must JOIN the org once per session or every gated read/write starts failing 'permission-denied' — the live CO loop, on a real job. Writes exactly the two spec'd write-only docs: 'orgauth/company/meta/security' (create-once claim, '{orgKey,by,at}') and 'orgauth/company/members/<uid>' ('{key,by,at}'); rules verify membership server-side via 'exists()'. Mirrors FieldInk's 'ensureOrgMembership'/'_joinOrg': claim-then-join, **swallow the already-claimed denial** (FieldInk usually claims first — expected, not an error), refresh the key once on a denied join. Hooked into 'ensureFieldinkAuth' rather than the 8 cc* call sites because every bridge read AND write already funnels through it — including the listeners' self-healing re-attach, so a failed join retries for free. Joined **per session and per uid** (an anonymous field-ink uid isn't stable across a browser-data clear, and a fresh uid needs its own members doc); a settled FALSE is never memoized, so a pre-stage-A denial stays retryable. '_ccDenied' self-heals the 5 write paths + the 2 protective pre-reads on 'permission-denied', throttled to once per 10s so a hard denial can't stampede. **FIRE-AND-FORGET BY CONTRACT** — never awaited, nothing gates on it, and with no key provisioned it is completely inert (zero writes), which is the "safe to ship anytime" posture the spec's build order step 1 asks for. Key resolution is one choke point ('_getOrgKey') so a Drive read or a callable can replace it in one function; provision per-device with '_hsSetOrgKey("<32-hex>")' and inspect with '_hsOrgStatus()' (neither ever prints the key value). 'ccjoblinks' is **not used by this app**, so that row of the spec's table doesn't apply. Verified by a 29-assertion harness driving the real extracted join block against stubbed Firestore/auth. ⚠️ 'REACT_APP_FIELDINK_ORG_KEY' exists but CRA inlines env vars into the **publicly downloadable** bundle — setting it publishes the one company-wide secret and would undercut stage B for both apps; see the handoff doc
+- **Incoming from FieldInk — walk mode: rooms, undo, whole-room suggest** · 'shipped 2026-09-14' · 'SW v401' · Koy's same-evening second pass on the v400 Suggest control below, pushed as its own ship: *"it jumps all over the place… need to be able to undo or switch back… separate into all the different rooms just like in FieldInk… organized for ease of walking and marking as you go with the customers"*). **Layout:** the Panelized Lighting **Incoming from FieldInk** inbox is now grouped **sheet → room → load** in a fixed walk order mirroring FieldInk's lighting report ('ccLoadsGrouped': sheets naturally sorted, rooms by the plan's room code then name, loads by name then id, gone-from-plan rows sink to the bottom of their room) — deterministic on every snapshot so a tap never moves a row; the status now renders on its own line under the load name so the control column never shifts. Rooms collapse/expand (local state), header filter chips **All · Pending N · N need a switch**. **Per load (non-tape):** **Suggest: Switched | Panel** — the segment matching the load's CURRENT plan kind ('control==='panel'' → Panel; switched/dimmer/anything else → Switched) is greyed as *what the plan has now*; tapping the other writes ONLY 'loads.<id>.office.{suggestedKind,suggestedAt,suggestedBy}' through 'publishCcLoadOffice'. **Undo:** tapping the filled (pending) segment again — or the status line's Undo — WITHDRAWS the suggestion by 'deleteField()'-ing those three keys ('ccLoadWithdrawPatch'; suggestedAt gone → not pending on either side; FieldInk's old ack is left alone). Switch-back after the field accepted = the other segment is simply live again. Re-tapping after a field dismiss writes a fresh 'suggestedAt', which reopens it. **Per room:** **Whole room → Switched | Panel** stamps a suggestion on every load in the room that isn't that kind yet (skips tape, gone, and already-pending-that-kind) in ONE merge-set via the new 'publishCcLoadOfficeMany'; **Withdraw N** clears every pending suggestion in the room. Tape rows hide the control (no kind concept). **Status tag** from FieldInk's OWN 'loads.<id>.suggestionAck {at, resolution:'accepted'|'dismissed'|'matched', by, resolvedAt}' (never written here): **pending** = 'suggestedAt > (suggestionAck.at||0)' (blue, who/when, Undo), **accepted** (green, who/when), **dismissed** / **plan already agreed** (grey). The office **never** changes a load's kind. **Needs-a-switch marker:** field-owned 'needsSwitch:true' (regular-switching load whose fixtures are mapped but no switch is placed on the plan yet) paints the row's left edge + a white-on-orange *needs a switch on the plan* pill, counted on the room header and the header chip — read-only; clears when the crew places the switch. Pure derivations ('ccLoadCurrentKind' / 'ccLoadSuggestPatch' / 'ccLoadSuggestionStatus' / 'ccLoadWithdrawPatch' / 'ccLoadsGrouped', top-level next to 'publishCcLoadOffice') plus the REAL 'publishCcLoadOffice' and 'publishCcLoadOfficeMany' bodies are extracted verbatim and run by the new prebuild gate 'scripts/ccloads-suggest-test.js' (63 checks: valid kinds, exact single- and multi-load payloads, withdraw sentinels, pending/accepted/dismissed/matched/newer-reopens, walk-order grouping). Two office users suggesting opposite kinds within seconds = last write wins (plain non-transactional merge-set, the same precedent as the v394 'dismissed' flag). No Firestore rules change ('isOrgMember()' read+write already covers both sides). Why it can't lose data: **writes only 'loads.<id>.office.suggested*' on 'ccloads/<jobId>' (field-ink project); never job data** — every write (single, room-level, withdraw) is a targeted 'merge:true' set naming ONLY the office-owned sub-object of the given load ids, the same shape v394 proved (loads is a MAP, so the deep merge preserves every field-owned key, FieldInk's 'suggestionAck', and every other load with no pre-read; a withdraw deletes only the three suggested keys it owns); no CC Firestore doc/field/loader/rule changed; a denied write self-heals via '_ccDenied' and no-ops.
 - **Incoming from FieldInk — Suggest Switched | Panel + "needs a switch" marker** · 'shipped 2026-09-14' · 'SW v400' · the office half of FieldInk v619 "panelized ⇄ regular switching" (Koy: *"office toggle is a suggestion, with option to accept all"* — Accept-all lives in FieldInk only; *"when a load is switched with no switch placed on the plan it needs to be obvious"*). Every non-tape row in the Panelized Lighting **Incoming from FieldInk** inbox now carries a two-segment **Suggest: Switched | Panel** control: the segment matching the load's CURRENT plan kind ('control==='panel'' → Panel; switched/dimmer/anything else → Switched) is greyed as *what the plan has now*, tapping the other writes ONLY 'loads.<id>.office.{suggestedKind,suggestedAt,suggestedBy}' through the existing 'publishCcLoadOffice' merge-set ('ccloads/<jobId>' on the field-ink project). The office **never** changes a load's kind — FieldInk answers in its OWN 'loads.<id>.suggestionAck {at, resolution:'accepted'|'dismissed'|'matched', by, resolvedAt}' (never written here) and a per-row status tag derives from the shared contract: **pending** = 'suggestedAt > (suggestionAck.at||0)' (blue, who/when), **accepted** (green, who/when), **dismissed** / **matched** (grey; matched = the plan already agreed, auto). Re-tapping a pending segment re-stamps 'suggestedAt', which is how a dismissed suggestion is reopened. Tape rows hide the control (no kind concept); gone-from-plan rows keep their status but lose the control. **Needs-a-switch marker:** a field-owned 'needsSwitch:true' (regular-switching load whose fixtures are mapped but no switch is placed on the plan yet) paints the row's left edge + a white-on-orange *needs a switch on the plan* pill, and the panel header counts them — read-only; it clears when the crew places the switch. Pure derivations ('ccLoadCurrentKind' / 'ccLoadSuggestPatch' / 'ccLoadSuggestionStatus', top-level next to 'publishCcLoadOffice') are extracted verbatim and run by the new prebuild gate 'scripts/ccloads-suggest-test.js' (31 checks: valid kinds, exact patch shape, pending/accepted/dismissed/matched/newer-reopens). Two office users suggesting opposite kinds within seconds = last write wins (plain non-transactional merge-set, the same precedent as the v394 'dismissed' flag). No Firestore rules change ('isOrgMember()' read+write already covers both sides). Why it can't lose data: **writes only 'loads.<id>.office.suggested*' on 'ccloads/<jobId>' (field-ink project); never job data** — the patch is three new keys inside the office-owned sub-object via the same targeted 'merge:true' write v394 proved (loads is a MAP, so the deep merge preserves every field-owned key, FieldInk's 'suggestionAck', and every other load with no pre-read); no CC Firestore doc/field/loader/rule changed; a denied write self-heals via '_ccDenied' and no-ops.
 - **Incoming from FieldInk — lighting loads inbox** · 'shipped 2026-09-02' · 'SW v394' · Part B step one of the lighting-loads bridge (pairs with TraceVault/FieldInk v580). FieldInk publishes each lighting load the crew ropes on the plan to 'ccloads/<jobId>' on the field-ink project (a MAP keyed by load id, field-owned keys only); the Panelized Lighting tab now shows an **Incoming from FieldInk (N)** panel above the Loads section streaming those loads — name, room, sheet, fixtures, switched/dimmer, with a "gone from plan" tag when a load is removed on the plan. **Read-only this increment:** the only action is **Dismiss**, which writes ONLY the office-owned 'office.dismissed' flag back via 'publishCcLoadOffice' — a targeted 'merge:true' write on 'loads.<id>.office' (safe because 'loads' is a MAP, so the merge preserves every field-owned key AND every other load with no pre-read; the read-then-merge dance the array-shaped cccos/ccquestions bridges need doesn't apply). The 'ccLoadInbox' listener mirrors the cccos listener (auth-gated, self-healing 15s retry, '[job.id]'). Assigning a load to a Savant panel output + the clean client Load Sheet are the next increment (reconciled model in 'LIGHTING-LOADS-BRIDGE.md': Savant outputs are DERIVED/whitelisted, so assign writes name/room/type via one 'handleSaveSlot' patch + stores fieldLoadId/fixtures/tapeFt in new sparse maps). Adversarially reviewed — no critical/high. Why it can't lose data: **writes NO job data** — the only write is to the SEPARATE field-ink project's 'ccloads/<jobId>.loads.<id>.office', so it cannot touch 'panelizedLighting' or any job field; no CC Firestore doc/field/loader/rule changed; inert until the job is FieldInk-linked AND the field-ink 'ccloads' rules are deployed (a denied read/write self-heals via '_ccDenied' and no-ops).
 - **FieldInk bridge hardening** · 'shipped 2026-07-10' · 'SW v323' · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.

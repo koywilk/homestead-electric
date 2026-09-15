@@ -17,8 +17,8 @@ const a = src.indexOf(START), b = src.indexOf(END);
 if (a === -1 || b === -1 || b < a) { console.error("ccloads-suggest-test: markers not found in src/App.js"); process.exit(1); }
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus;", ctx);
-const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped;", ctx);
+const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped } = ctx;
 
 let fails = 0, n = 0;
 const eq = (name, got, want) => {
@@ -83,6 +83,35 @@ eq("garbage suggestionAck (non-object) is ignored → pending", ccLoadSuggestion
 eq("tape load with a stray suggestion still derives (display only; the control is hidden)",
   ccLoadSuggestionStatus({ control: "tape", office: { suggestedKind: "panel", suggestedAt: T } }).state, "pending");
 
+// ── UNDO: withdraw patch ────────────────────────────────────────────────────
+const DEL = { __deleteField: true };
+eq("withdraw deletes exactly the three suggested keys", ccLoadWithdrawPatch(() => DEL), { suggestedKind: DEL, suggestedAt: DEL, suggestedBy: DEL });
+eq("after a withdraw the record derives to no suggestion (suggestedAt gone)",
+  ccLoadSuggestionStatus({ control: "switched", office: { dismissed: false }, suggestionAck: { at: T, resolution: "dismissed" } }), null);
+
+// ── walk-order grouping: sheet → room code → load name; gone rows sink ─────
+const G = ccLoadsGrouped([
+  { id: "z", name: "Cans", sheet: "Pg 2", roomCode: "002", room: "Kitchen", control: "panel" },
+  { id: "a", name: "Cans", sheet: "Pg 1", roomCode: "058", room: "MECH", control: "panel" },
+  { id: "b", name: "Sconce", sheet: "Pg 10", roomCode: "001", room: "Lounge", control: "switched" },
+  { id: "c", name: "Alpha", sheet: "Pg 2", roomCode: "002", room: "Kitchen", control: "switched", removedAt: 5 },
+  { id: "d", name: "Beta", sheet: "Pg 2", roomCode: "002", room: "Kitchen", control: "switched" },
+  { id: "e", name: "Pucks", sheet: "Pg 2", roomCode: "001", room: "4 CAR GARAGE", control: "panel", floor: "main" },
+  { id: "f", name: "Lonely", sheet: "", roomCode: "", room: "", control: "panel" },
+  { id: "g", name: "Same", sheet: "Pg 1", roomCode: "056", room: "056", control: "panel" },
+]);
+eq("sheets sort naturally (Pg 1, Pg 2, Pg 10) with the blank sheet last", G.map(x => x.label), ["No sheet", "Pg 1", "Pg 2", "Pg 10"]);
+eq("sheet counts", G.map(x => x.count), [1, 2, 4, 1]);
+eq("rooms within a sheet sort by room code", G[2].rooms.map(r => r.code), ["001", "002"]);
+eq("room name shown once when it equals the code", G[1].rooms.map(r => [r.code, r.name]), [["056", ""], ["058", "MECH"]]);
+eq("loads within a room: by name, gone-from-plan last", G[2].rooms[1].loads.map(l => l.id), ["d", "z", "c"]);
+eq("floor surfaces on the sheet when any load carries one", G[2].floor, "main");
+eq("blank room/code lands in a 'No room' bucket", G[0].rooms[0].name, "No room");
+eq("ordering is deterministic regardless of input order",
+  JSON.stringify(ccLoadsGrouped([{ id: "2", name: "B", sheet: "Pg 1", roomCode: "001", room: "R" }, { id: "1", name: "A", sheet: "Pg 1", roomCode: "001", room: "R" }]).map(x => x.rooms[0].loads.map(l => l.id))),
+  JSON.stringify(ccLoadsGrouped([{ id: "1", name: "A", sheet: "Pg 1", roomCode: "001", room: "R" }, { id: "2", name: "B", sheet: "Pg 1", roomCode: "001", room: "R" }]).map(x => x.rooms[0].loads.map(l => l.id))));
+eq("empty/null input is safe", ccLoadsGrouped(null), []);
+
 // ── the WRITE itself: run the real publishCcLoadOffice body with a captured setDoc ──
 // Proves the on-the-wire payload is exactly loads.<id>.office.{suggestedKind,
 // suggestedAt,suggestedBy,officeUpdatedAt} + doc-level updatedAt/updatedBy, merge:true,
@@ -103,7 +132,11 @@ const wctx = {
   _ccDenied: () => {}, console,
 };
 vm.createContext(wctx);
-vm.runInContext(src.slice(pa, pb + 2) + "\nthis.publishCcLoadOffice = publishCcLoadOffice;", wctx);
+const MSTART = "async function publishCcLoadOfficeMany(jobId, patchesById) {";
+const ma = src.indexOf(MSTART);
+const mb = src.indexOf("\n}\n", ma);
+if (ma === -1 || mb === -1) { console.error("ccloads-suggest-test: publishCcLoadOfficeMany not found"); process.exit(1); }
+vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.publishCcLoadOffice = publishCcLoadOffice; this.publishCcLoadOfficeMany = publishCcLoadOfficeMany;", wctx);
 (async () => {
   const patch = ccLoadSuggestPatch({ control: "switched" }, "panel", "Koy", T);
   const ok = await wctx.publishCcLoadOffice(1788319922110, "cg_abc", patch);
@@ -121,6 +154,25 @@ vm.runInContext(src.slice(pa, pb + 2) + "\nthis.publishCcLoadOffice = publishCcL
   eq("suggested* values pass through untouched", [c.data.loads.cg_abc.office.suggestedKind, c.data.loads.cg_abc.office.suggestedAt, c.data.loads.cg_abc.office.suggestedBy], ["panel", T, "Koy"]);
   eq("officeUpdatedAt is the serverTimestamp sentinel", c.data.loads.cg_abc.office.officeUpdatedAt === SENTINEL, true);
   eq("null patch (invalid kind) must be gated by the caller — the UI never calls with null", ccLoadSuggestPatch({ control: "switched" }, "dimmer", "Koy", T), null);
+
+  // withdraw through the same single-load write: the delete sentinels ride inside office
+  calls.length = 0;
+  await wctx.publishCcLoadOffice(1788319922110, "cg_abc", ccLoadWithdrawPatch(() => DEL));
+  eq("withdraw write names only the three suggested keys (as delete sentinels) + the stamp",
+    Object.keys(calls[0].data.loads.cg_abc.office).sort(), ["officeUpdatedAt", "suggestedAt", "suggestedBy", "suggestedKind"]);
+  eq("withdraw values are the delete sentinel", [calls[0].data.loads.cg_abc.office.suggestedKind, calls[0].data.loads.cg_abc.office.suggestedAt, calls[0].data.loads.cg_abc.office.suggestedBy], [DEL, DEL, DEL]);
+
+  // room-level: one merge-set naming only the given ids' office sub-objects
+  calls.length = 0;
+  const okMany = await wctx.publishCcLoadOfficeMany(1788319922110, { cg_1: ccLoadSuggestPatch({ control: "switched" }, "panel", "Koy", T), cg_2: ccLoadSuggestPatch({ control: "switched" }, "panel", "Koy", T), cg_skip: null });
+  eq("multi-write returns true", okMany, true);
+  eq("multi-write is ONE setDoc", calls.length, 1);
+  eq("multi-write merge:true on ccloads/<jobId>", [calls[0].opts, calls[0].ref.col, calls[0].ref.id], [{ merge: true }, "ccloads", "1788319922110"]);
+  eq("multi-write names only the real ids (null patches dropped)", Object.keys(calls[0].data.loads).sort(), ["cg_1", "cg_2"]);
+  eq("each id carries only office.{suggested*,officeUpdatedAt}", Object.keys(calls[0].data.loads.cg_2).concat(Object.keys(calls[0].data.loads.cg_2.office).sort()), ["office", "officeUpdatedAt", "suggestedAt", "suggestedBy", "suggestedKind"]);
+  eq("multi-write top-level keys are only loads/updatedAt/updatedBy", Object.keys(calls[0].data).sort(), ["loads", "updatedAt", "updatedBy"]);
+  calls.length = 0;
+  eq("multi-write with nothing to do is a no-op (no setDoc)", [await wctx.publishCcLoadOfficeMany(1, {}), calls.length], [false, 0]);
   if (fails) { console.error(`ccloads-suggest-test: ${fails}/${n} FAILED`); process.exit(1); }
   console.log(`ccloads-suggest-test: ${n} checks passed`);
 })();
