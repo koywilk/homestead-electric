@@ -51712,7 +51712,13 @@ function autoDelegation(needs) {
 function autoRowState(t, delegation, headName) {
   const doc = (delegation && t && delegation.get(t.id)) || null;
   if (!doc) return { state: "none", doc: null, who: "" };
-  if (doc.status !== "done") return { state: "with", doc, who: needAssignee(doc) };
+  // An open doc pointed back at the head is NOT delegated — it was taken back
+  // (or reassigned to the head from the Needs board). Treat it as "none" so the
+  // auto row gets its Push controls back instead of reading "with <the head>".
+  if (doc.status !== "done") {
+    if (sameName(needAssignee(doc), headName)) return { state: "none", doc, who: "" };
+    return { state: "with", doc, who: needAssignee(doc) };
+  }
   if (doc.doneBy && !sameName(doc.doneBy, headName)) return { state: "verify", doc, who: doc.doneBy };
   return { state: "none", doc, who: "" };
 }
@@ -51826,16 +51832,16 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // "don't really make sense for the foremans"). Each head row carries its
   // delegation state from the joined task doc (autoDelegation).
   const [pushFor, setPushFor] = useState(null);   // auto-task id whose "Pick person" list is open
-  const roster = (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort();
+  const roster = useMemo(() => (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort(), [users]);
   const delegation = autoDelegation(needs);
   const nowIso = () => new Date().toISOString();
   const pushTo = (t, job, who) => {
     if (!who) return;
     const cur = delegation.get(t.id);
-    if (cur && cur.status !== "done") { onPatchNeed(cur.id, { assignedTo: who }, cur); }
-    else if (onSaveNeed) { onSaveNeed(autoTaskDoc(t, job, who, me, nowIso())); }
     setPushFor(null);
-    toast.success(`Pushed to ${first(who)}`);
+    // Toast only where a write actually happened — no onSaveNeed, no claim.
+    if (cur && cur.status !== "done") { onPatchNeed(cur.id, { assignedTo: who }, cur); toast.success(`Pushed to ${first(who)}`); }
+    else if (onSaveNeed) { onSaveNeed(autoTaskDoc(t, job, who, me, nowIso())); toast.success(`Pushed to ${first(who)}`); }
   };
   const clearAuto = (t, job, openDoc) => {
     const prev = job.clearedTasks || []; const next = [...prev, t.id];
@@ -51864,7 +51870,11 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       } else if (st.state === "with") {
         row.canDone = true; row.onDone = () => clearAuto(t, job, st.doc);
         row.actions = [
-          { label: "Take back", title: "Put it back on you", onClick: () => { onPatchNeed(st.doc.id, { assignedTo: me }, st.doc); toast.success("Back on you"); }, tone: "ghost" },
+          // Take back CLOSES the delegate's doc (doneBy = the head) instead of
+          // reassigning it: the doc leaves their board, and autoRowState reads
+          // "none" again so the auto row comes back with its Push controls —
+          // no ghost "with <the head>" row, no duplicate Task row on Mine.
+          { label: "Take back", title: "Put it back on you", onClick: () => { onPatchNeed(st.doc.id, { status: "done", doneAt: nowIso(), doneBy: me }, st.doc); toast.success("Back on you"); }, tone: "ghost" },
           { label: "Re-push", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
         ];
       } else { // verify
@@ -51915,7 +51925,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           )}
           {r.pushOpen && (
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, padding: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
-              {r.roster.filter(n => !sameName(n, me)).map(n => (
+              {r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who))).map(n => (
                 <button key={n} onClick={() => r.onPick(n)}
                   style={{ fontFamily: "inherit", fontSize: 12, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer", background: C.card, color: C.text, border: `1px solid ${C.border}` }}>{n}</button>
               ))}

@@ -221,6 +221,7 @@ eq(H.autoRowState(autoA, del, "Koy Wilkinson"), { state:"with", doc:dOpen, who:"
 eq(H.autoRowState(autoB, del, "Koy Wilkinson"), { state:"verify", doc:dDone, who:"Daegan" }, "done by delegate -> verify");
 eq(H.autoRowState({ id:"j9_x" }, del, "Koy Wilkinson"), { state:"none", doc:dHeadDone, who:"" }, "done by the head -> none (already cleared)");
 eq(H.autoRowState({ id:"nope" }, del, "Koy Wilkinson"), { state:"none", doc:null, who:"" }, "no doc -> none");
+eq(H.autoRowState({ id:"k2" }, H.autoDelegation([{ id:"n20", autoTaskId:"k2", status:"open", assignedTo:"Koy Wilkinson", assignedAt:"2026-09-15T15:00:00.000Z" }]), "Koy Wilkinson").state, "none", "open doc assigned to the head -> none (taken back)");
 eq(H.autoDelegation(null).size, 0, "null-safe");
 
 // ── 12. newest wins among equals ────────────────────────────────────────────
