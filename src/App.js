@@ -44124,6 +44124,78 @@ function GCLogoFinder({ contacts, value, onPick, gcCall, B }) {
   );
 }
 
+// Office-side per-job super assignment on a link card (Phase 2b of the
+// Contractors build; Koy 2026-09-15: "when a super is selected on the CC they
+// should be made the super on that side as well. CC is the source of truth
+// always."). Mirrors GCSuperAssign on the portal: chips of the link's named
+// contacts, toggle, Save → gcPortalUpdateLink { supersByJobPatch: {jobId: ids} }
+// — ONE field-path write for that job only, never a whole-map replace. The
+// portal's live gc_links listener repaints the GC's chips the moment it lands.
+// Legacy NAME-keyed entries (pre-P0-2, e.g. "Austin" on the Robison test link)
+// and ids whose contact was since removed render as amber "old entry" chips
+// that can be toggled off — before this ship neither side could remove them.
+function GCOfficeSuperAssign({ link, jobs, allJobs, busy, onSave }) {
+  const contacts = Array.isArray(link.contacts) ? link.contacts.filter(c => c && c.id && String(c.name||"").trim()) : [];
+  const nameOf = (id) => { const c = contacts.find(x => x.id === id); return c ? c.name : id; };
+  const isLegacy = (id) => !contacts.some(c => c.id === id);
+  const sbj = (link.supersByJob && typeof link.supersByJob === "object") ? link.supersByJob : {};
+  const idsOf = (jobId) => Array.isArray(sbj[jobId]) ? sbj[jobId] : [];
+  const rows = jobs.slice().sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(j => ({ id: j.id, name: j.name || j.id, stale: false }));
+  Object.keys(sbj).forEach(jobId => {
+    if (idsOf(jobId).length && !rows.some(r => r.id === jobId)) {
+      const j = (allJobs||[]).find(x => x && x.id === jobId);
+      rows.push({ id: jobId, name: (j && j.name) || jobId, stale: true });
+    }
+  });
+  const [editJob, setEditJob] = useState(null);
+  const [draft, setDraft] = useState(() => new Set());
+  const [err, setErr] = useState("");
+  const btn = (primary) => ({border:"1px solid "+(primary?"#2E477D":"#CDD9EC"),background:primary?"#2E477D":"transparent",color:primary?"#fff":"#2E477D",borderRadius:8,padding:"2px 9px",fontWeight:700,fontSize:11.5,cursor:"pointer",fontFamily:"inherit"});
+  const chip = (key, label, on, onClick, legacy) => (
+    <button key={key} onClick={onClick||undefined} disabled={!onClick}
+      title={legacy ? "Old entry — not one of this link's contacts. Turn it off and pick the right person." : undefined}
+      style={{border:"1px solid "+(on?(legacy?"#B0892C":"#2E477D"):"#CDD9EC"), background:on?(legacy?"#FBF3E3":"#E9EEF8"):"#fff", color:on?(legacy?"#8A6A1C":"#2E477D"):"#5E6670",
+        borderRadius:999, fontSize:11.5, fontWeight:700, padding:"3px 10px", cursor:onClick?"pointer":"default", fontFamily:"inherit"}}>{label}{legacy?" · old entry":""}</button>
+  );
+  const start = (jobId) => { setDraft(new Set(idsOf(jobId))); setErr(""); setEditJob(jobId); };
+  const toggle = (id) => setDraft(d => { const nx = new Set(d); if (nx.has(id)) nx.delete(id); else nx.add(id); return nx; });
+  const save = async (jobId) => {
+    setErr("");
+    try { await onSave(jobId, [...draft]); setEditJob(null); }
+    catch (e) { setErr(e.message || "Couldn't save"); }
+  };
+  if (!rows.length) return <div style={{color:"#8A93A3"}}>No jobs on this portal yet.</div>;
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:5}}>
+      {rows.map(r => {
+        const cur = idsOf(r.id);
+        const editing = editJob === r.id;
+        const orphans = editing ? [...draft].filter(isLegacy) : [];
+        return (
+          <div key={r.id} style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{color:r.stale?"#8A93A3":"#1B1F24",minWidth:120}}>{r.name}{r.stale?" (not on this portal anymore)":""}</span>
+            {!editing ? (
+              <Fragment>
+                {cur.length ? cur.map(id => chip(id, nameOf(id), true, null, isLegacy(id))) : <span style={{color:"#8A93A3"}}>no super</span>}
+                <button disabled={!!busy} onClick={()=>start(r.id)} style={btn(false)}>{cur.length ? "Change" : "Assign"}</button>
+              </Fragment>
+            ) : (
+              <Fragment>
+                {contacts.map(c => chip(c.id, c.name, draft.has(c.id), () => toggle(c.id), false))}
+                {orphans.map(id => chip(id, nameOf(id), true, () => toggle(id), true))}
+                {!contacts.length && !orphans.length ? <span style={{color:"#8A93A3"}}>Add contacts (Edit) first.</span> : null}
+                <button disabled={!!busy} onClick={()=>save(r.id)} style={btn(true)}>{busy ? "Saving…" : "Save"}</button>
+                <button disabled={!!busy} onClick={()=>{ setEditJob(null); setErr(""); }} style={btn(false)}>Cancel</button>
+                {err ? <span style={{color:"#8A2A2A"}}>{err}</span> : null}
+              </Fragment>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function GCPortalManager({ jobs, identity }) {
   const [links, setLinks] = useState(null);   // null=loading
   const [err, setErr] = useState("");
@@ -44146,7 +44218,13 @@ function GCPortalManager({ jobs, identity }) {
   const gc = (name, payload) => gcAdminCallable(name, identity)(payload);
 
   const refresh = () => gc("gcPortalListLinks",{})
-    .then(r => { setLinks(r.data.links||[]); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null }); })
+    .then(r => {
+      setLinks(r.data.links||[]); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null });
+      // v405: the server auto-rebuilt portals whose mirror predated the current
+      // projection shape — say so, once, so nobody hunts for a Rebuild button.
+      const n = Number(r.data.healedPortals||0);
+      if (n > 0) toast.info("Refreshed " + n + " contractor portal" + (n===1?"":"s") + " to the current layout");
+    })
     .catch(e => { setErr(e.message||"Failed to load links"); setLinks([]); });
   useEffect(() => { refresh(); }, []);
 
@@ -44178,6 +44256,14 @@ function GCPortalManager({ jobs, identity }) {
     setBusy("");
   };
   const copy = (txt) => { try { navigator.clipboard.writeText(txt); } catch(e){} };
+  // v405 office-side super assignment: ONE job's field-path patch per save,
+  // then reload links so the card shows exactly what the server holds. The
+  // child shows the error inline; busy is cleared either way.
+  const saveSupers = async (l, jobId, ids) => {
+    setBusy(l.token+"_super");
+    try { await gc("gcPortalUpdateLink", { token: l.token, supersByJobPatch: { [jobId]: ids } }); await refresh(); }
+    finally { setBusy(""); }
+  };
 
   // P0-1: edit an EXISTING link's contacts / branding / hidden-jobs — this is
   // the exact gap Koy flagged first ("no way to add employees to existing GC
@@ -44270,18 +44356,6 @@ function GCPortalManager({ jobs, identity }) {
       setTestSent(s => ({...s, [l.token]: soaked ? ("Soak mode is ON — delivered to " + soaked + " (addressed to " + to + ").") : ("Sent — check " + to + ".")}));
     } catch(e) { setErr(e.message||"Test send failed"); }
     setBusy("");
-  };
-
-  // P0-7: surface per-job super assignments (previously invisible — the data
-  // existed server-side but the office UI never rendered it).
-  const superAssignmentLines = (l) => {
-    const entries = Object.entries(l.supersByJob||{}).filter(([,ids])=>Array.isArray(ids)&&ids.length);
-    if(!entries.length) return [];
-    return entries.map(([jobId, ids]) => {
-      const job = (jobs||[]).find(j=>j.id===jobId);
-      const names = ids.map(cid => { const c = (l.contacts||[]).find(x=>x.id===cid); return c ? c.name : cid; }).join(", ");
-      return (job ? job.name : jobId) + ": " + names;
-    });
   };
 
   const B = { field:{border:"1px solid #CDD9EC",borderRadius:8,padding:"7px 10px",font:"13px system-ui",width:"100%",boxSizing:"border-box"},
@@ -44499,9 +44573,9 @@ function GCPortalManager({ jobs, identity }) {
       {links===null ? <div style={{color:"#8A93A3"}}>Loading…</div> : null}
       {links && links.length===0 ? <div style={{color:"#8A93A3",fontSize:12.5}}>No portal links yet.</div> : null}
       {(links||[]).map(l=>{
-        const count = activeJobs.filter(j=>(_gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id)) && !(l.jobIdsExclude||[]).includes(j.id)).length;
+        const linkJobs = activeJobs.filter(j=>(_gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id)) && !(l.jobIdsExclude||[]).includes(j.id));
+        const count = linkJobs.length;
         const isEditing = editing===l.token;
-        const supersLines = superAssignmentLines(l);
         return (
           <div key={l.token} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:l.revoked?0.6:1}}>
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -44540,12 +44614,9 @@ function GCPortalManager({ jobs, identity }) {
                   {(l.contacts||[]).length ? (l.contacts||[]).map((c,i)=>(
                     <div key={c.id||i} style={{color:"#5E6670"}}>{c.name}{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}{c.email===false?" · (no email)":""}</div>
                   )) : <div style={{color:"#8A93A3"}}>No contacts yet — click Edit to add.</div>}
-                  {supersLines.length ? (
-                    <Fragment>
-                      <div style={{fontWeight:600,color:"#1B1F24",margin:"6px 0 3px"}}>Per-job assignments</div>
-                      {supersLines.map((line,i)=>(<div key={i} style={{color:"#5E6670"}}>{line}</div>))}
-                    </Fragment>
-                  ) : null}
+                  {/* v405: per-job supers are SET here, not just listed — what the office picks is what the portal shows */}
+                  <div style={{fontWeight:600,color:"#1B1F24",margin:"8px 0 4px"}}>Their super on each job <span style={{fontWeight:400,color:"#8A93A3"}}>— what you set here is what their portal shows</span></div>
+                  <GCOfficeSuperAssign link={l} jobs={linkJobs} allJobs={jobs} busy={busy===l.token+"_super"} onSave={(jobId, ids)=>saveSupers(l, jobId, ids)}/>
                 </div>
 
                 {/* P0-3: send a real test digest before any contractor sees one */}
@@ -47742,6 +47813,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Huddle** · 'shipped' · 'HuddleSheet' · weekly team huddle prep
 - **Subcontractors** · 'shipped' · external contractor view
 - **Contractors** · 'shipped 2026-07-21' · 'SW v352' · 'GCPortalManager' + 'GCPortalInbox' · the GC/contractor portal management promoted out of Settings into its own top-level nav tab (gated 'users.manage') — per-contractor link create/edit/revoke, contacts, per-job super assignment, send-test-digest, and the two-way requests inbox all in one place. Settings keeps a one-line pointer to the tab. Phase 1 of the Contractors build; the SimPro-derived GC auto-list (from 'job.gc') + per-job super auto-fill is the next phase — spec in '08-Specs/Contractors Tab Spec.md'
+  - **Office sets their super per job + portal plans + un-removable super fix** · 'shipped 2026-09-15' · 'SW v405' · Koy: *"you cannot remove a selected super from their side, and when a super is selected on the CC they should be made the super on that side as well. CC is the source of truth always."* and *"no plans are appearing there at all."* Three things, one ship. **(1) Office-side super picker** ('GCOfficeSuperAssign', on every link card under Contacts): each job on the portal (name-matched + force-included − hidden) lists its current super chips with **Assign / Change** → chips of the link's contacts → **Save**, which calls 'gcPortalUpdateLink' with a new 'supersByJobPatch: {jobId: ids}' — the server ('gcPortal.cleanSupersPatch', same limits as the GC's own 'assign': ≤6 ids/job, ≤40 chars, deduped, tag-stripped, job id ≤64 with no field-path specials) writes ONE field path 'supersByJob.<jobId>' per save, never the whole map, so an office click can't clobber a super the GC set on another job a moment earlier; the portal's live 'gc_links' listener repaints the contractor's chips as it lands. This is the Phase 2b "per-job super assignment" from the Contractors Tab Spec, minus the SimPro seed. The old read-only "Per-job assignments" lines are gone (replaced by the picker). **(2) Root cause of "can't remove"** — found in live data: the Robison link still carries pre-P0-2 NAME-keyed entries ('"Austin"', '"Robison Office"') that match no contact id, so 'GCSuperAssign' rendered them as raw chips in view mode but hid them in edit mode (the roster only lists contacts) — they rode along in the draft and could never be unticked, on either side. Both pickers now render such orphans (legacy names, or a contact the office since removed) as their own removable chip: amber **"· old entry"** in the office, **"· not on your team list"** on the portal; Save with none left clears the job. **(3) Plans on the portal** — the Documents section had only a placeholder; nothing was ever projected. 'projectJobForPortal' now carries 'plans: plansView(job)' = the job's **plans folder link** ('planLink', https-only) + its **uploaded plan files** ('planFiles' from the Plans & Links tab — ONLY 'name'+'url' cross the wall; 'storagePath'/'size'/'type' are leak-guarded in 'gcportal-test'; https-only; 12 max; names tag-stripped). Not projected on purpose: lighting/panel schedule links and FieldInk live-plan shares (add deliberately if wanted). Portal renders **Plans folder** and **Plans — <file>** links above the Matterport rows; a pre-v405 mirror with no 'plans' key falls back to the old placeholder. **(4) Mirrors auto-rebuild** (Koy: *"can you make it so they all auto rebuild?"*): 'gcPortal.PROJECTION_VERSION' (now 2) is stamped on the mirror meta doc by every rebuild; 'gcPortalHealStaleMirrors' rebuilds any ACTIVE portal whose stamp is older, run by 'gcPortalListLinks' (so opening the Contractors tab heals everything and toasts *"Refreshed N contractor portals to the current layout"*) and by the nightly 'gcPortalDailyDigest' before it builds digests — one rebuild per shared portalId, capped at 25, failures logged never thrown. Bump the version whenever the projection's shape changes; a prebuild check pins the top-level key list to the version so a shape change without a bump fails the build. No more Rebuild-per-link after a deploy (the button stays for membership fixes). 20 new prebuild checks. Deploy: 'functions:gcPortalUpdateLink,functions:gcPortalListLinks,functions:gcPortalDailyDigest,functions:gcPortalBackfill,functions:onJobUpdate,functions:gcPortalCreateLink,functions:gcPortalSetRevoked' (every function that projects, patches, or heals a link) BEFORE the app push, or the office Save is a server no-op. Why it can't lose data: the only new write is a per-job 'supersByJob.<jobId>' field-path update on 'gc_links/{token}' — the exact shape the GC-side 'assign' has used since v340 — behind the live-PIN 'requireAdmin' gate; the projection change is additive (a new 'plans' key on the mirror doc, no existing key touched, 'jobs/{id}' never written); no rules change ('gc_links' stays client-write-denied), no loader change, no job field added or renamed.
   - **Discovery: contractors on your jobs with no portal yet** · 'shipped 2026-07-21' · 'SW v353' · a panel atop the Contractors tab that groups live jobs by the normalized '_gcKeyOf(job.gc)' (byte-identical to the server membership key 'gcKeyOf' in 'functions/gcPortal.js'), drops GCs that already have a non-revoked link, and lists the rest **most-jobs-first** so repeat GCs float up and one-off names sink. "Create portal" pre-fills the create form and the new link auto-matches those jobs via the same key. Client-only (reads the 'gc' field already on every job), no backend change. Near-duplicate variants (e.g. "City Point" vs "City Point Homes") list separately by design — merge them with 'jobIdsInclude' when creating the link (manual curation, per Koy's "portals first so I can clean it up")
     - **Contacts pull from Simpro on Create** · 'shipped 2026-07-22' · 'SW v354' · "Create portal" in the discovery panel prefills the create form's name AND pulls that GC's **customer contacts** from Simpro into the contact editor. New read-only callable 'gcSimproCustomerContacts' (job → 'Customer.ID' → '/customers/{id}/contacts/' list → per-contact '/customers/{id}/contacts/{cid}' detail for Email/CellPhone), returns app-shaped '{name,role,emailAddr,phone}' with **PrimaryJobContact/JobContact floated to the top**. ONE customer lookup per GC (all of a GC's jobs share a customer). Endpoints + field shape confirmed against Koy's live tenant via a temporary probe (job SiteContacts were empty; contacts live on the customer, e.g. City Point Homes #303 → Luke/Sam Norman). Read-only over Simpro/Firestore; **office reviews every pulled contact before Create.** 'requireAdmin'-gated (live-PIN, like every gc* office callable — review pass hardened this from the app-key-only first cut; also chunked the detail fetches ×5 for Simpro rate limits, surfaced 'failedCount' + the Simpro 'customerName' in the office toast, and fixed a create-form state-leak/race so one GC's pulled contacts can never survive into another GC's form)
     - **Office control + observability bundle** · 'shipped 2026-07-23' · 'SW v355' · four review-pass conveniences (plus a second adversarial pass over the diff itself — 9 findings, 6 fixed in-bundle): (1) **per-contact "email on/off" toggle** in 'GCContactEditor' (create + edit) — the staged-rollout gate: flip contacts live one at a time as links are handed over; server already honors 'email:false'; **Simpro-pulled contacts start email-OFF** (bulk imports must be opted IN person-by-person; hand-typed contacts still default ON) and retyping the create form to a different GC clears pulled contacts/includes + drops in-flight pulls; (2) **digest observability** — 'gcPortalDailyDigest' writes a run-health doc ('gc_config/mail_health': lastRunAt/sent/failed/soak, function-only via the existing gc_config deny-all rule) and re-queues failed sends into 'gc_notify_queue' (5-try drain retry, counted toward the change-gate since the queue owns delivery); 'gcPortalListLinks' returns health + per-portal 'lastDigestAt'; the Contractors tab shows a red failure banner + "Last digest: X" per link card (during a soak the card instead says digests are rerouted — keyed off LIVE 'gc_config/mail' soak state via 'soakLive', never the stale last-run snapshot); (3) **force-include job picker** ('jobIdsInclude', create + edit) — merge a job filed under a different GC spelling ("City Point" → "City Point Homes") onto a portal; backend already accepted it, UI now sends it, save rebuilds the mirror; (4) **soak-aware test-digest confirmation** — 'gcPortalSendTestMail' returns 'soakedTo' and the office toast says where the mail actually landed instead of sending you to the wrong inbox
@@ -47923,6 +47995,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
+  - Plans on the portal + office-set supers · 'shipped 2026-09-15' · 'SW v405' · see the Contractors entry above — Documents now lists the job's plans folder link and uploaded plan PDFs (name+url only, https-only); per-job supers can be set from the office link card and stale/legacy super entries are removable on both sides.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
   - Phase 0 safety-bar hardening (14-item audit, pre-launch — not yet live to any real GC) · 'shipped 2026-07-21' · 'SW v351' · closed every gap found before the first real contractor sees a link: office can now Edit an existing link's contacts/branding/hidden-jobs ('GCContactEditor' reused in create + edit, including in-place contact rename that preserves the contact's id — Fable verification pass caught that remove-and-re-add was silently minting a new id and orphaning 'supersByJob'), "Send test digest to me" ('gcPortalSendTestMail') so email is verified before any real send, all 7 office gcPortal* callables + the new test-mail callable gated by a real live-PIN 'requireAdmin' (not the static app key alone), contact/super-assignment routing rekeyed off stable contact 'id' instead of display name (a rename can no longer orphan email routing — 'GCSuperAssign' + 'gcDigestRecipients'/'emailRecipients' both fixed, regression test added), self-service contact/roster changes now file a 'gc_requests' review instead of writing live (closes a silent-hijack hole), fixed-window rate limiting on 'gcPortalSubmit' ('gc_rate', function-only), a SendGrid bounce/complaint webhook ('gcSendGridWebhook' → 'gc_bounces', function-only, HMAC-verified, fails safe unconfigured — Fable pass caught 'gcLoadMailConfig' dropping 'webhookPublicKey' from its cached config, which silently no-op'd every event even once the key was set; fixed), office visibility into a link's contacts + per-job super assignments (previously invisible), sticky-exclude now unions across ALL of a GC's links including revoked ones (previously a revoked link's hides could vanish), a contractor-visible "Homestead has acted on this" status readback ('link.requestStatuses'), a distinct "having trouble connecting" state on the portal's live listeners (previously indistinguishable from "link revoked" / "no jobs"), and a cross-GC mirror-isolation test proving two contractors sharing one job never see each other's link data. Backend covered by 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js' (all passing); independently verified by a second model pass (Fable) which caught the two bugs noted above; day-one go-live steps in 'GC_PORTAL_ROLLOUT_CHECKLIST.md'. Known open item, deliberately not fixed here: 'settings/users' (holds admin PINs) is 'allow read, write: if true' in firestore.rules — the new admin gate is only as strong as that being locked down, which it isn't yet; needs an explicit decision since tightening it could affect the in-app PIN-change flow.
   - v343 audit round (Cursor draft → Claude-approved) · 'shipped 2026-07-17' · 'SW v344' · office inbox labels date anchors (Finish start / Matterport / Return trip / Question); Matterport CTA gated by shared '_gcMpNeedsDate' (card tags + modal can't drift; terminal 'complete' excluded), counts toward Need-your-input, confirm-vs-suggest 'dateKind' when scheduled; status pills map straight from the official ROUGH/FINISH status set (waiting_date/date_confirmed/scheduled/inprogress/waiting/complete — never 'projectedStart' alone); mirror projects 'matterportStatusDate' (+2 tests); 'gcPortalSubmit' requires a date, validates the anchor against the live mirror, and dedupes open same-anchor requests ('deduped:true'); broken-logo Set resets on link/logoUrl change. Needs 'firebase deploy --only functions:gcPortalSubmit'
@@ -52626,6 +52699,13 @@ function GCSuperAssign({ P, link, jobId, onAssign }) {
     </div>
   );
   const toggle = (id) => setDraft(d => { const nx = new Set(d); if (nx.has(id)) nx.delete(id); else nx.add(id); return nx; });
+  // v405 (Koy: "you cannot remove a selected super from their side"): an
+  // assigned id with no roster contact — a legacy NAME-keyed entry from before
+  // P0-2, or a contact the office since removed — was invisible in edit mode,
+  // so it rode along in `draft` and could never be unticked. Render those as
+  // their own removable chips.
+  const orphans = [...draft].filter(id => !roster.some(c => c.id === id));
+  const nothingToPick = !roster.length && !orphans.length;
   const save = async () => {
     setState("saving");
     try { await onAssign([...draft]); setEditing(false); setState(null); }
@@ -52635,11 +52715,12 @@ function GCSuperAssign({ P, link, jobId, onAssign }) {
     <div>
       <div style={{fontSize:12,color:P.muted,marginBottom:7}}>Tap the teammates who run this job — they'll get this job's updates. Two or more is fine.</div>
       <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:9}}>
-        {roster.length ? roster.map(c => chip(c.id, c.name, draft.has(c.id), () => toggle(c.id)))
-          : <span style={{fontSize:12.5,color:P.muted}}>No team contacts on file yet — send us a message below and we'll add them.</span>}
+        {roster.map(c => chip(c.id, c.name, draft.has(c.id), () => toggle(c.id)))}
+        {orphans.map(id => chip(id, nameOf(id) + " · not on your team list", true, () => toggle(id)))}
+        {nothingToPick ? <span style={{fontSize:12.5,color:P.muted}}>No team contacts on file yet — send us a message below and we'll add them.</span> : null}
       </div>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        <button disabled={state==="saving"||!roster.length} onClick={save} style={{..._gcPrimaryBtn(P),opacity:(state==="saving"||!roster.length)?0.5:1}}>{state==="saving"?"Saving…":"Save"}</button>
+        <button disabled={state==="saving"||nothingToPick} onClick={save} style={{..._gcPrimaryBtn(P),opacity:(state==="saving"||nothingToPick)?0.5:1}}>{state==="saving"?"Saving…":"Save"}</button>
         <button onClick={()=>{ setEditing(false); setState(null); }} style={_gcMiniBtn(P)}>Cancel</button>
         {state==="error" ? <span style={{fontSize:11.5,color:P.urgent}}>Couldn't save — check your connection and try again.</span> : null}
       </div>
@@ -52810,17 +52891,26 @@ function GCPortalDetail({ job, link, P, onClose }) {
           j.changeOrders.open ? j.changeOrders.open+" open change order"+(j.changeOrders.open>1?"s":"")+" — we send these by email; reply there to approve." : "All change orders resolved."
         )) : null}
 
-        {/* documents: plans placeholder + matterport links (real hrefs) */}
-        {sec("Documents", (
+        {/* documents: plans (folder link + uploaded plan PDFs — v405, projected
+            from the job's Plans & Links tab) + matterport links (real hrefs).
+            A mirror written before v405 has no `plans` key → guard. */}
+        {(()=>{ const plans = Array.isArray(j.plans) ? j.plans : []; const mp = (j.matterport && j.matterport.links) || []; return sec("Documents", (
           <Fragment>
-            {j.matterport && j.matterport.links.length ? j.matterport.links.map((m,i)=>(
+            {plans.map((p,i)=>(
+              <div key={"pl"+i} style={{marginBottom:6}}>
+                <a href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>{p.kind==="link" ? "Plans folder" : "Plans — "+_gcTxt(p.label)} ↗</a>
+                <span style={{fontSize:11.5,color:P.muted}}>{p.kind==="link" ? " (the shared plans folder for this job)" : ""}</span>
+              </div>
+            ))}
+            {mp.map((m,i)=>(
               <div key={"mp"+i} style={{marginBottom:6}}>
                 <a href={safeUrl(m.url)} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>3D walkthrough — {m.label} ↗</a>
                 <span style={{fontSize:11.5,color:P.muted}}> (a 3D as-built of your walls)</span>
               </div>
-            )) : line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.")}
+            ))}
+            {!plans.length && !mp.length ? line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.") : null}
           </Fragment>
-        ))}
+        )); })()}
 
         {/* two-way: message the crew / add an item (Piece 4a) */}
         {sec("Work with Homestead on this job", (

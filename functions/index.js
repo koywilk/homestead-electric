@@ -5769,8 +5769,31 @@ async function gcPortalRebuildMirror(link) {
   existing.docs.forEach((d) => { if (!wanted[d.id]) ops.push({ ref: d.ref, op: "delete" }); });
   Object.keys(wanted).forEach((id) => ops.push({ ref: pref.collection("jobs").doc(id), op: "set", data: wanted[id] }));
   await gcPortalCommitChunked(ops);
-  await pref.set({ gcKey: m.gcKey || link.gcKey, updatedAt: new Date().toISOString() }, { merge: true });
+  await pref.set({ gcKey: m.gcKey || link.gcKey, updatedAt: new Date().toISOString(), projectionVersion: gcPortal.PROJECTION_VERSION }, { merge: true });
   return Object.keys(wanted).length;
+}
+
+// Auto-heal stale mirrors (Koy 2026-09-15: "can you make it so they all auto
+// rebuild?"). Every projection-shape change used to need a manual Rebuild on
+// each link card. The mirror meta now carries `projectionVersion`; any ACTIVE
+// portal whose stamp isn't the current gcPortal.PROJECTION_VERSION is rebuilt
+// the next time the office opens the Contractors tab (gcPortalListLinks) or the
+// nightly digest runs — whichever comes first. One rebuild per portalId (links
+// sharing a GC share a mirror), capped, and a failure is logged, never thrown:
+// listing links must not break because one rebuild did. Returns the count.
+async function gcPortalHealStaleMirrors(activeLinks) {
+  const byPortal = new Map();
+  (activeLinks || []).forEach((l) => { if (l && l.portalId && l.gcKey && l.revoked !== true && !byPortal.has(l.portalId)) byPortal.set(l.portalId, l); });
+  let healed = 0;
+  for (const [portalId, link] of [...byPortal.entries()].slice(0, 25)) {
+    try {
+      const meta = (await db.collection("gc_portal").doc(portalId).get()).data() || {};
+      if (meta.projectionVersion === gcPortal.PROJECTION_VERSION) continue;
+      await gcPortalRebuildMirror(link);
+      healed++;
+    } catch (e) { console.error("gcPortalHealStaleMirrors", portalId, e && e.message); }
+  }
+  return healed;
 }
 
 // Shared contact normalizer (office create + GC self-service via the portal).
@@ -5934,6 +5957,17 @@ exports.gcPortalUpdateLink = functions.https.onCall(async (data) => {
   if (typeof data.logoUrl === "string") patch.logoUrl = gcPortal.cleanLogoUrl(data.logoUrl);
   if (typeof data.label === "string" && data.label.trim()) patch.label = data.label.trim();
   if (data.supersByJob && typeof data.supersByJob === "object" && !Array.isArray(data.supersByJob)) patch.supersByJob = data.supersByJob;
+  // Per-job super assignment from the office (Koy 2026-09-15: "CC is the source
+  // of truth always"). Field-path writes per job — never a whole-map replace —
+  // so an office click can't clobber a super the GC assigned on ANOTHER job a
+  // moment earlier. Same limits as the GC's own `assign` submit (cleanSupersPatch).
+  // A patch and a full-map replace can't share one update() (parent + child
+  // field conflict), so the targeted patch wins when both arrive.
+  const supersPatch = gcPortal.cleanSupersPatch(data.supersByJobPatch);
+  if (supersPatch) {
+    delete patch.supersByJob;
+    Object.keys(supersPatch).forEach((jid) => { patch["supersByJob." + jid] = supersPatch[jid]; });
+  }
   const cleanIds = (a) => a.map(String).filter(Boolean).slice(0, 500);
   let membershipChanged = false;
   if (Array.isArray(data.jobIdsInclude)) { patch.jobIdsInclude = cleanIds(data.jobIdsInclude); membershipChanged = true; }
@@ -6239,6 +6273,10 @@ exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
 exports.gcPortalListLinks = functions.https.onCall(async (data) => {
   await requireAdmin(data);
   const snap = await db.collection("gc_links").orderBy("createdAt", "desc").limit(300).get();
+  // v405: rebuild any active portal whose mirror predates the current
+  // projection shape, BEFORE the office sees the list (so "Last digest" /
+  // counts reflect the healed state). Never throws.
+  const healedPortals = await gcPortalHealStaleMirrors(snap.docs.map((d) => d.data()));
   // Digest observability (review finding): the office had no way to see when a
   // portal's digest last went out or that a run failed. Batch-read each unique
   // portal's meta + the run-health doc and return them alongside the links.
@@ -6255,7 +6293,7 @@ exports.gcPortalListLinks = functions.https.onCall(async (data) => {
   // Return ONLY the soak fields; never the mail doc itself (it holds the API key).
   let soakLive = null;
   try { const m = (await db.collection("gc_config").doc("mail").get()).data() || {}; soakLive = { soak: !!m.soakTo, soakTo: String(m.soakTo || "") }; } catch (e) {}
-  return { lastDigestByPortal, mailHealth, soakLive, links: snap.docs.map((d) => {
+  return { lastDigestByPortal, mailHealth, soakLive, healedPortals, links: snap.docs.map((d) => {
     const l = d.data();
     return {
       token: l.token, slug: l.slug, label: l.label, gc: l.gc, gcKey: l.gcKey, portalId: l.portalId,
@@ -6525,6 +6563,9 @@ exports.gcPortalDailyDigest = functions.pubsub
   .schedule("0 20 * * *").timeZone(TZ).onRun(async () => {
     const cfg = await gcLoadMailConfig();
     const links = await db.collection("gc_links").where("revoked", "==", false).get();
+    // v405: heal any mirror still on an older projection shape before building
+    // digests from it (a digest read off a stale mirror would omit new fields).
+    await gcPortalHealStaleMirrors(links.docs.map((d) => d.data()));
     const byPortal = {};
     links.docs.forEach((d) => { const l = d.data(); if (l.portalId) (byPortal[l.portalId] = byPortal[l.portalId] || []).push(l); });
     let sent = 0, portals = 0, failed = 0;

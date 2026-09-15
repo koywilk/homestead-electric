@@ -42,6 +42,15 @@ function stripHtml(s) {
     .trim();
 }
 
+// Projection shape version. BUMP THIS whenever projectJobForPortal's output
+// shape changes (new key, renamed key, different nesting). The mirror meta doc
+// (gc_portal/{portalId}) is stamped with it on every rebuild; any active portal
+// whose stamp is older is rebuilt automatically the next time the office opens
+// the Contractors tab or the nightly digest runs (gcPortalHealStaleMirrors in
+// index.js) — Koy 2026-09-15: "make it so they all auto rebuild". v1 = the
+// pre-stamp era (no plans key); v2 = plans added (SW v405).
+const PROJECTION_VERSION = 2;
+
 const cap = (arr, n) => (Array.isArray(arr) ? arr.slice(0, n) : []);
 const str = (v, max) => stripHtml(v).slice(0, max || 300);
 const bool = (v) => v === true;
@@ -246,6 +255,43 @@ function jobBelongsToLink(jobId, job, link) {
 }
 
 // ── THE projection: one job → its portal view (or null to exclude) ──────────
+// Plans for the portal. Koy 2026-09-15: "no plans are appearing there at all" —
+// the portal's Documents section only ever had a placeholder; nothing projected.
+// Two sources, both from the job's own Plans & Links tab: the plans folder link
+// (`planLink`) and the uploaded plan PDFs (`planFiles`, Firebase Storage —
+// {id,name,url,storagePath,type,size}; only name+url cross the wall).
+// https-only, names stripped, capped. Deliberately NOT included: lighting/panel
+// schedule links and FieldInk live-plan shares — explicit allowlist, add on purpose.
+function plansView(job) {
+  const out = [];
+  const link = typeof job.planLink === "string" ? job.planLink.trim() : "";
+  if (/^https:\/\//i.test(link)) out.push({ kind: "link", label: "Plans folder", url: link.slice(0, 500) });
+  const files = Array.isArray(job.planFiles) ? job.planFiles : [];
+  cap(files.filter((f) => f && typeof f.url === "string" && /^https:\/\//i.test(f.url.trim())), 12)
+    .forEach((f) => out.push({ kind: "file", label: str(f.name, 80) || "Plan file", url: String(f.url).trim().slice(0, 700) }));
+  return out;
+}
+
+// Office-side per-job super assignment (gcPortalUpdateLink `supersByJobPatch`).
+// Koy 2026-09-15: "when a super is selected on the CC they should be made the
+// super on that side as well. CC is the source of truth always." Same limits as
+// the GC's own `assign` submit: ids are contact ids (≤40 chars, ≤6 per job,
+// deduped), job ids are short doc ids (≤64, no field-path specials — each key
+// becomes the Firestore field path `supersByJob.<jobId>`). An EMPTY array is a
+// valid value: it clears that job's assignment. Returns {jobId: ids} or null.
+function cleanSupersPatch(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return null;
+  const out = {};
+  Object.keys(patch).slice(0, 200).forEach((jobId) => {
+    const k = String(jobId || "").trim();
+    if (!k || k.length > 64 || /[.~*/\[\]]/.test(k)) return;
+    const arr = Array.isArray(patch[jobId]) ? patch[jobId] : null;
+    if (!arr) return;
+    out[k] = [...new Set(arr.map((s) => stripHtml(String(s == null ? "" : s)).trim().slice(0, 40)).filter(Boolean))].slice(0, 6);
+  });
+  return Object.keys(out).length ? out : null;
+}
+
 function projectJobForPortal(jobId, job) {
   if (!job || typeof job !== "object") return null;
   if (job.archived === true || job.deleted === true) return null;
@@ -284,6 +330,7 @@ function projectJobForPortal(jobId, job) {
       items: qcItemsOf(job.roughPunch).concat(qcItemsOf(job.finishPunch)).slice(0, 30),
     },
     matterport: matterportView(job),
+    plans: plansView(job),
     returnTrips: returnTripsView(job.returnTrips),
     questions: questionsView(job),
     changeOrders: {
@@ -295,6 +342,7 @@ function projectJobForPortal(jobId, job) {
 }
 
 module.exports = {
+  PROJECTION_VERSION,
   gcKeyOf,
   stripHtml,
   hashOf,
@@ -302,6 +350,7 @@ module.exports = {
   makeSlug,
   makeContactId,
   cleanLogoUrl,
+  cleanSupersPatch,
   jobBelongsToLink,
   projectJobForPortal,
   // exported for tests
@@ -310,4 +359,5 @@ module.exports = {
   questionsView,
   returnTripsView,
   matterportView,
+  plansView,
 };

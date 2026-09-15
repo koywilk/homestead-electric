@@ -2,7 +2,7 @@
 // Guards the outbound wall (functions/gcPortal.js). Exit 0 = all pass.
 "use strict";
 const {
-  gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, projectJobForPortal, jobBelongsToLink,
+  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, projectJobForPortal, jobBelongsToLink,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -18,6 +18,13 @@ const FIXTURE = {
   simproNo: "1107",
   updated_at: "2026-07-16T12:00:00.000Z",
   gc: "  Robison  ",
+  // ---- plans (v405): folder link + uploaded plan files; only name+url may cross
+  planLink: "https://drive.google.com/drive/folders/PLANFOLDER",
+  planFiles: [
+    { id: "1", name: "<b>Cowdrey</b> lighting schedule.pdf", url: "https://firebasestorage.googleapis.com/v0/b/x/o/jobs%2F1%2Fplans%2F1.pdf?alt=media&token=tok", storagePath: "jobs/1/plans/STORAGEPATH.pdf", type: "application/pdf", size: 275954 },
+    { id: "2", name: "insecurefile.pdf", url: "http://firebasestorage.googleapis.com/x.pdf", storagePath: "jobs/1/plans/2.pdf" },
+    null,
+  ],
   archived: false,
   // ---- forbidden internals (leak-guard targets) ----
   simproMargin: 42.5,
@@ -149,6 +156,7 @@ const json = JSON.stringify(v).toLowerCase();
   ["internal", "internal notes"], ["slow to pay", "flag note"], ["material", "RT material list"],
   ["30' 12/2", "material contents"], ["keegan", "foreman name"], ["dailyupdates", "daily updates"],
   ["panelbeforegen", "panel snapshot"], ["side mount secret", "answer text (answers not in v1 mirror)"],
+  ["storagepath", "plan file storage path"], ["275954", "plan file size"], ["insecurefile", "http plan file"],
 ].forEach(([needle, label]) => t("no leak: " + label, !json.includes(needle), "found '" + needle + "'"));
 
 console.log("allowlist content present:");
@@ -158,6 +166,25 @@ t("qc items = fromQC only", v.qc.items.length === 2 && v.qc.items.every((q) => q
 t("qc fixer first-name only", v.qc.items[0].fixedBy === "Gage" && v.qc.items[1].fixedBy === "Trever");
 t("matterport keeps https links only", v.matterport.links.length === 1 && v.matterport.links[0].url.startsWith("https://"), JSON.stringify(v.matterport.links));
 t("matterport label", v.matterport.links[0].label === "Rough as-built");
+t("plans: folder link first, then https files only", v.plans.length === 2 && v.plans[0].kind === "link" && v.plans[0].url.endsWith("PLANFOLDER") && v.plans[1].kind === "file", JSON.stringify(v.plans));
+t("plans: file name stripped of tags", v.plans[1].label === "Cowdrey lighting schedule.pdf", v.plans[1].label);
+t("plans: only label/kind/url cross", Object.keys(v.plans[1]).sort().join(",") === "kind,label,url");
+t("plans: empty when the job has none", projectJobForPortal("x", { ...FIXTURE, planLink: "", planFiles: [] }).plans.length === 0);
+t("plans: http folder link dropped, missing fields safe", plansView({ planLink: "http://drive.google.com/x" }).length === 0 && plansView({}).length === 0);
+t("projection shape is stamped: PROJECTION_VERSION must be bumped when the top-level keys change",
+  PROJECTION_VERSION === 2 && Object.keys(v).sort().join(",") === "address,changeOrders,finish,id,matterport,name,plans,qc,questions,quickJob,quickJobStatus,returnTrips,rough,simproNo,tempPed,updatedAt",
+  "keys=" + Object.keys(v).sort().join(",") + " version=" + PROJECTION_VERSION);
+t("plans: files capped at 12", plansView({ planFiles: Array.from({ length: 20 }, (_, i) => ({ name: "f" + i, url: "https://x/" + i })) }).length === 12);
+
+console.log("cleanSupersPatch (office per-job super patch, v405):");
+t("valid patch passes", JSON.stringify(cleanSupersPatch({ "1772828648934": ["c_a", "c_b"] })) === JSON.stringify({ "1772828648934": ["c_a", "c_b"] }));
+t("empty array = clear (kept)", JSON.stringify(cleanSupersPatch({ j1: [] })) === JSON.stringify({ j1: [] }));
+t("dedupes, strips tags, caps at 6", (() => { const r = cleanSupersPatch({ j1: ["a", "a", "<b>b</b>", "c", "d", "e", "f", "g"] }); return r.j1.length === 6 && r.j1[1] === "b"; })());
+t("id clipped to 40", cleanSupersPatch({ j1: ["x".repeat(80)] }).j1[0].length === 40);
+t("bad job ids dropped (dots, slashes, overlong, empty)", cleanSupersPatch({ "a.b": ["c"], "a/b": ["c"], [("x".repeat(65))]: ["c"], "": ["c"] }) === null);
+t("non-array value dropped", cleanSupersPatch({ j1: "c_a" }) === null);
+t("non-object → null", cleanSupersPatch(null) === null && cleanSupersPatch(["j1"]) === null && cleanSupersPatch("x") === null);
+t("falsy ids filtered", JSON.stringify(cleanSupersPatch({ j1: ["", null, "c_a"] })) === JSON.stringify({ j1: ["c_a"] }));
 t("matterport statusDate projected when present", (() => {
   const withDate = projectJobForPortal("x", { ...FIXTURE, matterportStatus: "scheduled", matterportStatusDate: "7/22/2026", matterportLinks: [], matterportLink: "" });
   return withDate.matterport.status === "scheduled" && withDate.matterport.statusDate === "7/22/2026" && withDate.matterport.links.length === 0;
