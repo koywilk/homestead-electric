@@ -47819,6 +47819,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 ## Top-Level Views (Nav Tabs)
 
 - **Job Board — crews, not books** · 'shipped 2026-09-12' · 'SW v399' · the reorg cleanup slice Koy asked to see ("it's still showing all the coordinators and books"). The three "…'s Book" bands, the "No coordinator" band, and the "Show all jobs →" **book page** ('view==="book"', 'openBook', 'activeBook', 'showBookCompleted') are gone; the board's own ALL JOBS section already lists the whole company by stage. In their place one **Crews** band ('N foremen · M job sites') with a sort — **Most jobs** first (the head's where's-the-load read) or **A–Z** ('crewSort') — and every foreman card exactly as it was; Paul and Zane are just crews now. The Crew Schedule filter drops its "Books (coordinator)" group ('coordinatorBooks' memo, 'coord_' pref branch, 'coordMatch', and the day-column 'activeCrew' branch removed; the Crews group keeps its options), and Settings → Default schedule view drops the "…'s book (whole coordinator)" options — a previously saved 'coord_…' default now falls through to Auto (own crew). **Why it won't lose data:** read-side / UI only — no Firestore writes added or changed, no loader change, no rules change; the per-foreman 'coordinator' values in 'settings/users' are untouched (Scoreboard's coordinators board, Huddle chips and the functions' 'coordUserOf' routing still read them until their own cleanup); a user's saved 'defaultScheduleView' string is not rewritten, it just resolves differently.
+- **My Day — the head owns every auto-task; Push delegates** · 'shipped 2026-09-15' · 'SW v408' · Koy: *"it is flooded with tasks that don't really make sense for the foremans… all of them flow through me… a button or option to push task to job foreman or pick a person."* **Who sees what:** foremen no longer get auto rows at all — Mine = task docs on them ∪ their punch items; the Head of Residential ('resiHead') gets EVERY non-prep auto-task on every live job ('headAutoTasks'), plus task docs, punch, and stage duties; lanes unchanged. **Push:** each head auto row has '→ <job foreman>' (one tap) and 'Pick person…' (roster). Pushing writes ONE 'needs' doc through 'saveNeed' ('autoTaskDoc': kind task, the rule's title/desc/job/due, assignedTo, assignedBy = head, and the new additive **'autoTaskId'**). The delegate sees an ordinary task in Mine and gets the existing 'need_assigned' push. The head row then reads its state from the doc ('autoDelegation' join, never stored): **with X · age** (Take back / Re-push) → when X marks it Done, **done by X · verify** (Koy chose verify-before-clear) with Done (existing 'clearedTasks' clear) and Send back (reopens the doc to X). One open doc per auto-task: pushing again reassigns via 'patchNeed', never a second doc. Head Done with an open doc closes the doc too ('doneBy' head). **Duplicates folded:** the duties engine's Rough/Finish QC walk and start-PO rows win over the task engine's '_qc_walk' / '_final_qc_walk' / '_rough_po' / '_finish_po' twins on the head board ('foldDutyTwins'; neither engine changed). **Foreman's "On Koy":** collapsed to one line per job — *"Koy has N things on this job"* — opening to the read-only rows plus **+ Add for Koy** (Quick-add preset with job + To: head; 'NeedQuickAdd' now honours 'preset.assignedTo'). Harness 'scripts/needs-dryrun.js' gains sections 8–12 (foreman zero auto rows, head all, twins, autoTaskDoc shape, delegation states + reassign-not-duplicate). Guides 'myday.html' + 'needs.html' updated. No rules / functions / loader change. **Why it won't lose data:** one additive field ('autoTaskId') inside the need doc's 'data'; auto-task Done/Snooze keep the existing whole-map 'clearedTasks' / 'taskDueDates' precedents (one 'updateJob' per tap); foremen lose ROWS only — no doc, field, or job value is deleted or renamed; Push/Take back/Send back are ordinary 'saveNeed' / 'patchNeed' writes with version snapshots via the ledger.
+
 - **My Day** ('myday') · 'shipped 2026-09-09' · 'SW v398' · the landing screen for every field role (foreman, lead, crew) and the first nav tab for everyone internal. **One task object:** a 'needs' doc now carries a real person 'assignedTo' (+ 'assignedBy'/'assignedAt'), 'kind' (need|task|bodies), a real 'dueDate' ('dueBucket' kept for the lanes), 'foreman', 'snoozedUntil', 'doneBy' — all additive, all inside 'data', so the needs loader is untouched and the 12 pre-existing docs are read at run time ('assignedTo' absent ⇒ the legacy 'coordinator' is the assignee). **Mine** = task docs on me ∪ punch items assigned to me (the foreman card's Assigned walk, lifted to 'punchAssignedTo(name, jobs)' and keyed to the logged-in identity so leads/crew finally see their own items) ∪ (foremen) auto-tasks for my jobs; **On <head>** = what the Head of Residential owes on my jobs (task docs + read-only 'getCoordinatorDuties'/'getCompanyDuties' rows). Ordered overdue → today → this week → later; every row Done / Snooze (3d · 1wk · date) / 10s Undo. **Quick-add** ('NeedQuickAdd', the round + on phones, '+ Need' on laptops and inside Job Detail): two taps on the fast path — type, Save; chips for kind, **To:** (full roster; default one level up the chain of command via 'defaultAssigneeFor': crew/lead → their foreman, foreman → head, head → self), job, due. **Head of Residential** is a company hat ('resi.head', per-user cap like 'jobprep.own', Settings → Team → COMPANY HATS) resolved by 'resiHead(users)' (falls back to the 'jobprep.own' holder) — never a hardcoded name; coordinators/books are retired in every surface this touched (Needs page: no book transfer, a **To:** roster select instead; no 'coordinator' written on new docs). Auto-task owner for unassigned jobs and prep tasks = the hat holder ('_setTaskOwnerFallback'), replacing the '"Koy"' literals in 'computeTasks'. **Notify:** new 'onNeedWrite' trigger diffs 'assignedTo' old→new → 'need_assigned' push+inbox to the assignee (self-assign and no-op rewrites are silent; deep-links 'view:"myday"', no jobId so same-job pushes can't collapse), and 'need_done' back to the creator when someone else closes it; both keys are real server gates in the registry. Deep-link branches for 'myday' / 'needs' / 'schedule' in 'pendingView' + 'openInboxItem'. Perms: 'myday.view' + 'tasks.create' (all four tiers), 'resi.head' (hat). Harness 'scripts/needs-dryrun.js' (vm-extracts the shipped helpers; in the prebuild chain). Guides 'public/sops/myday.html' + 'needs.html' mounted via '<HelpDot>'. **Why it won't lose data:** every new field lives inside the existing 'data' map (loader returns it verbatim); nothing is renamed or removed; 'patchNeed' writes only touched 'data.<field>' paths (narrower than the previous full-doc setDoc); 'saved_by' on the envelope is read only by the server ledger; existing docs are never rewritten; 'ledgerNeeds' + nightly backups already cover 'needs'; jobs loader / 'saveJob' / job docs untouched (auto-task Done/Snooze use the existing 'clearedTasks' / 'taskDueDates' whole-map precedents; punch Done uses the existing 'togglePunchItemDone' RT cross-sync); delete restores the identical doc id on Undo; no Firestore rules change. Needs 'firebase deploy --only functions:onNeedWrite'. Flip-day step: tick **Head of Residential** on Koy in Settings → Team.
 
 - **Job Board** · 'shipped' · the home screen
@@ -51659,6 +51661,79 @@ function myJobsFor(identity, users, jobs) {
   else if (rec.foremanId) { const fm = (users || []).find(u => u && u.id === rec.foremanId); fmName = (fm && fm.name) || ""; }
   if (!fmName) return [];
   return (jobs || []).filter(j => j && !j.tempPed && matchesForeman(j, fmName));
+}
+
+// ── MY DAY delegation helpers (v408: the head owns every auto-task) ─────────
+// Koy, 2026-09-15: "it is flooded with tasks that don't really make sense for
+// the foremans… all of them flow through me… a button or option to push task
+// to job foreman or pick a person." Foremen get NO auto rows; the Head of
+// Residential gets all of them and PUSHES one by writing an ordinary `needs`
+// task doc that carries `autoTaskId` (the only new field). The head board joins
+// docs back to auto rows at render (autoDelegation) — nothing stored on jobs.
+// Verify-before-clear (Koy's choice): a doc the delegate closed shows as
+// "done by X · verify" until the head clears the auto-task itself.
+// Pure — extracted verbatim by scripts/needs-dryrun.js.
+function headAutoTasks(jobs, cleared, compute = computeTasks) {
+  const live = (jobs || []).filter(j => j && !j.tempPed && !j.quickJob);
+  if (!live.length) return [];
+  const liveIds = new Set(live.map(j => j.id));
+  return compute(live).filter(t => t && t.category !== "prep" && liveIds.has(t.jobId) && !(cleared && cleared.has(t.id)));
+}
+// The task-engine ids that say the same thing as a duties-engine row. The duty
+// row wins on the head board (it has the Mark-sent field + the tab jump).
+const AUTO_DUTY_TWINS = { _qc_walk: "_coord_rough_qc", _final_qc_walk: "_coord_finish_qc", _rough_po: "_coord_rough_po", _finish_po: "_coord_finish_po" };
+function foldDutyTwins(autoTasks, dutyKeys) {
+  const keys = dutyKeys || new Set();
+  return (autoTasks || []).filter(t => {
+    if (!t || !t.jobId) return true;
+    for (const suffix in AUTO_DUTY_TWINS) {
+      if (t.id === t.jobId + suffix && keys.has(t.jobId + AUTO_DUTY_TWINS[suffix])) return false;
+    }
+    return true;
+  });
+}
+// Per auto-task id, the doc that describes its delegation: an OPEN doc beats a
+// done one; among equals the newest assignedAt/createdAt wins. Docs without
+// autoTaskId (hand-typed tasks) are ignored.
+function autoDelegation(needs) {
+  const m = new Map();
+  for (const n of needs || []) {
+    if (!n || !n.autoTaskId) continue;
+    const cur = m.get(n.autoTaskId);
+    if (!cur) { m.set(n.autoTaskId, n); continue; }
+    const nOpen = n.status !== "done", cOpen = cur.status !== "done";
+    if (nOpen !== cOpen) { if (nOpen) m.set(n.autoTaskId, n); continue; }
+    const nAt = String(n.assignedAt || n.createdAt || ""), cAt = String(cur.assignedAt || cur.createdAt || "");
+    if (nAt > cAt) m.set(n.autoTaskId, n);
+  }
+  return m;
+}
+// What the head's row should show for auto-task `t`.
+function autoRowState(t, delegation, headName) {
+  const doc = (delegation && t && delegation.get(t.id)) || null;
+  if (!doc) return { state: "none", doc: null, who: "" };
+  if (doc.status !== "done") return { state: "with", doc, who: needAssignee(doc) };
+  if (doc.doneBy && !sameName(doc.doneBy, headName)) return { state: "verify", doc, who: doc.doneBy };
+  return { state: "none", doc, who: "" };
+}
+// The exact doc Push writes — same shape NeedQuickAdd.save() builds, plus
+// autoTaskId. Due date: the head's snoozed date (taskDueDates) wins, else the
+// rule's date, normalised to YYYY-MM-DD; no date → "week", never "today".
+function autoTaskDoc(t, job, assignee, me, nowIso, id) {
+  const raw = (job && job.taskDueDates && job.taskDueDates[t.id]) || t.dueDate || "";
+  const d = raw ? parseAnyDate(raw) : null;
+  const dueDate = d ? localYmd(d) : "";
+  return {
+    id: id || ("need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7)),
+    kind: "task", text: t.title || "(auto task)", plan: t.desc || "",
+    dueBucket: dueDate ? (dueBucketFromDate(dueDate, new Date(nowIso)) || "week") : "week",
+    dueDate, snoozedUntil: "",
+    assignedTo: assignee || "", assignedBy: me, assignedAt: nowIso,
+    foreman: (job && job.foreman) || t.foreman || "",
+    jobId: t.jobId || "", jobName: t.jobName || (job && job.name) || "",
+    status: "open", createdBy: me, createdAt: nowIso, doneAt: "", doneBy: "",
+    autoTaskId: t.id,
+  };
 }
 
 
