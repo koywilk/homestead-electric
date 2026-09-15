@@ -5184,7 +5184,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onClose }) {
   const first = (n) => String(n || "").split(" ")[0];
   const [text, setText] = useState("");
   const [kind, setKind] = useState("need");
-  const [assignedTo, setAssignedTo] = useState(() => defaultAssigneeFor(identity, users));
+  const [assignedTo, setAssignedTo] = useState(() => (preset && preset.assignedTo) || defaultAssigneeFor(identity, users));
   const [job, setJob] = useState(() => (preset && preset.job) || null);
   const [due, setDue] = useState({ bucket: "tomorrow", date: "" });
   const [open, setOpen] = useState(null); // "to" | "job" | "due" | null
@@ -51890,14 +51890,35 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const live = (jobs || []).filter(j => j && !j.tempPed && !j.quickJob);
     [...live.flatMap(getCoordinatorDuties), ...(can(head, "jobprep.own") ? live.flatMap(getCompanyDuties) : [])].forEach(d => mineRows.push(dutyRow(d, false)));
   }
-  const headRows = iAmHead ? [] : [
-    ...openNeeds.filter(n => onHead(n, identity, users, jobs)).map(n => needRow(n, true)),
-    ...derivedDutiesForForeman(jobs, identity, users).map(d => dutyRow(d, true)),
-  ];
   const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
+  // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
+  // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
+  // Rows = task docs on the head about my jobs ∪ the head's auto rows on my
+  // jobs ∪ duties, with duty twins folded exactly like the head's own board.
+  const [openHeadJobs, setOpenHeadJobs] = useState(() => new Set());
+  const toggleHeadJob = (id) => setOpenHeadJobs(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const headRows = iAmHead ? [] : (() => {
+    const rows = [...openNeeds.filter(n => onHead(n, identity, users, jobs)).map(n => needRow(n, true)),
+      ...derivedDutiesForForeman(jobs, identity, users).map(d => dutyRow(d, true))];
+    const myIds = new Set(myJobs.map(j => j.id));
+    const dutyKeys = new Set(derivedDutiesForForeman(jobs, identity, users).map(d => d.id)); // already `${jobId}_${dutyId}`
+    foldDutyTwins(headAutoTasks(jobs, cleared), dutyKeys).filter(t => myIds.has(t.jobId)).forEach(t => {
+      const st = autoRowState(t, delegation, headName);
+      if (st.state === "with" && sameName(st.who, me)) return; // it's in Mine already
+      rows.push({ key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+        sub: [t.jobName, st.state === "with" ? `with ${first(st.who)}` : `${headFirst}'s`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
+    });
+    return rows;
+  })();
+  const headByJob = (() => {
+    const m = new Map();
+    headRows.forEach(r => { const k = r.jobId || "_none"; if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+    return [...m.entries()].map(([jobId, rows]) => ({ jobId, job: jobById(jobId), rows: sortRows(rows) }))
+      .sort((a, b) => String((a.job && a.job.name) || "").localeCompare(String((b.job && b.job.name) || "")));
+  })();
   const groups = [
     { key: "mine", title: "Mine", rows: sortRows(mineRows), empty: "All clear — nothing on you right now." },
-    ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: sortRows(headRows), empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
+    ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
   ];
 
   const Row = (r) => {
@@ -51963,9 +51984,37 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
           <span style={{ flex: 1, height: 1, background: C.border }} />
         </div>
-        {isOpen && (g.rows.length
-          ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(Row)}</div>
-          : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)}
+        {isOpen && (g.byJob
+          ? (g.byJob.length
+            ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {g.byJob.map(({ jobId, job, rows }) => {
+                  const open = openHeadJobs.has(jobId);
+                  const n = rows.length;
+                  return (
+                    <div key={jobId} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                      <div onClick={() => toggleHeadJob(jobId)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44 }}>
+                        <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "this job"}</span>
+                      </div>
+                      {open && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
+                          {rows.map(Row)}
+                          {canCreate && openQuickAdd && (
+                            <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
+                              style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
+                              + Add for {headFirst}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)
+          : (g.rows.length
+            ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(Row)}</div>
+            : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>))}
       </div>
     );
   };

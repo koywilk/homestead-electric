@@ -228,4 +228,8 @@ eq(H.autoDelegation(null).size, 0, "null-safe");
 const two = H.autoDelegation([{ id:"a", autoTaskId:"k", status:"open", assignedAt:"2026-09-01T00:00:00.000Z" }, { id:"b", autoTaskId:"k", status:"open", assignedAt:"2026-09-02T00:00:00.000Z" }]);
 eq(two.get("k").id, "b", "two open docs (should not happen) -> newest assignedAt wins");
 
+// ── 13. foreman side: head auto rows on MY jobs only; twins folded ──────────
+const gageAutos = H.foldDutyTwins(H.headAutoTasks(jobsWithTP, new Set(), fakeCompute), new Set()).filter(t => H.myJobsFor(gage, users, jobsWithTP).some(j => j.id === t.jobId));
+eq(gageAutos.map(t => t.id), ["j1770_rough_po"], "foreman's On-head list holds only the head's auto rows on their jobs");
+
 console.log("needs-dryrun ok");
