@@ -753,6 +753,33 @@ function ccLoadsGrouped(loads) {
   }
   return out;
 }
+// IMPORT (v403): turn incoming field loads into rows for the job's own Loads
+// list (pl.loads — the plain master list, NOT Savant module slots; assigning to
+// a module stays the existing Assign-to-module flow). Idempotent on
+// `fieldLoadId` (the ccloads id) so Import / Import all can be tapped twice.
+// The name carries the room ("Kitchen Cans") because allSavantLoadsForJob
+// dedupes pl.loads by NAME — thirty rooms of "Cans" would otherwise collapse
+// into one. `location` = LoadsList's floor SECTION label ("Main Level" /
+// "Basement" / "Upper Level", or an extra floor via `floorLabels`) — NOT
+// plSectionLabels, which are panel names. `mk` = the row factory
+// (newCentralLoad; injected so this stays pure).
+// Returns { rows, skipped } — rows to APPEND (never replaces existing rows).
+function ccLoadImportRows(loads, existingRows, mk, floorLabels = {}) {
+  const have = new Set((existingRows || []).map(r => r && r.fieldLoadId).filter(Boolean));
+  const LT = { dimmer: "Dimming", switched: "Switching", tape: "LED", panel: "" };
+  const FL = { main: "Main Level", basement: "Basement", upper: "Upper Level" };
+  const rows = []; let skipped = 0;
+  for (const l of loads || []) {
+    if (!l || !l.id || l.removedAt) { skipped++; continue; }
+    if (have.has(l.id)) { skipped++; continue; }
+    have.add(l.id);
+    const room = String(l.room || "").trim(), base = String(l.name || l.loadId || "Load").trim();
+    const name = room && !base.toLowerCase().includes(room.toLowerCase()) ? `${room} ${base}` : base;
+    const fk = String(l.floor || "").trim().toLowerCase();
+    rows.push({ ...mk(), name, location: (fk && (floorLabels[fk] || FL[fk])) || "", loadType: LT[l.control] ?? "", room, fieldLoadId: l.id, origin: "fieldink" });
+  }
+  return { rows, skipped };
+}
 // ── end ccloads SUGGEST derivations ─────────────────────────────────────────
 
 // ── FieldInk CREW ROSTER seed + CREW TOKEN mint (CC-SIDE SPEC P4.2 Instant
@@ -27684,9 +27711,24 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   on field-flagged rows. Assigning a load to a panel output is still
                   the next increment. */}
               {(()=>{
-                const incoming = Object.values(ccLoadInbox || {}).filter(l => l && !(l.office && l.office.dismissed));
-                if (!incoming.length) return null;
+                const everything = Object.values(ccLoadInbox || {}).filter(Boolean);
+                const dismissedRows = everything.filter(l => l.office && l.office.dismissed);
+                const incoming = everything.filter(l => !(l.office && l.office.dismissed));
+                if (!everything.length) return null;
                 const me = identity?.name;
+                // v403 IMPORT into the job's own Loads list (pl.loads) — one u() patch per
+                // action (H6: never chain single-field panelizedLighting writes).
+                const pl = job.panelizedLighting || {};
+                const plLoads = pl.loads || [];
+                const importedIds = new Set(plLoads.map(r => r && r.fieldLoadId).filter(Boolean));
+                // LoadsList groups by `location` = the literal floor-section labels
+                // (plSectionLabels are PANEL names, not floors). Extra floors map by name.
+                const floorLabels = Object.fromEntries((pl.extraFloors || []).map(ef => [String(ef.label || "").trim().toLowerCase(), ef.label]).filter(([k]) => k));
+                const importLoads = (list) => {
+                  const { rows } = ccLoadImportRows(list, plLoads, newCentralLoad, floorLabels);
+                  if (rows.length) u({ panelizedLighting: { ...pl, loads: [...plLoads, ...rows] } });
+                };
+                const importable = (list) => list.filter(l => !l.removedAt && !importedIds.has(l.id));
                 const KIND_LABEL = { switched: "Switched", panel: "Panel" };
                 const fixtxt = (l) => (Array.isArray(l.fixtures) ? l.fixtures : []).filter(Boolean).map(f => `${f.n} ${f.name}`).join(", ");
                 const ctrlLabel = (l) => l.control === "dimmer" ? "Dimmer" : l.control === "tape" ? "Tape" : l.control === "panel" ? "Panel" : "Switched";
@@ -27706,7 +27748,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const filter = ccLoadUi.filter;
                 const passes = (l) => filter === "pending" ? !!(ccLoadSuggestionStatus(l) && ccLoadSuggestionStatus(l).state === "pending")
                   : filter === "needs" ? (l.needsSwitch === true && !l.removedAt) : true;
-                const groups = ccLoadsGrouped(incoming.filter(passes));
+                const groups = ccLoadsGrouped(filter === "dismissed" ? dismissedRows : incoming.filter(passes));
+                const toImportAll = importable(incoming);
                 // Writes. Last write wins between two office users (non-transactional merge-set, matches the dismiss precedent).
                 const suggest = (l, kind) => { const patch = ccLoadSuggestPatch(l, kind, me); if (patch) publishCcLoadOffice(job.id, l.id, patch); };
                 const withdraw = (l) => publishCcLoadOffice(job.id, l.id, ccLoadWithdrawPatch(deleteField));
@@ -27727,18 +27770,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 };
                 const toggleRoom = (key) => setCcLoadUi(u => ({ ...u, open: { ...u.open, [key]: !u.open[key] } }));
                 const setFilter = (f) => setCcLoadUi(u => ({ ...u, filter: f }));
-                // Segmented "Suggest" control. Current plan kind = grey/disabled. Other
-                // kind: outline → tap suggests; filled blue (pending) → tap withdraws.
-                const seg = (l, cur, st, kind, first) => {
-                  const isCur = cur === kind;
-                  const isPend = !!(st && st.state === "pending" && st.kind === kind);
+                // ONE action per row (v404 — Koy: the greyed segment "makes it look like
+                // they are switched instead of panel loads or vice versa"). What the plan
+                // HAS is the solid kind chip beside the name; the button only ever names
+                // the OTHER kind: "Suggest Switched" (outline) → "Suggested Switched · Undo"
+                // (solid blue) while pending. Nothing on a row is ever greyed out.
+                const suggestBtn = (l, cur, st) => {
+                  const pend = st && st.state === "pending";
+                  const kind = pend ? st.kind : (cur === "panel" ? "switched" : "panel");
                   const label = KIND_LABEL[kind];
                   return (
-                    <button key={kind} disabled={isCur} onClick={()=> isPend ? withdraw(l) : suggest(l, kind)}
-                      title={isCur ? `${label} — that's what the plan has now` : isPend ? `Suggested ${label} — tap again to withdraw` : `Suggest ${label} — the field accepts it on the plan`}
-                      style={{padding:"5px 10px",fontSize:11,fontFamily:"inherit",fontWeight:700,minWidth:66,cursor:isCur?"default":"pointer",
-                        background:isCur?C.surface:isPend?C.blue:"transparent",color:isCur?C.muted:isPend?"#fff":C.blue,
-                        border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{label}</button>
+                    <button onClick={()=> pend ? withdraw(l) : suggest(l, kind)}
+                      title={pend ? `Suggested ${label} — waiting on the field; tap to withdraw` : `Suggest ${label} — the field accepts it on the plan`}
+                      style={{padding:"5px 10px",borderRadius:8,fontSize:11,fontFamily:"inherit",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",
+                        background:pend?C.blue:"transparent",color:pend?"#fff":C.blue,border:`1px solid ${C.blue}`}}>
+                      {pend ? `Suggested ${label} · Undo` : `Suggest ${label}`}
+                    </button>
                   );
                 };
                 const statusLine = (l, st) => {
@@ -27794,6 +27841,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                         {chip("all", "All", null)}
                         {chip("pending", "Pending", all.pending)}
+                        {dismissedRows.length > 0 && chip("dismissed", "Dismissed", dismissedRows.length)}
                         {all.needs > 0 && (
                           <button onClick={()=>setFilter("needs")}
                             style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 9px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
@@ -27801,9 +27849,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             <Icon name="alertTriangle" size={11} stroke={2.5}/>{all.needs} need{all.needs===1?"s":""} a switch
                           </button>
                         )}
+                        {filter !== "dismissed" && toImportAll.length > 0 && (
+                          <button onClick={()=>importLoads(toImportAll)} title={`Add the ${toImportAll.length} incoming load${toImportAll.length===1?"":"s"} not yet on this job's Loads list (name carries the room; already-imported ones are skipped)`}
+                            style={{padding:"3px 10px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:sysAccentColor(job),color:"#fff",border:`1px solid ${sysAccentColor(job)}`}}>Import all {toImportAll.length}</button>
+                        )}
                       </div>
                     </div>
-                    {!groups.length && <div style={{padding:"14px 12px",fontSize:12,color:C.dim}}>Nothing {filter === "pending" ? "pending" : "needs a switch"} right now.</div>}
+                    {!groups.length && <div style={{padding:"14px 12px",fontSize:12,color:C.dim}}>Nothing {filter === "pending" ? "pending" : filter === "dismissed" ? "dismissed" : "needs a switch"} right now.</div>}
                     {groups.map(g => (
                       <div key={g.key}>
                         <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:C.bg,borderTop:`1px solid ${C.border}`,fontSize:11,fontWeight:700,color:C.dim,letterSpacing:"0.04em",textTransform:"uppercase"}}>
@@ -27812,7 +27864,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         </div>
                         {g.rooms.map(r => {
                           const rkey = g.key + "|" + r.key;
-                          const closed = filter === "all" ? !ccLoadUi.open[rkey] : false;
+                          const closed = filter === "all" ? !ccLoadUi.open[rkey] : false; // filtered views (pending / needs / dismissed) open their rooms
                           const t = tally(r.loads);
                           const suggestable = r.loads.some(l => !l.removedAt && ccLoadCurrentKind(l) != null);
                           return (
@@ -27829,10 +27881,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                 </button>
                                 {suggestable && (
                                   <div style={{display:"inline-flex",alignItems:"center",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
-                                    <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"3px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Whole room</span>
+                                    <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"3px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Suggest room &rarr;</span>
                                     {roomSeg(r.loads, "switched", true)}
                                     {roomSeg(r.loads, "panel", false)}
                                   </div>
+                                )}
+                                {filter !== "dismissed" && importable(r.loads).length > 0 && (
+                                  <button onClick={()=>importLoads(importable(r.loads))} title="Add this room's not-yet-imported loads to the job's Loads list"
+                                    style={{padding:"3px 8px",borderRadius:8,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:sysAccentColor(job),border:`1px solid ${sysAccentColor(job)}`}}>Import {importable(r.loads).length}</button>
                                 )}
                                 {t.pending > 0 && (
                                   <button onClick={()=>withdrawRoom(r.loads)} title="Withdraw every pending suggestion in this room"
@@ -27842,31 +27898,37 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               {!closed && r.loads.map(l => {
                                 const cur = ccLoadCurrentKind(l);
                                 const st = ccLoadSuggestionStatus(l);
-                                const canSuggest = cur != null && !l.removedAt;
+                                const isDismissed = !!(l.office && l.office.dismissed);
+                                const canSuggest = cur != null && !l.removedAt && !isDismissed;
                                 const needs = l.needsSwitch === true && !l.removedAt;
+                                const imported = importedIds.has(l.id);
                                 return (
                                   <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 12px 7px 30px",borderTop:`1px solid ${C.border}`,flexWrap:"wrap",
                                     borderLeft:needs?`4px solid ${C.orange}`:"4px solid transparent",background:needs?"rgba(176,106,44,0.06)":"transparent"}}>
                                     <div style={{flex:1,minWidth:200}}>
                                       <div style={{fontSize:13,fontWeight:700,color:l.removedAt?C.dim:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                                         <span>{l.name || l.loadId || "Load"}</span>
-                                        <span style={{fontSize:10,fontWeight:700,color:C.dim,border:`1px solid ${C.border}`,borderRadius:999,padding:"1px 7px",whiteSpace:"nowrap"}}>{ctrlLabel(l)}</span>
+                                        <span title="What the plan has now" style={{fontSize:10,fontWeight:700,color:l.control==="tape"?C.dim:"#fff",background:l.control==="tape"?C.surface:l.removedAt?C.muted:C.text,border:`1px solid ${l.control==="tape"?C.border:"transparent"}`,borderRadius:999,padding:"1px 8px",whiteSpace:"nowrap",letterSpacing:"0.02em"}}>{ctrlLabel(l)}</span>
                                         {l.removedAt && <span style={{fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
+                                        {imported && <span title="Already on this job's Loads list" style={{fontSize:10,fontWeight:700,color:C.green,border:`1px solid ${C.green}`,borderRadius:999,padding:"1px 7px",whiteSpace:"nowrap"}}>In Loads</span>}
                                         {needs && needsPill}
                                       </div>
                                       {fixtxt(l) && <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{fixtxt(l)}</div>}
                                       {statusLine(l, st)}
                                     </div>
                                     <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                                      {canSuggest && (
-                                        <div style={{display:"inline-flex",alignItems:"center",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
-                                          <span style={{fontSize:10,fontWeight:700,color:C.dim,padding:"5px 8px",background:C.surface,borderRight:`1px solid ${C.border}`}}>Suggest</span>
-                                          {seg(l, cur, st, "switched", true)}
-                                          {seg(l, cur, st, "panel", false)}
-                                        </div>
+                                      {canSuggest && suggestBtn(l, cur, st)}
+                                      {!isDismissed && !imported && !l.removedAt && (
+                                        <button onClick={()=>importLoads([l])} title="Add this load to the job's Loads list (name carries the room)"
+                                          style={{padding:"5px 8px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:sysAccentColor(job),border:`1px solid ${sysAccentColor(job)}`}}>Import</button>
                                       )}
-                                      <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this incoming load"
-                                        style={{padding:"5px 8px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
+                                      {isDismissed ? (
+                                        <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:false})} title="Restore — put this load back in the inbox"
+                                          style={{padding:"5px 8px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.blue,border:`1px solid ${C.blue}`}}>Restore</button>
+                                      ) : (
+                                        <button onClick={()=>publishCcLoadOffice(job.id, l.id, {dismissed:true})} title="Dismiss — hide this load from the inbox (find it again under the Dismissed chip)"
+                                          style={{padding:"5px 8px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>Dismiss</button>
+                                      )}
                                     </div>
                                   </div>
                                 );
@@ -47981,6 +48043,8 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Personalized Open on Live Plans** · 'shipped 2026-08-19' · 'SW v384' · CREW-LINK-CC-SIDE-SPEC item 1 — the LIVE PLANS rows' **Open** link now carries the logged-in user's real identity ('?crew=<id>&crewName=<name>' riding inside the hash fragment — the base already contains '#/v/'; FieldInk parses it with 'crewTagFromLocation', caps 120/60, persists it per share and pre-fills the pin name since v536), so a crew member's Question/Problem pins forward to this job's Questions attributed to their real name instead of browsing as an anonymous client whose pins never forward at all. Office sessions get tagged too — the tag is triage attribution, not a permission. No identity (edge case) → today's untagged URL. The copyable **Crew link** button deliberately keeps the generic '?crew=crew' tag: it exists for texting subs who never log into this app, and a sub's pins must not inherit the copier's identity. Same ship also answers **D8** for FieldInk: plan discovery is and stays the direct 'shares' query ('ccJobId' primary at the section's listener, 'jobFolderId' fallback) — 'ccjoblinks' has zero readers here, so FieldInk can retire its writer. Why it can't lose data: URL construction only — no write path, no new field, no rules change; the crew-tag hash contract is the one FieldInk v534/v536 already honors, and an untagged link behaves exactly as before.
 - **Instant Grants — crew roster seed + Open-link token mint** · 'shipped 2026-08-28' · 'SW v389' · CC-SIDE SPEC P4.2 (pairs with FieldInk v571). Two zero-tap grants layered on the Personalized Open link (item 1, v384). **(1) Roster seed** — the whole employee roster is mirrored into FieldInk's 'crewroster/<crewId>' (crewId = the 'he_identity' user id) so Koy's Employees panel shows everyone immediately instead of filling one access-request at a time. 'seedCrewRosterRow' is **CREATE-ONLY BY CONTRACT**: FieldInk's rules technically let an org member *update* a roster row, so a blind write would silently undo whatever Koy just toggled — every write 'getDoc'-checks first and bails if the row exists. Fresh seeds default to **'viewer'**; Koy flips people to Editor himself from the panel (nobody gets write access to a live plan without him tapping the toggle once). Two passes: a once-per-session **backfill** ('backfillCrewRoster', fired +8s off the users load like 'publishCcJobsIndex', only the real loaded roster — never 'DEFAULT_USERS', skips 'active:false') and an **on-add** hook in 'saveUsers' that seeds only newly-added ids so new hires appear without a second step. **(2) Token mint** — on a plain left-click of **Open**, 'mintCrewToken' writes a single-use 'crewtokens/<id>' (128-bit id, 'exp' 10m — FieldInk's rules independently cap it at 30m past the *server* clock) and appends '&ct=' to the personalized link; the device self-binds in FieldInk with no request and no bell. Fresh mint every click, never cached. Popup-safe: the click opens a blank tab **inside the gesture**, then navigates it once the mint resolves; **any** mint failure (rules not live, offline, not org-joined) falls through to the plain tagged link — the '<a href>' stays that link, so modifier/middle-clicks and JS-off degrade cleanly and no error ever surfaces. Both ride the same 'isOrgMember()' gate (live since v384/385) that already guards the cc* bridges, so 'ensureFieldinkAuth()' is the only prerequisite; a 'permission-denied' kicks a rejoin via '_ccDenied' so the next attempt works. The generic copyable **Crew link** button is untouched — it carries no real identity (for texting subs) so there's nothing to mint against. Why it can't lose data: additive, cross-app writes to FieldInk's own project only ('crewroster'/'crewtokens', governed by FieldInk's v571 rules) — no CC Firestore doc, field, loader, or rule changed; the roster write is create-only so Koy's toggles are never overwritten, and a token is inert until redeemed and single-use by FieldInk's own rules. Item 2 is safe to ship before FieldInk v571 is live — it just fails soft into today's plain tagged link until then.
 - **Org membership join (KC1 stage-B prerequisite)** · 'shipped 2026-07-29' · 'SW v362' · CC-side leg of 'CC-SIDE SPEC — Org Membership Join'; pairs with FieldInk v511. The six cc* bridge collections move from "any authenticated session" to **org members only**, so this app's field-ink session must JOIN the org once per session or every gated read/write starts failing 'permission-denied' — the live CO loop, on a real job. Writes exactly the two spec'd write-only docs: 'orgauth/company/meta/security' (create-once claim, '{orgKey,by,at}') and 'orgauth/company/members/<uid>' ('{key,by,at}'); rules verify membership server-side via 'exists()'. Mirrors FieldInk's 'ensureOrgMembership'/'_joinOrg': claim-then-join, **swallow the already-claimed denial** (FieldInk usually claims first — expected, not an error), refresh the key once on a denied join. Hooked into 'ensureFieldinkAuth' rather than the 8 cc* call sites because every bridge read AND write already funnels through it — including the listeners' self-healing re-attach, so a failed join retries for free. Joined **per session and per uid** (an anonymous field-ink uid isn't stable across a browser-data clear, and a fresh uid needs its own members doc); a settled FALSE is never memoized, so a pre-stage-A denial stays retryable. '_ccDenied' self-heals the 5 write paths + the 2 protective pre-reads on 'permission-denied', throttled to once per 10s so a hard denial can't stampede. **FIRE-AND-FORGET BY CONTRACT** — never awaited, nothing gates on it, and with no key provisioned it is completely inert (zero writes), which is the "safe to ship anytime" posture the spec's build order step 1 asks for. Key resolution is one choke point ('_getOrgKey') so a Drive read or a callable can replace it in one function; provision per-device with '_hsSetOrgKey("<32-hex>")' and inspect with '_hsOrgStatus()' (neither ever prints the key value). 'ccjoblinks' is **not used by this app**, so that row of the spec's table doesn't apply. Verified by a 29-assertion harness driving the real extracted join block against stubbed Firestore/auth. ⚠️ 'REACT_APP_FIELDINK_ORG_KEY' exists but CRA inlines env vars into the **publicly downloadable** bundle — setting it publishes the one company-wide secret and would undercut stage B for both apps; see the handoff doc
+- **Incoming from FieldInk — one Suggest button, no greyed segment** · 'shipped 2026-09-14' · 'SW v404' · Koy: *"the switched or panel being blocked out and grey make it look like they are switched instead of panel loads or vice versa."* The two-segment Suggest control (current kind greyed) read backwards, so it's gone. What the plan HAS is now the **solid dark kind chip beside the load name** (Panel / Switched / Dimmer; Tape stays a quiet outline), and each row carries exactly ONE action naming only the OTHER kind: **Suggest Switched** on a panel load, **Suggest Panel** on a switched one (blue outline); while pending it becomes solid blue **Suggested Panel · Undo** (tap withdraws). Nothing on a row is ever greyed. The room header's control is relabelled **Suggest room → Switched | Panel** so both segments read as actions (a segment only greys when every load in the room is already that kind). Why it can't lose data: render-only — the same suggest / withdraw writes as v401, just one button instead of two.
+- **Incoming from FieldInk — Dismiss undo + Import / Import all into Loads** · 'shipped 2026-09-14' · 'SW v403' · Koy: *"what does dismiss do? need an undo if they are accidentally dismissed. and how about an import that brings them into the loads? and import all?"* **Dismiss** has only ever written 'office.dismissed:true' on the bridge doc (hides the row from the inbox; the field is unaffected; no job data). It now has a way back: a **Dismissed N** chip shows the hidden rows (rooms auto-open) with **Restore** ('office.dismissed:false' through the same 'publishCcLoadOffice'). **Import** (per row), **Import N** (room header), **Import all N** (panel header) append incoming loads to the job's own **Loads** list ('panelizedLighting.loads' — the plain master list, NOT Savant module slots; Assign-to-module stays the existing flow) through ONE 'u()' patch per tap (H6 rule). 'ccLoadImportRows' (pure, tested) builds 'newCentralLoad()' rows with the name carrying the room (*Kitchen Cans*) because 'allSavantLoadsForJob' dedupes 'pl.loads' by name, 'location' = the Loads list's floor SECTION from FieldInk's floor ('main/basement/upper' → the literal Main Level / Basement / Upper Level the list groups by, or an extra floor matched by label; 'plSectionLabels' are panel names, deliberately not used), 'loadType' from control (dimmer → Dimming, switched → Switching, tape → LED, panel → blank), plus 'room', 'origin:'fieldink'' and **'fieldLoadId'** (the ccloads id) — the idempotency key: a load already on the list shows a green **In Loads** tag, loses its Import button, and is skipped by Import N / Import all, so tapping twice can't double anything (mirrors Bulk paste's skip). Gone-from-plan and dismissed rows never import. Why it can't lose data: the only job write is an APPEND to 'panelizedLighting.loads' via the same 'u({panelizedLighting:{...pl, loads:[...existing, ...new]}})' shape LoadsList itself uses (existing rows untouched, one patch per action); the new row fields ('room', 'fieldLoadId', 'origin') are additive and inside 'data.panelizedLighting', so the jobs loader carries them with no change; Restore writes only the office-owned 'dismissed' flag on 'ccloads/<jobId>' (field-ink project), the same key v394 introduced.
 - **Incoming from FieldInk — rooms start folded** · 'shipped 2026-09-14' · 'SW v402' · Koy, after v401 deployed: *"please make all rooms start auto collapsed."* Every room in the walk-mode inbox now starts folded (room header with its code, name, and counts only); tap a room to open it. 'ccLoadUi' tracks which rooms are OPEN instead of closed (local state, resets per job). The **Pending** and **N need a switch** filter chips auto-open every room they show, since those views already narrow the list to the loads you're acting on. Why it can't lose data: render-only — no write path touched; 'ccLoadUi' is component state.
 - **Incoming from FieldInk — walk mode: rooms, undo, whole-room suggest** · 'shipped 2026-09-14' · 'SW v401' · Koy's same-evening second pass on the v400 Suggest control below, pushed as its own ship: *"it jumps all over the place… need to be able to undo or switch back… separate into all the different rooms just like in FieldInk… organized for ease of walking and marking as you go with the customers"*). **Layout:** the Panelized Lighting **Incoming from FieldInk** inbox is now grouped **sheet → room → load** in a fixed walk order mirroring FieldInk's lighting report ('ccLoadsGrouped': sheets naturally sorted, rooms by the plan's room code then name, loads by name then id, gone-from-plan rows sink to the bottom of their room) — deterministic on every snapshot so a tap never moves a row; the status now renders on its own line under the load name so the control column never shifts. Rooms collapse/expand (local state), header filter chips **All · Pending N · N need a switch**. **Per load (non-tape):** **Suggest: Switched | Panel** — the segment matching the load's CURRENT plan kind ('control==='panel'' → Panel; switched/dimmer/anything else → Switched) is greyed as *what the plan has now*; tapping the other writes ONLY 'loads.<id>.office.{suggestedKind,suggestedAt,suggestedBy}' through 'publishCcLoadOffice'. **Undo:** tapping the filled (pending) segment again — or the status line's Undo — WITHDRAWS the suggestion by 'deleteField()'-ing those three keys ('ccLoadWithdrawPatch'; suggestedAt gone → not pending on either side; FieldInk's old ack is left alone). Switch-back after the field accepted = the other segment is simply live again. Re-tapping after a field dismiss writes a fresh 'suggestedAt', which reopens it. **Per room:** **Whole room → Switched | Panel** stamps a suggestion on every load in the room that isn't that kind yet (skips tape, gone, and already-pending-that-kind) in ONE merge-set via the new 'publishCcLoadOfficeMany'; **Withdraw N** clears every pending suggestion in the room. Tape rows hide the control (no kind concept). **Status tag** from FieldInk's OWN 'loads.<id>.suggestionAck {at, resolution:'accepted'|'dismissed'|'matched', by, resolvedAt}' (never written here): **pending** = 'suggestedAt > (suggestionAck.at||0)' (blue, who/when, Undo), **accepted** (green, who/when), **dismissed** / **plan already agreed** (grey). The office **never** changes a load's kind. **Needs-a-switch marker:** field-owned 'needsSwitch:true' (regular-switching load whose fixtures are mapped but no switch is placed on the plan yet) paints the row's left edge + a white-on-orange *needs a switch on the plan* pill, counted on the room header and the header chip — read-only; clears when the crew places the switch. Pure derivations ('ccLoadCurrentKind' / 'ccLoadSuggestPatch' / 'ccLoadSuggestionStatus' / 'ccLoadWithdrawPatch' / 'ccLoadsGrouped', top-level next to 'publishCcLoadOffice') plus the REAL 'publishCcLoadOffice' and 'publishCcLoadOfficeMany' bodies are extracted verbatim and run by the new prebuild gate 'scripts/ccloads-suggest-test.js' (63 checks: valid kinds, exact single- and multi-load payloads, withdraw sentinels, pending/accepted/dismissed/matched/newer-reopens, walk-order grouping). Two office users suggesting opposite kinds within seconds = last write wins (plain non-transactional merge-set, the same precedent as the v394 'dismissed' flag). No Firestore rules change ('isOrgMember()' read+write already covers both sides). Why it can't lose data: **writes only 'loads.<id>.office.suggested*' on 'ccloads/<jobId>' (field-ink project); never job data** — every write (single, room-level, withdraw) is a targeted 'merge:true' set naming ONLY the office-owned sub-object of the given load ids, the same shape v394 proved (loads is a MAP, so the deep merge preserves every field-owned key, FieldInk's 'suggestionAck', and every other load with no pre-read; a withdraw deletes only the three suggested keys it owns); no CC Firestore doc/field/loader/rule changed; a denied write self-heals via '_ccDenied' and no-ops.
 - **Incoming from FieldInk — Suggest Switched | Panel + "needs a switch" marker** · 'shipped 2026-09-14' · 'SW v400' · the office half of FieldInk v619 "panelized ⇄ regular switching" (Koy: *"office toggle is a suggestion, with option to accept all"* — Accept-all lives in FieldInk only; *"when a load is switched with no switch placed on the plan it needs to be obvious"*). Every non-tape row in the Panelized Lighting **Incoming from FieldInk** inbox now carries a two-segment **Suggest: Switched | Panel** control: the segment matching the load's CURRENT plan kind ('control==='panel'' → Panel; switched/dimmer/anything else → Switched) is greyed as *what the plan has now*, tapping the other writes ONLY 'loads.<id>.office.{suggestedKind,suggestedAt,suggestedBy}' through the existing 'publishCcLoadOffice' merge-set ('ccloads/<jobId>' on the field-ink project). The office **never** changes a load's kind — FieldInk answers in its OWN 'loads.<id>.suggestionAck {at, resolution:'accepted'|'dismissed'|'matched', by, resolvedAt}' (never written here) and a per-row status tag derives from the shared contract: **pending** = 'suggestedAt > (suggestionAck.at||0)' (blue, who/when), **accepted** (green, who/when), **dismissed** / **matched** (grey; matched = the plan already agreed, auto). Re-tapping a pending segment re-stamps 'suggestedAt', which is how a dismissed suggestion is reopened. Tape rows hide the control (no kind concept); gone-from-plan rows keep their status but lose the control. **Needs-a-switch marker:** a field-owned 'needsSwitch:true' (regular-switching load whose fixtures are mapped but no switch is placed on the plan yet) paints the row's left edge + a white-on-orange *needs a switch on the plan* pill, and the panel header counts them — read-only; it clears when the crew places the switch. Pure derivations ('ccLoadCurrentKind' / 'ccLoadSuggestPatch' / 'ccLoadSuggestionStatus', top-level next to 'publishCcLoadOffice') are extracted verbatim and run by the new prebuild gate 'scripts/ccloads-suggest-test.js' (31 checks: valid kinds, exact patch shape, pending/accepted/dismissed/matched/newer-reopens). Two office users suggesting opposite kinds within seconds = last write wins (plain non-transactional merge-set, the same precedent as the v394 'dismissed' flag). No Firestore rules change ('isOrgMember()' read+write already covers both sides). Why it can't lose data: **writes only 'loads.<id>.office.suggested*' on 'ccloads/<jobId>' (field-ink project); never job data** — the patch is three new keys inside the office-owned sub-object via the same targeted 'merge:true' write v394 proved (loads is a MAP, so the deep merge preserves every field-owned key, FieldInk's 'suggestionAck', and every other load with no pre-read); no CC Firestore doc/field/loader/rule changed; a denied write self-heals via '_ccDenied' and no-ops.

@@ -17,8 +17,8 @@ const a = src.indexOf(START), b = src.indexOf(END);
 if (a === -1 || b === -1 || b < a) { console.error("ccloads-suggest-test: markers not found in src/App.js"); process.exit(1); }
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped;", ctx);
-const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows;", ctx);
+const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows } = ctx;
 
 let fails = 0, n = 0;
 const eq = (name, got, want) => {
@@ -111,6 +111,27 @@ eq("ordering is deterministic regardless of input order",
   JSON.stringify(ccLoadsGrouped([{ id: "2", name: "B", sheet: "Pg 1", roomCode: "001", room: "R" }, { id: "1", name: "A", sheet: "Pg 1", roomCode: "001", room: "R" }]).map(x => x.rooms[0].loads.map(l => l.id))),
   JSON.stringify(ccLoadsGrouped([{ id: "1", name: "A", sheet: "Pg 1", roomCode: "001", room: "R" }, { id: "2", name: "B", sheet: "Pg 1", roomCode: "001", room: "R" }]).map(x => x.rooms[0].loads.map(l => l.id))));
 eq("empty/null input is safe", ccLoadsGrouped(null), []);
+
+// ── IMPORT into pl.loads (v403): idempotent, room-prefixed, append-only ────
+let mkN = 0; const mk = () => ({ id: "row" + (++mkN), name: "", location: "", loadType: "", watts: "", pulled: false });
+const IM = ccLoadImportRows([
+  { id: "c1", name: "Cans", room: "Kitchen", control: "panel", floor: "main" },
+  { id: "c2", name: "Kitchen Island Pendants", room: "Kitchen", control: "dimmer" },
+  { id: "c3", name: "Cans", room: "Primary Bath", control: "switched", floor: "upper" },
+  { id: "c4", name: "UCL", room: "Butler", control: "tape" },
+  { id: "gone", name: "Old", room: "Hall", control: "panel", removedAt: 5 },
+  { id: "dup", name: "Sconce", room: "Entry", control: "panel" },
+  { id: "noroom", name: "Lonely", room: "", control: "panel", floor: "attic" },
+], [{ id: "x", name: "Entry Sconce", fieldLoadId: "dup" }], mk);
+eq("names carry the room so the by-name dedupe can't collapse them", IM.rows.map(r => r.name), ["Kitchen Cans", "Kitchen Island Pendants", "Primary Bath Cans", "Butler UCL", "Lonely"]);
+eq("already-imported (fieldLoadId) and gone-from-plan loads are skipped", IM.skipped, 2);
+eq("control → Loads-list type: panel unknown, dimmer Dimming, switched Switching, tape LED", IM.rows.map(r => r.loadType), ["", "Dimming", "Switching", "LED", ""]);
+eq("FieldInk floor → the Loads list's floor section; unknown floors stay blank", IM.rows.map(r => r.location), ["Main Level", "", "Upper Level", "", ""]);
+eq("every row is a real newCentralLoad shape + room/fieldLoadId/origin", Object.keys(IM.rows[0]).sort(), ["fieldLoadId", "id", "loadType", "location", "name", "origin", "pulled", "room", "watts"]);
+eq("fieldLoadId is the ccloads id (the idempotency key)", IM.rows.map(r => r.fieldLoadId), ["c1", "c2", "c3", "c4", "noroom"]);
+eq("an extra floor maps by its label; the three standard floors are LoadsList's literal section labels", ccLoadImportRows([{ id: "f", name: "N", room: "R", control: "panel", floor: "Loft" }, { id: "g", name: "M", room: "R", control: "panel", floor: "main" }], [], mk, { loft: "Loft" }).rows.map(r => r.location), ["Loft", "Main Level"]);
+eq("second import of the same loads is a no-op", ccLoadImportRows([{ id: "c1", name: "Cans", room: "Kitchen", control: "panel" }], IM.rows, mk).rows.length, 0);
+eq("empty input is safe", ccLoadImportRows(null, null, mk), { rows: [], skipped: 0 });
 
 // ── the WRITE itself: run the real publishCcLoadOffice body with a captured setDoc ──
 // Proves the on-the-wire payload is exactly loads.<id>.office.{suggestedKind,
