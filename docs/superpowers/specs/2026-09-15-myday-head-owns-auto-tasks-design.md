@@ -58,7 +58,7 @@ head's row renders from that:
 | Doc state | Head row |
 |---|---|
 | none | normal row + Push control |
-| open, assigned to X | muted "with X · <age>"; buttons **Take back** (reassign doc to head), **Re-push** (picker) |
+| open, assigned to X | muted "with X · <age>"; buttons **Take back** (closes the doc: status done, doneBy head — review-round ruling; an open doc assigned to the head also reads as none), **Re-push** (picker) |
 | done by X (status done, doneBy ≠ head) | "done by X · <age> · verify"; buttons **Done** (existing clear → `clearedTasks`; the doc is already done, nothing else written), **Send back** (reopen doc: status open, assignedTo X, note) |
 | done by head | treated as none (the auto row already cleared through `clearedTasks`) |
 
@@ -72,6 +72,7 @@ Snooze / Undo as today. Nothing new to learn.
 - Head clears an auto-task (Done) while a doc is open → the doc is closed too
   (`status: done, doneBy: head, doneAt`), so it leaves the delegate's board.
 - Head snoozes the auto row → the doc is NOT touched (delegate keeps their date).
+- Take back closes the delegate's doc (doneBy = head), so it leaves their board; no push fires (creator = head).
 - Job state resolves the task (rule stops firing) → head row disappears; the open doc
   stays on the delegate until they close it (they did the work; it is their record).
 - Job foreman changes after a push → doc stays with the person it was pushed to.
@@ -99,9 +100,9 @@ the head show no line. Collapsed state is local (`useState`), starts collapsed.
 
 ### 5. Notifications
 
-No new triggers. Push → existing `need_assigned` (onNeedWrite diffs `assignedTo`).
+One new branch in the existing `onNeedWrite` trigger (needs `firebase deploy --only functions:onNeedWrite`): a done→open flip by someone other than the assignee sends `need_assigned` "Task sent back" — without it Send back had no signal. Push → existing `need_assigned` (onNeedWrite diffs `assignedTo`).
 Delegate Done → existing `need_done` to the creator (`assignedBy` = head). Take back /
-Send back are reassignments → `need_assigned` again. Cloud Functions untouched.
+Send back are reassignments → `need_assigned` again. Cloud Functions: that one branch only.
 
 ### 6. Testing (prebuild gate, `scripts/needs-dryrun.js`)
 

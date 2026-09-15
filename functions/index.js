@@ -1394,6 +1394,14 @@ exports.onNeedWrite = functions.firestore
         ? { title: "Bodies covered", body: `${doneBy} covered${onJob}: ${text}`, view: "myday" }
         : { title: "Task done",      body: `${doneBy} finished${onJob}: ${text}`, view: "myday" }));
     }
+    // 3. Sent back → the assignee. A done→open flip by someone OTHER than the
+    //    assignee (v408: the head rejected the work on My Day). The assignee
+    //    is unchanged, so branch 1 stays silent; this is the only signal.
+    const reopenedBy = String(after.assignedBy || "").trim();
+    if (wasDone && !isDone && nextA && reopenedBy && nextA.toLowerCase() !== reopenedBy.toLowerCase()) {
+      tasks.push(sendToNameIfWanted(nextA, "need_assigned",
+        { title: "Task sent back", body: `${reopenedBy} sent back${onJob}: ${text}`, view: "myday" }));
+    }
     if (tasks.length) functions.logger.info("[onNeedWrite]", { id: context.params.needId, prevA, nextA, isDone, sends: tasks.length });
     await Promise.all(tasks);
     return null;
