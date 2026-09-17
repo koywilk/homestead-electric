@@ -5980,6 +5980,35 @@ exports.gcPortalManifest = functions.https.onRequest(async (req, res) => {
   }
 });
 
+// v410 — the portal page itself. GET /p/<token> is rewritten by vercel.json to
+// this function, which fetches the app's built index.html from the site and
+// returns it with this link's manifest/title/theme baked into <head>
+// (gcPortal.portalHtmlFor). Same bundle, same service worker, same everything —
+// only the identity tags differ. Not cached (a deploy must show up at once);
+// the SW still keeps its own copy for offline. Unknown/revoked token → the
+// untouched shell (the app then shows its own "link isn't active" state).
+const GC_APP_ORIGIN = "https://homestead-electric.vercel.app";
+exports.gcPortalHtml = functions.https.onRequest(async (req, res) => {
+  try {
+    if (req.method !== "GET" && req.method !== "HEAD") { res.status(405).send("GET only"); return; }
+    const token = String((req.query && req.query.token) || "").trim();
+    res.set("Cache-Control", "no-store");
+    const shellRes = await fetch(GC_APP_ORIGIN + "/", { headers: { accept: "text/html" } });
+    if (!shellRes.ok) { res.status(502).send("The portal is briefly unavailable — try again in a minute."); return; }
+    const shell = await shellRes.text();
+    let link = null;
+    if (/^[A-Za-z0-9_-]{1,64}$/.test(token)) {
+      const snap = await db.collection("gc_links").doc(token).get();
+      if (snap.exists) link = snap.data();
+    }
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.status(200).send(gcPortal.portalHtmlFor(shell, link));
+  } catch (e) {
+    functions.logger.error("[gcPortalHtml]", e && e.message);
+    res.status(500).send("The portal is briefly unavailable — try again in a minute.");
+  }
+});
+
 exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
   await requireAdmin(data);
   const token = String(data.token || "");
@@ -6512,7 +6541,9 @@ async function gcLoadMailConfig() {
   return _gcMailCfg;
 }
 function gcPortalUrl(origin, token) {
-  return (origin || "https://app.homesteadelectric.net") + "/?gcportal=" + encodeURIComponent(token || "");
+  // v410: /p/<token> (server-rendered HTML with the link's own manifest); the
+  // old ?gcportal= form still works and redirects here.
+  return (origin || "https://homestead-electric.vercel.app") + "/p/" + encodeURIComponent(token || "");
 }
 // Resend free tier allows 2 requests/second — pace consecutive sends inside
 // this one funnel (digest + drain + test all flow through here) so a burst of
@@ -6703,7 +6734,7 @@ async function gcEnqueueInstants(gcKey, jobId, triggers) {
     recipMap.forEach((link, addr) => {
       // Deep link straight to the job this alert is about (v357) — digests stay
       // on the board root (they span jobs), instants point at their one job.
-      const html = gcNotify.renderGcEmail({ gcLabel: link.label, accent: link.accentColor, title: subject, sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, link.token) + (jobId ? "&job=" + encodeURIComponent(jobId) : "") });
+      const html = gcNotify.renderGcEmail({ gcLabel: link.label, accent: link.accentColor, title: subject, sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, link.token) + (jobId ? "?job=" + encodeURIComponent(jobId) : "") }); // v410: /p/<token>?job=
       ops.push(db.collection("gc_notify_queue").add({ to: addr, subject, html, sendAt, tries: 0, createdAt: new Date().toISOString() }));
     });
   });

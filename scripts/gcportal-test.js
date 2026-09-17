@@ -2,7 +2,7 @@
 // Guards the outbound wall (functions/gcPortal.js). Exit 0 = all pass.
 "use strict";
 const {
-  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, punchView, jobIdsViewFor, portalManifestFor, portalShortName, projectJobForPortal, jobBelongsToLink,
+  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, punchView, jobIdsViewFor, portalManifestFor, portalShortName, portalHtmlFor, projectJobForPortal, jobBelongsToLink,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -192,18 +192,27 @@ t("punch: waiting ignored on done items", punchView({ main: { general: [{ text: 
 console.log("per-link manifest (v409):");
 const MLINK = { token: "gcp_test_token_robison", label: "Robison <b>Build</b> Co", accentColor: "#4A5D3A", revoked: false };
 const M = portalManifestFor(MLINK);
-t("manifest: start_url + id carry the token", M && M.start_url === "/?gcportal=gcp_test_token_robison" && M.id === M.start_url);
+t("manifest: start_url + id = /p/<token>, scope /p/ (never the crew app's /)", M && M.start_url === "/p/gcp_test_token_robison" && M.id === M.start_url && M.scope === "/p/");
 t("manifest: name stripped, icon name is H×initials", M.name === "Robison Build Co · Homestead Electric" && M.short_name === "H×R", M.short_name);
 t("short name: filler words skipped", portalShortName({ label: "Mark Wintzer Company" }) === "H×MW" && portalShortName({ label: "City Point Homes" }) === "H×CP" && portalShortName({ label: "E Builders" }) === "H×EB" && portalShortName({ label: "Jorgenson Builders" }) === "H×JB", [portalShortName({ label: "Mark Wintzer Company" }), portalShortName({ label: "City Point Homes" }), portalShortName({ label: "E Builders" })].join("|"));
 t("short name: all-filler label falls back to first two words", portalShortName({ label: "The Home Company" }) === "H×TH");
 t("short name: super link adds first name, from the company name not the label", portalShortName({ kind: "super", gc: "Mark Wintzer Company", label: "Mark Wintzer Company — Austin Allen", viewName: "Austin Allen" }) === "H×MW Austin");
 t("short name: super link label-only (no gc field) strips the — suffix", portalShortName({ kind: "super", label: "Robison Build Co — Austin Allen", viewName: "Austin Allen" }) === "H×R Austin");
 t("short name: capped at 12, empty label → H×GC", portalShortName({ kind: "super", gc: "Alpha Beta Gamma Delta", viewName: "Bartholomew" }).length <= 12 && portalShortName({ label: "" }) === "H×GC");
-t("manifest: theme from accent, standalone, icons", M.theme_color === "#4A5D3A" && M.display === "standalone" && M.scope === "/" && M.icons.length === 2 && M.background_color === "#F2F3F6");
+t("manifest: theme from accent, standalone, icons", M.theme_color === "#4A5D3A" && M.display === "standalone" && M.icons.length === 2 && M.background_color === "#F2F3F6");
 t("manifest: bad accent → default blue", portalManifestFor({ ...MLINK, accentColor: "red" }).theme_color === "#3B5BA5");
 t("manifest: missing label → Homestead Electric", portalManifestFor({ ...MLINK, label: "" }).name === "Homestead Electric · Homestead Electric".replace(" · Homestead Electric", "") + " · Homestead Electric");
 t("manifest: revoked / missing / bad token → null", portalManifestFor({ ...MLINK, revoked: true }) === null && portalManifestFor(null) === null && portalManifestFor({ ...MLINK, token: "" }) === null && portalManifestFor({ ...MLINK, token: "a/b" }) === null);
 t("manifest: nothing but identity crosses", Object.keys(M).sort().join(",") === "background_color,description,display,icons,id,name,orientation,scope,short_name,start_url,theme_color");
+
+console.log("portal html (v410):");
+const SHELL = '<!doctype html><html><head><meta charset="utf-8"/><meta name="theme-color" content="#09090f"/><meta name="apple-mobile-web-app-title" content="Homestead"/><title>Homestead Electric</title><link rel="manifest" href="/manifest.json"/></head><body><div id="root"></div><script src="/static/js/main.abc.js"></script></body></html>';
+const H = portalHtmlFor(SHELL, MLINK);
+t("html: manifest link swapped to /gc/manifest/<token>", H.includes('<link rel="manifest" href="/gc/manifest/gcp_test_token_robison">') && !H.includes("/manifest.json"));
+t("html: apple title = icon name, theme = accent, title = label", H.includes('content="H×R"') && H.includes('content="#4A5D3A"') && H.includes("<title>Robison Build Co · Homestead Electric</title>"));
+t("html: body/scripts untouched", H.includes('<div id="root"></div><script src="/static/js/main.abc.js"></script>'));
+t("html: revoked / missing link → shell untouched", portalHtmlFor(SHELL, { ...MLINK, revoked: true }) === SHELL && portalHtmlFor(SHELL, null) === SHELL);
+t("html: label is escaped", !portalHtmlFor(SHELL, { ...MLINK, label: 'X "<script>" Co' }).includes('<title>X "<script>'));
 
 console.log("per-super link views (v407):");
 const LNK = [

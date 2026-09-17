@@ -388,14 +388,18 @@ function portalManifestFor(link) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(token)) return null;
   const label = str(link.label, 60) || "Homestead Electric";
   const accent = /^#[0-9a-fA-F]{6}$/.test(String(link.accentColor || "")) ? String(link.accentColor) : "#3B5BA5";
-  const start = "/?gcportal=" + token;
+  // v410: the portal lives at /p/<token> — its HTML is served by gcPortalHtml
+  // with this manifest baked in, and the scope is /p/ so a phone that already
+  // has the crew app installed (scope "/") never captures the portal as "the
+  // Homestead app" (Koy's first phone test did exactly that).
+  const start = "/p/" + token;
   return {
     id: start,
     name: label + " · Homestead Electric",
     short_name: portalShortName(link),
     description: "Your jobs with Homestead Electric — live status, plans, punch lists, questions.",
     start_url: start,
-    scope: "/",
+    scope: "/p/",
     display: "standalone",
     orientation: "portrait",
     background_color: "#F2F3F6",
@@ -405,6 +409,26 @@ function portalManifestFor(link) {
       { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
     ],
   };
+}
+
+// Portal HTML (v410). Takes the app's built index.html and bakes THIS link's
+// identity into the <head> — manifest link, apple-mobile-web-app-title (= the
+// icon name), theme-color, <title> — so Add-to-Home-Screen works before a
+// single line of app JS runs (a runtime swap was too late on phones that
+// already have the crew app installed). Pure string surgery, tolerant of
+// attribute order; a missing/revoked link returns the shell untouched.
+function portalHtmlFor(html, link) {
+  const shell = String(html || "");
+  const m = portalManifestFor(link);
+  if (!m) return shell;
+  const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const label = str(link.label, 60) || "Homestead Electric";
+  let out = shell;
+  out = out.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/i, '<link rel="manifest" href="/gc/manifest/' + esc(String(link.token)) + '">');
+  out = out.replace(/<meta\b[^>]*\bname=["']apple-mobile-web-app-title["'][^>]*>/i, '<meta name="apple-mobile-web-app-title" content="' + esc(m.short_name) + '">');
+  out = out.replace(/<meta\b[^>]*\bname=["']theme-color["'][^>]*>/i, '<meta name="theme-color" content="' + esc(m.theme_color) + '">');
+  out = out.replace(/<title>[^<]*<\/title>/i, "<title>" + esc(label + " · Homestead Electric") + "</title>");
+  return out;
 }
 
 function projectJobForPortal(jobId, job) {
@@ -484,5 +508,6 @@ module.exports = {
   punchView,
   portalManifestFor,
   portalShortName,
+  portalHtmlFor,
   eachPunchItem,
 };

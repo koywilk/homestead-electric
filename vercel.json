@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/p/:token",
+      "destination": "https://us-central1-homestead-electric.cloudfunctions.net/gcPortalHtml?token=:token"
+    },
+    {
       "source": "/gc/manifest/:token",
       "destination": "https://us-central1-homestead-electric.cloudfunctions.net/gcPortalManifest?token=:token"
     }
