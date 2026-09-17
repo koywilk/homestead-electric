@@ -48047,6 +48047,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
+  - **Clean layout — everything collapsed behind a count** · 'shipped 2026-09-17' · 'SW v410' · Koy: *"make the supers and contractors apps as simple as possible to understand and use, but jam packed with job info. Just needs to be super clean and easy to see everything, so any lists start in a collapsed drop down."* Mockup-first (https://claude.ai/artifact/XBi4pa7NVA6uKSSxLMyFFd), one rename from Koy ("Live plan links and documents"). **Job detail:** every section is now a 'GCSection' collapsible whose HEADER carries the numbers, so a closed page still reads as a full status — Punch '1 open · 311 done · 1 waiting', Questions '4 · 3 answered · 1 for you', Return trips '3 done · 1 to schedule', Homestead QC walk '8/8 fixed', Change orders '9 done · 1 open', Live plan links and documents '3', Your team 'Austin, Terrance'. Only **Where it stands** and **Needs your input** open by default (the latter only while its count is above zero); Needs your input is now the one answer to "what do you need from me" — the finish-start and Matterport date boxes live there, and return trips needing a date / questions waiting on them are pointer rows whose button opens that section and scrolls to it (their send boxes stay put — one box per item, no duplicate drafts). Open/closed state is remembered **per device + job** ('localStorage gcportal_secs_<token>_<jobId>'); a section's body mounts only while open. The old "Work with Homestead" block is a **sticky bottom bar** — Message the crew / + Add an item — that opens the matching 'GCSendBox' above it on demand (name field included). **Board:** a card is a summary line, two bars, and **count chips** — no prose, no status pills, no "tap for details" line: 'Needs you · 2' (accent), '1 waiting' (amber), 'Punch · 1 open', 'Questions · 4', 'Plans & docs · 3', scheduled return-trip dates, 'Super: X' (muted), 'Rough inspection passed' / 'Final passed' (green); nothing at zero; **every chip opens the detail on that section** ('initialSection' → forced open + scrolled into view; the modal remounts per chip so a second chip on the same job works). Tiles trimmed to four: Jobs · Need your input (return trips folded in) · Waiting on you · Completed & closed. 'GCPunchSection' gained a 'flat' mode so the two phases nest inside the one Punch section. Why it can't lose data: **render-only** — a re-layout of what the mirror already carries; no projection, function, rules, loader, or job-field change; the only new client storage is the per-device section-state key.
   - **Add to home screen — the portal as the contractor's own app** · 'shipped 2026-09-17' · 'SW v409' · Koy's north star (vault, GC Portal Link Spec North-star block): *"I want them to be able to add it to their home screen as an app just like our crews have."* Until now the only web manifest on the site was the crew app's ('public/manifest.json': name "Homestead", 'start_url:"/"'), so Add-to-Home-Screen on a portal URL produced a "Homestead" icon that opened the crew login. Now each link has its **own manifest**: 'functions/gcPortal.portalManifestFor(link)' (pure, tested — name "<label> · Homestead Electric", **icon name = "H×" + the contractor's initials** ('portalShortName', mirrors the header lockup — Koy: *"maybe H×R for Robison"*; filler words Build/Co/Company/Homes skipped, max 3 letters, a per-super link adds the first name: H×R, H×MW, H×CP, H×MW Austin; cut at 12), 'id'/'start_url' = '/?gcportal=<token>', 'scope:"/"', standalone, portrait, 'theme_color' = the link's accent, longhorn icons; revoked/missing/bad-token → null) served by the new HTTP function **'gcPortalManifest'** (GET, read-only, one 'gc_links' get, 404 on null, 'Cache-Control: public, max-age=300') and made same-origin by a new **'vercel.json'** rewrite '/gc/manifest/:token' → that function (browsers require a fetchable same-origin manifest; 'data:'/'blob:' manifests aren't reliable on iOS). Client ('GCPortalPage'): on mount the page swaps '<link rel=manifest>' to '/gc/manifest/<token>' and, once the link loads, sets 'apple-mobile-web-app-title' to the GC label and 'theme-color' to their accent ('_gcApplyInstallIdentity'; the apple-touch-icon stays the longhorn — GC logos aren't square). **'GCInstallCard'** sits under the header: Android captures 'beforeinstallprompt' and shows a real **Install** button; iPhone shows *Share → Add to Home Screen* with the share glyph; desktop shows a one-line "on your phone…" hint; hidden when already standalone or after **Not now** (per device, 'localStorage gcportal_a2hs_dismissed_<token>'). Per-super links get the same treatment with their own label. Service worker untouched (the manifest is a browser fetch, not a navigate). The Vercel rewrite can only be verified on the deployed site — post-deploy check: open a portal link on a phone → Share → Add to Home Screen → icon carries the GC's name → opens standalone on the portal. Why it can't lose data: **read-only** — the manifest is a projection of label/accent/token already on the link doc; no Firestore write, no rules change, no loader change, no job field; the only files added are 'vercel.json' (one rewrite; Vercel's CRA fallback stays) and the function.
   - Plans on the portal + office-set supers · 'shipped 2026-09-15' · 'SW v405' · see the Contractors entry above — Documents now lists the job's plans folder link and uploaded plan PDFs (name+url only, https-only); per-job supers can be set from the office link card and stale/legacy super entries are removable on both sides.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
@@ -52327,6 +52328,7 @@ function GCPortalPage({ token, deepJobId }) {
   const [link, setLink] = useState(undefined); // undefined=loading · null=inactive/missing · obj=live
   const [jobs, setJobs] = useState(null);       // null=loading · []=empty
   const [openId, setOpenId] = useState(null);   // job detail modal
+  const [openSec, setOpenSec] = useState(null); // v410: section a card chip asked to open
   // Deep link (&job=): open that job ONCE, and only after the mirror confirms
   // the id is really on this portal — an unknown/stale id just lands on the
   // board instead of erroring. Fires once so closing the modal doesn't reopen it.
@@ -52520,11 +52522,6 @@ function GCPortalPage({ token, deepJobId }) {
   const rosterCounts = {};
   jobsV.forEach(j => supersOf(j.id).forEach(n => { rosterCounts[n]=(rosterCounts[n]||0)+1; }));
 
-  const tag = (t,i) => (
-    <span key={i} style={{fontSize:12,fontWeight:t.k==="act"?700:600,borderRadius:8,padding:"5px 10px",
-      border:"1px solid "+(t.k==="act"?accent+"66":P.line),
-      background:t.k==="act"?accent+"14":"transparent", color:t.k==="act"?accent:P.dim}}>{t.text}</span>
-  );
   const bar = (label, pct, col) => (
     <div style={{display:"flex",alignItems:"center",gap:9}}>
       <span style={{font:"700 10px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
@@ -52534,42 +52531,58 @@ function GCPortalPage({ token, deepJobId }) {
     </div>
   );
 
+  // v410 card (Koy: "super clean and easy to see everything"): summary line,
+  // two bars, and a row of COUNT CHIPS — no prose. Every chip is a door: it
+  // opens the detail with that section already expanded. Priority order:
+  // needs-you (accent) → waiting (amber) → punch → questions → plans & docs →
+  // scheduled dates → super → passed (green). Nothing shows at zero.
+  const chipsOf = (j) => {
+    const out = [];
+    const need = actionCount(j);
+    if (need) out.push({ k:"act", sec:"needs", text:"Needs you · "+need });
+    const w = _gcPunchWaiting(j);
+    if (w) out.push({ k:"wait", sec:"punch", text: w+" waiting" });
+    const po = ["rough","finish"].reduce((s,k)=>{ const p=_gcPunchPhase(j,k); return s+(p?(Number(p.open)||0):0); },0);
+    const pd = ["rough","finish"].reduce((s,k)=>{ const p=_gcPunchPhase(j,k); return s+(p?(Number(p.done)||0):0); },0);
+    if (po) out.push({ k:"", sec:"punch", text:"Punch · "+po+" open" }); else if (pd) out.push({ k:"", sec:"punch", text:"Punch · "+pd+" done" });
+    if (j.questions && j.questions.asked) out.push({ k:"", sec:"questions", text:"Questions · "+j.questions.asked });
+    const docs = ((livePlans[j.id]||[]).filter(p=>p&&p.id&&!(Array.isArray(j.hiddenPlanShares)&&j.hiddenPlanShares.includes(p.id))).length) + (Array.isArray(j.plans)?j.plans.length:0) + ((j.matterport&&j.matterport.links)||[]).length;
+    if (docs) out.push({ k:"", sec:"docs", text:"Plans & docs · "+docs });
+    (j.returnTrips||[]).forEach(rt => { if (rt.scheduled && rt.scheduledDate && !rt.signedOff && !rt.needsSchedule) out.push({ k:"", sec:"rt", text:"Return trip "+rt.scheduledDate }); });
+    supersOf(j.id).forEach(s => out.push({ k:"muted", sec:"team", text:"Super: "+s }));
+    if (j.rough && j.rough.inspection==="pass" && !(j.finish && j.finish.inspection==="pass")) out.push({ k:"ok", sec:"status", text:"Rough inspection passed" });
+    if (j.finish && j.finish.inspection==="pass") out.push({ k:"ok", sec:"status", text:"Final passed" });
+    return out;
+  };
+  const chipStyle = (k) => k==="act" ? {border:"1px solid "+accent+"66",background:accent+"14",color:accent,fontWeight:700}
+    : k==="wait" ? {border:"1px solid #D9BC6B",background:"#F3E9CF",color:"#6E5212",fontWeight:700}
+    : k==="ok" ? {border:"1px solid #CDE6D7",background:"transparent",color:"#2C5C40",fontWeight:700}
+    : k==="muted" ? {border:"1px solid "+P.line,background:"transparent",color:P.muted,fontWeight:600}
+    : {border:"1px solid "+P.line,background:"transparent",color:P.dim,fontWeight:700};
   const card = (j) => {
-    const tg = tagsOf(j); const sup = supersOf(j.id); const pt = _gcPunchTags(j);
-    const bits = [];
-    if(j.rough && j.rough.inspection==="pass") bits.push("Rough inspection passed");
-    if(j.finish && j.finish.inspection==="pass") bits.push("Final passed");
-    const qcFixed = j.qc ? j.qc.items.filter(q=>q.done).length : 0;
-    if(j.qc && j.qc.items.length) bits.push("Homestead QC walk: "+qcFixed+"/"+j.qc.items.length+" fixed");
+    const chips = chipsOf(j);
     return (
-      <div key={j.id} onClick={()=>setOpenId(j.id)} style={{background:P.card,border:"1px solid "+P.line,borderRadius:11,
-        padding:"16px 18px",display:"flex",flexDirection:"column",gap:11,cursor:"pointer"}}>
+      <div key={j.id} onClick={()=>{ setOpenSec(null); setOpenId(j.id); }} style={{background:P.card,border:"1px solid "+P.line,borderRadius:11,
+        padding:"14px 16px",display:"flex",flexDirection:"column",gap:9,cursor:"pointer"}}>
         <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
           <h3 style={{fontSize:15,color:P.ink,margin:0}}>{(j.simproNo?"#"+j.simproNo+" ":"")+j.name}</h3>
           <span style={{fontSize:12,color:P.muted}}>{j.address}</span>
           <span style={{marginLeft:"auto",fontSize:11,color:P.muted}}>updated {j.updatedAt ? _gcShortDate(j.updatedAt) : ""}</span>
         </div>
-        {(tg.length || sup.length || pt.length) ? (
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {tg.map(tag)}
-            {sup.map((s,i)=><span key={"s"+i} style={{fontSize:12,fontWeight:600,borderRadius:8,padding:"5px 10px",border:"1px solid "+P.line,color:P.dim}}>Super: {s}</span>)}
-            {pt.map((t,i)=><span key={"pt"+i} style={t.k==="wait"
-              ? {fontSize:12,fontWeight:700,borderRadius:8,padding:"5px 10px",border:"1px solid #D9BC6B",background:"#F3E9CF",color:"#6E5212"}
-              : {fontSize:12,fontWeight:600,borderRadius:8,padding:"5px 10px",border:"1px solid transparent",background:accent+"14",color:accent}}>{t.text}</span>)}
-          </div>
-        ) : null}
         {!isDone(j) && !j.quickJob ? (
-          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {bar("ROUGH", j.rough&&j.rough.stage, accent)}
             {bar("FINISH", j.finish&&j.finish.stage, P.muted)}
           </div>
         ) : null}
-        {(()=>{ const pl=_gcStatusPills(j); return pl.length ? (
+        {chips.length ? (
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {pl.map((p,i)=><span key={"p"+i} style={{fontSize:12,fontWeight:600,borderRadius:8,padding:"4px 10px",border:"1px solid "+P.line,color:P.dim}}>{p}</span>)}
+            {chips.map((c,i)=>(
+              <button key={"c"+i} onClick={e=>{ e.stopPropagation(); setOpenSec(c.sec); setOpenId(j.id); }}
+                style={{...chipStyle(c.k),fontSize:11.5,borderRadius:8,padding:"4px 9px",cursor:"pointer",fontFamily:"inherit"}}>{c.text}</button>
+            ))}
           </div>
-        ) : null; })()}
-        {bits.length ? <div style={{fontSize:12,color:P.muted}}>{bits.join(" · ")} — tap for details</div> : null}
+        ) : null}
       </div>
     );
   };
@@ -52611,12 +52624,11 @@ function GCPortalPage({ token, deepJobId }) {
         </div>
       ) : null}
 
-      {/* summary tiles */}
+      {/* summary tiles — v410: four; return trips fold into "Need your input" */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap",margin:"16px 0"}}>
         {[[isSuper?"Jobs with you":"Jobs with us", filtered.length, false, false],
-          ["Need your input", needTotal, needTotal>0, false],
-          ["Punch items waiting", punchWaiting, false, punchWaiting>0],
-          ["Return trips — need scheduling", rtNeeds, rtNeeds>0, false],
+          ["Need your input", needTotal + rtNeeds, (needTotal + rtNeeds)>0, false],
+          ["Waiting on you", punchWaiting, false, punchWaiting>0],
           ["Completed & closed", dones.length, false, false]].map(([lbl,n,hot,warm],i)=>(
           <div key={i} style={{background:warm?"#F3E9CF":(hot?accent+"0F":P.card),border:"1px solid "+(warm?"#D9BC6B":(hot?accent+"55":P.line)),borderRadius:10,padding:"10px 16px",minWidth:118}}>
             <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: warm?"#6E5212":(hot?accent:P.ink)}}>{n}</b>
@@ -52668,7 +52680,7 @@ function GCPortalPage({ token, deepJobId }) {
         <div style={{marginTop:8}}>{_gcContactLine(P)}</div>
       </div>
 
-      {detail ? <GCPortalDetail job={detail} link={link} P={P} livePlans={livePlans[detail.id] || []} onClose={()=>setOpenId(null)}/> : null}
+      {detail ? <GCPortalDetail key={detail.id+"|"+(openSec||"")} job={detail} link={link} P={P} livePlans={livePlans[detail.id] || []} initialSection={openSec} onClose={()=>{ setOpenId(null); setOpenSec(null); }}/> : null}
     </Fragment>
   );
 }
@@ -52852,13 +52864,6 @@ function GCInstallCard({ P, accent, token, label }) {
 // v407 punch helpers (portal). A mirror written before v407 has no `punch` key.
 const _gcPunchPhase = (j, k) => { const p = j && j.punch && typeof j.punch === "object" ? j.punch[k] : null; return (p && Array.isArray(p.items)) ? p : null; };
 const _gcPunchWaiting = (j) => ["rough","finish"].reduce((s,k)=>{ const p=_gcPunchPhase(j,k); return s + (p ? (Number(p.waiting)||0) : 0); }, 0);
-const _gcPunchTags = (j) => {
-  const out = [];
-  ["rough","finish"].forEach(k => { const p = _gcPunchPhase(j,k); if (!p || (!p.open && !p.done)) return;
-    out.push({ k:"punch", text: (k==="rough"?"Rough":"Finish")+" punch · "+(p.open||0)+" open · "+(p.done||0)+" done" }); });
-  const w = _gcPunchWaiting(j); if (w) out.push({ k:"wait", text: w+" waiting" });
-  return out;
-};
 const _gcDoneMs = (it) => { const t = Date.parse(it.doneTs||""); if (t) return t; const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(it.doneDate||""); return m ? new Date(+m[3], +m[1]-1, +m[2]).getTime() : 0; };
 
 // One punch phase on the job detail (v407). Waiting items first in an amber
@@ -52866,7 +52871,26 @@ const _gcDoneMs = (it) => { const t = Date.parse(it.doneTs||""); if (t) return t
 // what we are waiting on"), then every open item grouped by floor/room, then
 // items finished in the last 14 days struck through for progress; older ones
 // collapse into a count. A phase with nothing open collapses to its summary.
-function GCPunchSection({ P, label, v, gcLabel }) {
+// v410 — collapsible portal section (Koy: "any lists start in a collapsed
+// drop down … super clean and easy to see everything"). The HEADER carries the
+// numbers (`count` in dim, `hot` in the accent or amber tone) so a closed page
+// still reads as a full status; the body mounts only while open. Open state is
+// the parent's (remembered per device + job).
+function GCSection({ P, id, title, count, hot, tone, open, onToggle, children }) {
+  return (
+    <div id={id} style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,overflow:"hidden"}}>
+      <button onClick={onToggle} aria-expanded={!!open} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",textAlign:"left",flexWrap:"wrap"}}>
+        <span style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:open?P.ink:P.muted,fontWeight:700}}>{title}</span>
+        {count ? <span style={{fontSize:12,fontWeight:600,color:P.dim}}>{count}</span> : null}
+        {hot ? <span style={{fontSize:12,fontWeight:700,color:tone==="wait"?"#6E5212":P.accent}}>{hot}</span> : null}
+        <span aria-hidden="true" style={{marginLeft:"auto",color:P.muted,fontSize:12,display:"inline-block",transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▾</span>
+      </button>
+      {open ? <div style={{padding:"0 14px 12px"}}>{children}</div> : null}
+    </div>
+  );
+}
+
+function GCPunchSection({ P, label, v, gcLabel, flat }) {
   const [showOlder, setShowOlder] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const total = (Number(v.open)||0) + (Number(v.done)||0);
@@ -52899,7 +52923,7 @@ function GCPunchSection({ P, label, v, gcLabel }) {
   const allDone = !(Number(v.open)||0);
   const expanded = !allDone || showAll;
   return (
-    <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"11px 14px"}}>
+    <div style={flat ? {paddingTop:6} : {background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"11px 14px"}}>
       <h4 style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:P.muted,margin:"0 0 7px"}}>{label}{allDone ? "" : " — what's left on our side"}</h4>
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:8}}>
         <div style={{flex:1,minWidth:160,height:8,borderRadius:99,background:P.line,overflow:"hidden",display:"flex"}}>
@@ -53205,9 +53229,27 @@ function GCSuperAssign({ P, link, jobId, onAssign }) {
   );
 }
 
-function GCPortalDetail({ job, link, P, livePlans, onClose }) {
+function GCPortalDetail({ job, link, P, livePlans, initialSection, onClose }) {
   const j = job;
   const token = link && link.token;
+  // v410: which sections are open — remembered per device + job so a super who
+  // always wants Punch open gets it open. Defaults: "Where it stands" open,
+  // "Needs your input" open while it has anything, everything else collapsed.
+  // A chip tapped on the board (initialSection) forces that section open.
+  const _secKey = "gcportal_secs_" + (token || "") + "_" + j.id;
+  const [openSecs, setOpenSecs] = useState(() => {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(_secKey) || "{}") || {}; } catch(e) { saved = {}; }
+    return initialSection ? { ...saved, [initialSection]: true } : saved;
+  });
+  const isOpen = (k, def) => (Object.prototype.hasOwnProperty.call(openSecs, k) ? !!openSecs[k] : !!def);
+  const toggleSec = (k, def) => setOpenSecs(prev => { const nx = { ...prev, [k]: !isOpen(k, def) }; try { localStorage.setItem(_secKey, JSON.stringify(nx)); } catch(e) {} return nx; });
+  useEffect(() => {
+    if (!initialSection) return;
+    const t = setTimeout(() => { try { const el = document.getElementById("gcsec-" + initialSection); if (el) el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch(e) {} }, 60);
+    return () => clearTimeout(t);
+  }, [initialSection]);
+  const [composer, setComposer] = useState(null); // v410: "thread" | "punch" | null — the sticky bar's open box
   // Who's submitting — remembered per portal so the office sees a name on
   // requests. Optional; blank is fine (the GC company label is always on file).
   const _whoKey = "gcportal_who_" + (token || "");
@@ -53219,12 +53261,11 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
     if (!token) return Promise.reject(new Error("no token"));
     return httpsCallable(functions, "gcPortalSubmit")({ token, jobId: j.id, by: who, ...payload });
   };
-  const sec = (title, kids) => (
-    <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"11px 14px"}}>
-      <h4 style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:P.muted,margin:"0 0 7px"}}>{title}</h4>
-      {kids}
-    </div>
-  );
+  // v410: every section is a collapsible with its numbers in the header
+  const sec = (key, title, kids, o) => { const opts = o || {}; return (
+    <GCSection key={key} id={"gcsec-"+key} P={P} title={title} count={opts.count} hot={opts.hot} tone={opts.tone}
+      open={isOpen(key, !!opts.open)} onToggle={()=>toggleSec(key, !!opts.open)}>{kids}</GCSection>
+  ); };
   const line = (kids,key) => <div key={key} style={{fontSize:12.5,color:P.dim,marginBottom:4}}>{kids}</div>;
   const qcFixed = j.qc ? j.qc.items.filter(q=>q.done).length : 0;
   const dates = [];
@@ -53262,13 +53303,13 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
         ) : null; })()}
 
         {/* status (parent objects guarded — always present today, but never crash if a mirror doc ever drifts) */}
-        {(() => { const R = j.rough||{}, Fn = j.finish||{}; return sec("Where it stands", (
+        {(() => { const R = j.rough||{}, Fn = j.finish||{}; return sec("status", "Where it stands", (
           <Fragment>
             {line(<span><b style={{color:P.ink}}>Rough</b> — {R.stage||"—"} · {_gcTxt(R.status)||"not started"}{R.inspection?" · inspection "+R.inspection:""}{R.punchOpen?" · "+R.punchOpen+" punch open":""}</span>,"r")}
             {!j.quickJob ? line(<span><b style={{color:P.ink}}>Finish</b> — {Fn.stage||"—"} · {_gcTxt(Fn.status)||"not started"}{Fn.inspection?" · inspection "+Fn.inspection:""}{Fn.punchOpen?" · "+Fn.punchOpen+" punch open":""}</span>,"f") : null}
             {dates.map((d,i)=>line(<span>{d[0]}: <b style={{color:P.ink}}>{d[1]}</b></span>,"d"+i))}
           </Fragment>
-        )); })()}
+        ), { open: true }); })()}
 
         {/* needs & scheduling — the card's action tags land HERE (mockup section).
             Finish-start planning + matterport date ride the same gc_requests date
@@ -53278,9 +53319,28 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
           const R = j.rough||{}, Fn = j.finish||{};
           const finishPlanning = !j.quickJob && R.status==="complete" && (!Fn.status || Fn.status==="waiting_date");
           const mpSuggest = _gcMpNeedsDate(j);
-          if(!finishPlanning && !mpSuggest) return null;
-          return sec("Needs & scheduling", (
+          // v410: one place that answers "what do you need from me" — the date
+          // boxes live here; return trips and questions that need them are
+          // pointers that open those sections (their send boxes stay there).
+          const rtNeed = (j.returnTrips||[]).filter(rt=>rt.needsSchedule && !rt.signedOff);
+          const openQ = (j.questions && j.questions.byFor || []).reduce((s,g)=>s+(g.openCount||0),0);
+          const needCount = (finishPlanning?1:0) + (mpSuggest?1:0) + rtNeed.length + (openQ?1:0);
+          if(!needCount) return null;
+          const jump = (k, label) => <button onClick={()=>{ setOpenSecs(prev=>{ const nx={...prev,[k]:true}; try{ localStorage.setItem(_secKey, JSON.stringify(nx)); }catch(e){} return nx; }); setTimeout(()=>{ try{ const el=document.getElementById("gcsec-"+k); if(el) el.scrollIntoView({block:"center",behavior:"smooth"}); }catch(e){} },40); }} style={_gcPrimaryBtn(P)}>{label}</button>;
+          return sec("needs", "Needs your input", (
             <Fragment>
+              {rtNeed.map((rt,i)=>(
+                <div key={"need-rt"+i} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"6px 0",borderBottom:"1px solid "+P.line}}>
+                  <span style={{flex:1,minWidth:160,fontSize:12.5,color:P.dim}}><b style={{color:P.ink}}>Return trip</b>{rt.scope?" — "+_gcTxt(rt.scope).slice(0,80):""}. Pick a day that works.</span>
+                  {jump("rt","Suggest a date")}
+                </div>
+              ))}
+              {openQ ? (
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"6px 0",borderBottom:"1px solid "+P.line}}>
+                  <span style={{flex:1,minWidth:160,fontSize:12.5,color:P.dim}}><b style={{color:P.ink}}>{openQ} question{openQ>1?"s":""}</b> waiting on your answer.</span>
+                  {jump("questions","Answer")}
+                </div>
+              ) : null}
               {finishPlanning ? (
                 <div style={{marginBottom:mpSuggest?12:0}}>
                   {line(Fn.projectedStart
@@ -53304,31 +53364,36 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
                 </div>
               ) : null}
             </Fragment>
-          ));
+          ), { open: true, hot: String(needCount), tone: "act" });
         })()}
 
         {/* v407: live punch lists — active phase first */}
         {(()=>{
           const r = _gcPunchPhase(j,"rough"), f = _gcPunchPhase(j,"finish");
           const order = (r && !r.open && f && (f.open||f.done)) ? [["finish",f,"Finish punch"],["rough",r,"Rough punch"]] : [["rough",r,"Rough punch"],["finish",f,"Finish punch"]];
-          return order.map(([k,v,lbl]) => v && (v.open||v.done) ? <GCPunchSection key={"punch"+k} P={P} label={lbl} v={v} gcLabel={link.label}/> : null);
+          const phases = order.filter(([,v]) => v && (v.open||v.done));
+          if (!phases.length) return null;
+          const tot = (k) => phases.reduce((s,[,v]) => s + (Number(v[k])||0), 0);
+          const w = tot("waiting");
+          return sec("punch", "Punch", (
+            <Fragment>{phases.map(([k,v,lbl]) => <GCPunchSection key={"punch"+k} P={P} label={lbl} v={v} gcLabel={link.label} flat/>)}</Fragment>
+          ), { count: tot("open")+" open · "+tot("done")+" done", hot: w ? "· "+w+" waiting" : "", tone: "wait" });
         })()}
 
         {/* per-job super assignment (GC self-service — drives filter + email routing).
             A per-super link can't reassign (server refuses too) — read-only line. */}
-        {sec("Your team on this job", link.kind==="super" ? (
+        {sec("team", "Your team on this job", link.kind==="super" ? (
           <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
             <span style={{border:"1px solid "+P.accent,background:P.accent+"14",color:P.accent,borderRadius:999,fontSize:12,fontWeight:700,padding:"5px 12px"}}>{_gcTxt(link.viewName||"You")}</span>
             <span style={{fontSize:12,color:P.muted}}>You're on this job. Your office sets who runs which job — ask them to change it.</span>
           </div>
         ) : (
           <GCSuperAssign P={P} link={link} jobId={j.id} onAssign={(supers)=>gcSubmit({ type:"assign", supers })}/>
-        ))}
+        ), { count: link.kind==="super" ? _gcTxt(link.viewName||"") : ((link.supersByJob && Array.isArray(link.supersByJob[j.id])) ? link.supersByJob[j.id].map(id => { const c = (link.contacts||[]).find(x=>x&&x.id===id); return c ? c.name : id; }).join(", ") : "no super yet") })}
 
         {/* questions */}
-        {j.questions && (j.questions.byFor.length || j.questions.links.length) ? sec("Questions", (
+        {j.questions && (j.questions.byFor.length || j.questions.links.length) ? sec("questions", "Questions", (
           <Fragment>
-            {line(<b style={{color:P.ink}}>{j.questions.asked} questions on this job · {j.questions.answered} answered · {j.questions.open} waiting</b>,"qsum")}
             {j.questions.byFor.map((g,i)=>(
               <div key={"g"+i} style={{border:"1px solid "+P.line,borderRadius:9,padding:"10px 12px",margin:"8px 0"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -53349,10 +53414,10 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
               <div key={"L"+i} style={{fontSize:11.5,color:P.muted,marginTop:4}}>Link “{L.name}”: {L.sent} sent · {L.answered} answered · {L.waiting} waiting</div>
             ))}
           </Fragment>
-        )) : null}
+        ), { count: j.questions.asked+" · "+j.questions.answered+" answered", hot: j.questions.open ? "· "+j.questions.open+" for you" : "", tone: "act" }) : null}
 
         {/* return trips */}
-        {(j.returnTrips||[]).length ? sec("Return trips", (
+        {(j.returnTrips||[]).length ? sec("rt", "Return trips", (
           j.returnTrips.map((rt,i)=>(
             <div key={"rt"+i} style={{marginBottom:i<j.returnTrips.length-1?10:0}}>
               {line(<span><b style={{color:P.ink}}>{rt.signedOff?"Completed":rt.scheduled?"Scheduled"+(rt.scheduledDate?" "+rt.scheduledDate:""):rt.needsSchedule?"Needs scheduling":"Open"}</b>{rt.targetDate&&!rt.signedOff?" · target "+rt.targetDate:""}{rt.signedOff&&rt.signedOffDate?" "+rt.signedOffDate:""}</span>,"rts"+i)}
@@ -53366,20 +53431,20 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
               ) : null}
             </div>
           ))
-        )) : null}
+        ), (()=>{ const rts=j.returnTrips; const done=rts.filter(r=>r.signedOff).length; const need=rts.filter(r=>r.needsSchedule&&!r.signedOff).length; const sched=rts.filter(r=>r.scheduled&&!r.signedOff&&!r.needsSchedule).length; return { count: done+" done"+(sched?" · "+sched+" scheduled":""), hot: need ? "· "+need+" to schedule" : "", tone: "act" }; })()) : null}
 
         {/* QC receipts */}
-        {j.qc && j.qc.items.length ? sec("Homestead QC walk — "+qcFixed+"/"+j.qc.items.length+" fixed", (
+        {j.qc && j.qc.items.length ? sec("qc", "Homestead QC walk", (
           <Fragment>
             <div style={{fontSize:11.5,color:P.muted,marginBottom:6}}>Items our own QC walker called on our work (we self-QC every job after rough &amp; finish):</div>
             {j.qc.items.map((q,i)=><div key={"qc"+i} style={{fontSize:12,color:P.dim,marginBottom:4}}><b style={{color:P.ink}}>{q.done?"✓ ":"○ "}</b>{q.text}{q.fixedBy?" — fixed by "+q.fixedBy:""}</div>)}
           </Fragment>
-        )) : null}
+        ), { count: qcFixed+"/"+j.qc.items.length+" fixed" }) : null}
 
         {/* change orders (count only) */}
-        {j.changeOrders && j.changeOrders.count ? sec("Change orders", line(
+        {j.changeOrders && j.changeOrders.count ? sec("co", "Change orders", line(
           j.changeOrders.open ? j.changeOrders.open+" open change order"+(j.changeOrders.open>1?"s":"")+" — we send these by email; reply there to approve." : "All change orders resolved."
-        )) : null}
+        ), { count: (j.changeOrders.count - (j.changeOrders.open||0))+" done", hot: j.changeOrders.open ? "· "+j.changeOrders.open+" open" : "", tone: "act" }) : null}
 
         {/* documents: plans (folder link + uploaded plan PDFs — v405, projected
             from the job's Plans & Links tab) + matterport links (real hrefs).
@@ -53396,7 +53461,7 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
           const lp = (Array.isArray(livePlans) ? livePlans : []).filter(p => p && p.id && !hiddenSet.has(p.id));
           const gcTag = "?crew=" + encodeURIComponent(("gc:" + String(link && link.gcKey || "gc")).slice(0, 120)) + "&crewName=" + encodeURIComponent(String(link && link.label || "Contractor").slice(0, 60));
           const ago = (ms) => { if (!ms) return ""; const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); if (m < 2) return "just updated"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; const d = Math.round(h / 24); return d < 30 ? d + "d ago" : Math.round(d / 30) + "mo ago"; };
-          return sec("Documents", (
+          return sec("docs", "Live plan links and documents", (
           <Fragment>
             {lp.map((p)=>(
               <div key={"lp"+p.id} style={{marginBottom:6}}>
@@ -53418,28 +53483,37 @@ function GCPortalDetail({ job, link, P, livePlans, onClose }) {
             ))}
             {!lp.length && !plans.length && !mp.length ? line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.") : null}
           </Fragment>
-        )); })()}
+        ), { count: String(lp.length + plans.length + mp.length) }); })()}
 
-        {/* two-way: message the crew / add an item (Piece 4a) */}
-        {sec("Work with Homestead on this job", (
-          <Fragment>
-            <div style={{fontSize:11.5,color:P.muted,marginBottom:8}}>Anything you send here goes straight to our office and the crew lead on this job.</div>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,color:P.dim}}>Your name:</span>
-              <input value={who} onChange={e=>setWhoP(e.target.value)} placeholder="(optional) who's writing"
-                style={{...(_gcField(P)),width:"auto",flex:"1 1 180px",padding:"5px 9px",fontSize:12.5}}/>
+        {/* two-way: message the crew / add an item (Piece 4a) — v410: one sticky
+            bar at the bottom of the modal; the box opens above it on demand. */}
+        <div style={{position:"sticky",bottom:0,background:P.board,paddingTop:6,marginTop:2}}>
+          {composer ? (
+            <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:"10px 10px 0 0",padding:"10px 14px",borderBottom:"none"}}>
+              <div style={{fontSize:11.5,color:P.muted,marginBottom:6}}>Goes straight to our office and the crew lead on this job.</div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,color:P.dim}}>Your name:</span>
+                <input value={who} onChange={e=>setWhoP(e.target.value)} placeholder="(optional) who's writing"
+                  style={{...(_gcField(P)),width:"auto",flex:"1 1 180px",padding:"5px 9px",fontSize:12.5}}/>
+              </div>
+              {composer==="thread" ? (
+                <GCSendBox P={P} link={link} label="Send a message about this job" cta="Send message" placeholder="Question, heads-up, or note for the crew…"
+                  allowFiles
+                  onSend={(text, attachments)=>gcSubmit({ type:"thread", text, attachments })}/>
+              ) : (
+                <GCSendBox P={P} link={link} label="Add an item for us to address" cta="Send item" placeholder="Something you need us to come back for or fix…"
+                  doneText="✓ Item sent — it’ll reach the crew after our office reviews it" allowFiles
+                  onSend={(text, attachments)=>gcSubmit({ type:"punch", text, attachments })}/>
+              )}
             </div>
-            <GCSendBox P={P} link={link} label="Send a message about this job" cta="Send message" placeholder="Question, heads-up, or note for the crew…"
-              allowFiles
-              onSend={(text, attachments)=>gcSubmit({ type:"thread", text, attachments })}/>
-            <div style={{height:6}}/>
-            <GCSendBox P={P} link={link} label="Add an item for us to address" cta="Send item" placeholder="Something you need us to come back for or fix…"
-              doneText="✓ Item sent — it’ll reach the crew after our office reviews it" allowFiles
-              onSend={(text, attachments)=>gcSubmit({ type:"punch", text, attachments })}/>
-          </Fragment>
-        ))}
-
-        <div style={{fontSize:11,color:P.muted,textAlign:"center",paddingTop:2}}>Built in-house by Homestead Electric.</div>
+          ) : null}
+          <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:composer?"0 0 10px 10px":10,padding:"8px 12px",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>setComposer(c=>c==="thread"?null:"thread")} style={composer==="thread"?_gcPrimaryBtn(P):_gcMiniBtn(P)}>Message the crew</button>
+            <button onClick={()=>setComposer(c=>c==="punch"?null:"punch")} style={composer==="punch"?_gcPrimaryBtn(P):_gcMiniBtn(P)}>+ Add an item</button>
+            {composer ? <button onClick={()=>setComposer(null)} style={{marginLeft:"auto",background:"none",border:"none",color:P.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>close</button>
+              : <span style={{marginLeft:"auto",fontSize:11,color:P.muted}}>Built in-house by Homestead Electric.</span>}
+          </div>
+        </div>
       </div>
     </div>
   );
