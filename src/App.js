@@ -433,6 +433,7 @@ async function _publishCcHomerunsNow(jid, homeRuns) {
         id: `hr:${r.id}`,
         slots: [],                                                 // no breaker slot yet
         name: (r.name || "").trim() + (r.wire ? ` (${r.wire})` : ""),
+        note: (r.note || "").trim(),                               // v411: per-run note (location etc.)
         amperage: null,
         poles: 1,
         source: "office",
@@ -14832,6 +14833,12 @@ const sortHRRows = (arr) => [...arr].sort((a,b)=>{
 // so each view routes the write back to the right floor array. addRow is
 // optional (panel view has no add — adding lives in the floor view).
 function HRRow({r, upd, del, addRow, customPanels}) {
+  // v411: per-run note ("location of homerun or just little informative
+  // notes" — crew request via Koy, 2026-09-17). Additive `note` on the row,
+  // saved through the same upd funnel as the name; shows as a compact line
+  // under the name once it has text, otherwise a small "+ note" ghost.
+  const [noteOpen, setNoteOpen] = useState(false);
+  const showNote = noteOpen || !!(r.note||"").trim();
   return (
     <div
       style={{marginBottom:6,paddingBottom:6,
@@ -14882,6 +14889,24 @@ function HRRow({r, upd, del, addRow, customPanels}) {
           </span>
         </div>
       )}
+      {/* Row 3 (v411): note — location or anything useful. Flows to FieldInk's
+          From Command Center list via publishCcHomeruns. */}
+      <div style={{paddingLeft:22,marginTop:3,display:"flex",alignItems:"center",gap:6}}>
+        {showNote ? (
+          <>
+            <span style={{display:"inline-flex",color:C.dim,flexShrink:0}} title="Note"><Icon name="note" size={12} stroke={2}/></span>
+            <input value={r.note||""} onChange={e=>upd(r.id,{note:e.target.value})} placeholder="Location, or anything useful…"
+              autoFocus={noteOpen && !(r.note||"").trim()}
+              onBlur={()=>{ if(!(r.note||"").trim()) setNoteOpen(false); }}
+              style={{flex:1,minWidth:0,fontFamily:"inherit",fontSize:11,color:C.text,background:"transparent",border:"none",borderBottom:`1px dashed ${C.border}`,padding:"2px 0",outline:"none"}}/>
+          </>
+        ) : (
+          <button type="button" onClick={()=>setNoteOpen(true)} title="Add a note — location, or anything useful"
+            style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:10,color:C.muted,display:"inline-flex",alignItems:"center",gap:4}}>
+            <Icon name="note" size={11} stroke={2}/>+ note
+          </button>
+        )}
+      </div>
       {/* 240V 2-wire override — only for 14/2 & 12/2 (the 1-pole /2 cables run
           2-wire, no neutral, on a 240V-only load). Sets v240 on the row; every
           panel + the generator page read it via effectivePoles. */}
@@ -14912,7 +14937,7 @@ const HRColHeaders = () => (
 // A home-run row counts as real content when anything is filled in — used to
 // filter blank seeded rows out of the panel view and the collapsed-header
 // counts (blank rows still render in the floor view for editing).
-const hrHasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||r.panel||r.status));
+const hrHasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||r.panel||r.status||(r.note||"").trim()));
 
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
@@ -45494,7 +45519,7 @@ function HomeRunsSharePage({ jobId }) {
       )}
 
       {floors.map(f => {
-        const rows = (hr[f.key]||[]).filter(r=>r.name||r.panel||r.wire);
+        const rows = (hr[f.key]||[]).filter(r=>r.name||r.panel||r.wire||(r.note||"").trim());
         if(!rows.length) return null;
         return (
           <div key={f.key} style={{background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,marginBottom:12,overflow:'hidden'}}>
@@ -45505,7 +45530,10 @@ function HomeRunsSharePage({ jobId }) {
               {rows.map((r,i) => (
                 <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #EEF0F3':'none',background:r.status==='Pulled'?'#ECF2EE':'#fff'}}>
                   <span style={{fontSize:11,color:'#99A0AA',width:22,flexShrink:0,textAlign:'right'}}>{r.num}.</span>
-                  <span style={{flex:1,fontSize:13,fontWeight:600,color:'#111'}}>{r.name||<span style={{color:'#99A0AA',fontStyle:'italic'}}>Unnamed</span>}</span>
+                  <span style={{flex:1,minWidth:0}}>
+                    <span style={{display:'block',fontSize:13,fontWeight:600,color:'#111'}}>{r.name||<span style={{color:'#99A0AA',fontStyle:'italic'}}>Unnamed</span>}</span>
+                    {(r.note||"").trim()&&<span style={{display:'block',fontSize:11,color:'#6E7682',marginTop:1}}>{r.note}</span>}
+                  </span>
                   {r.panel&&<span style={{fontSize:11,color:'#6E7682',background:'#EEF0F3',borderRadius:5,padding:'2px 7px'}}>{r.panel}</span>}
                   {wireChip(r.wire)}
                   {r.status==='Pulled'&&<span style={{fontSize:11,fontWeight:700,color:'#3E7D5A'}}>✓</span>}
@@ -47989,6 +48017,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
+  - **Per-run note** · 'shipped 2026-09-17' · 'SW v411' · crew request via Koy: *"a little note option to each homerun… location of homerun or just little informative notes."* Every home-run row (By Floor AND By Panel — same 'HRRow') gets a compact **+ note** under the name; once it has text it shows as a dashed-underline line with a note icon ("Location, or anything useful…") and saves through the same 'upd' funnel as the name (debounced 'saveJob'). The read-only Home Runs share link shows the note under the run name. 'hrHasContent' counts a note as content. **Flows to FieldInk:** 'publishCcHomeruns' now carries 'note' on every published circuit (additive key on 'cchomeruns/<jobId>.panels[].circuits[]'; the hash gate republishes each job once on its next save). FieldInk's importer copies a fixed field set and never updates circuits it already holds, so the plan-side display + refresh of the note is a separate FieldInk ship. Why it can't lose data: additive 'note' on existing row objects inside 'data.homeRuns.<floor>[]', written by the existing row-update path only; no row, field, or job value is removed or renamed; the bridge write adds one key to the office-owned circuit objects on the field-ink project.
   - By Floor is the default view again + a panel creates its own schedule + generator select-all · 'shipped 2026-08-11' · 'SW v378' · Koy: "by floor should be default view... the panel schedules should be created when a panel is created, shouldnt have to add panel twice if youve already created the panel somewhere else... generator selection should have a select all button." Three independent fixes in one ship. **(1) By Floor default:** 'hrViewEff' was 'hrView || (anyPanelLabeled ? "panel" : "floor")' (v345) — it flipped to By Panel the moment ANY row carried a panel label, which on a real job happens immediately and permanently, so nobody ever landed on the floor view. Now 'hrView || "floor"'; the By Panel / By Floor toggle is untouched, only the landing view changed. **(2) Panels ↔ Panel Schedules link:** the two lists were completely independent — 'homeRuns.customPanels' (strings, feeds every row's panel dropdown) and 'job.electricalPanels' (objects, the printable breaker sheets) — so every new panel had to be typed in twice. Now CREATE-only in BOTH directions: 'addP' in the Panels section also appends a blank '{label,location:"",size:"40/80",slotCount:40,circuits:{}}' schedule, and 'ElectricalPanelSchedules.addPanel' calls the new 'onEnsurePanelName' prop (the component can't write 'homeRuns' itself, so 'HomeRunsTab' passes the callback in) to add the name to the dropdown. Both matches are case-insensitive so "sub panel" can't duplicate "Sub Panel". **Deletes never cascade either way** — a schedule holds typed circuits, and a panel name may still be referenced by home-run rows. Fires only on the explicit add click — never on load and never for the four 'DEFAULT_PANELS', or every job would sprout four empty schedules. **(3) Generator select-all:** one button in the 'GeneratorLoadSection' toolbar that flips to "Deselect all" once everything is on (so the same control undoes itself), plus a live "{n} of {total} on the generator" readout. Why it can't lose data: the panel link writes 'homeRuns' and 'electricalPanels' back-to-back in one click, and both go through the same 'u' patch updater, which advances 'jobRef.current' SYNCHRONOUSLY before returning — so the second call composes on the first instead of clobbering it, and 'saveJob' accumulates both into ONE patch and one three-way-merge transaction (the path hardened in v369/v370/v371). No new field, no schema or rules change; auto-created schedules arrive with 'circuits:{}' and no 'fillSig', so the v373 sync effect leaves them blank until someone hits FILL; select-all rides the existing 'saveHomeownerRequest' funnel (version snapshot before every write) and is reversible by the same button
   - Pull-summary leads the tab + expandable A-Z flat list · 'shipped 2026-08-10' · 'SW v376' · Koy: "I want the Home Runs pulled, with the number of pulled compared to not pulled at the very top... click that list and have it show you all of the home runs organized and wiresized alphabetically... the whole list of pulled and not pulled right there so it's easy to see. Right now it's kind of hard to navigate: you have to click into Home Runs and then find the panel or the floor." The "Home Runs Pulled" progress card now leads the WHOLE tab — above even the v369 list-first Home Runs section and Panel Schedules, not just above Generator Load Selection — and its header line spells out both sides of the count ('{pulled} pulled · {notPulled} left', was the bare 'pulled / total — pct%'). New 'HomeRunsPullSummary' component: click the card to expand (starts collapsed, per the v347 every-section-collapsed convention) into one flat A-Z list of every named home run on the job — no drilling into a panel or floor first. Split into "Not Pulled" (the actionable set, listed first) and "Pulled" groups, each with its own count header (a group hides entirely when empty, same pattern the generator response modal already uses for its ON/NOT ON lists); every row carries its wire size as a colored chip plus panel · floor · 'wireAmpsVolts()' so the row is self-describing without opening it. Sort is alphabetical-by-name only — Koy's "organized and wiresized alphabetically" resolved as name-sort with wire shown on every row, NOT grouped by wire; the 'byName' comparator inside 'HomeRunsPullSummary' is the one place a future wire-size-grouping pass would touch. List membership comes from the same per-floor arrays (main/basement/upper/extraFloors) and the same name-required 'namedRows' filter the pulled/total counts already used, so the header numbers and the expanded list's group counts can never drift apart. Purely additive: the existing By Panel / By Floor Home Runs section, 'HomeRunsByPanel', and the row editors are untouched. Why it can't lose data: read-only presentational component — no new field, no write path, no schema or rules change; the moved progress card reuses the exact 'pulled'/'total'/'pct' values 'HomeRunsTab' already computed, nothing recalculated a new way
   - 240V flip now moves the breaker COUNT cards too · 'shipped 2026-08-10' · 'SW v374' · Koy, testing v373 on Webb: "ive marked two of the 12/2 homeruns as 240v but it still does not appear in the breaker counts." v373 was real but only half the surface — it taught the panel *schedule* about 240V ('fillPanelFromHomeRuns' already called 'effectivePoles'), while the **panel summary cards above it** still destructured 'poles' straight off the raw wire table ('const {amps,poles}=WIRE_BREAKER[r.wire]'), so the flag re-poled the printed sheet while the counts never moved. Audited every 'WIRE_BREAKER[...]' read in the file: this was the ONLY one that ignored 'v240' — the generator panel ('slotsUsed'), 'GenPanelGrid' and the schedule fill all already went through 'effectivePoles'. Now 'poles = effectivePoles(r.wire, r.v240)' at that one site, and because every downstream number flows from it, the whole card chain corrects at once: the group label (a 240V 12/2 files under "20A 2P" instead of "20A 1P"), the space math, 'autoSpaces'/drift detection, the tandem + quad sizing banner, and the PO breaker counts. Pairs with the v369 drift banner — an existing manual override on that panel now correctly reads "Manual count is stale" and its Refresh pulls the corrected number. Why it can't lose data: read-side derivation only — no write, no new field, no schema or rules change, and 'effectivePoles' is the same module-scope helper four other call sites already trusted
