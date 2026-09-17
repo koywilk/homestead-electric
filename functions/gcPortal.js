@@ -354,6 +354,59 @@ function jobIdsViewFor(links, contactId) {
   return [...out].slice(0, 500);
 }
 
+// Per-link web-app manifest (v409 — Koy's north star: "I want them to be able
+// to add it to their home screen as an app just like our crews have"). Served
+// same-origin at /gc/manifest/<token> (Vercel rewrite → gcPortalManifest), so
+// Add-to-Home-Screen on a portal URL yields an icon named after THEIR company
+// that opens THEIR portal standalone — instead of the crew app's manifest
+// (name "Homestead", start_url "/", i.e. the crew login). Pure: label/accent/
+// token only; a revoked or missing link → null (404). The token in start_url is
+// the same secret as the link itself — no new exposure.
+// The name under the home-screen icon (Koy 2026-09-17: "Need something better,
+// maybe H×R for Robison"). Mirrors the header lockup — Homestead × the GC:
+// "H×" + the contractor's initials (filler words like Build/Co/Company/Homes
+// skipped, max 3 letters; falls back to the first two words' initials), and a
+// per-super link adds the person's first name: "H×MW Austin". Phones show
+// ~12 characters under an icon, so the result is cut there.
+const SHORT_NAME_FILLER = new Set(["build", "co", "company", "inc", "llc", "corp", "ltd", "group", "homes", "home", "construction", "contracting", "contractors", "the", "and", "&", "of"]);
+function portalShortName(link) {
+  const base = String((link && link.kind === "super" && link.gc) ? link.gc : (link && link.label) || "").replace(/\s+—\s+.*$/, "");
+  const words = stripHtml(base).split(/[\s\-_/,.]+/).map((w) => w.trim()).filter(Boolean);
+  let initials = words.filter((w) => !SHORT_NAME_FILLER.has(w.toLowerCase())).map((w) => w[0].toUpperCase()).filter((c) => /[A-Z0-9]/.test(c)).slice(0, 3).join("");
+  if (!initials) initials = words.slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+  let out = "H×" + (initials || "GC");
+  if (link && link.kind === "super") {
+    const first = stripHtml(String(link.viewName || "")).trim().split(/\s+/)[0] || "";
+    if (first) out += " " + first;
+  }
+  return out.slice(0, 12).trim();
+}
+
+function portalManifestFor(link) {
+  if (!link || typeof link !== "object" || link.revoked === true || !link.token) return null;
+  const token = String(link.token);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(token)) return null;
+  const label = str(link.label, 60) || "Homestead Electric";
+  const accent = /^#[0-9a-fA-F]{6}$/.test(String(link.accentColor || "")) ? String(link.accentColor) : "#3B5BA5";
+  const start = "/?gcportal=" + token;
+  return {
+    id: start,
+    name: label + " · Homestead Electric",
+    short_name: portalShortName(link),
+    description: "Your jobs with Homestead Electric — live status, plans, punch lists, questions.",
+    start_url: start,
+    scope: "/",
+    display: "standalone",
+    orientation: "portrait",
+    background_color: "#F2F3F6",
+    theme_color: accent,
+    icons: [
+      { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
+      { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+    ],
+  };
+}
+
 function projectJobForPortal(jobId, job) {
   if (!job || typeof job !== "object") return null;
   if (job.archived === true || job.deleted === true) return null;
@@ -429,5 +482,7 @@ module.exports = {
   matterportView,
   plansView,
   punchView,
+  portalManifestFor,
+  portalShortName,
   eachPunchItem,
 };

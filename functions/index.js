@@ -5958,6 +5958,28 @@ exports.gcPortalCreateSuperLink = functions.https.onCall(async (data) => {
   return { token, slug: doc.slug, jobCount: doc.jobIdsView.length };
 });
 
+// v409 — per-link web-app manifest. GET /gc/manifest/<token> on the app's own
+// origin is rewritten by vercel.json to this function (browsers require a
+// same-origin, fetchable manifest for Add-to-Home-Screen; data:/blob: manifests
+// are not reliable on iOS). Read-only: one gc_links get; revoked/missing → 404.
+// Short public cache so a label/accent edit shows up within minutes.
+exports.gcPortalManifest = functions.https.onRequest(async (req, res) => {
+  try {
+    if (req.method !== "GET") { res.status(405).send("GET only"); return; }
+    const token = String((req.query && req.query.token) || "").trim();
+    res.set("Cache-Control", "public, max-age=300");
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(token)) { res.status(404).json({}); return; }
+    const snap = await db.collection("gc_links").doc(token).get();
+    const manifest = gcPortal.portalManifestFor(snap.exists ? snap.data() : null);
+    if (!manifest) { res.status(404).json({}); return; }
+    res.set("Content-Type", "application/manifest+json; charset=utf-8");
+    res.status(200).send(JSON.stringify(manifest));
+  } catch (e) {
+    functions.logger.error("[gcPortalManifest]", e && e.message);
+    res.status(500).json({});
+  }
+});
+
 exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
   await requireAdmin(data);
   const token = String(data.token || "");

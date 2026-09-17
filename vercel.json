@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/gc/manifest/:token",
+      "destination": "https://us-central1-homestead-electric.cloudfunctions.net/gcPortalManifest?token=:token"
+    }
+  ]
+}

@@ -48047,6 +48047,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
+  - **Add to home screen — the portal as the contractor's own app** · 'shipped 2026-09-17' · 'SW v409' · Koy's north star (vault, GC Portal Link Spec North-star block): *"I want them to be able to add it to their home screen as an app just like our crews have."* Until now the only web manifest on the site was the crew app's ('public/manifest.json': name "Homestead", 'start_url:"/"'), so Add-to-Home-Screen on a portal URL produced a "Homestead" icon that opened the crew login. Now each link has its **own manifest**: 'functions/gcPortal.portalManifestFor(link)' (pure, tested — name "<label> · Homestead Electric", **icon name = "H×" + the contractor's initials** ('portalShortName', mirrors the header lockup — Koy: *"maybe H×R for Robison"*; filler words Build/Co/Company/Homes skipped, max 3 letters, a per-super link adds the first name: H×R, H×MW, H×CP, H×MW Austin; cut at 12), 'id'/'start_url' = '/?gcportal=<token>', 'scope:"/"', standalone, portrait, 'theme_color' = the link's accent, longhorn icons; revoked/missing/bad-token → null) served by the new HTTP function **'gcPortalManifest'** (GET, read-only, one 'gc_links' get, 404 on null, 'Cache-Control: public, max-age=300') and made same-origin by a new **'vercel.json'** rewrite '/gc/manifest/:token' → that function (browsers require a fetchable same-origin manifest; 'data:'/'blob:' manifests aren't reliable on iOS). Client ('GCPortalPage'): on mount the page swaps '<link rel=manifest>' to '/gc/manifest/<token>' and, once the link loads, sets 'apple-mobile-web-app-title' to the GC label and 'theme-color' to their accent ('_gcApplyInstallIdentity'; the apple-touch-icon stays the longhorn — GC logos aren't square). **'GCInstallCard'** sits under the header: Android captures 'beforeinstallprompt' and shows a real **Install** button; iPhone shows *Share → Add to Home Screen* with the share glyph; desktop shows a one-line "on your phone…" hint; hidden when already standalone or after **Not now** (per device, 'localStorage gcportal_a2hs_dismissed_<token>'). Per-super links get the same treatment with their own label. Service worker untouched (the manifest is a browser fetch, not a navigate). The Vercel rewrite can only be verified on the deployed site — post-deploy check: open a portal link on a phone → Share → Add to Home Screen → icon carries the GC's name → opens standalone on the portal. Why it can't lose data: **read-only** — the manifest is a projection of label/accent/token already on the link doc; no Firestore write, no rules change, no loader change, no job field; the only files added are 'vercel.json' (one rewrite; Vercel's CRA fallback stays) and the function.
   - Plans on the portal + office-set supers · 'shipped 2026-09-15' · 'SW v405' · see the Contractors entry above — Documents now lists the job's plans folder link and uploaded plan PDFs (name+url only, https-only); per-job supers can be set from the office link card and stale/legacy super entries are removable on both sides.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
   - Phase 0 safety-bar hardening (14-item audit, pre-launch — not yet live to any real GC) · 'shipped 2026-07-21' · 'SW v351' · closed every gap found before the first real contractor sees a link: office can now Edit an existing link's contacts/branding/hidden-jobs ('GCContactEditor' reused in create + edit, including in-place contact rename that preserves the contact's id — Fable verification pass caught that remove-and-re-add was silently minting a new id and orphaning 'supersByJob'), "Send test digest to me" ('gcPortalSendTestMail') so email is verified before any real send, all 7 office gcPortal* callables + the new test-mail callable gated by a real live-PIN 'requireAdmin' (not the static app key alone), contact/super-assignment routing rekeyed off stable contact 'id' instead of display name (a rename can no longer orphan email routing — 'GCSuperAssign' + 'gcDigestRecipients'/'emailRecipients' both fixed, regression test added), self-service contact/roster changes now file a 'gc_requests' review instead of writing live (closes a silent-hijack hole), fixed-window rate limiting on 'gcPortalSubmit' ('gc_rate', function-only), a SendGrid bounce/complaint webhook ('gcSendGridWebhook' → 'gc_bounces', function-only, HMAC-verified, fails safe unconfigured — Fable pass caught 'gcLoadMailConfig' dropping 'webhookPublicKey' from its cached config, which silently no-op'd every event even once the key was set; fixed), office visibility into a link's contacts + per-job super assignments (previously invisible), sticky-exclude now unions across ALL of a GC's links including revoked ones (previously a revoked link's hides could vanish), a contractor-visible "Homestead has acted on this" status readback ('link.requestStatuses'), a distinct "having trouble connecting" state on the portal's live listeners (previously indistinguishable from "link revoked" / "no jobs"), and a cross-GC mirror-isolation test proving two contractors sharing one job never see each other's link data. Backend covered by 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js' (all passing); independently verified by a second model pass (Fable) which caught the two bugs noted above; day-one go-live steps in 'GC_PORTAL_ROLLOUT_CHECKLIST.md'. Known open item, deliberately not fixed here: 'settings/users' (holds admin PINs) is 'allow read, write: if true' in firestore.rules — the new admin gate is only as strong as that being locked down, which it isn't yet; needs an explicit decision since tightening it could affect the in-app PIN-change flow.
@@ -52406,9 +52407,12 @@ function GCPortalPage({ token, deepJobId }) {
     return unsub;
   }, [portalId, link]);
 
+  // v409: this portal's own manifest, swapped in before anyone can tap Share
+  useEffect(() => { _gcApplyInstallIdentity(token, null); }, [token]);
   useEffect(() => {
     if(link && link.label) { try { document.title = link.label + " · Homestead Electric"; } catch(e){} }
-  }, [link]);
+    if(link) _gcApplyInstallIdentity(token, link);
+  }, [link, token]);
 
   const accent = (link && /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"")) ? link.accentColor : "#3B5BA5";
   const P = { board:"#F2F3F6", card:"#FFFFFF", line:"#E3E5EA", ink:"#232936", dim:"#5E6670",
@@ -52596,6 +52600,9 @@ function GCPortalPage({ token, deepJobId }) {
         </div>
       </div>
 
+      {/* v409: install as their own app */}
+      <GCInstallCard P={P} accent={accent} token={token} label={link.label}/>
+
       {/* v407: whose slice this is (per-super link) */}
       {isSuper ? (
         <div style={{margin:"14px 0 -6px",display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
@@ -52768,6 +52775,80 @@ function _gcBar(P, label, pct, col){
 // user hitting a network error can never break or blank the page, so each box
 // owns explicit null|sending|done|error state and swallows throws.
 const _gcField = (P) => ({ width:"100%", boxSizing:"border-box", border:"1px solid "+P.line, borderRadius:8, padding:"8px 10px", fontSize:13, color:P.ink, background:P.card, fontFamily:"inherit", resize:"vertical" });
+// v409 — the portal as the contractor's OWN home-screen app. The site's only
+// manifest is the crew app's (name "Homestead", start_url "/"), so Add-to-Home-
+// Screen on a portal URL used to make a "Homestead" icon that opened the crew
+// login. Each link now has its own manifest at /gc/manifest/<token> (vercel.json
+// rewrite → gcPortalManifest); the page swaps the <link rel=manifest> to it on
+// mount (before anyone can tap Share) and, once the link loads, retitles the
+// apple-mobile-web-app-title + theme-color to the GC's. Idempotent; never throws.
+const _gcManifestHref = (token) => "/gc/manifest/" + encodeURIComponent(String(token||""));
+function _gcApplyInstallIdentity(token, link) {
+  try {
+    const l = document.querySelector('link[rel="manifest"]');
+    const want = _gcManifestHref(token);
+    if (l && l.getAttribute("href") !== want) l.setAttribute("href", want);
+    if (link) {
+      const label = String(link.label||"").trim().slice(0,30);
+      const t = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+      if (t && label) t.setAttribute("content", label);
+      const acc = /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"") ? link.accentColor : "#3B5BA5";
+      const th = document.querySelector('meta[name="theme-color"]');
+      if (th) th.setAttribute("content", acc);
+    }
+  } catch(e) {}
+}
+const _gcIsStandalone = () => { try { return !!((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true); } catch(e) { return false; } };
+const _gcIsIOS = () => { try { return /iPad|iPhone|iPod/.test(navigator.userAgent||"") && !window.MSStream; } catch(e) { return false; } };
+const _gcIsPhone = () => { try { return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent||""); } catch(e) { return false; } };
+
+// "Add this to your home screen" card (v409). Android: a real Install button
+// via beforeinstallprompt. iPhone: the two-step instruction with the share
+// glyph (Safari has no install API). Desktop: a one-line phone hint. Hidden
+// when already running standalone, after install, or after "Not now" (per
+// device + per link — respected forever, no nagging).
+function GCInstallCard({ P, accent, token, label }) {
+  const key = "gcportal_a2hs_dismissed_" + token;
+  const [dismissed, setDismissed] = useState(() => { try { return localStorage.getItem(key) === "1"; } catch(e){ return false; } });
+  const [promptEv, setPromptEv] = useState(null);
+  const [installed, setInstalled] = useState(() => _gcIsStandalone());
+  useEffect(() => {
+    const onBip = (e) => { try { e.preventDefault(); } catch(x){} setPromptEv(e); };
+    const onInst = () => setInstalled(true);
+    window.addEventListener("beforeinstallprompt", onBip);
+    window.addEventListener("appinstalled", onInst);
+    return () => { window.removeEventListener("beforeinstallprompt", onBip); window.removeEventListener("appinstalled", onInst); };
+  }, []);
+  if (dismissed || installed) return null;
+  const dismiss = () => { setDismissed(true); try { localStorage.setItem(key, "1"); } catch(e){} };
+  const install = async () => {
+    if (!promptEv) return;
+    try { promptEv.prompt(); const r = await promptEv.userChoice; if (r && r.outcome === "accepted") setInstalled(true); } catch(e) {}
+  };
+  const name = _gcTxt(label||"your portal");
+  const share = <svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14" style={{verticalAlign:"-2px"}}><path d="M6 1v8M3 4l3-3 3 3M2 7v6h8V7" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+  const how = promptEv
+    ? <span>One tap from your home screen, full screen, named <b>{name}</b>.</span>
+    : _gcIsIOS()
+      ? <span>Tap <b>Share</b> {share} then <b>Add to Home Screen</b> — it works like an app, named <b>{name}</b>.</span>
+      : _gcIsPhone()
+        ? <span>Open your browser menu <b>⋮</b> and choose <b>Add to Home screen</b> — it works like an app, named <b>{name}</b>.</span>
+        : <span>On your phone, open this link and add it to your home screen — it works like an app, named <b>{name}</b>.</span>;
+  return (
+    <div style={{background:P.card,border:"1px solid "+accent+"55",borderRadius:11,padding:"11px 14px",margin:"14px 0 0",display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+      <img src="/icon-192.png" alt="" style={{width:40,height:40,borderRadius:10,flexShrink:0}}/>
+      <div style={{flex:1,minWidth:220}}>
+        <div style={{fontWeight:800,color:P.ink,fontSize:13.5}}>Add this to your home screen</div>
+        <div style={{fontSize:12,color:P.dim}}>{how}</div>
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        {promptEv ? <button onClick={install} style={_gcPrimaryBtn(P)}>Install</button> : null}
+        <button onClick={dismiss} style={_gcMiniBtn(P)}>Not now</button>
+      </div>
+    </div>
+  );
+}
+
 // v407 punch helpers (portal). A mirror written before v407 has no `punch` key.
 const _gcPunchPhase = (j, k) => { const p = j && j.punch && typeof j.punch === "object" ? j.punch[k] : null; return (p && Array.isArray(p.items)) ? p : null; };
 const _gcPunchWaiting = (j) => ["rough","finish"].reduce((s,k)=>{ const p=_gcPunchPhase(j,k); return s + (p ? (Number(p.waiting)||0) : 0); }, 0);

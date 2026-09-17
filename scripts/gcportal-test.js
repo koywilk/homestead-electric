@@ -2,7 +2,7 @@
 // Guards the outbound wall (functions/gcPortal.js). Exit 0 = all pass.
 "use strict";
 const {
-  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, punchView, jobIdsViewFor, projectJobForPortal, jobBelongsToLink,
+  PROJECTION_VERSION, gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, makeContactId, cleanLogoUrl, cleanSupersPatch, plansView, punchView, jobIdsViewFor, portalManifestFor, portalShortName, projectJobForPortal, jobBelongsToLink,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -188,6 +188,22 @@ t("punch: open items first, done sorted newest first", (() => { const its = v.pu
 t("punch: empty/garbage safe", punchView(null).open === 0 && punchView("x").items.length === 0 && punchView({ main: { rooms: [{ items: [null, { text: "" }] }] } }).items.length === 0);
 t("punch: caps (80 open / 60 done)", (() => { const big = { main: { general: Array.from({ length: 200 }, (_, i) => ({ text: "i" + i, done: i % 2 === 0, checkedAtTs: "2026-01-01T00:00:00.000Z" })) } }; const pv = punchView(big); return pv.open === 100 && pv.done === 100 && pv.items.length === 140; })());
 t("punch: waiting ignored on done items", punchView({ main: { general: [{ text: "x", done: true, waiting: true, waitingOn: "y" }] } }).waiting === 0);
+
+console.log("per-link manifest (v409):");
+const MLINK = { token: "gcp_test_token_robison", label: "Robison <b>Build</b> Co", accentColor: "#4A5D3A", revoked: false };
+const M = portalManifestFor(MLINK);
+t("manifest: start_url + id carry the token", M && M.start_url === "/?gcportal=gcp_test_token_robison" && M.id === M.start_url);
+t("manifest: name stripped, icon name is H×initials", M.name === "Robison Build Co · Homestead Electric" && M.short_name === "H×R", M.short_name);
+t("short name: filler words skipped", portalShortName({ label: "Mark Wintzer Company" }) === "H×MW" && portalShortName({ label: "City Point Homes" }) === "H×CP" && portalShortName({ label: "E Builders" }) === "H×EB" && portalShortName({ label: "Jorgenson Builders" }) === "H×JB", [portalShortName({ label: "Mark Wintzer Company" }), portalShortName({ label: "City Point Homes" }), portalShortName({ label: "E Builders" })].join("|"));
+t("short name: all-filler label falls back to first two words", portalShortName({ label: "The Home Company" }) === "H×TH");
+t("short name: super link adds first name, from the company name not the label", portalShortName({ kind: "super", gc: "Mark Wintzer Company", label: "Mark Wintzer Company — Austin Allen", viewName: "Austin Allen" }) === "H×MW Austin");
+t("short name: super link label-only (no gc field) strips the — suffix", portalShortName({ kind: "super", label: "Robison Build Co — Austin Allen", viewName: "Austin Allen" }) === "H×R Austin");
+t("short name: capped at 12, empty label → H×GC", portalShortName({ kind: "super", gc: "Alpha Beta Gamma Delta", viewName: "Bartholomew" }).length <= 12 && portalShortName({ label: "" }) === "H×GC");
+t("manifest: theme from accent, standalone, icons", M.theme_color === "#4A5D3A" && M.display === "standalone" && M.scope === "/" && M.icons.length === 2 && M.background_color === "#F2F3F6");
+t("manifest: bad accent → default blue", portalManifestFor({ ...MLINK, accentColor: "red" }).theme_color === "#3B5BA5");
+t("manifest: missing label → Homestead Electric", portalManifestFor({ ...MLINK, label: "" }).name === "Homestead Electric · Homestead Electric".replace(" · Homestead Electric", "") + " · Homestead Electric");
+t("manifest: revoked / missing / bad token → null", portalManifestFor({ ...MLINK, revoked: true }) === null && portalManifestFor(null) === null && portalManifestFor({ ...MLINK, token: "" }) === null && portalManifestFor({ ...MLINK, token: "a/b" }) === null);
+t("manifest: nothing but identity crosses", Object.keys(M).sort().join(",") === "background_color,description,display,icons,id,name,orientation,scope,short_name,start_url,theme_color");
 
 console.log("per-super link views (v407):");
 const LNK = [
