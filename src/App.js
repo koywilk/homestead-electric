@@ -48234,6 +48234,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Parent folder ID: '1laC4udt1sBdV-_QUMzzbKJfD03q4_Ml3'
   - 'namesMatch()' helper for tolerant folder→job matching
 - **Simpro sync** · 'shipped' · 'simproCandidates' doc, Simpro import flow
+  - **Import as normal, temp ped, or quick job** · 'shipped 2026-09-17' · 'SW v415' · Koy: *"when importing job i need option to import as normal, temp ped, or quick job."* Each Simpro inbox card now carries **Import →** (normal job, as before) plus two smaller buttons, **Temp Ped** and **Quick Job**. 'importSimproCandidate(cand, kind)' mirrors the three "+ New" buttons exactly — temp ped = 'blankJob()' + 'tempPed:true', quick job = 'blankQuickJob()' — with the same name / address / 'simproNo' / customer / '_importedFromSimpro' / 'imported_at' stamps and foreman "Unassigned"; the toast names the kind. Why it can't lose data: creates one new job doc per tap exactly as before (only the blank factory differs), never touches existing jobs; candidate removal unchanged.
   - **Imported jobs no longer get their own name as the address** · 'shipped 2026-09-17' · 'SW v414' · Koy: *"when a job is imported the site address is just the name of the job every time, i have to delete it and repull from simpro."* Root cause: Simpro's Pending-jobs list returns 'Site' as a stub '{ID, Name}' with no address, and '_runSimproCandidateRefresh' still had the 'Site.Name' fallback that the pull parser dropped on 2026-08-06 — on this tenant the site name is usually the job name ("Wise Flooring"), so 'importSimproCandidate' copied it into 'address', and the blank-only auto-pull then never corrected it. Fix at the source: new pure 'functions/simproShape.js' ('candidateSiteInfo' — inline address or nothing, never 'Site.Name'), and the refresh resolves a blank address once via '/sites/{ID}' (the same '_simproSiteAddress' the pull uses) and caches it on the candidate ('addressFrom:"site"', 'siteId') so later runs cost no extra Simpro calls. Belt: the client import treats an address equal to the job name as blank (verbatim 'importableAddress'), so candidates cached by the old refresh also import clean and the auto-pull fills the real address. Prebuild test 'scripts/simpro-shape-test.js'. Needs **'firebase deploy --only functions:refreshSimproCandidates,scheduledSimproCandidateRefresh'**. Why it can't lose data: the refresh writes only 'settings/simproCandidates' as before (two additive keys per candidate); the import creates a job with a blank address instead of a wrong one and never touches existing jobs; Simpro read-only.
 - **Activity tracking (lastActivityAt)** · 'shipped 2026-05-21' · 'SW v180'
   - 'lastActivityAt: serverTimestamp()' on all 7 job-write paths
@@ -55579,7 +55580,11 @@ function App() {
   // CREATE-only setDoc (never modifies an existing doc), removes it from the
   // candidates list, and opens the new job's detail page so Koy can fill in
   // the foreman / lead before it lands in everyone's view.
-  const importSimproCandidate = async (cand) => {
+  // v415: import AS a normal job (default), a temp ped, or a quick job (Koy,
+  // 2026-09-17: "when importing job i need option to import as normal, temp
+  // ped, or quick job"). Mirrors the three "+ New" buttons exactly: temp ped =
+  // blankJob + tempPed:true; quick job = blankQuickJob(). Same Simpro stamps.
+  const importSimproCandidate = async (cand, kind = "job") => {
     // Belt-and-suspenders gate. The badge / modal already hide for non-admins,
     // but if someone hits this code path another way (cached UI, dev tools)
     // we refuse rather than silently creating jobs.
@@ -55587,7 +55592,8 @@ function App() {
       toast.error("Importing Simpro jobs is admin-only.");
       return;
     }
-    const j = blankJob();
+    const j = kind === "quick" ? blankQuickJob() : blankJob();
+    if (kind === "tempped") j.tempPed = true;
     j.name = cand.name || "";
     // v414: a candidate cached by the pre-fix refresh carries the SITE NAME as
     // its address (often = the job name). Import that as blank so the Simpro
@@ -55614,7 +55620,7 @@ function App() {
       });
       setSelected(j);
       setSimproInboxOpen(false);
-      toast.success(`Imported "${j.name}" — set foreman/lead to make it live`);
+      toast.success(kind === "tempped" ? `Imported "${j.name}" as a temp ped — set foreman/lead to make it live` : kind === "quick" ? `Imported "${j.name}" as a quick job — set foreman/lead to make it live` : `Imported "${j.name}" — set foreman/lead to make it live`);
     } catch (e) {
       console.error("[HE] importSimproCandidate failed", e);
       toast.error(`Import failed: ${e.message || e}`);
@@ -56481,12 +56487,26 @@ function App() {
                             </div>
                           </div>
                           <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
-                            <button onClick={()=>importSimproCandidate(c)}
+                            <button onClick={()=>importSimproCandidate(c, "job")} title="Import as a normal job"
                               style={{background:"#3B5BA5",color:"#fff",border:"none",borderRadius:6,
                                 padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",
                                 fontFamily:"inherit",letterSpacing:"0.04em"}}>
                               Import →
                             </button>
+                            <div style={{display:"flex",gap:4}}>
+                              <button onClick={()=>importSimproCandidate(c, "tempped")} title="Import as a temp ped"
+                                style={{flex:1,background:"none",border:`1px solid #6A5E97`,color:"#6A5E97",
+                                  borderRadius:6,padding:"5px 8px",fontSize:10,fontWeight:700,
+                                  cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                                Temp Ped
+                              </button>
+                              <button onClick={()=>importSimproCandidate(c, "quick")} title="Import as a quick job"
+                                style={{flex:1,background:"none",border:`1px solid ${C.teal}`,color:C.teal,
+                                  borderRadius:6,padding:"5px 8px",fontSize:10,fontWeight:700,
+                                  cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                                Quick Job
+                              </button>
+                            </div>
                             <button onClick={()=>ignoreSimproCandidate(c)}
                               style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
                                 borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:600,
