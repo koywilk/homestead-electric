@@ -23274,6 +23274,7 @@ function DriveFilesSection({ job, onUpdate }) {
   const [simproSync, setSimproSync] = useState(null); // null | 'loading' | {uploaded, skipped, errors}
   const [treeFolderIds, setTreeFolderIds] = useState([]);  // every folder id in the job's Drive tree — feeds FieldInk live plans
   const [creating, setCreating] = useState(false);  // "Create Drive folder" button in flight
+  const [pulling, setPulling] = useState(false);    // v413: "Pull from Simpro" in flight (progress itself comes off job.docPull)
 
   const folderId = extractDriveFolderId(job.driveFolderId);
 
@@ -23301,7 +23302,34 @@ function DriveFilesSection({ job, onUpdate }) {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [folderId]);
+  }, [folderId, job.docPull && job.docPull.finishedAt]);   // v413: re-list once a Simpro pull finishes
+
+  // v413 ── pull the job's documents out of Simpro into the Drive folder.
+  // Server does the work (pullJobDocsToDrive, 2 GB / 9 min, resumable Drive
+  // upload, filename dedupe) and streams progress onto job.docPull, which the
+  // jobs listener delivers here — so the line under the buttons keeps moving
+  // even if this tab is closed. Fired automatically after Create Drive folder;
+  // the manual button fills gaps later. Koy: "bring everything over."
+  const runDocPull = async (folderIdNow) => {
+    if (pulling) return;
+    if (!simproJobNoOf(job) || !folderIdNow) return;
+    setPulling(true);
+    try {
+      const fn = httpsCallable(functions, "pullJobDocsToDrive", { timeout: 540000 });
+      const res = await fn({ jobId: job.id, provider: "simpro", by: getIdentity()?.name || "" });
+      const d = res?.data || {};
+      if (d.alreadyRunning) toast.info(`Already pulling — ${d.done} of ${d.total}`);
+      else toast.success(`${d.done} pulled from Simpro${d.skipped ? ` · ${d.skipped} already there` : ""}${d.errors && d.errors.length ? ` · ${d.errors.length} failed` : ""}`);
+    } catch (e) {
+      setError(e.message || "Pull from Simpro failed.");
+    } finally { setPulling(false); }
+  };
+  const handlePullFromSimpro = () => runDocPull(extractDriveFolderId(job.driveFolderId));
+  const docPull = job.docPull || null;
+  const docPullText = !docPull || !docPull.status ? "" :
+    docPull.status === "running" ? `Pulling from Simpro… ${docPull.done || 0} of ${docPull.total || 0}${docPull.lastFile ? ` · ${docPull.lastFile}` : ""}` :
+    docPull.status === "done" ? [`${docPull.done || 0} file${(docPull.done || 0) === 1 ? "" : "s"} pulled from Simpro`, docPull.skipped ? `${docPull.skipped} already there` : "", (docPull.errors || []).length ? `${docPull.errors.length} failed` : ""].filter(Boolean).join(" · ") :
+    docPull.status === "error" ? `Pull failed — ${docPull.message || "unknown error"}` : "";
 
   const handleSaveFolder = () => {
     const id = extractDriveFolderId(folderInput);
@@ -23326,6 +23354,8 @@ function DriveFilesSection({ job, onUpdate }) {
         onUpdate({ driveFolderId: fid });
         setFolderInput(fid);
         setEditingFolder(false);
+        // v413: the whole point — bring the Simpro subfolders + plans over now.
+        if (simproJobNoOf(job)) runDocPull(fid);
       } else {
         setError("Could not create the Drive folder.");
       }
@@ -23407,6 +23437,18 @@ function DriveFilesSection({ job, onUpdate }) {
                 {simproSync === "loading" ? "Syncing…" : "Push to Simpro"}
               </button>
             )}
+            {job.simproNo && simproJobNoOf(job) && (
+              <button
+                onClick={handlePullFromSimpro}
+                disabled={pulling || (docPull && docPull.status === "running")}
+                title="Bring Simpro's subfolders and plans into this Drive folder (only what's missing)"
+                style={{ background: "none", border: `1px solid ${C.blue}`, borderRadius: 6,
+                  color: C.blue, cursor: pulling ? "wait" : "pointer",
+                  fontSize: 11, fontWeight: 700, padding: "3px 9px", fontFamily: "inherit",
+                  opacity: (pulling || (docPull && docPull.status === "running")) ? 0.6 : 1 }}>
+                {pulling || (docPull && docPull.status === "running") ? "Pulling…" : "Pull from Simpro"}
+              </button>
+            )}
             <button onClick={() => setEditingFolder(true)}
               style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6,
                 color: C.dim, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
@@ -23421,6 +23463,16 @@ function DriveFilesSection({ job, onUpdate }) {
         )}
       </div>
 
+      {docPullText && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, marginBottom: 10,
+          color: docPull.status === "error" ? C.red : docPull.status === "running" ? C.blue : C.green }}>
+          {docPull.status === "running" ? <Icon name="refresh" size={12} stroke={2.25}/> : docPull.status === "done" ? <Icon name="checkCircle" size={12} stroke={2.25}/> : <Icon name="alertTriangle" size={12} stroke={2.25}/>}
+          <span>{docPullText}</span>
+          {docPull.status === "done" && Array.isArray(docPull.errors) && docPull.errors.length > 0 && (
+            <span style={{ color: C.dim }} title={docPull.errors.map(e => `${e.name}: ${e.error}`).join("\n")}>(hover for which)</span>
+          )}
+        </div>
+      )}
       {/* Broken-link hint — fires when there's something saved on the
           job but extractDriveFolderId returned empty (couldn't parse the
           URL or ID). Without this, the user sees a blank section with
@@ -48016,6 +48068,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
 - **Plans tab** · 'shipped' · 'PlansTab'
 - **Drive Files** · 'shipped' · 'DriveFilesSection'
   - Drive folder sync ('syncDriveFoldersToJobs()')
+  - **Pull plans from Simpro into the Drive folder** · 'shipped 2026-09-17' · 'SW v413' · Koy: *"when I click Create a Drive Folder … pull both the subfolders and all the plans out of Simpro into that Drive Folder automatically … bring everything over."* New callable **'pullJobDocsToDrive'** (2 GB / 540 s) fires right after 'createJobDriveFolder' succeeds, and a **Pull from Simpro** button beside Push to Simpro fills gaps on an existing folder. Lists the Simpro job's attachment folders + files (detail call per file for size / folder / mime, sequential at Simpro's ~60 req/min), lists what the Drive folder already holds (full 'drive' scope — the SA is a Shared Drive member, so hand-dropped files count for dedupe; 'drive.file' would not see them), plans the copy with the pure, prebuild-tested planner 'functions/docPull.js' ('planDocPull': dedupe by cleaned filename within a folder, empty Simpro folders still created, duplicate names in one Simpro folder keep the first), creates missing subfolders, then downloads each file as Base64 ('?display=Base64', verified 43.7 MB in 9.5 s) and **resumable-uploads** it to Drive (multipart caps at 5 MB). Progress streams onto **'job.docPull'** '{provider, status: running|done|error, startedAt, finishedAt, total, done, skipped, errors[≤25], lastFile, by}' (throttled dotted-path writes, ISO 'updated_at'), so the Drive section's status line — *Pulling from Simpro… 14 of 22 · file.pdf* → *20 files pulled · 3 already there · 1 failed* — moves off the normal jobs listener even if the tab is closed; the file list re-lists on 'finishedAt'. A 'running' older than 12 min is treated as a crashed run and re-runs. Provider seam for Procore ('DOC_PROVIDERS.simpro' is the only Simpro-aware code; the planner and Drive side are provider-agnostic). Ops dry run: 'node scripts/simpro-plans-dryrun.js <simproJobNo>' (read-only). Needs **'firebase deploy --only functions:pullJobDocsToDrive'**. Why it can't lose data: **adds files to Drive only** — never deletes, moves, or overwrites (a same-named file in the same folder is skipped, not replaced); Simpro is read-only here; the only job-doc write is the additive 'data.docPull' progress map via dotted 'update' (no other field named, ISO 'updated_at'), which lives inside 'data' so the loader carries it unchanged; a failed file is recorded and skipped, never retried destructively.
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
   - **Per-run note** · 'shipped 2026-09-17' · 'SW v411' · crew request via Koy: *"a little note option to each homerun… location of homerun or just little informative notes."* Every home-run row (By Floor AND By Panel — same 'HRRow') gets a compact **+ note** under the name; once it has text it shows as a dashed-underline line with a note icon ("Location, or anything useful…") and saves through the same 'upd' funnel as the name (debounced 'saveJob'). The read-only Home Runs share link shows the note under the run name. 'hrHasContent' counts a note as content. **Flows to FieldInk:** 'publishCcHomeruns' now carries 'note' on every published circuit (additive key on 'cchomeruns/<jobId>.panels[].circuits[]'; the hash gate republishes each job once on its next save). FieldInk's importer copies a fixed field set and never updates circuits it already holds, so the plan-side display + refresh of the note is a separate FieldInk ship. Why it can't lose data: additive 'note' on existing row objects inside 'data.homeRuns.<floor>[]', written by the existing row-update path only; no row, field, or job value is removed or renamed; the bridge write adds one key to the office-owned circuit objects on the field-ink project.

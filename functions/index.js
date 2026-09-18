@@ -2100,6 +2100,164 @@ exports.pushPlansToSimpro = functions
     return { uploaded, skipped, errors };
   });
 
+// ─── Pull the job's documents from the system-of-record INTO its Drive folder ──
+// Koy, 2026-09-17: "when I click Create a Drive Folder … pull both the
+// subfolders and all the plans out of Simpro into that Drive Folder
+// automatically … bring everything over." The mirror image of
+// pushPlansToSimpro. Fired by the app right after createJobDriveFolder (and
+// by a manual "Pull from Simpro" button to fill gaps later).
+//
+// PROVIDER SEAM (Simpro → Procore, March 2027): everything Simpro-specific is
+// in DOC_PROVIDERS.simpro — list folders, list files, file detail, fetch bytes.
+// The planner (functions/docPull.js, pure, prebuild-tested) and the Drive
+// side never see Simpro. Adding Procore = one more entry in DOC_PROVIDERS.
+//
+// Verified 2026-09-17 from Koy's Mac: Simpro's `?display=Base64` returned a
+// 43.7 MB plan byte-exact in 9.5 s; the jobs parent lives in the Shared Drive
+// "Homestead Job Organization", so SA-created files use pooled quota.
+// Hence 2 GB / 540 s, sequential file fetches (Simpro ≈60 req/min), and a
+// RESUMABLE Drive upload (multipart caps at 5 MB).
+//
+// Progress lives on the job doc at data.docPull (throttled writes, dotted
+// path, updated_at ISO string like createJobDriveFolder) so the Drive section
+// shows "Pulling from Simpro… 14 of 22" off the normal jobs listener.
+// Idempotent: dedupe by filename within a folder — re-running fills gaps only.
+const { planDocPull } = require("./docPull.js");
+const DOC_PROVIDERS = {
+  simpro: {
+    label: "Simpro",
+    jobRef: (job) => String(job.simproNo || "").trim(),
+    async listFolders(no) { const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(no)}/attachments/folders/`); return Array.isArray(r.data) ? r.data.map(f => ({ id: f.ID, name: String(f.Name || "") })) : []; },
+    async listFiles(no)   { const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(no)}/attachments/files/`);   return Array.isArray(r.data) ? r.data.map(f => ({ id: f.ID, name: String(f.Filename || "") })) : []; },
+    async fileDetail(no, id) {
+      const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(no)}/attachments/files/${encodeURIComponent(id)}`, null, { maxAttempts: 3 });
+      if (!r.ok || !r.data || typeof r.data !== "object") return null;
+      const d = r.data;
+      return { id: d.ID, name: String(d.Filename || ""), bytes: Number(d.FileSizeBytes) || 0, mime: String(d.MimeType || ""), folder: d.Folder && d.Folder.Name ? String(d.Folder.Name) : "" };
+    },
+    async fetchBytes(no, id) {
+      const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(no)}/attachments/files/${encodeURIComponent(id)}?display=Base64`, null, { maxAttempts: 3 });
+      if (!r.ok || !r.data || !r.data.Base64Data) throw new Error(`Simpro download failed (${r.status})`);
+      return Buffer.from(r.data.Base64Data, "base64");
+    },
+  },
+};
+// Full `drive` scope here (not drive.file): the SA is a member of the Shared
+// Drive, and dedupe must SEE files people dropped in by hand — drive.file only
+// shows what the app itself created (the org-key lesson, v384).
+function _driveFullClient() {
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive"] });
+  return { drive: google.drive({ version: "v3", auth }), auth };
+}
+async function _driveListChildren(drive, folderId) {
+  const out = []; let pageToken;
+  do {
+    const r = await drive.files.list({ q: `'${folderId}' in parents and trashed=false`, fields: "nextPageToken,files(id,name,mimeType)", pageSize: 1000, pageToken, supportsAllDrives: true, includeItemsFromAllDrives: true });
+    out.push(...(r.data.files || [])); pageToken = r.data.nextPageToken;
+  } while (pageToken);
+  return out;
+}
+// Resumable upload (metadata → session URL → one PUT of the bytes). Plans run
+// 25–50 MB; multipart tops out at 5 MB. Returns the new file id.
+async function _driveUploadResumable(auth, { name, mime, parentId, buffer }) {
+  const client = await auth.getClient();
+  const tok = (await client.getAccessToken()).token;
+  const init = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": mime || "application/octet-stream", "X-Upload-Content-Length": String(buffer.length) },
+    body: JSON.stringify({ name, parents: [parentId] }),
+  });
+  if (!init.ok) throw new Error(`Drive upload init ${init.status}: ${(await init.text()).slice(0, 160)}`);
+  const session = init.headers.get("location");
+  if (!session) throw new Error("Drive upload: no session URL");
+  const put = await fetch(session, { method: "PUT", headers: { "Content-Type": mime || "application/octet-stream", "Content-Length": String(buffer.length) }, body: buffer });
+  if (!put.ok) throw new Error(`Drive upload ${put.status}: ${(await put.text()).slice(0, 160)}`);
+  const j = await put.json().catch(() => ({}));
+  return j.id || "";
+}
+const DOC_PULL_STALE_MS = 12 * 60 * 1000;   // a "running" older than the 9-min function ceiling is a crashed run
+exports.pullJobDocsToDrive = functions
+  .runWith({ timeoutSeconds: 540, memory: "2GB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    const jobId = String((data && data.jobId) || "").trim();
+    const providerKey = String((data && data.provider) || "simpro");
+    const provider = DOC_PROVIDERS[providerKey];
+    if (!jobId) throw new functions.https.HttpsError("invalid-argument", "Missing jobId");
+    if (!provider) throw new functions.https.HttpsError("invalid-argument", `Unknown provider ${providerKey}`);
+    const ref = db.collection("jobs").doc(jobId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new functions.https.HttpsError("not-found", "Job not found");
+    const job = snap.data()?.data || {};
+    const jobNo = provider.jobRef(job);
+    const folderId = String(job.driveFolderId || "").trim();
+    if (!jobNo) throw new functions.https.HttpsError("failed-precondition", `This job has no ${provider.label} job number.`);
+    if (!folderId) throw new functions.https.HttpsError("failed-precondition", "Create or link the Drive folder first.");
+    const prev = job.docPull || {};
+    if (prev.status === "running" && Date.now() - (Date.parse(prev.startedAt) || 0) < DOC_PULL_STALE_MS) {
+      return { alreadyRunning: true, done: prev.done || 0, total: prev.total || 0 };
+    }
+    const startedAt = new Date().toISOString();
+    let lastWrite = 0;
+    const state = { provider: providerKey, status: "running", startedAt, finishedAt: "", total: 0, done: 0, skipped: 0, errors: [], lastFile: "", by: String((data && data.by) || "") };
+    const save = async (force) => {
+      if (!force && Date.now() - lastWrite < 3000) return;
+      lastWrite = Date.now();
+      try { await ref.update({ "data.docPull": { ...state, errors: state.errors.slice(0, 25) }, updated_at: new Date().toISOString() }); }
+      catch (e) { functions.logger.warn("pullJobDocsToDrive progress write failed", { jobId, error: e.message }); }
+    };
+    try {
+      // 1. What the provider has (detail per file: size / folder / mime — sequential, rate-limited)
+      const [srcFolders, srcList] = await Promise.all([provider.listFolders(jobNo), provider.listFiles(jobNo)]);
+      const srcFiles = [];
+      for (const f of srcList) { const d = await provider.fileDetail(jobNo, f.id); srcFiles.push(d || { id: f.id, name: f.name, bytes: 0, mime: "", folder: "" }); }
+      // 2. What Drive already has (one level of subfolders — mirrors how we create them)
+      const { drive, auth } = _driveFullClient();
+      const top = await _driveListChildren(drive, folderId);
+      const driveFolders = {};
+      const driveFiles = [];
+      for (const it of top) {
+        if (it.mimeType === "application/vnd.google-apps.folder") driveFolders[String(it.name || "").trim()] = it.id;
+        else driveFiles.push({ name: it.name, folderName: "" });
+      }
+      for (const [name, id] of Object.entries(driveFolders)) {
+        for (const it of await _driveListChildren(drive, id)) if (it.mimeType !== "application/vnd.google-apps.folder") driveFiles.push({ name: it.name, folderName: name });
+      }
+      // 3. Plan (pure), then execute
+      const plan = planDocPull({ files: srcFiles, folders: srcFolders.map(f => f.name), driveFolders, driveFiles });
+      state.total = plan.copies.length; state.skipped = plan.skipped.filter(x => x.reason === "already in Drive").length;
+      await save(true);
+      for (const name of plan.makeFolders) {
+        const r = await drive.files.create({ requestBody: { name, parents: [folderId], mimeType: "application/vnd.google-apps.folder" }, fields: "id", supportsAllDrives: true });
+        driveFolders[name] = r.data.id;
+      }
+      for (const c of plan.copies) {
+        state.lastFile = c.name;
+        try {
+          const buffer = await provider.fetchBytes(jobNo, c.id);
+          const parentId = c.folderName ? driveFolders[c.folderName] : folderId;
+          if (!parentId) throw new Error(`no Drive folder for "${c.folderName}"`);
+          await _driveUploadResumable(auth, { name: c.name, mime: c.mime, parentId, buffer });
+          state.done += 1;
+        } catch (e) {
+          state.errors.push({ name: c.name, error: String(e.message || e).slice(0, 160) });
+          functions.logger.warn("pullJobDocsToDrive file failed", { jobId, file: c.name, error: e.message });
+        }
+        await save(false);
+      }
+      state.status = "done"; state.finishedAt = new Date().toISOString(); state.lastFile = "";
+      await save(true);
+      functions.logger.info("pullJobDocsToDrive done", { jobId, jobNo, total: state.total, done: state.done, skipped: state.skipped, errors: state.errors.length, folders: plan.makeFolders.length });
+      return { total: state.total, done: state.done, skipped: state.skipped, errors: state.errors, foldersMade: plan.makeFolders };
+    } catch (e) {
+      state.status = "error"; state.finishedAt = new Date().toISOString(); state.message = String(e.message || e).slice(0, 200);
+      await save(true);
+      functions.logger.error("pullJobDocsToDrive failed", { jobId, error: e.message });
+      throw new functions.https.HttpsError("internal", state.message);
+    }
+  });
+
+
 // ─── Get Simpro Job Financials ────────────────────────────────────────────────
 exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
     requireAppKey(data);
