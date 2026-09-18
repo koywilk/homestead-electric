@@ -13106,14 +13106,53 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 }
 
 
+// ── Bid stock derivations (v416: Required vs Assigned) ──────────────────────
+// Pure — extracted verbatim by scripts/bidstock-test.js. Rows come from
+// getSimproJobStock: {catalogId, name, partNo, required, assigned, breakdown}.
+// Wire is matched on name/part (NM-B, MC, THHN, UF, SER…) minus the things
+// that merely mention wire (staples, connectors). Simpro puts a NEGATIVE
+// Required on deduction lines (a cost center that takes material back out of
+// the base bid) — those are never "over" and the rollup nets them.
+const BID_WIRE_RE = /NM-B|NMB|THHN|THWN|\bMC\b|\bUF-B\b|\bUF\b|ROMEX(?!\s+STAPLE)|\bSER\b|\bSEU\b|\bUSE\b|CABLE|WIRE|\bXHHW\b/i;
+const BID_NOT_WIRE_RE = /STAPLE|STRAP|CONNECTOR|CLAMP|MARKER|\bTIE\b|STRIPPER|NUT/i;
+function bidWireLike(name, partNo) { const h = `${name || ""} ${partNo || ""}`; return BID_WIRE_RE.test(h) && !BID_NOT_WIRE_RE.test(h); }
+function bidStockStatus(r) {
+  const req = Number(r && r.required) || 0, asg = Number(r && r.assigned) || 0;
+  if (req < 0) return { kind: "deduction", diff: 0 };
+  if (!req && !asg) return { kind: "none", diff: 0 };
+  const d = asg - req;
+  return d > 0 ? { kind: "over", diff: d } : d < 0 ? { kind: "short", diff: -d } : { kind: "ok", diff: 0 };
+}
+// Whole-job wire rollup: one line per catalog item across every cost center,
+// required/assigned summed (deductions net out), storage breakdown merged.
+function bidWireRollup(costCenters) {
+  const agg = new Map();
+  for (const cc of costCenters || []) for (const r of (cc && cc.rows) || []) {
+    if (!r || !bidWireLike(r.name, r.partNo)) continue;
+    const a = agg.get(r.catalogId) || { catalogId: r.catalogId, name: r.name, partNo: r.partNo, required: 0, assigned: 0, breakdown: [], ccCount: 0 };
+    a.required += Number(r.required) || 0; a.assigned += Number(r.assigned) || 0; a.ccCount += 1;
+    for (const b of r.breakdown || []) { const e = a.breakdown.find(x => x.storage === b.storage); if (e) e.qty += Number(b.qty) || 0; else a.breakdown.push({ storage: b.storage, qty: Number(b.qty) || 0 }); }
+    agg.set(r.catalogId, a);
+  }
+  return [...agg.values()].sort((x, y) => (y.required - x.required) || String(x.name).localeCompare(String(y.name)));
+}
+// ── end Bid stock derivations ────────────────────────────────────────────────
+
 // ── Bid Items (Simpro Cost Centers) ───────────────────────────
 // "Is this in the bid?" panel. Reads the job's Simpro cost centers plus
 // the individual items inside each cost center (catalogs, one-offs,
 // prebuilds). Field team can search by any item name — if nothing
 // matches, they know it's a change order.
-function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
+function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null, stockErr=null, stockRefreshing=false, onRefreshStock=null}) {
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState({}); // ccKey -> bool
+  // v416: sections start folded (Koy); the whole-job wire box folds too; two
+  // row filters. All local — nothing persisted.
+  const [openSections, setOpenSections] = useState(() => new Set());
+  const [bidLinesOpen, setBidLinesOpen] = useState({});  // ccKey -> bool (assemblies fold inside a CC)
+  const [wireOpen, setWireOpen] = useState(true);
+  const [onlyOver, setOnlyOver] = useState(false);
+  const [onlyWire, setOnlyWire] = useState(false);
   // Lazy-loaded qty per item. Simpro's list endpoint doesn't include Quantity,
   // so we fetch each item's detail the first time its cost center is opened.
   // Key: `${sectionId}-${ccId}-${kind}-${itemId}` → qty number.
@@ -13190,17 +13229,26 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   // When searching, a cost center is "relevant" if its name matches OR any
   // of its items match. We also track which specific items match so we can
   // highlight just those under each cost center.
+  // v416: Required vs Assigned rows per cost center (getSimproJobStock), keyed like the CCs.
+  const stockByCc = new Map();
+  if (stock && Array.isArray(stock.costCenters)) stock.costCenters.forEach(sc => stockByCc.set(`${sc.sectionId}-${sc.ccId}`, sc));
+  const rowPasses = (r) => (!onlyOver || bidStockStatus(r).kind === "over") && (!onlyWire || bidWireLike(r.name, r.partNo)) && (!tokens.length || matchTokens(norm(r.name) + " " + norm(r.partNo)));
+  const filtering = onlyOver || onlyWire;
   const scored = costCenters.map(cc => {
     const ccHay = norm(cc.name) + " " + norm(cc.sectionName);
     const items = Array.isArray(cc.items) ? cc.items : [];
     const itemMatches = items.filter(it => matchTokens(norm(it.name)));
     const ccMatches = matchTokens(ccHay);
-    return { cc, items, itemMatches, ccMatches };
+    const srows = (stockByCc.get(`${cc.sectionId}-${cc.id}`) || {}).rows || [];
+    const stockMatches = srows.filter(rowPasses);
+    return { cc, items, itemMatches, ccMatches, srows, stockMatches };
   });
 
-  const visible = tokens.length
-    ? scored.filter(s => s.ccMatches || s.itemMatches.length > 0)
-    : scored;
+  const visible = filtering
+    ? scored.filter(s => s.stockMatches.length > 0)
+    : tokens.length
+      ? scored.filter(s => s.ccMatches || s.itemMatches.length > 0 || s.stockMatches.length > 0)
+      : scored;
 
   const bySection = new Map();
   visible.forEach(entry => {
@@ -13211,8 +13259,39 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
 
   const totalItems = costCenters.reduce((s,cc) => s + (Array.isArray(cc.items) ? cc.items.length : 0), 0);
   const totalItemMatches = tokens.length
-    ? visible.reduce((s,e) => s + e.itemMatches.length, 0)
+    ? visible.reduce((s,e) => s + e.itemMatches.length + e.stockMatches.length, 0)
     : totalItems;
+  const stockRowsAll = scored.flatMap(e => e.srows);
+  const overTotal = stockRowsAll.filter(r => bidStockStatus(r).kind === "over").length;
+  const wireRollup = bidWireRollup(stock && Array.isArray(stock.costCenters) ? stock.costCenters : []).filter(rowPasses);
+  const toggleSection = (name) => setOpenSections(prev => { const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n; });
+  const fmtQty = (n) => (Number(n) || 0).toLocaleString("en-US");
+  const stockRow = (r, wire) => {
+    const st = bidStockStatus(r);
+    const from = (r.breakdown || []).filter(b => b.qty).map(b => `${b.storage} ${fmtQty(b.qty)}`).join(" · ");
+    const badge = st.kind === "over" ? { t: `+${fmtQty(st.diff)} over`, bg: C.red, fg: "#fff" }
+      : st.kind === "short" ? { t: `${fmtQty(st.diff)} to go`, bg: "#B06A2C18", fg: C.orange }
+      : st.kind === "ok" ? { t: "on the number", bg: "#3E7D5A18", fg: C.green }
+      : st.kind === "deduction" ? { t: "deduction", bg: "transparent", fg: C.muted }
+      : { t: "—", bg: "transparent", fg: C.muted };
+    const unit = wire ? "FT" : "EA";
+    return (
+      <div key={`st-${r.catalogId}-${r.name}`} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 82px 82px 104px",gap:8,padding:"4px 2px",fontSize:11,color:C.text,alignItems:"center",borderTop:`1px solid ${C.surface}`,background:wire?"#3B5BA508":"transparent"}}>
+        <div style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+          {r.name}{r.partNo && <span style={{color:C.dim,fontSize:10,marginLeft:6}}>{r.partNo}</span>}
+          {from && <span style={{display:"block",fontSize:10,color:C.dim,whiteSpace:"normal"}}>from {from}</span>}
+        </div>
+        <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",textAlign:"right",color:C.dim}}><b style={{color:C.text,fontWeight:600}}>{fmtQty(r.required)}</b><span style={{fontSize:9,marginLeft:3}}>{unit}</span></div>
+        <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",textAlign:"right",color:C.dim}}><b style={{color:C.text,fontWeight:600}}>{fmtQty(r.assigned)}</b><span style={{fontSize:9,marginLeft:3}}>{unit}</span></div>
+        <span style={{fontSize:10,fontWeight:700,borderRadius:5,padding:"2px 7px",whiteSpace:"nowrap",textAlign:"center",justifySelf:"end",background:badge.bg,color:badge.fg}}>{badge.t}</span>
+      </div>
+    );
+  };
+  const colHead = (
+    <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 82px 82px 104px",gap:8,padding:"2px 2px 4px",fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim}}>
+      <span>Item</span><span style={{textAlign:"right"}}>Required</span><span style={{textAlign:"right"}}>Assigned</span><span/>
+    </div>
+  );
 
   // Fire a lazy qty fetch for a cost center's items. No-op if already fetched.
   const fetchQtyForCc = async (cc) => {
@@ -13337,10 +13416,22 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
             background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text}}
         />
         <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap"}}>
-          {tokens.length
+          {tokens.length || filtering
             ? `${visible.length} / ${costCenters.length} CCs · ${totalItemMatches} item${totalItemMatches===1?"":"s"}`
-            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · ${totalItems} items`}
+            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · ${totalItems} items${stockRowsAll.length ? ` · ${overTotal} over` : ""}`}
         </div>
+        {stockRowsAll.length > 0 && (
+          <>
+            <button onClick={()=>setOnlyOver(v=>!v)} title="Only lines where more is assigned than the bid calls for"
+              style={{fontSize:11,padding:"6px 10px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:700,
+                background:onlyOver?C.red:C.card,color:onlyOver?"#fff":C.red,border:`1px solid ${C.red}66`}}>Over only</button>
+            <button onClick={()=>setOnlyWire(v=>!v)} title="Wire and cable only"
+              style={{fontSize:11,padding:"6px 10px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:700,
+                background:onlyWire?C.text:C.card,color:onlyWire?"#fff":C.text,border:`1px solid ${onlyWire?C.text:C.border}`}}>Wire only</button>
+          </>
+        )}
+        {stock === "loading" && !stockRowsAll.length && <span style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>loading required vs assigned…</span>}
+        {stockErr && !stockRowsAll.length && <span style={{fontSize:11,color:C.red}}>Required vs assigned unavailable: {stockErr}</span>}
         {onRefresh && (
           <button
             onClick={onRefresh}
@@ -13353,6 +13444,13 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
             {refreshing ? "Syncing…" : `Refresh${fetchedAtLabel ? ` · ${fetchedAtLabel}` : ""}`}
           </button>
         )}
+        {onRefreshStock && stockRowsAll.length > 0 && (
+          <button onClick={onRefreshStock} disabled={stockRefreshing} title="Re-read required vs assigned from Simpro"
+            style={{fontSize:11,padding:"6px 12px",borderRadius:6,cursor:stockRefreshing?"default":"pointer",fontFamily:"inherit",
+              background:stockRefreshing?C.surface:C.card,border:`1px solid ${C.border}`,color:C.text,opacity:stockRefreshing?0.6:1,whiteSpace:"nowrap"}}>
+            {stockRefreshing ? "Syncing stock…" : "Refresh stock"}
+          </button>
+        )}
       </div>
 
       {tokens.length > 0 && visible.length === 0 && (
@@ -13362,42 +13460,59 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
         </div>
       )}
 
-      {[...bySection.entries()].map(([sectionName, entries]) => (
+      {[...bySection.entries()].map(([sectionName, entries]) => {
+        // v416: sections start folded; a search or filter opens the ones with hits.
+        const secForced = (tokens.length || filtering) && entries.some(e => e.itemMatches.length || e.stockMatches.length || e.ccMatches);
+        const secOpen = secForced || openSections.has(sectionName);
+        const secRows = entries.reduce((n, e) => n + e.srows.length, 0);
+        const secOver = entries.reduce((n, e) => n + e.srows.filter(r => bidStockStatus(r).kind === "over").length, 0);
+        return (
         <div key={sectionName} style={{marginBottom:14}}>
-          <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",
-            color:C.dim,marginBottom:4,borderBottom:`1px solid ${C.border}`,paddingBottom:3}}>
-            {sectionName}
-          </div>
-          {entries.map(({cc, items, itemMatches}) => {
+          <button type="button" onClick={()=>toggleSection(sectionName)}
+            style={{display:"flex",alignItems:"center",gap:6,width:"100%",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,
+              textAlign:"left",fontFamily:"inherit",padding:"6px 2px 5px",cursor:"pointer",minHeight:36,marginBottom:4,
+              fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim}}>
+            <span style={{fontSize:10,width:10,display:"inline-block"}}>{secOpen ? "▾" : "▸"}</span>
+            <span>{sectionName}</span>
+            <span style={{fontWeight:500,letterSpacing:0,textTransform:"none"}}>· {entries.length} cost center{entries.length===1?"":"s"}{secRows ? ` · ${secRows} items` : ""}</span>
+            {secOver > 0 && <span style={{fontSize:10,fontWeight:700,color:C.red,background:"#B23A3A18",borderRadius:5,padding:"1px 6px",letterSpacing:0,textTransform:"none"}}>{secOver} over</span>}
+          </button>
+          {secOpen && entries.map(({cc, items, itemMatches, srows, stockMatches}) => {
             const key = `${cc.sectionId}-${cc.id}`;
-            // Auto-expand when there are item matches under a search.
-            const isOpen = tokens.length && itemMatches.length
+            // Auto-expand when there are item / stock matches under a search or filter.
+            const isOpen = (tokens.length || filtering) && (itemMatches.length || stockMatches.length)
               ? true
               : !!expanded[key];
             const itemsToShow = tokens.length && itemMatches.length ? itemMatches : items;
+            const rowsToShow = (tokens.length || filtering) ? stockMatches : srows;
             const itemCount = items.length;
+            const ccOver = srows.filter(r => bidStockStatus(r).kind === "over").length;
+            const ccShort = srows.filter(r => bidStockStatus(r).kind === "short").length;
             const qtyLoading = qtyLoadingCcs.has(key);
+            const wireRows = rowsToShow.filter(r => bidWireLike(r.name, r.partNo));
+            const otherRows = rowsToShow.filter(r => !bidWireLike(r.name, r.partNo));
+            const linesOpen = !!bidLinesOpen[key] || (tokens.length && itemMatches.length && !stockMatches.length);
             return (
               <div key={key} style={{borderBottom:`1px solid ${C.border}22`,paddingBottom:4,marginBottom:4}}>
                 <div
                   onClick={() => toggle(key, cc)}
                   style={{display:"flex",justifyContent:"space-between",gap:12,
-                    padding:"6px 2px",fontSize:12,cursor:itemCount?"pointer":"default",userSelect:"none"}}
+                    padding:"6px 2px",fontSize:12,cursor:(itemCount||srows.length)?"pointer":"default",userSelect:"none"}}
                 >
-                  <div style={{color:C.text,flex:"1 1 auto",minWidth:0,display:"flex",alignItems:"center",gap:6}}>
+                  <div style={{color:C.text,flex:"1 1 auto",minWidth:0,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                     <span style={{color:C.dim,fontSize:10,width:10,display:"inline-block"}}>
-                      {itemCount ? (isOpen ? "▾" : "▸") : ""}
+                      {(itemCount||srows.length) ? (isOpen ? "▾" : "▸") : ""}
                     </span>
                     <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>
                       {cc.name || "(unnamed)"}
                     </span>
-                    {itemCount > 0 && (
+                    {(srows.length > 0 || itemCount > 0) && (
                       <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>
-                        · {tokens.length && itemMatches.length
-                            ? `${itemMatches.length}/${itemCount} items`
-                            : `${itemCount} item${itemCount===1?"":"s"}`}
+                        · {srows.length ? `${(tokens.length||filtering) ? `${stockMatches.length}/` : ""}${srows.length} item${srows.length===1?"":"s"}` : (tokens.length && itemMatches.length ? `${itemMatches.length}/${itemCount} bid lines` : `${itemCount} bid line${itemCount===1?"":"s"}`)}
                       </span>
                     )}
+                    {ccOver > 0 && <span style={{fontSize:10,fontWeight:700,color:C.red,background:"#B23A3A18",borderRadius:5,padding:"1px 6px",whiteSpace:"nowrap"}}>{ccOver} over</span>}
+                    {ccOver === 0 && ccShort > 0 && <span style={{fontSize:10,fontWeight:700,color:C.orange,whiteSpace:"nowrap"}}>{ccShort} short</span>}
                     {qtyLoading && (
                       <span style={{fontSize:10,color:C.dim,fontStyle:"italic",whiteSpace:"nowrap"}}>
                         · loading qty…
@@ -13406,7 +13521,23 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
                   </div>
                 </div>
 
-                {isOpen && itemsToShow.length > 0 && (() => {
+                {isOpen && rowsToShow.length > 0 && (
+                  <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
+                    {colHead}
+                    {wireRows.length > 0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Wire &amp; cable</div>}
+                    {wireRows.map(r => stockRow(r, true))}
+                    {otherRows.length > 0 && wireRows.length > 0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Everything else</div>}
+                    {otherRows.map(r => stockRow(r, false))}
+                  </div>
+                )}
+                {isOpen && srows.length > 0 && itemCount > 0 && !filtering && (
+                  <button type="button" onClick={()=>setBidLinesOpen(v=>({...v,[key]:!v[key]}))}
+                    style={{marginLeft:16,marginTop:2,background:"none",border:"none",padding:"3px 2px",fontFamily:"inherit",fontSize:10,fontWeight:700,color:C.dim,cursor:"pointer",letterSpacing:"0.06em",textTransform:"uppercase"}}>
+                    {linesOpen ? "▾" : "▸"} Bid lines · {itemCount} (assemblies &amp; one-offs)
+                  </button>
+                )}
+
+                {isOpen && (linesOpen || !srows.length) && itemsToShow.length > 0 && (() => {
                   // Aggregate by normalized item name — if Simpro stores the
                   // same catalog item on 8 separate lines, show one row × 8
                   // instead of 8 identical rows.
@@ -13441,7 +13572,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
                   );
                 })()}
 
-                {isOpen && itemsToShow.length === 0 && (
+                {isOpen && itemsToShow.length === 0 && rowsToShow.length === 0 && (
                   <div style={{marginLeft:16,marginTop:2,fontSize:11,color:C.dim,fontStyle:"italic"}}>
                     No items in this cost center.
                   </div>
@@ -13450,7 +13581,26 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
             );
           })}
         </div>
-      ))}
+        );
+      })}
+
+      {/* v416: whole-job wire rollup — every cost center summed, deductions netted. Sits at the bottom (Koy). */}
+      {wireRollup.length > 0 && (
+        <div style={{border:`1px solid ${C.border}`,borderLeft:`4px solid ${C.blue}`,borderRadius:8,background:C.card,padding:"10px 12px",margin:"6px 0 12px"}}>
+          <button type="button" onClick={()=>setWireOpen(v=>!v)}
+            style={{display:"flex",alignItems:"center",gap:8,width:"100%",background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"'Bebas Neue',sans-serif",fontSize:17,letterSpacing:"0.06em",color:C.blue,textAlign:"left"}}>
+            <span style={{fontSize:11,fontFamily:"'DM Sans',sans-serif"}}>{wireOpen ? "▾" : "▸"}</span>
+            Wire &amp; cable — whole job
+            <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:11,color:C.dim,letterSpacing:0}}>{wireRollup.length} items across {stock.costCenters.length} cost centers</span>
+          </button>
+          {wireOpen && (
+            <div style={{marginTop:6}}>
+              {colHead}
+              {wireRollup.map(w => stockRow({ ...w, name: w.ccCount > 1 ? `${w.name} (${w.ccCount} cost centers)` : w.name }, true))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -23946,7 +24096,7 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
-function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters}) {
+function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters, simproStock=null, simproStockErr=null, simproStockRefreshing=false, onRefreshSimproStock=null}) {
 
   return (
 
@@ -23962,6 +24112,10 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
           error={simproCostCentersErr}
           refreshing={simproCostCentersRefreshing}
           onRefresh={onRefreshSimproCostCenters}
+          stock={simproStock}
+          stockErr={simproStockErr}
+          stockRefreshing={simproStockRefreshing}
+          onRefreshStock={onRefreshSimproStock}
         />
       </Section>
 
@@ -25920,6 +26074,31 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [simproCostCentersTick, setSimproCostCentersTick] = useState(0); // bump to force refetch
 
   const refetchSimproCostCenters = () => setSimproCostCentersTick(n => n + 1);
+
+  // v416: Required vs Assigned per cost center (getSimproJobStock). Same
+  // cache-on-the-job pattern as the cost centers above (simproStockCache,
+  // 12h TTL, additive u() write only), same bare deps.
+  const [simproStock, setSimproStock] = useState(null);
+  const [simproStockErr, setSimproStockErr] = useState(null);
+  const [simproStockRefreshing, setSimproStockRefreshing] = useState(false);
+  const [simproStockTick, setSimproStockTick] = useState(0);
+  const refetchSimproStock = () => setSimproStockTick(n => n + 1);
+  useEffect(() => {
+    if (!simproJobNoOf(job)) { setSimproStock(null); setSimproStockErr(null); return; }
+    const cached = job.simproStockCache;
+    const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0;
+    const isStale = !fetchedAt || (Date.now() - fetchedAt) > CC_CACHE_TTL_MS;
+    const forced = simproStockTick > 0;
+    if (cached && Array.isArray(cached.costCenters)) setSimproStock(cached); else setSimproStock("loading");
+    setSimproStockErr(null);
+    if (!cached || isStale || forced) {
+      setSimproStockRefreshing(!!cached);
+      const fn = httpsCallable(functions, "getSimproJobStock", { timeout: 120000 });
+      fn({ simproJobNo: simproJobNoOf(job) })
+        .then(res => { setSimproStock(res.data); setSimproStockRefreshing(false); u({ simproStockCache: res.data }); })
+        .catch(e => { console.error("[simproStock error]", e); setSimproStockRefreshing(false); setSimproStockErr(e.message || "Failed to load required vs assigned"); if (!cached) setSimproStock(null); });
+    }
+  }, [job.simproNo, simproStockTick]);
 
   useEffect(() => {
     if (!simproJobNoOf(job)) {                        // quotes have no bid on /jobs
@@ -28832,6 +29011,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               simproCostCentersErr={simproCostCentersErr}
               simproCostCentersRefreshing={simproCostCentersRefreshing}
               onRefreshSimproCostCenters={refetchSimproCostCenters}
+              simproStock={simproStock}
+              simproStockErr={simproStockErr}
+              simproStockRefreshing={simproStockRefreshing}
+              onRefreshSimproStock={refetchSimproStock}
             />
           )}
 
@@ -48106,6 +48289,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Generator page crash fix · 'shipped 2026-07-10' · 'SW v320' · restored 'WIRE_BREAKER'/'wireAmpsVolts' + Savant V2 slot helpers wrongly deleted as dead code in the v319 cleanup (blank-screened homeowner generator links); crew-board needs-date 'endKey' ReferenceError fixed
 - **Status Update inline** · 'shipped' · 'StatusUpdateInline'
 - **Bid Items Panel** · 'shipped' · pulls Simpro cost centers
+  - **Required vs Assigned per line + wire rollup** · 'shipped 2026-09-18' · 'SW v416' · Koy: *"bid items shows how much of what was bid right? I want it to show how many we've ordered as well so we can see when we are over on material… need them to be able to see wire especially."* Approved off a real-data preview (Miller, 162 lines). Source: Simpro's own cost-center **Inventory → Allocated** numbers at '/jobs/{id}/sections/{s}/costCenters/{cc}/stock/' — verified against the Simpro screen to the foot (12/2: 5,150 required / 1,500 assigned; 14/2: 3,750 / 6,000). New read-only callable **'getSimproJobStock'** (sections → cost centers → stock, 4-wide, no prices returned) cached on the job as 'simproStockCache' with the same 12h TTL / additive 'u()' write / bare-deps effect as 'simproCostCentersCache'. Panel: **sections start folded** (count + items + red *N over* badge on the header), cost centers folded inside; an opened cost center shows **Item · Required · Assigned · badge** — red **+N over**, orange **N to go**, green **on the number**, grey **deduction** for Simpro's NEGATIVE-Required deduction lines (e.g. the Lutron switchleg cost center taking 4,320 ft of 14/2 back out of the base bid — never counted as over) — with a *from Shop 1,500 · Koy's Van 300* line; **wire & cable first** inside each cost center; the old assemblies/one-offs list lives under a folded **Bid lines** button so "is this in the bid?" still works. Header chips **Over only** / **Wire only**; search matches part names and numbers too and opens what it hits. A **Wire & cable — whole job** box at the **bottom** (Koy) sums every cost center per catalog item, deductions netted, storage merged; folds. **Refresh stock** re-reads Simpro. Pure helpers 'bidWireLike' / 'bidStockStatus' / 'bidWireRollup' gated by 'scripts/bidstock-test.js'. Needs **'firebase deploy --only functions:getSimproJobStock'**. Why it can't lose data: read-only from Simpro; the only job write is the additive 'simproStockCache' map (same precedent as 'simproCostCentersCache'); no other field, rule, loader, or function touched.
 
 ---
 

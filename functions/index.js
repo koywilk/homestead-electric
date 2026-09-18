@@ -2663,6 +2663,49 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
   return basics;
 });
 
+// ─── Simpro cost-center STOCK: Required vs Assigned per catalog item ────────
+// Koy, 2026-09-17: "bid items shows how much of what was bid right? I want it
+// to show how many we've ordered as well so we can see when we are over on
+// material… need them to be able to see wire especially." Simpro already
+// computes exactly this on each cost center's Inventory → Allocated tab and
+// exposes it at /jobs/{id}/sections/{s}/costCenters/{cc}/stock/ — verified
+// 2026-09-17 against Miller (#1438): Required 5150 / Assigned 1500 on 12/2,
+// 3750 / 6000 on 14/2, byte-for-byte what the Simpro screen shows. Assemblies
+// are already exploded into parts. One call per cost center; parallel with a
+// concurrency cap. Prices deliberately NOT returned (crew-facing panel).
+// Read-only from Simpro; writes nothing.
+exports.getSimproJobStock = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    const simproJobNo = String((data && data.simproJobNo) || "").trim();
+    if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+    const jn = encodeURIComponent(simproJobNo);
+    const secRes = await simproReqWithRetry("GET", `/jobs/${jn}/sections/?columns=ID,Name&pageSize=100`);
+    if (secRes.status === 404) throw new functions.https.HttpsError("not-found", `No Simpro job ${simproJobNo}`);
+    if (!secRes.ok || !Array.isArray(secRes.data)) throw new functions.https.HttpsError("internal", `Simpro sections error ${secRes.status}`);
+    const ccTasks = secRes.data.map(sec => async () => {
+      const r = await simproReqWithRetry("GET", `/jobs/${jn}/sections/${sec.ID}/costCenters/?pageSize=100`);
+      return (r.ok && Array.isArray(r.data) ? r.data : []).map(cc => ({ sectionId: sec.ID, sectionName: sec.Name || "", ccId: cc.ID, ccName: cc.Name || "" }));
+    });
+    const ccs = (await _pLimit(ccTasks, 4)).flat();
+    const stockTasks = ccs.map(cc => async () => {
+      const r = await simproReqWithRetry("GET", `/jobs/${jn}/sections/${cc.sectionId}/costCenters/${cc.ccId}/stock/?pageSize=250`, null, { maxAttempts: 3 });
+      const rows = (r.ok && Array.isArray(r.data) ? r.data : []).map(x => ({
+        catalogId: x.Catalog && x.Catalog.ID != null ? x.Catalog.ID : null,
+        name: String((x.Catalog && x.Catalog.Name) || "").trim(),
+        partNo: String((x.Catalog && x.Catalog.PartNo) || "").trim(),
+        required: Number(x.Quantity && x.Quantity.Required) || 0,
+        assigned: Number(x.Quantity && x.Quantity.Assigned) || 0,
+        breakdown: (Array.isArray(x.AssignedBreakdown) ? x.AssignedBreakdown : []).map(b => ({ storage: String((b.Storage && b.Storage.Name) || "").trim(), qty: Number(b.Quantity) || 0, inStock: Number(b.InStock) || 0 })),
+      })).filter(row => row.catalogId != null);
+      return { ...cc, ok: !!r.ok, rows };
+    });
+    const costCenters = await _pLimit(stockTasks, 4);
+    functions.logger.info("getSimproJobStock", { simproJobNo, sections: secRes.data.length, costCenters: costCenters.length, rows: costCenters.reduce((n, c) => n + c.rows.length, 0), failed: costCenters.filter(c => !c.ok).length });
+    return { fetchedAt: new Date().toISOString(), costCenters };
+  });
+
 // ─── Get Simpro QUOTE basics (name / address / site contact) ─────────────────
 // The Quotes tab's counterpart to getSimproJobBasics, added 2026-08-05 after
 // Koy reported "I put in a job number and it says not found" on a quote.
