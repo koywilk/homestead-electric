@@ -2123,6 +2123,7 @@ exports.pushPlansToSimpro = functions
 // shows "Pulling from Simpro… 14 of 22" off the normal jobs listener.
 // Idempotent: dedupe by filename within a folder — re-running fills gaps only.
 const { planDocPull } = require("./docPull.js");
+const { candidateSiteInfo } = require("./simproShape.js");
 const DOC_PROVIDERS = {
   simpro: {
     label: "Simpro",
@@ -3951,26 +3952,31 @@ async function _runSimproCandidateRefresh() {
     // Pull a sensible name. Simpro varies: some installs put the project name
     // in Name, others in Description. Take whichever is non-empty.
     const name = (j.Name && String(j.Name).trim()) || (j.Description && String(j.Description).trim()) || `Simpro ${simproId}`;
-    // Site address — Simpro typically returns Site as an object with Address
-    // (string) or as a structured Address sub-object.
-    let address = "";
-    if (j.Site) {
-      if (typeof j.Site.Address === "string") address = j.Site.Address;
-      else if (j.Site.Address && typeof j.Site.Address === "object") {
-        const a = j.Site.Address;
-        address = [a.Address, a.City, a.State, a.PostalCode].filter(Boolean).join(", ");
-      } else if (j.Site.Name) {
-        address = j.Site.Name;
-      }
+    // Site address. The list endpoint returns Site as a STUB {ID, Name} — no
+    // address — and the old Site.Name fallback wrote the site name into the
+    // address (on this tenant that's usually the job name, so every import
+    // needed a manual clear + re-pull; Koy, 2026-09-17). Never use Site.Name:
+    // take an inline address if Simpro ever sends one, else resolve the site
+    // once via /sites/{ID} (same helper the pull path uses) and cache it on
+    // the candidate (`addressFrom:"site"`) so later runs cost no extra calls.
+    const existing = prevById.get(simproId) || {};
+    const siteInfo = candidateSiteInfo(j.Site);
+    let address = siteInfo.address, addressFrom = address ? "inline" : "";
+    if (!address && existing.addressFrom === "site" && existing.siteId === siteInfo.siteId && existing.address) {
+      address = existing.address; addressFrom = "site";
+    } else if (!address && siteInfo.siteId) {
+      address = await _simproSiteAddress(siteInfo.siteId);
+      addressFrom = address ? "site" : "";
     }
     const customer = (j.Customer && (j.Customer.CompanyName || j.Customer.Name)) || "";
     const dateIssued = j.DateIssued || "";
 
-    const existing = prevById.get(simproId) || {};
     candidates.push({
       simproId,
       name,
       address,
+      addressFrom,
+      siteId: siteInfo.siteId,
       customer,
       dateIssued,
       stage: j.Stage || "Pending",
