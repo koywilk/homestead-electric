@@ -13106,6 +13106,154 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 }
 
 
+// ── Approved COs on the punch list (v417) ────────────────────────────────────
+// Koy, 2026-09-18: "I want an approved COs section made, with the entire CO
+// and all info that can be checked off when done." No convert step: a CO with
+// coStatus "approved" appears in the punch list of the phase the job is in;
+// each "- " line of its task is its own check; the big check marks the whole
+// CO done, which is the SAME thing as the COs tab's "Work Completed" — one
+// record, two views. Pure helpers here are extracted verbatim by
+// scripts/copunch-test.js. All new fields are additive on the CO object.
+function coTaskLines(html) {
+  // Break on OPENING block tags too: Simpro/rich-text pastes put bare text
+  // right before a <div> ("…stairs<div>- Add 2 wafers</div>"), which would
+  // otherwise glue a room label onto the item after it.
+  const t = String(html || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/?(div|p|li|h[1-6])(\s[^>]*)?>/gi, "\n").replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  return t.split("\n").map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean)
+    .map(x => /^[-•*]/.test(x) ? { kind: "item", text: x.replace(/^[-•*]+\s*/, "") } : { kind: "head", text: x });
+}
+// Stable per-line key: the line's own text, so a reorder or an edit elsewhere
+// in the CO can't shift a check onto a different line.
+function coTaskKey(text) { return String(text || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 120); }
+// Which phase's punch list an approved CO lands on: Rough until rough is 100%.
+function coPunchPhase(job) { return parseStage(job && job.roughStage) >= 100 ? "finish" : "rough"; }
+// Open = approved (and not converted to a return trip); done = completed FROM
+// this block (punchDoneAt) — older office-completed COs stay off the list.
+function approvedCOsForPunch(changeOrders, returnTrips) {
+  const out = [];
+  (changeOrders || []).forEach((co, idx) => {
+    if (!co) return;
+    const conv = typeof coIsConverted === "function" ? coIsConverted(co, returnTrips || []) : co.coStatus === "converted";
+    if (conv) return;
+    if (co.coStatus === "approved") out.push({ co, idx, done: false });
+    else if (co.coStatus === "completed" && co.punchDoneAt) out.push({ co, idx, done: true });
+  });
+  return out.sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
+}
+// ── end Approved COs derivations ─────────────────────────────────────────────
+function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough, phaseLabel = "Rough" }) {
+  const [open, setOpen] = useState(false);            // starts collapsed (Koy: "as always")
+  const [expanded, setExpanded] = useState({});        // done CO id -> reopened view
+  const list = approvedCOsForPunch(job.changeOrders, job.returnTrips);
+  if (!list.length) return null;
+  const me = getIdentity()?.name || "";
+  const today = new Date().toLocaleDateString("en-US");
+  const first = (n) => String(n || "").split(" ")[0];
+  const patchCO = (id, patch) => onUpdate({ changeOrders: (job.changeOrders || []).map(c => c && c.id === id ? { ...c, ...patch } : c) });
+  const openN = list.filter(e => !e.done).length, doneN = list.length - openN;
+  const cb = (on, big) => ({ width: big ? 26 : 18, height: big ? 26 : 18, borderRadius: big ? 7 : 5, border: `2px solid ${on ? C.green : C.muted}`, background: on ? C.green : "#fff", color: "#fff", fontSize: big ? 15 : 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, marginTop: 1 });
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button type="button" onClick={() => setOpen(v => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", padding: "6px 2px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", minHeight: 36 }}>
+        <span style={{ color: C.dim, fontSize: 10, width: 10, display: "inline-block" }}>{open ? "▾" : "▸"}</span>
+        <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.06em", color: C.purple }}>Approved COs</span>
+        <span style={{ fontSize: 11, color: C.dim }}>{openN} open{doneN ? ` · ${doneN} done` : ""}</span>
+      </button>
+      {open && list.map(({ co, idx, done }) => {
+        const lines = coTaskLines(co.task);
+        const items = lines.filter(l => l.kind === "item");
+        const checks = co.taskChecks || {};
+        const ck = items.filter(l => checks[coTaskKey(l.text)]).length;
+        const mats = coTaskLines(co.material).map(l => l.text);
+        const photos = Array.isArray(co.photos) ? co.photos.filter(p => p && p.url) : [];
+        const showBody = !done || !!expanded[co.id];
+        const toggleLine = (text) => {
+          const k = coTaskKey(text); const next = { ...checks };
+          if (next[k]) delete next[k]; else next[k] = { by: me, at: today };
+          patchCO(co.id, { taskChecks: next });
+        };
+        const markDone = () => {
+          const all = { ...checks }; items.forEach(l => { const k = coTaskKey(l.text); if (!all[k]) all[k] = { by: me, at: today }; });
+          patchCO(co.id, { coStatus: "completed", punchDoneBy: me, punchDoneAt: new Date().toISOString(), taskChecks: all, needsByStart: "", needsByEnd: "", needsHardDate: false });
+        };
+        const reopen = () => patchCO(co.id, { coStatus: "approved", punchDoneAt: "", punchDoneBy: "" });
+        return (
+          <div key={co.id} style={{ background: done ? "#F6FAF7" : C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${done ? C.green : C.purple}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <div onClick={done ? reopen : markDone} title={done ? "Reopen this CO" : "Mark the whole CO done"} style={cb(done, true)}>{done ? "✓" : ""}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div onClick={done ? () => setExpanded(v => ({ ...v, [co.id]: !v[co.id] })) : undefined} style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.25, color: done ? C.dim : C.text, textDecoration: done ? "line-through" : "none", cursor: done ? "pointer" : "default" }}>
+                  CO #{idx + 1} · {co.desc || "(no description)"}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 11, color: C.dim }}>
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: done ? C.green : "#3E7D5A18", color: done ? "#fff" : C.green }}>{done ? "Done" : "Approved"}</span>
+                  {co.quoteNumber && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: "#6A5E9722", color: C.purple }}>Quote #{co.quoteNumber}</span>}
+                  {co.time && <span style={{ border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 6px", background: C.surface }}>Est. {co.time}</span>}
+                  {co.coStatusDate && !done && <span>approved {co.coStatusDate}</span>}
+                  <span>{co.createdBy ? `by ${first(co.createdBy)} · ` : ""}{co.createdAt || ""}</span>
+                  {co.sendTo && <span>to {co.sendTo}</span>}
+                  {co.assignedTo && <span style={{ color: C.blue, fontWeight: 700 }}>{first(co.assignedTo)}</span>}
+                  {items.length > 0 && <span style={{ marginLeft: "auto", fontWeight: 700, color: C.blue, whiteSpace: "nowrap" }}>{ck} of {items.length} done</span>}
+                </div>
+              </div>
+            </div>
+            {showBody && (
+              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: mats.length || photos.length ? "minmax(0,3fr) minmax(0,2fr)" : "minmax(0,1fr)", gap: 8 }}>
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", background: "#fff", minWidth: 0 }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, marginBottom: 5 }}>Task</div>
+                  {lines.length === 0 && <div style={{ fontSize: 12, color: C.dim, fontStyle: "italic" }}>No task lines on this CO.</div>}
+                  {lines.map((l, i) => l.kind === "head"
+                    ? <div key={i} style={{ fontSize: 11, fontWeight: 800, color: C.text, margin: i === 0 ? "0 0 2px" : "7px 0 2px" }}>{l.text}</div>
+                    : (() => { const st = checks[coTaskKey(l.text)]; return (
+                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "4px 0", fontSize: 12.5, lineHeight: 1.35, borderTop: `1px solid ${C.surface}` }}>
+                        <div onClick={() => !done && toggleLine(l.text)} style={{ ...cb(!!st, false), cursor: done ? "default" : "pointer" }}>{st ? "✓" : ""}</div>
+                        <span style={{ color: st ? C.dim : C.text, textDecoration: st ? "line-through" : "none", minWidth: 0 }}>{l.text}</span>
+                        {st && <span style={{ fontSize: 10, color: C.green, whiteSpace: "nowrap", marginLeft: "auto" }}>✓ {first(st.by) || "done"} · {st.at}</span>}
+                      </div>); })()
+                  )}
+                </div>
+                {(mats.length > 0 || photos.length > 0) && (
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", background: "#fff", minWidth: 0 }}>
+                    {mats.length > 0 && <>
+                      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, marginBottom: 5 }}>Material</div>
+                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{mats.map((m, i) => <div key={i}>{m}</div>)}</div>
+                    </>}
+                    {photos.length > 0 && <>
+                      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, margin: mats.length ? "8px 0 5px" : "0 0 5px" }}>Photos</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {photos.map(p => <a key={p.id || p.url} href={p.url} target="_blank" rel="noreferrer"><img src={p.url} alt={p.name || "CO photo"} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: `1px solid ${C.border}` }} /></a>)}
+                      </div>
+                    </>}
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+              {!done ? (
+                <>
+                  <select value={co.assignedTo || ""} onChange={e => patchCO(co.id, { assignedTo: e.target.value })}
+                    style={{ fontSize: 11, padding: "5px 9px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontFamily: "inherit" }}>
+                    <option value="">Assign to…</option>
+                    {(assigneeOptions || []).map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  <button type="button" onClick={markDone} style={{ fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.green}`, background: "transparent", color: C.green, fontFamily: "inherit", cursor: "pointer" }}>Mark CO done</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 11, color: C.green, fontWeight: 600 }}>✓ Done by {first(co.punchDoneBy) || "—"} · {co.punchDoneAt ? new Date(co.punchDoneAt).toLocaleDateString("en-US") : ""} · flipped to Work Completed on the COs tab</span>
+                  <button type="button" onClick={reopen} style={{ fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: "transparent", color: C.dim, fontFamily: "inherit", cursor: "pointer" }}>Reopen</button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Bid stock derivations (v416: Required vs Assigned) ──────────────────────
 // Pure — extracted verbatim by scripts/bidstock-test.js. Rows come from
 // getSimproJobStock: {catalogId, name, partNo, required, assigned, breakdown}.
@@ -13872,6 +14020,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <span style={{fontSize:12,color:isCompleted?"#3E7D5A":"var(--accent)",fontWeight:700}}>Change Order #{o._idx+1}</span>
                 {isCompleted&&<StatusPill variant="done" bordered>✓ WORK COMPLETED</StatusPill>}
+                {isCompleted&&o.punchDoneAt&&<span style={{fontSize:10,color:"#3E7D5A",fontWeight:600}}>from the punch list · {String(o.punchDoneBy||"").split(" ")[0]} · {new Date(o.punchDoneAt).toLocaleDateString("en-US")}</span>}
                 {isConverted&&<StatusPill variant="neutral" bordered>CONVERTED TO RT</StatusPill>}
                 {/* Quote # — appears right next to the CO title so it's
                     scannable in a long list. Editable any time, click to
@@ -27341,6 +27490,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   shares={job.roughPunchShares||[]} onSaveShares={v=>u({roughPunchShares:v})}/>
               }>
 
+                {coPunchPhase(job) === "rough" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.rough} phaseLabel="Rough"/>}
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
@@ -27634,6 +27784,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}
                   shares={job.finishPunchShares||[]} onSaveShares={v=>u({finishPunchShares:v})}/>
               }>
+                {coPunchPhase(job) === "finish" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.finish} phaseLabel="Finish"/>}
                 <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapFinish}
@@ -48196,6 +48347,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Send to Simpro
   - Submit Change Order · 'shipped 2026-08-06' · 'SW v366' · crew feedback: making a CO "feels like they didn't do it right because there's no sort of submit or anything" — every field autosaves through the debounced job save, so filling one out just… ended, with no moment that said the office has it. New COs (and job-note promotes) still autosave exactly as before — nothing typed is ever lost by NOT submitting — but an unsubmitted 'needs_sending' CO now shows an amber dashed draft bar ("Draft — add a description, then submit" → "Ready — submit so the office picks it up") with a green **Submit Change Order** button, disabled until the description has text so blank COs can't be fired at the office. Submit stamps 'submittedAt' (ISO) + 'submittedBy' (identity, falls back to 'createdBy'), toasts "Change Order submitted — the office has it," swaps the draft bar for a green check "submitted by X · date" line in the card header, and leaves every field editable after. The bar keys strictly off 'coStatus==="needs_sending" && !submittedAt': legacy COs whose status the office already advanced never see a draft bar, and the retired empty/'simpro_task' statuses are deliberately excluded so historical cards don't sprout buttons. Both stamps are additive fields inside 'changeOrders[]' items — 'normalizeJob' spreads '...o', so they survive the loader untouched, and no write path or rules change was needed
   - CO submit follow-ups: office push + draft chase · 'shipped 2026-08-06' · 'SW v367' · Koy: "yes i think we need the follow up items as well." Two halves. **Push (server, rides the pending functions deploy):** new 'co_submitted' pref ("CO submitted by crew (ready to review)", default admin/manager; 'wantsNotif' treats the missing key as ON so nobody has to re-save prefs) — 'onJobUpdate' fires it on the 'submittedAt' transition to the job's coordinator + Jeromy, via a shared 'coSubmittedSends' helper that ALSO covers the offline case where a CO arrives already-submitted in its creation write (created+filled+submitted offline, synced as one write — the prev-diff loop can't see it because no 'prev' exists; the new-CO branch catches it, disjoint by construction so no double-fire). 'co_new' still fires at creation, deliberately untouched — Jeromy can now mute 'co_new' and keep 'co_submitted' to hear only about ready COs instead of empty just-created drafts; that's his toggle, not a code decision. 'dailyCoChase' body now calls out how many of the waiting COs are unsubmitted crew drafts (1+ day old), so the 8am number distinguishes "stuck on Jeromy" from "stuck on the crew". **Board (client, live now):** 'allCOs' stitches 'submittedAt/By' through (the projection whitelists fields — without this the board can never see the stamp), and a 'needs_sending' CO with no stamp created **on/after 2026-08-07** shows an amber dashed "DRAFT — NOT SUBMITTED" chip (same language as the in-job draft bar, one state two surfaces), a "(N unsubmitted crew drafts)" callout inside the header's need-sending count, and a **Chase** RemindButton pre-picked to the job's foreman — reuses the deployed 'reNudge' path (renudge pref-gated on the recipient), so chasing works immediately with no functions deploy. The date gate is the same reasoning as the in-job bar's status gate: every pre-v366 CO lacks the stamp by definition, not by neglect — flagging the legacy backlog would make the office chase COs it already triages (D32 Payne CO #2, filed the morning of the ship, is exactly the card that must NOT get flagged). Why it can't lose data: board + header are pure read-side derivations; the chase button writes nothing (reNudge sends a push); the functions changes only ADD sends on a field transition and enrich one chase body — no write path, no schema, no rules touched
+  - **Approved COs on the punch list — the whole CO, checkable** · 'shipped 2026-09-18' · 'SW v417' · Koy: *"when a CO is approved it only has option to convert to return trip. i want an option to convert to punch list where it will move the entire co to the punch list section for easy visibility and make sure its seen and done by the crews"* → after a real-data preview: *"I want an approved COs section made, with the entire co and all info that can be check off when done"* → *"perfect, as always have the tab start collapsed."* **No convert step and no copy:** 'ApprovedCOsPunch' sits at the top of the Punch List section on the phase the job is in ('coPunchPhase': Rough until 'roughStage' hits 100%, then Finish) and lists every CO with 'coStatus:"approved"' that isn't converted to a return trip ('approvedCOsForPunch'), starting **collapsed** with *N open · M done* on the header. Each card shows the whole CO — description, Quote #, est. time, who/when, send-to — and its task rich text parsed by 'coTaskLines' into room headings + one **check per "- " line** (stored on the CO as 'taskChecks[coTaskKey(line)] = {by, at}', keyed by the line's own text so edits elsewhere can't shift a check), materials, and the CO's own photos (thumbnails → the same Storage URLs). **Assign to** writes 'assignedTo' on the CO. The big check / **Mark CO done** ticks every line and writes the SAME 'coStatus:"completed"' the COs tab's Work Completed button writes, plus 'punchDoneBy/punchDoneAt' — one record, two views; the COs tab card shows *from the punch list · Keegan · 9/18/2026* under its Work Completed pill. Done cards fold and drop to the bottom with **Reopen** (back to approved, checks kept); only COs completed FROM this block stay listed, so older office-completed COs don't pile up. Pending/sent COs never appear. Prebuild gate 'scripts/copunch-test.js' (parser — including the bare-text-before-'<div>' case the test caught — keys, phase, list). Why it can't lose data: every write is 'changeOrders.map(...)' patching ONE CO with additive fields ('taskChecks', 'assignedTo', 'punchDoneBy', 'punchDoneAt') or the pre-existing 'coStatus' value the COs tab already writes; nothing is copied to the punch floors, nothing removed; no loader, rules, or function change.
   - Converted badge is self-healing + Undo Convert confirms · 'shipped 2026-08-18' · 'SW v382' · Koy: "why is the co not showing as converted now?" PITR forensics on Bukhshtaber: the sconces CO (quote #3148) converted fine, but 'coStatus:"converted"' NEVER reached Firestore — within the save debounce a stray tap landed on ↩ Undo Convert (tapping Convert collapses the card instantly, so the layout shifts Undo up under the finger) and silently rewrote the pending status back to "approved". The RT survived with the full v381 carry; only the converted state died. Ruled out first: the re-enabled Simpro watcher (its eligibility guard skips everything but needs_sending/pending, and run logs show zero flips from "converted") and cross-tab echo clobber (that would have wiped the new RT too). Fix, two halves: **(1)** 'coIsConverted(co, returnTrips)' — the CO card, the CO board column, and the open-COs summary now treat a CO as converted when 'coStatus==="converted"' OR a Return Trip still points back via 'fromCOId' (v381 stamp) with no deliberate undo recorded. The RT link is the durable signal, so a status clobber can't erase the converted state — and Bukhshtaber's CO shows CONVERTED again with no data write. Pre-v381 conversions (no 'fromCOId') keep working off 'coStatus' alone. **(2)** Undo Convert now confirms ('showConfirm', same pattern as CO Remove) and stamps 'convertUndoneAt' (ISO) — the stamp is what separates "a human chose this" from "the status got clobbered", so deliberate undos still un-convert the card; converting again clears it. Why it can't lose data: badge/column/summary changes are pure read-side derivation; the only write changes are additive fields inside 'data.changeOrders[]' items ('convertUndoneAt' stamped on undo, cleared to '""' on convert), which the loader passes through wholesale — no loader, rules, or write-path change, and no existing field is removed or rewritten
 - **Return Trips** · 'shipped' · 'ReturnTrips'
   - Items list per RT
