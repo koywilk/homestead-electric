@@ -47847,6 +47847,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 ## Top-Level Views (Nav Tabs)
 
 - **Job Board — crews, not books** · 'shipped 2026-09-12' · 'SW v399' · the reorg cleanup slice Koy asked to see ("it's still showing all the coordinators and books"). The three "…'s Book" bands, the "No coordinator" band, and the "Show all jobs →" **book page** ('view==="book"', 'openBook', 'activeBook', 'showBookCompleted') are gone; the board's own ALL JOBS section already lists the whole company by stage. In their place one **Crews** band ('N foremen · M job sites') with a sort — **Most jobs** first (the head's where's-the-load read) or **A–Z** ('crewSort') — and every foreman card exactly as it was; Paul and Zane are just crews now. The Crew Schedule filter drops its "Books (coordinator)" group ('coordinatorBooks' memo, 'coord_' pref branch, 'coordMatch', and the day-column 'activeCrew' branch removed; the Crews group keeps its options), and Settings → Default schedule view drops the "…'s book (whole coordinator)" options — a previously saved 'coord_…' default now falls through to Auto (own crew). **Why it won't lose data:** read-side / UI only — no Firestore writes added or changed, no loader change, no rules change; the per-foreman 'coordinator' values in 'settings/users' are untouched (Scoreboard's coordinators board, Huddle chips and the functions' 'coordUserOf' routing still read them until their own cleanup); a user's saved 'defaultScheduleView' string is not rewritten, it just resolves differently.
+- **My Day — Mine folded into categories, sorted by urgency** · 'shipped 2026-09-17' · 'SW v412' · Koy: *"in the my day section can we organize these into collapsed categories and sort them by urgency?"* — option A (by type). Every Mine row now carries what it is ('needKind' / 'dutyType' / 'autoCategory') and 'myDayCategories' folds them into **Tasks on me · Needs · Bodies · Punch · Invoicing · Start POs · Change orders · Return trips · Scheduling · QC walks · Job prep**; categories start collapsed (header = label, count, 'N overdue' badge or a *today* hint, left edge coloured by the category's most urgent lane) and order themselves by most-urgent lane → overdue count → label, so whatever holds an overdue row floats to the top; rows inside keep the overdue → today → this week → later sort. The foreman's On-<head> per-job lines are untouched. Pure helpers 'myDayCategoryOf' / 'myDayCategories' are extracted by the prebuild harness (section 14). Why it can't lose data: render-only — no write path touched; fold state is component state.
 - **My Day — the head owns every auto-task; Push delegates** · 'shipped 2026-09-15' · 'SW v408' · Koy: *"it is flooded with tasks that don't really make sense for the foremans… all of them flow through me… a button or option to push task to job foreman or pick a person."* **Who sees what:** foremen no longer get auto rows at all — Mine = task docs on them ∪ their punch items; the Head of Residential ('resiHead') gets EVERY non-prep auto-task on every live job ('headAutoTasks'), plus task docs, punch, and stage duties; lanes unchanged. **Push:** each head auto row has '→ <job foreman>' (one tap) and 'Pick person…' (roster). Pushing writes ONE 'needs' doc through 'saveNeed' ('autoTaskDoc': kind task, the rule's title/desc/job/due, assignedTo, assignedBy = head, and the new additive **'autoTaskId'**). The delegate sees an ordinary task in Mine and gets the existing 'need_assigned' push. The head row then reads its state from the doc ('autoDelegation' join, never stored): **with X · age** (Take back / Re-push) → when X marks it Done, **done by X · verify** (Koy chose verify-before-clear) with Done (existing 'clearedTasks' clear) and Send back (reopens the doc to its assignee and pushes "Task sent back"). One open doc per auto-task: pushing again reassigns via 'patchNeed', never a second doc. Head Done with an open doc closes the doc too ('doneBy' head). **Duplicates folded:** the duties engine's Rough/Finish QC walk and start-PO rows win over the task engine's '_qc_walk' / '_final_qc_walk' / '_rough_po' / '_finish_po' twins on the head board ('foldDutyTwins'; neither engine changed). **Foreman's "On Koy":** collapsed to one line per job — *"Koy has N things on this job"* — opening to the read-only rows plus **+ Add for Koy** (Quick-add preset with job + To: head; 'NeedQuickAdd' now honours 'preset.assignedTo'). Harness 'scripts/needs-dryrun.js' gains sections 8–12 (foreman zero auto rows, head all, twins, autoTaskDoc shape, delegation states + reassign-not-duplicate). Guides 'myday.html' + 'needs.html' updated. No rules / loader change; **needs 'firebase deploy --only functions:onNeedWrite'** (new branch 3: a done→open flip by someone other than the assignee sends 'need_assigned' "Task sent back" — Send back had no signal otherwise). **Why it won't lose data:** one additive field ('autoTaskId') inside the need doc's 'data'; auto-task Done/Snooze keep the existing whole-map 'clearedTasks' / 'taskDueDates' precedents (one 'updateJob' per tap); foremen lose ROWS only — no doc, field, or job value is deleted or renamed; Push/Take back/Send back are ordinary 'saveNeed' / 'patchNeed' writes with version snapshots via the ledger.
 
 - **My Day** ('myday') · 'shipped 2026-09-09' · 'SW v398' · the landing screen for every field role (foreman, lead, crew) and the first nav tab for everyone internal. **One task object:** a 'needs' doc now carries a real person 'assignedTo' (+ 'assignedBy'/'assignedAt'), 'kind' (need|task|bodies), a real 'dueDate' ('dueBucket' kept for the lanes), 'foreman', 'snoozedUntil', 'doneBy' — all additive, all inside 'data', so the needs loader is untouched and the 12 pre-existing docs are read at run time ('assignedTo' absent ⇒ the legacy 'coordinator' is the assignee). **Mine** = task docs on me ∪ punch items assigned to me (the foreman card's Assigned walk, lifted to 'punchAssignedTo(name, jobs)' and keyed to the logged-in identity so leads/crew finally see their own items) ∪ (foremen) auto-tasks for my jobs; **On <head>** = what the Head of Residential owes on my jobs (task docs + read-only 'getCoordinatorDuties'/'getCompanyDuties' rows). Ordered overdue → today → this week → later; every row Done / Snooze (3d · 1wk · date) / 10s Undo. **Quick-add** ('NeedQuickAdd', the round + on phones, '+ Need' on laptops and inside Job Detail): two taps on the fast path — type, Save; chips for kind, **To:** (full roster; default one level up the chain of command via 'defaultAssigneeFor': crew/lead → their foreman, foreman → head, head → self), job, due. **Head of Residential** is a company hat ('resi.head', per-user cap like 'jobprep.own', Settings → Team → COMPANY HATS) resolved by 'resiHead(users)' (falls back to the 'jobprep.own' holder) — never a hardcoded name; coordinators/books are retired in every surface this touched (Needs page: no book transfer, a **To:** roster select instead; no 'coordinator' written on new docs). Auto-task owner for unassigned jobs and prep tasks = the hat holder ('_setTaskOwnerFallback'), replacing the '"Koy"' literals in 'computeTasks'. **Notify:** new 'onNeedWrite' trigger diffs 'assignedTo' old→new → 'need_assigned' push+inbox to the assignee (self-assign and no-op rewrites are silent; deep-links 'view:"myday"', no jobId so same-job pushes can't collapse), and 'need_done' back to the creator when someone else closes it; both keys are real server gates in the registry. Deep-link branches for 'myday' / 'needs' / 'schedule' in 'pendingView' + 'openInboxItem'. Perms: 'myday.view' + 'tasks.create' (all four tiers), 'resi.head' (hat). Harness 'scripts/needs-dryrun.js' (vm-extracts the shipped helpers; in the prebuild chain). Guides 'public/sops/myday.html' + 'needs.html' mounted via '<HelpDot>'. **Why it won't lose data:** every new field lives inside the existing 'data' map (loader returns it verbatim); nothing is renamed or removed; 'patchNeed' writes only touched 'data.<field>' paths (narrower than the previous full-doc setDoc); 'saved_by' on the envelope is read only by the server ledger; existing docs are never rewritten; 'ledgerNeeds' + nightly backups already cover 'needs'; jobs loader / 'saveJob' / job docs untouched (auto-task Done/Snooze use the existing 'clearedTasks' / 'taskDueDates' whole-map precedents; punch Done uses the existing 'togglePunchItemDone' RT cross-sync); delete restores the identical doc id on Undo; no Firestore rules change. Needs 'firebase deploy --only functions:onNeedWrite'. Flip-day step: tick **Head of Residential** on Koy in Settings → Team.
@@ -51809,6 +51810,33 @@ function plainText(s) { return String(s || "").replace(/<[^>]+>/g, " ").replace(
 function addDaysYmd(todayYmd, days) { const t = new Date(todayYmd + "T00:00:00"); t.setDate(t.getDate() + days); return localYmd(t); }
 const MYDAY_BUCKETS = { overdue: ["Overdue", "#B23A3A"], today: ["Today", "#3B5BA5"], week: ["This week", "#5E6670"], later: ["Later", "#8A929D"] };
 const MYDAY_ORDER = ["overdue", "today", "week", "later"];
+// ── MY DAY categories (v412) ─────────────────────────────────────────────────
+// Koy, 2026-09-17: "organize these into collapsed categories and sort them by
+// urgency" — option A, by TYPE. Every Mine row gets a category from what it is
+// (kind + the auto rule family / duty type / need kind); categories start
+// folded, order themselves by their most urgent row (lane), then overdue
+// count, then label; rows inside keep the lane sort. Pure — extracted by
+// scripts/needs-dryrun.js.
+const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", prep: "Job prep", other: "Other" };
+function myDayCategoryOf(row) {
+  if (!row) return "other";
+  if (row.kind === "need") return row.needKind === "task" ? "tasks" : row.needKind === "bodies" ? "bodies" : "needs";
+  if (row.kind === "punch") return "punch";
+  if (row.kind === "duty") return row.dutyType === "qc" ? "qc" : row.dutyType === "po" ? "po" : "prep";
+  if (row.kind === "auto") {
+    const c = row.autoCategory;
+    return c === "invoice" ? "invoicing" : c === "po" ? "po" : c === "co" ? "co" : c === "rt" ? "rt" : c === "qc" ? "qc" : c === "punch" ? "punch" : c === "prep" ? "prep" : "scheduling";
+  }
+  return "other";
+}
+function myDayCategories(rows) {
+  const m = new Map();
+  for (const r of rows || []) { const k = myDayCategoryOf(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+  const lane = (r) => { const i = MYDAY_ORDER.indexOf(r && r.bucket); return i < 0 ? MYDAY_ORDER.length : i; };
+  return [...m.entries()]
+    .map(([key, rs]) => ({ key, label: MYDAY_CAT_LABELS[key] || key, rows: rs, top: Math.min(...rs.map(lane)), overdue: rs.filter(r => r.bucket === "overdue").length }))
+    .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
+}
 
 function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
   const [winW, setWinW] = useState(window.innerWidth);
@@ -51837,7 +51865,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const needRow = (n, readOnly) => {
     const k = needKind(n);
     const from = n.assignedBy && !sameName(n.assignedBy, me) ? n.assignedBy : (n.createdBy && !sameName(n.createdBy, me) ? n.createdBy : "");
-    return { key: "need_" + n.id, kind: "need", bucket: needBucket(n, todayYmd), title: n.text || "(no text)",
+    return { key: "need_" + n.id, kind: "need", needKind: k, bucket: needBucket(n, todayYmd), title: n.text || "(no text)",
       tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need", tagColor: k === "task" ? C.teal : C.orange,
       sub: [n.jobName, readOnly ? (sameName(n.createdBy, me) ? "you asked" : "") : (from ? `from ${first(from)}` : "")].filter(Boolean),
       jobId: n.jobId, section: null, canDone: !readOnly, canSnooze: !readOnly,
@@ -51851,7 +51879,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // the start is inside the PO window) → Today. Prep tracks the rough start
     // date; a job with no start yet sits under Later instead of shouting.
     const bucket = d.dutyType === "prep" ? urgencyBucket(job && job.roughScheduledDate) : "today";
-    return { key: "duty_" + d.jobId + "_" + d.id, kind: "duty", bucket, title: d.label,
+    return { key: "duty_" + d.jobId + "_" + d.id, kind: "duty", dutyType: d.dutyType, bucket, title: d.label,
       tag: d.dutyType === "qc" ? "QC" : d.dutyType === "po" ? "Start" : "Prep", tagColor: d.dutyType === "qc" ? C.purple : C.teal,
       sub: [d.jobName, readOnly ? `${headFirst}'s duty` : (d.foreman && !sameName(d.foreman, me) ? first(d.foreman) : "")].filter(Boolean),
       jobId: d.jobId, section: d.targetTab || null, canDone: !readOnly && isPO, canSnooze: false,
@@ -51892,7 +51920,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       const job = jobById(t.jobId); if (!job) return;
       const st = autoRowState(t, delegation, headName);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
-      const row = { key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
         sub: [t.jobName, t.desc].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
@@ -51936,6 +51964,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // Rows = task docs on the head about my jobs ∪ the head's auto rows on my
   // jobs ∪ duties, with duty twins folded exactly like the head's own board.
   const [openHeadJobs, setOpenHeadJobs] = useState(() => new Set());
+  const [openCats, setOpenCats] = useState(() => new Set());   // v412: Mine categories start folded
+  const toggleCat = (k) => setOpenCats(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const toggleHeadJob = (id) => setOpenHeadJobs(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const headRows = iAmHead ? [] : (() => {
     const rows = [...openNeeds.filter(n => onHead(n, identity, users, jobs)).map(n => needRow(n, true)),
@@ -51958,7 +51988,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       .sort((a, b) => String(a.jobId === "_none" ? "￿" : ((a.job && a.job.name) || "")).localeCompare(String(b.jobId === "_none" ? "￿" : ((b.job && b.job.name) || ""))));
   })();
   const groups = [
-    { key: "mine", title: "Mine", rows: sortRows(mineRows), empty: "All clear — nothing on you right now." },
+    { key: "mine", title: "Mine", rows: sortRows(mineRows), byCat: myDayCategories(sortRows(mineRows)), empty: "All clear — nothing on you right now." },
     ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
   ];
 
@@ -52025,7 +52055,27 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
           <span style={{ flex: 1, height: 1, background: C.border }} />
         </div>
-        {isOpen && (g.byJob
+        {isOpen && g.byCat && (g.byCat.length
+          ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {g.byCat.map(c => {
+                const open = openCats.has(c.key);
+                const [, laneColor] = MYDAY_BUCKETS[MYDAY_ORDER[c.top]] || MYDAY_BUCKETS.later;
+                return (
+                  <div key={c.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${laneColor}`, borderRadius: 10 }}>
+                    <div onClick={() => toggleCat(c.key)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
+                      <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
+                      <span style={{ fontSize: 12, color: C.muted }}>{c.rows.length}</span>
+                      {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
+                      {c.overdue === 0 && c.top === 1 && <span style={{ fontSize: 10, fontWeight: 700, color: C.blue }}>today</span>}
+                    </div>
+                    {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)}
+        {isOpen && !g.byCat && (g.byJob
           ? (g.byJob.length
             ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {g.byJob.map(({ jobId, job, rows }) => {

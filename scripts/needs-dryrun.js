@@ -53,10 +53,12 @@ function extractFrom(marker, label) {
 }
 const extractFunction = (name) => extractFrom(`function ${name}(`, name);
 const extractConst    = (name) => extractFrom(`const ${name} = `, name) + ";";
+// One-line consts (arrays) have no `{` to balance — take the whole source line.
+const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i < 0) throw new Error(`extract: const ${name} not found`); return src.slice(i, src.indexOf("\n", i)); };
 
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
-  "punchAssignedTo","myJobsFor","headAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins"];
+  "punchAssignedTo","myJobsFor","headAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -64,6 +66,8 @@ const combined = [
   extractConst("matchesForeman"),
   extractConst("parseAnyDate"),
   extractConst("AUTO_DUTY_TWINS"),
+  extractLine("MYDAY_ORDER"),
+  extractConst("MYDAY_CAT_LABELS"),
   ...FN.map(extractFunction),
   `({ ${FN.join(", ")} })`,
 ].join("\n");
@@ -233,5 +237,26 @@ eq(two.get("k").id, "b", "two open docs (should not happen) -> newest assignedAt
 // ── 13. foreman side: head auto rows on MY jobs only; twins folded ──────────
 const gageAutos = H.foldDutyTwins(H.headAutoTasks(jobsWithTP, new Set(), fakeCompute), new Set()).filter(t => H.myJobsFor(gage, users, jobsWithTP).some(j => j.id === t.jobId));
 eq(gageAutos.map(t => t.id), ["j1770_rough_po"], "foreman's On-head list holds only the head's auto rows on their jobs");
+
+// ── 14. My Day categories (v412): by type, folded, sorted by urgency ────────
+eq(["need","need","need","punch","duty","duty","duty","auto","auto","auto","auto","auto","auto","auto","auto"].map((kind, i) => H.myDayCategoryOf([
+  { kind, needKind:"task" }, { kind, needKind:"need" }, { kind, needKind:"bodies" }, { kind },
+  { kind, dutyType:"qc" }, { kind, dutyType:"po" }, { kind, dutyType:"prep" },
+  { kind, autoCategory:"invoice" }, { kind, autoCategory:"po" }, { kind, autoCategory:"co" }, { kind, autoCategory:"rt" }, { kind, autoCategory:"qc" }, { kind, autoCategory:"punch" }, { kind, autoCategory:"schedule" }, { kind, autoCategory:"tempped" },
+][i])), ["tasks","needs","bodies","punch","qc","po","prep","invoicing","po","co","rt","qc","punch","scheduling","scheduling"], "every row kind maps to a category");
+eq(H.myDayCategoryOf(null), "other", "null-safe");
+const cats = H.myDayCategories([
+  { kind:"auto", autoCategory:"invoice", bucket:"week", title:"Invoice" },
+  { kind:"punch", bucket:"today", title:"P" },
+  { kind:"auto", autoCategory:"co", bucket:"overdue", title:"CO" },
+  { kind:"auto", autoCategory:"co", bucket:"later", title:"CO2" },
+  { kind:"need", needKind:"task", bucket:"overdue", title:"T1" },
+  { kind:"need", needKind:"task", bucket:"overdue", title:"T2" },
+  { kind:"auto", autoCategory:"rough", bucket:"nonsense", title:"X" },
+]);
+eq(cats.map(c => c.key), ["tasks","co","punch","invoicing","scheduling"], "most urgent lane first, then overdue count, then label; unknown bucket sinks last");
+eq(cats.map(c => [c.rows.length, c.overdue]), [[2,2],[2,1],[1,0],[1,0],[1,0]], "counts + overdue per category");
+eq(cats[0].label, "Tasks on me", "labels come from MYDAY_CAT_LABELS");
+eq(H.myDayCategories([]), [], "empty -> []");
 
 console.log("needs-dryrun ok");
