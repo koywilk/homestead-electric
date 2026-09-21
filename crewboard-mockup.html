@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew Board v2 mockup</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9; --muted:#CDD3DB;
+  --text:#1B1F24; --dim:#5E6670; --accent:#3B5BA5; --accent-ink:#FFFFFF; --accent-soft:rgba(59,91,165,.12);
+  --green:#3E7D5A; --red:#B23A3A; --orange:#B06A2C; --purple:#6A5E97;
+  --shadow:0 1px 2px rgba(16,24,40,.06), 0 12px 32px -12px rgba(16,24,40,.25);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141821; --surface:#1B2030; --card:#222732; --border:#2A2F3A; --muted:#3A4150;
+    --text:#E6EAF1; --dim:#9AA3B2; --accent:#66A8FF; --accent-ink:#0B1220; --accent-soft:rgba(102,168,255,.14);
+    --green:#46C78A; --red:#E06A60; --orange:#D98A4A; --purple:#A393E0;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 14px 36px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141821; --surface:#1B2030; --card:#222732; --border:#2A2F3A; --muted:#3A4150;
+  --text:#E6EAF1; --dim:#9AA3B2; --accent:#66A8FF; --accent-ink:#0B1220; --accent-soft:rgba(102,168,255,.14);
+  --green:#46C78A; --red:#E06A60; --orange:#D98A4A; --purple:#A393E0;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 14px 36px -14px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.4}
+button{font-family:inherit}
+.wrap{max-width:1100px;margin:0 auto;padding:20px 16px 140px}
+.eyebrow{font-family:"Bebas Neue",sans-serif;font-size:13px;letter-spacing:.14em;color:var(--accent)}
+h1{font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:34px;letter-spacing:.04em;margin:2px 0 4px;line-height:1}
+.lede{color:var(--dim);font-size:13px;margin:0 0 16px;max-width:64ch}
+.note{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--dim);margin-bottom:18px}
+.note b{color:var(--text)}
+.sectionTitle{font-family:"Bebas Neue",sans-serif;font-size:18px;letter-spacing:.06em;color:var(--dim);margin:18px 0 8px;display:flex;align-items:center;gap:8px}
+.sectionTitle .count{font-family:"IBM Plex Sans",sans-serif;font-size:11px;letter-spacing:0;background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:1px 8px;color:var(--dim)}
+
+.board{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.col{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:0 0 8px;overflow:hidden;box-shadow:var(--shadow)}
+.col .bar{height:4px}
+.colHead{display:flex;align-items:center;gap:8px;padding:10px 12px 8px;cursor:pointer;border-bottom:1px solid var(--border)}
+.colHead:hover{background:var(--surface)}
+.colHead .nm{font-weight:700;font-size:14px;flex:1}
+.colHead .ct{font-size:11px;color:var(--dim)}
+.colHead .pill{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.colHead .pill.changed{color:var(--accent);font-weight:700}
+.crew{display:flex;flex-direction:column;gap:4px;padding:8px 8px 0}
+.person{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:8px;background:var(--surface);border:1px solid var(--border);cursor:pointer;font-size:13px;user-select:none}
+.person:hover{border-color:var(--accent)}
+.person.changed{border-color:var(--accent);background:var(--accent-soft)}
+.person .dot{width:8px;height:8px;border-radius:99px;flex-shrink:0}
+.person .nm{flex:1;font-weight:500}
+.person .role{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:700}
+.person .role.lead{color:var(--accent)}
+.empty{font-size:11px;color:var(--dim);font-style:italic;padding:4px 10px 0}
+.pool{display:flex;flex-wrap:wrap;gap:6px;padding:10px;background:var(--card);border:1px dashed var(--border);border-radius:12px}
+.pool .person{flex:0 1 auto}
+
+.footer{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;z-index:5}
+.footer .changes{flex:1;min-width:200px;font-size:12px;color:var(--dim)}
+.footer .changes b{color:var(--orange)}
+.footer .changes ul{margin:4px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:4px 12px}
+.footer .changes li{white-space:nowrap}
+.btn{border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--dim);font-weight:700;font-size:13px;padding:9px 16px;cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.link{background:none;border:none;color:var(--dim);font-weight:500}
+
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:20;display:none;align-items:flex-end;justify-content:center}
+.scrim.on{display:flex}
+.sheet{background:var(--card);border:1px solid var(--border);border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:14px 16px 20px;box-shadow:var(--shadow)}
+@media (min-width:700px){ .scrim{align-items:center} .sheet{border-radius:14px} }
+.sheet .who{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.sheet .who .dot{width:12px;height:12px;border-radius:99px}
+.sheet .who .nm{font-weight:700;font-size:16px}
+.sheet .who .sub{font-size:12px;color:var(--dim)}
+.sheet .who .txt{flex:1}
+.sheet .close{background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:4px}
+.lbl{font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--dim);margin:12px 0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border-radius:99px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;padding:7px 12px;cursor:pointer;display:flex;align-items:center;gap:6px}
+.chip .dot{width:7px;height:7px;border-radius:99px}
+.chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+.chip.ghost{border-style:dashed;color:var(--dim)}
+.handoff{margin-top:10px;padding:10px 12px;border:1px solid var(--orange);background:rgba(176,106,44,.08);border-radius:10px}
+.handoff .t{font-size:12px;color:var(--text);margin-bottom:6px}
+.handoff .t b{color:var(--orange)}
+.sheet .done{margin-top:16px;width:100%}
+.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;z-index:30;display:none}
+.toast.on{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Settings · Crew Board · mockup</div>
+  <h1>Crew Board v2</h1>
+  <p class="lede">One column per foreman. Tap anyone to change their role or move them. No drag, no pick-up mode, no coordinators. Everything stages until you hit Save.</p>
+  <div class="note"><b>Try it:</b> tap a crew card and move them to another foreman · tap a foreman's name and make them a Lead (you'll be asked where their crew goes) · tap someone in Unassigned and make them a Foreman (a new column appears).</div>
+
+  <div class="sectionTitle">Crews <span class="count" id="crewCount"></span></div>
+  <div class="board" id="board"></div>
+
+  <div class="sectionTitle">Unassigned <span class="count" id="poolCount"></span></div>
+  <div class="pool" id="pool"></div>
+</div>
+
+<div class="footer">
+  <div class="changes" id="changes">No unsaved changes</div>
+  <button class="btn link" id="discard" style="display:none">Discard</button>
+  <button class="btn primary" id="save" disabled>Saved</button>
+</div>
+
+<div class="scrim" id="scrim"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast">Team saved</div>
+
+<script>
+// Sample roster, hardcoded in this file (shape matches settings/users entries).
+const COLORS = {"Keegan":"#3B5BA5","Gage":"#3E7D5A","Daegan":"#6A5E97","Vasa":"#B06A2C","Paul":"#3E7D7A","Owen":"#B23A3A"};
+const seed = [
+  {id:"keegan", name:"Keegan Hart",   title:"foreman"},
+  {id:"gage",   name:"Gage Miller",   title:"foreman"},
+  {id:"daegan", name:"Daegan Price",  title:"foreman"},
+  {id:"vasa",   name:"Vasa Petrov",   title:"foreman"},
+  {id:"paul",   name:"Paul Ortiz",    title:"foreman"},
+  {id:"braden", name:"Braden Cole",   title:"lead", foremanId:"keegan"},
+  {id:"austin", name:"Austin Reyes",  title:"crew", foremanId:"keegan"},
+  {id:"jacobn", name:"Jacob Nolan",   title:"crew", foremanId:"keegan"},
+  {id:"tyler",  name:"Tyler Brooks",  title:"lead", foremanId:"gage"},
+  {id:"mason",  name:"Mason Diaz",    title:"crew", foremanId:"gage"},
+  {id:"eli",    name:"Eli Turner",    title:"lead", foremanId:"daegan"},
+  {id:"caleb",  name:"Caleb Ward",    title:"crew", foremanId:"daegan"},
+  {id:"noah",   name:"Noah Kim",      title:"crew", foremanId:"daegan"},
+  {id:"liam",   name:"Liam Foster",   title:"crew", foremanId:"vasa"},
+  {id:"owen",   name:"Owen Patel",    title:"lead", foremanId:""},
+  {id:"zane",   name:"Zane Lott",     title:"crew", foremanId:""},
+  {id:"koy",    name:"Koy Wilkinson", title:"admin"},
+];
+let saved = JSON.parse(JSON.stringify(seed));
+let list  = JSON.parse(JSON.stringify(seed));
+let open  = null;          // id of the person in the sheet
+let pendingDemote = null;  // {id, toTitle} while asking where their crew goes
+
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => { const d=document.createElement(tag); if(cls) d.className=cls; if(text!=null) d.textContent=text; return d; };
+const first = n => (n||"").split(" ")[0];
+const shortName = n => { const p=(n||"").split(" "); return p[0] + (p[1]?" "+p[1][0]+".":""); };
+const color = u => COLORS[first(u.name)] || "#6E7682";
+const T = u => u.title || "crew";
+const foremen  = () => list.filter(u => T(u)==="foreman");
+const foremanIds = () => new Set(foremen().map(f=>f.id));
+const crewOf   = fid => list.filter(u => u.foremanId===fid && T(u)!=="foreman" && T(u)!=="admin")
+  .sort((a,b)=>(T(a)==="lead"?0:1)-(T(b)==="lead"?0:1) || a.name.localeCompare(b.name));
+const unassigned = () => list.filter(u => T(u)!=="foreman" && T(u)!=="admin" && (!u.foremanId || !foremanIds().has(u.foremanId)));
+const byId = id => list.find(u=>u.id===id);
+const savedById = id => saved.find(u=>u.id===id);
+const changed = u => { const s=savedById(u.id); return !s || s.title!==u.title || (s.foremanId||"")!==(u.foremanId||""); };
+
+// Mutations: all staged in `list`; Save = one guarded saveUsers in the real app.
+function setUser(id, patch){ list = list.map(u => u.id===id ? {...u, ...patch} : u); }
+function setRole(id, title){
+  const u = byId(id);
+  if (T(u)==="foreman" && title!=="foreman") {
+    if (crewOf(id).length) { pendingDemote = {id, toTitle:title}; renderSheet(); return; }
+    setUser(id, {title, foremanId:""});
+  } else if (title==="foreman") {
+    setUser(id, {title:"foreman", foremanId:""});
+  } else {
+    setUser(id, {title});
+  }
+  pendingDemote = null; render();
+}
+function finishDemote(handTo){  // handTo = foreman id, or "" for Unassigned
+  const {id, toTitle} = pendingDemote;
+  crewOf(id).forEach(p => setUser(p.id, {foremanId: handTo}));
+  setUser(id, {title:toTitle, foremanId: handTo});   // the demoted foreman joins the same crew
+  pendingDemote = null; render();
+}
+function moveTo(id, fid){ setUser(id, {foremanId:fid}); render(); }
+
+function openSheet(id){ open=id; pendingDemote=null; renderSheet(); $("#scrim").classList.add("on"); }
+function dot(c, cls){ const s=el("span", cls||"dot"); s.style.background=c; return s; }
+function personCard(u){
+  const d = el("div", "person" + (changed(u)?" changed":""));
+  d.appendChild(dot(color(u)));
+  d.appendChild(el("span","nm",shortName(u.name)));
+  d.appendChild(el("span","role "+T(u),T(u)));
+  d.onclick = () => openSheet(u.id);
+  return d;
+}
+function render(){
+  const board = $("#board"); board.replaceChildren();
+  const fs = foremen().sort((a,b)=>a.name.localeCompare(b.name));
+  fs.forEach(f => {
+    const col = el("div","col");
+    const crew = crewOf(f.id);
+    const bar = el("div","bar"); bar.style.background=color(f); col.appendChild(bar);
+    const head = el("div","colHead");
+    head.appendChild(el("span","nm",shortName(f.name)));
+    head.appendChild(el("span","ct",crew.length+" crew"));
+    head.appendChild(el("span","pill"+(changed(f)?" changed":""), changed(f)?"changed":"foreman"));
+    head.onclick = () => openSheet(f.id);
+    col.appendChild(head);
+    const wrap = el("div","crew");
+    crew.forEach(p => wrap.appendChild(personCard(p)));
+    if (!crew.length) wrap.appendChild(el("div","empty","no crew yet"));
+    col.appendChild(wrap);
+    board.appendChild(col);
+  });
+  $("#crewCount").textContent = fs.length + " foremen";
+  const pool = $("#pool"); pool.replaceChildren();
+  const un = unassigned();
+  un.forEach(p => pool.appendChild(personCard(p)));
+  if (!un.length) pool.appendChild(el("div","empty","Everyone's on a crew."));
+  $("#poolCount").textContent = un.length;
+
+  // Pending-changes review line (what Save will write).
+  const ch = $("#changes"); ch.replaceChildren();
+  const diffs = list.filter(changed);
+  if (!diffs.length) ch.textContent = "No unsaved changes";
+  else {
+    ch.appendChild(el("b",null,diffs.length+" unsaved change"+(diffs.length>1?"s":"")));
+    const ul = el("ul");
+    diffs.forEach(u => {
+      const s = savedById(u.id); const li = el("li", null, first(u.name)+": ");
+      if (s.title!==u.title) { li.append(T(s)+" → "); li.appendChild(el("b",null,T(u))); }
+      if ((s.foremanId||"")!==(u.foremanId||"")) { const f=byId(u.foremanId); li.append((s.title!==u.title?", ":"")+"→ "); li.appendChild(el("b",null,f?first(f.name)+"'s crew":"Unassigned")); }
+      ul.appendChild(li);
+    });
+    ch.appendChild(ul);
+  }
+  $("#save").disabled = !diffs.length; $("#save").textContent = diffs.length ? "Save changes" : "Saved";
+  $("#discard").style.display = diffs.length ? "" : "none";
+  if (open) renderSheet();
+}
+function chip(label, on, onClick, dotColor, ghost){
+  const b = el("button","chip"+(on?" on":"")+(ghost?" ghost":""));
+  if (dotColor) b.appendChild(dot(dotColor));
+  b.append(label); b.onclick = onClick; return b;
+}
+function renderSheet(){
+  const u = byId(open); if (!u) return;
+  const sh = $("#sheet"); sh.replaceChildren();
+  const f = byId(u.foremanId);
+  const where = T(u)==="foreman" ? crewOf(u.id).length+" crew" : (f ? first(f.name)+"'s crew" : "Unassigned");
+  const who = el("div","who"); who.appendChild(dot(color(u)));
+  const txt = el("div","txt"); txt.appendChild(el("div","nm",u.name)); txt.appendChild(el("div","sub",T(u)+" · "+where)); who.appendChild(txt);
+  const x = el("button","close","✕"); x.setAttribute("aria-label","Close"); x.onclick=closeSheet; who.appendChild(x);
+  sh.appendChild(who);
+
+  sh.appendChild(el("div","lbl","ROLE"));
+  const roles = el("div","chips");
+  ["foreman","lead","crew"].forEach(r => roles.appendChild(chip(r[0].toUpperCase()+r.slice(1), T(u)===r, () => setRole(u.id, r))));
+  sh.appendChild(roles);
+
+  if (pendingDemote && pendingDemote.id===u.id) {
+    const n = crewOf(u.id).length;
+    const h = el("div","handoff");
+    const t = el("div","t"); t.appendChild(el("b",null,first(u.name)+" has "+n+" crew.")); t.append(" Hand them (and "+first(u.name)+") to…"); h.appendChild(t);
+    const c = el("div","chips");
+    foremen().filter(o=>o.id!==u.id).forEach(o => c.appendChild(chip(first(o.name), false, () => finishDemote(o.id), color(o))));
+    c.appendChild(chip("Unassigned", false, () => finishDemote(""), null, true));
+    c.appendChild(chip("Cancel", false, () => { pendingDemote=null; renderSheet(); }, null, true));
+    h.appendChild(c); sh.appendChild(h);
+  }
+
+  if (T(u)!=="foreman") {
+    sh.appendChild(el("div","lbl","CREW"));
+    const crews = el("div","chips");
+    foremen().forEach(o => crews.appendChild(chip(first(o.name), u.foremanId===o.id, () => moveTo(u.id, o.id), color(o))));
+    crews.appendChild(chip("Unassigned", !f, () => moveTo(u.id, ""), null, true));
+    sh.appendChild(crews);
+  }
+  const done = el("button","btn primary done","Done"); done.onclick=closeSheet; sh.appendChild(done);
+}
+function closeSheet(){ open=null; pendingDemote=null; $("#scrim").classList.remove("on"); }
+$("#scrim").onclick = e => { if (e.target===$("#scrim")) closeSheet(); };
+$("#save").onclick = () => { saved = JSON.parse(JSON.stringify(list)); render(); const t=$("#toast"); t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),1600); };
+$("#discard").onclick = () => { list = JSON.parse(JSON.stringify(saved)); render(); };
+render();
+</script>
+</body>
+</html>

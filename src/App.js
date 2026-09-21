@@ -48236,7 +48236,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-12 · App SW version: v399
+**Last manifest update:** 2026-09-21 · App SW version: v419
 
 ---
 
@@ -48527,6 +48527,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Fleet Notification Health · 'FleetHealth' (admin only)
   - Devices — app versions · 'DeviceVersionsCard' (admin only) · fleet list vs latest deployed version, stale devices glow red · 'shipped 2026-07-10' · 'SW v318'
   - User management · 'UserManagement'
+  - **Crew Board v2 — tap to edit, foreman columns, no coordinators** · 'shipped 2026-09-21' · 'SW v419' · 'CrewBoard' (Settings, 'users.manage') · Koy: *"the drag to move feature sucks and coordinators should be removed and replaced with foreman. make it easy to make someone foreman or lead etc from crew board and swap anyone around with ease."* The v1 board (HTML5 drag + a phone-only pick-up-then-tap mode, grouped Coordinator → Foreman → crew) is replaced by **one column per active foreman** (A–Z, colour bar, crew count, leads first) plus an **Unassigned** pool (still catches crew whose foreman was deactivated or demoted). **One interaction on every device:** tap any person — a crew card or the foreman's column header — and a person sheet opens (bottom sheet on phones, centred dialog on laptops) with **ROLE** chips (Foreman / Lead / Crew) and **CREW** chips (one per foreman + Unassigned); one tap = one change, the board behind updates live. No drag handlers remain. Making anyone Foreman clears their 'foremanId' and their empty column appears at once; demoting a foreman **with crew** asks *"X has N crew. Hand them (and X) to…"* (a chip per other foreman + Unassigned) and moves the crew AND the demoted foreman together, so no 'foremanId' is ever left pointing at a non-foreman. A **pending-changes list** in plain words ("Braden: → Gage's crew", "Owen: lead → foreman") sits above Save. The section header carries the counts ('N FOREMEN · M UNASSIGNED') and starts collapsed. The board **neither reads nor writes 'coordinator'** and does not clear it — Scoreboard's coordinators board, Huddle chips, the functions' 'coordUserOf', and Team Members' COORDINATOR select still use the stored values (their retirement is a separate cleanup). **Why it won't lose data:** every tap stages in component state; Save persists the whole list through the existing stale-write-guarded 'saveUsers' (re-reads the live doc, refuses a stale overwrite, stamps 'updated_at'/'saved_by'/'device', toasts); only 'title' and 'foremanId' are ever written and only on tapped users — every other field on every user, including admins and deactivated people who never render, is spread through untouched; no loader change, no rules change, no 'jobs' write (a job's 'foreman' string is not rewritten on demotion — the Job Board picker owns that).
   - Deactivate team member access + delete-resurrection fix · 'shipped 2026-08-06' · 'SW v366' · Koy laid five people off and "it wont let me delete them they keep coming back." Root cause: the "one-time" 'heUserMerge_v1' employee backfill in the users loader was keyed on **per-device localStorage** but wrote the **shared** 'settings/users' doc — every new phone, cleared browser, or fresh install re-ran it and re-added anyone missing from its hardcoded 28-name list, via an unstamped 'setDoc' that also wiped 'updated_at'/'saved_by' and disarmed saveUsers' stale-write guard. The merge block is deleted (roster's only source of truth is the doc; 'BAD_IDS' stays as a read-side filter but its unstamped write-back is gone too), so Remove now sticks. On top of that, layoffs get a first-class **Deactivate access** action (edit card, next to Remove; Koy's own record exempt like Remove): sets 'active:false' + 'deactivatedAt'/'deactivatedBy' stamps and strips 'fcmTokens'/'fcmToken' so job pushes stop reaching their phone immediately, all through the existing stale-guarded 'saveUsers' funnel. Deactivated people: hidden from the login picker (the 'onSavePin' closure maps the FULL outer list, so a new hire setting a PIN can't drop them from the doc); booted from any device with a cached identity by a new roster check that runs on app open, on return-to-foreground, and every 30 minutes (also boots identities whose id is GONE from the roster, closing the "deleted but still logged in for up to the 24h identity TTL" hole; fails open on read errors and empty lists so a flaky network can never lock out the crew); excluded from every derived name list — foremen/leads dropdowns, module 'FOREMEN'/'LEADS' globals, Crew view foremanCrews, Crew Board columns and unassigned pool (which now also catches crew whose foreman was deactivated, so they surface for re-drag instead of vanishing), foremen-colors settings, and the Scoreboard boards; and denied server-side in 'requireAdmin' (one added 'user.active === false' condition — needs the next functions deploy, client works without it). Shown dimmed with a red DEACTIVATED · date pill in Team Members, one-tap **Reactivate** restores them (PIN kept). Remove stays for true mistakes; deactivate is the layoff path — history, scoreboard attributions, and job name strings all stay intact
   - Backup / restore + Force Update All Devices
   - Contractor portal — requests inbox · 'GCPortalInbox' (admin only) · 'shipped 2026-07-16' · 'SW v340' · reviews GC-filed requests ('gc_requests' via admin callables); Apply lands an answer on the exact question ('answeredVia:"gc"', "From contractor portal" chip) or adds a punch item with a 'GC' badge — through the app's merge-safe patch path, and NEVER marks "applied" unless the mutation actually landed
@@ -51833,125 +51834,210 @@ function AppHelpBox() {
 }
 
 // ── Crew Board ──────────────────────────────────────────────────────────────
-// Visual org builder for Settings. Arrange people into crews by MOVING cards
-// instead of editing each record. Parity: drag on desktop, tap-to-move on
-// touch (native DnD doesn't fire on touch). Placement only — sets foremanId
-// (crew) and coordinator (book); title/role edits stay in Team Members.
-// Edits stage locally; "Save changes" persists via the guarded saveUsers
-// (stale-write guard + audit stamp + toast). "Discard" reverts. Only the moved
-// users' foremanId/coordinator change — every other field/user is preserved.
+// v2 (2026-09-21, SW v419): tap-to-edit org builder for Settings. One column
+// per active foreman + an Unassigned pool. Tap ANY person (crew card or the
+// foreman's column header) → a person sheet (bottom sheet on phones, centred
+// dialog on laptops — same content) with ROLE chips (Foreman / Lead / Crew)
+// and CREW chips (one per foreman + Unassigned). One tap = one change.
+// No drag, no pick-up mode, no coordinator groups: books were retired in
+// v398/v399, so `coordinator` is neither read nor written here (Scoreboard's
+// coordinators board, Huddle chips and the functions still read the stored
+// values — untouched). Every tap stages in local state; "Save changes"
+// persists the WHOLE list via the guarded saveUsers (stale-write guard +
+// audit stamp + toast); "Discard" reverts to the prop. Only `title` and
+// `foremanId` are ever written by this board — every other field on every
+// user (incl. admins + deactivated people, who never render here) is spread
+// through untouched. Demoting a foreman who has crew asks where the crew
+// goes and moves crew + foreman together, so no foremanId is ever left
+// pointing at someone who is no longer a foreman.
+const crewBoardTitle = u => u.title || (["admin","justin","jeromy"].includes(u.role) ? "admin" : ["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+function crewBoardCounts(users) {
+  const live = (users || []).filter(u => u && u.active !== false);
+  const foremen = live.filter(u => crewBoardTitle(u) === "foreman");
+  const fids = new Set(foremen.map(f => f.id));
+  const unassigned = live.filter(u => { const t = crewBoardTitle(u); return t !== "foreman" && t !== "admin" && (!u.foremanId || !fids.has(u.foremanId)); });
+  return { foremen: foremen.length, unassigned: unassigned.length };
+}
 function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
-  const [list, setList]     = useState(users);
-  const [dirty, setDirty]   = useState(false);
-  const [picked, setPicked] = useState(null);   // person "picked up" for tap-to-move
-  const [saving, setSaving] = useState(false);
-  // Sync from server only when there are no unsaved local moves.
+  const [list, setList]       = useState(users);
+  const [dirty, setDirty]     = useState(false);
+  const [openId, setOpenId]   = useState(null);   // person whose sheet is open
+  const [handoff, setHandoff] = useState(null);   // {id, toTitle} — demoting a foreman with crew
+  const [saving, setSaving]   = useState(false);
+  // Sync from server only when there are no unsaved local edits.
   useEffect(() => { if (!dirty) setList(users); }, [users, dirty]);
 
-  const T = u => u.title || u.role || "";
-  const foremen    = list.filter(u => T(u) === "foreman" && u.active !== false);
-  const coordNames = [...new Set(foremen.map(f => f.coordinator).filter(Boolean))].sort();
-  const activeForemanIds = new Set(foremen.map(f => f.id));
-  const crewOf = fid => list.filter(u => u.foremanId === fid && u.active !== false)
-    .sort((a,b) => (T(a)==="lead"?0:1) - (T(b)==="lead"?0:1) || (a.name||"").localeCompare(b.name||""));
-  const noCoordForemen = foremen.filter(f => !f.coordinator);
-  // Unassigned also catches crew whose foreman was deactivated — their
-  // foremanId points at a hidden column, so without this they'd vanish
-  // from the board instead of surfacing for re-assignment.
-  const unassigned = list.filter(u => T(u) !== "foreman" && T(u) !== "admin" && u.active !== false
-    && (!u.foremanId || !activeForemanIds.has(u.foremanId)));
+  const T = crewBoardTitle;
+  const first = n => String(n || "").trim().split(/\s+/)[0] || "?";
+  const short = n => { const p = String(n || "").trim().split(/\s+/); return p[0] + (p[1] ? " " + p[1][0] + "." : ""); };
+  const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
+  const live       = list.filter(u => u && u.active !== false);
+  const foremen    = live.filter(u => T(u) === "foreman").sort(byName);
+  const foremanIds = new Set(foremen.map(f => f.id));
+  const isCrewish  = u => T(u) !== "foreman" && T(u) !== "admin";
+  const crewOf     = fid => live.filter(u => isCrewish(u) && u.foremanId === fid)
+    .sort((a, b) => (T(a) === "lead" ? 0 : 1) - (T(b) === "lead" ? 0 : 1) || byName(a, b));
+  // Unassigned also catches crew whose foreman was deactivated or demoted
+  // elsewhere — their foremanId points at a hidden column, so without this
+  // they'd vanish from the board instead of surfacing for re-assignment.
+  const unassigned = live.filter(u => isCrewish(u) && (!u.foremanId || !foremanIds.has(u.foremanId))).sort(byName);
+  const byId    = id => list.find(u => u.id === id);
+  const savedOf = id => users.find(u => u.id === id);
+  const changed = u => { const s = savedOf(u.id); return !s || T(s) !== T(u) || (s.foremanId || "") !== (u.foremanId || ""); };
+  const color   = u => getPersonColor(u.name) || "#6E7682";
 
-  const setUser = (id, patch) => { setList(l => l.map(u => u.id===id ? {...u, ...patch} : u)); setDirty(true); };
-  // target: {kind:'foreman',id} | {kind:'coord',name} | {kind:'nocoord'} | {kind:'unassigned'}
-  const applyMove = (person, target) => {
-    if (!person) { setPicked(null); return; }
-    const isForeman = T(person) === "foreman";
-    if (isForeman) {
-      if (target.kind === "coord")   setUser(person.id, { coordinator: target.name });
-      if (target.kind === "nocoord") setUser(person.id, { coordinator: "" });
-    } else {
-      if (target.kind === "foreman")    setUser(person.id, { foremanId: target.id });
-      if (target.kind === "unassigned") setUser(person.id, { foremanId: "" });
-    }
-    setPicked(null);
+  const setUser = (id, patch) => { setList(l => l.map(u => u.id === id ? { ...u, ...patch } : u)); setDirty(true); };
+  const setRole = (id, title) => {
+    const u = byId(id); if (!u || T(u) === title) return;
+    if (T(u) === "foreman" && crewOf(id).length) { setHandoff({ id, toTitle: title }); return; }
+    if (title === "foreman")      setUser(id, { title: "foreman", foremanId: "" });
+    else if (T(u) === "foreman")  setUser(id, { title, foremanId: "" });
+    else                          setUser(id, { title });
+    setHandoff(null);
   };
-  const tapCard   = person => setPicked(p => (p && p.id === person.id) ? null : person);
-  const tapTarget = target => { if (picked) applyMove(picked, target); };
-  const dragStart = (e, person) => { e.dataTransfer.setData("text/plain", person.id); e.dataTransfer.effectAllowed = "move"; };
-  const drop      = (e, target) => { e.preventDefault(); const p = list.find(u => u.id === e.dataTransfer.getData("text/plain")); applyMove(p, target); };
-  const allowDrop = e => e.preventDefault();
+  // target = foreman id, or "" for Unassigned. Crew AND the demoted foreman
+  // move together to the same place.
+  const finishHandoff = (target) => {
+    if (!handoff) return;
+    const { id, toTitle } = handoff;
+    const ids = new Set(crewOf(id).map(p => p.id));
+    setList(l => l.map(u => ids.has(u.id) ? { ...u, foremanId: target } : u.id === id ? { ...u, title: toTitle, foremanId: target } : u));
+    setDirty(true); setHandoff(null);
+  };
+  const moveTo = (id, fid) => setUser(id, { foremanId: fid });
+  const openSheet  = id => { setOpenId(id); setHandoff(null); };
+  const closeSheet = () => { setOpenId(null); setHandoff(null); };
 
-  const save = async () => { setSaving(true); try { await onSave(list); } finally { setSaving(false); setDirty(false); } };
-  const discard = () => { setList(users); setDirty(false); setPicked(null); };
+  const save = async () => { setSaving(true); try { await onSave(list); } finally { setSaving(false); setDirty(false); setOpenId(null); setHandoff(null); } };
+  const discard = () => { setList(users); setDirty(false); closeSheet(); };
 
-  const isPicked = id => picked && picked.id === id;
-  const card = (person, extra={}) => (
-    <div key={person.id}
-      draggable
-      onDragStart={e => dragStart(e, person)}
-      onClick={e => { e.stopPropagation(); if (extra.onCardClick) extra.onCardClick(); else tapCard(person); }}
-      style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 9px", borderRadius:7,
-        background: isPicked(person.id) ? `${C.accent}22` : C.surface,
-        border:`1px solid ${isPicked(person.id) ? C.accent : C.border}`,
-        cursor:"pointer", fontSize:12, color:C.text, ...(extra.style||{}) }}>
-      <span style={{ width:7, height:7, borderRadius:99, background: getPersonColor(person.name) || "#6E7682", flexShrink:0 }}/>
-      <span style={{ fontWeight: T(person)==="foreman"?700:500 }}>{(person.name||"?").split(" ")[0]} {(person.name||"").split(" ")[1]?.[0]||""}</span>
-      <span style={{ fontSize:9, color:C.dim, textTransform:"uppercase", marginLeft:"auto" }}>{T(person)==="crew"?"app":T(person)}</span>
+  // Pending-changes review — what Save will write, in words.
+  const pending = list.filter(u => savedOf(u.id) && changed(u)).map(u => {
+    const s = savedOf(u.id); const parts = [];
+    if (T(s) !== T(u)) parts.push(`${T(s)} → ${T(u)}`);
+    if ((s.foremanId || "") !== (u.foremanId || "")) { const f = byId(u.foremanId); parts.push(`→ ${f ? first(f.name) + "'s crew" : "Unassigned"}`); }
+    return `${first(u.name)}: ${parts.join(", ")}`;
+  });
+
+  const dot = (c, size = 8) => <span style={{ width: size, height: size, borderRadius: 99, background: c, flexShrink: 0, display: "inline-block" }}/>;
+  const personCard = (u) => (
+    <div key={u.id} onClick={() => openSheet(u.id)}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, cursor: "pointer", fontSize: 13, userSelect: "none",
+        background: changed(u) ? `${C.accent}18` : C.surface, border: `1px solid ${changed(u) ? C.accent : C.border}`, color: C.text }}>
+      {dot(color(u))}
+      <span style={{ flex: 1, fontWeight: 500 }}>{short(u.name)}</span>
+      <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700, color: T(u) === "lead" ? C.accent : C.dim }}>{T(u)}</span>
     </div>
   );
+  const chip = (label, on, onClick, dotColor, ghost) => (
+    <button key={label} type="button" onClick={onClick}
+      style={{ borderRadius: 99, border: `1px ${ghost ? "dashed" : "solid"} ${on ? C.accent : C.border}`, background: on ? C.accent : C.surface,
+        color: on ? "#fff" : ghost ? C.dim : C.text, fontSize: 13, fontWeight: on ? 700 : 500, padding: "7px 12px", cursor: "pointer",
+        display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "inherit" }}>
+      {dotColor ? dot(dotColor, 7) : null}{label}
+    </button>
+  );
+  const lbl = t => <div style={{ fontSize: 10, letterSpacing: "0.1em", fontWeight: 700, color: C.dim, margin: "12px 0 6px" }}>{t}</div>;
+  const chips = kids => <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{kids}</div>;
 
-  const foremanCard = (f) => (
-    <div key={f.id}
-      onDragOver={allowDrop} onDrop={e => drop(e, { kind:"foreman", id:f.id })}
-      onClick={() => { if (picked && T(picked)!=="foreman") applyMove(picked, { kind:"foreman", id:f.id }); }}
-      style={{ background:C.card, border:`1px solid ${C.border}`, borderTop:`3px solid ${getPersonColor(f.name)||"#6E7682"}`,
-        borderRadius:10, padding:"8px 10px", minWidth:150, flex:"1 1 170px" }}>
-      {card(f, { onCardClick: () => { if (picked && T(picked)!=="foreman") applyMove(picked, { kind:"foreman", id:f.id }); else tapCard(f); },
-                 style:{ background:"transparent", border:"none", padding:"0 0 6px", borderRadius:0 } })}
-      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-        {crewOf(f.id).map(p => card(p))}
-        {crewOf(f.id).length === 0 && <div style={{ fontSize:10, color:C.muted, fontStyle:"italic", padding:"2px 0" }}>drop crew here</div>}
+  const open = openId ? byId(openId) : null;
+  const phone = typeof window !== "undefined" && window.innerWidth < 700;
+  const sheet = open && (
+    <div onClick={closeSheet}
+      style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.38)", display: "flex", justifyContent: "center", alignItems: phone ? "flex-end" : "center" }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: phone ? "16px 16px 0 0" : 14, width: "100%", maxWidth: 520,
+          padding: "14px 16px 20px", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 12px 32px -12px rgba(16,24,40,.35)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          {dot(color(open), 12)}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: C.text }}>{open.name}</div>
+            <div style={{ fontSize: 12, color: C.dim }}>
+              {T(open)} · {T(open) === "foreman" ? `${crewOf(open.id).length} crew` : (byId(open.foremanId) && foremanIds.has(open.foremanId)) ? `${first(byId(open.foremanId).name)}'s crew` : "Unassigned"}
+            </div>
+          </div>
+          <button type="button" onClick={closeSheet} aria-label="Close" style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 4 }}><Icon name="x" size={16}/></button>
+        </div>
+        {lbl("ROLE")}
+        {chips(["foreman", "lead", "crew"].map(r => chip(r[0].toUpperCase() + r.slice(1), T(open) === r, () => setRole(open.id, r))))}
+        {handoff && handoff.id === open.id && (
+          <div style={{ marginTop: 10, padding: "10px 12px", border: `1px solid ${C.orange}`, background: `${C.orange}14`, borderRadius: 10 }}>
+            <div style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>
+              <b style={{ color: C.orange }}>{first(open.name)} has {crewOf(open.id).length} crew.</b> Hand them (and {first(open.name)}) to…
+            </div>
+            {chips([
+              ...foremen.filter(f => f.id !== open.id).map(f => chip(first(f.name), false, () => finishHandoff(f.id), color(f))),
+              chip("Unassigned", false, () => finishHandoff(""), null, true),
+              chip("Cancel", false, () => setHandoff(null), null, true),
+            ])}
+          </div>
+        )}
+        {T(open) !== "foreman" && (<>
+          {lbl("CREW")}
+          {chips([
+            ...foremen.map(f => chip(first(f.name), open.foremanId === f.id, () => moveTo(open.id, f.id), color(f))),
+            chip("Unassigned", !open.foremanId || !foremanIds.has(open.foremanId), () => moveTo(open.id, ""), null, true),
+          ])}
+        </>)}
+        <button type="button" onClick={closeSheet}
+          style={{ marginTop: 16, width: "100%", background: C.accent, color: "#fff", border: `1px solid ${C.accent}`, borderRadius: 8, fontWeight: 700, fontSize: 13, padding: "10px 16px", cursor: "pointer", fontFamily: "inherit" }}>
+          Done
+        </button>
       </div>
     </div>
   );
 
-  const group = (label, color, target, children) => (
-    <div onDragOver={allowDrop} onDrop={e => drop(e, target)} onClick={() => tapTarget(target)}
-      style={{ border:`1px solid ${C.border}`, borderRadius:12, padding:"10px 12px", marginBottom:12, background:C.bg }}>
-      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, paddingBottom:6, borderBottom:`2px solid ${color}33` }}>
-        <span style={{ width:9, height:9, borderRadius:99, background:color }}/>
-        <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:18, letterSpacing:"0.06em", color }}>{label}</span>
-      </div>
-      <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"flex-start" }}>{children}</div>
+  const sectionTitle = (label, count) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
+      <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.06em", color: C.dim }}>{label}</span>
+      <span style={{ fontSize: 11, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 99, padding: "1px 8px", color: C.dim }}>{count}</span>
     </div>
   );
 
   return (
     <div>
-      {picked && (
-        <div style={{ position:"sticky", top:0, zIndex:5, background:`${C.accent}18`, border:`1px solid ${C.accent}`,
-          borderRadius:8, padding:"8px 12px", marginBottom:10, fontSize:12, color:C.text, display:"flex", alignItems:"center", gap:10 }}>
-          <Icon name="arrowRight" size={13}/> Moving <b>{picked.name}</b> — tap a {T(picked)==="foreman"?"coordinator":"crew/foreman"} to drop.
-          <button onClick={() => setPicked(null)} style={{ marginLeft:"auto", background:"none", border:`1px solid ${C.border}`, borderRadius:6, color:C.dim, fontSize:11, padding:"3px 9px", cursor:"pointer" }}>Cancel</button>
+      <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+        Tap anyone to change their role or move them to another crew. Nothing saves until you tap Save changes.
+      </div>
+      {sectionTitle("Crews", `${foremen.length} foremen`)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+        {foremen.map(f => { const crew = crewOf(f.id); return (
+          <div key={f.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", paddingBottom: 8 }}>
+            <div style={{ height: 4, background: color(f) }}/>
+            <div onClick={() => openSheet(f.id)}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 8px", cursor: "pointer", borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ fontWeight: 700, fontSize: 14, flex: 1, color: C.text }}>{short(f.name)}</span>
+              <span style={{ fontSize: 11, color: C.dim }}>{crew.length} crew</span>
+              <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: changed(f) ? 700 : 400, color: changed(f) ? C.accent : C.dim }}>{changed(f) ? "changed" : "foreman"}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 8px 0" }}>
+              {crew.map(personCard)}
+              {crew.length === 0 && <div style={{ fontSize: 11, color: C.dim, fontStyle: "italic", padding: "2px 2px 0" }}>no crew yet</div>}
+            </div>
+          </div>
+        ); })}
+        {foremen.length === 0 && <div style={{ fontSize: 12, color: C.dim, fontStyle: "italic" }}>No foremen yet — tap someone below and make them one.</div>}
+      </div>
+      {sectionTitle("Unassigned", unassigned.length)}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: 10, background: C.card, border: `1px dashed ${C.border}`, borderRadius: 12 }}>
+        {unassigned.map(personCard)}
+        {unassigned.length === 0 && <div style={{ fontSize: 11, color: C.dim, fontStyle: "italic" }}>Everyone's on a crew.</div>}
+      </div>
+      {pending.length > 0 && (
+        <div style={{ marginTop: 12, fontSize: 12, color: C.dim }}>
+          <b style={{ color: C.orange }}>{pending.length} unsaved change{pending.length > 1 ? "s" : ""}</b>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", marginTop: 4 }}>{pending.map((p, i) => <span key={i}>{p}</span>)}</div>
         </div>
       )}
-      <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>
-        Drag (desktop) or tap-to-move (mobile) to set crews. Sets crew &amp; coordinator only — titles stay in Team Members below.
-      </div>
-      {coordNames.map(cn => group(cn, getPersonColor(cn) || C.accent, { kind:"coord", name:cn },
-        foremen.filter(f => f.coordinator === cn).map(foremanCard)))}
-      {noCoordForemen.length > 0 && group("No coordinator", "#6E7682", { kind:"nocoord" }, noCoordForemen.map(foremanCard))}
-      {group("Unassigned (no crew)", "#6E7682", { kind:"unassigned" },
-        unassigned.length ? unassigned.map(p => card(p)) : [<div key="_e" style={{ fontSize:11, color:C.muted, fontStyle:"italic" }}>Everyone's on a crew.</div>])}
-      <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6 }}>
-        <button onClick={save} disabled={!dirty || saving}
-          style={{ background: dirty ? C.accent : C.surface, color: dirty ? "#000" : C.dim, border:`1px solid ${dirty?C.accent:C.border}`,
-            borderRadius:8, fontWeight:700, fontSize:13, padding:"8px 18px", cursor: dirty&&!saving?"pointer":"default", fontFamily:"inherit" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+        <button type="button" onClick={save} disabled={!dirty || saving}
+          style={{ background: dirty ? C.accent : C.surface, color: dirty ? "#fff" : C.dim, border: `1px solid ${dirty ? C.accent : C.border}`,
+            borderRadius: 8, fontWeight: 700, fontSize: 13, padding: "9px 18px", cursor: dirty && !saving ? "pointer" : "default", fontFamily: "inherit" }}>
           {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
         </button>
-        {dirty && <button onClick={discard} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:8, color:C.dim, fontSize:12, padding:"8px 14px", cursor:"pointer", fontFamily:"inherit" }}>Discard</button>}
-        {dirty && <span style={{ fontSize:11, color:C.orange, fontWeight:600 }}>Unsaved changes</span>}
+        {dirty && <button type="button" onClick={discard} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.dim, fontSize: 12, padding: "9px 14px", cursor: "pointer", fontFamily: "inherit" }}>Discard</button>}
       </div>
+      {sheet}
     </div>
   );
 }
@@ -58581,7 +58667,7 @@ function App() {
           />
           {can(identity,"users.manage")&&(
             <div style={{padding:"0 26px 40px"}}>
-              <SettingsSection title="CREW BOARD" defaultOpen={false}>
+              <SettingsSection title={(() => { const c = crewBoardCounts(users); return `CREW BOARD · ${c.foremen} FOREMEN · ${c.unassigned} UNASSIGNED`; })()} defaultOpen={false}>
                 <CrewBoard users={users} onSave={saveUsers} getPersonColor={getPersonColor}/>
               </SettingsSection>
               <SettingsSection title="TEAM MEMBERS" defaultOpen={false}>
