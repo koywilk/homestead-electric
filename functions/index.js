@@ -4394,6 +4394,152 @@ exports.sendTestLeadMeetingPrep = functions
   });
 
 // ─────────────────────────────────────────────────────────────
+// SCHEDULED — Tuesday 6:00pm Mountain Time
+// Foreman + Lead Meeting Prep — fills the ONE running notes doc that is attached
+// to the Wednesday 6:30 meeting. Inserts the coming meeting's section at the top:
+// action items carried from last week (unchecked only), open needs, this week's
+// + next week's Simpro schedule, hours vs bid, inspections since last meeting,
+// crew out, blank action items. Content comes from the PURE builder
+// ./foremanMeetingPrep.js so a dry run renders byte-identical output.
+// Data safety: read-only on Firestore (jobs, needs, crewPTO, upcoming_jobs); ZERO Firestore
+// writes. The only write is a Docs API insert at index 1 of the notes doc —
+// it never deletes or restyles existing text (updates are range-limited to the
+// freshly inserted characters). Koy shares the doc Editor with
+// <project>@appspot.gserviceaccount.com; unreadable ⇒ the carried section
+// degrades to a note and the run still writes the rest.
+// ─────────────────────────────────────────────────────────────
+const foremanPrepLib = require("./foremanMeetingPrep.js");
+// "Foreman + Lead Meeting — Weekly Notes" (Drive folder: Head of Residential — 90-Day Plan)
+const FOREMAN_NOTES_DOC_ID = "1t7i3gFiLsWmb-htGleutCZFh6TXSAnNbqbq9_ma3e80";
+// Residential crew — a job is in the meeting when its foreman or lead is one of
+// these (first name, case-insensitive). Needs match on foreman/assignee/creator.
+const RES_CREW = ["Keegan", "Daegan", "Gage", "Treycen"];
+
+async function runForemanMeetingPrep({ testRun = false } = {}) {
+  const now = new Date();
+  const mtNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
+  const today = new Date(mtNow.getFullYear(), mtNow.getMonth(), mtNow.getDate());
+  const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const nextFriday = new Date(monday); nextFriday.setDate(monday.getDate() + 11);
+  const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const windowStart = ymdOf(monday), windowEnd = ymdOf(nextFriday);
+
+  // 1 · Firestore reads (jobs + needs are wrapped {data:{...}}; settings docs are not).
+  const [snap, needSnap, ptoSnap, upSnap] = await Promise.all([
+    db.collection("jobs").get(),
+    db.collection("needs").get(),
+    db.doc("settings/crewPTO").get(),
+    db.doc("settings/upcoming_jobs").get(),
+  ]);
+  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}), updated_at: raw.updated_at || "" }; });
+  const needs = needSnap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; });
+  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+  const upcomingRaw = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
+
+  // 1b · Upcoming/past-due rows and "what shipped" (Training) come from the lead
+  //      prep's pure builders so both meetings agree on them. FEATURES.md read from
+  //      GitHub like the lead prep does; failure ⇒ null ⇒ the section degrades.
+  let featuresMd = null;
+  try {
+    const resp = await fetch(FEATURES_MD_RAW_URL, { signal: AbortSignal.timeout(15000) });
+    if (resp.ok) featuresMd = await resp.text();
+  } catch (e) { functions.logger.warn("foremanMeetingPrep FEATURES.md fetch error", { error: e.message }); }
+  let upcoming = null, shipped = null;
+  try {
+    const leadModel = leadPrepLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now });
+    upcoming = leadModel.upcoming;
+  } catch (e) { functions.logger.warn("foremanMeetingPrep upcoming build failed", { error: e.message }); }
+  try { if (featuresMd) shipped = leadPrepLib.extractShipped(featuresMd, new Date(now.toLocaleString("en-US", { timeZone: TZ }))); }
+  catch (e) { functions.logger.warn("foremanMeetingPrep shipped parse failed", { error: e.message }); }
+
+  // 2 · Simpro schedule, this Monday → next Friday (same paging as the Friday Packet).
+  let scheduleEntries = [];
+  try {
+    let page = 1;
+    while (page <= 60) {
+      const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+      if (!resp.ok) { functions.logger.warn("foremanMeetingPrep simpro schedule page failed", { page, status: resp.status }); break; }
+      const batch = await resp.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      scheduleEntries.push(...batch);
+      if (batch.length < 250) break;
+      page++;
+    }
+    scheduleEntries = scheduleEntries.filter(s => s && s.Date && s.Date >= windowStart && s.Date <= windowEnd);
+  } catch (e) { functions.logger.warn("foremanMeetingPrep simpro schedule fetch error", { error: e.message }); scheduleEntries = []; }
+
+  // 3 · Simpro margin + per-phase labor hours (rough / finish / extras cost centers)
+  //     for active residential jobs, 5 jobs in flight at a time.
+  const simproTotalsById = await (async () => {
+    try {
+      const wanted = [];
+      const seen = new Set();
+      // Active residential jobs + anything residential completed in the last 30 days.
+      jobs.forEach(j => {
+        if (!j || !j.name || j.type === "quote" || j.deleted) return;
+        if (!foremanPrepLib.isResJob(j, RES_CREW)) return;
+        const done = j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
+        if (done ? !foremanPrepLib.recentlyCompleted(j, today) : (j.archived || j.archivedAt)) return;
+        const sn = j.simproNo ? String(j.simproNo) : "";
+        if (sn && !seen.has(sn) && wanted.length < 60) { seen.add(sn); wanted.push(sn); }
+      });
+      const getJson = async (path) => {
+        const resp = await fetch(`${SIMPRO_BASE}${path}`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+        return resp.ok ? resp.json() : null;
+      };
+      return await foremanPrepLib.collectSimproHours(wanted, getJson);
+    } catch (e) { functions.logger.warn("foremanMeetingPrep simpro hours fetch error", { error: e.message }); return {}; }
+  })();
+
+  // 4 · Read the notes doc (last week's unchecked action items). Unreadable ⇒ null ⇒ section degrades.
+  const docsAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents"] });
+  const docs = google.docs({ version: "v1", auth: docsAuth });
+  let lastActions = null;
+  try {
+    const res = await docs.documents.get({ documentId: FOREMAN_NOTES_DOC_ID });
+    lastActions = foremanPrepLib.parseLastActions(res.data || null);
+  } catch (e) { functions.logger.warn("foremanMeetingPrep notes doc read failed", { error: e.message }); }
+
+  // 5 · Build + render (pure — no I/O inside).
+  const model = foremanPrepLib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming, shipped, now, crew: RES_CREW });
+  const lines = foremanPrepLib.renderLines(model);
+  const requests = foremanPrepLib.docsRequests(lines, 1);
+
+  // 6 · Insert at the top of the doc. Range-limited to the inserted text; nothing existing is touched.
+  try {
+    await docs.documents.batchUpdate({ documentId: FOREMAN_NOTES_DOC_ID, requestBody: { requests } });
+  } catch (e) {
+    functions.logger.error("foremanMeetingPrep docs insert failed", { error: e.message });
+    await sendToName("Koy", { title: "⚠️ Foreman + Lead prep failed", body: `Docs write error: ${e.message.slice(0, 120)}` });
+    return { ok: false, error: e.message };
+  }
+
+  const docLink = `https://docs.google.com/document/d/${FOREMAN_NOTES_DOC_ID}/edit`;
+  await sendToName("Koy", {
+    title: testRun ? "📝 Foreman + Lead notes (test) ready" : "📝 Foreman + Lead notes ready",
+    body: `${model.heading} is at the top of the meeting doc`,
+    jobId: "", section: "",
+  });
+  functions.logger.info("foremanMeetingPrep inserted", { docLink, testRun, ...model.counts });
+  return { ok: true, docLink, counts: model.counts };
+}
+
+exports.foremanMeetingPrep = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .pubsub.schedule("0 18 * * 2")
+  .timeZone(TZ)
+  .onRun(async () => { await runForemanMeetingPrep(); return null; });
+
+// Manual trigger — a full real run any day so the pipeline can be verified
+// without waiting for a Tuesday. Inserts a section like the scheduled run does.
+exports.sendTestForemanMeetingPrep = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    return await runForemanMeetingPrep({ testRun: true });
+  });
+
+// ─────────────────────────────────────────────────────────────
 // DRIVE — shared helpers for auto-folder-create & nightly sync
 // ─────────────────────────────────────────────────────────────
 
