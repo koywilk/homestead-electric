@@ -4436,19 +4436,20 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
   const upcomingRaw = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
 
-  // 1b · Upcoming/past-due rows and "what shipped" (Training) come from the lead
-  //      prep's pure builders so both meetings agree on them. FEATURES.md read from
-  //      GitHub like the lead prep does; failure ⇒ null ⇒ the section degrades.
+  // 1b · "What shipped" (Training) uses the lead prep's FEATURES.md parser, read
+  //      from GitHub like the lead prep does; failure ⇒ null ⇒ the section degrades.
   let featuresMd = null;
   try {
     const resp = await fetch(FEATURES_MD_RAW_URL, { signal: AbortSignal.timeout(15000) });
     if (resp.ok) featuresMd = await resp.text();
   } catch (e) { functions.logger.warn("foremanMeetingPrep FEATURES.md fetch error", { error: e.message }); }
-  let upcoming = null, shipped = null;
-  try {
-    const leadModel = leadPrepLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now });
-    upcoming = leadModel.upcoming;
-  } catch (e) { functions.logger.warn("foremanMeetingPrep upcoming build failed", { error: e.message }); }
+  // Upcoming = every row on the app's Upcoming tab (as-is) PLUS the job-board
+  // rows the lead prep computes (dated rough/finish starts, pipeline); the pure
+  // builder de-dups by job name.
+  const upcoming = upcomingRaw;
+  let upcomingBoard = null, shipped = null;
+  try { upcomingBoard = leadPrepLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now }).upcoming; }
+  catch (e) { functions.logger.warn("foremanMeetingPrep board upcoming build failed", { error: e.message }); }
   try { if (featuresMd) shipped = leadPrepLib.extractShipped(featuresMd, new Date(now.toLocaleString("en-US", { timeZone: TZ }))); }
   catch (e) { functions.logger.warn("foremanMeetingPrep shipped parse failed", { error: e.message }); }
 
@@ -4505,7 +4506,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   } catch (e) { functions.logger.warn("foremanMeetingPrep notes doc read failed", { error: e.message }); }
 
   // 5 · Build + render (pure — no I/O inside).
-  const model = foremanPrepLib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming, shipped, now, crew: RES_CREW });
+  const model = foremanPrepLib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming, upcomingBoard, shipped, now, crew: RES_CREW });
   const lines = foremanPrepLib.renderLines(model);
   const requests = foremanPrepLib.docsRequests(lines, 1);
 

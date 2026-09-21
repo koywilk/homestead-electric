@@ -184,10 +184,12 @@ async function collectSimproHours(simproNos, getJson, { concurrency = 5 } = {}) 
 
 // ── model ────────────────────────────────────────────────────────────────────
 function buildModel(inputs) {
-  // upcoming: rows from leadMeetingPrep.buildModel().upcoming ({name, kind, who, start, startsIn, note});
+  // upcoming: the raw rows of settings/upcoming_jobs (the app's Upcoming tab);
+  // upcomingBoard: leadMeetingPrep.buildModel().upcoming — dated rough/finish starts
+  //   and pipeline rows off the job board ({name, kind, who, start, startsIn, note});
   // shipped: rows from leadMeetingPrep.extractShipped() ({title, version, date}) — app trainings.
   const { jobs = [], needs = [], pto = [], scheduleEntries = [], simproTotalsById = {},
-          lastActions = null, upcoming = null, shipped = null, now, crew = [] } = inputs || {};
+          lastActions = null, upcoming = null, upcomingBoard = null, shipped = null, now, crew = [] } = inputs || {};
   const realNow = now instanceof Date ? now : new Date();
   const mtNow = new Date(realNow.toLocaleString("en-US", { timeZone: TZ }));
   const today = startOfDay(mtNow);
@@ -343,24 +345,39 @@ function buildModel(inputs) {
     ["passed", "failed"].forEach(k => { m.inspections[k].sort((a, b) => b.d - a.d); m.inspections[k] = m.inspections[k].map(r => r.line); });
   } catch (e) { m.inspections.error = true; }
 
-  // Upcoming and past due — rows already built by the lead prep's pipeline logic
-  // (pipeline + quotes + dated rough starts + finish starts). Residential = the
-  // foreman is one of ours, or nobody has been assigned yet.
+  // Upcoming and past due — every row on the app's Upcoming tab
+  // (settings/upcoming_jobs.items: name, projectedStart, startConfirmed, foreman,
+  // customer, sales, city, notes). Past due = projected start before the meeting.
+  // Undated rows sit at the bottom of Upcoming. (Koy, 2026-09-21: all of them, no filter.)
   try {
     if (upcoming == null) m.upcoming.error = true;
     else {
-      const crewSet = new Set(arr(crew).map(n => first(n).toLowerCase()));
       arr(upcoming).forEach(u => {
-        if (!u || !u.name) return;
-        const who = String(u.who || "");
-        const ours = !crewSet.size || crewSet.has(first(who).toLowerCase()) || /no foreman/i.test(who) || !who;
-        if (!ours) return;
+        if (!u || !String(u.name || "").trim()) return;
+        const d = toDateAny(u.projectedStart);
+        const n = d ? daysBetween(d, meeting) : null;
+        const bits = [];
+        if (d) bits.push(`${fmtShort(d)}${u.startConfirmed ? " (confirmed)" : " (not confirmed)"}`); else bits.push("no start date");
+        if (u.foreman) bits.push(first(u.foreman));
+        if (u.customer || u.sales) bits.push(clip(u.customer || u.sales, 30));
+        if (u.city) bits.push(clip(u.city, 20));
+        if (u.notes) bits.push(clip(u.notes, 70));
+        const text = `${String(u.name).trim()} — ${bits.join(" — ")}`;
+        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${String(u.name).trim()} — ${fmtShort(d)} (${-n} day${-n === 1 ? "" : "s"} past)${bits.slice(1).length ? " — " + bits.slice(1).join(" — ") : ""}` });
+        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text });
+      });
+      // Plus the job-board rows (dated rough starts, finish starts, pipeline) the
+      // lead prep already computes — skipped when the same job is on the tab.
+      const norm = (n) => String(n || "").toLowerCase().replace(/\(finish\)/g, "").replace(/#\d+\s*[-–—]?\s*/g, "").replace(/[^a-z0-9]/g, "");
+      const onTab = new Set(arr(upcoming).map(u => norm(u && u.name)).filter(Boolean));
+      arr(upcomingBoard).forEach(u => {
+        if (!u || !u.name || onTab.has(norm(u.name))) return;
         const d = u.start ? toDateAny(u.start) : null;
-        const n = (typeof u.startsIn === "number") ? u.startsIn : null;
-        const when = d ? fmtShort(d) : "no date";
-        const tail = [u.kind, who && !/no foreman/i.test(who) ? first(who) : "", u.note ? clip(u.note, 70) : ""].filter(Boolean).join(", ");
-        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${when} (${-n} day${-n === 1 ? "" : "s"} past)${tail ? ` — ${tail}` : ""}` });
-        else m.upcoming.soon.push({ n: n == null ? 999 : n, text: `${u.name} — ${when}${tail ? ` — ${tail}` : ""}` });
+        const n = d ? daysBetween(d, meeting) : null;
+        const who = String(u.who || "");
+        const tail = [u.kind, who && !/no foreman/i.test(who) ? first(who) : "", u.note ? clip(u.note, 70) : ""].filter(Boolean).join(" — ");
+        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${fmtShort(d)} (${-n} day${-n === 1 ? "" : "s"} past)${tail ? ` — ${tail}` : ""}` });
+        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${u.name} — ${d ? fmtShort(d) : "no date"}${tail ? ` — ${tail}` : ""}` });
       });
       m.upcoming.pastDue.sort((a, b) => a.n - b.n); m.upcoming.soon.sort((a, b) => a.n - b.n);
       m.upcoming.pastDue = m.upcoming.pastDue.map(r => r.text); m.upcoming.soon = m.upcoming.soon.map(r => r.text);
@@ -481,7 +498,7 @@ function renderLines(m) {
   H3("Past due");
   list(m.upcoming.pastDue, m.upcoming.error, "Nothing past its start date.");
   H3("Upcoming");
-  list(m.upcoming.soon, m.upcoming.error, "Nothing dated in the next 60 days.");
+  list(m.upcoming.soon, m.upcoming.error, "Nothing on the Upcoming tab.");
 
   H2("Hours vs bid");
   if (m.hours.error) G("Could not load Simpro hours.");

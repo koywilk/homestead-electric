@@ -91,9 +91,8 @@ const TZ = "America/Denver";
   try { lastActions = lib.parseLastActions((await docs.documents.get({ documentId: FOREMAN_NOTES_DOC_ID })).data); }
   catch (e) { console.log("Notes doc read failed (share it Editor with the service account):", String(e.message).slice(0, 160)); }
 
-  const upcomingRows = leadLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now }).upcoming;
   const shipped = featuresMd ? leadLib.extractShipped(featuresMd, new Date(now.toLocaleString("en-US", { timeZone: TZ }))) : null;
-  const model = lib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming: upcomingRows, shipped, now, crew: RES_CREW });
+  const model = lib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming: upcomingRaw, upcomingBoard: leadLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now }).upcoming, shipped, now, crew: RES_CREW });
   const lines = lib.renderLines(model);
   console.log("counts", model.counts);
   console.log("\n--- section text ---");
