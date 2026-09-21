@@ -537,33 +537,34 @@ function docsRequests(lines, at = 1) {
   const size = { h1: 18, h2: 14, h3: 12, h4: 11, p: 11, grey: 9, bullet: 11, check: 11 };
   const black = { color: { rgbColor: { red: 0, green: 0, blue: 0 } } };
   const grey = { color: { rgbColor: { red: 0.5, green: 0.5, blue: 0.5 } } };
-  ranges.forEach(r => {
-    reqs.push({ updateParagraphStyle: { range: { startIndex: r.start, endIndex: r.end - 1 }, paragraphStyle: { namedStyleType: named[r.kind] }, fields: "namedStyleType" } });
+  ranges.forEach((r, li) => {
+    const tag = (q) => { q._line = li; return q; };
+    reqs.push(tag({ updateParagraphStyle: { range: { startIndex: r.start, endIndex: r.end - 1 }, paragraphStyle: { namedStyleType: named[r.kind] }, fields: "namedStyleType" } }));
     if (!r.text) return;
     // Inserted text inherits whatever style sits at the insertion point (the doc's
     // grey intro line), so every run gets an explicit, deterministic text style.
-    reqs.push({ updateTextStyle: {
+    reqs.push(tag({ updateTextStyle: {
       range: { startIndex: r.start, endIndex: r.end - 1 },
       textStyle: { foregroundColor: r.kind === "grey" ? grey : black, fontSize: { magnitude: size[r.kind], unit: "PT" },
                    bold: r.kind === "h1" || r.kind === "h2" || r.kind === "h3" || r.kind === "h4", italic: false, strikethrough: false },
       fields: "foregroundColor,fontSize,bold,italic,strikethrough",
-    } });
+    } }));
     (r.spans || []).forEach(sp => {
-      reqs.push({ updateTextStyle: {
+      reqs.push(tag({ updateTextStyle: {
         range: { startIndex: r.start + sp.start, endIndex: r.start + sp.start + sp.len },
         textStyle: { foregroundColor: { color: { rgbColor: { red: sp.rgb[0], green: sp.rgb[1], blue: sp.rgb[2] } } }, bold: !!sp.bold },
         fields: "foregroundColor,bold",
-      } });
+      } }));
     });
   });
   // Bullets: group consecutive same-kind runs so each list is one request.
   let run = null;
   // endIndex stops BEFORE the run's last newline: a range that reaches the next
   // paragraph's start index pulls that paragraph (the following heading) into the list.
-  const flush = () => { if (run) { reqs.push({ createParagraphBullets: { range: { startIndex: run.start, endIndex: run.end - 1 }, bulletPreset: run.kind === "check" ? "BULLET_CHECKBOX" : "BULLET_DISC_CIRCLE_SQUARE" } }); run = null; } };
-  ranges.forEach(r => {
+  const flush = () => { if (run) { reqs.push({ _line: run.line, createParagraphBullets: { range: { startIndex: run.start, endIndex: run.end - 1 }, bulletPreset: run.kind === "check" ? "BULLET_CHECKBOX" : "BULLET_DISC_CIRCLE_SQUARE" } }); run = null; } };
+  ranges.forEach((r, li) => {
     if (r.kind === "bullet" || r.kind === "check") {
-      if (run && run.kind === r.kind) run.end = r.end; else { flush(); run = { kind: r.kind, start: r.start, end: r.end }; }
+      if (run && run.kind === r.kind) run.end = r.end; else { flush(); run = { kind: r.kind, start: r.start, end: r.end, line: li }; }
     } else flush();
   });
   flush();
@@ -571,8 +572,10 @@ function docsRequests(lines, at = 1) {
   // leading tabs that nest the schedule rows, which deletes characters and shifts
   // every index below it; working from the highest index down means nothing that
   // still has to run sits below a deletion. (Learned the hard way, 2026-09-21.)
-  const startOf = (q) => (q.updateParagraphStyle || q.updateTextStyle || q.createParagraphBullets).range.startIndex;
-  const rest = reqs.slice(1).sort((a, b) => startOf(b) - startOf(a));
+  // Sort by LINE (not raw index) so a line's whole-line black style still runs
+  // before its colored spans; Array.sort is stable, so same-line order is kept.
+  const rest = reqs.slice(1).sort((a, b) => b._line - a._line);
+  rest.forEach(q => { delete q._line; });
   return [reqs[0], ...rest];
 }
 
