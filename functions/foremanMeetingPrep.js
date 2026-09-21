@@ -538,7 +538,7 @@ function docsRequests(lines, at = 1) {
   const black = { color: { rgbColor: { red: 0, green: 0, blue: 0 } } };
   const grey = { color: { rgbColor: { red: 0.5, green: 0.5, blue: 0.5 } } };
   ranges.forEach(r => {
-    reqs.push({ updateParagraphStyle: { range: { startIndex: r.start, endIndex: r.end }, paragraphStyle: { namedStyleType: named[r.kind] }, fields: "namedStyleType" } });
+    reqs.push({ updateParagraphStyle: { range: { startIndex: r.start, endIndex: r.end - 1 }, paragraphStyle: { namedStyleType: named[r.kind] }, fields: "namedStyleType" } });
     if (!r.text) return;
     // Inserted text inherits whatever style sits at the insertion point (the doc's
     // grey intro line), so every run gets an explicit, deterministic text style.
@@ -558,7 +558,9 @@ function docsRequests(lines, at = 1) {
   });
   // Bullets: group consecutive same-kind runs so each list is one request.
   let run = null;
-  const flush = () => { if (run) { reqs.push({ createParagraphBullets: { range: { startIndex: run.start, endIndex: run.end }, bulletPreset: run.kind === "check" ? "BULLET_CHECKBOX" : "BULLET_DISC_CIRCLE_SQUARE" } }); run = null; } };
+  // endIndex stops BEFORE the run's last newline: a range that reaches the next
+  // paragraph's start index pulls that paragraph (the following heading) into the list.
+  const flush = () => { if (run) { reqs.push({ createParagraphBullets: { range: { startIndex: run.start, endIndex: run.end - 1 }, bulletPreset: run.kind === "check" ? "BULLET_CHECKBOX" : "BULLET_DISC_CIRCLE_SQUARE" } }); run = null; } };
   ranges.forEach(r => {
     if (r.kind === "bullet" || r.kind === "check") {
       if (run && run.kind === r.kind) run.end = r.end; else { flush(); run = { kind: r.kind, start: r.start, end: r.end }; }
@@ -568,4 +570,4 @@ function docsRequests(lines, at = 1) {
   return reqs;
 }
 
-module.exports = { parseLastActions, buildModel, renderLines, docsRequests, collectSimproHours, toDateAny, isResJob, TZ, SECTION_TAG };
+module.exports = { parseLastActions, buildModel, renderLines, docsRequests, collectSimproHours, recentlyCompleted, roughRecentlyDone, toDateAny, isResJob, TZ, SECTION_TAG };

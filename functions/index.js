@@ -4394,9 +4394,9 @@ exports.sendTestLeadMeetingPrep = functions
   });
 
 // ─────────────────────────────────────────────────────────────
-// SCHEDULED — Tuesday 6:00pm Mountain Time
+// SCHEDULED — Tuesday 4:00pm Mountain Time
 // Foreman + Lead Meeting Prep — fills the ONE running notes doc that is attached
-// to the Wednesday 6:30 meeting. Inserts the coming meeting's section at the top:
+// to the Wednesday 6:30 meeting. Runs Tuesday 4pm. Inserts the coming meeting's section at the top:
 // action items carried from last week (unchecked only), open needs, this week's
 // + next week's Simpro schedule, hours vs bid, inspections since last meeting,
 // crew out, blank action items. Content comes from the PURE builder
@@ -4526,7 +4526,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
 
 exports.foremanMeetingPrep = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB" })
-  .pubsub.schedule("0 18 * * 2")
+  .pubsub.schedule("0 16 * * 2")
   .timeZone(TZ)
   .onRun(async () => { await runForemanMeetingPrep(); return null; });
 
