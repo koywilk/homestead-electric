@@ -4483,11 +4483,15 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
         const sn = j.simproNo ? String(j.simproNo) : "";
         if (sn && !seen.has(sn) && wanted.length < 60) { seen.add(sn); wanted.push(sn); }
       });
+      // simproReqWithRetry backs off on 429/5xx — the function hits Simpro far
+      // faster than a laptop and tripped the rate limit with a plain fetch
+      // (2026-09-21: 4 of 35 jobs came back). Two jobs in flight at a time.
       const getJson = async (path) => {
-        const resp = await fetch(`${SIMPRO_BASE}${path}`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
-        return resp.ok ? resp.json() : null;
+        const r = await simproReqWithRetry("GET", path);
+        if (!r.ok) { functions.logger.warn("foremanMeetingPrep simpro miss", { path, status: r.status }); return null; }
+        return r.data;
       };
-      return await foremanPrepLib.collectSimproHours(wanted, getJson);
+      return await foremanPrepLib.collectSimproHours(wanted, getJson, { concurrency: 2 });
     } catch (e) { functions.logger.warn("foremanMeetingPrep simpro hours fetch error", { error: e.message }); return {}; }
   })();
 

@@ -567,7 +567,13 @@ function docsRequests(lines, at = 1) {
     } else flush();
   });
   flush();
-  return reqs;
+  // Apply everything after the insert BOTTOM-UP. createParagraphBullets strips the
+  // leading tabs that nest the schedule rows, which deletes characters and shifts
+  // every index below it; working from the highest index down means nothing that
+  // still has to run sits below a deletion. (Learned the hard way, 2026-09-21.)
+  const startOf = (q) => (q.updateParagraphStyle || q.updateTextStyle || q.createParagraphBullets).range.startIndex;
+  const rest = reqs.slice(1).sort((a, b) => startOf(b) - startOf(a));
+  return [reqs[0], ...rest];
 }
 
 module.exports = { parseLastActions, buildModel, renderLines, docsRequests, collectSimproHours, recentlyCompleted, roughRecentlyDone, toDateAny, isResJob, TZ, SECTION_TAG };
