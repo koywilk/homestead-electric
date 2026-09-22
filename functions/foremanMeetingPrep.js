@@ -362,7 +362,7 @@ function buildModel(inputs) {
         if (!u || !String(u.name || "").trim()) return;
         const d = toDateAny(u.projectedStart);
         const n = d ? daysBetween(d, meeting) : null;
-        const who = u.foreman ? ` — ${first(u.foreman)}` : "";
+        const who = "";   // no names in Upcoming (Koy, 2026-09-21)
         const when = d ? `${fmtShort(d)} ${u.startConfirmed ? "confirmed" : "projected"}` : "no date";
         if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${String(u.name).trim()} — ${fmtShort(d)} ${u.startConfirmed ? "confirmed" : "projected"} (${-n}d past)${who}` });
         else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${String(u.name).trim()} — ${when}${who}` });
@@ -375,8 +375,7 @@ function buildModel(inputs) {
         if (!u || !u.name || onTab.has(norm(u.name))) return;
         const d = u.start ? toDateAny(u.start) : null;
         const n = d ? daysBetween(d, meeting) : null;
-        const who = String(u.who || "");
-        const tail = who && !/no foreman/i.test(who) ? ` — ${first(who)}` : "";
+        const tail = "";   // no names in Upcoming (Koy, 2026-09-21)
         if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${fmtShort(d)} (${-n}d past)${tail}` });
         else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${u.name} — ${d ? fmtShort(d) : "no date"}${tail}` });
       });
