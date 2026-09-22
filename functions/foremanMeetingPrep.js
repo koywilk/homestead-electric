@@ -298,7 +298,9 @@ function buildModel(inputs) {
       }
       const cur = inFinish ? finish : rough;
       if (!inFinish && rough && rough.used === 0 && !(finish && finish.used > 0)) return;   // not started
+      const stage = parseInt(j[(inFinish ? "finish" : "rough") + "Stage"]);   // app's phase % done
       const row = { name: j.name, phase: inFinish ? "finish" : "rough", cur, rough, finish, extras,
+        stage: Number.isFinite(stage) ? stage : null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate,
         ratio: cur ? cur.ratio : 0 };
       m.hours[inFinish ? "finish" : "rough"].push(row);
@@ -431,8 +433,8 @@ const marginColor = (pct, phase) => { const b = MARGIN_BANDS[phase] || MARGIN_BA
 const pct = (p) => `${Math.round(p.ratio * 100)}%`;
 function hoursLine(r) {
   // One consistent shape per line, easy to scan (Koy, 2026-09-21):
-  //   **Job name**   214 / 420 h   51%   margin 77%
-  //   **Job name**   547 / 310 h   176%  +237h over   margin 30%
+  //   **Job name**   45% done   214 / 420 h   51% of bid   margin 77%
+  //   **Job name**   80% done   547 / 310 h   176% of bid   +237h over   margin 30%
   // Job name bold; hours grey; "+Nh over" red; margin colored by band.
   const spans = [];
   let text = "";
@@ -440,9 +442,10 @@ function hoursLine(r) {
   const grey = (str) => { spans.push({ start: text.length, len: str.length, rgb: [0.45, 0.45, 0.45], bold: false }); text += str; };
   push(r.name, null, true);
   if ((r.phase === "completed" || r.phase === "roughDone") && r.done) grey(`   done ${fmtShort(r.done)}`);
+  if ((r.phase === "rough" || r.phase === "finish") && r.stage != null) text += `   ${r.stage}% done`;   // from the app
   if (r.cur) {
     grey(`   ${r.cur.used} / ${r.cur.est} h`);
-    text += `   ${pct(r.cur)}`;
+    text += `   ${pct(r.cur)} of bid`;
     if (r.cur.used > r.cur.est) { text += "   "; push(`+${r.cur.used - r.cur.est}h over`, "red", true); }
   } else grey("   hours not in Simpro");
   if (r.phase === "finish" && r.rough) {
