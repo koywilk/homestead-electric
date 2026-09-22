@@ -48265,12 +48265,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-22 · App SW version: v425
+**Last manifest update:** 2026-09-22 · App SW version: v426
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — "Done" group (see what you finished)** · 'shipped 2026-09-22' · 'SW v426' · Koy: *"can we add a spot where i can see all my completed tasks."* New collapsed **Done** group at the bottom of My Day (below Mine / On-head / Sent), listing task cards I finished or that finished on me in the **last 30 days**, newest first, each showing 'done by <name>' + how long ago, with a one-tap **Reopen**. Scope = **both** (Koy's choice): assigned to me OR I sent it — new pure helper 'completedForMe(n, identity, nowMs)' = 'status==="done" && (isMine || assignedBy/createdBy me) && doneAt within 30 days'. **Task docs only** — auto rows (QC / invoice / scans) clear via 'clearedTasks' with no 'doneAt', so they can't show a real completion time and are intentionally excluded. Reopen is the existing 'patchNeed' status→open (fires the existing 'onNeedWrite' "sent back" branch only when someone reopens a task another person closed). Harness 'scripts/needs-dryrun.js' covers the both-scope + 30-day window. **Why it won't lose data:** render-only read over the already-loaded 'needs' ('completedForMe' is pure; no new field, no loader/rules/functions change); Reopen is the existing field-surgical 'patchNeed'.
 - **Matterport scans — one row per scan (kill the head-board AUTO duplicate)** · 'shipped 2026-09-22' · 'SW v425' · Koy: *"these ones underneath i dont want there. they are alot that are duplicates."* v423 put scans on **both** the scanner's board (a **SCAN** row with paste-link / schedule / no-scan) and the head board (an **AUTO** "Schedule Matterport Scan" row with → foreman / Pick person). A login that holds **both** the 'resi.head' and 'matterport.own' hats therefore saw every scan **twice**. Fix: the head auto-task render now **excludes 'category === "matterport"'** in both the head's own board block and the foreman's "On &lt;head&gt;" block, so Matterport scans render **only** as the scanner's SCAN rows (the useful ones). 'headAutoTasks' / 'scanAutoTasks' are unchanged — the scanner queue still derives its rows from the same source; only the head's duplicate AUTO render is dropped. **Why it won't lose data:** render-only — two '.filter(t => t.category !== "matterport")' guards on the head board's derived rows; no write path, no field, no function, no rules change. The scan itself is unchanged; it just shows once.
 - **Matterport scans — the before-drywall window (rough 85% → finish start)** · 'shipped 2026-09-22' · 'SW v424' · Koy: *"just put it on the list at 85% completion so we have time to schedule it"* + *"i accidentally cleared them all when they are still needed."* The v423 queue auto-flagged a scan on EVERY job that hit rough 100%, including service / T&M / EV / commercial jobs that never get scanned — so it filled with noise and a "clear all" swept up the real ones. Fix: a scan is needed only in the real **before-drywall window** — new shared pure helper **'matterportScanNeeded(job)'** = 'parseStage(roughStage) >= 85 && parseStage(finishStage) === 0 && matterportStatus !== "complete" && no scan link && !matterportDismissed'. It **opens at rough 85%** (early enough to schedule, matching the QC/invoice 80–85% triggers) and **closes once finish/drywall starts**, which auto-drops finished jobs with no clicking. Applied **everywhere**: the '_matterport' auto-task condition (My Day scanner queue, head board, Up Next, Today, Friday Packet all derive from 'computeTasks'), the two auto-flip sites (roughStage picker now flips 'matterportStatus:"needs"' at pct>=85 with finish==0, and the rough-status→complete flip gains the same finish gate), and the server-side 'dailyMatterportChase' (re-implements the same test: 'roughPct>=85 && finishPct===0 && …'). Task desc updated ("Rough is wrapping up — schedule the scan before drywall"). Harness 'scripts/needs-dryrun.js' covers the window (opens at 85, closes on finish start, honors complete/dismissed/link). **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** render / derivation only for the queue — 'matterportScanNeeded' is a pure read over existing fields ('roughStage'/'finishStage'/'matterportStatus'/'matterportLinks'/'matterportDismissed'), no new field, no loader/rules change; the auto-flip change only narrows WHEN the existing 'matterportStatus:"needs"' string is auto-set (still additive, still skipped when already set or a link exists), it never clears a user's value; the chase is a read-only scan. Finished jobs that had been auto-flagged simply stop showing (the scan window has passed) — their stored 'matterportStatus' is untouched and still visible on the Job Info card.
 - **My Day — Matterport scans queue for the scanner (Justin)** · 'shipped 2026-09-22' · 'SW v423' · Koy: *"need a good way to remind and track matterports for justin… right now we only have a little status bar in the job info card and its easy to forget."* Every rough-in gets a Matterport scan before drywall, all done by ONE person. The scan was already auto-flagged (rough 100% → 'matterportStatus:"needs"') and an auto-task existed, but it pointed at each job's foreman and lived only on the head board — nobody had a single "scans I owe" list. **New company hat 'matterport.own'** (Settings → Team → COMPANY HATS, gated client-side by 'can(identity,"matterport.own")' and resolved server-side from 'caps', **never a hardcoded name** — same pattern as 'resi.head'); tick it on Justin. **New My Day category "Matterport scans"** ('MYDAY_CAT_LABELS' + 'myDayCategoryOf' map 'autoCategory:"matterport"'), so the scans read as one folded section — on **both** the scanner's board (via 'scanAutoTasks', every live matterport auto-task company-wide, pushed into 'mineRows' when the viewer holds the hat) **and** the head board (unchanged — it already showed them; head stays Push-only, it delegates). **Three row controls for the scanner** (all existing fields, zero new): **paste Matterport link** → writes 'matterportLinks' + 'matterportStatus:"complete"' (mirrors the Job Info write; clears the auto-task on its own and fires the existing "scan complete" + GC-portal pushes); **Schedule** date → 'matterportStatus:"scheduled"' + 'matterportStatusDate' (M/D/YYYY, like DateInp); **No scan needed** → 'matterportDismissed:true' (the auto-task condition already respects it). A pushed scan (Koy delegated it as a real task doc) is de-duped out of the scanner rows via the 'autoDelegation' join, so it shows once under Tasks on me. **Morning push** 'dailyMatterportChase' (8am weekdays, mirrors 'dailyCoChase'): counts jobs with 'matterportStatus:"needs"' + no link + not dismissed and nudges the hat holder with a count + oldest date, deep-linked to My Day; gated by new notif pref 'matterport_chase'; scanner resolved server-side from 'caps' (no hardcoded name). Harness 'scripts/needs-dryrun.js' gains 'scanOwner' / 'scanAutoTasks' / matterport-category coverage. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** Flip-day step: tick **Matterport scans** on Justin in Settings → Team. **Why it won't lose data:** ZERO new job fields — reuses 'matterportStatus' / 'matterportLinks' / 'matterportStatusDate' / 'matterportDismissed' that already exist; the only job write is the identical additive 'updateJob' the Job Info Matterport section already performs (no loader change, nothing renamed/removed); 'matterport.own' rides the existing per-user 'caps' write; the chase is a read-only scan + a new export (no existing function touched); surfacing ('scanAutoTasks', category, the row controls) is render-only; no Firestore rules change.
@@ -52181,6 +52182,18 @@ function sentByMe(n, identity) {
   if (isMine(n, identity)) return false;
   return sameName(n.assignedBy, me) || sameName(n.createdBy, me);
 }
+// v426: a task card I finished or that finished on me, within the last 30 days —
+// the "Done" group (Koy: "a spot where i can see all my completed tasks"). "Both"
+// per Koy: on me (isMine) OR I sent it (assignedBy/createdBy me). Real task docs
+// only — auto-tasks clear via clearedTasks and carry no doneAt, so they can't
+// show a completion time. Pure; extracted by scripts/needs-dryrun.js.
+function completedForMe(n, identity, nowMs = Date.now()) {
+  if (!n || n.status !== "done") return false;
+  const me = identity && identity.name; if (!me) return false;
+  if (!(isMine(n, identity) || sameName(n.assignedBy, me) || sameName(n.createdBy, me))) return false;
+  const t = Date.parse(n.doneAt || "");
+  return Number.isFinite(t) && (nowMs - t) <= 30 * 24 * 60 * 60 * 1000;
+}
 // The Head of Residential = whoever holds the resi.head hat (Settings → Team →
 // COMPANY HATS). Falls back to the jobprep.own holder so nothing routes to
 // nobody before the hat is ticked on flip day. Deactivated users never win.
@@ -52651,11 +52664,31 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // actually looks.
   const sentRows = liveNeeds.filter(n => sentByMe(n, identity)).map(n => needRow(n, true));
   const sentWaiting = sentRows.filter(r => r.snoozedUntil || (r.latest && r.latest.kind === "waiting")).length;
+  // v426: "Done" — task cards I finished or that finished on me in the last 30
+  // days (Koy: "a spot where i can see all my completed tasks"). Read-only rows
+  // with a one-tap Reopen, newest first by doneAt. Starts folded.
+  const doneRows = (needs || [])
+    .filter(n => completedForMe(n, identity))
+    .sort((a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || "")))
+    .map(n => {
+      const k = needKind(n);
+      return {
+        key: "done_" + n.id, kind: "need", needKind: k, bucket: "later",
+        title: n.text || "(no text)",
+        tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need",
+        tagColor: k === "task" ? C.teal : C.orange,
+        sub: [n.jobName, n.doneBy ? `done by ${first(n.doneBy)}` : "done", n.doneAt ? timeAgo(n.doneAt) : ""].filter(Boolean),
+        jobId: n.jobId, section: null, canDone: false, canSnooze: false,
+        actions: [{ label: "Reopen", title: "Put it back on the list", onClick: () => { onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n); toast.success("Reopened"); }, tone: "ghost" }],
+      };
+    });
   const groups = [
     { key: "mine", title: "Mine", rows: sortRows(mineRows), byCat: myDayCategories(sortRows(mineRows)), empty: "All clear — nothing on you right now." },
     ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
     // v421: what I asked others for, with their latest update. Starts folded.
     { key: "sent", title: "Sent", rows: sortRows(sentRows), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
+    // v426: everything I finished (mine + sent), last 30 days, newest first.
+    { key: "done", title: "Done", rows: doneRows, empty: "Nothing finished in the last 30 days." },
   ];
   // v421 update panel state (Row is a plain render fn, so state lives here).
   const [updFor, setUpdFor] = useState(null);

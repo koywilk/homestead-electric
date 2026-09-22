@@ -59,7 +59,7 @@ const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
   "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
-  "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe"];
+  "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -325,5 +325,14 @@ assert.ok(H.onHead(ownAskToHead, gage, users, jobs), "own ask to head is technic
 assert.ok(H.sentByMe(ownAskToHead, gage), "…and I sent it");
 assert.ok(!(H.onHead(ownAskToHead, gage, users, jobs) && !H.sentByMe(ownAskToHead, gage)), "grouping precedence: NOT placed under On <head>");
 assert.ok(H.sentByMe(ownAskToHead, gage), "grouping precedence: placed in Sent, where the waiting-on line shows");
+
+// v426 — the Done group: task cards I finished OR that finished on me, last 30d ("both").
+const doneNow = new Date().toISOString();
+assert.ok(H.completedForMe({ id:"d1", status:"done", assignedTo:"Gage Lund", createdBy:"Koy Wilkinson", doneAt: doneNow }, gage), "done + on me + recent -> my Done");
+assert.ok(H.completedForMe({ id:"d2", status:"done", assignedTo:"Koy Wilkinson", assignedBy:"Gage Lund", createdBy:"Gage Lund", doneAt: doneNow }, gage), "done + I sent it -> my Done");
+assert.ok(!H.completedForMe({ id:"d3", status:"open", assignedTo:"Gage Lund", doneAt: doneNow }, gage), "still open -> not in Done");
+assert.ok(!H.completedForMe({ id:"d4", status:"done", assignedTo:"Daegan", assignedBy:"Daegan", createdBy:"Daegan", doneAt: doneNow }, gage), "someone else's done task -> excluded");
+assert.ok(!H.completedForMe({ id:"d5", status:"done", assignedTo:"Gage Lund", doneAt: new Date(Date.now()-40*24*60*60*1000).toISOString() }, gage), "done 40 days ago -> outside the 30-day window");
+assert.ok(!H.completedForMe({ id:"d6", status:"done", assignedTo:"Gage Lund", doneAt:"" }, gage), "no doneAt -> excluded");
 
 console.log("needs-dryrun ok");
