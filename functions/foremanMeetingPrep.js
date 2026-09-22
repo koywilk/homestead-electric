@@ -246,7 +246,7 @@ function buildModel(inputs) {
   } catch (e) { m.needs.error = true; }
 
   // Schedule — Simpro bookings for the meeting week + next week, ONE line per job:
-  // "Job — Mon–Thu — Keegan, Austin". Residential jobs only (or our people on any job).
+  // "Job — Mon–Thu". Residential jobs only (or our people on any job).
   try {
     const crewSet = new Set(arr(crew).map(n => first(n).toLowerCase()));
     const byWeek = { this: new Map(), next: new Map() };     // week → (label → {days:Set, staff:Set})
@@ -273,7 +273,7 @@ function buildModel(inputs) {
     m.schedule.days = ["this", "next"].map(w => ({
       week: w, label: w,
       rows: [...byWeek[w].entries()].sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([job, v]) => `${job} — ${dayRange(v.days)} — ${[...v.staff].sort().join(", ")}`),
+        .map(([job, v]) => `${job} — ${dayRange(v.days)}`),   // no crew names (Koy, 2026-09-21)
     }));
   } catch (e) { m.schedule.error = true; }
 
@@ -363,8 +363,8 @@ function buildModel(inputs) {
         const d = toDateAny(u.projectedStart);
         const n = d ? daysBetween(d, meeting) : null;
         const who = u.foreman ? ` — ${first(u.foreman)}` : "";
-        const when = d ? `${fmtShort(d)}${u.startConfirmed ? "" : "?"}` : "no date";   // "?" = start not confirmed
-        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${String(u.name).trim()} — ${fmtShort(d)} (${-n}d past)${who}` });
+        const when = d ? `${fmtShort(d)} ${u.startConfirmed ? "confirmed" : "projected"}` : "no date";
+        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${String(u.name).trim()} — ${fmtShort(d)} ${u.startConfirmed ? "confirmed" : "projected"} (${-n}d past)${who}` });
         else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${String(u.name).trim()} — ${when}${who}` });
       });
       // Plus the job-board rows (dated rough starts, finish starts, pipeline) the
