@@ -431,31 +431,40 @@ const RGB = { green: [0.2, 0.55, 0.3], amber: [0.8, 0.55, 0], red: [0.75, 0.15, 
 const MARGIN_BANDS = { rough: { green: 50, yellow: 40 }, finish: { green: 25, yellow: 20 }, other: { green: 25, yellow: 20 }, roughDone: { green: 50, yellow: 50 }, completed: { green: 15, yellow: 15 } };   // done groups: hit or missed — no middle
 const marginColor = (pct, phase) => { const b = MARGIN_BANDS[phase] || MARGIN_BANDS.finish; return pct >= b.green ? "green" : pct >= b.yellow ? "amber" : "red"; };
 const pct = (p) => `${Math.round(p.ratio * 100)}%`;
-function hoursLine(r) {
-  // One consistent shape per line, easy to scan (Koy, 2026-09-21):
-  //   **Job name**   45% done   214 / 420 h   51% of bid   margin 77%
-  //   **Job name**   80% done   547 / 310 h   176% of bid   +237h over   margin 30%
-  // Job name bold; hours grey; "+Nh over" red; margin colored by band.
-  const spans = [];
-  let text = "";
-  const push = (str, color, bold) => { spans.push({ start: text.length, len: str.length, rgb: color ? RGB[color] : [0, 0, 0], bold: !!bold }); text += str; };
-  const grey = (str) => { spans.push({ start: text.length, len: str.length, rgb: [0.45, 0.45, 0.45], bold: false }); text += str; };
-  push(r.name, null, true);
-  if ((r.phase === "completed" || r.phase === "roughDone") && r.done) grey(`   done ${fmtShort(r.done)}`);
-  if ((r.phase === "rough" || r.phase === "finish") && r.stage != null) text += `   ${r.stage}% done`;   // from the app
+function hoursLines(r) {
+  // One job = a parent bullet plus nested sub-bullets (Koy, 2026-09-22):
+  //   • **Job name**   95% done
+  //       ◦ 2079 / 1370 h   152% of bid
+  //       ◦ +709h over            (red, only when over)
+  //       ◦ margin 56%            (margin colored by band)
+  // Sub-bullets start with a tab: createParagraphBullets nests by leading tabs.
+  const out = [];
+  const line = (indent) => {
+    const l = { text: indent ? "\t" : "", kind: "bullet", spans: [] };
+    l.push = (str, color, bold) => { l.spans.push({ start: l.text.length, len: str.length, rgb: color ? RGB[color] : [0, 0, 0], bold: !!bold }); l.text += str; };
+    l.grey = (str) => { l.spans.push({ start: l.text.length, len: str.length, rgb: [0.45, 0.45, 0.45], bold: false }); l.text += str; };
+    out.push(l);
+    return l;
+  };
+  const top = line(false);
+  top.push(r.name, null, true);
+  if ((r.phase === "completed" || r.phase === "roughDone") && r.done) top.grey(`   done ${fmtShort(r.done)}`);
+  if ((r.phase === "rough" || r.phase === "finish") && r.stage != null) top.text += `   ${r.stage}% done`;   // from the app
   if (r.cur) {
-    grey(`   ${r.cur.used} / ${r.cur.est} h`);
-    text += `   ${pct(r.cur)} of bid`;
-    if (r.cur.used > r.cur.est) { text += "   "; push(`+${r.cur.used - r.cur.est}h over`, "red", true); }
-  } else grey("   hours not in Simpro");
+    const h = line(true);
+    h.grey(`${r.cur.used} / ${r.cur.est} h`);
+    h.text += `   ${pct(r.cur)} of bid`;
+    if (r.cur.used > r.cur.est) line(true).push(`+${r.cur.used - r.cur.est}h over`, "red", true);
+  } else line(true).grey("hours not in Simpro");
   if (r.phase === "finish" && r.rough) {
     const diff = r.rough.used - r.rough.est;
-    grey(diff > 0 ? `   rough +${diff}h` : diff < 0 ? `   rough ${diff}h` : "   rough on bid");
+    line(true).grey(diff > 0 ? `rough +${diff}h` : diff < 0 ? `rough ${diff}h` : "rough on bid");
   }
-  text += "   ";
-  if (r.margin == null) grey("margin n/a");
-  else { text += "margin "; push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true); }
-  return { text, kind: "bullet", spans };
+  const mg = line(true);
+  if (r.margin == null) mg.grey("margin n/a");
+  else { mg.text += "margin "; mg.push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true); }
+  out.forEach(l => { delete l.push; delete l.grey; });
+  return out;
 }
 
 // kind: h1 | h2 | h3 | h4 (bold plain line) | p | grey | bullet | check
@@ -530,7 +539,7 @@ function renderLines(m) {
       const rs = rows.filter(r => band(r) === b);
       if (!rs.length) return;
       L.push({ text: title, kind: "h4", spans: b === "none" ? [] : [{ start: 0, len: title.length, rgb: RGB[b], bold: true }] });
-      rs.forEach(r => L.push(hoursLine(r)));
+      rs.forEach(r => hoursLines(r).forEach(l => L.push(l)));
     });
   });
 
