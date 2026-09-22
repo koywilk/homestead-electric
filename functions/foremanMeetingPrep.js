@@ -216,6 +216,7 @@ function buildModel(inputs) {
   const res = live.filter(j => isResJob(j, crew));
   const byId = new Map(res.map(j => [j.id, j]));
   const bySimpro = new Map(res.filter(j => j.simproNo).map(j => [String(j.simproNo), j]));
+  const byAnySimpro = new Map(live.filter(j => j.simproNo).map(j => [String(j.simproNo), j]));   // any active job, for schedule labels
 
   // Carried action items
   try {
@@ -246,7 +247,7 @@ function buildModel(inputs) {
   } catch (e) { m.needs.error = true; }
 
   // Schedule — Simpro bookings for the meeting week + next week, ONE line per job:
-  // "Job — Mon–Thu". Residential jobs only (or our people on any job).
+  // "Job — Mon–Thu". Every job with a Simpro booking that week.
   try {
     const crewSet = new Set(arr(crew).map(n => first(n).toLowerCase()));
     const byWeek = { this: new Map(), next: new Map() };     // week → (label → {days:Set, staff:Set})
@@ -256,8 +257,8 @@ function buildModel(inputs) {
       const pid = String((s.Project && s.Project.ProjectID) || "");
       const nm = first(s.Staff && s.Staff.Name);
       if (!pid || !nm) return;
-      const j = bySimpro.get(pid);
-      if (!j && !(crewSet.size && crewSet.has(nm.toLowerCase()))) return;
+      // Every job booked in Simpro (Koy, 2026-09-21) — no residential filter here.
+      const j = bySimpro.get(pid) || byAnySimpro.get(pid);
       const label = j ? j.name : ((s.Project && s.Project.Name) || `Simpro #${pid}`);
       const wk = i < 5 ? byWeek.this : byWeek.next;
       if (!wk.has(label)) wk.set(label, { days: new Set(), staff: new Set() });
