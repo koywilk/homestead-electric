@@ -1551,7 +1551,7 @@ exports.dailyPOReminder = functions.pubsub
   .schedule("0 13 * * 1-5")
   .timeZone(TZ)
   .onRun(async () => {
-    await sendToRoles(["lead"], {
+    await sendToRoles(["lead","jrforeman"], {   // Jr. Foreman (v419) counts as a lead
       title: "📄 PO Reminder",
       body:  "Don't forget to submit your POs for today",
     }, [], "reminder_po");
@@ -1566,7 +1566,7 @@ exports.dailyUpdateReminder = functions.pubsub
   .schedule("30 16 * * 1-5")
   .timeZone(TZ)
   .onRun(async () => {
-    await sendToRoles(["lead"], {
+    await sendToRoles(["lead","jrforeman"], {   // Jr. Foreman (v419) counts as a lead
       title: "📝 Daily Update",
       body:  "Time to enter your daily job update",
     }, [], "reminder_daily");
@@ -4411,9 +4411,9 @@ exports.sendTestLeadMeetingPrep = functions
 const foremanPrepLib = require("./foremanMeetingPrep.js");
 // "Foreman + Lead Meeting — Weekly Notes" (Drive folder: Head of Residential — 90-Day Plan)
 const FOREMAN_NOTES_DOC_ID = "1t7i3gFiLsWmb-htGleutCZFh6TXSAnNbqbq9_ma3e80";
-// Residential crew — a job is in the meeting when its foreman or lead is one of
-// these (first name, case-insensitive). Needs match on foreman/assignee/creator.
-const RES_CREW = ["Keegan", "Daegan", "Gage", "Treycen"];
+// Crew filter — empty means EVERY job (Koy, 2026-09-21: "I'm over every single
+// person, pull everything"). Put first names here to narrow it again.
+const RES_CREW = [];
 
 async function runForemanMeetingPrep({ testRun = false } = {}) {
   const now = new Date();
@@ -4482,7 +4482,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
         const done = j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
         if (done ? !foremanPrepLib.recentlyCompleted(j, today) : (j.archived || j.archivedAt)) return;
         const sn = j.simproNo ? String(j.simproNo) : "";
-        if (sn && !seen.has(sn) && wanted.length < 60) { seen.add(sn); wanted.push(sn); }
+        if (sn && !seen.has(sn) && wanted.length < 90) { seen.add(sn); wanted.push(sn); }
       });
       // simproReqWithRetry backs off on 429/5xx — the function hits Simpro far
       // faster than a laptop and tripped the rate limit with a plain fetch
@@ -4492,7 +4492,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
         if (!r.ok) { functions.logger.warn("foremanMeetingPrep simpro miss", { path, status: r.status }); return null; }
         return r.data;
       };
-      return await foremanPrepLib.collectSimproHours(wanted, getJson, { concurrency: 2 });
+      return await foremanPrepLib.collectSimproHours(wanted, getJson, { concurrency: 3 });
     } catch (e) { functions.logger.warn("foremanMeetingPrep simpro hours fetch error", { error: e.message }); return {}; }
   })();
 
@@ -4530,7 +4530,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
 }
 
 exports.foremanMeetingPrep = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .pubsub.schedule("0 16 * * 2")
   .timeZone(TZ)
   .onRun(async () => { await runForemanMeetingPrep(); return null; });
@@ -4538,7 +4538,7 @@ exports.foremanMeetingPrep = functions
 // Manual trigger — a full real run any day so the pipeline can be verified
 // without waiting for a Tuesday. Inserts a section like the scheduled run does.
 exports.sendTestForemanMeetingPrep = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .https.onCall(async (data) => {
     requireAppKey(data);
     return await runForemanMeetingPrep({ testRun: true });
