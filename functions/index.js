@@ -1735,6 +1735,45 @@ exports.dailyRtChase = functions.pubsub
   });
 
 // ─────────────────────────────────────────────────────────────
+// SCHEDULED — Daily Matterport scan chase (8am MT, weekdays) → the scanner.
+// ONE person (the matterport.own hat holder) does every rough-in Matterport
+// scan before drywall. Read-only scan of jobs for matterportStatus === "needs"
+// with no link uploaded and not dismissed; nudge the hat holder with a count +
+// oldest date, deep-linked to My Day. Resolved FROM THE HAT, never hardcoded —
+// unheld hat ⇒ no send. ADDITIVE: new export only. Mirrors dailyCoChase.
+// ─────────────────────────────────────────────────────────────
+exports.dailyMatterportChase = functions.pubsub
+  .schedule("0 8 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const users = await getUsers();
+    const scanner = users.find(u => u && u.active !== false && Array.isArray(u.caps) && u.caps.includes("matterport.own"));
+    if (!scanner) { functions.logger.info("[dailyMatterportChase] no matterport.own hat set — skip"); return null; }
+    const snap = await db.collection("jobs").get();
+    let count = 0, oldest = null;
+    snap.forEach(d => {
+      const j = (d.data() && d.data().data) || {};
+      if (j.type === "quote") return;
+      const hasLink = !!(j.matterportLink || (Array.isArray(j.matterportLinks) && j.matterportLinks.length));
+      if (j.matterportStatus === "needs" && !hasLink && !j.matterportDismissed) {
+        count++;
+        const t = Date.parse(j.matterportStatusDate || "");
+        if (Number.isFinite(t) && (oldest === null || t < oldest)) oldest = t;
+      }
+    });
+    if (count > 0) {
+      const since = oldest !== null ? ` — oldest since ${new Date(oldest).toLocaleDateString("en-US")}` : "";
+      await deliverIfWanted(scanner, "matterport_chase", {
+        title: "📷 Matterport scans waiting",
+        body: `${count} scan${count !== 1 ? "s" : ""} need to be done${since}.`,
+        view: "myday",
+      });
+    }
+    functions.logger.info("[dailyMatterportChase] ran", { count });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
 // SCHEDULED — Weekly safety / toolbox-talk reminder (Mon 6:45am MT) → foremen.
 // ─────────────────────────────────────────────────────────────
 exports.weeklySafetyReminder = functions.pubsub

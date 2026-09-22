@@ -58,7 +58,7 @@ const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i
 
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
-  "punchAssignedTo","myJobsFor","headAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
+  "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
   "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe"];
 const combined = [
   extractConst("PERMISSIONS"),
@@ -70,7 +70,7 @@ const combined = [
   extractLine("MYDAY_ORDER"),
   extractConst("MYDAY_CAT_LABELS"),
   ...FN.map(extractFunction),
-  `({ ${FN.join(", ")} })`,
+  `({ ${FN.join(", ")}, can })`,
 ].join("\n");
 const sandbox = vm.createContext({});
 const H = vm.runInContext(combined, sandbox, { filename: "needs-extract.vm.js" });
@@ -96,6 +96,14 @@ assert.strictEqual(H.resiHead(prepOnly).id, "koy", "falls back to jobprep.own be
 assert.strictEqual(H.resiHead([josh, gage]), null, "nobody holds either hat -> null");
 assert.strictEqual(H.resiHead([{ ...koy, active:false }, { ...josh, caps:["resi.head"] }]).id, "josh", "deactivated holder never wins");
 assert.strictEqual(H.resiHeadName([]), "", "empty users -> ''");
+
+// v423 — Matterport scanner hat (matterport.own): the client gates the scans
+// queue on can(identity,"matterport.own"), the server chase finds the holder in
+// caps. Both are the same per-user cap; lock it here.
+const scanHat = { id:"just", name:"Justin Cloward", access:"admin", caps:["matterport.own"] };
+assert.ok(H.can(scanHat, "matterport.own"), "hat holder passes the matterport.own gate");
+assert.ok(!H.can(koy, "matterport.own"), "the head does NOT hold the scanner hat (different people)");
+assert.ok(!H.can(gage, "matterport.own"), "a foreman does not hold it");
 
 // ── 2. legacy docs ──────────────────────────────────────────────────────────
 const legacy = { id:"n1", text:"Set panel", coordinator:"Koy Wilkinson", createdBy:"Justin Cloward ", status:"open", dueBucket:"tomorrow" };
@@ -197,6 +205,15 @@ eq(H.headAutoTasks(jobsWithTP, new Set(["j1937_qc_walk"]), fakeCompute).map(t =>
 eq(H.headAutoTasks(null, new Set(), fakeCompute), [], "null jobs -> []");
 eq(H.headAutoTasks([{ ...england, taskDueDates: { j1770_rough_po: "2026-09-30" } }, navarro], new Set(), fakeCompute).find(t => t.id === "j1770_rough_po").dueDate, "2026-09-30", "the head's snoozed date (taskDueDates) overrides the rule's date on the board");
 eq(H.headAutoTasks([{ ...england, taskDueDates: { j1770_rough_po: "" } }, navarro], new Set(), fakeCompute).find(t => t.id === "j1770_rough_po").dueDate, "2026-09-10", "a cleared override (\"\") falls back to the rule's date");
+
+// v423 — the scanner's queue = ONLY the matterport auto-tasks (company-wide),
+// and the row folds into the "Matterport scans" category.
+const autoMP = { id:"j1770_matterport", jobId:"j1770", jobName:"#1770 England Home", category:"matterport", foreman:"Gage", title:"Schedule Matterport Scan", desc:"", dueDate:"" };
+const fakeComputeMP = () => [autoA, autoB, autoMP, autoPrep];
+eq(H.scanAutoTasks([england, navarro], new Set(), fakeComputeMP).map(t => t.id), ["j1770_matterport"], "scanAutoTasks: only the matterport auto-task, across live jobs");
+eq(H.scanAutoTasks([england, navarro], new Set(["j1770_matterport"]), fakeComputeMP), [], "scanAutoTasks respects cleared");
+assert.strictEqual(H.myDayCategoryOf({ kind:"auto", autoCategory:"matterport" }), "matterport", "auto matterport row -> Matterport scans category");
+assert.strictEqual(H.myDayCategoryOf({ kind:"auto", autoCategory:"qc" }), "qc", "other auto categories unchanged (qc)");
 
 // ── 9. duty twins fold ──────────────────────────────────────────────────────
 const dutyKeys = new Set(["j1937_coord_rough_qc"]);

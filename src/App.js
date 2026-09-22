@@ -3941,6 +3941,11 @@ const PERMISSIONS = {
   // hardcoded name. Default assignee for new needs/tasks, owner of the
   // "On <name>" section on My Day, recipient of bodies requests.
   "resi.head":              [],
+  // Matterport scans — ONE person (the field scanner) does every rough-in
+  // Matterport scan before drywall. Same per-user hat mechanism as resi.head so
+  // it follows the ROLE, never a hardcoded name; scanOwner(users) resolves the
+  // holder. Owns the "Matterport scans" queue on My Day + the morning chase.
+  "matterport.own":         [],
   // My Day — everyone's identity-scoped list (what's on ME + what's on the
   // head for my jobs). All tiers incl. lead/crew so they finally see their own
   // punch items. Creating needs/tasks stays gated to board.add (foreman+).
@@ -4162,6 +4167,7 @@ const NOTIF_CATEGORIES = [
     { key:"qc_ready",          label:"QC walk ready to schedule",            roles:["admin","manager"] },
     { key:"qc_passed",         label:"QC passed",                            roles:["admin","manager","foreman","lead"] },
     { key:"matterport",        label:"Matterport scan complete",             roles:["admin","manager"] },
+    { key:"matterport_chase",  label:"Matterport scans waiting (morning)",   roles:["admin","manager"] },
     { key:"failed_inspection", label:"Inspection failed",                    roles:["admin","manager","foreman"] },
   ]},
   { label:"Change Orders", items:[
@@ -4330,7 +4336,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["jobprep.own","Job prep & redlines"],["resi.head","Head of Residential"]].map(([cap,label])=>{
+                        {[["jobprep.own","Job prep & redlines"],["resi.head","Head of Residential"],["matterport.own","Matterport scans"]].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -48242,12 +48248,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-22 · App SW version: v422
+**Last manifest update:** 2026-09-22 · App SW version: v423
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — Matterport scans queue for the scanner (Justin)** · 'shipped 2026-09-22' · 'SW v423' · Koy: *"need a good way to remind and track matterports for justin… right now we only have a little status bar in the job info card and its easy to forget."* Every rough-in gets a Matterport scan before drywall, all done by ONE person. The scan was already auto-flagged (rough 100% → 'matterportStatus:"needs"') and an auto-task existed, but it pointed at each job's foreman and lived only on the head board — nobody had a single "scans I owe" list. **New company hat 'matterport.own'** (Settings → Team → COMPANY HATS, gated client-side by 'can(identity,"matterport.own")' and resolved server-side from 'caps', **never a hardcoded name** — same pattern as 'resi.head'); tick it on Justin. **New My Day category "Matterport scans"** ('MYDAY_CAT_LABELS' + 'myDayCategoryOf' map 'autoCategory:"matterport"'), so the scans read as one folded section — on **both** the scanner's board (via 'scanAutoTasks', every live matterport auto-task company-wide, pushed into 'mineRows' when the viewer holds the hat) **and** the head board (unchanged — it already showed them; head stays Push-only, it delegates). **Three row controls for the scanner** (all existing fields, zero new): **paste Matterport link** → writes 'matterportLinks' + 'matterportStatus:"complete"' (mirrors the Job Info write; clears the auto-task on its own and fires the existing "scan complete" + GC-portal pushes); **Schedule** date → 'matterportStatus:"scheduled"' + 'matterportStatusDate' (M/D/YYYY, like DateInp); **No scan needed** → 'matterportDismissed:true' (the auto-task condition already respects it). A pushed scan (Koy delegated it as a real task doc) is de-duped out of the scanner rows via the 'autoDelegation' join, so it shows once under Tasks on me. **Morning push** 'dailyMatterportChase' (8am weekdays, mirrors 'dailyCoChase'): counts jobs with 'matterportStatus:"needs"' + no link + not dismissed and nudges the hat holder with a count + oldest date, deep-linked to My Day; gated by new notif pref 'matterport_chase'; scanner resolved server-side from 'caps' (no hardcoded name). Harness 'scripts/needs-dryrun.js' gains 'scanOwner' / 'scanAutoTasks' / matterport-category coverage. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** Flip-day step: tick **Matterport scans** on Justin in Settings → Team. **Why it won't lose data:** ZERO new job fields — reuses 'matterportStatus' / 'matterportLinks' / 'matterportStatusDate' / 'matterportDismissed' that already exist; the only job write is the identical additive 'updateJob' the Job Info Matterport section already performs (no loader change, nothing renamed/removed); 'matterport.own' rides the existing per-user 'caps' write; the chase is a read-only scan + a new export (no existing function touched); surfacing ('scanAutoTasks', category, the row controls) is render-only; no Firestore rules change.
 - **My Day — a task you sent shows in Sent, not swallowed by "On &lt;head&gt;"** · 'shipped 2026-09-22' · 'SW v422' · Koy: *"i marked one of the tasks created by keegan as waiting and typed a reason in, its not even showing up on his my day board."* Root cause (verified against the live doc + 'onNeedWrite' logs — the push fired fine): a task the requester **created and sent to the head**, when it carries the requester's **own foreman stamp** (e.g. Keegan is the foreman on the thing he's asking Koy about), is BOTH 'onHead' (assigned to the head about my job) and 'sentByMe'. The old grouping filed it under **On &lt;head&gt;** (which starts collapsed, and a **jobless** ask sank to the bottom under "…on no job") AND the Sent group **excluded** every 'onHead' doc — so the head's *"waiting on…"* reply never surfaced to the person who asked. Fix is a two-line precedence flip in 'MyDay': **head rows = 'onHead(n) && !sentByMe(n, identity)'** (a doc I sent is no longer filed under On &lt;head&gt;) and **sent rows = 'sentByMe(n, identity)'** (dropped the old '&& !onHead(...)' exclusion — no duplication risk now that head rows exclude sent ones). A doc I sent now always lands in **Sent**, with its 'N waiting' badge and the waiting-on line, where the requester looks. Harness 'scripts/needs-dryrun.js' gains the precedence lock (a foreman's own ask to the head → Sent, not On &lt;head&gt;). **Why it won't lose data:** render-only — the two changed lines are 'Array.filter' predicates over the already-loaded 'needs'; no Firestore write, no field/doc/collection touched, no loader change, no rules change, no functions change (the 'onNeedWrite' "Task on hold" push already works). Purely *where a row is displayed*.
 - **Job Board — crews, not books** · 'shipped 2026-09-12' · 'SW v399' · the reorg cleanup slice Koy asked to see ("it's still showing all the coordinators and books"). The three "…'s Book" bands, the "No coordinator" band, and the "Show all jobs →" **book page** ('view==="book"', 'openBook', 'activeBook', 'showBookCompleted') are gone; the board's own ALL JOBS section already lists the whole company by stage. In their place one **Crews** band ('N foremen · M job sites') with a sort — **Most jobs** first (the head's where's-the-load read) or **A–Z** ('crewSort') — and every foreman card exactly as it was; Paul and Zane are just crews now. The Crew Schedule filter drops its "Books (coordinator)" group ('coordinatorBooks' memo, 'coord_' pref branch, 'coordMatch', and the day-column 'activeCrew' branch removed; the Crews group keeps its options), and Settings → Default schedule view drops the "…'s book (whole coordinator)" options — a previously saved 'coord_…' default now falls through to Auto (own crew). **Why it won't lose data:** read-side / UI only — no Firestore writes added or changed, no loader change, no rules change; the per-foreman 'coordinator' values in 'settings/users' are untouched (Scoreboard's coordinators board, Huddle chips and the functions' 'coordUserOf' routing still read them until their own cleanup); a user's saved 'defaultScheduleView' string is not rewritten, it just resolves differently.
 - **My Day — task updates and "waiting on"** · 'shipped 2026-09-21' · 'SW v421' · Koy: *"we need to be able to either start a discussion or add a note to tasks assigned to us, i dont want them to think im ignoring request if i myself am waiting to hear back from someone."* The gap was that snooze was silent: a task could only be open, snoozed, or done, and to the person who asked, snoozed and ignored looked identical. Every real task doc now has a **note button** on both sides (Mine, On &lt;head&gt;, and the new **Sent** group) that opens an inline panel: **Note** (a one-liner) or **Waiting on…** (who/what, plus an optional **Back on** date). An entry is '{by, at, kind: note|waiting, text, until?}' appended to the additive 'updates' array inside the doc's 'data' via 'arrayUnion' ('addNeedUpdate'; two phones can't clobber each other). The assignee's waiting-with-date also snoozes the row (the snooze that finally says why); an entry from the other side clears the snooze so the reply is seen. The **latest update line** shows under the task on both sides (orange for waiting, with '· back M/D'); tap it for the full history. The requester's views (On &lt;head&gt;, Sent) now list not-done docs **including snoozed ones**, so a task on hold stays visible with its reason instead of vanishing; a snoozed task with no update shows 'on hold · back M/D'. **Sent** = not-done docs I asked for that sit on someone else ('sentByMe'), folded by default with an 'N waiting' badge. Needs board cards show the latest line too. **Notify:** 'onNeedWrite' branch 4 — 'data.updates' grew → 'need_update' push + inbox ("Task on hold" / "Task update", deep-link 'myday') to the OTHER side ('needUpdateAudience': assignee posts → requester = assignedBy else createdBy; anyone else → assignee; self-talk silent); registered in 'NOTIF_CATEGORIES' for all roles ('wantsNotif' treats an absent key as on, so existing users get it). Harness 'scripts/needs-dryrun.js' §15 (audience, lines, Sent). Guide 'myday.html' steps 5–6. Mockup 'taskupdates-mockup.html'. **Needs 'firebase deploy --only functions:onNeedWrite'.** **Why it won't lose data:** one additive array inside 'data' (the needs loader returns 'data' verbatim, no loader change); appended with 'arrayUnion' never a whole-array write; the only other fields touched are 'snoozedUntil' (existing) on the updated doc via dotted 'data.*' paths; no rules change (the needs rule already accepts field-surgical updates); pre-v421 docs have no 'updates' and read as before; jobs, users, punch untouched.
@@ -52163,6 +52170,11 @@ function resiHead(users) {
   return live.find(u => can(u, "resi.head")) || live.find(u => can(u, "jobprep.own")) || null;
 }
 function resiHeadName(users) { const h = resiHead(users); return (h && h.name) || ""; }
+// The Matterport scanner holds the matterport.own hat (Settings → Team → COMPANY
+// HATS). One person does every rough-in scan before drywall; the client gates
+// the "Matterport scans" queue on can(identity,"matterport.own") and the server
+// chase resolves the holder from caps — so there's no scanOwner() helper to keep
+// in sync, and the role is never a hardcoded name.
 // Default To: for a new task follows the chain of command, one level up:
 // crew/lead → their foreman (foremanId); foreman → the head; the head → self;
 // any other office user → the head. Anyone can still pick anyone in the chip —
@@ -52276,6 +52288,14 @@ function headAutoTasks(jobs, cleared, compute = computeTasks) {
     .filter(t => t && t.category !== "prep" && liveIds.has(t.jobId) && !(cleared && cleared.has(t.id)))
     .map(t => { const job = live.find(j => j.id === t.jobId); const d = job && job.taskDueDates ? job.taskDueDates[t.id] : undefined; return d !== undefined ? { ...t, dueDate: d || t.dueDate || "" } : t; });
 }
+// The scanner's queue = ONLY the Matterport auto-tasks, across every live job
+// (the scanner isn't a foreman, so "my jobs" never applies — they scan the
+// whole company). Reuses headAutoTasks' exact compute + cleared + taskDueDates
+// override, then narrows to the matterport category. Pure — extracted by
+// scripts/needs-dryrun.js.
+function scanAutoTasks(jobs, cleared, compute = computeTasks) {
+  return headAutoTasks(jobs, cleared, compute).filter(t => t && t.category === "matterport");
+}
 // The task-engine ids that say the same thing as a duties-engine row. The duty
 // row wins on the head board (it has the Mark-sent field + the tab jump).
 const AUTO_DUTY_TWINS = { _qc_walk: "_coord_rough_qc", _final_qc_walk: "_coord_finish_qc", _rough_po: "_coord_rough_po", _finish_po: "_coord_finish_po" };
@@ -52377,7 +52397,7 @@ const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 // folded, order themselves by their most urgent row (lane), then overdue
 // count, then label; rows inside keep the lane sort. Pure — extracted by
 // scripts/needs-dryrun.js.
-const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", prep: "Job prep", other: "Other" };
+const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
 function myDayCategoryOf(row) {
   if (!row) return "other";
   if (row.kind === "need") return row.needKind === "task" ? "tasks" : row.needKind === "bodies" ? "bodies" : "needs";
@@ -52385,7 +52405,7 @@ function myDayCategoryOf(row) {
   if (row.kind === "duty") return row.dutyType === "qc" ? "qc" : row.dutyType === "po" ? "po" : "prep";
   if (row.kind === "auto") {
     const c = row.autoCategory;
-    return c === "invoice" ? "invoicing" : c === "po" ? "po" : c === "co" ? "co" : c === "rt" ? "rt" : c === "qc" ? "qc" : c === "punch" ? "punch" : c === "prep" ? "prep" : "scheduling";
+    return c === "invoice" ? "invoicing" : c === "po" ? "po" : c === "co" ? "co" : c === "rt" ? "rt" : c === "qc" ? "qc" : c === "matterport" ? "matterport" : c === "punch" ? "punch" : c === "prep" ? "prep" : "scheduling";
   }
   return "other";
 }
@@ -52522,6 +52542,46 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const live = (jobs || []).filter(j => j && !j.tempPed && !j.quickJob);
     [...live.flatMap(getCoordinatorDuties), ...(can(head, "jobprep.own") ? live.flatMap(getCompanyDuties) : [])].forEach(d => mineRows.push(dutyRow(d, false)));
   }
+  // v423: the Matterport scanner (matterport.own hat) gets the scans queue on
+  // THEIR My Day too — not only the head board — with paste-link / schedule /
+  // no-scan controls right on the row (Koy 2026-09-22). Reads every live
+  // matterport auto-task company-wide; skips any Koy already Pushed as a real
+  // task doc (that one shows under Tasks on me via the delegation join, so no
+  // double). Head + scanner are different people in practice; if one person
+  // held both hats they'd see the head auto-row too — acceptable, out of scope.
+  if (can(identity, "matterport.own")) {
+    scanAutoTasks(jobs, cleared).forEach(t => {
+      const openDoc = delegation.get(t.id);
+      if (openDoc && openDoc.status !== "done") return;
+      const job = jobById(t.jobId); if (!job) return;
+      const prevStatus = job.matterportStatus || "", prevDate = job.matterportStatusDate || "";
+      const prevLinks = job.matterportLinks || [], prevLink = job.matterportLink || "";
+      const revertScan = () => onUpdateJob({ ...job, matterportLinks: prevLinks, matterportLink: prevLink, matterportStatus: prevStatus, matterportStatusDate: prevDate, matterportDismissed: !!job.matterportDismissed },
+        { matterportLinks: prevLinks, matterportLink: prevLink, matterportStatus: prevStatus, matterportStatusDate: prevDate, matterportDismissed: !!job.matterportDismissed });
+      const writeJob = (patch, label) => { onUpdateJob({ ...job, ...patch }, patch); if (label) stage(label, revertScan); };
+      mineRows.push({
+        key: "scan_" + t.id, kind: "auto", autoCategory: "matterport",
+        bucket: urgencyBucket(prevDate), title: job.name || t.jobName || "Matterport scan",
+        tag: "Scan", tagColor: C.rough,
+        sub: [prevStatus === "scheduled" && prevDate ? `Scan scheduled ${fmtDisplay(prevDate)}` : (prevDate ? `Needs by ${fmtDisplay(prevDate)}` : "Rough complete — scan before drywall")].filter(Boolean),
+        jobId: t.jobId, section: "Plans & Links", canSnooze: true,
+        onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
+        scan: {
+          status: prevStatus, scheduledDate: prevDate,
+          // Pasting the link IS the completion: saves the walkthrough to the job
+          // and flips status to complete, which clears this auto-task on its own
+          // and fires the existing "scan complete" push + GC-portal walkthrough.
+          onSaveLink: (url) => {
+            const u = String(url || "").trim(); if (!u) return;
+            const links = [...(prevLinks.length ? prevLinks : (prevLink ? [{ label: "Main", url: prevLink }] : [])), { label: "Scan", url: u }];
+            writeJob({ matterportLinks: links, matterportLink: links[0]?.url || "", matterportStatus: "complete", matterportStatusDate: new Date().toLocaleDateString("en-US") }, "Scan saved");
+          },
+          onSchedule: (mdy) => writeJob({ matterportStatus: "scheduled", matterportStatusDate: mdy }, "Scan scheduled"),  // mdy = M/D/YYYY (Job Info picker format)
+          onDismiss: () => writeJob({ matterportDismissed: true }, "No scan needed"),
+        },
+      });
+    });
+  }
   const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
@@ -52579,6 +52639,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const [updText, setUpdText] = useState("");
   const [updUntil, setUpdUntil] = useState("");
   const [histFor, setHistFor] = useState(null);
+  const [scanDraft, setScanDraft] = useState({});   // v423: per-row Matterport paste-link draft, keyed by row key
   const closeUpd = () => { setUpdFor(null); setUpdKind("note"); setUpdText(""); setUpdUntil(""); };
   const sendUpd = (r) => {
     const text = updText.trim(); if (!text || !r.need) return;
@@ -52643,6 +52704,27 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             </div>
           )}
           {r.state === "with" && <div style={{ fontSize: 12, color: C.blue, fontWeight: 600, marginTop: 4 }}>with {first(r.who)}{r.age ? ` · ${r.age}` : ""}</div>}
+          {r.scan && (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input type="text" value={scanDraft[r.key] || ""} placeholder="Paste Matterport link…"
+                  onChange={e => setScanDraft(s => ({ ...s, [r.key]: e.target.value }))}
+                  onKeyDown={e => { if (e.key === "Enter" && (scanDraft[r.key] || "").trim()) { r.scan.onSaveLink(scanDraft[r.key]); setScanDraft(s => { const n = { ...s }; delete n[r.key]; return n; }); } }}
+                  style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.bg, color: C.text }} />
+                <button onClick={() => { if (!(scanDraft[r.key] || "").trim()) return; r.scan.onSaveLink(scanDraft[r.key]); setScanDraft(s => { const n = { ...s }; delete n[r.key]; return n; }); }}
+                  style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 700, padding: "8px 12px", borderRadius: 7, cursor: "pointer", background: C.accent, color: "#fff", border: "none", whiteSpace: "nowrap" }}>Save</button>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ fontSize: 12, color: C.dim, display: "flex", gap: 6, alignItems: "center" }}>{r.scan.status === "scheduled" ? "Scheduled" : "Schedule"}
+                  <input type="date" min={todayYmd} value={r.scan.scheduledDate ? toYMD(r.scan.scheduledDate) : ""}
+                    onChange={e => { const ymd = e.target.value; const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (m) r.scan.onSchedule(`${parseInt(m[2])}/${parseInt(m[3])}/${m[1]}`); }}
+                    style={{ fontFamily: "inherit", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.bg, color: C.text, colorScheme: "light" }} />
+                </label>
+                <button onClick={r.scan.onDismiss}
+                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 12, fontWeight: 600, padding: "6px 10px", borderRadius: 7, cursor: "pointer", background: "transparent", color: C.dim, border: `1px solid ${C.border}` }}>No scan needed</button>
+              </div>
+            </div>
+          )}
           {r.state === "verify" && <div style={{ fontSize: 12, color: C.green, fontWeight: 700, marginTop: 4 }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</div>}
           {r.actions && r.actions.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
