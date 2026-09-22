@@ -208,7 +208,7 @@ function buildModel(inputs) {
     hours: { rough: [], finish: [], other: [], roughDone: [], completed: [], error: false },   // rows: {name, phase, cur, rough, finish, extras, margin, marginEst}
     inspections: { passed: [], failed: [], error: false },   // [text] — feed Highlight / Lowlight
     upcoming: { pastDue: [], soon: [], error: false },        // [text]
-    shipped: { rows: [], error: false },                      // [text] — Training
+    shipped: { rows: [], more: 0, error: false },             // [text] — Training
     pto: { rows: [], error: false },
   };
 
@@ -232,42 +232,48 @@ function buildModel(inputs) {
     const open = arr(needs).filter(n => n && n.status !== "done" && mine(n))
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
     open.forEach(n => {
-      const who = n.assignedTo ? ` → ${first(n.assignedTo)}` : "";
-      const due = n.dueDate ? `, by ${fmtShort(toDateAny(n.dueDate))}` : "";
+      const who = n.assignedTo ? ` (${first(n.assignedTo)})` : "";
       const job = n.jobName ? `${n.jobName} — ` : "";
-      const asked = n.createdBy ? ` (${first(n.createdBy)})` : "";
       if (n.kind === "bodies") {
         const c = n.count ? `${n.count} ${n.count === 1 ? "body" : "bodies"}` : "bodies";
-        m.needs.bodies.push(`${job}${c}${n.note ? ` — ${clip(n.note, 60)}` : ""}${asked}${due}`);
+        m.needs.bodies.push(`${job}${c}${n.note ? `, ${clip(n.note, 40)}` : ""}`);
       } else {
-        m.needs.tasks.push(`${job}${clip(n.text || "", 80)}${who}${asked}${due}`);
+        m.needs.tasks.push(`${job}${clip(n.text || "", 60)}${who}`);
       }
     });
     m.needs.bodies = m.needs.bodies.slice(0, NEEDS_CAP);
     m.needs.tasks = m.needs.tasks.slice(0, NEEDS_CAP);
   } catch (e) { m.needs.error = true; }
 
-  // Schedule — Simpro bookings Mon–Fri of the meeting week, residential jobs only
+  // Schedule — Simpro bookings for the meeting week + next week, ONE line per job:
+  // "Job — Mon–Thu — Keegan, Austin". Residential jobs only (or our people on any job).
   try {
-    const byDay = new Map(weekYmds.map(d => [d, new Map()]));   // ymd → (jobName → Set<staff first name>)
+    const crewSet = new Set(arr(crew).map(n => first(n).toLowerCase()));
+    const byWeek = { this: new Map(), next: new Map() };     // week → (label → {days:Set, staff:Set})
     arr(scheduleEntries).forEach(s => {
-      if (!s || s.Type !== "job" || !s.Date || !byDay.has(s.Date)) return;
+      if (!s || s.Type !== "job" || !s.Date) return;
+      const i = weekYmds.indexOf(s.Date); if (i < 0) return;
       const pid = String((s.Project && s.Project.ProjectID) || "");
       const nm = first(s.Staff && s.Staff.Name);
       if (!pid || !nm) return;
       const j = bySimpro.get(pid);
-      const crewSet = new Set(arr(crew).map(n => first(n).toLowerCase()));
-      if (!j && !(crewSet.size && crewSet.has(nm.toLowerCase()))) return;   // not our job, not our person
+      if (!j && !(crewSet.size && crewSet.has(nm.toLowerCase()))) return;
       const label = j ? j.name : ((s.Project && s.Project.Name) || `Simpro #${pid}`);
-      const dm = byDay.get(s.Date);
-      if (!dm.has(label)) dm.set(label, new Set());
-      dm.get(label).add(nm);
+      const wk = i < 5 ? byWeek.this : byWeek.next;
+      if (!wk.has(label)) wk.set(label, { days: new Set(), staff: new Set() });
+      wk.get(label).days.add(i % 5); wk.get(label).staff.add(nm);
     });
-    m.schedule.days = weekYmds.map((d, i) => ({
-      week: i < 5 ? "this" : "next",
-      label: `${DAY_LBL[i]} ${fmtShort(weekDays[i])}`,
-      rows: [...byDay.get(d).entries()].sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([job, staff]) => `${job} — ${[...staff].sort().join(", ")}`),
+    const dayRange = (set) => {
+      const d = [...set].sort((a, b) => a - b);
+      if (!d.length) return "";
+      const lbl = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+      const consecutive = d.every((v, k) => k === 0 || v === d[k - 1] + 1);
+      return d.length === 1 ? lbl[d[0]] : consecutive ? `${lbl[d[0]]}–${lbl[d[d.length - 1]]}` : d.map(v => lbl[v]).join("/");
+    };
+    m.schedule.days = ["this", "next"].map(w => ({
+      week: w, label: w,
+      rows: [...byWeek[w].entries()].sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([job, v]) => `${job} — ${dayRange(v.days)} — ${[...v.staff].sort().join(", ")}`),
     }));
   } catch (e) { m.schedule.error = true; }
 
@@ -356,15 +362,10 @@ function buildModel(inputs) {
         if (!u || !String(u.name || "").trim()) return;
         const d = toDateAny(u.projectedStart);
         const n = d ? daysBetween(d, meeting) : null;
-        const bits = [];
-        if (d) bits.push(`${fmtShort(d)}${u.startConfirmed ? " (confirmed)" : " (not confirmed)"}`); else bits.push("no start date");
-        if (u.foreman) bits.push(first(u.foreman));
-        if (u.customer || u.sales) bits.push(clip(u.customer || u.sales, 30));
-        if (u.city) bits.push(clip(u.city, 20));
-        if (u.notes) bits.push(clip(u.notes, 70));
-        const text = `${String(u.name).trim()} — ${bits.join(" — ")}`;
-        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${String(u.name).trim()} — ${fmtShort(d)} (${-n} day${-n === 1 ? "" : "s"} past)${bits.slice(1).length ? " — " + bits.slice(1).join(" — ") : ""}` });
-        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text });
+        const who = u.foreman ? ` — ${first(u.foreman)}` : "";
+        const when = d ? `${fmtShort(d)}${u.startConfirmed ? "" : "?"}` : "no date";   // "?" = start not confirmed
+        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${String(u.name).trim()} — ${fmtShort(d)} (${-n}d past)${who}` });
+        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${String(u.name).trim()} — ${when}${who}` });
       });
       // Plus the job-board rows (dated rough starts, finish starts, pipeline) the
       // lead prep already computes — skipped when the same job is on the tab.
@@ -375,9 +376,9 @@ function buildModel(inputs) {
         const d = u.start ? toDateAny(u.start) : null;
         const n = d ? daysBetween(d, meeting) : null;
         const who = String(u.who || "");
-        const tail = [u.kind, who && !/no foreman/i.test(who) ? first(who) : "", u.note ? clip(u.note, 70) : ""].filter(Boolean).join(" — ");
-        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${fmtShort(d)} (${-n} day${-n === 1 ? "" : "s"} past)${tail ? ` — ${tail}` : ""}` });
-        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${u.name} — ${d ? fmtShort(d) : "no date"}${tail ? ` — ${tail}` : ""}` });
+        const tail = who && !/no foreman/i.test(who) ? ` — ${first(who)}` : "";
+        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${fmtShort(d)} (${-n}d past)${tail}` });
+        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${u.name} — ${d ? fmtShort(d) : "no date"}${tail}` });
       });
       m.upcoming.pastDue.sort((a, b) => a.n - b.n); m.upcoming.soon.sort((a, b) => a.n - b.n);
       m.upcoming.pastDue = m.upcoming.pastDue.map(r => r.text); m.upcoming.soon = m.upcoming.soon.map(r => r.text);
@@ -387,7 +388,11 @@ function buildModel(inputs) {
   // Training — what shipped in the app since last meeting (FEATURES.md)
   try {
     if (shipped == null) m.shipped.error = true;
-    else m.shipped.rows = arr(shipped).map(r => `${r.title}${r.version ? ` (${r.version})` : ""}`);
+    else {
+      const all = arr(shipped).map(r => String(r.title || "").replace(/\s*[·—-]\s*(shipped|SW).*$/i, "")).filter(Boolean);
+      m.shipped.rows = all.slice(-8);                 // newest 8; the rest is in the app
+      m.shipped.more = Math.max(0, all.length - 8);
+    }
   } catch (e) { m.shipped.error = true; }
 
   // Crew out — next 7 days from the meeting
@@ -420,28 +425,22 @@ const MARGIN_BANDS = { rough: { green: 50, yellow: 40 }, finish: { green: 25, ye
 const marginColor = (pct, phase) => { const b = MARGIN_BANDS[phase] || MARGIN_BANDS.finish; return pct >= b.green ? "green" : pct >= b.yellow ? "amber" : "red"; };
 const pct = (p) => `${Math.round(p.ratio * 100)}%`;
 function hoursLine(r) {
+  // Compact: "Job — 214/420h (51%) OVER +237h · 77%"   (finish adds "· rough +91h")
   const spans = [];
   let text = `${r.name} — `;
   const push = (s, color, bold) => { if (color) spans.push({ start: text.length, len: s.length, rgb: RGB[color], bold: !!bold }); text += s; };
-  const phaseBit = (label, p) => {
-    text += `${label} ${p.used}h used / ${p.est}h bid (${pct(p)})`;
-    if (p.used > p.est) { text += " "; push(`OVER by ${p.used - p.est}h`, "red", true); }
-  };
-  if ((r.phase === "completed" || r.phase === "roughDone") && r.done) text += `done ${fmtShort(r.done)} · `;
-  if (r.cur) phaseBit(r.phase === "rough" || r.phase === "roughDone" ? "Rough" : r.phase === "finish" ? "Finish" : "Total", r.cur);
-  else text += r.phase === "rough" || r.phase === "roughDone" ? "Rough hours not in Simpro" : r.phase === "finish" ? "Finish hours not in Simpro" : "hours not in Simpro";
-  if (r.phase === "completed" && r.rough && r.finish) text += ` (rough ${r.rough.used}/${r.rough.est}h, finish ${r.finish.used}/${r.finish.est}h)`;
-  // Rough is history by finish time — plain words, no red flag (Koy, 2026-09-21).
+  if ((r.phase === "completed" || r.phase === "roughDone") && r.done) text += `${fmtShort(r.done)} · `;
+  if (r.cur) {
+    text += `${r.cur.used}/${r.cur.est}h (${pct(r.cur)})`;
+    if (r.cur.used > r.cur.est) { text += " "; push(`OVER +${r.cur.used - r.cur.est}h`, "red", true); }
+  } else text += "hours not in Simpro";
   if (r.phase === "finish" && r.rough) {
     const diff = r.rough.used - r.rough.est;
-    text += diff > 0 ? ` · rough went over by ${diff}h (${r.rough.used}h / ${r.rough.est}h)`
-          : diff < 0 ? ` · rough came in ${-diff}h under (${r.rough.used}h / ${r.rough.est}h)`
-          : ` · rough landed on bid (${r.rough.used}h)`;
+    text += diff > 0 ? ` · rough +${diff}h` : diff < 0 ? ` · rough ${diff}h` : " · rough on bid";
   }
-  if (r.extras && r.extras.used > 0) text += ` · extras ${r.extras.used}h / ${r.extras.est}h`;
-  text += " · margin ";
-  if (r.margin == null) text += "n/a";
-  else push(`${r.margin.toFixed(1)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true);
+  text += " · ";
+  if (r.margin == null) text += "margin n/a";
+  else push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true);
   return { text, kind: "bullet", spans };
 }
 
@@ -458,7 +457,7 @@ function renderLines(m) {
   const list = (rows, err, none) => { if (err) G("Could not load this section."); else if (!rows.length) G(none); else rows.forEach(B); };
 
   H1(m.heading);
-  G(`Prepared ${m.generated}. Numbers come from the app and Simpro; open the app for detail.`);
+  G(`Prepared ${m.generated}. Hours are used/bid; the % after the dot is margin.`);
 
   H2("Notes");
   B("");
@@ -488,10 +487,9 @@ function renderLines(m) {
   if (m.schedule.error) G("Could not load Simpro.");
   else ["this", "next"].forEach(w => {
     H3(w === "this" ? "This week" : "Next week");
-    const days = m.schedule.days.filter(d => d.week === w && d.rows.length);
-    if (!days.length) G(w === "this" ? "Nothing booked in Simpro this week." : "Next week not set in Simpro yet.");
-    // A leading tab nests the job under its day (createParagraphBullets counts leading tabs).
-    days.forEach(d => { B(d.label); d.rows.forEach(r => B("\t" + r)); });
+    const wk = m.schedule.days.find(d => d.week === w);
+    if (!wk || !wk.rows.length) G(w === "this" ? "Nothing booked in Simpro." : "Not set in Simpro yet.");
+    else wk.rows.forEach(B);
   });
 
   H2("Upcoming and past due");
@@ -502,7 +500,7 @@ function renderLines(m) {
 
   H2("Hours vs bid");
   if (m.hours.error) G("Could not load Simpro hours.");
-  else [["rough", "In rough"], ["finish", "In finish"], ["other", "Other (no rough/finish split in Simpro)"], ["roughDone", "Rough completed in the last 30 days"], ["completed", "Finish completed in the last 30 days"]].forEach(([k, label]) => {
+  else [["rough", "In rough"], ["finish", "In finish"], ["other", "Other"], ["roughDone", "Rough completed in the last 30 days"], ["completed", "Finish completed in the last 30 days"]].forEach(([k, label]) => {
     const rows = m.hours[k];
     if (k === "other" && !rows.length) return;
     H3(label);
@@ -524,7 +522,7 @@ function renderLines(m) {
 
   H2("Training");
   if (m.shipped.error) G("Could not read what shipped in the app.");
-  else m.shipped.rows.forEach(r => B(`App: ${r}`));
+  else { m.shipped.rows.forEach(B); if (m.shipped.more) G(`+${m.shipped.more} more app updates this week.`); }
   B("");
 
   H2("Crew out");
