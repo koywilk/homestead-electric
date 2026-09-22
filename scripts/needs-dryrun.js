@@ -285,4 +285,16 @@ assert.ok(!H.sentByMe({ ...upTask, status:"done" }, gage), "done leaves Sent");
 assert.ok(!H.sentByMe({ ...upTask, assignedTo:"Gage Lund" }, gage), "on me -> Mine, not Sent");
 assert.ok(!H.sentByMe(upTask, { id:"dae", name:"Daegan" }), "someone else's task is not in my Sent");
 
+// v421 FIX (Keegan, 2026-09-22): a foreman's OWN ask to the head — foreman stamp
+// = the requester — is BOTH onHead and sentByMe. It was landing under "On <head>"
+// (collapsed; jobless asks sank under "…on no job") and getting excluded from
+// Sent, so the head's "waiting on" reply never surfaced to the requester.
+// The component's grouping precedence is now: head = onHead && !sentByMe, sent =
+// sentByMe. These asserts lock that so Sent wins for a doc I sent.
+const ownAskToHead = { ...upTask, id:"u2", foreman:"Gage Lund" };
+assert.ok(H.onHead(ownAskToHead, gage, users, jobs), "own ask to head is technically onHead (foreman stamp = me)");
+assert.ok(H.sentByMe(ownAskToHead, gage), "…and I sent it");
+assert.ok(!(H.onHead(ownAskToHead, gage, users, jobs) && !H.sentByMe(ownAskToHead, gage)), "grouping precedence: NOT placed under On <head>");
+assert.ok(H.sentByMe(ownAskToHead, gage), "grouping precedence: placed in Sent, where the waiting-on line shows");
+
 console.log("needs-dryrun ok");
