@@ -4148,6 +4148,7 @@ const NOTIF_CATEGORIES = [
     // real toggles, not placebos (2026-07-10 rule).
     { key:"need_assigned",     label:"Task or need assigned to you",         roles:["admin","manager","foreman","lead","crew"] },
     { key:"need_done",         label:"A task you added was finished",        roles:["admin","manager","foreman","lead","crew"] },
+    { key:"need_update",       label:"Update or waiting-on note on a task you're part of", roles:["admin","manager","foreman","lead","crew"] },
     { key:"quote_converted",   label:"Quote converted to job",               roles:["admin","manager"] },
   ]},
   { label:"Job Status", items:[
@@ -48241,13 +48242,14 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-21 · App SW version: v420
+**Last manifest update:** 2026-09-21 · App SW version: v421
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
 - **Job Board — crews, not books** · 'shipped 2026-09-12' · 'SW v399' · the reorg cleanup slice Koy asked to see ("it's still showing all the coordinators and books"). The three "…'s Book" bands, the "No coordinator" band, and the "Show all jobs →" **book page** ('view==="book"', 'openBook', 'activeBook', 'showBookCompleted') are gone; the board's own ALL JOBS section already lists the whole company by stage. In their place one **Crews** band ('N foremen · M job sites') with a sort — **Most jobs** first (the head's where's-the-load read) or **A–Z** ('crewSort') — and every foreman card exactly as it was; Paul and Zane are just crews now. The Crew Schedule filter drops its "Books (coordinator)" group ('coordinatorBooks' memo, 'coord_' pref branch, 'coordMatch', and the day-column 'activeCrew' branch removed; the Crews group keeps its options), and Settings → Default schedule view drops the "…'s book (whole coordinator)" options — a previously saved 'coord_…' default now falls through to Auto (own crew). **Why it won't lose data:** read-side / UI only — no Firestore writes added or changed, no loader change, no rules change; the per-foreman 'coordinator' values in 'settings/users' are untouched (Scoreboard's coordinators board, Huddle chips and the functions' 'coordUserOf' routing still read them until their own cleanup); a user's saved 'defaultScheduleView' string is not rewritten, it just resolves differently.
+- **My Day — task updates and "waiting on"** · 'shipped 2026-09-21' · 'SW v421' · Koy: *"we need to be able to either start a discussion or add a note to tasks assigned to us, i dont want them to think im ignoring request if i myself am waiting to hear back from someone."* The gap was that snooze was silent: a task could only be open, snoozed, or done, and to the person who asked, snoozed and ignored looked identical. Every real task doc now has a **note button** on both sides (Mine, On &lt;head&gt;, and the new **Sent** group) that opens an inline panel: **Note** (a one-liner) or **Waiting on…** (who/what, plus an optional **Back on** date). An entry is '{by, at, kind: note|waiting, text, until?}' appended to the additive 'updates' array inside the doc's 'data' via 'arrayUnion' ('addNeedUpdate'; two phones can't clobber each other). The assignee's waiting-with-date also snoozes the row (the snooze that finally says why); an entry from the other side clears the snooze so the reply is seen. The **latest update line** shows under the task on both sides (orange for waiting, with '· back M/D'); tap it for the full history. The requester's views (On &lt;head&gt;, Sent) now list not-done docs **including snoozed ones**, so a task on hold stays visible with its reason instead of vanishing; a snoozed task with no update shows 'on hold · back M/D'. **Sent** = not-done docs I asked for that sit on someone else ('sentByMe'), folded by default with an 'N waiting' badge. Needs board cards show the latest line too. **Notify:** 'onNeedWrite' branch 4 — 'data.updates' grew → 'need_update' push + inbox ("Task on hold" / "Task update", deep-link 'myday') to the OTHER side ('needUpdateAudience': assignee posts → requester = assignedBy else createdBy; anyone else → assignee; self-talk silent); registered in 'NOTIF_CATEGORIES' for all roles ('wantsNotif' treats an absent key as on, so existing users get it). Harness 'scripts/needs-dryrun.js' §15 (audience, lines, Sent). Guide 'myday.html' steps 5–6. Mockup 'taskupdates-mockup.html'. **Needs 'firebase deploy --only functions:onNeedWrite'.** **Why it won't lose data:** one additive array inside 'data' (the needs loader returns 'data' verbatim, no loader change); appended with 'arrayUnion' never a whole-array write; the only other fields touched are 'snoozedUntil' (existing) on the updated doc via dotted 'data.*' paths; no rules change (the needs rule already accepts field-surgical updates); pre-v421 docs have no 'updates' and read as before; jobs, users, punch untouched.
 - **My Day — time-off requests land on the head's board** · 'shipped 2026-09-21' · 'SW v420' · Koy: *"any time off requests should still send notification but also be routed to my needs board in my day"* + *"mine only."* On submit, 'TimeOffPage' still fires 'notifyTimeOffRequest' (admins/managers + the requester's coordinator, unchanged) **and** now writes ONE 'needs' doc ('toneed_<requestId>', 'kind:"task"') assigned to the Head of Residential ('resiHeadName(users)', "mine only" → the head, not every approver) so it shows in the head's My Day **Tasks on me** lane (via 'headQueue'→'isMine'), due-dated to the time-off start so it climbs the lanes as the date nears. The board doc is **self-assigned** ('assignedTo'='assignedBy'=head, 'createdBy:""') precisely so 'onNeedWrite' stays silent — the 'notifyTimeOffRequest' push is the only alert, no duplicate ping (the requester still shows in the row text; 'requestedBy'/'timeoffId' keep the link in 'data'). Approve/deny marks the linked doc done (field-surgical 'updateDoc' on 'data.status'/'doneBy'/'doneAt'); Remove deletes it — both best-effort and caught, so older requests with no board doc just no-op. **Why it won't lose data:** additive — one new 'needs' doc via the standard '{data,…}' envelope the needs loader already reads (every field lives inside 'data', no loader change); no existing doc/field/collection/rule is modified; 'notifyTimeOffRequest', 'settings/timeOffRequests', and 'crewPTO' writes are untouched; 'ledgerNeeds' + nightly backups already cover 'needs'. No functions change for this feature (uses the already-deployed 'onNeedWrite', kept silent by design).
 - **My Day — Mine folded into categories, sorted by urgency** · 'shipped 2026-09-17' · 'SW v412' · Koy: *"in the my day section can we organize these into collapsed categories and sort them by urgency?"* — option A (by type). Every Mine row now carries what it is ('needKind' / 'dutyType' / 'autoCategory') and 'myDayCategories' folds them into **Tasks on me · Needs · Bodies · Punch · Invoicing · Start POs · Change orders · Return trips · Scheduling · QC walks · Job prep**; categories start collapsed (header = label, count, 'N overdue' badge or a *today* hint, left edge coloured by the category's most urgent lane) and order themselves by most-urgent lane → overdue count → label, so whatever holds an overdue row floats to the top; rows inside keep the overdue → today → this week → later sort. The foreman's On-<head> per-job lines are untouched. Pure helpers 'myDayCategoryOf' / 'myDayCategories' are extracted by the prebuild harness (section 14). Why it can't lose data: render-only — no write path touched; fold state is component state.
 - **My Day — the head owns every auto-task; Push delegates** · 'shipped 2026-09-15' · 'SW v408' · Koy: *"it is flooded with tasks that don't really make sense for the foremans… all of them flow through me… a button or option to push task to job foreman or pick a person."* **Who sees what:** foremen no longer get auto rows at all — Mine = task docs on them ∪ their punch items; the Head of Residential ('resiHead') gets EVERY non-prep auto-task on every live job ('headAutoTasks'), plus task docs, punch, and stage duties; lanes unchanged. **Push:** each head auto row has '→ <job foreman>' (one tap) and 'Pick person…' (roster). Pushing writes ONE 'needs' doc through 'saveNeed' ('autoTaskDoc': kind task, the rule's title/desc/job/due, assignedTo, assignedBy = head, and the new additive **'autoTaskId'**). The delegate sees an ordinary task in Mine and gets the existing 'need_assigned' push. The head row then reads its state from the doc ('autoDelegation' join, never stored): **with X · age** (Take back / Re-push) → when X marks it Done, **done by X · verify** (Koy chose verify-before-clear) with Done (existing 'clearedTasks' clear) and Send back (reopens the doc to its assignee and pushes "Task sent back"). One open doc per auto-task: pushing again reassigns via 'patchNeed', never a second doc. Head Done with an open doc closes the doc too ('doneBy' head). **Duplicates folded:** the duties engine's Rough/Finish QC walk and start-PO rows win over the task engine's '_qc_walk' / '_final_qc_walk' / '_rough_po' / '_finish_po' twins on the head board ('foldDutyTwins'; neither engine changed). **Foreman's "On Koy":** collapsed to one line per job — *"Koy has N things on this job"* — opening to the read-only rows plus **+ Add for Koy** (Quick-add preset with job + To: head; 'NeedQuickAdd' now honours 'preset.assignedTo'). Harness 'scripts/needs-dryrun.js' gains sections 8–12 (foreman zero auto rows, head all, twins, autoTaskDoc shape, delegation states + reassign-not-duplicate). Guides 'myday.html' + 'needs.html' updated. No rules / loader change; **needs 'firebase deploy --only functions:onNeedWrite'** (new branch 3: a done→open flip by someone other than the assignee sends 'need_assigned' "Task sent back" — Send back had no signal otherwise). **Why it won't lose data:** one additive field ('autoTaskId') inside the need doc's 'data'; auto-task Done/Snooze keep the existing whole-map 'clearedTasks' / 'taskDueDates' precedents (one 'updateJob' per tap); foremen lose ROWS only — no doc, field, or job value is deleted or renamed; Push/Take back/Send back are ordinary 'saveNeed' / 'patchNeed' writes with version snapshots via the ledger.
@@ -52123,6 +52125,35 @@ function dueBucketFromDate(ymd, now) {
 // come back on their own the morning of snoozedUntil (v392 pattern).
 function isSnoozed(n, todayYmd) { return !!(n && n.snoozedUntil) && n.snoozedUntil > todayYmd; }
 function needIsOpen(n, todayYmd) { return !!n && n.status !== "done" && !isSnoozed(n, todayYmd); }
+// ── Task updates (v421) ──────────────────────────────────────────────────────
+// `updates` is an ADDITIVE array inside a need doc's data: {by, at, kind:
+// "note"|"waiting", text, until?}. Appended with arrayUnion so two phones can't
+// clobber each other. A "waiting" entry by the ASSIGNEE with an `until` date
+// also snoozes the row (the snooze that finally says why); any entry by the
+// other side clears the snooze so the reply is seen. The audience is always
+// the other side of the task — never the author. Koy (2026-09-21): "i dont
+// want them to think im ignoring request if i myself am waiting to hear back
+// from someone".
+function needUpdates(n) { return Array.isArray(n && n.updates) ? n.updates : []; }
+function lastNeedUpdate(n) { const u = needUpdates(n); return u.length ? u[u.length - 1] : null; }
+function needRequester(n) { return String((n && (n.assignedBy || n.createdBy)) || "").trim(); }
+function needUpdateAudience(n, by) {
+  const a = needAssignee(n), req = needRequester(n);
+  const target = a && sameName(a, by) ? req : a;
+  return target && !sameName(target, by) ? target : "";
+}
+function needUpdateLine(u) {
+  if (!u) return "";
+  const md = y => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
+  return u.kind === "waiting" ? `waiting on ${u.text}${u.until ? " · back " + md(u.until) : ""}` : String(u.text || "");
+}
+// SENT: a not-done doc I asked for that sits on someone else — the requester's
+// side of the loop. Snoozed docs stay in (that's where "waiting on" shows).
+function sentByMe(n, identity) {
+  const me = identity && identity.name; if (!n || !me || n.status === "done") return false;
+  if (isMine(n, identity)) return false;
+  return sameName(n.assignedBy, me) || sameName(n.createdBy, me);
+}
 // The Head of Residential = whoever holds the resi.head hat (Settings → Team →
 // COMPANY HATS). Falls back to the jobprep.own holder so nothing routes to
 // nobody before the hat is ticked on flip day. Deactivated users never win.
@@ -52366,7 +52397,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -52389,6 +52420,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const jobById = (id) => (jobs || []).find(j => j && j.id === id);
   const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
   const first = (n) => String(n || "").split(" ")[0];
+  const mdOf = (y) => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
 
   const needRow = (n, readOnly) => {
     const k = needKind(n);
@@ -52397,6 +52429,9 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need", tagColor: k === "task" ? C.teal : C.orange,
       sub: [n.jobName, readOnly ? (sameName(n.createdBy, me) ? "you asked" : "") : (from ? `from ${first(from)}` : "")].filter(Boolean),
       jobId: n.jobId, section: null, canDone: !readOnly, canSnooze: !readOnly,
+      // v421: every real doc can take an update from either side.
+      need: n, canUpdate: !!onAddNeedUpdate, latest: lastNeedUpdate(n), nUpdates: needUpdates(n).length,
+      snoozedUntil: isSnoozed(n, todayYmd) ? n.snoozedUntil : "", audience: needUpdateAudience(n, me),
       onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n)); },
       onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); } };
   };
@@ -52495,8 +52530,12 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const [openCats, setOpenCats] = useState(() => new Set());   // v412: Mine categories start folded
   const toggleCat = (k) => setOpenCats(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const toggleHeadJob = (id) => setOpenHeadJobs(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  // v421: the requester's views (On <head>, Sent) list NOT-DONE docs, snoozed
+  // included — a task the other side put on hold must stay visible with its
+  // "waiting on" line instead of silently vanishing.
+  const liveNeeds = (needs || []).filter(n => n && n.status !== "done");
   const headRows = iAmHead ? [] : (() => {
-    const rows = [...openNeeds.filter(n => onHead(n, identity, users, jobs)).map(n => needRow(n, true)),
+    const rows = [...liveNeeds.filter(n => onHead(n, identity, users, jobs)).map(n => needRow(n, true)),
       ...derivedDutiesForForeman(jobs, identity, users).map(d => dutyRow(d, true))];
     const myIds = new Set(myJobs.map(j => j.id));
     const dutyKeys = new Set(derivedDutiesForForeman(jobs, identity, users).map(d => d.id)); // already `${jobId}_${dutyId}`
@@ -52515,10 +52554,27 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       // jobless rows ("_none") sort LAST — ￿ is past every real job name.
       .sort((a, b) => String(a.jobId === "_none" ? "￿" : ((a.job && a.job.name) || "")).localeCompare(String(b.jobId === "_none" ? "￿" : ((b.job && b.job.name) || ""))));
   })();
+  const sentRows = liveNeeds.filter(n => sentByMe(n, identity) && !(!iAmHead && onHead(n, identity, users, jobs))).map(n => needRow(n, true));
+  const sentWaiting = sentRows.filter(r => r.snoozedUntil || (r.latest && r.latest.kind === "waiting")).length;
   const groups = [
     { key: "mine", title: "Mine", rows: sortRows(mineRows), byCat: myDayCategories(sortRows(mineRows)), empty: "All clear — nothing on you right now." },
     ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
+    // v421: what I asked others for, with their latest update. Starts folded.
+    { key: "sent", title: "Sent", rows: sortRows(sentRows), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
   ];
+  // v421 update panel state (Row is a plain render fn, so state lives here).
+  const [updFor, setUpdFor] = useState(null);
+  const [updKind, setUpdKind] = useState("note");
+  const [updText, setUpdText] = useState("");
+  const [updUntil, setUpdUntil] = useState("");
+  const [histFor, setHistFor] = useState(null);
+  const closeUpd = () => { setUpdFor(null); setUpdKind("note"); setUpdText(""); setUpdUntil(""); };
+  const sendUpd = (r) => {
+    const text = updText.trim(); if (!text || !r.need) return;
+    onAddNeedUpdate(r.need.id, { kind: updKind, text, until: updKind === "waiting" ? updUntil : "" }, r.need);
+    toast.success(r.audience ? `Sent to ${first(r.audience)}` : "Note added");
+    closeUpd();
+  };
 
   const Row = (r) => {
     const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
@@ -52532,6 +52588,49 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             {r.sub.map((s, i) => <span key={i}>{s}</span>)}
             {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
           </div>
+          {r.latest && (
+            <div onClick={e => { e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
+              style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12, marginTop: 4, cursor: "pointer" }}>
+              <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
+              <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
+              <span style={{ color: C.muted }}>{timeAgo(r.latest.at)}{r.nUpdates > 1 ? ` · ${r.nUpdates} updates` : ""}</span>
+            </div>
+          )}
+          {!r.latest && r.snoozedUntil && <div style={{ fontSize: 12, color: C.orange, fontWeight: 600, marginTop: 4 }}>on hold · back {mdOf(r.snoozedUntil)}</div>}
+          {histFor === r.key && r.nUpdates > 0 && (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, borderLeft: `2px solid ${C.border}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: C.dim }}>
+              {needUpdates(r.need).slice().reverse().map((u, i) => (
+                <div key={i}><span style={{ fontWeight: 600, color: C.text }}>{first(u.by)}:</span> {needUpdateLine(u)} <span style={{ color: C.muted }}>· {timeAgo(u.at)}</span></div>
+              ))}
+            </div>
+          )}
+          {updFor === r.key && (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                {[["note", "Note"], ["waiting", "Waiting on…"]].map(([k, l]) => (
+                  <button key={k} onClick={() => setUpdKind(k)}
+                    style={{ fontFamily: "inherit", fontSize: 12, fontWeight: updKind === k ? 700 : 500, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer",
+                      background: updKind === k ? C.accent : C.card, color: updKind === k ? "#fff" : C.text, border: `1px solid ${updKind === k ? C.accent : C.border}` }}>{l}</button>
+                ))}
+              </div>
+              <input type="text" value={updText} autoFocus onChange={e => setUpdText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendUpd(r); }}
+                placeholder={updKind === "waiting" ? "Waiting on who or what?" : "Add a note…"}
+                style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                {updKind === "waiting" && (
+                  <label style={{ fontSize: 12, color: C.dim, display: "flex", gap: 6, alignItems: "center" }}>Back on
+                    <input type="date" min={todayYmd} value={updUntil} onChange={e => setUpdUntil(e.target.value)}
+                      style={{ fontFamily: "inherit", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+                  </label>
+                )}
+                <button onClick={closeUpd} style={{ fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
+                <button onClick={() => sendUpd(r)} disabled={!updText.trim()}
+                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: updText.trim() ? 1 : .5 }}>
+                  {r.audience ? `Send to ${first(r.audience)}` : "Add note"}
+                </button>
+              </div>
+            </div>
+          )}
           {r.state === "with" && <div style={{ fontSize: 12, color: C.blue, fontWeight: 600, marginTop: 4 }}>with {first(r.who)}{r.age ? ` · ${r.age}` : ""}</div>}
           {r.state === "verify" && <div style={{ fontSize: 12, color: C.green, fontWeight: 700, marginTop: 4 }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</div>}
           {r.actions && r.actions.length > 0 && (
@@ -52558,6 +52657,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         {r.canSnooze && (
           <button onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)} title="Snooze" style={ib}><Icon name="clock" size={19} stroke={2} /></button>
         )}
+        {r.canUpdate && (
+          <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); setUpdFor(r.key); } }} title="Add an update"
+            style={{ ...ib, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}><Icon name="note" size={18} stroke={2} /></button>
+        )}
         {snoozeFor === r.key && (
           <div style={{ position: "absolute", right: 10, top: "calc(100% + 4px)", zIndex: 5, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(20,30,50,.12)", padding: 6, display: "flex", flexDirection: "column", minWidth: 170 }}>
             {[["3 days", 3], ["1 week", 7]].map(([lbl, d]) => (
@@ -52581,6 +52684,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
           <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
+          {g.badge && <span style={{ fontSize: 10, fontWeight: 700, color: C.orange, background: "#B06A2C1A", borderRadius: 5, padding: "1px 6px" }}>{g.badge}</span>}
           <span style={{ flex: 1, height: 1, background: C.border }} />
         </div>
         {isOpen && g.byCat && (g.byCat.length
@@ -52668,7 +52772,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       )}
       {narrow || groups.length === 1
         ? groups.map(Group)
-        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{Group(groups[0])}</div><div>{Group(groups[1])}</div></div>}
+        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{Group(groups[0])}</div><div>{groups.slice(1).map(Group)}</div></div>}
       {undo && (
         <div style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${ON_MOBILE ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8995, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 520, margin: "0 auto" }}>
           <span>{undo.label}</span>
@@ -52759,6 +52863,11 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         borderRadius: 10, padding: "12px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, lineHeight: 1.45, color: C.text, marginBottom: 8, wordBreak: "break-word" }}>{n.text}</div>
+        {lastNeedUpdate(n) && (
+          <div style={{ fontSize: 12, marginTop: -4, marginBottom: 8, color: lastNeedUpdate(n).kind === "waiting" ? C.orange : C.dim, fontWeight: 600 }}>
+            {String(lastNeedUpdate(n).by || "").split(" ")[0]}: {needUpdateLine(lastNeedUpdate(n))} <span style={{ color: C.muted, fontWeight: 400 }}>· {timeAgo(lastNeedUpdate(n).at)}</span>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {n.jobName
             ? pill(n.jobName, C.bg, C.dim, "mapPin", n.jobId && onSelectJob ? () => { const j = (jobs || []).find(x => x.id === n.jobId); if (j) onSelectJob(j); } : null)
@@ -55741,6 +55850,23 @@ function App() {
     try { await updateDoc(doc(db,"needs",id), upd); }
     catch(e){ if (current) { await saveNeed({ ...current, ...p }); } else { console.error("patchNeed error:",e); } }
   };
+  // v421: append one update entry. arrayUnion (never a whole-array write) so
+  // two phones posting at once can't clobber each other. Assignee's "waiting"
+  // with a date also snoozes; a reply from the other side un-snoozes.
+  const addNeedUpdate = async (id, { kind, text, until }, current) => {
+    const nowIso = new Date().toISOString();
+    const entry = { by: identity?.name || "", at: nowIso, kind: kind === "waiting" ? "waiting" : "note", text: String(text || "").trim(), ...(kind === "waiting" && until ? { until } : {}) };
+    if (!entry.text) return;
+    const isAssignee = !!current && sameName(needAssignee(current), entry.by);
+    const extra = {};
+    if (entry.kind === "waiting" && entry.until && isAssignee) extra.snoozedUntil = entry.until;
+    else if (!isAssignee && current && current.snoozedUntil) extra.snoozedUntil = "";
+    setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, updates: [...needUpdates(n), entry], ...extra } : n));
+    const upd = { updated_at: nowIso, saved_by: entry.by, "data.updates": arrayUnion(entry) };
+    Object.keys(extra).forEach(k => { upd["data."+k] = extra[k]; });
+    try { await updateDoc(doc(db,"needs",id), upd); }
+    catch(e){ if (current) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
+  };
   const deleteNeed = async (id) => {
     setNeeds(prev => (prev||[]).filter(n=>n.id!==id));
     try { await deleteDoc(doc(db,"needs",id)); } catch(e){ console.error("deleteNeed error:",e); }
@@ -58567,7 +58693,7 @@ function App() {
       )}
 
       {view==="myday"&&can(identity,"myday.view")&&(
-        <MyDay identity={identity} users={users} jobs={jobs} needs={needs}
+        <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}/>

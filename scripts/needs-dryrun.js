@@ -58,7 +58,8 @@ const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i
 
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
-  "punchAssignedTo","myJobsFor","headAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories"];
+  "punchAssignedTo","myJobsFor","headAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
+  "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -258,5 +259,30 @@ eq(cats.map(c => c.key), ["tasks","co","punch","invoicing","scheduling"], "most 
 eq(cats.map(c => [c.rows.length, c.overdue]), [[2,2],[2,1],[1,0],[1,0],[1,0]], "counts + overdue per category");
 eq(cats[0].label, "Tasks on me", "labels come from MYDAY_CAT_LABELS");
 eq(H.myDayCategories([]), [], "empty -> []");
+
+// ── 15. task updates (v421): audience = the other side, never the author ──
+const upTask = { id:"u1", text:"Order meter base", kind:"task", assignedTo:"Koy Wilkinson", assignedBy:"Gage Lund", createdBy:"Gage Lund", status:"open",
+  updates:[{ by:"Koy Wilkinson", at:"2026-09-22T15:00:00.000Z", kind:"waiting", text:"Rexel quote", until:"2026-09-25" }] };
+eq(H.needUpdates(upTask).length, 1, "updates array read");
+eq(H.needUpdates({ id:"x" }), [], "absent updates -> [] (every pre-v421 doc)");
+eq(H.lastNeedUpdate({ id:"x" }), null, "no updates -> null");
+eq(H.lastNeedUpdate(upTask).text, "Rexel quote", "last entry");
+eq(H.needRequester(upTask), "Gage Lund", "requester = assignedBy");
+eq(H.needRequester({ createdBy:"Justin Cloward" }), "Justin Cloward", "…else createdBy");
+eq(H.needUpdateAudience(upTask, "Koy Wilkinson"), "Gage Lund", "assignee posts -> the requester hears");
+eq(H.needUpdateAudience(upTask, "Gage Lund"), "Koy Wilkinson", "requester posts -> the assignee hears");
+eq(H.needUpdateAudience(upTask, "Josh Cloward"), "Koy Wilkinson", "a third party posts -> the assignee hears");
+eq(H.needUpdateAudience({ assignedTo:"Koy Wilkinson", createdBy:"Koy Wilkinson" }, "Koy Wilkinson"), "", "self-assigned self-note -> nobody");
+eq(H.needUpdateAudience({ assignedTo:"", createdBy:"Gage Lund" }, "Gage Lund"), "", "unassigned, creator posts -> nobody");
+eq(H.needUpdateLine(upTask.updates[0]), "waiting on Rexel quote · back 9/25", "waiting line with M/D date");
+eq(H.needUpdateLine({ kind:"waiting", text:"the GC" }), "waiting on the GC", "waiting line without a date");
+eq(H.needUpdateLine({ kind:"note", text:"called, no answer" }), "called, no answer", "note line");
+eq(H.needUpdateLine(null), "", "null-safe");
+assert.ok(H.sentByMe(upTask, gage), "Gage sent it -> in Gage's Sent");
+assert.ok(!H.sentByMe(upTask, koy), "…not in Koy's (it's Koy's Mine)");
+assert.ok(H.sentByMe({ ...upTask, snoozedUntil:"2026-09-25" }, gage), "snoozed by the assignee stays in Sent (that's where 'waiting on' shows)");
+assert.ok(!H.sentByMe({ ...upTask, status:"done" }, gage), "done leaves Sent");
+assert.ok(!H.sentByMe({ ...upTask, assignedTo:"Gage Lund" }, gage), "on me -> Mine, not Sent");
+assert.ok(!H.sentByMe(upTask, { id:"dae", name:"Daegan" }), "someone else's task is not in my Sent");
 
 console.log("needs-dryrun ok");

@@ -1402,6 +1402,28 @@ exports.onNeedWrite = functions.firestore
       tasks.push(sendToNameIfWanted(nextA, "need_assigned",
         { title: "Task sent back", body: `${reopenedBy} sent back${onJob}: ${text}`, view: "myday" }));
     }
+    // 4. Update (v421) → the OTHER side of the task. data.updates grew by one
+    //    entry {by, at, kind: note|waiting, text, until?}: author = assignee →
+    //    the requester (assignedBy, else createdBy); anyone else → the
+    //    assignee. Self-talk is silent. Mirrors needUpdateAudience() in App.js.
+    const bu = Array.isArray(before && before.updates) ? before.updates : [];
+    const au = Array.isArray(after.updates) ? after.updates : [];
+    if (au.length > bu.length) {
+      const entry = au[au.length - 1] || {};
+      const lc = (s) => String(s || "").trim().toLowerCase();
+      const author = String(entry.by || "").trim();
+      const requester = String(after.assignedBy || after.createdBy || "").trim();
+      const target = nextA && lc(nextA) === lc(author) ? requester : nextA;
+      if (target && author && lc(target) !== lc(author)) {
+        const what = String(entry.text || "").slice(0, 120);
+        const isWait = entry.kind === "waiting";
+        tasks.push(sendToNameIfWanted(target, "need_update", {
+          title: isWait ? "Task on hold" : "Task update",
+          body:  isWait ? `${author} is waiting on ${what}${entry.until ? ` · back ${entry.until}` : ""}${onJob} — ${text}`
+                        : `${author}${onJob}: ${what} — ${text}`,
+          view:  "myday" }));
+      }
+    }
     if (tasks.length) functions.logger.info("[onNeedWrite]", { id: context.params.needId, prevA, nextA, isDone, sends: tasks.length });
     await Promise.all(tasks);
     return null;

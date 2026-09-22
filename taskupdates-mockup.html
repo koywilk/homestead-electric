@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task updates mockup</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFFFFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--muted:#9AA3B2;--accent:#3B5BA5;--ink:#fff;--green:#3E7D5A;--orange:#B06A2C;--teal:#3E7D7A;--red:#B23A3A}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141821;--surface:#1B2030;--card:#222732;--border:#2A2F3A;--text:#E6EAF1;--dim:#9AA3B2;--muted:#6E7682;--accent:#66A8FF;--ink:#0B1220;--green:#46C78A;--orange:#D98A4A;--teal:#5FB3AE;--red:#E06A60}}
+:root[data-theme="dark"]{--bg:#141821;--surface:#1B2030;--card:#222732;--border:#2A2F3A;--text:#E6EAF1;--dim:#9AA3B2;--muted:#6E7682;--accent:#66A8FF;--ink:#0B1220;--green:#46C78A;--orange:#D98A4A;--teal:#5FB3AE;--red:#E06A60}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px}
+.wrap{max-width:1040px;margin:0 auto;padding:20px 16px 60px}
+.eyebrow{font-family:"Bebas Neue";font-size:13px;letter-spacing:.14em;color:var(--accent)}h1{font-family:"Bebas Neue";font-weight:400;font-size:32px;letter-spacing:.04em;margin:2px 0 6px;line-height:1}
+.lede{color:var(--dim);font-size:13px;margin:0 0 16px;max-width:70ch}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:760px){.two{grid-template-columns:1fr}}
+.phone{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px}
+.who{font-family:"Bebas Neue";font-size:20px;letter-spacing:.06em;margin:0 0 8px;display:flex;align-items:center;gap:8px}.who small{font-family:"IBM Plex Sans";font-size:11px;letter-spacing:0;color:var(--dim)}
+.group{display:flex;align-items:center;gap:8px;margin:12px 2px 6px;cursor:pointer;user-select:none}.group .t{font-family:"Bebas Neue";font-size:18px;letter-spacing:.07em}.group .n{font-size:12px;color:var(--muted)}.group .badge{font-size:10px;font-weight:700;color:var(--orange);background:rgba(176,106,44,.12);border-radius:5px;padding:1px 6px}.group .line{flex:1;height:1px;background:var(--border)}.group .chev{display:inline-block;transition:transform .15s;color:var(--dim)}.group.open .chev{transform:rotate(90deg)}
+.rows{display:flex;flex-direction:column;gap:7px}
+.row{display:flex;gap:8px;align-items:flex-start;background:var(--card);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:8px 10px 8px 12px}
+.row .main{flex:1;min-width:0}.row .title{font-size:14px;font-weight:600;line-height:1.35}.row .sub{display:flex;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:3px;align-items:center}
+.tag{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:4px;padding:1px 6px;color:var(--teal);border:1px solid rgba(62,125,122,.4)}
+.latest{margin-top:5px;font-size:12px;color:var(--dim);cursor:pointer;display:flex;gap:6px;align-items:center}.latest b{color:var(--text);font-weight:600}.latest.wait b{color:var(--orange)}.latest .ago{color:var(--muted)}
+.hist{margin-top:6px;border-left:2px solid var(--border);padding-left:8px;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)}.hist b{color:var(--text);font-weight:600}
+.ib{width:44px;height:44px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--dim);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:16px}.ib.on{border-color:var(--accent);color:var(--accent)}
+.panel{margin-top:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px}
+.chips{display:flex;gap:6px;margin-bottom:6px}.chip{border-radius:999px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;padding:6px 10px;cursor:pointer}.chip.on{background:var(--accent);color:var(--ink);border-color:var(--accent);font-weight:700}
+.panel input[type=text]{width:100%;font:inherit;font-size:13px;padding:8px 10px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+.panel .foot{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}.panel label{font-size:12px;color:var(--dim);display:flex;gap:6px;align-items:center}.panel input[type=date]{font:inherit;font-size:12px;padding:6px 8px;border-radius:7px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+.send{margin-left:auto;background:var(--accent);color:var(--ink);border:none;border-radius:8px;font-weight:700;font-size:13px;padding:8px 14px;cursor:pointer;font-family:inherit}
+.push{margin-top:10px;background:#1B2030;color:#E6EAF1;border-radius:10px;padding:9px 12px;font-size:12px;display:none;gap:8px;align-items:center}.push.on{display:flex}.push b{color:#66A8FF}
+.empty{padding:12px;text-align:center;color:var(--dim);font-size:13px;background:var(--surface);border:1px dashed var(--border);border-radius:10px}
+.note{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--dim);margin-bottom:16px}.note b{color:var(--text)}
+</style></head><body><div class="wrap">
+<div class="eyebrow">My Day · task updates · mockup</div><h1>Updates and "waiting on"</h1>
+<p class="lede">Same task, both phones. Gage asked Koy for a meter base. Koy is waiting on the supplier. Tap the note button on either side to post an update; the other side gets a push and sees the latest line under the task.</p>
+<div class="note"><b>Try it:</b> on Koy's phone tap the note icon, pick <b>Waiting on…</b>, type "Rexel quote", set a back-on date, Send → the row leaves Koy's Mine until that date and Gage's side shows why. Then reply from Gage's phone → Koy's row wakes up.</div>
+<div class="two">
+  <div class="phone"><div class="who">GAGE <small>foreman · asked for it</small></div><div id="gage"></div><div class="push" id="pushGage"></div></div>
+  <div class="phone"><div class="who">KOY <small>head of residential · it's on him</small></div><div id="koy"></div><div class="push" id="pushKoy"></div></div>
+</div></div>
+<script>
+const TODAY="2026-09-22";
+let task={id:"n1",text:"Order meter base for #1770 England",jobName:"#1770 England Home",kind:"task",assignedTo:"Koy Wilkinson",assignedBy:"Gage Lund",createdBy:"Gage Lund",status:"open",snoozedUntil:"",updates:[]};
+const state={openPanel:null,kind:"note",text:"",until:"",hist:{},groups:{gageSent:true,koyMine:true}};
+const $=s=>document.querySelector(s);const el=(t,c,x)=>{const d=document.createElement(t);if(c)d.className=c;if(x!=null)d.textContent=x;return d};
+const first=n=>String(n||"").split(" ")[0];const md=y=>{if(!y)return"";const p=y.split("-");return (+p[1])+"/"+(+p[2])};
+const ago=iso=>{const m=Math.round((Date.now()-new Date(iso))/60000);return m<1?"just now":m<60?m+"m":Math.round(m/60)+"h"};
+const last=()=>task.updates[task.updates.length-1]||null;
+const line=u=>u.kind==="waiting"?`waiting on ${u.text}${u.until?" · back "+md(u.until):""}`:u.text;
+const audience=by=>by===task.assignedTo?task.assignedBy:task.assignedTo;
+function post(by){const inp=document.querySelector(".panel input[type=text]");if(inp)state.text=inp.value;const t=state.text.trim();if(!t)return;const u={by,at:new Date().toISOString(),kind:state.kind,text:t,...(state.kind==="waiting"&&state.until?{until:state.until}:{})};task.updates.push(u);
+  if(u.kind==="waiting"&&u.until&&by===task.assignedTo)task.snoozedUntil=u.until;
+  if(by!==task.assignedTo&&task.snoozedUntil)task.snoozedUntil="";
+  const to=audience(by);const p=$(to===task.assignedTo?"#pushKoy":"#pushGage");p.replaceChildren();p.appendChild(el("b",null,u.kind==="waiting"?"Task on hold":"Task update"));p.append(` ${first(by)}${u.kind==="waiting"?" is ":": "}${line(u)} · ${task.jobName}`);p.classList.add("on");
+  state.openPanel=null;state.text="";state.until="";state.kind="note";render();}
+function row(side){const me=side==="koy"?"Koy Wilkinson":"Gage Lund";const r=el("div","row");const main=el("div","main");
+  main.appendChild(el("div","title",task.text));const sub=el("div","sub");sub.appendChild(el("span","tag","Task"));sub.appendChild(el("span",null,task.jobName));sub.appendChild(el("span",null,side==="koy"?"from Gage":"with Koy"));main.appendChild(sub);
+  const lu=last();if(lu){const l=el("div","latest"+(lu.kind==="waiting"?" wait":""));const b=el("b",null,first(lu.by)+": "+line(lu));l.appendChild(b);l.appendChild(el("span","ago",ago(lu.at)));if(task.updates.length>1)l.appendChild(el("span","ago","· "+task.updates.length+" updates"));l.onclick=()=>{state.hist[side]=!state.hist[side];render()};main.appendChild(l);
+    if(state.hist[side]){const h=el("div","hist");[...task.updates].reverse().forEach(u=>{const d=el("div");d.appendChild(el("b",null,first(u.by)+": "));d.append(line(u)+" · "+ago(u.at));h.appendChild(d)});main.appendChild(h)}}
+  if(state.openPanel===side){const p=el("div","panel");const ch=el("div","chips");[["note","Note"],["waiting","Waiting on…"]].forEach(([k,l])=>{const c=el("button","chip"+(state.kind===k?" on":""),l);c.onclick=()=>{state.kind=k;render()};ch.appendChild(c)});p.appendChild(ch);
+    const inp=el("input");inp.type="text";inp.placeholder=state.kind==="waiting"?"Waiting on who or what?":"Add a note…";inp.value=state.text;inp.oninput=e=>state.text=e.target.value;inp.onkeydown=e=>{if(e.key==="Enter")post(me)};p.appendChild(inp);
+    const f=el("div","foot");if(state.kind==="waiting"){const lab=el("label",null,"Back on ");const d=el("input");d.type="date";d.min=TODAY;d.value=state.until;d.onchange=e=>state.until=e.target.value;lab.appendChild(d);f.appendChild(lab)}
+    const s=el("button","send","Send to "+first(audience(me)));s.onclick=()=>post(me);f.appendChild(s);p.appendChild(f);main.appendChild(p);setTimeout(()=>inp.focus(),0)}
+  r.appendChild(main);
+  if(side==="koy"){const d=el("button","ib","✓");d.title="Done";r.appendChild(d)}
+  const n=el("button","ib"+(state.openPanel===side?" on":""),"✎");n.title="Add an update";n.onclick=()=>{state.openPanel=state.openPanel===side?null:side;render()};r.appendChild(n);
+  return r}
+function group(title,n,badge,key,body){const g=el("div");const h=el("div","group"+(state.groups[key]?" open":""));h.appendChild(el("span","chev","▶"));h.appendChild(el("span","t",title));h.appendChild(el("span","n",String(n)));if(badge)h.appendChild(el("span","badge",badge));h.appendChild(el("span","line"));h.onclick=()=>{state.groups[key]=!state.groups[key];render()};g.appendChild(h);if(state.groups[key])g.appendChild(body);return g}
+function render(){const snoozed=task.snoozedUntil&&task.snoozedUntil>TODAY;const lu=last();
+  const g=$("#gage");g.replaceChildren();const gm=el("div","rows");gm.appendChild(el("div","empty","All clear — nothing on you right now."));g.appendChild(group("Mine",0,"","gageMine",gm));
+  const gs=el("div","rows");gs.appendChild(row("gage"));g.appendChild(group("Sent",1,lu&&lu.kind==="waiting"&&snoozed?"1 waiting":"","gageSent",gs));
+  const k=$("#koy");k.replaceChildren();const km=el("div","rows");if(snoozed)km.appendChild(el("div","empty","All clear — 1 task snoozed until "+md(task.snoozedUntil)+" (waiting on "+lu.text+")"));else km.appendChild(row("koy"));k.appendChild(group("Mine",snoozed?0:1,"","koyMine",km));}
+render();
+</script></body></html>
