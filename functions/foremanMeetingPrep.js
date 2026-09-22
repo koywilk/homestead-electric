@@ -430,22 +430,28 @@ const MARGIN_BANDS = { rough: { green: 50, yellow: 40 }, finish: { green: 25, ye
 const marginColor = (pct, phase) => { const b = MARGIN_BANDS[phase] || MARGIN_BANDS.finish; return pct >= b.green ? "green" : pct >= b.yellow ? "amber" : "red"; };
 const pct = (p) => `${Math.round(p.ratio * 100)}%`;
 function hoursLine(r) {
-  // Compact: "Job — 214/420h (51%) OVER +237h · 77%"   (finish adds "· rough +91h")
+  // One consistent shape per line, easy to scan (Koy, 2026-09-21):
+  //   **Job name**   214 / 420 h   51%   margin 77%
+  //   **Job name**   547 / 310 h   176%  +237h over   margin 30%
+  // Job name bold; hours grey; "+Nh over" red; margin colored by band.
   const spans = [];
-  let text = `${r.name} — `;
-  const push = (s, color, bold) => { if (color) spans.push({ start: text.length, len: s.length, rgb: RGB[color], bold: !!bold }); text += s; };
-  if ((r.phase === "completed" || r.phase === "roughDone") && r.done) text += `${fmtShort(r.done)} · `;
+  let text = "";
+  const push = (str, color, bold) => { spans.push({ start: text.length, len: str.length, rgb: color ? RGB[color] : [0, 0, 0], bold: !!bold }); text += str; };
+  const grey = (str) => { spans.push({ start: text.length, len: str.length, rgb: [0.45, 0.45, 0.45], bold: false }); text += str; };
+  push(r.name, null, true);
+  if ((r.phase === "completed" || r.phase === "roughDone") && r.done) grey(`   done ${fmtShort(r.done)}`);
   if (r.cur) {
-    text += `${r.cur.used}/${r.cur.est}h (${pct(r.cur)})`;
-    if (r.cur.used > r.cur.est) { text += " "; push(`OVER +${r.cur.used - r.cur.est}h`, "red", true); }
-  } else text += "hours not in Simpro";
+    grey(`   ${r.cur.used} / ${r.cur.est} h`);
+    text += `   ${pct(r.cur)}`;
+    if (r.cur.used > r.cur.est) { text += "   "; push(`+${r.cur.used - r.cur.est}h over`, "red", true); }
+  } else grey("   hours not in Simpro");
   if (r.phase === "finish" && r.rough) {
     const diff = r.rough.used - r.rough.est;
-    text += diff > 0 ? ` · rough +${diff}h` : diff < 0 ? ` · rough ${diff}h` : " · rough on bid";
+    grey(diff > 0 ? `   rough +${diff}h` : diff < 0 ? `   rough ${diff}h` : "   rough on bid");
   }
-  text += " · ";
-  if (r.margin == null) text += "margin n/a";
-  else push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true);
+  text += "   ";
+  if (r.margin == null) grey("margin n/a");
+  else { text += "margin "; push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true); }
   return { text, kind: "bullet", spans };
 }
 
@@ -462,7 +468,7 @@ function renderLines(m) {
   const list = (rows, err, none) => { if (err) G("Could not load this section."); else if (!rows.length) G(none); else rows.forEach(B); };
 
   H1(m.heading);
-  G(`Prepared ${m.generated}. Hours are used/bid; the % after the dot is margin.`);
+  G(`Prepared ${m.generated}.`);
 
   H2("Notes");
   B("");
