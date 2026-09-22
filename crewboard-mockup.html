@@ -152,7 +152,9 @@ const T = u => u.title || "crew";
 const foremen  = () => list.filter(u => T(u)==="foreman");
 const foremanIds = () => new Set(foremen().map(f=>f.id));
 const crewOf   = fid => list.filter(u => u.foremanId===fid && T(u)!=="foreman" && T(u)!=="admin")
-  .sort((a,b)=>(T(a)==="lead"?0:1)-(T(b)==="lead"?0:1) || a.name.localeCompare(b.name));
+  .sort((a,b)=>rank(a)-rank(b) || a.name.localeCompare(b.name));
+const rank = u => T(u)==="jrforeman"?0:T(u)==="lead"?1:2;
+const LBL = {foreman:"Foreman",jrforeman:"Jr. Foreman",lead:"Lead",crew:"Crew"};
 const unassigned = () => list.filter(u => T(u)!=="foreman" && T(u)!=="admin" && (!u.foremanId || !foremanIds().has(u.foremanId)));
 const byId = id => list.find(u=>u.id===id);
 const savedById = id => saved.find(u=>u.id===id);
@@ -186,7 +188,7 @@ function personCard(u){
   const d = el("div", "person" + (changed(u)?" changed":""));
   d.appendChild(dot(color(u)));
   d.appendChild(el("span","nm",shortName(u.name)));
-  d.appendChild(el("span","role "+T(u),T(u)));
+  d.appendChild(el("span","role "+(T(u)==="jrforeman"?"lead":T(u)),LBL[T(u)]||T(u)));
   d.onclick = () => openSheet(u.id);
   return d;
 }
@@ -246,13 +248,13 @@ function renderSheet(){
   const f = byId(u.foremanId);
   const where = T(u)==="foreman" ? crewOf(u.id).length+" crew" : (f ? first(f.name)+"'s crew" : "Unassigned");
   const who = el("div","who"); who.appendChild(dot(color(u)));
-  const txt = el("div","txt"); txt.appendChild(el("div","nm",u.name)); txt.appendChild(el("div","sub",T(u)+" · "+where)); who.appendChild(txt);
+  const txt = el("div","txt"); txt.appendChild(el("div","nm",u.name)); txt.appendChild(el("div","sub",(LBL[T(u)]||T(u))+" · "+where)); who.appendChild(txt);
   const x = el("button","close","✕"); x.setAttribute("aria-label","Close"); x.onclick=closeSheet; who.appendChild(x);
   sh.appendChild(who);
 
   sh.appendChild(el("div","lbl","ROLE"));
   const roles = el("div","chips");
-  ["foreman","lead","crew"].forEach(r => roles.appendChild(chip(r[0].toUpperCase()+r.slice(1), T(u)===r, () => setRole(u.id, r))));
+  [["foreman","Foreman"],["jrforeman","Jr. Foreman"],["lead","Lead"],["crew","Crew"]].forEach(([r,l]) => roles.appendChild(chip(l, T(u)===r, () => setRole(u.id, r))));
   sh.appendChild(roles);
 
   if (pendingDemote && pendingDemote.id===u.id) {

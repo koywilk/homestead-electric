@@ -135,3 +135,13 @@ and `saveUsers` wiring do not change.
 - [ ] Footer lists pending changes in words; Save persists via `saveUsers`; Discard reverts.
 - [ ] Re-read of `settings/users` after Save shows only `title`/`foremanId` changed on touched users.
 - [ ] `coordinator` values are byte-identical before and after any board save.
+
+## Addendum (same ship): Jr. Foreman title
+
+Koy: "add Jr. foreman as a role." New title `jrforeman` ("Jr. Foreman"), a fourth ROLE chip
+(order on the board: Jr. Foreman, Lead, Crew). Semantics: a crew-side title one rung above
+Lead. Still sits under a foreman (keeps `foremanId`); counts as a lead everywhere a lead
+does via `isLeadTitle()` (lead pickers, return-trip crew options, notification defaults,
+Scoreboard Leads board, My Day landing, login card); not a job foreman (no foreman pickers,
+no own column). Server: the two daily lead reminders include the title; needs a functions
+deploy. If a Jr. Foreman should run their own jobs instead, that is a follow-up.

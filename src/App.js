@@ -3866,8 +3866,13 @@ const DEFAULT_USERS = [
 ];
 
 // ── Title = field role (who they are on site) ────────────────
-const TITLE_OPTIONS = ["admin","foreman","lead","crew"];
-const TITLE_LABELS  = { admin:"Admin", foreman:"Foreman", lead:"Lead", crew:"Crew" };
+const TITLE_OPTIONS = ["admin","foreman","jrforeman","lead","crew"];
+const TITLE_LABELS  = { admin:"Admin", foreman:"Foreman", jrforeman:"Jr. Foreman", lead:"Lead", crew:"Crew" };
+// Jr. Foreman (2026-09-21, v419): a crew-side title one rung above Lead. Still
+// sits under a foreman (has a foremanId), counts as a LEAD everywhere a lead
+// does — lead pickers, notification defaults, Scoreboard Leads board, My Day
+// landing — and is NOT a job foreman (not in foreman pickers, no own column).
+const isLeadTitle = t => t === "lead" || t === "jrforeman";
 
 // ── Access = what they can do in the app ─────────────────────
 const ACCESS_OPTIONS = ["admin","manager","standard","limited","contractor"];
@@ -4196,7 +4201,7 @@ const NOTIF_CATEGORIES = [
 const getNotifDefaults = (title) => {
   const prefs = {};
   NOTIF_CATEGORIES.forEach(cat => cat.items.forEach(item => {
-    prefs[item.key] = item.roles.includes(title||"crew");
+    prefs[item.key] = item.roles.includes(title === "jrforeman" ? "lead" : (title||"crew"));
   }));
   return prefs;
 };
@@ -4340,7 +4345,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     </div>
                   )}
                   {/* Foreman assignment — for crew/lead */}
-                  {(title==="crew"||title==="lead") && (
+                  {(title==="crew"||isLeadTitle(title)) && (
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>FOREMAN (crew assignment)</div>
                       <select value={u.foremanId||""} onChange={e=>upd(u.id,{foremanId:e.target.value})}
@@ -14613,7 +14618,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
   };
 
   const crewOptions = (Array.isArray(users) ? users : [])
-    .filter(usr => { const ti = usr.title||(usr.role||""); return ti==="foreman"||ti==="lead"; })
+    .filter(usr => { const ti = usr.title||(usr.role||""); return ti==="foreman"||isLeadTitle(ti); })
     .map(usr => usr.name).filter(Boolean).sort();
 
   const deletePhoto = async (tripId, photo) => {
@@ -40080,7 +40085,7 @@ function SettingsRoleBadge({label, color}) {
 
 function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   const accessColors = { admin:"#B23A3A", manager:"#6A5E97", standard:"#3B5BA5", limited:"#5E6670" };
-  const titleLabels  = { foreman:"Foreman", lead:"Lead", crew:"Crew" };
+  const titleLabels  = { foreman:"Foreman", jrforeman:"Jr. Foreman", lead:"Lead", crew:"Crew" };
   const title  = user.title || (["admin","justin","jeromy"].includes(user.role) ? "admin" : ["foreman","lead","crew"].includes(user.role) ? user.role : "crew");
   const access = getAccess(user);
   return (
@@ -42703,7 +42708,7 @@ const sb4Build = (jobs, board, users, cfg) => {
     if (u.active === false) return; // laid-off / deactivated — off the boards
     const t = _sb3lc(u.title || u.role), nm = String(u.name || "").trim();
     if (t === "foreman") { foremen.push(nm); if (u.coordinator) f2c[nm] = String(u.coordinator).trim(); }
-    if (t === "lead") leads.push(nm);
+    if (isLeadTitle(t)) leads.push(nm);
   });
   const foremanLc = new Set(foremen.map(n => n.toLowerCase()));
   const clean = (jobs || []).filter(j => j && !SBV2_TEST_JOB(j.name || j.jobName));
@@ -45208,7 +45213,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
     return "crew";
   };
   const foremanUsers = (users||[]).filter(u=>getT(u)==="foreman"&&u.active!==false);
-  const leadUsers    = (users||[]).filter(u=>getT(u)==="lead");
+  const leadUsers    = (users||[]).filter(u=>isLeadTitle(getT(u)));
   const crewUsers    = (users||[]).filter(u=>getT(u)==="crew");
 
   const getColor = (name) => {
@@ -48236,13 +48241,14 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-21 · App SW version: v419
+**Last manifest update:** 2026-09-21 · App SW version: v420
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
 - **Job Board — crews, not books** · 'shipped 2026-09-12' · 'SW v399' · the reorg cleanup slice Koy asked to see ("it's still showing all the coordinators and books"). The three "…'s Book" bands, the "No coordinator" band, and the "Show all jobs →" **book page** ('view==="book"', 'openBook', 'activeBook', 'showBookCompleted') are gone; the board's own ALL JOBS section already lists the whole company by stage. In their place one **Crews** band ('N foremen · M job sites') with a sort — **Most jobs** first (the head's where's-the-load read) or **A–Z** ('crewSort') — and every foreman card exactly as it was; Paul and Zane are just crews now. The Crew Schedule filter drops its "Books (coordinator)" group ('coordinatorBooks' memo, 'coord_' pref branch, 'coordMatch', and the day-column 'activeCrew' branch removed; the Crews group keeps its options), and Settings → Default schedule view drops the "…'s book (whole coordinator)" options — a previously saved 'coord_…' default now falls through to Auto (own crew). **Why it won't lose data:** read-side / UI only — no Firestore writes added or changed, no loader change, no rules change; the per-foreman 'coordinator' values in 'settings/users' are untouched (Scoreboard's coordinators board, Huddle chips and the functions' 'coordUserOf' routing still read them until their own cleanup); a user's saved 'defaultScheduleView' string is not rewritten, it just resolves differently.
+- **My Day — time-off requests land on the head's board** · 'shipped 2026-09-21' · 'SW v420' · Koy: *"any time off requests should still send notification but also be routed to my needs board in my day"* + *"mine only."* On submit, 'TimeOffPage' still fires 'notifyTimeOffRequest' (admins/managers + the requester's coordinator, unchanged) **and** now writes ONE 'needs' doc ('toneed_<requestId>', 'kind:"task"') assigned to the Head of Residential ('resiHeadName(users)', "mine only" → the head, not every approver) so it shows in the head's My Day **Tasks on me** lane (via 'headQueue'→'isMine'), due-dated to the time-off start so it climbs the lanes as the date nears. The board doc is **self-assigned** ('assignedTo'='assignedBy'=head, 'createdBy:""') precisely so 'onNeedWrite' stays silent — the 'notifyTimeOffRequest' push is the only alert, no duplicate ping (the requester still shows in the row text; 'requestedBy'/'timeoffId' keep the link in 'data'). Approve/deny marks the linked doc done (field-surgical 'updateDoc' on 'data.status'/'doneBy'/'doneAt'); Remove deletes it — both best-effort and caught, so older requests with no board doc just no-op. **Why it won't lose data:** additive — one new 'needs' doc via the standard '{data,…}' envelope the needs loader already reads (every field lives inside 'data', no loader change); no existing doc/field/collection/rule is modified; 'notifyTimeOffRequest', 'settings/timeOffRequests', and 'crewPTO' writes are untouched; 'ledgerNeeds' + nightly backups already cover 'needs'. No functions change for this feature (uses the already-deployed 'onNeedWrite', kept silent by design).
 - **My Day — Mine folded into categories, sorted by urgency** · 'shipped 2026-09-17' · 'SW v412' · Koy: *"in the my day section can we organize these into collapsed categories and sort them by urgency?"* — option A (by type). Every Mine row now carries what it is ('needKind' / 'dutyType' / 'autoCategory') and 'myDayCategories' folds them into **Tasks on me · Needs · Bodies · Punch · Invoicing · Start POs · Change orders · Return trips · Scheduling · QC walks · Job prep**; categories start collapsed (header = label, count, 'N overdue' badge or a *today* hint, left edge coloured by the category's most urgent lane) and order themselves by most-urgent lane → overdue count → label, so whatever holds an overdue row floats to the top; rows inside keep the overdue → today → this week → later sort. The foreman's On-<head> per-job lines are untouched. Pure helpers 'myDayCategoryOf' / 'myDayCategories' are extracted by the prebuild harness (section 14). Why it can't lose data: render-only — no write path touched; fold state is component state.
 - **My Day — the head owns every auto-task; Push delegates** · 'shipped 2026-09-15' · 'SW v408' · Koy: *"it is flooded with tasks that don't really make sense for the foremans… all of them flow through me… a button or option to push task to job foreman or pick a person."* **Who sees what:** foremen no longer get auto rows at all — Mine = task docs on them ∪ their punch items; the Head of Residential ('resiHead') gets EVERY non-prep auto-task on every live job ('headAutoTasks'), plus task docs, punch, and stage duties; lanes unchanged. **Push:** each head auto row has '→ <job foreman>' (one tap) and 'Pick person…' (roster). Pushing writes ONE 'needs' doc through 'saveNeed' ('autoTaskDoc': kind task, the rule's title/desc/job/due, assignedTo, assignedBy = head, and the new additive **'autoTaskId'**). The delegate sees an ordinary task in Mine and gets the existing 'need_assigned' push. The head row then reads its state from the doc ('autoDelegation' join, never stored): **with X · age** (Take back / Re-push) → when X marks it Done, **done by X · verify** (Koy chose verify-before-clear) with Done (existing 'clearedTasks' clear) and Send back (reopens the doc to its assignee and pushes "Task sent back"). One open doc per auto-task: pushing again reassigns via 'patchNeed', never a second doc. Head Done with an open doc closes the doc too ('doneBy' head). **Duplicates folded:** the duties engine's Rough/Finish QC walk and start-PO rows win over the task engine's '_qc_walk' / '_final_qc_walk' / '_rough_po' / '_finish_po' twins on the head board ('foldDutyTwins'; neither engine changed). **Foreman's "On Koy":** collapsed to one line per job — *"Koy has N things on this job"* — opening to the read-only rows plus **+ Add for Koy** (Quick-add preset with job + To: head; 'NeedQuickAdd' now honours 'preset.assignedTo'). Harness 'scripts/needs-dryrun.js' gains sections 8–12 (foreman zero auto rows, head all, twins, autoTaskDoc shape, delegation states + reassign-not-duplicate). Guides 'myday.html' + 'needs.html' updated. No rules / loader change; **needs 'firebase deploy --only functions:onNeedWrite'** (new branch 3: a done→open flip by someone other than the assignee sends 'need_assigned' "Task sent back" — Send back had no signal otherwise). **Why it won't lose data:** one additive field ('autoTaskId') inside the need doc's 'data'; auto-task Done/Snooze keep the existing whole-map 'clearedTasks' / 'taskDueDates' precedents (one 'updateJob' per tap); foremen lose ROWS only — no doc, field, or job value is deleted or renamed; Push/Take back/Send back are ordinary 'saveNeed' / 'patchNeed' writes with version snapshots via the ledger.
 
@@ -48527,7 +48533,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Fleet Notification Health · 'FleetHealth' (admin only)
   - Devices — app versions · 'DeviceVersionsCard' (admin only) · fleet list vs latest deployed version, stale devices glow red · 'shipped 2026-07-10' · 'SW v318'
   - User management · 'UserManagement'
-  - **Crew Board v2 — tap to edit, foreman columns, no coordinators** · 'shipped 2026-09-21' · 'SW v419' · 'CrewBoard' (Settings, 'users.manage') · Koy: *"the drag to move feature sucks and coordinators should be removed and replaced with foreman. make it easy to make someone foreman or lead etc from crew board and swap anyone around with ease."* The v1 board (HTML5 drag + a phone-only pick-up-then-tap mode, grouped Coordinator → Foreman → crew) is replaced by **one column per active foreman** (A–Z, colour bar, crew count, leads first) plus an **Unassigned** pool (still catches crew whose foreman was deactivated or demoted). **One interaction on every device:** tap any person — a crew card or the foreman's column header — and a person sheet opens (bottom sheet on phones, centred dialog on laptops) with **ROLE** chips (Foreman / Lead / Crew) and **CREW** chips (one per foreman + Unassigned); one tap = one change, the board behind updates live. No drag handlers remain. Making anyone Foreman clears their 'foremanId' and their empty column appears at once; demoting a foreman **with crew** asks *"X has N crew. Hand them (and X) to…"* (a chip per other foreman + Unassigned) and moves the crew AND the demoted foreman together, so no 'foremanId' is ever left pointing at a non-foreman. A **pending-changes list** in plain words ("Braden: → Gage's crew", "Owen: lead → foreman") sits above Save. The section header carries the counts ('N FOREMEN · M UNASSIGNED') and starts collapsed. The board **neither reads nor writes 'coordinator'** and does not clear it — Scoreboard's coordinators board, Huddle chips, the functions' 'coordUserOf', and Team Members' COORDINATOR select still use the stored values (their retirement is a separate cleanup). **Why it won't lose data:** every tap stages in component state; Save persists the whole list through the existing stale-write-guarded 'saveUsers' (re-reads the live doc, refuses a stale overwrite, stamps 'updated_at'/'saved_by'/'device', toasts); only 'title' and 'foremanId' are ever written and only on tapped users — every other field on every user, including admins and deactivated people who never render, is spread through untouched; no loader change, no rules change, no 'jobs' write (a job's 'foreman' string is not rewritten on demotion — the Job Board picker owns that).
+  - **Crew Board v2 — tap to edit, foreman columns, no coordinators** · 'shipped 2026-09-21' · 'SW v419' · 'CrewBoard' (Settings, 'users.manage') · Koy: *"the drag to move feature sucks and coordinators should be removed and replaced with foreman. make it easy to make someone foreman or lead etc from crew board and swap anyone around with ease."* The v1 board (HTML5 drag + a phone-only pick-up-then-tap mode, grouped Coordinator → Foreman → crew) is replaced by **one column per active foreman** (A–Z, colour bar, crew count, leads first) plus an **Unassigned** pool (still catches crew whose foreman was deactivated or demoted). **One interaction on every device:** tap any person — a crew card or the foreman's column header — and a person sheet opens (bottom sheet on phones, centred dialog on laptops) with **ROLE** chips (Foreman / Lead / Crew) and **CREW** chips (one per foreman + Unassigned); one tap = one change, the board behind updates live. No drag handlers remain. Making anyone Foreman clears their 'foremanId' and their empty column appears at once; demoting a foreman **with crew** asks *"X has N crew. Hand them (and X) to…"* (a chip per other foreman + Unassigned) and moves the crew AND the demoted foreman together, so no 'foremanId' is ever left pointing at a non-foreman. A **pending-changes list** in plain words ("Braden: → Gage's crew", "Owen: lead → foreman") sits above Save. The section header carries the counts ('N FOREMEN · M UNASSIGNED') and starts collapsed. The board **neither reads nor writes 'coordinator'** and does not clear it — Scoreboard's coordinators board, Huddle chips, the functions' 'coordUserOf', and Team Members' COORDINATOR select still use the stored values (their retirement is a separate cleanup). **Jr. Foreman title** (same ship, Koy: *"add Jr. foreman as a role"*): new 'title:"jrforeman"' in 'TITLE_OPTIONS'/'TITLE_LABELS', a fourth ROLE chip on the board (columns order Jr. Foreman → Lead → Crew) and in Team Members. A Jr. Foreman still sits under a foreman (keeps 'foremanId') and counts as a **lead** everywhere a lead does via 'isLeadTitle' — job lead pickers ('leadUsers'/'_leadUsers'), return-trip crew options, notification defaults ('getNotifDefaults' maps it to the lead row), Scoreboard Leads board, My Day landing, login card label. NOT a job foreman: not in foreman pickers, no own column — promote to Foreman on the board when they graduate. **Why it won't lose data:** every tap stages in component state; Save persists the whole list through the existing stale-write-guarded 'saveUsers' (re-reads the live doc, refuses a stale overwrite, stamps 'updated_at'/'saved_by'/'device', toasts); only 'title' and 'foremanId' are ever written and only on tapped users — every other field on every user, including admins and deactivated people who never render, is spread through untouched; no loader change, no rules change, no 'jobs' write (a job's 'foreman' string is not rewritten on demotion — the Job Board picker owns that).
   - Deactivate team member access + delete-resurrection fix · 'shipped 2026-08-06' · 'SW v366' · Koy laid five people off and "it wont let me delete them they keep coming back." Root cause: the "one-time" 'heUserMerge_v1' employee backfill in the users loader was keyed on **per-device localStorage** but wrote the **shared** 'settings/users' doc — every new phone, cleared browser, or fresh install re-ran it and re-added anyone missing from its hardcoded 28-name list, via an unstamped 'setDoc' that also wiped 'updated_at'/'saved_by' and disarmed saveUsers' stale-write guard. The merge block is deleted (roster's only source of truth is the doc; 'BAD_IDS' stays as a read-side filter but its unstamped write-back is gone too), so Remove now sticks. On top of that, layoffs get a first-class **Deactivate access** action (edit card, next to Remove; Koy's own record exempt like Remove): sets 'active:false' + 'deactivatedAt'/'deactivatedBy' stamps and strips 'fcmTokens'/'fcmToken' so job pushes stop reaching their phone immediately, all through the existing stale-guarded 'saveUsers' funnel. Deactivated people: hidden from the login picker (the 'onSavePin' closure maps the FULL outer list, so a new hire setting a PIN can't drop them from the doc); booted from any device with a cached identity by a new roster check that runs on app open, on return-to-foreground, and every 30 minutes (also boots identities whose id is GONE from the roster, closing the "deleted but still logged in for up to the 24h identity TTL" hole; fails open on read errors and empty lists so a flaky network can never lock out the crew); excluded from every derived name list — foremen/leads dropdowns, module 'FOREMEN'/'LEADS' globals, Crew view foremanCrews, Crew Board columns and unassigned pool (which now also catches crew whose foreman was deactivated, so they surface for re-drag instead of vanishing), foremen-colors settings, and the Scoreboard boards; and denied server-side in 'requireAdmin' (one added 'user.active === false' condition — needs the next functions deploy, client works without it). Shown dimmed with a red DEACTIVATED · date pill in Team Members, one-tap **Reactivate** restores them (PIN kept). Remove stays for true mistakes; deactivate is the layoff path — history, scoreboard attributions, and job name strings all stay intact
   - Backup / restore + Force Update All Devices
   - Contractor portal — requests inbox · 'GCPortalInbox' (admin only) · 'shipped 2026-07-16' · 'SW v340' · reviews GC-filed requests ('gc_requests' via admin callables); Apply lands an answer on the exact question ('answeredVia:"gc"', "From contractor portal" chip) or adds a punch item with a 'GC' badge — through the app's merge-safe patch path, and NEVER marks "applied" unless the mutation actually landed
@@ -48790,6 +48796,30 @@ function TimeOffPage({ identity = null, users = [] }) {
       // Notify approvers (admins/managers + this person's coordinator). Best-effort.
       try { httpsCallable(functions,"notifyTimeOffRequest")({ requesterName:me, start:entry.start, end:entry.end, note:entry.note, usePaid:entry.usePaid }); }
       catch(_) {}
+      // Also route it onto the Head of Residential's My Day / Needs board so it
+      // can't be missed (Koy, 2026-09-21: "still send notification but also …
+      // routed to my needs board"). "mine only" → the head only, not every
+      // approver. Written SELF-ASSIGNED (assignedBy = createdBy = head) so
+      // onNeedWrite stays silent — the notifyTimeOffRequest push above is the
+      // only alert; this doc is silent board plumbing (no duplicate ping). The
+      // requester shows in the row text; `requestedBy` keeps the link in data.
+      try {
+        const headName = resiHeadName(users);
+        if (headName) {
+          const range = (entry.end && entry.end !== entry.start) ? `${entry.start} → ${entry.end}` : entry.start;
+          const payTag = entry.usePaid === false ? " (unpaid)" : " (PTO)";
+          const nowIso = new Date().toISOString();
+          const need = {
+            id: "toneed_" + entry.id, kind: "task",
+            text: `Time off — ${me}: ${range}${payTag}${entry.note ? ` — ${entry.note}` : ""}`,
+            assignedTo: headName, assignedBy: headName, assignedAt: nowIso, createdBy: "",
+            requestedBy: me, timeoffId: entry.id,
+            dueDate: entry.start, dueBucket: dueBucketFromDate(entry.start) || "week",
+            status: "open",
+          };
+          await setDoc(doc(db,"needs",need.id), { data:need, updated_at:nowIso, saved_by:me });
+        }
+      } catch(_) {}
     } catch(e) { toast.error("Couldn't submit: "+(e?.message||"")); }
     setSubmitting(false);
   };
@@ -48797,6 +48827,11 @@ function TimeOffPage({ identity = null, users = [] }) {
   const decide = async (r, status) => {
     try {
       await _saveRequests(requests.map(x => x.id===r.id ? { ...x, status, decidedBy:me, decidedAt:new Date().toISOString() } : x));
+      // Clear the head's My Day board task now that it's been acted on. Field-
+      // surgical (never a full-doc overwrite); silent (doneBy=head, createdBy
+      // empty → onNeedWrite branch 2 can't fire). Older requests predating this
+      // routing have no such doc → updateDoc 404s, caught and ignored.
+      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), { "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me }); } catch(_) {}
       if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
         const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off", usePaid:r.usePaid!==false };
         await mergeSaveSettingsFields("crewPTO", { list:[...(ptoList||[]), entry] });
@@ -48814,6 +48849,9 @@ function TimeOffPage({ identity = null, users = [] }) {
     if (!window.confirm("Remove this request?")) return;
     try {
       await _saveRequests(requests.filter(x => x.id !== r.id));
+      // Drop the head's board task too (the request is gone). Best-effort — a
+      // missing doc (older request) just no-ops.
+      try { await deleteDoc(doc(db,"needs","toneed_"+r.id)); } catch(_) {}
       const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
       if (filtered.length !== (ptoList||[]).length) await setDoc(doc(db,"settings","crewPTO"), { list:filtered, updatedAt:new Date().toISOString() });
     } catch(e) { toast.error("Delete failed: "+(e?.message||"")); }
@@ -51875,8 +51913,10 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
   const foremen    = live.filter(u => T(u) === "foreman").sort(byName);
   const foremanIds = new Set(foremen.map(f => f.id));
   const isCrewish  = u => T(u) !== "foreman" && T(u) !== "admin";
+  const rank       = u => T(u) === "jrforeman" ? 0 : T(u) === "lead" ? 1 : 2;   // column order: Jr. Foreman, Lead, Crew
+  const label      = t => TITLE_LABELS[t] || t;
   const crewOf     = fid => live.filter(u => isCrewish(u) && u.foremanId === fid)
-    .sort((a, b) => (T(a) === "lead" ? 0 : 1) - (T(b) === "lead" ? 0 : 1) || byName(a, b));
+    .sort((a, b) => rank(a) - rank(b) || byName(a, b));
   // Unassigned also catches crew whose foreman was deactivated or demoted
   // elsewhere — their foremanId points at a hidden column, so without this
   // they'd vanish from the board instead of surfacing for re-assignment.
@@ -51914,7 +51954,7 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
   // Pending-changes review — what Save will write, in words.
   const pending = list.filter(u => savedOf(u.id) && changed(u)).map(u => {
     const s = savedOf(u.id); const parts = [];
-    if (T(s) !== T(u)) parts.push(`${T(s)} → ${T(u)}`);
+    if (T(s) !== T(u)) parts.push(`${label(T(s))} → ${label(T(u))}`);
     if ((s.foremanId || "") !== (u.foremanId || "")) { const f = byId(u.foremanId); parts.push(`→ ${f ? first(f.name) + "'s crew" : "Unassigned"}`); }
     return `${first(u.name)}: ${parts.join(", ")}`;
   });
@@ -51926,7 +51966,7 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
         background: changed(u) ? `${C.accent}18` : C.surface, border: `1px solid ${changed(u) ? C.accent : C.border}`, color: C.text }}>
       {dot(color(u))}
       <span style={{ flex: 1, fontWeight: 500 }}>{short(u.name)}</span>
-      <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700, color: T(u) === "lead" ? C.accent : C.dim }}>{T(u)}</span>
+      <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700, color: isLeadTitle(T(u)) ? C.accent : C.dim }}>{label(T(u))}</span>
     </div>
   );
   const chip = (label, on, onClick, dotColor, ghost) => (
@@ -51953,13 +51993,13 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 16, color: C.text }}>{open.name}</div>
             <div style={{ fontSize: 12, color: C.dim }}>
-              {T(open)} · {T(open) === "foreman" ? `${crewOf(open.id).length} crew` : (byId(open.foremanId) && foremanIds.has(open.foremanId)) ? `${first(byId(open.foremanId).name)}'s crew` : "Unassigned"}
+              {label(T(open))} · {T(open) === "foreman" ? `${crewOf(open.id).length} crew` : (byId(open.foremanId) && foremanIds.has(open.foremanId)) ? `${first(byId(open.foremanId).name)}'s crew` : "Unassigned"}
             </div>
           </div>
           <button type="button" onClick={closeSheet} aria-label="Close" style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 4 }}><Icon name="x" size={16}/></button>
         </div>
         {lbl("ROLE")}
-        {chips(["foreman", "lead", "crew"].map(r => chip(r[0].toUpperCase() + r.slice(1), T(open) === r, () => setRole(open.id, r))))}
+        {chips(["foreman", "jrforeman", "lead", "crew"].map(r => chip(label(r), T(open) === r, () => setRole(open.id, r))))}
         {handoff && handoff.id === open.id && (
           <div style={{ marginTop: 10, padding: "10px 12px", border: `1px solid ${C.orange}`, background: `${C.orange}14`, borderRadius: 10 }}>
             <div style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>
@@ -54420,7 +54460,7 @@ function App() {
   // active!==false everywhere: deactivated members stay in the roster doc
   // (history + reactivation) but disappear from every picker and name list.
   const _foremanUsers = users.filter(u=>getTitle(u)==="foreman"&&u.active!==false);
-  const _leadUsers    = users.filter(u=>getTitle(u)==="lead"&&u.active!==false);
+  const _leadUsers    = users.filter(u=>isLeadTitle(getTitle(u))&&u.active!==false);
   const _crewUsers    = users.filter(u=>getTitle(u)==="crew");
 
   // One-time lead-notification backfill. Leads were created with old defaults
@@ -56199,7 +56239,7 @@ function App() {
     if (landingApplied) return;
     if (!identity?.id || !Array.isArray(users) || users.length === 0) return;
     const t = getTitle(identity);
-    if ((t === "foreman" || t === "lead" || t === "crew") && can(identity, "myday.view")) setView("myday");
+    if ((t === "foreman" || isLeadTitle(t) || t === "crew") && can(identity, "myday.view")) setView("myday");
     setLandingApplied(true);
   }, [identity, users, landingApplied]);
 
