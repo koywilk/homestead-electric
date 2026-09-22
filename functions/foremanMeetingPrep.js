@@ -371,13 +371,18 @@ function buildModel(inputs) {
       // lead prep already computes — skipped when the same job is on the tab.
       const norm = (n) => String(n || "").toLowerCase().replace(/\(finish\)/g, "").replace(/#\d+\s*[-–—]?\s*/g, "").replace(/[^a-z0-9]/g, "");
       const onTab = new Set(arr(upcoming).map(u => norm(u && u.name)).filter(Boolean));
+      // Board rows carry no confirmed flag; look the job up by name and read the
+      // phase's *StartConfirmed field so the label matches the tab rows.
+      const jobByName = new Map(arr(jobs).map(j => [norm(j && j.name), j]));
       arr(upcomingBoard).forEach(u => {
         if (!u || !u.name || onTab.has(norm(u.name))) return;
         const d = u.start ? toDateAny(u.start) : null;
         const n = d ? daysBetween(d, meeting) : null;
-        const tail = "";   // no names in Upcoming (Koy, 2026-09-21)
-        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${fmtShort(d)} (${-n}d past)${tail}` });
-        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${u.name} — ${d ? fmtShort(d) : "no date"}${tail}` });
+        const j = jobByName.get(norm(u.name));
+        const confirmed = j ? !!(/finish/i.test(u.kind || "") || /\(finish\)/i.test(u.name) ? j.finishStartConfirmed : j.roughStartConfirmed) : false;
+        const label = d ? ` ${confirmed ? "confirmed" : "projected"}` : "";
+        if (n != null && n < 0) m.upcoming.pastDue.push({ n, text: `${u.name} — ${fmtShort(d)}${label} (${-n}d past)` });
+        else m.upcoming.soon.push({ n: n == null ? 9999 : n, text: `${u.name} — ${d ? fmtShort(d) + label : "no date"}` });
       });
       m.upcoming.pastDue.sort((a, b) => a.n - b.n); m.upcoming.soon.sort((a, b) => a.n - b.n);
       m.upcoming.pastDue = m.upcoming.pastDue.map(r => r.text); m.upcoming.soon = m.upcoming.soon.map(r => r.text);
