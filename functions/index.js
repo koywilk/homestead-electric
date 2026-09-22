@@ -1755,7 +1755,11 @@ exports.dailyMatterportChase = functions.pubsub
       const j = (d.data() && d.data().data) || {};
       if (j.type === "quote") return;
       const hasLink = !!(j.matterportLink || (Array.isArray(j.matterportLinks) && j.matterportLinks.length));
-      if (j.matterportStatus === "needs" && !hasLink && !j.matterportDismissed) {
+      // v424: before-drywall window — rough >= 85% AND finish not started (mirrors
+      // matterportScanNeeded in App.js). Drops finished service/T&M jobs.
+      const roughPct = parseInt(String(j.roughStage || "0"), 10) || 0;
+      const finishPct = parseInt(String(j.finishStage || "0"), 10) || 0;
+      if (roughPct >= 85 && finishPct === 0 && (j.matterportStatus || "") !== "complete" && !hasLink && !j.matterportDismissed) {
         count++;
         const t = Date.parse(j.matterportStatusDate || "");
         if (Number.isFinite(t) && (oldest === null || t < oldest)) oldest = t;

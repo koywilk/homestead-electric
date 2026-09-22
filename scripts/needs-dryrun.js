@@ -58,7 +58,7 @@ const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i
 
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
-  "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
+  "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
   "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe"];
 const combined = [
   extractConst("PERMISSIONS"),
@@ -66,6 +66,7 @@ const combined = [
   extractConst("can"),
   extractConst("matchesForeman"),
   extractConst("parseAnyDate"),
+  extractConst("parseStage"),
   extractConst("AUTO_DUTY_TWINS"),
   extractLine("MYDAY_ORDER"),
   extractConst("MYDAY_CAT_LABELS"),
@@ -214,6 +215,17 @@ eq(H.scanAutoTasks([england, navarro], new Set(), fakeComputeMP).map(t => t.id),
 eq(H.scanAutoTasks([england, navarro], new Set(["j1770_matterport"]), fakeComputeMP), [], "scanAutoTasks respects cleared");
 assert.strictEqual(H.myDayCategoryOf({ kind:"auto", autoCategory:"matterport" }), "matterport", "auto matterport row -> Matterport scans category");
 assert.strictEqual(H.myDayCategoryOf({ kind:"auto", autoCategory:"qc" }), "qc", "other auto categories unchanged (qc)");
+
+// v424 — before-drywall scan window: opens at rough >= 85%, closes once finish
+// starts; also honors complete / dismissed / has-link.
+assert.ok(H.matterportScanNeeded({ roughStage:"85%", finishStage:"" }), "rough 85 + finish not started -> needed (early, time to schedule)");
+assert.ok(H.matterportScanNeeded({ roughStage:"100%", finishStage:"0%" }), "rough 100 + finish 0 -> needed");
+assert.ok(!H.matterportScanNeeded({ roughStage:"70%", finishStage:"" }), "rough < 85 -> not yet");
+assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"40%" }), "finish started (drywall up) -> dropped");
+assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", matterportStatus:"complete" }), "already complete -> not needed");
+assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", matterportDismissed:true }), "dismissed -> not needed");
+assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", matterportLinks:[{ url:"x" }] }), "scan link uploaded -> not needed");
+assert.ok(!H.matterportScanNeeded(null), "null-safe");
 
 // ── 9. duty twins fold ──────────────────────────────────────────────────────
 const dutyKeys = new Set(["j1937_coord_rough_qc"]);
