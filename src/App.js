@@ -53044,10 +53044,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       onDone: undefined, onSnooze: undefined, scan: undefined, pushOpen: false,
       onTogglePick: undefined, onPick: undefined,
     });
-    mineQ.forEach(r => {
-      add(me, r);
-      (r.owners || []).forEach(o => { if (!sameName(o, me)) add(o, readOnlyFor(r, o)); });
-    });
+    mineQ.forEach(r => add(me, r));
+    // v431 fix round 3: the co-owner mirror has to come from freshMine (search-
+    // filtered via fq, but NOT pin-filtered) — mineQ excludes rows pinned to
+    // Focus, so a shared row Koy pinned was still counted for Josh by teamPulse
+    // (which reads ownedRows off freshMine) but never mirrored into p:Josh,
+    // another dead tap. Pinning only changes where the row shows for ME (Focus
+    // strip vs. Mine group); a co-owner still needs to see it in their group.
+    fq(freshMine).forEach(r => (r.owners || []).forEach(o => { if (!sameName(o, me)) add(o, readOnlyFor(r, o)); }));
     othersQ.forEach(r => (r.owners || []).forEach(o => add(o, r)));
     liveNeeds.forEach(n => { if (seenNeed.has(n.id)) return; const a = needAssignee(n); if (!a || sameName(a, me)) return; const r = needRow(n, true); if (rowMatches(r, q)) add(a, r); });
     return [...m.entries()]
