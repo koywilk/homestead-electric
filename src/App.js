@@ -52202,6 +52202,65 @@ function resiHead(users) {
   return live.find(u => can(u, "resi.head")) || live.find(u => can(u, "jobprep.own")) || null;
 }
 function resiHeadName(users) { const h = resiHead(users); return (h && h.name) || ""; }
+
+// ── HAT REGISTRY (v427) ──────────────────────────────────────────────────────
+// Each company hat (a per-user `caps` grant, Settings → Team → COMPANY HATS)
+// owns one or more ROUTE KEYS. A My Day source (auto-task / duty / redline
+// walk) maps to a route key; the key's hat holders own the row; no holder (or
+// no key) → the Head of Residential. Shared hats = walked together: one row on
+// every holder's board, one Done (shared job/record state) clears it for all.
+// Koy 2026-09-22: invoicing → Josh, CO quotes → Jeromy, QC → Koy+Josh,
+// redlines → Brady+Koy, scans → Justin. Start POs are NOT a hat (head keeps).
+const HAT_REGISTRY = [
+  { cap:"invoice.own",    label:"Invoicing",           routes:["invoice"],    note:"Ready to invoice · CO/RT complete, merge or invoice" },
+  { cap:"co.own",         label:"Change order quotes", routes:["co_send"],    note:"CO needs to be sent · redline walk CO owed" },
+  { cap:"qc.own",         label:"QC walks",            routes:["qc"],         shared:true, note:"Walked together: one Done clears it for everyone" },
+  { cap:"redline.own",    label:"Redline walks",       routes:["redline"],    shared:true, note:"Scheduled redline walks, walked together" },
+  { cap:"matterport.own", label:"Matterport scans",    routes:["matterport"], note:"Rough 85% → scan before drywall" },
+];
+function routeKeyOfAuto(t) {
+  if (!t) return null;
+  const id = String(t.id || "");
+  if (t.category === "invoice") return "invoice";
+  if (t.category === "co") return /_send$/.test(id) ? "co_send" : /_done$/.test(id) ? "invoice" : null;
+  if (t.category === "rt") return /_done$/.test(id) ? "invoice" : null;
+  if (t.category === "qc") return "qc";
+  if (t.category === "matterport") return "matterport";
+  return null;
+}
+function routeKeyOfDuty(d) { return d && d.dutyType === "qc" ? "qc" : null; }
+function routeKeyOfRedline(w) {
+  if (!w) return null;
+  if (w.status === "scheduled") return "redline";
+  if (w.status === "co_owed" && !w.coQuoteNumber) return "co_send";
+  return null;
+}
+// COVERING: the covered person's user entry carries coverTo (name) +
+// coverUntil (YYYY-MM-DD, inclusive). Routing only — caps/permissions untouched.
+function activeCoverName(u, todayYmd) {
+  return (u && u.active !== false && u.coverTo && u.coverUntil && String(u.coverUntil) >= todayYmd) ? String(u.coverTo) : "";
+}
+function coverName(users, name, todayYmd) {
+  const u = (users || []).find(x => x && sameName(x.name, name));
+  return activeCoverName(u, todayYmd) || name;
+}
+function hatHolderNames(users, cap, todayYmd) {
+  const live = (users || []).filter(u => u && u.active !== false && u.name && Array.isArray(u.caps) && u.caps.includes(cap));
+  const out = [];
+  live.forEach(u => { const n = coverName(users, u.name, todayYmd); if (n && !out.some(x => sameName(x, n))) out.push(n); });
+  return out;
+}
+function ownersForRoute(routeKey, users, todayYmd) {
+  const hat = routeKey ? HAT_REGISTRY.find(h => h.routes.includes(routeKey)) : null;
+  const holders = hat ? hatHolderNames(users, hat.cap, todayYmd) : [];
+  if (holders.length) return holders;
+  const head = resiHeadName(users);
+  return head ? [coverName(users, head, todayYmd)] : [];
+}
+function coveredFor(users, me, todayYmd) {
+  return (users || []).filter(u => u && u.name && !sameName(u.name, me) && sameName(activeCoverName(u, todayYmd), me)).map(u => u.name);
+}
+
 // The Matterport scanner holds the matterport.own hat (Settings → Team → COMPANY
 // HATS). One person does every rough-in scan before drywall; the client gates
 // the "Matterport scans" queue on can(identity,"matterport.own") and the server
@@ -52358,17 +52417,19 @@ function autoDelegation(needs) {
   return m;
 }
 // What the head's row should show for auto-task `t`.
-function autoRowState(t, delegation, headName) {
+function autoRowState(t, delegation, owners) {
+  const list = Array.isArray(owners) ? owners : [owners];
+  const isOwner = (n) => list.some(o => o && sameName(n, o));
   const doc = (delegation && t && delegation.get(t.id)) || null;
   if (!doc) return { state: "none", doc: null, who: "" };
   // An open doc pointed back at the head is NOT delegated — it was taken back
   // (or reassigned to the head from the Needs board). Treat it as "none" so the
   // auto row gets its Push controls back instead of reading "with <the head>".
   if (doc.status !== "done") {
-    if (sameName(needAssignee(doc), headName)) return { state: "none", doc, who: "" };
+    if (isOwner(needAssignee(doc))) return { state: "none", doc, who: "" };
     return { state: "with", doc, who: needAssignee(doc) };
   }
-  if (doc.doneBy && !sameName(doc.doneBy, headName)) return { state: "verify", doc, who: doc.doneBy };
+  if (doc.doneBy && !isOwner(doc.doneBy)) return { state: "verify", doc, who: doc.doneBy };
   return { state: "none", doc, who: "" };
 }
 // The exact doc Push writes — same shape NeedQuickAdd.save() builds, plus

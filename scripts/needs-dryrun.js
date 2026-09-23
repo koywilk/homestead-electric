@@ -55,11 +55,14 @@ const extractFunction = (name) => extractFrom(`function ${name}(`, name);
 const extractConst    = (name) => extractFrom(`const ${name} = `, name) + ";";
 // One-line consts (arrays) have no `{` to balance — take the whole source line.
 const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i < 0) throw new Error(`extract: const ${name} not found`); return src.slice(i, src.indexOf("\n", i)); };
+// Array of objects: find from marker to closing ];
+const extractArray = (name) => { const start = src.indexOf(`const ${name} = `); if (start < 0) throw new Error(`extract: const ${name} not found`); const end = src.indexOf("];", start); if (end < 0) throw new Error(`extract: no closing ]; for ${name}`); return src.slice(start, end + 2) + ";"; };
 
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
   "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
-  "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe"];
+  "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
+  "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -70,8 +73,9 @@ const combined = [
   extractConst("AUTO_DUTY_TWINS"),
   extractLine("MYDAY_ORDER"),
   extractConst("MYDAY_CAT_LABELS"),
+  extractArray("HAT_REGISTRY"),
   ...FN.map(extractFunction),
-  `({ ${FN.join(", ")}, can })`,
+  `({ ${FN.join(", ")}, can, HAT_REGISTRY })`,
 ].join("\n");
 const sandbox = vm.createContext({});
 const H = vm.runInContext(combined, sandbox, { filename: "needs-extract.vm.js" });
@@ -334,5 +338,43 @@ assert.ok(!H.completedForMe({ id:"d3", status:"open", assignedTo:"Gage Lund", do
 assert.ok(!H.completedForMe({ id:"d4", status:"done", assignedTo:"Daegan", assignedBy:"Daegan", createdBy:"Daegan", doneAt: doneNow }, gage), "someone else's done task -> excluded");
 assert.ok(!H.completedForMe({ id:"d5", status:"done", assignedTo:"Gage Lund", doneAt: new Date(Date.now()-40*24*60*60*1000).toISOString() }, gage), "done 40 days ago -> outside the 30-day window");
 assert.ok(!H.completedForMe({ id:"d6", status:"done", assignedTo:"Gage Lund", doneAt:"" }, gage), "no doneAt -> excluded");
+
+// v427 — hat registry routing + covering.
+const T = "2026-09-23";
+const hkoy   = { id:"koy",   name:"Koy Wilkinson", caps:["resi.head","qc.own","redline.own"] };
+const hjosh  = { id:"josh",  name:"Josh", caps:["invoice.own","qc.own"] };
+const hjer   = { id:"jer",   name:"Jeromy", caps:["co.own"] };
+const hbrady = { id:"brady", name:"Brady", caps:["redline.own"] };
+const hteam  = [hkoy, hjosh, hjer, hbrady];
+eq(H.routeKeyOfAuto({ id:"j1_invoice", category:"invoice" }), "invoice", "invoice auto → invoice");
+eq(H.routeKeyOfAuto({ id:"j1_co_c1_send", category:"co" }), "co_send", "CO needs-sending → co_send");
+eq(H.routeKeyOfAuto({ id:"j1_co_c1_done", category:"co" }), "invoice", "CO complete merge/invoice → invoice");
+eq(H.routeKeyOfAuto({ id:"j1_co_c1_approved", category:"co" }), null, "CO approved follow-up stays with head");
+eq(H.routeKeyOfAuto({ id:"j1_rt_r1_done", category:"rt" }), "invoice", "RT complete merge/invoice → invoice");
+eq(H.routeKeyOfAuto({ id:"j1_rough_po", category:"po" }), null, "start POs are not a hat");
+eq(H.routeKeyOfDuty({ dutyType:"qc" }), "qc", "QC duty → qc");
+eq(H.routeKeyOfDuty({ dutyType:"po" }), null, "PO duty → head");
+eq(H.routeKeyOfRedline({ status:"scheduled" }), "redline", "scheduled walk → redline");
+eq(H.routeKeyOfRedline({ status:"co_owed" }), "co_send", "CO owed → CO writer");
+eq(H.routeKeyOfRedline({ status:"co_owed", coQuoteNumber:"Q12" }), null, "quoted → off the list");
+eq(H.routeKeyOfRedline({ status:"plans_prep" }), null, "cleaning plans → not routed");
+eq(H.ownersForRoute("invoice", hteam, T), ["Josh"], "invoice → Josh");
+eq(H.ownersForRoute("qc", hteam, T), ["Koy Wilkinson","Josh"], "qc shared by both holders");
+eq(H.ownersForRoute("redline", hteam, T), ["Koy Wilkinson","Brady"], "redline shared");
+eq(H.ownersForRoute(null, hteam, T), ["Koy Wilkinson"], "unrouted → head");
+eq(H.ownersForRoute("invoice", [hkoy], T), ["Koy Wilkinson"], "nobody wears the hat → head");
+eq(H.ownersForRoute("invoice", [hkoy, { ...hjosh, active:false }], T), ["Koy Wilkinson"], "deactivated holder never owns");
+const covering = [{ ...hkoy, coverTo:"Josh", coverUntil:"2026-10-03" }, hjosh, hjer, hbrady];
+eq(H.ownersForRoute(null, covering, T), ["Josh"], "covering: head's rows go to Josh");
+eq(H.ownersForRoute("qc", covering, T), ["Josh"], "covering: shared hat collapses to one owner");
+eq(H.ownersForRoute("redline", covering, T), ["Josh","Brady"], "covering: Koy's half of redline → Josh");
+eq(H.ownersForRoute(null, covering, "2026-10-04"), ["Koy Wilkinson"], "cover expires the day after coverUntil");
+eq(H.coveredFor(covering, "Josh", T), ["Koy Wilkinson"], "Josh is covering Koy");
+eq(H.coveredFor(covering, "Josh", "2026-10-04"), [], "…until it expires");
+eq(H.coveredFor(covering, "Brady", T), [], "Brady covers nobody");
+// autoRowState: a Take back by ANY owner reads "none", not "verify".
+const tb = new Map([["t1", { id:"n", autoTaskId:"t1", status:"done", doneBy:"Josh", assignedTo:"Gage" }]]);
+eq(H.autoRowState({ id:"t1" }, tb, ["Josh"]).state, "none", "owner's own close = take back");
+eq(H.autoRowState({ id:"t1" }, tb, "Koy Wilkinson").state, "verify", "string owner still works (head path)");
 
 console.log("needs-dryrun ok");
