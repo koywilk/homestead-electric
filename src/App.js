@@ -52710,11 +52710,16 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // the start is inside the PO window) → Today. Prep tracks the rough start
     // date; a job with no start yet sits under Later instead of shouting.
     const bucket = d.dutyType === "prep" ? urgencyBucket(job && job.roughScheduledDate) : "today";
+    // v431 fix: real owners (not just [me]) so Team pulse credits every
+    // shared-hat co-owner of a QC walk, not only the head. Other head-kept
+    // duties (prep/PO) have no route hat, so they're just [me].
+    const rk = routeKeyOfDuty(d);
+    const owners = rk ? ownersForRoute(rk, users, todayYmd) : [me];
     return { key: "duty_" + d.jobId + "_" + d.id, kind: "duty", dutyType: d.dutyType, bucket, title: d.label,
       staleJob: job || null, staleDate: d.dutyType === "prep" ? ((job && job.roughScheduledDate) || "") : "",
       tag: d.dutyType === "qc" ? "QC" : d.dutyType === "po" ? "Start" : "Prep", tagColor: d.dutyType === "qc" ? C.purple : C.teal,
       sub: [d.jobName, readOnly ? `${headFirst}'s duty` : (d.foreman && !sameName(d.foreman, me) ? first(d.foreman) : "")].filter(Boolean),
-      jobId: d.jobId, section: d.targetTab || null, canDone: !readOnly && isPO, canSnooze: false,
+      jobId: d.jobId, section: d.targetTab || null, canDone: !readOnly && isPO, canSnooze: false, owners,
       onDone: () => { if (!isPO) return; onUpdateJob({ ...job, [d.markField]: true }, { [d.markField]: true }); stage("Marked sent", () => onUpdateJob({ ...job, [d.markField]: false }, { [d.markField]: false })); } };
   };
 
@@ -52779,7 +52784,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       }
       const st = autoRowState(t, delegation, owners);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
-      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate, staleMoney,
+      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate, staleMoney, owners,
         sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
@@ -52875,7 +52880,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // Walks made from the Job Prep strip carry walkDate only (no statusDate).
     const wDate = w.statusDate || w.walkDate || "";
     const owners = ownersForRoute(rk, users, todayYmd);
-    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate, staleMoney: rk === "co_send",
+    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate, staleMoney: rk === "co_send", owners,
       title: rk === "redline" ? `Redline walk · ${name}` : `Write redline CO · ${name}`,
       tag: rk === "redline" ? "Walk" : "CO", tagColor: rk === "redline" ? C.purple : C.red,
       sub: [wDate ? fmtDisplay(wDate) : "", owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean),
@@ -53385,9 +53390,12 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
               <tbody>
                 {pulse.map(p => {
                   const redOverdue = p.overdue >= 2, redOldest = p.oldestDays >= 7;
+                  // Minor fix: a row here only for doneWeek (no open items) has no
+                  // p:<name> group to open — don't offer a dead tap.
+                  const clickable = p.open > 0;
                   return (
-                    <tr key={p.name} onClick={() => openPersonPulse(p.name)} style={{ borderTop: `1px solid ${C.border}`, cursor: "pointer" }}>
-                      <td style={{ padding: "7px 10px", color: C.text, fontWeight: 600 }}>{p.name}</td>
+                    <tr key={p.name} onClick={clickable ? () => openPersonPulse(p.name) : undefined} style={{ borderTop: `1px solid ${C.border}`, cursor: clickable ? "pointer" : "default" }}>
+                      <td style={{ padding: "7px 10px", color: clickable ? C.text : C.dim, fontWeight: 600 }}>{p.name}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: C.text }}>{p.open}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: redOverdue ? C.red : C.text, fontWeight: redOverdue ? 700 : 400 }}>{p.overdue}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.oldestDays}d</td>
