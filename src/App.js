@@ -52623,6 +52623,11 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "done", doneAt: nowIso(), doneBy: me }, openDoc);
     stage("Cleared", () => { onUpdateJob({ ...job, clearedTasks: prev }, { clearedTasks: prev }); if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "open", doneAt: "", doneBy: "" }, openDoc); });
   };
+  // v427: an OPEN delegated doc held by an owner (e.g. a pre-v427 Push of an
+  // invoice task to Josh, who now wears the invoicing hat) is absorbed by the
+  // owned auto row: its need row is dropped from Mine and the row's Done closes
+  // it too — one row, one Done.
+  const absorbedDocIds = new Set();
   // v427: each auto row goes to the holder(s) of its route's hat (ownersForRoute);
   // unrouted rows / no holder -> the head. Rows routed away from the head show on
   // the head board read-only under "With others".
@@ -52651,7 +52656,9 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
         pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
       if (st.state === "none") {
-        row.canDone = true; row.onDone = () => clearAuto(t, job, null);
+        const ownDoc = st.doc && st.doc.status !== "done" ? st.doc : null;
+        if (ownDoc) absorbedDocIds.add(ownDoc.id);
+        row.canDone = true; row.onDone = () => clearAuto(t, job, ownDoc);
         row.actions = [
           ...(fm ? [{ label: `→ ${first(fm)}`, title: `Push to ${fm}, this job's foreman`, onClick: () => pushTo(t, job, fm), tone: "primary" }] : []),
           { label: "Pick person", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
@@ -52751,6 +52758,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       : [{ label: "Open COs", title: "Write + send it from the CO board", tone: "ghost", onClick: () => onOpenCOs && onOpenCOs() }];
     mineRows.push(row);
   });
+  if (absorbedDocIds.size) { for (let i = mineRows.length - 1; i >= 0; i--) { const r = mineRows[i]; if (r.kind === "need" && r.need && absorbedDocIds.has(r.need.id)) mineRows.splice(i, 1); } }
   const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
