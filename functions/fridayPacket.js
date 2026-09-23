@@ -382,15 +382,9 @@ function buildModel(inputs) {
           }
         });
 
-        // Rough done 50+ days, finish not on any calendar.
-        if (effStatus(j, "rough") === "complete" && !phaseStarted(effStatus(j, "finish")) &&
-            !String(j.finishProjectedStart || "").trim() && !String(j.finishStatusDate || "").trim()) {
-          const re = toDateAny(j.roughStatusDate);
-          const d = re ? daysBetween(today, re) : null;
-          if (d != null && d >= 50) {
-            push(j, "in_between", 25 + Math.min(d - 50, 30), d, `no finish date — rough done ${d}d ago`, "job stalling out between phases");
-          }
-        }
+        // v430: removed the "no finish date — rough done Nd ago" flag. Koy
+        // (2026-09-23): "i will get finish dates when they come to me" — same
+        // nag My Day dropped in v429 (_in_between_long / _finish_waiting).
       }
 
       // Approved COs not scheduled (approved is its own status — scheduled /
