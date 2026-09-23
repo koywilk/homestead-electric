@@ -4214,7 +4214,7 @@ const NOTIF_CATEGORIES = [
     { key:"reminder_safety",   label:"Weekly safety reminder (Mon)",         roles:["foreman"] },
     { key:"daily_update_missing", label:"No daily update logged today",      roles:["foreman"] },
     { key:"stale_job",         label:"Stale job (no update in 5+ days)",     roles:["admin","manager","foreman"] },
-    { key:"book_digest",       label:"Morning book digest (needs attention)", roles:["admin","manager"] },
+    { key:"myday_digest",      label:"Morning My Day summary",               roles:["admin","manager","foreman","lead","crew"] },
     { key:"co_chase",          label:"Morning CO chase (open 2+ days)",      roles:["admin","manager","crew"] },
     { key:"rt_chase",          label:"Morning RT chase (needs scheduling)",  roles:["admin","manager"] },
   ]},
