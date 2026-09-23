@@ -52250,6 +52250,44 @@ function userKeyOf(identity) {
   if (!identity) return "";
   return identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
+// ── MY DAY Ship 3 helpers (v431) ────────────────────────────────────────────
+// Task photos live under the jobs/ prefix every other upload uses (Storage
+// rules are console-managed; staying under jobs/ inherits them). Jobless tasks
+// use the "_tasks" segment.
+function taskPhotoPath(jobId, needId, photoId, ext) {
+  return `jobs/${jobId || "_tasks"}/task-photos/${needId}/${photoId}.${ext || "jpg"}`;
+}
+function needPhotos(n) { return ((n && n.photos) || []).filter(p => p && p.id); }
+// Head-only Team pulse: per person, open / overdue / oldest / done this week.
+// (Destructured in the body, not the param list — a verbatim-extraction
+// harness that brace-balances from this declaration's opening paren would
+// else stop at the closing brace of a destructured param, not the body.)
+function teamPulse(opts) {
+  const { needs, users, ownedRows, todayYmd, nowMs = Date.now() } = opts || {};
+  const people = (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor");
+  const rowFor = new Map(people.map(u => [u.name, { name: u.name, open: 0, overdue: 0, oldestDays: 0, doneWeek: 0 }]));
+  const find = (name) => { for (const [k, v] of rowFor) if (sameName(k, name)) return v; return null; };
+  const ageOf = (iso) => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? Math.max(0, Math.floor((nowMs - t) / 864e5)) : 0; };
+  (needs || []).forEach(n => {
+    if (!n) return;
+    if (n.status === "done") {
+      const who = n.doneBy && find(n.doneBy); const t = Date.parse(n.doneAt || "");
+      if (who && Number.isFinite(t) && nowMs - t <= 7 * 864e5) who.doneWeek++;
+      return;
+    }
+    const who = find(needAssignee(n) || n.createdBy); if (!who) return;
+    who.open++;
+    if (n.dueDate && n.dueDate < todayYmd) who.overdue++;
+    who.oldestDays = Math.max(who.oldestDays, ageOf(n.createdAt || n.assignedAt));
+  });
+  (ownedRows || []).forEach(r => (r && r.owners || []).forEach(o => {
+    const who = find(o); if (!who) return;
+    who.open++; if (r.bucket === "overdue") who.overdue++;
+    who.oldestDays = Math.max(who.oldestDays, r.ageDays || 0);
+  }));
+  return [...rowFor.values()].filter(p => p.open || p.doneWeek)
+    .sort((a, b) => (b.overdue - a.overdue) || (b.open - a.open) || a.name.localeCompare(b.name));
+}
 // The Head of Residential = whoever holds the resi.head hat (Settings → Team →
 // COMPANY HATS). Falls back to the jobprep.own holder so nothing routes to
 // nobody before the hat is ticked on flip day. Deactivated users never win.

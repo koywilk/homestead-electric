@@ -63,7 +63,8 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
   "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
   "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor",
-  "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf"];
+  "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
+  "taskPhotoPath","needPhotos","teamPulse"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -430,5 +431,27 @@ assert.ok(!H.sentFinishedForMe({ ...sentDone, doneAt: new Date(now2 - 31*864e5).
 assert.ok(!H.sentFinishedForMe({ ...sentDone, status:"open" }, koy, now2), "open → not finished");
 eq(H.userKeyOf({ id:"u1", name:"Koy Wilkinson" }), "u1", "id wins");
 eq(H.userKeyOf({ name:" Koy  Wilkinson " }), "koy_wilkinson", "name slug fallback");
+
+// v431 — Ship 3 helpers.
+eq(H.taskPhotoPath("j1", "need_9", "p1", "jpg"), "jobs/j1/task-photos/need_9/p1.jpg", "job task photo path");
+eq(H.taskPhotoPath("", "need_9", "p1", "png"), "jobs/_tasks/task-photos/need_9/p1.png", "jobless task → _tasks prefix");
+eq(H.needPhotos({ photos:[{id:"a"}, null, {id:"b"}] }).map(p => p.id), ["a","b"], "needPhotos drops junk");
+eq(H.needPhotos({}), [], "no photos → []");
+const P_NOW = Date.parse("2026-09-23T12:00:00");
+const pUsers = [{ name:"Koy Wilkinson", caps:["resi.head"] }, { name:"Josh" }, { name:"Gage Lund" }, { name:"Old Timer", active:false }, { name:"GC Guy", access:"contractor" }];
+const pNeeds = [
+  { id:"a", status:"open", assignedTo:"Gage Lund", dueDate:"2026-09-20", createdAt:"2026-09-10T12:00:00" },
+  { id:"b", status:"open", assignedTo:"Gage Lund", dueDate:"2026-09-21", createdAt:"2026-09-20T12:00:00" },
+  { id:"c", status:"open", assignedTo:"Josh", dueDate:"2026-09-30", createdAt:"2026-09-22T12:00:00" },
+  { id:"d", status:"done", assignedTo:"Josh", doneBy:"Josh", doneAt:"2026-09-21T12:00:00" },
+  { id:"e", status:"done", assignedTo:"Josh", doneBy:"Josh", doneAt:"2026-09-10T12:00:00" },
+  { id:"f", status:"open", assignedTo:"Old Timer", dueDate:"2026-09-01" },
+];
+const pRows = [{ owners:["Josh"], bucket:"overdue", ageDays:9 }, { owners:["Koy Wilkinson","Josh"], bucket:"today", ageDays:1 }];
+const pulse = H.teamPulse({ needs:pNeeds, users:pUsers, ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
+eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue desc, then open desc; inactive/contractor/idle excluded");
+eq(pulse.find(p => p.name === "Gage Lund"), { name:"Gage Lund", open:2, overdue:2, oldestDays:13, doneWeek:0 }, "Gage: 2 open both overdue, oldest from createdAt");
+eq(pulse.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "Josh: 1 doc + 2 owned rows; done 9/21 counts, 9/10 doesn't");
+eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, overdue:0, oldestDays:1, doneWeek:0 }, "shared row counts for each owner");
 
 console.log("needs-dryrun ok");
