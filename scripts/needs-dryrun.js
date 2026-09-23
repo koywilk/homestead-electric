@@ -418,6 +418,8 @@ assert.ok(!H.completedForMe(sentDone, koy, now2), "…and NOT in my Done (no dup
 assert.ok(H.completedForMe(sentDone, gage, now2), "still in Gage's Done");
 const selfClosed = { ...sentDone, id:"s2", doneBy:"Koy Wilkinson" };
 assert.ok(H.completedForMe(selfClosed, koy, now2) && !H.sentFinishedForMe(selfClosed, koy, now2), "I sent + closed it myself → my Done, not Finished");
+assert.ok(H.sentFinishedForMe({ ...sentDone, id:"s3", doneBy: undefined }, koy, now2), "sent + done + no doneBy → Sent/Finished");
+assert.ok(!H.completedForMe({ ...sentDone, id:"s3", doneBy: undefined }, koy, now2), "…not duplicated in Done");
 assert.ok(!H.sentFinishedForMe({ ...sentDone, doneAt: new Date(now2 - 31*864e5).toISOString() }, koy, now2), "31 days → out of window");
 assert.ok(!H.sentFinishedForMe({ ...sentDone, status:"open" }, koy, now2), "open → not finished");
 eq(H.userKeyOf({ id:"u1", name:"Koy Wilkinson" }), "u1", "id wins");
