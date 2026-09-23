@@ -765,10 +765,30 @@ function ccLoadsGrouped(loads) {
 // plSectionLabels, which are panel names. `mk` = the row factory
 // (newCentralLoad; injected so this stays pure).
 // Returns { rows, skipped } — rows to APPEND (never replaces existing rows).
-function ccLoadImportRows(loads, existingRows, mk, floorLabels = {}) {
+// v436: FieldInk's floor is whatever the crew typed for the plan SHEET ("Main
+// Level", "2nd Floor", "Basement"…) — the old exact-key map only knew
+// main/basement/upper, so "Main Level" imported BLANK and landed in Unassigned
+// (Koy 2026-09-23). Match an existing section case-insensitively, then common
+// synonyms, else keep FieldInk's own text as its own section. "" = unknown.
+// `options` = the Loads list's floor sections (std + extra floor labels).
+function ccFloorToSection(raw, options) {
+  const t = String(raw || "").trim(); if (!t) return "";
+  const n = t.toLowerCase().replace(/[._-]+/g, " ").replace(/\s+/g, " ");
+  const opts = (options || []).filter(Boolean);
+  const exact = opts.find(o => String(o).trim().toLowerCase() === n);
+  if (exact) return exact;
+  const SYN = [
+    ["Main Level", /^(main|main (level|floor)|1st( floor| level)?|first( floor| level)?|level 1|floor 1|ground( floor| level)?)$/],
+    ["Basement", /^(basement|lower|lower (level|floor)|bsmt|lvl b|level b)$/],
+    ["Upper Level", /^(upper|upper (level|floor)|2nd( floor| level)?|second( floor| level)?|level 2|floor 2|upstairs)$/],
+  ];
+  for (const [label, re] of SYN) if (re.test(n)) return opts.find(o => o === label) || label;
+  return t;
+}
+function ccLoadImportRows(loads, existingRows, mk, floorOptions = []) {
   const have = new Set((existingRows || []).map(r => r && r.fieldLoadId).filter(Boolean));
   const LT = { dimmer: "Dimming", switched: "Switching", tape: "LED", panel: "" };
-  const FL = { main: "Main Level", basement: "Basement", upper: "Upper Level" };
+  const opts = Array.isArray(floorOptions) ? floorOptions : ["Main Level", "Basement", "Upper Level", ...Object.values(floorOptions || {})];
   const rows = []; let skipped = 0;
   for (const l of loads || []) {
     if (!l || !l.id || l.removedAt) { skipped++; continue; }
@@ -780,8 +800,9 @@ function ccLoadImportRows(loads, existingRows, mk, floorLabels = {}) {
     have.add(l.id);
     const room = String(l.room || "").trim(), base = String(l.name || l.loadId || "Load").trim();
     const name = room && !base.toLowerCase().includes(room.toLowerCase()) ? `${room} ${base}` : base;
-    const fk = String(l.floor || "").trim().toLowerCase();
-    rows.push({ ...mk(), name, location: (fk && (floorLabels[fk] || FL[fk])) || "", loadType: LT[l.control] ?? "", room, fieldLoadId: l.id, origin: "fieldink" });
+    // An office-set floor on the bridge (office.floor) wins over the plan sheet's.
+    const location = ccFloorToSection((l.office && l.office.floor) || l.floor, opts);
+    rows.push({ ...mk(), name, location, loadType: LT[l.control] ?? "", room, fieldLoadId: l.id, origin: "fieldink" });
   }
   return { rows, skipped };
 }
@@ -18108,7 +18129,8 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
             const groups = {};
             loads.forEach(l=>{ const fl=(l.location||"").trim()||"Unassigned"; if(!groups[fl])groups[fl]=[]; groups[fl].push(l); });
             const sortedFloors = Object.keys(groups).sort((a,b)=>a==="Unassigned"?-1:b==="Unassigned"?1:a.localeCompare(b));
-            sortedFloors.forEach(fl=>groups[fl].sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
+            // v436: rooms first (imported loads carry their room), then name.
+            sortedFloors.forEach(fl=>groups[fl].sort((a,b)=>(a.room||"\uffff").localeCompare(b.room||"\uffff")||(a.name||"").localeCompare(b.name||"")));
             const flatSorted = sortedFloors.flatMap(fl=>groups[fl]);
             const multiFloor = sortedFloors.length>1||(sortedFloors.length===1&&sortedFloors[0]!=="Unassigned");
             return (
@@ -18161,6 +18183,10 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               concept so a Master-bedroom load can be assigned to
                               the basement LCP, etc. */}
                           <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",paddingLeft:48}}>
+                            <input value={l.room||""} onChange={e=>upd(l.id,{room:e.target.value})}
+                              placeholder="Room" title="Room (filled from FieldInk on import)"
+                              style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
+                                padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",flex:1,minWidth:80}}/>
                             <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
                               placeholder="Floor / area"
                               style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
@@ -28237,9 +28263,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const importedIds = new Set(plLoads.map(r => r && r.fieldLoadId).filter(Boolean));
                 // LoadsList groups by `location` = the literal floor-section labels
                 // (plSectionLabels are PANEL names, not floors). Extra floors map by name.
-                const floorLabels = Object.fromEntries((pl.extraFloors || []).map(ef => [String(ef.label || "").trim().toLowerCase(), ef.label]).filter(([k]) => k));
+                // v436: the SAME section list the Loads list offers (std + extra floors).
+                const floorOptions = ["Main Level", "Basement", "Upper Level", ...(pl.extraFloors || []).map(ef => ef.label).filter(Boolean)];
                 const importLoads = (list) => {
-                  const { rows } = ccLoadImportRows(list, plLoads, newCentralLoad, floorLabels);
+                  const { rows } = ccLoadImportRows(list, plLoads, newCentralLoad, floorOptions);
                   if (rows.length) u({ panelizedLighting: { ...pl, loads: [...plLoads, ...rows] } });
                 };
                 const importable = (list) => list.filter(l => l.control === "panel" && !l.removedAt && !importedIds.has(l.id));   // v435: panelized only
@@ -28270,6 +28297,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // hand-typed rows and panel loads are never touched.
                 const fieldById = Object.fromEntries(everything.map(l => [l.id, l]));
                 const strayImported = plLoads.filter(r => r && r.origin === "fieldink" && r.fieldLoadId && fieldById[r.fieldLoadId] && fieldById[r.fieldLoadId].control !== "panel");
+                // v436 backfill: loads imported BEFORE floors/rooms mapped right. Fill
+                // ONLY blank location / room from the field load — never overwrite
+                // anything the office typed. One u() patch.
+                const fillable = plLoads.filter(r => {
+                  const f = r && r.origin === "fieldink" && r.fieldLoadId && fieldById[r.fieldLoadId];
+                  if (!f || f.control !== "panel") return false;
+                  const loc = ccFloorToSection((f.office && f.office.floor) || f.floor, floorOptions);
+                  return (!String(r.location || "").trim() && loc) || (!String(r.room || "").trim() && String(f.room || "").trim());
+                });
+                const fillFromField = () => {
+                  if (!fillable.length) return;
+                  const ids = new Set(fillable.map(r => r.id));
+                  const next = plLoads.map(r => {
+                    if (!r || !ids.has(r.id)) return r;
+                    const f = fieldById[r.fieldLoadId];
+                    const loc = ccFloorToSection((f.office && f.office.floor) || f.floor, floorOptions);
+                    const room = String(f.room || "").trim();
+                    return { ...r, ...(!String(r.location || "").trim() && loc ? { location: loc } : {}), ...(!String(r.room || "").trim() && room ? { room } : {}) };
+                  });
+                  u({ panelizedLighting: { ...pl, loads: next } });
+                  toast.success(`Filled floor/room on ${ids.size} load${ids.size===1?"":"s"}`);
+                };
                 const removeStray = () => {
                   if (!strayImported.length) return;
                   if (!window.confirm(`Remove ${strayImported.length} regular-switching load${strayImported.length===1?"":"s"} that were imported from FieldInk by mistake? Panel loads and anything you typed yourself stay.`)) return;
@@ -28374,6 +28423,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 9px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                               background:filter==="needs"?C.orange:"transparent",color:filter==="needs"?"#fff":C.orange,border:`1px solid ${C.orange}`}}>
                             <Icon name="alertTriangle" size={11} stroke={2.5}/>{all.needs} need{all.needs===1?"s":""} a switch
+                          </button>
+                        )}
+                        {fillable.length > 0 && (
+                          <button onClick={fillFromField} title="Loads imported earlier came in without a floor or room; this fills ONLY the blanks from FieldInk"
+                            style={{padding:"3px 10px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"transparent",color:sysAccentColor(job),border:`1px solid ${sysAccentColor(job)}`}}>
+                            Fill floor/room on {fillable.length} load{fillable.length===1?"":"s"}
                           </button>
                         )}
                         {strayImported.length > 0 && (
@@ -48391,12 +48446,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-23 · App SW version: v435
+**Last manifest update:** 2026-09-23 · App SW version: v436
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **FieldInk import brings the rooms and floors** · 'shipped 2026-09-23' · 'SW v436' · Koy: *"when a load is imported into the panelized lighting, it needs to import the rooms and floors."* FieldInk sends each load's 'floor' as the crew typed it for the plan SHEET ("Main Level", "2nd Floor"…) but 'ccLoadImportRows' only knew the keys main/basement/upper, so most loads imported with a BLANK floor into Unassigned. New pure 'ccFloorToSection' matches an existing Loads-list section case-insensitively, then synonyms (main/1st/first/level 1/ground → Main Level; basement/lower/bsmt → Basement; upper/2nd/second/level 2/upstairs → Upper Level), else keeps FieldInk's own text as its own section; an office-set 'office.floor' on the bridge wins. The **Room** (already stored on imported rows) now shows as an editable **Room** box on every Loads-list row, and loads sort by room within each floor. **Fill floor/room on N loads** (header, when any) backfills ONLY blank floor/room on earlier FieldInk imports. Tests: 'scripts/ccloads-suggest-test.js' (82 checks). Guide updated. **Why it won't lose data:** import stays append-only; the backfill is one 'u()' patch that only fills empty 'location'/'room' on fieldink-origin rows; 'room' is an existing row field.
 - **FieldInk import brings in panelized loads only** · 'shipped 2026-09-23' · 'SW v435' · Koy: *"when i hit import loads from field ink the panelized lighting tab, it imported all the regular switching loads too. it need to only import panelized loads."* 'ccLoadImportRows' now skips any incoming load whose FieldInk 'control' isn't 'panel' (switched / dimmer / tape stay on the plan's regular switching); the per-row **Import**, room **Import N** and header **Import all** only offer and count panel loads. **Cleanup:** when the job's Loads list still holds rows an older import created from non-panel loads (only rows with 'origin:"fieldink"' + a 'fieldLoadId' whose field load isn't panel), a red **Remove N switched loads imported by mistake** header button removes them after a confirm (hand-typed rows and panel loads are never touched). Tests: 'scripts/ccloads-suggest-test.js' (73 checks). Guide 'panelizedlighting.html' updated. **Why it won't lose data:** import is still append-only and idempotent; the cleanup is one confirmed 'u()' patch that filters ONLY fieldink-origin rows tied to a non-panel field load; the per-field job version history + recovery ledger cover it.
 - **My Day — void / edit a sent task, Reply + edit your reply** · 'shipped 2026-09-23' · 'SW v434' · Koy (2026-09-23): "we need an option to either void or edit a need sent to somebody as well as a comment back". On a not-done task row I sent (Sent, and my own self-created rows in Mine) — or any task row for whoever runs the head board — two new actions: **Edit** opens an inline panel (wording, due date, To: roster, Job: active jobs + "No job"; an auto-task delegate hides Job) and saves one field-surgical 'patchNeed' of only the changed fields plus an update entry '{kind:"edit", text:"changed: wording, due 10/3, job"}' — unless ONLY the person changed (the assign push already covers that). **Void** opens a confirm with an optional reason; it closes the doc with a flag ('status:"done", doneBy, voided:true, voidedBy, voidedAt, voidReason') plus an update entry '{kind:"void"}' in the SAME write, with the usual 10-second Undo. A voided task leaves every open list (every open predicate already reads status), shows in the sender's **Sent · finished** tagged **VOIDED** (red) with who / when / why and **Reopen** (clears the flags + a "Reopened" note), and in the assignee's Done as "voided by <first>" (no Reopen for them). 'sentFinishedForMe' / 'completedForMe' / 'teamPulse' updated (voids never count as "done this week"), vm-tested in 'scripts/needs-dryrun.js'. The old note icon is now a **Reply** button (text on phones, icon + text on desktop); the thread opens oldest → newest; on my own replies a ✎ edits the text in place ("(edited)"), via a Firestore transaction ('editNeedUpdate') that re-reads the doc and swaps only that entry, so an entry appended at the same moment isn't lost; no push (array length unchanged). **Server (onNeedWrite):** a void never sends "Task done" (branch 2 skips 'voided'), reopening a void never sends "Task sent back" (branch 3 skips 'before.voided'); branch 4 titles "Task voided" / "Task changed" by entry kind, and skips an edit push when the same write already pushed "assigned to you" to that person. Needs 'firebase deploy --only functions:onNeedWrite'. The Needs board's Done today also tags voided docs VOIDED, and its Reopen clears the void flags (sender / head only). Void is hidden on auto-task delegate docs (Take back covers them). SOPs 'public/sops/myday.html' + 'needs.html' updated. **Why it won't lose data:** additive fields inside 'data' only; void is a closed-with-flag, never a delete (Reopen / Undo restore it); every write is dotted-path 'updateDoc' + 'arrayUnion'; reply edits go through a transaction that re-reads the array; no rules change.
 - **"Question answered" pushes work again (functions)** · 'shipped 2026-09-23' · 'SW v433' · functions-only, no app change. 'onQuestionAnswered' crashed on every job whose question link had ever been submitted: its answer counter walked every value in 'homeowner_requests.questionAnswers', including the 'answeredBy' **string**, split it into characters and threw ('(floor || []).forEach is not a function', errors on record since at least 2026-09-02), so no "Question answered" push reached the lead / foreman / head. Replaced by the shape-safe 'functions/qaCount.js' (plain-object phases × array floors only, non-blank string answers), tested by 'scripts/qacount-test.js' in prebuild. Needs 'firebase deploy --only functions'. **Why it won't lose data:** the trigger only reads the doc and sends pushes; no write path changed.

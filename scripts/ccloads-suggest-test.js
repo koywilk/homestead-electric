@@ -17,8 +17,8 @@ const a = src.indexOf(START), b = src.indexOf(END);
 if (a === -1 || b === -1 || b < a) { console.error("ccloads-suggest-test: markers not found in src/App.js"); process.exit(1); }
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows;", ctx);
-const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection;", ctx);
+const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows, ccFloorToSection } = ctx;
 
 let fails = 0, n = 0;
 const eq = (name, got, want) => {
@@ -126,11 +126,22 @@ const IM = ccLoadImportRows([
 eq("v435: ONLY panelized loads import - switched / dimmer / tape are skipped", IM.rows.map(r => r.name), ["Kitchen Cans", "Lonely"]);
 eq("skipped = 3 non-panel + already-imported + gone-from-plan", IM.skipped, 5);
 eq("panel loads keep a blank Loads-list type", IM.rows.map(r => r.loadType), ["", ""]);
-eq("FieldInk floor maps to the Loads list floor section; unknown floors stay blank", IM.rows.map(r => r.location), ["Main Level", ""]);
+eq("FieldInk floor maps to the Loads list floor section; an unknown floor keeps its own name", IM.rows.map(r => r.location), ["Main Level", "attic"]);
 eq("every row is a real newCentralLoad shape + room/fieldLoadId/origin", Object.keys(IM.rows[0]).sort(), ["fieldLoadId", "id", "loadType", "location", "name", "origin", "pulled", "room", "watts"]);
 eq("fieldLoadId is the ccloads id (the idempotency key)", IM.rows.map(r => r.fieldLoadId), ["c1", "noroom"]);
 eq("a load with no control never imports", ccLoadImportRows([{ id: "z", name: "Mystery", room: "R" }], [], mk).rows.length, 0);
 eq("an extra floor maps by its label; the three standard floors are LoadsList's literal section labels", ccLoadImportRows([{ id: "f", name: "N", room: "R", control: "panel", floor: "Loft" }, { id: "g", name: "M", room: "R", control: "panel", floor: "main" }], [], mk, { loft: "Loft" }).rows.map(r => r.location), ["Loft", "Main Level"]);
+// ── v436 floors: FieldInk sends the sheet's floor as typed ─────────────────
+const FO = ["Main Level", "Basement", "Upper Level", "Loft"];
+eq("'Main Level' as typed lands in Main Level (used to import blank)", ccFloorToSection("Main Level", FO), "Main Level");
+eq("synonyms → Main Level", ["main", "Main Floor", "1st Floor", "first floor", "Level 1", "ground floor"].map(x => ccFloorToSection(x, FO)), Array(6).fill("Main Level"));
+eq("synonyms → Basement", ["basement", "Lower Level", "lower", "BSMT"].map(x => ccFloorToSection(x, FO)), Array(4).fill("Basement"));
+eq("synonyms → Upper Level", ["upper", "2nd Floor", "Second Floor", "Level 2", "upstairs"].map(x => ccFloorToSection(x, FO)), Array(5).fill("Upper Level"));
+eq("an extra floor matches by label, case-insensitive", ccFloorToSection("  loft ", FO), "Loft");
+eq("an unknown floor keeps FieldInk's text (its own section, not Unassigned)", ccFloorToSection("Garage Apartment", FO), "Garage Apartment");
+eq("blank / null → '' (unknown)", [ccFloorToSection("", FO), ccFloorToSection(null, FO)], ["", ""]);
+eq("office.floor on the bridge wins over the sheet floor", ccLoadImportRows([{ id: "o1", name: "Cans", room: "Den", control: "panel", floor: "Main Level", office: { floor: "Basement" } }], [], mk, FO).rows[0].location, "Basement");
+eq("room is carried onto the row", ccLoadImportRows([{ id: "o2", name: "Cans", room: "Den", control: "panel", floor: "2nd Floor" }], [], mk, FO).rows.map(r => [r.room, r.location]), [["Den", "Upper Level"]]);
 eq("second import of the same loads is a no-op", ccLoadImportRows([{ id: "c1", name: "Cans", room: "Kitchen", control: "panel" }], IM.rows, mk).rows.length, 0);
 eq("empty input is safe", ccLoadImportRows(null, null, mk), { rows: [], skipped: 0 });
 
