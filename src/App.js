@@ -52583,7 +52583,17 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
   const [undo, setUndo] = useState(null);
-  const stage = (label, revert) => { if (undo && undo.timer) clearTimeout(undo.timer); const timer = setTimeout(() => setUndo(null), 10000); setUndo({ label, revert, timer }); };
+  // v429 Ship 2 UI state: search, view (per-device), batch select, stale footer.
+  const [q, setQ] = useState("");
+  const [viewPref, setViewPref] = useState(() => { try { return localStorage.getItem("myday.view") || "cat"; } catch { return "cat"; } });
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [showStale, setShowStale] = useState(false);
+  // Batch runs ONE row per render (see the batch effect below): each step reads
+  // that render's fresh jobs/needs, so two rows on the same job can't clobber
+  // each other's whole-field writes (clearedTasks / taskDueDates / punch).
+  const [batchQ, setBatchQ] = useState(null);
+  const stage =(label, revert) => { if (undo && undo.timer) clearTimeout(undo.timer); const timer = setTimeout(() => setUndo(null), 10000); setUndo({ label, revert, timer }); };
   const runUndo = () => { if (!undo) return; if (undo.timer) clearTimeout(undo.timer); undo.revert(); setUndo(null); };
   const jobById = (id) => (jobs || []).find(j => j && j.id === id);
   const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
@@ -52610,6 +52620,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // date; a job with no start yet sits under Later instead of shouting.
     const bucket = d.dutyType === "prep" ? urgencyBucket(job && job.roughScheduledDate) : "today";
     return { key: "duty_" + d.jobId + "_" + d.id, kind: "duty", dutyType: d.dutyType, bucket, title: d.label,
+      staleJob: job || null, staleDate: d.dutyType === "prep" ? ((job && job.roughScheduledDate) || "") : "",
       tag: d.dutyType === "qc" ? "QC" : d.dutyType === "po" ? "Start" : "Prep", tagColor: d.dutyType === "qc" ? C.purple : C.teal,
       sub: [d.jobName, readOnly ? `${headFirst}'s duty` : (d.foreman && !sameName(d.foreman, me) ? first(d.foreman) : "")].filter(Boolean),
       jobId: d.jobId, section: d.targetTab || null, canDone: !readOnly && isPO, canSnooze: false,
@@ -52667,14 +52678,16 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       const rk = routeKeyOfAuto(t);
       const owners = ownersForRoute(rk, users, todayYmd);
       const mineToo = owners.some(o => sameName(o, me));
+      const staleDate = (job.taskDueDates || {})[t.id] || t.dueDate || "";
       if (!mineToo) {
         if (iRunHead) othersRows.push({ key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+          staleJob: job, staleDate, owners,
           sub: [t.jobName, `with ${owners.map(first).join(" + ")}`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
         return;
       }
       const st = autoRowState(t, delegation, owners);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
-      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate,
         sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
@@ -52715,7 +52728,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     live.flatMap(getCoordinatorDuties).forEach(d => {
       const rk = routeKeyOfDuty(d);
       if (rk ? ownsRoute(rk) : iRunHead) mineRows.push(dutyRow(d, false));
-      else if (iRunHead) othersRows.push({ ...dutyRow(d, true), sub: [d.jobName, `with ${ownerLabel(rk)}`] });
+      else if (iRunHead) othersRows.push({ ...dutyRow(d, true), sub: [d.jobName, `with ${ownerLabel(rk)}`], owners: ownersForRoute(rk, users, todayYmd) });
     });
     if (iRunHead && can(head, "jobprep.own")) live.flatMap(getCompanyDuties).forEach(d => mineRows.push(dutyRow(d, false)));
   }
@@ -52737,7 +52750,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         { matterportLinks: prevLinks, matterportLink: prevLink, matterportStatus: prevStatus, matterportStatusDate: prevDate, matterportDismissed: !!job.matterportDismissed });
       const writeJob = (patch, label) => { onUpdateJob({ ...job, ...patch }, patch); if (label) stage(label, revertScan); };
       mineRows.push({
-        key: "scan_" + t.id, kind: "auto", autoCategory: "matterport",
+        key: "scan_" + t.id, kind: "auto", autoCategory: "matterport", staleJob: job, staleDate: "",
         bucket: urgencyBucket(prevDate), title: job.name || t.jobName || "Matterport scan",
         tag: "Scan", tagColor: C.rough,
         sub: [prevStatus === "scheduled" && prevDate ? `Scan scheduled ${fmtDisplay(prevDate)}` : (prevDate ? `Needs by ${fmtDisplay(prevDate)}` : "Rough complete — scan before drywall")].filter(Boolean),
@@ -52768,12 +52781,12 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // Walks made from the Job Prep strip carry walkDate only (no statusDate).
     const wDate = w.statusDate || w.walkDate || "";
     const owners = ownersForRoute(rk, users, todayYmd);
-    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate),
+    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate,
       title: rk === "redline" ? `Redline walk · ${name}` : `Write redline CO · ${name}`,
       tag: rk === "redline" ? "Walk" : "CO", tagColor: rk === "redline" ? C.purple : C.red,
       sub: [wDate ? fmtDisplay(wDate) : "", owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean),
       jobId: w.jobId || null, section: null, canDone: false, canSnooze: false };
-    if (!owners.some(o => sameName(o, me))) { if (iRunHead) othersRows.push({ ...row, sub: [name, `with ${owners.map(first).join(" + ")}`] }); return; }
+    if (!owners.some(o => sameName(o, me))) { if (iRunHead) othersRows.push({ ...row, sub: [name, `with ${owners.map(first).join(" + ")}`], owners }); return; }
     row.actions = rk === "redline"
       ? [{ label: "Walk done", title: "Walk finished: plans go to cleanup", tone: "primary", onClick: () => {
           if (!onUpdateRedline) return; const prev = { ...w };
@@ -52789,7 +52802,34 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     mineRows.push(row);
   });
   if (absorbedDocIds.size) { for (let i = mineRows.length - 1; i >= 0; i--) { const r = mineRows[i]; if (r.kind === "need" && r.need && absorbedDocIds.has(r.need.id)) mineRows.splice(i, 1); } }
-  const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
+  // v429: stale partition (Koy 2026-09-23). Derived rows on an inactive job, an
+  // old redline walk, or 60+ days overdue drop off Mine / With others into a
+  // read-only "N hidden (stale)" footer. Hidden, never deleted; search doesn't
+  // un-hide them. Real task docs never go stale (staleReason skips needs).
+  const staleOf = (r) => staleReason({ kind: r.kind, job: r.staleJob || null, dateYmd: r.staleDate || "" }, todayYmd);
+  const staleRows = [];
+  const keepFresh = (rows) => rows.filter(r => { const why = staleOf(r); if (why) { staleRows.push({ ...r, sub: [...(r.sub || []), `hidden: ${why}`], actions: undefined, canDone: false, canSnooze: false, scan: undefined, pushOpen: false }); return false; } return true; });
+  const freshMine = keepFresh(mineRows);
+  const freshOthers = keepFresh(othersRows);
+  // Only the viewer's own actionable rows (Mine + Focus) are selectable / pinnable.
+  freshMine.forEach(r => { r.sel = true; });
+  const mineByKey = new Map(freshMine.map(r => [r.key, r]));
+  // Focus today: up to 3 pinned Mine rows, shown in their own strip and pulled
+  // out of the Mine groups so nothing shows twice. Keys whose row closed drop.
+  const pinnedRows = onSaveFocus ? focusKeysToday(focusEntry, todayYmd).map(k => mineByKey.get(k)).filter(Boolean) : [];
+  const pinnedSet = new Set(pinnedRows.map(r => r.key));
+  const carryKeys = onSaveFocus && focusEntry && focusEntry.date && focusEntry.date !== todayYmd && Array.isArray(focusEntry.keys)
+    ? focusEntry.keys.filter(k => mineByKey.has(k)) : [];
+  const toggleFocus = (key) => {
+    const cur = pinnedRows.map(r => r.key);
+    const next = cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];
+    if (next.length > 3) { toast.info("Focus holds 3 — unpin one first."); return; }
+    onSaveFocus({ date: todayYmd, keys: next });
+  };
+  const qOn = !!String(q || "").trim();
+  const fq = (rows) => qOn ? rows.filter(r => rowMatches(r, q)) : rows;
+  const view = (viewPref === "job" || (viewPref === "person" && iRunHead)) ? viewPref : "cat";
+  const sortRows =(rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
   // Rows = task docs on the head about my jobs ∪ the head's auto rows on my
@@ -52820,13 +52860,16 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     });
     return rows;
   })();
-  const headByJob = (() => {
+  // One line per job (v408 head group; v429 also the Mine "Job" view).
+  const byJobOf = (rowsIn) => {
     const m = new Map();
-    headRows.forEach(r => { const k = r.jobId || "_none"; if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+    rowsIn.forEach(r => { const k = r.jobId || "_none"; if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
     return [...m.entries()].map(([jobId, rows]) => ({ jobId, job: jobById(jobId), rows: sortRows(rows) }))
       // jobless rows ("_none") sort LAST — ￿ is past every real job name.
       .sort((a, b) => String(a.jobId === "_none" ? "￿" : ((a.job && a.job.name) || "")).localeCompare(String(b.jobId === "_none" ? "￿" : ((b.job && b.job.name) || ""))));
-  })();
+  };
+  const headRowsQ = fq(headRows);
+  const headByJob = byJobOf(headRowsQ);
   // SENT owns every not-done doc I sent that sits on someone else. Edit above
   // pulls these out of "On <head>", so there is no duplication to guard against
   // — dropping the old `&& !onHead(...)` exclusion is what makes a foreman's ask
@@ -52836,32 +52879,58 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const sentWaiting = sentRows.filter(r => r.snoozedUntil || (r.latest && r.latest.kind === "waiting")).length;
   // v426: "Done" — task cards I finished or that finished on me in the last 30
   // days (Koy: "a spot where i can see all my completed tasks"). Read-only rows
-  // with a one-tap Reopen, newest first by doneAt. Starts folded.
-  const doneRows = (needs || [])
-    .filter(n => completedForMe(n, identity))
-    .sort((a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || "")))
-    .map(n => {
-      const k = needKind(n);
-      return {
-        key: "done_" + n.id, kind: "need", needKind: k, bucket: "later",
-        title: n.text || "(no text)",
-        tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need",
-        tagColor: k === "task" ? C.teal : C.orange,
-        sub: [n.jobName, n.doneBy ? `done by ${first(n.doneBy)}` : "done", n.doneAt ? timeAgo(n.doneAt) : ""].filter(Boolean),
-        jobId: n.jobId, section: null, canDone: false, canSnooze: false,
-        actions: [{ label: "Reopen", title: "Put it back on the list", onClick: () => { onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n); toast.success("Reopened"); }, tone: "ghost" }],
-      };
-    });
+  // with a one-tap Reopen, newest first by doneAt. Starts folded. v429: the same
+  // row shape serves Sent · finished (docs I sent that someone else closed).
+  const doneRowOf = (n) => {
+    const k = needKind(n);
+    return {
+      key: "done_" + n.id, kind: "need", needKind: k, bucket: "later",
+      title: n.text || "(no text)",
+      tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need",
+      tagColor: k === "task" ? C.teal : C.orange,
+      sub: [n.jobName, n.doneBy ? `done by ${first(n.doneBy)}` : "done", n.doneAt ? timeAgo(n.doneAt) : ""].filter(Boolean),
+      jobId: n.jobId, section: null, canDone: false, canSnooze: false,
+      actions: [{ label: "Reopen", title: "Put it back on the list", onClick: () => { onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n); toast.success("Reopened"); }, tone: "ghost" }],
+    };
+  };
+  const byDoneAtDesc = (a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || ""));
+  const doneRows = (needs || []).filter(n => completedForMe(n, identity)).sort(byDoneAtDesc).map(doneRowOf);
+  const finishedRows = (needs || []).filter(n => sentFinishedForMe(n, identity)).sort(byDoneAtDesc).map(doneRowOf);
+  // v429 Mine rows for the groups: fresh (not stale), not pinned to Focus, search-filtered.
+  const mineQ = sortRows(fq(freshMine.filter(r => !pinnedSet.has(r.key))));
+  const othersQ = sortRows(fq(freshOthers));
+  // v429 Person view (head only): one group per owner — me = my Mine rows;
+  // others = With-others rows (by their owners) + open task docs on someone
+  // else, read-only. Every person group starts folded.
+  const personGroups = view !== "person" ? [] : (() => {
+    const m = new Map();
+    const add = (name, r) => { const nm = String(name || "").trim(); if (!nm) return; const k = nm.toLowerCase(); if (!m.has(k)) m.set(k, { name: nm, rows: [] }); m.get(k).rows.push(r); };
+    const meKey = String(me).trim().toLowerCase();
+    m.set(meKey, { name: me, rows: [] });
+    mineQ.forEach(r => add(me, r));
+    othersQ.forEach(r => (r.owners || []).forEach(o => add(o, r)));
+    liveNeeds.forEach(n => { if (seenNeed.has(n.id)) return; const a = needAssignee(n); if (!a || sameName(a, me)) return; const r = needRow(n, true); if (rowMatches(r, q)) add(a, r); });
+    return [...m.entries()]
+      .filter(([k, p]) => k === meKey || p.rows.length)
+      .sort((a, b) => (a[0] === meKey ? -1 : b[0] === meKey ? 1 : a[1].name.localeCompare(b[1].name)))
+      .map(([k, p]) => ({ key: "p:" + p.name, title: k === meKey ? `${p.name} (you)` : p.name, rows: sortRows(p.rows), main: true, empty: "All clear — nothing on you right now." }));
+  })();
   const groups = [
-    { key: "mine", title: "Mine", rows: sortRows(mineRows), byCat: myDayCategories(sortRows(mineRows)), empty: "All clear — nothing on you right now." },
-    // v427: rows the head's board used to own that now route to another hat
-    // holder — read-only (no Done/Snooze/actions), folded by default.
-    ...(iRunHead && othersRows.length ? [{ key: "others", title: "With others", rows: sortRows(othersRows), byCat: myDayCategories(sortRows(othersRows)), empty: "" }] : []),
-    ...(iRunHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
+    ...(view === "person" ? personGroups : [
+      view === "job"
+        ? { key: "mine", title: "Mine", rows: mineQ, byJob: byJobOf(mineQ), main: true, empty: "All clear — nothing on you right now." }
+        : { key: "mine", title: "Mine", rows: mineQ, byCat: myDayCategories(mineQ), main: true, empty: "All clear — nothing on you right now." },
+      // v427: rows the head's board used to own that now route to another hat
+      // holder — read-only (no Done/Snooze/actions), folded by default.
+      ...(iRunHead && freshOthers.length ? [{ key: "others", title: "With others", rows: othersQ, byCat: myDayCategories(othersQ), empty: "" }] : []),
+    ]),
+    ...(iRunHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRowsQ, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
     // v421: what I asked others for, with their latest update. Starts folded.
-    { key: "sent", title: "Sent", rows: sortRows(sentRows), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
-    // v426: everything I finished (mine + sent), last 30 days, newest first.
-    { key: "done", title: "Done", rows: doneRows, empty: "Nothing finished in the last 30 days." },
+    { key: "sent", title: "Sent", rows: sortRows(fq(sentRows)), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
+    // v429: docs I sent that someone else finished, last 30 days. Folded.
+    { key: "sentDone", title: "Sent · finished", rows: fq(finishedRows), empty: "Nothing you sent was finished in the last 30 days." },
+    // v426: everything I finished (on me, or sent and closed myself), last 30 days, newest first.
+    { key: "done", title: "Done", rows: fq(doneRows), empty: "Nothing finished in the last 30 days." },
   ];
   // v421 update panel state (Row is a plain render fn, so state lives here).
   const [updFor, setUpdFor] = useState(null);
@@ -52881,9 +52950,21 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const Row = (r) => {
     const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
     const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
+    // v429 select mode: a row never opens its job or a panel — tapping a
+    // selectable row toggles it; per-row buttons / panels are hidden.
+    const caps = batchCaps(r);
+    const canPick = !!r.sel && (caps.done || caps.snooze || caps.push);
+    const isSel = selected.has(r.key);
+    const pinned = pinnedSet.has(r.key);
     return (
-      <div key={r.key} style={{ display: "flex", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44 }}>
-        <div onClick={() => { if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: 1, minWidth: 0, cursor: r.jobId ? "pointer" : "default" }}>
+      <div key={r.key} style={{ display: "flex", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : C.border}`, borderLeft: `4px solid ${bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44 }}>
+        {selectMode && r.sel && (
+          <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
+            <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
+              style={{ width: 20, height: 20, cursor: canPick ? "pointer" : "not-allowed", accentColor: C.blue }} />
+          </span>
+        )}
+        <div onClick={() => { if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
@@ -52891,7 +52972,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
           </div>
           {r.latest && (
-            <div onClick={e => { e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
+            <div onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
               style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12, marginTop: 4, cursor: "pointer" }}>
               <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
               <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
@@ -52934,7 +53015,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             </div>
           )}
           {r.state === "with" && <div style={{ fontSize: 12, color: C.blue, fontWeight: 600, marginTop: 4 }}>with {first(r.who)}{r.age ? ` · ${r.age}` : ""}</div>}
-          {r.scan && (
+          {r.scan && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ display: "flex", gap: 6 }}>
                 <input type="text" value={scanDraft[r.key] || ""} placeholder="Paste Matterport link…"
@@ -52956,7 +53037,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             </div>
           )}
           {r.state === "verify" && <div style={{ fontSize: 12, color: C.green, fontWeight: 700, marginTop: 4 }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</div>}
-          {r.actions && r.actions.length > 0 && (
+          {!selectMode && r.actions && r.actions.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
               {r.actions.map(a => (
                 <button key={a.label} title={a.title} onClick={e => { e.stopPropagation(); a.onClick(); }}
@@ -52965,7 +53046,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
               ))}
             </div>
           )}
-          {r.pushOpen && (
+          {r.pushOpen && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, padding: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
               {r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who))).map(n => (
                 <button key={n} onClick={() => r.onPick(n)}
@@ -52974,13 +53055,17 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             </div>
           )}
         </div>
-        {r.canDone && (
+        {!selectMode && r.sel && onSaveFocus && (
+          <button onClick={() => toggleFocus(r.key)} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} aria-pressed={pinned}
+            style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.muted, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
+        )}
+        {!selectMode && r.canDone && (
           <button onClick={r.onDone} title="Done" style={{ ...ib, color: C.green }}><Icon name="check" size={20} stroke={2.25} /></button>
         )}
-        {r.canSnooze && (
+        {!selectMode && r.canSnooze && (
           <button onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)} title="Snooze" style={ib}><Icon name="clock" size={19} stroke={2} /></button>
         )}
-        {r.canUpdate && (
+        {!selectMode && r.canUpdate && (
           <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); setUpdFor(r.key); } }} title="Add an update"
             style={{ ...ib, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}><Icon name="note" size={18} stroke={2} /></button>
         )}
@@ -52998,7 +53083,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     );
   };
   const Group = (g) => {
-    const isOpen = openGroups.has(g.key) || (groups.length === 1);
+    const isOpen = openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
     const overdue = g.rows.filter(r => r.bucket === "overdue").length;
     return (
       <div key={g.key} style={{ marginBottom: 14 }}>
@@ -53014,7 +53099,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {g.byCat.map(c => {
                 const ck = g.key === "mine" ? c.key : g.key + ":" + c.key;
-                const open = openCats.has(ck);
+                const open = openCats.has(ck) || qOn;
                 const [, laneColor] = MYDAY_BUCKETS[MYDAY_ORDER[c.top]] || MYDAY_BUCKETS.later;
                 return (
                   <div key={c.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${laneColor}`, borderRadius: 10 }}>
@@ -53035,18 +53120,27 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           ? (g.byJob.length
             ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {g.byJob.map(({ jobId, job, rows }) => {
-                  const open = openHeadJobs.has(jobId);
+                  const isHead = g.key === "head";
+                  const jk = isHead ? jobId : g.key + ":" + jobId;   // v429: Mine Job view folds independently of the head group
+                  const open = openHeadJobs.has(jk) || qOn;
                   const n = rows.length;
+                  const od = rows.filter(r => r.bucket === "overdue").length;
                   return (
                     <div key={jobId} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
-                      <div onClick={() => toggleHeadJob(jobId)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44 }}>
+                      <div onClick={() => toggleHeadJob(jk)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44 }}>
                         <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
-                        <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
+                        {isHead
+                          ? <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
+                          : <>
+                              <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{(job && job.name) || "No job"}</span>
+                              <span style={{ fontSize: 12, color: C.muted }}>{n}</span>
+                              {od > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{od} overdue</span>}
+                            </>}
                       </div>
                       {open && (
                         <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
                           {rows.map(Row)}
-                          {canCreate && openQuickAdd && (
+                          {isHead && canCreate && openQuickAdd && (
                             <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
                               style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
                               + Add for {headFirst}
@@ -53066,6 +53160,61 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     );
   };
   const link = (label, fn) => <span onClick={fn} style={{ fontSize: 12, color: C.accent, fontWeight: 600, cursor: "pointer" }}>{label}</span>;
+  // ── v429 toolbar / batch ──
+  const pickView = (v) => { setViewPref(v); try { localStorage.setItem("myday.view", v); } catch {} };
+  const toggleSel = (key) => setSelected(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  const toggleSelectMode = () => {
+    if (selectMode) { setSelectMode(false); setSelected(new Set()); return; }
+    closeUpd(); setSnoozeFor(null); setPushFor(null); setHistFor(null);
+    setSelected(new Set()); setSelectMode(true);
+  };
+  // Only keys still on Mine count (a row that closed since it was ticked drops).
+  const selKeys = [...selected].filter(k => mineByKey.has(k));
+  const runBatch = (op, who) => {
+    if (!selKeys.length || (op === "push" && !who)) return;
+    setSelected(new Set()); setSelectMode(false);
+    setBatchQ({ op, who: who || "", keys: selKeys, ok: 0, skip: 0 });
+  };
+  // One row per render: each step looks the row up in THIS render (fresh job /
+  // doc closures), so N rows on one job chain their whole-field writes instead
+  // of each overwriting the last. Uses the rows' own onDone / onSnooze / onPick
+  // (so each still stages its Undo — only the LAST one stays undoable).
+  useEffect(() => {
+    if (!batchQ) return;
+    if (!batchQ.keys.length) {
+      const verb = batchQ.op === "done" ? "done" : batchQ.op === "snooze" ? "snoozed" : `pushed to ${first(batchQ.who)}`;
+      toast.success(`${batchQ.ok} ${verb}${batchQ.skip ? ` · ${batchQ.skip} skipped` : ""}`);
+      setBatchQ(null);
+      return;
+    }
+    const [k, ...rest] = batchQ.keys;
+    const r = mineByKey.get(k);
+    const caps = batchCaps(r);
+    let ok = false;
+    if (r && caps[batchQ.op]) {
+      if (batchQ.op === "done" && r.onDone) { r.onDone(); ok = true; }
+      else if (batchQ.op === "snooze" && r.onSnooze) { r.onSnooze(addDaysYmd(todayYmd, 3)); ok = true; }
+      else if (batchQ.op === "push") {
+        // patchNeed stamps assignedBy / assignedAt itself on any assignedTo write.
+        if (r.kind === "need" && r.need) { onPatchNeed(r.need.id, { assignedTo: batchQ.who }, r.need); ok = true; }
+        else if (r.onPick) { r.onPick(batchQ.who); ok = true; }
+      }
+    }
+    setBatchQ({ ...batchQ, keys: rest, ok: batchQ.ok + (ok ? 1 : 0), skip: batchQ.skip + (ok ? 0 : 1) });
+  }, [batchQ]); // eslint-disable-line
+  const segBtn = (on) => ({ fontFamily: "inherit", fontSize: 12, fontWeight: on ? 700 : 500, padding: "6px 10px", minHeight: 34, border: "none", cursor: "pointer", background: on ? C.accent : "transparent", color: on ? "#fff" : C.text });
+  const barBtn = { fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: "#66A8FF", border: "1px solid #66A8FF55" };
+  const mainGroups = groups.filter(g => g.main);
+  const sideGroups = groups.filter(g => !g.main);
+  const staleFooter = staleRows.length > 0 && (
+    <div key="stale" style={{ marginBottom: 14 }}>
+      <div onClick={() => setShowStale(s => !s)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px", fontSize: 12, color: C.dim }}>
+        <span style={{ display: "inline-flex", transition: "transform .15s", transform: showStale ? "rotate(90deg)" : "none" }}><Icon name="chevronRight" size={14} stroke={2.25} /></span>
+        <span>{staleRows.length} hidden (stale) · <span style={{ color: C.accent, fontWeight: 600 }}>{showStale ? "Hide" : "Show"}</span></span>
+      </div>
+      {showStale && <div style={{ display: "flex", flexDirection: "column", gap: 7, opacity: .75 }}>{sortRows(staleRows).map(Row)}</div>}
+    </div>
+  );
 
   return (
     <div style={{ padding: narrow ? "12px 12px 110px" : "16px 18px 60px", maxWidth: 1120, margin: "0 auto" }} onClick={() => { if (snoozeFor) setSnoozeFor(null); }}>
@@ -53083,6 +53232,21 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           )}
         </div>
       </div>
+      {/* v429 toolbar: search · Category | Job | Person · Select (stacks when narrow) */}
+      <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", alignItems: narrow ? "stretch" : "center", gap: 8, marginBottom: 10 }}>
+        <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs…"
+          style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", fontSize: 14, padding: "9px 12px", minHeight: 38, borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
+            {[["cat", "Category"], ["job", "Job"], ...(iRunHead ? [["person", "Person"]] : [])].map(([k, l]) => (
+              <button key={k} onClick={() => pickView(k)} aria-pressed={view === k} style={segBtn(view === k)}>{l}</button>
+            ))}
+          </div>
+          <button onClick={toggleSelectMode} aria-pressed={selectMode}
+            style={{ marginLeft: narrow ? "auto" : 0, fontFamily: "inherit", fontSize: 12, fontWeight: 700, padding: "6px 12px", minHeight: 34, borderRadius: 8, cursor: "pointer",
+              background: selectMode ? C.accent : "transparent", color: selectMode ? "#fff" : C.accent, border: `1px solid ${C.accent}` }}>{selectMode ? "Cancel" : "Select"}</button>
+        </div>
+      </div>
       {myJobs.length > 0 && (
         <div style={{ display: "flex", gap: 6, overflowX: "auto", margin: "0 0 12px", paddingBottom: 2, scrollbarWidth: "none" }}>
           {myJobs.map(j => (
@@ -53094,9 +53258,40 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           ))}
         </div>
       )}
+      {/* v429 Focus today: up to 3 pinned Mine rows (always visible, not folded). */}
+      {onSaveFocus && (
+        <div style={{ border: `1px solid #66A8FF`, borderRadius: 12, padding: "10px 10px 12px", marginBottom: 14, background: C.surface }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 8px" }}>
+            <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}><span style={{ color: "#66A8FF" }}>★</span> Focus today</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{pinnedRows.length}/3</span>
+          </div>
+          {pinnedRows.length
+            ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{pinnedRows.map(Row)}</div>
+            : <div style={{ fontSize: 13, color: C.dim, padding: "2px 4px" }}>Pin up to 3 rows as today's must-dos.</div>}
+          {carryKeys.length > 0 && (
+            <div style={{ fontSize: 12, color: C.dim, marginTop: 8, padding: "0 4px" }}>
+              From {mdOf(focusEntry.date)}: {carryKeys.length} still open · {link("Re-pin", () => onSaveFocus({ date: todayYmd, keys: carryKeys.slice(0, 3) }))}
+            </div>
+          )}
+        </div>
+      )}
       {narrow || groups.length === 1
-        ? groups.map(Group)
-        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{Group(groups[0])}</div><div>{groups.slice(1).map(Group)}</div></div>}
+        ? <>{mainGroups.map(Group)}{staleFooter}{sideGroups.map(Group)}</>
+        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{mainGroups.map(Group)}{staleFooter}</div><div>{sideGroups.map(Group)}</div></div>}
+      {/* v429 batch action bar (Command Deck dark, steel blue accent). */}
+      {selectMode && (
+        <div onClick={e => e.stopPropagation()} style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${(ON_MOBILE ? 92 : 24) + (undo ? 56 : 0)}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8996, background: "#1B2030", color: "#E6EAF1", borderRadius: 12, padding: "10px 12px", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 640, margin: "0 auto" }}>
+          <span style={{ fontWeight: 700, marginRight: 4 }}>{selKeys.length} selected</span>
+          <button disabled={!selKeys.length} onClick={() => runBatch("done")} style={{ ...barBtn, opacity: selKeys.length ? 1 : .45 }}>Done</button>
+          <button disabled={!selKeys.length} onClick={() => runBatch("snooze")} style={{ ...barBtn, opacity: selKeys.length ? 1 : .45 }}>Snooze 3d</button>
+          <select value="" disabled={!selKeys.length} onChange={e => runBatch("push", e.target.value)}
+            style={{ ...barBtn, background: "#1B2030", opacity: selKeys.length ? 1 : .45, colorScheme: "dark" }}>
+            <option value="">Push to…</option>
+            {roster.filter(n => !sameName(n, me)).map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <button onClick={toggleSelectMode} style={{ ...barBtn, marginLeft: "auto", color: "#9AA3B2", border: "1px solid #2E3440" }}>Cancel</button>
+        </div>
+      )}
       {undo && (
         <div style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${ON_MOBILE ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8995, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 520, margin: "0 auto" }}>
           <span>{undo.label}</span>
