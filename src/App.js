@@ -52512,9 +52512,10 @@ const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 // folded, order themselves by their most urgent row (lane), then overdue
 // count, then label; rows inside keep the lane sort. Pure — extracted by
 // scripts/needs-dryrun.js.
-const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
+const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", redline: "Redline walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
 function myDayCategoryOf(row) {
   if (!row) return "other";
+  if (row.kind === "redline") return row.routeKey === "co_send" ? "co" : "redline";
   if (row.kind === "need") return row.needKind === "task" ? "tasks" : row.needKind === "bodies" ? "bodies" : "needs";
   if (row.kind === "punch") return "punch";
   if (row.kind === "duty") return row.dutyType === "qc" ? "qc" : row.dutyType === "po" ? "po" : "prep";
@@ -52533,7 +52534,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -52543,6 +52544,13 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const headName = (head && head.name) || "";
   const headFirst = headName ? headName.split(" ")[0] : "the office";
   const iAmHead = !!(head && sameName(head.name, me));
+  const first = (n) => String(n || "").split(" ")[0];
+  // v427: routing is by OWNER (HAT_REGISTRY). Covering → I also act for them.
+  const coverees = coveredFor(users, me, todayYmd);
+  const iRunHead = iAmHead || coverees.some(n => sameName(n, headName));
+  const ownsRoute = (rk) => ownersForRoute(rk, users, todayYmd).some(o => sameName(o, me));
+  const ownerLabel = (rk) => ownersForRoute(rk, users, todayYmd).map(first).join(" + ");
+  const othersRows = [];   // head board only: routed-away rows, read-only
   const myJobs = myJobsFor(identity, users, jobs);
   const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
   const myTitle = myRec.title || myRec.role || "";
@@ -52555,7 +52563,6 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const runUndo = () => { if (!undo) return; if (undo.timer) clearTimeout(undo.timer); undo.revert(); setUndo(null); };
   const jobById = (id) => (jobs || []).find(j => j && j.id === id);
   const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
-  const first = (n) => String(n || "").split(" ")[0];
   const mdOf = (y) => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
 
   const needRow = (n, readOnly) => {
@@ -52587,7 +52594,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
 
   const openNeeds = (needs || []).filter(n => needIsOpen(n, todayYmd));
   const mineRows = [];
-  (iAmHead ? headQueue(needs, identity, todayYmd) : openNeeds.filter(n => isMine(n, identity))).forEach(n => mineRows.push(needRow(n, false)));
+  const seenNeed = new Set();
+  const addNeeds = (list) => list.forEach(n => { if (seenNeed.has(n.id)) return; seenNeed.add(n.id); mineRows.push(needRow(n, false)); });
+  addNeeds(iAmHead ? headQueue(needs, identity, todayYmd) : openNeeds.filter(n => isMine(n, identity)));
+  coverees.forEach(name => { const who = { name }; addNeeds(sameName(name, headName) ? headQueue(needs, who, todayYmd) : openNeeds.filter(n => isMine(n, who))); });
   punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
     tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
     onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
@@ -52613,7 +52623,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "done", doneAt: nowIso(), doneBy: me }, openDoc);
     stage("Cleared", () => { onUpdateJob({ ...job, clearedTasks: prev }, { clearedTasks: prev }); if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "open", doneAt: "", doneBy: "" }, openDoc); });
   };
-  if (iAmHead) {
+  // v427: each auto row goes to the holder(s) of its route's hat (ownersForRoute);
+  // unrouted rows / no holder -> the head. Rows routed away from the head show on
+  // the head board read-only under "With others".
+  {
     const dutyKeys = new Set((jobs || []).filter(j => j && !j.tempPed && !j.quickJob).flatMap(getCoordinatorDuties).map(d => d.jobId + "_" + d.id));
     // v425: Matterport scans render ONLY as the scanner's SCAN rows (with the
     // paste-link / schedule / no-scan controls), never as a head AUTO "Schedule
@@ -52622,10 +52635,18 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // there. they are alot that are duplicates"). Excluded on the head board.
     foldDutyTwins(headAutoTasks(jobs, cleared), dutyKeys).filter(t => t.category !== "matterport").forEach(t => {
       const job = jobById(t.jobId); if (!job) return;
-      const st = autoRowState(t, delegation, headName);
+      const rk = routeKeyOfAuto(t);
+      const owners = ownersForRoute(rk, users, todayYmd);
+      const mineToo = owners.some(o => sameName(o, me));
+      if (!mineToo) {
+        if (iRunHead) othersRows.push({ key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+          sub: [t.jobName, `with ${owners.map(first).join(" + ")}`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
+        return;
+      }
+      const st = autoRowState(t, delegation, owners);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
       const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
-        sub: [t.jobName, t.desc].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
+        sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
         pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
@@ -52658,9 +52679,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       mineRows.push(row);
     });
   }
-  if (iAmHead) {
+  {
     const live = (jobs || []).filter(j => j && !j.tempPed && !j.quickJob);
-    [...live.flatMap(getCoordinatorDuties), ...(can(head, "jobprep.own") ? live.flatMap(getCompanyDuties) : [])].forEach(d => mineRows.push(dutyRow(d, false)));
+    live.flatMap(getCoordinatorDuties).forEach(d => {
+      const rk = routeKeyOfDuty(d);
+      if (rk ? ownsRoute(rk) : iRunHead) mineRows.push(dutyRow(d, false));
+      else if (iRunHead) othersRows.push({ ...dutyRow(d, true), sub: [d.jobName, `with ${ownerLabel(rk)}`] });
+    });
+    if (iRunHead && can(head, "jobprep.own")) live.flatMap(getCompanyDuties).forEach(d => mineRows.push(dutyRow(d, false)));
   }
   // v423: the Matterport scanner (matterport.own hat) gets the scans queue on
   // THEIR My Day too — not only the head board — with paste-link / schedule /
@@ -52669,7 +52695,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // task doc (that one shows under Tasks on me via the delegation join, so no
   // double). The head board excludes matterport auto-rows entirely (v425), so a
   // head who also holds the scanner hat sees each scan once — as a SCAN row.
-  if (can(identity, "matterport.own")) {
+  if (ownsRoute("matterport")) {
     scanAutoTasks(jobs, cleared).forEach(t => {
       const openDoc = delegation.get(t.id);
       if (openDoc && openDoc.status !== "done") return;
@@ -52702,6 +52728,29 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       });
     });
   }
+  // v427: redline walks (standalone redlineWalks records). Scheduled -> the
+  // redline hat (walked together); CO owed -> the CO-quote hat.
+  (redlineWalks || []).forEach(w => {
+    const rk = routeKeyOfRedline(w); if (!rk) return;
+    const job = w.jobId ? jobById(w.jobId) : null;
+    const name = (job && job.name) || w.address || w.clientName || "Redline walk";
+    // Walks made from the Job Prep strip carry walkDate only (no statusDate).
+    const wDate = w.statusDate || w.walkDate || "";
+    const owners = ownersForRoute(rk, users, todayYmd);
+    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate),
+      title: rk === "redline" ? `Redline walk · ${name}` : `Write redline CO · ${name}`,
+      tag: rk === "redline" ? "Walk" : "CO", tagColor: rk === "redline" ? C.purple : C.red,
+      sub: [wDate ? fmtDisplay(wDate) : "", owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean),
+      jobId: w.jobId || null, section: null, canDone: false, canSnooze: false };
+    if (!owners.some(o => sameName(o, me))) { if (iRunHead) othersRows.push({ ...row, sub: [name, `with ${owners.map(first).join(" + ")}`] }); return; }
+    row.actions = rk === "redline"
+      ? [{ label: "Walk done", title: "Walk finished: plans go to cleanup", tone: "primary", onClick: () => {
+          if (!onUpdateRedline) return; const prev = { ...w };
+          onUpdateRedline({ ...w, status: "plans_prep", statusDate: "" });
+          stage("Walk done", () => onUpdateRedline(prev)); } }]
+      : [{ label: "Open COs", title: "Write + send it from the CO board", tone: "ghost", onClick: () => onOpenCOs && onOpenCOs() }];
+    mineRows.push(row);
+  });
   const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
@@ -52715,7 +52764,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // included — a task the other side put on hold must stay visible with its
   // "waiting on" line instead of silently vanishing.
   const liveNeeds = (needs || []).filter(n => n && n.status !== "done");
-  const headRows = iAmHead ? [] : (() => {
+  const headRows = iRunHead ? [] : (() => {
     // A doc the viewer created/sent belongs in SENT, not here — even when it's
     // assigned to the head about the viewer's own job (onHead true). Without the
     // `!sentByMe` guard a foreman's own ask to the head was swallowed by "On
@@ -52767,7 +52816,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     });
   const groups = [
     { key: "mine", title: "Mine", rows: sortRows(mineRows), byCat: myDayCategories(sortRows(mineRows)), empty: "All clear — nothing on you right now." },
-    ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
+    // v427: rows the head's board used to own that now route to another hat
+    // holder — read-only (no Done/Snooze/actions), folded by default.
+    ...(iRunHead && othersRows.length ? [{ key: "others", title: "With others", rows: sortRows(othersRows), byCat: myDayCategories(sortRows(othersRows)), empty: "" }] : []),
+    ...(iRunHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
     // v421: what I asked others for, with their latest update. Starts folded.
     { key: "sent", title: "Sent", rows: sortRows(sentRows), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
     // v426: everything I finished (mine + sent), last 30 days, newest first.
@@ -52923,11 +52975,12 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         {isOpen && g.byCat && (g.byCat.length
           ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {g.byCat.map(c => {
-                const open = openCats.has(c.key);
+                const ck = g.key === "mine" ? c.key : g.key + ":" + c.key;
+                const open = openCats.has(ck);
                 const [, laneColor] = MYDAY_BUCKETS[MYDAY_ORDER[c.top]] || MYDAY_BUCKETS.later;
                 return (
                   <div key={c.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${laneColor}`, borderRadius: 10 }}>
-                    <div onClick={() => toggleCat(c.key)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
+                    <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
                       <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
                       <span style={{ fontSize: 12, color: C.muted }}>{c.rows.length}</span>
@@ -58929,6 +58982,7 @@ function App() {
         <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
+          redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={()=>setView("cos")}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}/>
       )}
 

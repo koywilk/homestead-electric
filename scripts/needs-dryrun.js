@@ -377,4 +377,8 @@ const tb = new Map([["t1", { id:"n", autoTaskId:"t1", status:"done", doneBy:"Jos
 eq(H.autoRowState({ id:"t1" }, tb, ["Josh"]).state, "none", "owner's own close = take back");
 eq(H.autoRowState({ id:"t1" }, tb, "Koy Wilkinson").state, "verify", "string owner still works (head path)");
 
+// v427: redline walk rows categorize by route key.
+eq(H.myDayCategoryOf({ kind:"redline", routeKey:"redline" }), "redline", "redline walk row → Redline walks");
+eq(H.myDayCategoryOf({ kind:"redline", routeKey:"co_send" }), "co", "redline CO owed row → Change orders");
+
 console.log("needs-dryrun ok");
