@@ -32386,15 +32386,7 @@ function computeTasks(jobs, opts) {
         }
       }
     }
-    if(fs === "waiting_date") {
-      tasks.push({
-        id: job.id+"_finish_waiting", jobId: job.id, jobName: job.name,
-        type: "auto", category: "finish", foreman,
-        title: "Get Finish Start Date",
-        desc: "Waiting for finish start date confirmation",
-        color: C.finish, cleared: false,
-      });
-    }
+    // v429: removed — Koy gets finish dates when they come (no nag).
     if(fs === "date_confirmed") {
       const fHard = job.finishNeedsHardDate;
       const fStart = job.finishNeedsByStart||"";
@@ -32476,23 +32468,7 @@ function computeTasks(jobs, opts) {
       color: C.red, cleared: false,
     });
 
-    // FIX 6: "In Between" too long — fires after 2 months
-    if(rs==="complete" && (!fs||fs===""||fs==="waiting_date"||fs==="ready")) {
-      const betweenDate = job.roughStatusDate||job.roughProjectedStart||"";
-      if(betweenDate) {
-        const d = parseAnyDate(betweenDate);
-        if(d) {
-          const daysBetween = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
-          if(daysBetween>=60) tasks.push({
-            id: job.id+"_in_between_long", jobId: job.id, jobName: job.name,
-            type: "auto", category: "schedule", foreman,
-            title: "In Between — Over 2 Months",
-            desc: `Rough completed ${daysBetween} days ago — finish has not been scheduled`,
-            color: C.orange, cleared: false,
-          });
-        }
-      }
-    }
+    // v429: removed — Koy gets finish dates when they come (no nag).
 
     // FIX 2b: Ready to Invoice stale — fires after 5 days with no action
     if(job.readyToInvoice && !job.invoiceDismissed) {
@@ -52210,13 +52186,59 @@ function sentByMe(n, identity) {
 // the "Done" group (Koy: "a spot where i can see all my completed tasks"). "Both"
 // per Koy: on me (isMine) OR I sent it (assignedBy/createdBy me). Real task docs
 // only — auto-tasks clear via clearedTasks and carry no doneAt, so they can't
-// show a completion time. Pure; extracted by scripts/needs-dryrun.js.
+// show a completion time. v429: split off the case where I sent it and SOMEONE
+// ELSE closed it — that lives in Sent → Finished (sentFinishedForMe) now, not
+// here, so a sent-and-finished doc doesn't show twice. Pure; extracted by
+// scripts/needs-dryrun.js.
 function completedForMe(n, identity, nowMs = Date.now()) {
   if (!n || n.status !== "done") return false;
   const me = identity && identity.name; if (!me) return false;
   if (!(isMine(n, identity) || sameName(n.assignedBy, me) || sameName(n.createdBy, me))) return false;
+  if (!isMine(n, identity) && !(n.doneBy && sameName(n.doneBy, me))) return false; // v429: sent-and-finished-by-someone-else lives in Sent → Finished
   const t = Date.parse(n.doneAt || "");
   return Number.isFinite(t) && (nowMs - t) <= 30 * 24 * 60 * 60 * 1000;
+}
+
+// ── MY DAY Ship 2 helpers (v429) ────────────────────────────────────────────
+// Inactive = the Job Board's own archive gate (see allJobs filter) + quotes.
+function isInactiveJob(j) { return !!(j && (j.archived || j.deleted || j.archivedAt || j.type === "quote")); }
+// Why a derived row should drop off My Day on its own (Koy 2026-09-23). Real
+// task docs (kind "need") never go stale — only derived rows. Hidden, not deleted.
+function staleReason(r, todayYmd) {
+  if (!r || r.kind === "need" || r.kind === "punch") return "";
+  if (r.job && isInactiveJob(r.job)) return r.job.type === "quote" ? "quote" : "job archived";
+  const d = r.dateYmd ? parseAnyDate(r.dateYmd) : null;
+  if (!d) return "";
+  const days = Math.floor((new Date(todayYmd + "T00:00:00") - new Date(localYmd(d) + "T00:00:00")) / 864e5);
+  if (r.kind === "redline" && days >= 45) return "old walk";
+  if ((r.kind === "auto" || r.kind === "duty") && days >= 60) return "60+ days overdue";
+  return "";
+}
+function rowMatches(row, q) {
+  const s = String(q || "").trim().toLowerCase(); if (!s) return true;
+  return [row && row.title, ...((row && row.sub) || [])].some(x => String(x || "").toLowerCase().includes(s));
+}
+function batchCaps(row) {
+  if (!row) return { done: false, snooze: false, push: false };
+  if (row.kind === "need") return { done: true, snooze: true, push: true };
+  if (row.kind === "auto") return { done: !!row.canDone && !row.scan, snooze: !!row.canSnooze, push: !row.scan && !!row.onPick };
+  if (row.kind === "punch") return { done: !!row.canDone, snooze: false, push: false };
+  if (row.kind === "duty") return { done: !!row.canDone, snooze: false, push: false };
+  return { done: false, snooze: false, push: false };
+}
+function focusKeysToday(entry, todayYmd) { return entry && entry.date === todayYmd && Array.isArray(entry.keys) ? entry.keys.slice(0, 3) : []; }
+// Sent → Finished: a doc I sent that SOMEONE ELSE closed in the last 30 days.
+function sentFinishedForMe(n, identity, nowMs = Date.now()) {
+  const me = identity && identity.name; if (!n || !me || n.status !== "done") return false;
+  if (isMine(n, identity)) return false;
+  if (!(sameName(n.assignedBy, me) || sameName(n.createdBy, me))) return false;
+  if (n.doneBy && sameName(n.doneBy, me)) return false;
+  const t = Date.parse(n.doneAt || "");
+  return Number.isFinite(t) && (nowMs - t) <= 30 * 864e5;
+}
+function userKeyOf(identity) {
+  if (!identity) return "";
+  return identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 // The Head of Residential = whoever holds the resi.head hat (Settings → Team →
 // COMPANY HATS). Falls back to the jobprep.own holder so nothing routes to

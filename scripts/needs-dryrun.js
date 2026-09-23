@@ -62,7 +62,8 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
   "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
   "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
-  "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor"];
+  "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor",
+  "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -331,9 +332,12 @@ assert.ok(!(H.onHead(ownAskToHead, gage, users, jobs) && !H.sentByMe(ownAskToHea
 assert.ok(H.sentByMe(ownAskToHead, gage), "grouping precedence: placed in Sent, where the waiting-on line shows");
 
 // v426 — the Done group: task cards I finished OR that finished on me, last 30d ("both").
+// v429: split — a doc I only sent that someone ELSE closed now lives in Sent →
+// Finished (sentFinishedForMe), not here, so it doesn't show twice; I still see
+// it in my own Done when I closed it myself (doneBy = me).
 const doneNow = new Date().toISOString();
 assert.ok(H.completedForMe({ id:"d1", status:"done", assignedTo:"Gage Lund", createdBy:"Koy Wilkinson", doneAt: doneNow }, gage), "done + on me + recent -> my Done");
-assert.ok(H.completedForMe({ id:"d2", status:"done", assignedTo:"Koy Wilkinson", assignedBy:"Gage Lund", createdBy:"Gage Lund", doneAt: doneNow }, gage), "done + I sent it -> my Done");
+assert.ok(H.completedForMe({ id:"d2", status:"done", assignedTo:"Koy Wilkinson", assignedBy:"Gage Lund", createdBy:"Gage Lund", doneBy:"Gage Lund", doneAt: doneNow }, gage), "done + I sent it + I closed it myself -> my Done");
 assert.ok(!H.completedForMe({ id:"d3", status:"open", assignedTo:"Gage Lund", doneAt: doneNow }, gage), "still open -> not in Done");
 assert.ok(!H.completedForMe({ id:"d4", status:"done", assignedTo:"Daegan", assignedBy:"Daegan", createdBy:"Daegan", doneAt: doneNow }, gage), "someone else's done task -> excluded");
 assert.ok(!H.completedForMe({ id:"d5", status:"done", assignedTo:"Gage Lund", doneAt: new Date(Date.now()-40*24*60*60*1000).toISOString() }, gage), "done 40 days ago -> outside the 30-day window");
@@ -380,5 +384,43 @@ eq(H.autoRowState({ id:"t1" }, tb, "Koy Wilkinson").state, "verify", "string own
 // v427: redline walk rows categorize by route key.
 eq(H.myDayCategoryOf({ kind:"redline", routeKey:"redline" }), "redline", "redline walk row → Redline walks");
 eq(H.myDayCategoryOf({ kind:"redline", routeKey:"co_send" }), "co", "redline CO owed row → Change orders");
+
+// v429 — Ship 2 helpers.
+const T2 = "2026-09-23";
+assert.ok(H.isInactiveJob({ archived:true }) && H.isInactiveJob({ deleted:true }) && H.isInactiveJob({ archivedAt:"2026-01-01" }) && H.isInactiveJob({ type:"quote" }), "archived/deleted/archivedAt/quote are inactive");
+assert.ok(!H.isInactiveJob({ id:"j" }) && !H.isInactiveJob(null), "normal job or none → active");
+eq(H.staleReason({ kind:"auto", job:{ archived:true }, dateYmd:"" }, T2), "job archived", "inactive job wins");
+eq(H.staleReason({ kind:"auto", job:{ type:"quote" }, dateYmd:"" }, T2), "quote", "quote job");
+eq(H.staleReason({ kind:"redline", job:null, dateYmd:"2026-08-09" }, T2), "old walk", "45 days back → old walk");
+eq(H.staleReason({ kind:"redline", job:null, dateYmd:"2026-08-10" }, T2), "", "44 days → fresh");
+eq(H.staleReason({ kind:"auto", job:{}, dateYmd:"2026-07-25" }, T2), "60+ days overdue", "60 days overdue auto");
+eq(H.staleReason({ kind:"duty", job:{}, dateYmd:"2026-07-26" }, T2), "", "59 days → keep");
+eq(H.staleReason({ kind:"need", job:{}, dateYmd:"2026-01-01" }, T2), "", "real task docs never go stale");
+eq(H.staleReason({ kind:"auto", job:{}, dateYmd:"" }, T2), "", "no date → keep");
+assert.ok(H.rowMatches({ title:"Order meter base", sub:["#1770 England"] }, "england"), "search hits sub");
+assert.ok(H.rowMatches({ title:"Order meter base", sub:[] }, "  METER "), "trim + case-insensitive");
+assert.ok(!H.rowMatches({ title:"x", sub:[] }, "zzz"), "miss");
+assert.ok(H.rowMatches({ title:"x" }, ""), "empty query matches all");
+eq(H.batchCaps({ kind:"need", canDone:true, canSnooze:true }), { done:true, snooze:true, push:true }, "need: all three");
+eq(H.batchCaps({ kind:"auto", autoCategory:"invoice", canDone:true, canSnooze:true, onPick:()=>{} }), { done:true, snooze:true, push:true }, "auto: all three");
+eq(H.batchCaps({ kind:"auto", autoCategory:"matterport", canSnooze:true, scan:{} }), { done:false, snooze:true, push:false }, "scan: snooze only");
+eq(H.batchCaps({ kind:"punch", canDone:true }), { done:true, snooze:false, push:false }, "punch: done only");
+eq(H.batchCaps({ kind:"duty", dutyType:"qc", canDone:false }), { done:false, snooze:false, push:false }, "QC duty: nothing");
+eq(H.batchCaps({ kind:"redline" }), { done:false, snooze:false, push:false }, "redline: nothing");
+eq(H.focusKeysToday({ date:T2, keys:["a","b"] }, T2), ["a","b"], "today's pins");
+eq(H.focusKeysToday({ date:"2026-09-22", keys:["a"] }, T2), [], "yesterday's pins don't show as pinned");
+eq(H.focusKeysToday(null, T2), [], "none");
+eq(H.focusKeysToday({ date:T2, keys:["a","b","c","d"] }, T2), ["a","b","c"], "max 3");
+const now2 = Date.now(), iso2 = new Date(now2).toISOString();
+const sentDone = { id:"s1", status:"done", assignedTo:"Gage Lund", assignedBy:"Koy Wilkinson", createdBy:"Koy Wilkinson", doneBy:"Gage Lund", doneAt: iso2 };
+assert.ok(H.sentFinishedForMe(sentDone, koy, now2), "I sent it, Gage finished → Sent/Finished");
+assert.ok(!H.completedForMe(sentDone, koy, now2), "…and NOT in my Done (no duplicate)");
+assert.ok(H.completedForMe(sentDone, gage, now2), "still in Gage's Done");
+const selfClosed = { ...sentDone, id:"s2", doneBy:"Koy Wilkinson" };
+assert.ok(H.completedForMe(selfClosed, koy, now2) && !H.sentFinishedForMe(selfClosed, koy, now2), "I sent + closed it myself → my Done, not Finished");
+assert.ok(!H.sentFinishedForMe({ ...sentDone, doneAt: new Date(now2 - 31*864e5).toISOString() }, koy, now2), "31 days → out of window");
+assert.ok(!H.sentFinishedForMe({ ...sentDone, status:"open" }, koy, now2), "open → not finished");
+eq(H.userKeyOf({ id:"u1", name:"Koy Wilkinson" }), "u1", "id wins");
+eq(H.userKeyOf({ name:" Koy  Wilkinson " }), "koy_wilkinson", "name slug fallback");
 
 console.log("needs-dryrun ok");
