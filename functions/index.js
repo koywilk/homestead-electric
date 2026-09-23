@@ -93,6 +93,7 @@ async function getUsers() {
 // exact name first, word-boundary first-name match second, deactivated users
 // never; a shared first name is logged instead of silently picking whoever's first.
 const { findUserByName } = require("./nameMatch.js");
+const { countAnswers } = require("./qaCount.js");
 const userByName = (users, name) => findUserByName(users, name,
   (asked, picked) => functions.logger.warn("[names] ambiguous name — picked first match", { asked, picked }));
 
@@ -1211,16 +1212,9 @@ exports.onQuestionAnswered = functions.firestore
     const beforeAnswers = before.questionAnswers || {};
     const afterAnswers  = after.questionAnswers  || {};
 
-    const countAnswers = (qa) => {
-      let n = 0;
-      Object.values(qa || {}).forEach(stage => {
-        Object.values(stage || {}).forEach(floor => {
-          (floor || []).forEach(a => { if (a.answer) n++; });
-        });
-      });
-      return n;
-    };
-
+    // v432: shape-safe counter (functions/qaCount.js). The old inline one split
+    // the answeredBy STRING into characters and threw on every submitted job,
+    // so no "Question answered" push had gone out (errors since ≥ 2026-09-02).
     if (countAnswers(afterAnswers) <= countAnswers(beforeAnswers)) return null;
 
     const jobSnap = await db.doc(`jobs/${jobId}`).get();
