@@ -5315,7 +5315,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
               style={{ fontSize: 13, padding: "8px 12px", minHeight: 36, boxSizing: "border-box", display: "inline-flex", alignItems: "center", borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
                 border: `1px ${pics.length ? "solid" : "dashed"} ${pics.length ? C.accent : C.border}`, background: pics.length ? C.accent : C.card, color: pics.length ? "#fff" : C.dim, fontWeight: pics.length ? 700 : 500 }}>
               {pics.length ? `📷 ${pics.length}` : "📷 Photo"}
-              <input type="file" accept="image/*" multiple capture="environment" style={{ display: "none" }}
+              <input type="file" accept="image/*" multiple style={{ display: "none" }}
                 onChange={e => { addPics(e.target.files); e.target.value = ""; }} />
             </label>
           )}
@@ -6592,6 +6592,9 @@ const toast = {
   success: (m, o)=>showToast(m, {type:'success', ...o}),
   error:   (m, o)=>showToast(m, {type:'error',   ...o}),
   warn:    (m, o)=>showToast(m, {type:'warn',    ...o}),
+  // v431: sticky progress toast — pass {key, duration:0} to show one that
+  // stays up; a later toast with the same key replaces it, dismiss(key) drops it.
+  dismiss: (key)=>window.dispatchEvent(new CustomEvent('he-toast-dismiss', { detail: { key } })),
 };
 
 // ── Zoomable photo lightbox (2026-08-10, Koy: "need any pictures uploaded to
@@ -6832,15 +6835,17 @@ function HEToastHost() {
   const [toasts, setToasts] = useState([]);
   useEffect(() => {
     const handler = e => {
-      const id = Date.now() + Math.random();
+      const id = e.detail.key ?? (Date.now() + Math.random());
       const duration = e.detail.duration ?? 4000;
-      setToasts(ts => [...ts, { id, ...e.detail }]);
+      setToasts(ts => [...ts.filter(t => t.id !== id), { ...e.detail, id }]);
       if (duration > 0) {
         setTimeout(() => setToasts(ts => ts.filter(t => t.id !== id)), duration);
       }
     };
+    const dismiss = e => { const k = e.detail && e.detail.key; if (k != null) setToasts(ts => ts.filter(t => t.id !== k)); };
     window.addEventListener('he-toast', handler);
-    return () => window.removeEventListener('he-toast', handler);
+    window.addEventListener('he-toast-dismiss', dismiss);
+    return () => { window.removeEventListener('he-toast', handler); window.removeEventListener('he-toast-dismiss', dismiss); };
   }, []);
   if (toasts.length === 0) return null;
   const tint = t => t==='error'?C.red : t==='success'?C.green : t==='warn'?C.orange : C.blue;
@@ -48306,7 +48311,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **My Day — photos on tasks, Team pulse for the head** · 'shipped 2026-09-23' · 'SW v431' · Two additions to My Day. **Photos**: the quick-add sheet gets a '📷 Photo' chip (multi-pick, 44px previews, drop before saving); every Mine/On-head/Sent row that has photos shows 44px thumbnails (tap to open full-size), each with a '📷 N' add control and a per-photo '✕' remove for the uploader or the head, with a 10-second Undo before the file is actually deleted from Storage — Done rows show thumbnails read-only, no add/remove. **Team pulse**: a folded card ("Team pulse · N people · M overdue") visible only to the head (or whoever's covering), listing Person / Open / Overdue / Oldest / Done-this-week for everyone with open or recently-finished work, red at Overdue ≥ 2 or Oldest ≥ 7; tapping a person opens Person view on their group. A shared QC/redline row credits every co-owner, including a row someone pinned to Focus. Guide 'public/sops/myday.html' gains "Photos on tasks" and "Team pulse" sections. **Why it won't lose data:** photos live in a new 'photos' array inside the need doc's existing 'data' field, written only with 'arrayUnion'/'arrayRemove' — never a whole-field overwrite; Storage uploads go under the existing 'jobs/<job|_tasks>/task-photos/<needId>/' prefix, no Firestore or Storage rules change; a removed photo is undoable for 10 seconds before its Storage object is deleted; Team pulse only reads existing need/duty/route data, no new writes.
+- **My Day — photos on tasks, Team pulse for the head** · 'shipped 2026-09-23' · 'SW v431' · Two additions to My Day. **Photos**: the quick-add sheet gets a '📷 Photo' chip (multi-pick, 44px previews, drop before saving); photos pick from the camera or the photo library, and are recompressed to JPEG ≤1920px before upload (same '_gcPrepUpload' prep as the GC portal) with a sticky "Uploading N photos…" toast until they attach; your own tasks and ones you sent carry a plain '📷' camera button on the row to add more (hidden while that row's upload runs); any row with photos shows 44px thumbnails (tap to open full-size), each with a per-photo '✕' remove for the uploader or the head, with a 10-second Undo before the file is actually deleted from Storage — Done rows show thumbnails read-only, no add/remove. **Team pulse**: a folded card ("Team pulse · N people · M overdue") visible only to the head (or whoever's covering), listing Person / Open / Overdue / Oldest / Done-this-week for everyone with open or recently-finished work, red at Overdue ≥ 2 or Oldest ≥ 7; tapping a person opens Person view on their group. A shared QC/redline row credits every co-owner, including a row someone pinned to Focus. Guide 'public/sops/myday.html' gains "Photos on tasks" and "Team pulse" sections. **Why it won't lose data:** photos live in a new 'photos' array inside the need doc's existing 'data' field, written only with 'arrayUnion'/'arrayRemove' — never a whole-field overwrite; Storage uploads go under the existing 'jobs/<job|_tasks>/task-photos/<needId>/' prefix, no Firestore or Storage rules change; a removed photo is undoable for 10 seconds before its Storage object is deleted; Team pulse only reads existing need/duty/route data, no new writes (an auto row pushed to someone counts once, on the delegate's task; an absorbed pre-v427 doc counts once, on its owner's auto row).
 - **Return trips — assign to anyone in the company** · 'shipped 2026-09-23' · 'SW v430' · Koy: *"I need to be able to assign return trips to anybody in the company, not just leads or foreman."* The RT card's ASSIGNED TO picker ('crewOptions' in 'ReturnTrips') now lists every active, non-contractor teammate instead of only foremen + leads; deactivated users and outside contractors stay out like every other roster picker, and a trip already assigned to someone no longer on that list keeps showing their name instead of going blank. Also in this ship: the Friday Packet no longer flags "no finish date — rough done Nd ago" (functions: 'fridayPacket' + 'sendTestFridayPacket'). **Why it won't lose data:** picker options only — the same 'assignedTo' string write as before; no new fields, no loader or rules change.
 - **My Day — search, Category/Job/Person views, Focus today, batch select, stale footer, Sent · finished** · 'shipped 2026-09-23' · 'SW v429' · Ship 2 of the My Day rework. A **toolbar** under the title adds a search box ('Search tasks or jobs…', filters Mine/With others/On head/Sent/Sent · finished/Done and the person groups, force-opens any group or job/category line that matches) and a **Category | Job | Person** view toggle (Person only for the Head of Residential or whoever is covering — i.e. whoever currently holds 'resi.head', remembered per device in 'localStorage', falls back to Category if the stored value is stale or Person-without-the-cap). **Focus today**: a always-visible steel-blue strip above the groups where you ★ up to 3 Mine rows as today's must-dos (pinned rows drop out of the normal groups so they don't double-count); pinning a 4th toasts "Focus holds 3 — unpin one first."; the pin list is per-user, stored in the new 'settings/mydayFocus' doc ('byUser.<key>', merge write) so it follows you across devices and resets each morning — yesterday's un-cleared pins show as "From M/D: N still open · Re-pin". **Select**: a Select button turns Mine/Focus rows into checkboxes (With-others, On-head, Sent, Done and stale rows are never selectable); a dark Command-Deck bar offers Done / Snooze 3d / Push to… (roster minus yourself) / Cancel, applies one row at a time so same-job rows never clobber each other, skips rows that can't do the action with a count in the summary toast, and only the last row stays Undo-able. **Hidden (stale) footer**: derived rows that are no longer worth seeing — archived/deleted/quote-stage jobs, redline walks 45+ days old, auto/duty rows 60+ days overdue — are pulled out of Mine into a folded "N hidden (stale) · Show" strip at 75% opacity with every action control removed (read-only); real task docs never go stale, and neither does a row carrying one (an auto row that absorbed an open doc, or is in "with"/"verify" state — it holds a real task); **money rows never hide by age** (Koy 2026-09-23: "Never hide money rows") — invoicing, material deposits, CO quotes to send, CO/RT complete merge-or-invoice, and redline CO owed only hide if their job is archived/deleted/quote; search never touches this list. **Sent · finished**: a new folded group under Sent listing docs you sent that someone *else* finished in the last 30 days, so a sent-and-closed doc no longer lands in your own Done (Done now only shows docs *you* personally closed or that closed on you — a v426 semantics tightening: a sent doc with 'doneBy' unset can no longer land ambiguously in your Done). **Removed the two finish-date nags** ("In Between — Over 2 Months" and "Get Finish Start Date") — Koy: *"i will get finish dates when they come to me."* Both were derived auto-tasks ('_in_between_long' / '_finish_waiting'), never stored data, so removing them touched no job fields. Harness 'scripts/needs-dryrun.js' covers the new helpers ('isInactiveJob', 'staleReason', 'rowMatches', 'batchCaps', 'focusKeysToday', 'sentFinishedForMe', 'userKeyOf') and the completedForMe/sentFinishedForMe split. Guide 'public/sops/myday.html' gains sections for search & views, Focus today, Select, hidden stale rows, and Sent · finished. **Why it won't lose data:** the only new write is 'settings/mydayFocus' 'byUser.<key>', a merge write scoped to one user's key under an already open-write 'settings' doc (no rules change); batch actions reuse each row's own existing per-row writer ('onDone'/'onSnooze'/'onPick'/'patchNeed') one row at a time, nothing new; stale rows are hidden from view, never deleted — their stored data is untouched and they reappear if the underlying condition changes; the removed nags were derived, in-memory auto-tasks with no stored fields, so nothing was deleted from any job or doc.
 - **My Day — Invoicing hat includes material deposits (docs)** · 'shipped 2026-09-23' · 'SW v428' · Koy confirmed deposits belong to the invoicing hat (Josh): Material Deposit rough/finish and Invoice Overdue 5+ days were already 'category:"invoice"' auto-tasks, so v427 routed them to 'invoice.own' — this ship only makes the My Day guide ('public/sops/myday.html'), this entry and the HAT_REGISTRY note say so. Koy also OK'd that a covered head still sees unrouted duties/prep alongside the cover. **Why it won't lose data:** text-only — no logic, no writes, no fields.
@@ -52643,7 +52648,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -52924,11 +52929,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     return Math.max(0, Math.floor((new Date(todayYmd + "T00:00:00") - new Date(localYmd(d) + "T00:00:00")) / 864e5));
   };
   const ownedRows = iRunHead ? [
-    ...freshMine.filter(r => r.kind === "auto" || r.kind === "duty" || r.kind === "redline")
+    // An auto row in "with" state is held by its delegate doc, which the needs
+    // pass already counts for the assignee — counting the row too doubled it.
+    ...freshMine.filter(r => (r.kind === "auto" || r.kind === "duty" || r.kind === "redline") && r.state !== "with")
       .map(r => ({ owners: r.owners || [me], bucket: r.bucket, ageDays: ageDaysOf(r.staleDate) })),
     ...freshOthers.map(r => ({ owners: r.owners || [], bucket: r.bucket, ageDays: ageDaysOf(r.staleDate) })),
   ] : [];
-  const pulse = iRunHead ? teamPulse({ needs, users, ownedRows, todayYmd }) : [];
+  // Absorbed pre-v427 docs are already counted via their owner's auto row.
+  const pulse = iRunHead ? teamPulse({ needs: absorbedDocIds.size ? (needs || []).filter(n => !(n && absorbedDocIds.has(n.id))) : needs, users, ownedRows, todayYmd }) : [];
   // Only the viewer's own actionable rows (Mine + Focus) are selectable / pinnable.
   freshMine.forEach(r => { r.sel = true; });
   const mineByKey = new Map(freshMine.map(r => [r.key, r]));
@@ -53232,13 +53240,24 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         {!selectMode && r.canSnooze && (
           <button onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)} title="Snooze" style={ib}><Icon name="clock" size={19} stroke={2} /></button>
         )}
-        {!selectMode && r.canPhoto && (
+        {!selectMode && r.canPhoto && (photoBusyIds && photoBusyIds[r.need.id] ? (
+          <span title="Uploading photos…" aria-busy="true" style={{ ...ib, boxSizing: "border-box", opacity: 0.45, cursor: "default" }}>
+            <Icon name="camera" size={18} stroke={2} />
+          </span>
+        ) : (
           <label onClick={e => e.stopPropagation()} title="Add a photo" style={{ ...ib, boxSizing: "border-box" }}>
             <Icon name="camera" size={18} stroke={2} />
-            <input type="file" accept="image/*" multiple capture="environment" style={{ display: "none" }}
-              onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ""; if (fs.length) onAddNeedPhotos(r.need.id, r.need.jobId, fs); }} />
+            <input type="file" accept="image/*" multiple style={{ display: "none" }}
+              onChange={e => {
+                const all = Array.from(e.target.files || []); e.target.value = "";
+                // Same filter as quick-add: images only (blank type = let it through).
+                const fs = all.filter(f => f && (!f.type || /^image\//.test(f.type)));
+                const skipped = all.length - fs.length;
+                if (skipped) toast.warn(`${skipped} non-image file${skipped === 1 ? "" : "s"} skipped`);
+                if (fs.length) onAddNeedPhotos(r.need.id, r.need.jobId, fs);
+              }} />
           </label>
-        )}
+        ))}
         {!selectMode && r.canUpdate && (
           <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); setUpdFor(r.key); } }} title="Add an update"
             style={{ ...ib, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}><Icon name="note" size={18} stroke={2} /></button>
@@ -55442,6 +55461,7 @@ function App() {
   const [upcomingOpenId, setUpcomingOpenId] = useState(null);
   const clearUpcomingOpen = useCallback(()=>setUpcomingOpenId(null),[]);
   const [needs, setNeeds] = useState([]);
+  const [needPhotoBusy, setNeedPhotoBusy] = useState({});   // v431: { needId: in-flight upload count } — hides that row's 📷 while uploading
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
   const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
@@ -56626,32 +56646,46 @@ function App() {
     if (!needId || !list.length) return;
     const by = identity?.name || "";
     const entries = [];
-    for (const file of list) {
-      try {
-        const photoId = uid() + Math.random().toString(36).slice(2, 6);
-        const m = String(file.name || "").match(/\.([a-z0-9]{1,5})$/i);
-        const ext = m ? m[1].toLowerCase() : "jpg";
-        const storagePath = taskPhotoPath(jobId, needId, photoId, ext);
-        const sref = ref(storage, storagePath);
-        await uploadBytes(sref, file);
-        const url = await getDownloadURL(sref);
-        entries.push({ id: photoId, name: String(file.name || "photo"), url, storagePath, by, at: new Date().toISOString() });
-      } catch(e) {
-        console.error("Task photo upload failed:", e);
-        toast.error(`Failed to upload ${file.name || "photo"}. Check connection.`);
-      }
-    }
-    if (!entries.length) return;
-    const nowIso = new Date().toISOString();
-    setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: [...((n && n.photos) || []), ...entries] } : n));
+    // Progress: one sticky toast from the first byte until the arrayUnion
+    // lands, and that row's 📷 is hidden meanwhile (needPhotoBusy, per need).
+    const tKey = "needphotos_" + needId + "_" + Date.now();
+    const busy = (d) => setNeedPhotoBusy(prev => { const n = { ...prev }; const c = (n[needId] || 0) + d; if (c > 0) n[needId] = c; else delete n[needId]; return n; });
+    busy(1);
+    toast.info(list.length === 1 ? "Uploading 1 photo…" : `Uploading ${list.length} photos…`, { key: tKey, duration: 0 });
     try {
-      await updateDoc(doc(db,"needs",needId), { updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) });
-      toast.success(entries.length === 1 ? "Photo added" : `${entries.length} photos added`);
-    } catch(e) {
-      console.error("addNeedPhotos error:", e);
-      const ids = new Set(entries.map(p => p.id));
-      setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: ((n && n.photos) || []).filter(p => !(p && ids.has(p.id))) } : n));
-      toast.error("Photo uploaded but couldn't attach to the task — try again.");
+      for (const file of list) {
+        try {
+          // Recompress to JPEG ≤1920px q0.85 (also converts iPhone HEIC) — the
+          // same prep the GC portal uses; raw file if the decode fails.
+          const prep = await _gcPrepUpload(file);
+          const photoId = uid() + Math.random().toString(36).slice(2, 6);
+          const m = String(prep.name || "").match(/\.([a-z0-9]{1,5})$/i);
+          const ext = m ? m[1].toLowerCase() : "jpg";
+          const storagePath = taskPhotoPath(jobId, needId, photoId, ext);
+          const sref = ref(storage, storagePath);
+          await uploadBytes(sref, prep.blob, { contentType: prep.type });
+          const url = await getDownloadURL(sref);
+          entries.push({ id: photoId, name: String(prep.name || file.name || "photo"), url, storagePath, by, at: new Date().toISOString() });
+        } catch(e) {
+          console.error("Task photo upload failed:", e);
+          toast.error(e && e.message === "too big" ? `${file.name || "Photo"} is over 20MB — skipped.` : `Failed to upload ${file.name || "photo"}. Check connection.`);
+        }
+      }
+      if (!entries.length) return;
+      const nowIso = new Date().toISOString();
+      setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: [...((n && n.photos) || []), ...entries] } : n));
+      try {
+        await updateDoc(doc(db,"needs",needId), { updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) });
+        toast.success(entries.length === 1 ? "Photo added" : `${entries.length} photos added`);
+      } catch(e) {
+        console.error("addNeedPhotos error:", e);
+        const ids = new Set(entries.map(p => p.id));
+        setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: ((n && n.photos) || []).filter(p => !(p && ids.has(p.id))) } : n));
+        toast.error("Photo uploaded but couldn't attach to the task — try again.");
+      }
+    } finally {
+      toast.dismiss(tKey);
+      busy(-1);
     }
   };
   // v431: remove = arrayRemove of the EXACT stored entry (Firestore matches by
@@ -59525,7 +59559,7 @@ function App() {
 
       {view==="myday"&&can(identity,"myday.view")&&(
         <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate}
-          onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto}
+          onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto} photoBusyIds={needPhotoBusy}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
