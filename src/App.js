@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp, deleteField } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, arrayRemove, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp, deleteField } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
@@ -5228,7 +5228,7 @@ const MobileInpSheet = ({initialValue, placeholder, onDone, onCancel, addMode}) 
 // are tap-to-edit with quick-picks; onMouseDown+preventDefault so the text
 // input's blur can't clobber the pick (same idiom as the Questions room chip).
 // Writes the unified need/task shape through the one saveNeed funnel.
-function NeedQuickAdd({ identity, users, jobs, preset, onSave, onClose }) {
+function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, onClose }) {
   const me = identity?.name || "";
   const first = (n) => String(n || "").split(" ")[0];
   const [text, setText] = useState("");
@@ -5238,6 +5238,18 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onClose }) {
   const [due, setDue] = useState({ bucket: "tomorrow", date: "" });
   const [open, setOpen] = useState(null); // "to" | "job" | "due" | null
   const [other, setOther] = useState(false);
+  // v431: optional photos — picked here, uploaded by the root AFTER the doc is
+  // saved (so they attach to a real need id). Previews are object URLs,
+  // revoked on unmount; the File objects stay valid for the upload.
+  const [pics, setPics] = useState([]);   // [{ file, url }]
+  const picsRef = useRef(pics);
+  picsRef.current = pics;
+  useEffect(() => () => { (picsRef.current || []).forEach(p => { try { URL.revokeObjectURL(p.url); } catch {} }); }, []);
+  const addPics = (fileList) => {
+    const fs = Array.from(fileList || []).filter(f => f && (!f.type || /^image\//.test(f.type)));
+    if (fs.length) setPics(prev => [...prev, ...fs.map(file => ({ file, url: URL.createObjectURL(file) }))]);
+  };
+  const dropPic = (i) => setPics(prev => { const p = prev[i]; if (p) { try { URL.revokeObjectURL(p.url); } catch {} } return prev.filter((_, j) => j !== i); });
   const head = resiHead(users);
   const headName = (head && head.name) || "";
   const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
@@ -5266,6 +5278,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onClose }) {
       status: "open", createdBy: me, createdAt: now, doneAt: "", doneBy: "",
     };
     onSave && onSave(need);
+    if (pics.length && onAddNeedPhotos) onAddNeedPhotos(need.id, need.jobId, pics.map(p => p.file));
     toast.success(!assignedTo ? "Added — unassigned" : sameName(assignedTo, me) ? "Added to your day" : `Added to ${first(assignedTo)}'s day`);
     onClose && onClose();
   };
@@ -5297,7 +5310,27 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onClose }) {
           {chip(toLabel, open === "to", () => setOpen(o => o === "to" ? null : "to"))}
           {chip(job ? `Job: ${String(job.name).slice(0, 22)}` : "+ job", open === "job", () => setOpen(o => o === "job" ? null : "job"), !job)}
           {chip(dueLabel, open === "due", () => setOpen(o => o === "due" ? null : "due"))}
+          {onAddNeedPhotos && (
+            <label onMouseDown={e => e.preventDefault()} title="Add a photo"
+              style={{ fontSize: 13, padding: "8px 12px", minHeight: 36, boxSizing: "border-box", display: "inline-flex", alignItems: "center", borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
+                border: `1px ${pics.length ? "solid" : "dashed"} ${pics.length ? C.accent : C.border}`, background: pics.length ? C.accent : C.card, color: pics.length ? "#fff" : C.dim, fontWeight: pics.length ? 700 : 500 }}>
+              {pics.length ? `📷 ${pics.length}` : "📷 Photo"}
+              <input type="file" accept="image/*" multiple capture="environment" style={{ display: "none" }}
+                onChange={e => { addPics(e.target.files); e.target.value = ""; }} />
+            </label>
+          )}
         </div>
+        {pics.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            {pics.map((p, i) => (
+              <div key={p.url} style={{ position: "relative", width: 44, height: 44 }}>
+                <img src={p.url} alt="" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}`, display: "block" }} />
+                <button onMouseDown={e => e.preventDefault()} onClick={() => dropPic(i)} title="Remove"
+                  style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: 999, border: `1px solid ${C.border}`, background: C.card, color: C.dim, fontSize: 11, lineHeight: 1, padding: 0, cursor: "pointer" }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
         {open === "to" && (
           <div>
             {sub("To")}
@@ -52258,6 +52291,9 @@ function taskPhotoPath(jobId, needId, photoId, ext) {
   return `jobs/${jobId || "_tasks"}/task-photos/${needId}/${photoId}.${ext || "jpg"}`;
 }
 function needPhotos(n) { return ((n && n.photos) || []).filter(p => p && p.id); }
+// v431: pending Storage deletes for removed task photos, keyed by photo id.
+// Module-level so an Undo still cancels after My Day unmounts.
+const _needPhotoDelTimers = new Map();
 // Head-only Team pulse: per person, open / overdue / oldest / done this week.
 // (Destructured in the body, not the param list — a verbatim-extraction
 // harness that brace-balances from this declaration's opening paren would
@@ -52606,7 +52642,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -52662,6 +52698,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       // v421: every real doc can take an update from either side.
       need: n, canUpdate: !!onAddNeedUpdate, latest: lastNeedUpdate(n), nUpdates: needUpdates(n).length,
       snoozedUntil: isSnoozed(n, todayYmd) ? n.snoozedUntil : "", audience: needUpdateAudience(n, me),
+      // v431: photos. Requester can add from Sent too; ✕ = uploader or the head board.
+      photos: needPhotos(n), canPhoto: !!onAddNeedPhotos && (!readOnly || sentByMe(n, identity)), canRmPhotos: !!onRemoveNeedPhoto,
       onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n)); },
       onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); } };
   };
@@ -52956,6 +52994,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       tagColor: k === "task" ? C.teal : C.orange,
       sub: [n.jobName, n.doneBy ? `done by ${first(n.doneBy)}` : "done", n.doneAt ? timeAgo(n.doneAt) : ""].filter(Boolean),
       jobId: n.jobId, section: null, canDone: false, canSnooze: false,
+      need: n, photos: needPhotos(n),   // v431: read-only thumbnails, no ✕ / 📷
       actions: [{ label: "Reopen", title: "Put it back on the list", onClick: () => { onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n); toast.success("Reopened"); }, tone: "ghost" }],
     };
   };
@@ -53013,6 +53052,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     closeUpd();
   };
 
+  // v431: photo remove — the root does the write + delayed Storage delete and
+  // hands back its undo; stage it in the single Undo slot.
+  const rmPhoto = (n, p) => { if (!onRemoveNeedPhoto || !n) return; const undoFn = onRemoveNeedPhoto(n.id, p); if (undoFn) stage("Photo removed", undoFn); };
+  const canRmPhoto = (p) => !!p && (sameName(p.by, me) || iRunHead);
   const Row = (r) => {
     const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
     const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
@@ -53046,6 +53089,24 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             </div>
           )}
           {!r.latest && r.snoozedUntil && <div style={{ fontSize: 12, color: C.orange, fontWeight: 600, marginTop: 4 }}>on hold · back {mdOf(r.snoozedUntil)}</div>}
+          {r.photos && r.photos.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              {r.photos.map(p => {
+                const img = <img src={p.url} alt={p.name || "photo"} loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}`, display: "block", background: C.bg }} />;
+                return (
+                  <div key={p.id} style={{ position: "relative", width: 44, height: 44 }}>
+                    {selectMode ? img : (
+                      <a href={p.url} target="_blank" rel="noopener noreferrer" title={p.by ? `${p.name || "Photo"} · ${first(p.by)}` : (p.name || "Photo")} onClick={e => e.stopPropagation()}>{img}</a>
+                    )}
+                    {!selectMode && r.canRmPhotos && canRmPhoto(p) && (
+                      <button onClick={e => { e.stopPropagation(); rmPhoto(r.need, p); }} title="Remove photo"
+                        style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: 999, border: `1px solid ${C.border}`, background: C.card, color: C.dim, fontSize: 11, lineHeight: 1, padding: 0, cursor: "pointer" }}>✕</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {histFor === r.key && r.nUpdates > 0 && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, borderLeft: `2px solid ${C.border}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: C.dim }}>
               {needUpdates(r.need).slice().reverse().map((u, i) => (
@@ -53130,6 +53191,13 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         )}
         {!selectMode && r.canSnooze && (
           <button onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)} title="Snooze" style={ib}><Icon name="clock" size={19} stroke={2} /></button>
+        )}
+        {!selectMode && r.canPhoto && (
+          <label onClick={e => e.stopPropagation()} title="Add a photo" style={{ ...ib, boxSizing: "border-box" }}>
+            <Icon name="camera" size={18} stroke={2} />
+            <input type="file" accept="image/*" multiple capture="environment" style={{ display: "none" }}
+              onChange={e => { const fs = Array.from(e.target.files || []); e.target.value = ""; if (fs.length) onAddNeedPhotos(r.need.id, r.need.jobId, fs); }} />
+          </label>
         )}
         {!selectMode && r.canUpdate && (
           <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); setUpdFor(r.key); } }} title="Add an update"
@@ -56460,6 +56528,76 @@ function App() {
     try { await updateDoc(doc(db,"needs",id), upd); }
     catch(e){ if (current) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
   };
+  // v431: photos on a task doc. Upload each file (per-file try/catch, same as
+  // the RT uploader), then ONE field-surgical arrayUnion on data.photos — never
+  // a whole-array write, never touches data.updates or any other field.
+  // onNeedWrite only diffs assignee / done / updates, so this sends no push.
+  const addNeedPhotos = async (needId, jobId, files) => {
+    const list = Array.from(files || []).filter(Boolean);
+    if (!needId || !list.length) return;
+    const by = identity?.name || "";
+    const entries = [];
+    for (const file of list) {
+      try {
+        const photoId = uid() + Math.random().toString(36).slice(2, 6);
+        const m = String(file.name || "").match(/\.([a-z0-9]{1,5})$/i);
+        const ext = m ? m[1].toLowerCase() : "jpg";
+        const storagePath = taskPhotoPath(jobId, needId, photoId, ext);
+        const sref = ref(storage, storagePath);
+        await uploadBytes(sref, file);
+        const url = await getDownloadURL(sref);
+        entries.push({ id: photoId, name: String(file.name || "photo"), url, storagePath, by, at: new Date().toISOString() });
+      } catch(e) {
+        console.error("Task photo upload failed:", e);
+        toast.error(`Failed to upload ${file.name || "photo"}. Check connection.`);
+      }
+    }
+    if (!entries.length) return;
+    const nowIso = new Date().toISOString();
+    setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: [...((n && n.photos) || []), ...entries] } : n));
+    try {
+      await updateDoc(doc(db,"needs",needId), { updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) });
+      toast.success(entries.length === 1 ? "Photo added" : `${entries.length} photos added`);
+    } catch(e) {
+      console.error("addNeedPhotos error:", e);
+      const ids = new Set(entries.map(p => p.id));
+      setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: ((n && n.photos) || []).filter(p => !(p && ids.has(p.id))) } : n));
+      toast.error("Photo uploaded but couldn't attach to the task — try again.");
+    }
+  };
+  // v431: remove = arrayRemove of the EXACT stored entry (Firestore matches by
+  // deep equality), optimistic local drop, and the Storage file is deleted only
+  // after the 10s Undo window closes. Returns the undo fn (caller stages it):
+  // undo cancels the pending delete and re-arrayUnions the same object. Timers
+  // live in a module-level Map, so leaving My Day doesn't matter; a closed tab
+  // just orphans the file (acceptable — a broken Undo is not).
+  const removeNeedPhoto = (needId, photo) => {
+    if (!needId || !photo || !photo.id) return null;
+    const by = identity?.name || "";
+    const dropLocal = () => setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: ((n && n.photos) || []).filter(p => !(p && p.id === photo.id)) } : n));
+    const addLocal = () => setNeeds(prev => (prev||[]).map(n => n.id===needId && !((n && n.photos) || []).some(p => p && p.id === photo.id) ? { ...n, photos: [...((n && n.photos) || []), photo] } : n));
+    const cancelDelete = () => { const t = _needPhotoDelTimers.get(photo.id); if (t) { clearTimeout(t); _needPhotoDelTimers.delete(photo.id); } };
+    dropLocal();
+    cancelDelete();
+    // Only ever delete inside this task's own task-photos folder — entries are
+    // anonymously writable, so a crafted storagePath must not reach other files.
+    const sp = String(photo.storagePath || "");
+    const safePath = /^jobs\/[^/]+\/task-photos\/[^/]+\/[^/]+$/.test(sp) && sp.split("/")[3] === needId && !sp.split("/").some(s => s === ".." || s === ".");
+    if (safePath) {
+      _needPhotoDelTimers.set(photo.id, setTimeout(() => {
+        _needPhotoDelTimers.delete(photo.id);
+        deleteObject(ref(storage, sp)).catch(() => {});
+      }, 11000));
+    }
+    updateDoc(doc(db,"needs",needId), { updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayRemove(photo) })
+      .catch(e => { console.error("removeNeedPhoto error:", e); cancelDelete(); addLocal(); toast.error("Couldn't remove the photo — try again."); });
+    return () => {
+      cancelDelete();
+      addLocal();
+      updateDoc(doc(db,"needs",needId), { updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayUnion(photo) })
+        .catch(e => { console.error("restore photo error:", e); toast.error("Couldn't restore the photo."); });
+    };
+  };
   const deleteNeed = async (id) => {
     setNeeds(prev => (prev||[]).filter(n=>n.id!==id));
     try { await deleteDoc(doc(db,"needs",id)); } catch(e){ console.error("deleteNeed error:",e); }
@@ -57563,7 +57701,7 @@ function App() {
         </button>
       )}
       {quickAdd && can(identity,"tasks.create") && (
-        <NeedQuickAdd identity={identity} users={users} jobs={jobs} preset={quickAdd} onSave={saveNeed} onClose={()=>setQuickAdd(null)}/>
+        <NeedQuickAdd identity={identity} users={users} jobs={jobs} preset={quickAdd} onSave={saveNeed} onAddNeedPhotos={addNeedPhotos} onClose={()=>setQuickAdd(null)}/>
       )}
 
       {/* Update pill — bottom-left (SIMPRO owns bottom-right). Shows when a
@@ -59298,6 +59436,7 @@ function App() {
 
       {view==="myday"&&can(identity,"myday.view")&&(
         <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate}
+          onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
