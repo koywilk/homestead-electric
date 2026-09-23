@@ -52558,7 +52558,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -55025,6 +55025,7 @@ function App() {
   const [needs, setNeeds] = useState([]);
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
+  const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
   // the inbox UI; this one is intentionally duplicated rather than lifted to
@@ -55431,6 +55432,11 @@ function App() {
       (err) => { console.error("Redline walks snapshot error:", err); }
     );
 
+    // Focus today pins — settings/mydayFocus.byUser, keyed per user (v429).
+    const unsubMydayFocus = onSnapshot(doc(db, "settings", "mydayFocus"),
+      s => setMydayFocus((s.exists() && s.data() && s.data().byUser) || {}),
+      e => console.warn("[HE] mydayFocus listener", e));
+
     // Suggestions feed (for Today tab event stream) — read-only listener.
     // Docs are flat (no `data` envelope) since suggestions are written directly
     // with the fields at the top level by the App Map share form.
@@ -55469,7 +55475,7 @@ function App() {
       window.removeEventListener('focus', onReturn);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('online', onNetUp);
-      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
+      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
     }; // cleanup on unmount
 
   },[]);
@@ -56496,6 +56502,17 @@ function App() {
     setRedlineWalks(ws => [...ws, walk]);
     await saveRedlineWalk(walk);
     return walk;
+  };
+
+  // Focus today pins — settings/mydayFocus.byUser, one entry per user. `merge:true`
+  // on a nested map path only touches the [key] entry (Firestore merges maps
+  // key-by-key), so this never clobbers another user's pins; `entry.keys` itself
+  // is replaced wholesale, which is what we want (v429).
+  const saveMyDayFocus = async (key, entry) => {
+    if (!key) return;
+    setMydayFocus(m => ({ ...m, [key]: entry }));            // optimistic
+    try { await setDoc(doc(db, "settings", "mydayFocus"), { byUser: { [key]: entry } }, { merge: true }); }
+    catch (e) { console.warn("[HE] mydayFocus save failed", e); toast.error("Couldn't save focus pins"); }
   };
 
   // ── Simpro inbox handlers ──────────────────────────────────────────
@@ -59021,7 +59038,8 @@ function App() {
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
-          openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}/>
+          openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
+          focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}/>
       )}
 
       {view==="today"&&can(identity,"today.view")&&(
