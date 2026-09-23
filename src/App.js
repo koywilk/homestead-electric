@@ -48368,12 +48368,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-23 · App SW version: v433
+**Last manifest update:** 2026-09-23 · App SW version: v434
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — void / edit a sent task, Reply + edit your reply** · 'shipped 2026-09-23' · 'SW v434' · Koy (2026-09-23): "we need an option to either void or edit a need sent to somebody as well as a comment back". On a not-done task row I sent (Sent, and my own self-created rows in Mine) — or any task row for whoever runs the head board — two new actions: **Edit** opens an inline panel (wording, due date, To: roster, Job: active jobs + "No job"; an auto-task delegate hides Job) and saves one field-surgical 'patchNeed' of only the changed fields plus an update entry '{kind:"edit", text:"changed: wording, due 10/3, job"}' — unless ONLY the person changed (the assign push already covers that). **Void** opens a confirm with an optional reason; it closes the doc with a flag ('status:"done", doneBy, voided:true, voidedBy, voidedAt, voidReason') plus an update entry '{kind:"void"}' in the SAME write, with the usual 10-second Undo. A voided task leaves every open list (every open predicate already reads status), shows in the sender's **Sent · finished** tagged **VOIDED** (red) with who / when / why and **Reopen** (clears the flags + a "Reopened" note), and in the assignee's Done as "voided by <first>" (no Reopen for them). 'sentFinishedForMe' / 'completedForMe' / 'teamPulse' updated (voids never count as "done this week"), vm-tested in 'scripts/needs-dryrun.js'. The old note icon is now a **Reply** button (text on phones, icon + text on desktop); the thread opens oldest → newest; on my own replies a ✎ edits the text in place ("(edited)"), via a Firestore transaction ('editNeedUpdate') that re-reads the doc and swaps only that entry, so an entry appended at the same moment isn't lost; no push (array length unchanged). **Server (onNeedWrite):** a void never sends "Task done" (branch 2 skips 'voided'), reopening a void never sends "Task sent back" (branch 3 skips 'before.voided'); branch 4 titles "Task voided" / "Task changed" by entry kind, and skips an edit push when the same write already pushed "assigned to you" to that person. Needs 'firebase deploy --only functions:onNeedWrite'. SOP 'public/sops/myday.html' updated. **Why it won't lose data:** additive fields inside 'data' only; void is a closed-with-flag, never a delete (Reopen / Undo restore it); every write is dotted-path 'updateDoc' + 'arrayUnion'; reply edits go through a transaction that re-reads the array; no rules change.
 - **"Question answered" pushes work again (functions)** · 'shipped 2026-09-23' · 'SW v433' · functions-only, no app change. 'onQuestionAnswered' crashed on every job whose question link had ever been submitted: its answer counter walked every value in 'homeowner_requests.questionAnswers', including the 'answeredBy' **string**, split it into characters and threw ('(floor || []).forEach is not a function', errors on record since at least 2026-09-02), so no "Question answered" push reached the lead / foreman / head. Replaced by the shape-safe 'functions/qaCount.js' (plain-object phases × array floors only, non-blank string answers), tested by 'scripts/qacount-test.js' in prebuild. Needs 'firebase deploy --only functions'. **Why it won't lose data:** the trigger only reads the doc and sends pushes; no write path changed.
 - **Usage tracking — which screens and job tabs people actually open** · 'shipped 2026-09-23' · 'SW v433' · From the 2026-09-23 strategy pass: *measure before you cut* (v319's guess-deletion blank-screened production). The app now counts, once per device per person per day, every top-nav screen opened (App 'view') and every Job Detail tab opened (JobDetail 'tab'), into one doc per local day: 'settings/usage_<YYYY-MM-DD>' shaped '{ views: { <view>: { <userKey>: n } }, tabs: { <tab>: { <userKey>: n } }, updated_at }', written with a merge 'increment(1)'. The once-a-day throttle lives in localStorage 'he_usage_<ymd>' (old days pruned; falls back to an in-memory set if storage throws, so it never writes on every switch). Fire-and-forget — failures go to 'console.warn' only, never a toast, never blocks. **Only internal staff are counted:** the logger's user ('_usageUser') is set from the internal app shell's render, below every share-link / GC-portal / homeowner route return, and is null for contractors; the Job Board landing flash for field roles isn't counted (the view effect waits for the landing redirect). **Report (admin only):** Settings → **APP USAGE — LAST 14 DAYS** (folded) reads the last 14 daily docs and shows two tables, **Screens** and **Job tabs** — Name / People / Person-days, least-used first, with every real nav screen and every 'TABS' entry nobody opened listed as 0 · 0 (the lists come from the real nav consts 'NAV_MAIN_TABS' / 'NAV_MORE_TABS', which the header now renders from, and 'TABS' — no hand-written names). Pure helpers 'usageSeenKey' / 'shouldLogUsage' / 'usageRollup' / 'usageLastDays' / 'usageWithZeros' are vm-tested in 'scripts/needs-dryrun.js'. Run it ~2 weeks, then cut from data. **Why it won't lose data:** the only writes are new, additive 'settings/usage_*' docs via increment-merge — no existing doc, job field, loader, or Firestore rule is touched ('settings' is already open-write); the report is read-only; the nav refactor renders the identical tabs behind the identical permission gates.
 - **My Day — snooze by date works + by-name pushes find the right person** · 'shipped 2026-09-23' · 'SW v432' · Koy: *"I was trying to snooze a task using the date picker so I could snooze it longer than a week. When I click the calendar button, it just closes the whole thing."* The page container closes the snooze menu on any click, and tapping the date field bubbled up to it, unmounting the input before a date could be picked; the snooze menu now stops its own clicks, and a half-typed desktop date (year still being typed) no longer fires early. **Server:** every by-name push (manual re-nudge, RT/punch/CO assignment pushes, token lookup) now resolves names through one tested helper ('functions/nameMatch.js', 'scripts/namematch-test.js' in prebuild): exact full name first, then a word-boundary first-name match, **deactivated users never**, and a shared first name logs '[names] ambiguous' instead of silently picking whoever is first — matters more now that return trips can go to anyone. Needs 'firebase deploy --only functions' for the name fix (every function that sends by name). **Why it won't lose data:** snooze writes the same 'snoozedUntil' field as the 3-day/1-week buttons; the name helper only chooses who a push goes to — no reads or writes change.
@@ -52284,6 +52285,7 @@ function needUpdateAudience(n, by) {
 function needUpdateLine(u) {
   if (!u) return "";
   const md = y => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
+  if (u.kind === "void") return u.text ? `voided — ${u.text}` : "voided"; // v434
   return u.kind === "waiting" ? `waiting on ${u.text}${u.until ? " · back " + md(u.until) : ""}` : String(u.text || "");
 }
 // SENT: a not-done doc I asked for that sits on someone else — the requester's
@@ -52306,6 +52308,7 @@ function completedForMe(n, identity, nowMs = Date.now()) {
   const me = identity && identity.name; if (!me) return false;
   if (!(isMine(n, identity) || sameName(n.assignedBy, me) || sameName(n.createdBy, me))) return false;
   if (!isMine(n, identity) && !(n.doneBy && sameName(n.doneBy, me))) return false; // v429: sent-and-finished-by-someone-else lives in Sent → Finished
+  if (n.voided && !isMine(n, identity)) return false; // v434: a task I sent and voided lives in Sent → Finished (VOIDED), not Done
   const t = Date.parse(n.doneAt || "");
   return Number.isFinite(t) && (nowMs - t) <= 30 * 24 * 60 * 60 * 1000;
 }
@@ -52342,12 +52345,13 @@ function batchCaps(row) {
   return { done: false, snooze: false, push: false };
 }
 function focusKeysToday(entry, todayYmd) { return entry && entry.date === todayYmd && Array.isArray(entry.keys) ? entry.keys.slice(0, 3) : []; }
-// Sent → Finished: a doc I sent that SOMEONE ELSE closed in the last 30 days.
+// Sent → Finished: a doc I sent that SOMEONE ELSE closed in the last 30 days,
+// or (v434) one that was VOIDED — by me or the head — which shows here tagged.
 function sentFinishedForMe(n, identity, nowMs = Date.now()) {
   const me = identity && identity.name; if (!n || !me || n.status !== "done") return false;
   if (isMine(n, identity)) return false;
   if (!(sameName(n.assignedBy, me) || sameName(n.createdBy, me))) return false;
-  if (n.doneBy && sameName(n.doneBy, me)) return false;
+  if (!n.voided && n.doneBy && sameName(n.doneBy, me)) return false; // v434: voided shows here even when I voided it
   const t = Date.parse(n.doneAt || "");
   return Number.isFinite(t) && (nowMs - t) <= 30 * 864e5;
 }
@@ -52519,6 +52523,7 @@ function teamPulse(opts) {
   (needs || []).forEach(n => {
     if (!n) return;
     if (n.status === "done") {
+      if (n.voided) return; // v434: voided = closed, never "done this week"
       const who = n.doneBy && find(n.doneBy); const t = Date.parse(n.doneAt || "");
       if (who && Number.isFinite(t) && nowMs - t <= 7 * 864e5) who.doneWeek++;
       return;
@@ -52854,7 +52859,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -52879,6 +52884,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
   const [undo, setUndo] = useState(null);
+  // v434 Edit / Void / edit-your-reply panels (Row is a plain render fn, so
+  // the state lives here, like updFor). One panel open at a time.
+  const [editFor, setEditFor] = useState(null);      // row key whose Edit panel is open
+  const [editDraft, setEditDraft] = useState(null);  // { text, dueDate, assignedTo, jobId }
+  const [voidFor, setVoidFor] = useState(null);      // row key whose Void confirm is open
+  const [voidReason, setVoidReason] = useState("");
+  const [replyEdit, setReplyEdit] = useState(null);  // { key, by, at, text } — reply being edited
+  const editJobs = useMemo(() => (jobs || []).filter(j => j && j.name && !j.tempPed && !isInactiveJob(j)).slice().sort((a, b) => String(a.name).localeCompare(String(b.name))), [jobs]);
   // v429 Ship 2 UI state: search, view (per-device), batch select, stale footer.
   const [q, setQ] = useState("");
   const [viewPref, setViewPref] = useState(() => { try { return localStorage.getItem("myday.view") || "cat"; } catch { return "cat"; } });
@@ -52900,6 +52913,48 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
   const mdOf = (y) => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
 
+  // v434: who may Edit / Void / Reopen-a-void a task doc.
+  const canManageNeed = (n) => !!n && n.status !== "done" && needKind(n) !== "bodies" && !!me &&
+    (sameName(n.assignedBy, me) || sameName(n.createdBy, me) || iRunHead);
+  const closePanels = () => { setEditFor(null); setEditDraft(null); setVoidFor(null); setVoidReason(""); };
+  const openEdit = (key, n) => {
+    if (editFor === key) { closePanels(); return; }
+    closePanels(); closeUpd();
+    setEditFor(key); setEditDraft({ text: n.text || "", dueDate: n.dueDate || "", assignedTo: needAssignee(n), jobId: n.jobId || "" });
+  };
+  const openVoid = (key) => { if (voidFor === key) { closePanels(); return; } closePanels(); closeUpd(); setVoidFor(key); };
+  const VOID_CLEAR = { voided: false, voidedBy: "", voidedAt: "", voidReason: "" };
+  const voidNeed = (n, reason) => {
+    const at = new Date().toISOString(); const why = String(reason || "").trim();
+    closePanels();
+    onPatchNeed(n.id, { status: "done", doneAt: at, doneBy: me, voided: true, voidedBy: me, voidedAt: at, voidReason: why }, n, { kind: "void", text: why });
+    // Undo = reopen WITHOUT a "Reopened" note (the void entry stays as history).
+    stage("Voided", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "", ...VOID_CLEAR }, n));
+  };
+  const reopenNeed = (n) => {
+    if (n.voided) onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "", ...VOID_CLEAR }, n, { kind: "note", text: "Reopened" });
+    else onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n);
+    toast.success("Reopened");
+  };
+  const saveEdit = (n) => {
+    const d = editDraft; if (!d || !n) return;
+    const text = String(d.text || "").trim(); if (!text) return;
+    const patch = {}; const what = [];
+    if (text !== String(n.text || "").trim()) { patch.text = text; what.push("wording"); }
+    if ((d.dueDate || "") !== (n.dueDate || "")) { patch.dueDate = d.dueDate || ""; what.push(d.dueDate ? `due ${mdOf(d.dueDate)}` : "no due date"); }
+    if (d.assignedTo && !sameName(d.assignedTo, needAssignee(n))) patch.assignedTo = d.assignedTo;
+    if ((d.jobId || "") !== (n.jobId || "")) {
+      const j = d.jobId ? (jobs || []).find(x => x && x.id === d.jobId) : null;
+      patch.jobId = j ? j.id : ""; patch.jobName = j ? (j.name || "") : ""; patch.foreman = j ? (j.foreman || "") : "";
+      what.push("job");
+    }
+    closePanels();
+    if (!Object.keys(patch).length) return;
+    // Only-the-person changed → no note: onNeedWrite's assign branch already
+    // pushes "assigned to you"; a note would push twice.
+    onPatchNeed(n.id, patch, n, what.length ? { kind: "edit", text: `changed: ${what.join(", ")}` } : undefined);
+    toast.success(patch.assignedTo && !what.length ? `Moved to ${first(patch.assignedTo)}` : "Task updated");
+  };
   const needRow = (n, readOnly) => {
     const k = needKind(n);
     const from = n.assignedBy && !sameName(n.assignedBy, me) ? n.assignedBy : (n.createdBy && !sameName(n.createdBy, me) ? n.createdBy : "");
@@ -52913,7 +52968,13 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       // v431: photos. Requester can add from Sent too; ✕ = uploader or the head board.
       photos: needPhotos(n), canPhoto: !!onAddNeedPhotos && (!readOnly || sentByMe(n, identity)), canRmPhotos: !!onRemoveNeedPhoto,
       onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n)); },
-      onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); } };
+      onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); },
+      // v434: Edit + Void — the sender (assignedBy/createdBy me) or whoever
+      // runs the head board. The assignee alone never gets Void (Done/Snooze).
+      actions: canManageNeed(n) ? [
+        { label: "Edit", title: "Change wording, due date, person or job", onClick: () => openEdit("need_" + n.id, n), tone: "ghost" },
+        { label: "Void", title: "Cancel this task (keeps a record)", onClick: () => openVoid("need_" + n.id), tone: "ghost" },
+      ] : undefined };
   };
   const dutyRow = (d, readOnly) => {
     const job = jobById(d.jobId);
@@ -53233,15 +53294,21 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // row shape serves Sent · finished (docs I sent that someone else closed).
   const doneRowOf = (n) => {
     const k = needKind(n);
+    // v434: a voided doc reads VOIDED (red) with who/when/why; only the sender
+    // or the head board can Reopen it (the assignee can't undo a void).
+    const v = !!n.voided;
+    const canReopen = !v || sameName(n.assignedBy, me) || sameName(n.createdBy, me) || sameName(n.voidedBy, me) || iRunHead;
     return {
       key: "done_" + n.id, kind: "need", needKind: k, bucket: "later",
       title: n.text || "(no text)",
-      tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need",
-      tagColor: k === "task" ? C.teal : C.orange,
-      sub: [n.jobName, n.doneBy ? `done by ${first(n.doneBy)}` : "done", n.doneAt ? timeAgo(n.doneAt) : ""].filter(Boolean),
+      tag: v ? "Voided" : k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need",
+      tagColor: v ? C.red : k === "task" ? C.teal : C.orange,
+      sub: v ? [n.jobName, `voided by ${first(n.voidedBy || n.doneBy) || "?"}`, (n.voidedAt || n.doneAt) ? timeAgo(n.voidedAt || n.doneAt) : "", n.voidReason || ""].filter(Boolean)
+             : [n.jobName, n.doneBy ? `done by ${first(n.doneBy)}` : "done", n.doneAt ? timeAgo(n.doneAt) : ""].filter(Boolean),
       jobId: n.jobId, section: null, canDone: false, canSnooze: false,
       need: n, photos: needPhotos(n),   // v431: read-only thumbnails, no ✕ / 📷
-      actions: [{ label: "Reopen", title: "Put it back on the list", onClick: () => { onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n); toast.success("Reopened"); }, tone: "ghost" }],
+      latest: lastNeedUpdate(n), nUpdates: needUpdates(n).length,   // v434: thread readable on closed rows too
+      actions: canReopen ? [{ label: "Reopen", title: "Put it back on the list", onClick: () => reopenNeed(n), tone: "ghost" }] : [],
     };
   };
   const byDoneAtDesc = (a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || ""));
@@ -53309,6 +53376,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const [histFor, setHistFor] = useState(null);
   const [scanDraft, setScanDraft] = useState({});   // v423: per-row Matterport paste-link draft, keyed by row key
   const closeUpd = () => { setUpdFor(null); setUpdKind("note"); setUpdText(""); setUpdUntil(""); };
+  const saveReplyEdit = (r) => { const re = replyEdit; if (!re || !r.need || !onEditNeedUpdate) return; const u = needUpdates(r.need).find(x => x && x.by === re.by && x.at === re.at); setReplyEdit(null); if (u) onEditNeedUpdate(r.need.id, u, re.text); };
   const sendUpd = (r) => {
     const text = updText.trim(); if (!text || !r.need) return;
     onAddNeedUpdate(r.need.id, { kind: updKind, text, until: updKind === "waiting" ? updUntil : "" }, r.need);
@@ -53348,8 +53416,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             <div onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
               style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12, marginTop: 4, cursor: "pointer" }}>
               <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
-              <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
-              <span style={{ color: C.muted }}>{timeAgo(r.latest.at)}{r.nUpdates > 1 ? ` · ${r.nUpdates} updates` : ""}</span>
+              <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : r.latest.kind === "void" ? C.red : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
+              <span style={{ color: C.muted }}>{timeAgo(r.latest.at)}{r.latest.editedAt ? " (edited)" : ""}{r.nUpdates > 1 ? ` · ${r.nUpdates} updates` : ""}</span>
             </div>
           )}
           {!r.latest && r.snoozedUntil && <div style={{ fontSize: 12, color: C.orange, fontWeight: 600, marginTop: 4 }}>on hold · back {mdOf(r.snoozedUntil)}</div>}
@@ -53373,22 +53441,47 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           )}
           {histFor === r.key && r.nUpdates > 0 && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, borderLeft: `2px solid ${C.border}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: C.dim }}>
-              {needUpdates(r.need).slice().reverse().map((u, i) => (
-                <div key={i}><span style={{ fontWeight: 600, color: C.text }}>{first(u.by)}:</span> {needUpdateLine(u)} <span style={{ color: C.muted }}>· {timeAgo(u.at)}</span></div>
-              ))}
+              {needUpdates(r.need).map((u, i) => {
+                // v434: oldest → newest. My own reply (note / waiting — not the
+                // void / edit system lines) gets a pencil; editing swaps its text.
+                const mine = !selectMode && !!onEditNeedUpdate && sameName(u.by, me) && (u.kind === "note" || u.kind === "waiting" || !u.kind);
+                const editing = replyEdit && replyEdit.key === r.key && replyEdit.by === u.by && replyEdit.at === u.at;
+                if (editing) return (
+                  <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input type="text" value={replyEdit.text} autoFocus onChange={e => setReplyEdit(x => ({ ...x, text: e.target.value }))}
+                      onKeyDown={e => { if (e.key === "Enter") saveReplyEdit(r); if (e.key === "Escape") setReplyEdit(null); }}
+                      style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+                    <button onClick={() => setReplyEdit(null)} style={{ fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
+                    <button onClick={() => saveReplyEdit(r)} disabled={!String(replyEdit.text || "").trim()}
+                      style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 700, padding: "6px 10px", minHeight: 32, borderRadius: 7, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: String(replyEdit.text || "").trim() ? 1 : .5 }}>Save</button>
+                  </div>
+                );
+                return (
+                  <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, color: u.kind === "void" ? C.red : C.text }}>{first(u.by)}:</span> {needUpdateLine(u)}{" "}
+                      <span style={{ color: C.muted }}>· {timeAgo(u.at)}{u.editedAt ? " (edited)" : ""}</span>
+                    </span>
+                    {mine && (
+                      <button onClick={() => setReplyEdit({ key: r.key, by: u.by, at: u.at, text: String(u.text || "") })} title="Edit your reply"
+                        style={{ fontFamily: "inherit", fontSize: 13, lineHeight: 1, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "4px 6px", minHeight: 28 }}>✎</button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {updFor === r.key && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                {[["note", "Note"], ["waiting", "Waiting on…"]].map(([k, l]) => (
+                {[["note", "Reply"], ["waiting", "Waiting on…"]].map(([k, l]) => (
                   <button key={k} onClick={() => setUpdKind(k)}
                     style={{ fontFamily: "inherit", fontSize: 12, fontWeight: updKind === k ? 700 : 500, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer",
                       background: updKind === k ? C.accent : C.card, color: updKind === k ? "#fff" : C.text, border: `1px solid ${updKind === k ? C.accent : C.border}` }}>{l}</button>
                 ))}
               </div>
               <input type="text" value={updText} autoFocus onChange={e => setUpdText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendUpd(r); }}
-                placeholder={updKind === "waiting" ? "Waiting on who or what?" : "Add a note…"}
+                placeholder={updKind === "waiting" ? "Waiting on who or what?" : (r.audience ? `Reply to ${first(r.audience)}…` : "Add a note…")}
                 style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                 {updKind === "waiting" && (
@@ -53437,6 +53530,57 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
               ))}
             </div>
           )}
+          {editFor === r.key && editDraft && r.need && !selectMode && (() => {
+            // v434 Edit panel: wording, due date, person, job. Same look as the reply panel.
+            const n = r.need; const lab = { fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.dim, display: "flex", flexDirection: "column", gap: 4, flex: "1 1 140px", minWidth: 0 };
+            const fld = { width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, fontWeight: 400, letterSpacing: 0, textTransform: "none", padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text };
+            const people = roster.some(nm => sameName(nm, editDraft.assignedTo)) || !editDraft.assignedTo ? roster : [editDraft.assignedTo, ...roster];
+            const curJob = editDraft.jobId && !editJobs.some(j => j.id === editDraft.jobId) ? (jobById(editDraft.jobId) || { id: editDraft.jobId, name: n.jobName || "(this job)" }) : null;
+            const set = (k, v) => setEditDraft(d => ({ ...d, [k]: v }));
+            return (
+              <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                <input type="text" value={editDraft.text} autoFocus onChange={e => set("text", e.target.value)} onKeyDown={e => { if (e.key === "Enter") saveEdit(n); }} placeholder="What's needed?" style={fld} />
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <label style={lab}>Due
+                    <input type="date" min={todayYmd} value={editDraft.dueDate} onChange={e => set("dueDate", e.target.value)} style={fld} />
+                  </label>
+                  <label style={lab}>To
+                    <select value={people.find(nm => sameName(nm, editDraft.assignedTo)) || ""} onChange={e => set("assignedTo", e.target.value)} style={fld}>
+                      {!editDraft.assignedTo && <option value="">Unassigned</option>}
+                      {people.map(nm => <option key={nm} value={nm}>{nm}</option>)}
+                    </select>
+                  </label>
+                  {!n.autoTaskId && (
+                    <label style={lab}>Job
+                      <select value={editDraft.jobId || ""} onChange={e => set("jobId", e.target.value)} style={fld}>
+                        <option value="">No job</option>
+                        {curJob && <option value={curJob.id}>{curJob.name}</option>}
+                        {editJobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button onClick={closePanels} style={{ fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
+                  <button onClick={() => saveEdit(n)} disabled={!String(editDraft.text || "").trim()}
+                    style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: String(editDraft.text || "").trim() ? 1 : .5 }}>Save</button>
+                </div>
+              </div>
+            );
+          })()}
+          {voidFor === r.key && r.need && !selectMode && (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 8, padding: 8 }}>
+              <div style={{ fontSize: 12, color: C.dim, marginBottom: 6 }}>Void this task? It leaves every list{needAssignee(r.need) && !sameName(needAssignee(r.need), me) ? ` and ${first(needAssignee(r.need))} gets a push` : ""}. You'll still see it under Sent · finished.</div>
+              <input type="text" value={voidReason} autoFocus onChange={e => setVoidReason(e.target.value)} onKeyDown={e => { if (e.key === "Enter") voidNeed(r.need, voidReason); }}
+                placeholder="Reason (optional)"
+                style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                <button onClick={closePanels} style={{ fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
+                <button onClick={() => voidNeed(r.need, voidReason)}
+                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.red, color: "#fff", border: "none" }}>Void task</button>
+              </div>
+            </div>
+          )}
           {r.pushOpen && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, padding: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
               {r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who))).map(n => (
@@ -53475,8 +53619,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           </label>
         ))}
         {!selectMode && r.canUpdate && (
-          <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); setUpdFor(r.key); } }} title="Add an update"
-            style={{ ...ib, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}><Icon name="note" size={18} stroke={2} /></button>
+          <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); closePanels(); setUpdFor(r.key); } }} title={r.audience ? `Reply to ${first(r.audience)}` : "Add a note"}
+            style={{ ...ib, width: "auto", padding: "0 10px", gap: 5, fontFamily: "inherit", fontSize: 13, fontWeight: 700, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}>{!narrow && <Icon name="note" size={16} stroke={2} />}Reply</button>
         )}
         {snoozeFor === r.key && (
           // v432: clicks inside the snooze menu must not bubble — the page
@@ -56834,16 +56978,22 @@ function App() {
   // different fields of one need can't last-write-wins each other. `current`
   // (the caller's copy) lets us fall back to the full funnel if the doc doesn't
   // exist yet (need created offline, not yet flushed).
-  const patchNeed = async (id, patch, current) => {
+  // v434: optional `note` {kind: "void"|"edit"|"note", text} rides the SAME
+  // updateDoc as an arrayUnion'd update entry — void / edit / reopen are one
+  // atomic write, so onNeedWrite sees the flag and its entry together (no push
+  // race, no half-applied void).
+  const patchNeed = async (id, patch, current, note) => {
     const p = { ...patch };
     const nowIso = new Date().toISOString();
     if ("assignedTo" in p) { p.assignedBy = identity?.name || ""; p.assignedAt = nowIso; }
     if (p.dueDate) { const b = dueBucketFromDate(p.dueDate); if (b) p.dueBucket = b; }
-    setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, ...p } : n));
+    const entry = note ? { by: identity?.name || "", at: nowIso, kind: ["void", "edit"].includes(note.kind) ? note.kind : "note", text: String(note.text || "").trim() } : null;
+    setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, ...p, ...(entry ? { updates: [...needUpdates(n), entry] } : {}) } : n));
     const upd = { updated_at: nowIso, saved_by: identity?.name || "" };
     Object.keys(p).forEach(k => { upd["data."+k] = p[k]; });
+    if (entry) upd["data.updates"] = arrayUnion(entry);
     try { await updateDoc(doc(db,"needs",id), upd); }
-    catch(e){ if (current) { await saveNeed({ ...current, ...p }); } else { console.error("patchNeed error:",e); } }
+    catch(e){ if (current) { await saveNeed({ ...current, ...p, ...(entry ? { updates: [...needUpdates(current), entry] } : {}) }); } else { console.error("patchNeed error:",e); } }
   };
   // v421: append one update entry. arrayUnion (never a whole-array write) so
   // two phones posting at once can't clobber each other. Assignee's "waiting"
@@ -56861,6 +57011,34 @@ function App() {
     Object.keys(extra).forEach(k => { upd["data."+k] = extra[k]; });
     try { await updateDoc(doc(db,"needs",id), upd); }
     catch(e){ if (current) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
+  };
+  // v434: edit your own reply. A transaction on needs/<id> re-reads the doc,
+  // swaps ONLY the matching entry's text (matched by by + at) and writes
+  // data.updates back — Firestore retries it if another phone appended an entry
+  // meanwhile, so nothing appended concurrently is lost. Array length is
+  // unchanged, so onNeedWrite's update branch stays silent (no push).
+  const editNeedUpdate = async (needId, entry, newText) => {
+    const text = String(newText || "").trim();
+    if (!needId || !entry || !text || text === String(entry.text || "")) return;
+    const editedAt = new Date().toISOString();
+    const match = (u) => !!u && u.by === entry.by && u.at === entry.at;
+    const swap = (list, fn) => (Array.isArray(list) ? list : []).map(u => match(u) ? fn(u) : u);
+    setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, updates: swap(n.updates, u => ({ ...u, text, editedAt })) } : n));
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, "needs", needId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error("task not found");
+        const cur = (snap.data() || {}).data || {};
+        const list = Array.isArray(cur.updates) ? cur.updates : [];
+        if (!list.some(match)) throw new Error("reply not found");
+        tx.update(ref, { "data.updates": swap(list, u => ({ ...u, text, editedAt })), updated_at: editedAt, saved_by: identity?.name || "" });
+      });
+    } catch(e) {
+      console.error("editNeedUpdate error:", e);
+      toast.error("Couldn't save your edit — check connection.");
+      setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, updates: swap(n.updates, u => { const r = { ...u, text: entry.text }; if (entry.editedAt) r.editedAt = entry.editedAt; else delete r.editedAt; return r; }) } : n));
+    }
   };
   // v431: photos on a task doc. Upload each file (per-file try/catch, same as
   // the RT uploader), then ONE field-surgical arrayUnion on data.photos — never
@@ -59772,7 +59950,7 @@ function App() {
       )}
 
       {view==="myday"&&can(identity,"myday.view")&&(
-        <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate}
+        <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate} onEditNeedUpdate={editNeedUpdate}
           onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto} photoBusyIds={needPhotoBusy}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}

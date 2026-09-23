@@ -314,6 +314,10 @@ eq(H.needUpdateLine(upTask.updates[0]), "waiting on Rexel quote · back 9/25", "
 eq(H.needUpdateLine({ kind:"waiting", text:"the GC" }), "waiting on the GC", "waiting line without a date");
 eq(H.needUpdateLine({ kind:"note", text:"called, no answer" }), "called, no answer", "note line");
 eq(H.needUpdateLine(null), "", "null-safe");
+// v434: system entries read as sentences; an empty void reason is still a line.
+eq(H.needUpdateLine({ kind:"void", text:"" }), "voided", "void, no reason");
+eq(H.needUpdateLine({ kind:"void", text:"dup of #12" }), "voided — dup of #12", "void with reason");
+eq(H.needUpdateLine({ kind:"edit", text:"changed: wording, due 10/3" }), "changed: wording, due 10/3", "edit line");
 assert.ok(H.sentByMe(upTask, gage), "Gage sent it -> in Gage's Sent");
 assert.ok(!H.sentByMe(upTask, koy), "…not in Koy's (it's Koy's Mine)");
 assert.ok(H.sentByMe({ ...upTask, snoozedUntil:"2026-09-25" }, gage), "snoozed by the assignee stays in Sent (that's where 'waiting on' shows)");
@@ -430,6 +434,19 @@ assert.ok(H.sentFinishedForMe({ ...sentDone, id:"s3", doneBy: undefined }, koy, 
 assert.ok(!H.completedForMe({ ...sentDone, id:"s3", doneBy: undefined }, koy, now2), "…not duplicated in Done");
 assert.ok(!H.sentFinishedForMe({ ...sentDone, doneAt: new Date(now2 - 31*864e5).toISOString() }, koy, now2), "31 days → out of window");
 assert.ok(!H.sentFinishedForMe({ ...sentDone, status:"open" }, koy, now2), "open → not finished");
+// v434 — void = closed with a flag. The sender who voided sees it in Sent ·
+// finished (not a duplicate in Done); the assignee sees it in Done.
+const voidedByKoy = { id:"v1", status:"done", assignedTo:"Gage Lund", assignedBy:"Koy Wilkinson", createdBy:"Koy Wilkinson", doneBy:"Koy Wilkinson", doneAt: iso2, voided:true, voidedBy:"Koy Wilkinson", voidedAt: iso2, voidReason:"dup" };
+assert.ok(H.sentFinishedForMe(voidedByKoy, koy, now2), "I sent + I voided → Sent/Finished (even though doneBy is me)");
+assert.ok(!H.completedForMe(voidedByKoy, koy, now2), "…and NOT in my Done (voider isn't the assignee)");
+assert.ok(H.completedForMe(voidedByKoy, gage, now2), "assignee still sees it in Done");
+assert.ok(!H.sentFinishedForMe(voidedByKoy, gage, now2), "assignee doesn't get it in Sent/Finished");
+const voidedByHead = { ...voidedByKoy, id:"v2", assignedBy:"Gage Lund", createdBy:"Gage Lund", assignedTo:"Koy Wilkinson", doneBy:"Josh Cloward", voidedBy:"Josh Cloward" };
+assert.ok(H.sentFinishedForMe(voidedByHead, gage, now2), "head voided Gage's sent task → Gage's Sent/Finished");
+assert.ok(!H.completedForMe(voidedByHead, josh, now2) && !H.sentFinishedForMe(voidedByHead, josh, now2), "head who voided someone else's task → no row for the head");
+const selfVoided = { ...voidedByKoy, id:"v3", assignedTo:"Koy Wilkinson" };
+assert.ok(H.completedForMe(selfVoided, koy, now2) && !H.sentFinishedForMe(selfVoided, koy, now2), "self-task voided → my Done only");
+assert.ok(!H.sentFinishedForMe({ ...voidedByKoy, doneAt: new Date(now2 - 31*864e5).toISOString() }, koy, now2), "voided 31 days ago → out of window");
 eq(H.userKeyOf({ id:"u1", name:"Koy Wilkinson" }), "u1", "id wins");
 eq(H.userKeyOf({ name:" Koy  Wilkinson " }), "koy_wilkinson", "name slug fallback");
 
@@ -454,6 +471,9 @@ eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue
 eq(pulse.find(p => p.name === "Gage Lund"), { name:"Gage Lund", open:2, overdue:2, oldestDays:13, doneWeek:0 }, "Gage: 2 open both overdue, oldest from createdAt");
 eq(pulse.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "Josh: 1 doc + 2 owned rows; done 9/21 counts, 9/10 doesn't");
 eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, overdue:0, oldestDays:1, doneWeek:0 }, "shared row counts for each owner");
+// v434: a voided doc is closed but was never "done" — no doneWeek credit, not open.
+const pulseV = H.teamPulse({ needs:[...pNeeds, { id:"g", status:"done", assignedTo:"Josh", doneBy:"Josh", doneAt:"2026-09-22T12:00:00", voided:true, voidedBy:"Josh" }], users:pUsers, ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
+eq(pulseV.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "voided doc doesn't count as done this week");
 
 // ── usage tracking (v433) ───────────────────────────────────────────────────
 eq(H.usageSeenKey("koy", "views", "myday"), "koy|views|myday", "seen key shape");

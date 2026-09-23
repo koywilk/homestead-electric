@@ -1360,7 +1360,8 @@ exports.onNeedWrite = functions.firestore
     const nextA = _needAssigneeOf(after);
     const by    = String(after.assignedBy || after.createdBy || "").trim();
     const isBodies = after.kind === "bodies";
-    if (nextA && nextA.toLowerCase() !== prevA.toLowerCase() && nextA.toLowerCase() !== by.toLowerCase()) {
+    const assignPushed = !!(nextA && nextA.toLowerCase() !== prevA.toLowerCase() && nextA.toLowerCase() !== by.toLowerCase());
+    if (assignPushed) {
       tasks.push(sendToNameIfWanted(nextA, "need_assigned", isBodies
         ? { title: "Bodies requested",
             body:  `${by || "Someone"} needs ${after.count || "a"} ${after.count === 1 ? "body" : "bodies"}${onJob}${after.note ? ` — ${after.note}` : ""}`,
@@ -1375,7 +1376,9 @@ exports.onNeedWrite = functions.firestore
     const isDone  = after.status === "done";
     const doneBy  = String(after.doneBy || "").trim();
     const creator = String(after.createdBy || "").trim();
-    if (!wasDone && isDone && creator && doneBy && doneBy.toLowerCase() !== creator.toLowerCase()) {
+    // v434: a VOID is closed-with-a-flag, not finished — no "Task done" echo;
+    //       branch 4 sends "Task voided" to the other side instead.
+    if (!wasDone && isDone && !after.voided && creator && doneBy && doneBy.toLowerCase() !== creator.toLowerCase()) {
       tasks.push(sendToNameIfWanted(creator, "need_done", isBodies
         ? { title: "Bodies covered", body: `${doneBy} covered${onJob}: ${text}`, view: "myday" }
         : { title: "Task done",      body: `${doneBy} finished${onJob}: ${text}`, view: "myday" }));
@@ -1384,12 +1387,14 @@ exports.onNeedWrite = functions.firestore
     //    assignee (v408: the head rejected the work on My Day). The assignee
     //    is unchanged, so branch 1 stays silent; this is the only signal.
     const reopenedBy = String(after.assignedBy || "").trim();
-    if (wasDone && !isDone && nextA && reopenedBy && nextA.toLowerCase() !== reopenedBy.toLowerCase()) {
+    //    v434: reopening a VOIDED task (or undoing a void) is not a send-back —
+    //    its "Reopened" note rides branch 4; an Undo stays silent.
+    if (wasDone && !isDone && !(before && before.voided) && nextA && reopenedBy && nextA.toLowerCase() !== reopenedBy.toLowerCase()) {
       tasks.push(sendToNameIfWanted(nextA, "need_assigned",
         { title: "Task sent back", body: `${reopenedBy} sent back${onJob}: ${text}`, view: "myday" }));
     }
     // 4. Update (v421) → the OTHER side of the task. data.updates grew by one
-    //    entry {by, at, kind: note|waiting, text, until?}: author = assignee →
+    //    entry {by, at, kind: note|waiting|void|edit, text, until?}: author = assignee →
     //    the requester (assignedBy, else createdBy); anyone else → the
     //    assignee. Self-talk is silent. Mirrors needUpdateAudience() in App.js.
     const bu = Array.isArray(before && before.updates) ? before.updates : [];
@@ -1400,14 +1405,28 @@ exports.onNeedWrite = functions.firestore
       const author = String(entry.by || "").trim();
       const requester = String(after.assignedBy || after.createdBy || "").trim();
       const target = nextA && lc(nextA) === lc(author) ? requester : nextA;
-      if (target && author && lc(target) !== lc(author)) {
+      // v434: kind "void" / "edit" (system entries written with the change
+      // itself). An edit that ALSO moved the task already pushed "assigned to
+      // you" to the same person via branch 1 — don't push them twice.
+      const dupAssign = entry.kind === "edit" && assignPushed && lc(target) === lc(nextA);
+      if (target && author && lc(target) !== lc(author) && !dupAssign) {
         const what = String(entry.text || "").slice(0, 120);
         const isWait = entry.kind === "waiting";
-        tasks.push(sendToNameIfWanted(target, "need_update", {
-          title: isWait ? "Task on hold" : "Task update",
-          body:  isWait ? `${author} is waiting on ${what}${entry.until ? ` · back ${entry.until}` : ""}${onJob} — ${text}`
-                        : `${author}${onJob}: ${what} — ${text}`,
-          view:  "myday" }));
+        let title, body;
+        if (entry.kind === "void") {
+          title = "Task voided";
+          body  = `${author} voided${onJob}: ${text}${what ? ` — ${what}` : ""}`;
+        } else if (entry.kind === "edit") {
+          title = "Task changed";
+          body  = `${author} changed${onJob}: ${what.replace(/^changed:\s*/i, "")} — ${text}`;
+        } else if (isWait) {
+          title = "Task on hold";
+          body  = `${author} is waiting on ${what}${entry.until ? ` · back ${entry.until}` : ""}${onJob} — ${text}`;
+        } else {
+          title = "Task update";
+          body  = `${author}${onJob}: ${what} — ${text}`;
+        }
+        tasks.push(sendToNameIfWanted(target, "need_update", { title, body, view: "myday" }));
       }
     }
     if (tasks.length) functions.logger.info("[onNeedWrite]", { id: context.params.needId, prevA, nextA, isDone, sends: tasks.length });
