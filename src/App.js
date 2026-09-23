@@ -3960,6 +3960,11 @@ const PERMISSIONS = {
   // it follows the ROLE, never a hardcoded name; scanOwner(users) resolves the
   // holder. Owns the "Matterport scans" queue on My Day + the morning chase.
   "matterport.own":         [],
+  // v427 hat registry (HAT_REGISTRY) — per-user grants only, never by tier.
+  "invoice.own":            [],
+  "co.own":                 [],
+  "qc.own":                 [],
+  "redline.own":            [],
   // My Day — everyone's identity-scoped list (what's on ME + what's on the
   // head for my jobs). All tiers incl. lead/crew so they finally see their own
   // punch items. Creating needs/tasks stays gated to board.add (foreman+).
@@ -4350,7 +4355,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["jobprep.own","Job prep & redlines"],["resi.head","Head of Residential"],["matterport.own","Matterport scans"]].map(([cap,label])=>{
+                        {[["resi.head","Head of Residential"],["jobprep.own","Job prep"], ...HAT_REGISTRY.map(h => [h.cap, h.label + (h.shared ? " (shared)" : "")])].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -4362,7 +4367,24 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Surfaces the Company section of the Today worklist. Grant as people train in.</div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential.</div>
+                    </div>
+                  )}
+                  {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
+                    <div style={{marginTop:8,padding:"6px 8px",border:`1px dashed ${C.border}`,borderRadius:7}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COVERING</div>
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",fontSize:12,color:C.text}}>
+                        Hand {String(u.name||"").split(" ")[0]}'s hats to
+                        <select value={u.coverTo||""} onChange={e=>upd(u.id,{coverTo:e.target.value, coverUntil: e.target.value ? (u.coverUntil||"") : ""})}
+                          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"4px 6px",fontSize:12,fontFamily:"inherit"}}>
+                          <option value="">nobody</option>
+                          {list.filter(x=>x&&x.id!==u.id&&x.active!==false&&getAccess(x)!=="contractor").map(x=><option key={x.id} value={x.name}>{x.name}</option>)}
+                        </select>
+                        until
+                        <input type="date" value={u.coverUntil||""} onChange={e=>upd(u.id,{coverUntil:e.target.value})}
+                          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"3px 6px",fontSize:12,fontFamily:"inherit"}}/>
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Routes their My Day rows and personal tasks until the date passes, then routes back on its own.</div>
                     </div>
                   )}
                   {/* Foreman assignment — for crew/lead */}
