@@ -89,6 +89,13 @@ async function getUsers() {
   return (snap.exists && snap.data().list) ? snap.data().list : [];
 }
 
+// v432: one name → user lookup for every by-name push (functions/nameMatch.js):
+// exact name first, word-boundary first-name match second, deactivated users
+// never; a shared first name is logged instead of silently picking whoever's first.
+const { findUserByName } = require("./nameMatch.js");
+const userByName = (users, name) => findUserByName(users, name,
+  (asked, picked) => functions.logger.warn("[names] ambiguous name — picked first match", { asked, picked }));
+
 function getTokens(user) {
   const tokens = [];
   if (Array.isArray(user.fcmTokens)) tokens.push(...user.fcmTokens);
@@ -359,10 +366,7 @@ exports.reNudge = functions.https.onCall(async (data) => {
   if (!toName) throw new functions.https.HttpsError("invalid-argument", "toName required");
   const users = await getUsers();
   const n = String(toName).toLowerCase().trim();
-  const user = users.find(u => {
-    const un = (u.name || "").toLowerCase();
-    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
-  });
+  const user = userByName(users, n);
   if (!user) return { ok: false, reason: "not-found", message: `${toName} isn't in the team list.` };
   if (!wantsNotif(user, key || "renudge")) return { ok: false, reason: "muted", message: `${user.name} has manual reminders turned off.` };
   const tokens = getTokens(user);
@@ -426,10 +430,7 @@ async function sendToName(name, notification) {
   if (!name || name === "Unassigned") return;
   const users = await getUsers();
   const n = name.toLowerCase().trim();
-  const user = users.find(u => {
-    const un = (u.name || "").toLowerCase();
-    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
-  });
+  const user = userByName(users, n);
   if (!user) return;
   await deliver(user, notification);
 }
@@ -457,10 +458,7 @@ async function sendToNameIfWanted(name, key, notification) {
   if (!name || name === "Unassigned") return;
   const users = await getUsers();
   const n = name.toLowerCase().trim();
-  const user = users.find(u => {
-    const un = (u.name || "").toLowerCase();
-    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
-  });
+  const user = userByName(users, n);
   if (!user) return;
   await deliverIfWanted(user, key, notification);
 }
@@ -490,10 +488,7 @@ async function getTokenForName(name) {
   if (!name || name === "Unassigned") return [];
   const users = await getUsers();
   const n = name.toLowerCase().trim();
-  const user = users.find(u => {
-    const un = (u.name || "").toLowerCase();
-    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
-  });
+  const user = userByName(users, n);
   return user ? getTokens(user) : [];
 }
 
@@ -956,10 +951,7 @@ exports.onJobUpdate = functions.firestore
         const users = await getUsers();
         for (const a of assignees) {
           const an = a.toLowerCase();
-          const u = users.find(x => {
-            const un = (x.name || "").toLowerCase();
-            return un === an || un.startsWith(an + " ") || an.startsWith(un.split(" ")[0]);
-          });
+          const u = userByName(users, an);
           if (!u || !wantsNotif(u, "punch_assigned")) continue;
           const items = newlyAssigned[a];
           const firstText = _stripHtml(items[0].text).slice(0, 80);
