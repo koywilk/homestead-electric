@@ -123,12 +123,13 @@ const IM = ccLoadImportRows([
   { id: "dup", name: "Sconce", room: "Entry", control: "panel" },
   { id: "noroom", name: "Lonely", room: "", control: "panel", floor: "attic" },
 ], [{ id: "x", name: "Entry Sconce", fieldLoadId: "dup" }], mk);
-eq("names carry the room so the by-name dedupe can't collapse them", IM.rows.map(r => r.name), ["Kitchen Cans", "Kitchen Island Pendants", "Primary Bath Cans", "Butler UCL", "Lonely"]);
-eq("already-imported (fieldLoadId) and gone-from-plan loads are skipped", IM.skipped, 2);
-eq("control → Loads-list type: panel unknown, dimmer Dimming, switched Switching, tape LED", IM.rows.map(r => r.loadType), ["", "Dimming", "Switching", "LED", ""]);
-eq("FieldInk floor → the Loads list's floor section; unknown floors stay blank", IM.rows.map(r => r.location), ["Main Level", "", "Upper Level", "", ""]);
+eq("v435: ONLY panelized loads import - switched / dimmer / tape are skipped", IM.rows.map(r => r.name), ["Kitchen Cans", "Lonely"]);
+eq("skipped = 3 non-panel + already-imported + gone-from-plan", IM.skipped, 5);
+eq("panel loads keep a blank Loads-list type", IM.rows.map(r => r.loadType), ["", ""]);
+eq("FieldInk floor maps to the Loads list floor section; unknown floors stay blank", IM.rows.map(r => r.location), ["Main Level", ""]);
 eq("every row is a real newCentralLoad shape + room/fieldLoadId/origin", Object.keys(IM.rows[0]).sort(), ["fieldLoadId", "id", "loadType", "location", "name", "origin", "pulled", "room", "watts"]);
-eq("fieldLoadId is the ccloads id (the idempotency key)", IM.rows.map(r => r.fieldLoadId), ["c1", "c2", "c3", "c4", "noroom"]);
+eq("fieldLoadId is the ccloads id (the idempotency key)", IM.rows.map(r => r.fieldLoadId), ["c1", "noroom"]);
+eq("a load with no control never imports", ccLoadImportRows([{ id: "z", name: "Mystery", room: "R" }], [], mk).rows.length, 0);
 eq("an extra floor maps by its label; the three standard floors are LoadsList's literal section labels", ccLoadImportRows([{ id: "f", name: "N", room: "R", control: "panel", floor: "Loft" }, { id: "g", name: "M", room: "R", control: "panel", floor: "main" }], [], mk, { loft: "Loft" }).rows.map(r => r.location), ["Loft", "Main Level"]);
 eq("second import of the same loads is a no-op", ccLoadImportRows([{ id: "c1", name: "Cans", room: "Kitchen", control: "panel" }], IM.rows, mk).rows.length, 0);
 eq("empty input is safe", ccLoadImportRows(null, null, mk), { rows: [], skipped: 0 });
