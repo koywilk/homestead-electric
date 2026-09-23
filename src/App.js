@@ -53033,7 +53033,21 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const add = (name, r) => { const nm = String(name || "").trim(); if (!nm) return; const k = nm.toLowerCase(); if (!m.has(k)) m.set(k, { name: nm, rows: [] }); m.get(k).rows.push(r); };
     const meKey = String(me).trim().toLowerCase();
     m.set(meKey, { name: me, rows: [] });
-    mineQ.forEach(r => add(me, r));
+    // v431 fix: a shared Mine row (auto/duty/redline with >1 owner, e.g. a QC
+    // walk both Koy and Josh hold the hat for) is my actionable row, but it's
+    // also Josh's open item per teamPulse's ownedRows — so Josh's Person-view
+    // group needs a copy of it too, or tapping his Team-pulse row is a dead
+    // tap. Read-only: no Done/Snooze/actions/photo/select, title+sub+tag only.
+    const readOnlyFor = (r, owner) => ({
+      ...r, key: r.key + "@" + owner, sel: false, canDone: false, canSnooze: false,
+      canPhoto: false, canUpdate: false, canRmPhotos: false, actions: undefined,
+      onDone: undefined, onSnooze: undefined, scan: undefined, pushOpen: false,
+      onTogglePick: undefined, onPick: undefined,
+    });
+    mineQ.forEach(r => {
+      add(me, r);
+      (r.owners || []).forEach(o => { if (!sameName(o, me)) add(o, readOnlyFor(r, o)); });
+    });
     othersQ.forEach(r => (r.owners || []).forEach(o => add(o, r)));
     liveNeeds.forEach(n => { if (seenNeed.has(n.id)) return; const a = needAssignee(n); if (!a || sameName(a, me)) return; const r = needRow(n, true); if (rowMatches(r, q)) add(a, r); });
     return [...m.entries()]
