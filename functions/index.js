@@ -1873,38 +1873,31 @@ exports.dailyBookDigest = functions.pubsub
   .schedule("50 6 * * 1-5")
   .timeZone(TZ)
   .onRun(async () => {
+    // RETIRED v427 — coordinators/books are gone; dailyMyDayDigest replaces it.
+    functions.logger.info("[dailyBookDigest] retired — no-op (see dailyMyDayDigest)");
+    return null;
+  });
+
+// v427 — one morning push per person: their My Day in a line. Replaces the
+// coordinator-routed book digest. Read-only scan; push + inbox via deliverIfWanted.
+exports.dailyMyDayDigest = functions.pubsub
+  .schedule("45 6 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
     const users = await getUsers();
-    const CO_DONE = new Set(["completed", "complete", "approved", "denied", "converted"]);
-    const punchOpen = (ph) => {
-      if (!ph) return false;
-      return ["upper", "main", "basement"].some(fk => {
-        const fl = ph[fk] || {};
-        return (fl.general || []).some(i => i && !i.done)
-          || (fl.hotcheck || []).some(i => i && !i.done)
-          || (fl.rooms || []).some(r => ((r && r.items) || []).some(i => i && !i.done));
-      });
-    };
-    const qOpen = (q) => q && ["upper", "main", "basement"].some(fk => (q[fk] || []).some(x => x && !x.done));
-    const needsAttention = (j) =>
-      punchOpen(j.roughPunch) || punchOpen(j.finishPunch) || punchOpen(j.qcPunch)
-      || (j.returnTrips || []).some(rt => rt && !rt.signedOff && !rt.rtScheduled && !rt.scheduledDate && (rt.scope || rt.date))
-      || (j.changeOrders || []).some(co => co && !CO_DONE.has(co.coStatus))
-      || qOpen(j.roughQuestions) || qOpen(j.finishQuestions);
-    const snap = await db.collection("jobs").get();
-    const byCoord = {};
-    snap.forEach(d => {
-      const j = d.data()?.data || {};
-      if (_isQuote(j) || j.tempPed) return;
-      if (!needsAttention(j)) return;
-      const coord = coordUserOf(users, j.foreman);
-      if (coord) { if (!byCoord[coord.id]) byCoord[coord.id] = { coord, count: 0 }; byCoord[coord.id].count++; }
-    });
+    const todayYmd = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const env = (s) => s.docs.map(d => { const raw = d.data(); const data = raw && raw.data; return data ? { id: d.id, ...data } : null; }).filter(Boolean);
+    const [jobsSnap, needsSnap, rlSnap] = await Promise.all([
+      db.collection("jobs").get(), db.collection("needs").get(), db.collection("redlineWalks").get(),
+    ]);
+    const counts = digestCounts({ users, jobs: env(jobsSnap), needs: env(needsSnap), redlines: env(rlSnap), todayYmd });
     const sends = [];
-    Object.values(byCoord).forEach(({ coord, count }) => {
-      sends.push(deliverIfWanted(coord, "book_digest", { title: "📋 Your book", body: `${count} job${count !== 1 ? "s" : ""} in your book need attention today.`, view: "today" }));
+    users.filter(u => u && u.active !== false && u.name).forEach(u => {
+      const line = digestLine(counts.get(u.name));
+      if (line) sends.push(deliverIfWanted(u, "myday_digest", { title: "☀️ Your day", body: line, view: "myday" }));
     });
     await Promise.all(sends);
-    functions.logger.info("[dailyBookDigest] ran", { coordinators: Object.keys(byCoord).length });
+    functions.logger.info("[dailyMyDayDigest] ran", { sent: sends.length });
     return null;
   });
 
@@ -3978,6 +3971,7 @@ const PACKET_DRIVE_FOLDER_ID = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
 
 const { google } = require("googleapis");
 const fridayPacketLib = require("./fridayPacket.js");
+const { digestCounts, digestLine } = require("./myDayDigest.js");
 
 // (The packet's date/escape/flatten helpers moved into ./fridayPacket.js with
 // the 2026-07-30 rewrite. _stripHtml stays — it has callers outside this block.)

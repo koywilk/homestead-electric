@@ -3960,6 +3960,11 @@ const PERMISSIONS = {
   // it follows the ROLE, never a hardcoded name; scanOwner(users) resolves the
   // holder. Owns the "Matterport scans" queue on My Day + the morning chase.
   "matterport.own":         [],
+  // v427 hat registry (HAT_REGISTRY) — per-user grants only, never by tier.
+  "invoice.own":            [],
+  "co.own":                 [],
+  "qc.own":                 [],
+  "redline.own":            [],
   // My Day — everyone's identity-scoped list (what's on ME + what's on the
   // head for my jobs). All tiers incl. lead/crew so they finally see their own
   // punch items. Creating needs/tasks stays gated to board.add (foreman+).
@@ -4209,7 +4214,7 @@ const NOTIF_CATEGORIES = [
     { key:"reminder_safety",   label:"Weekly safety reminder (Mon)",         roles:["foreman"] },
     { key:"daily_update_missing", label:"No daily update logged today",      roles:["foreman"] },
     { key:"stale_job",         label:"Stale job (no update in 5+ days)",     roles:["admin","manager","foreman"] },
-    { key:"book_digest",       label:"Morning book digest (needs attention)", roles:["admin","manager"] },
+    { key:"myday_digest",      label:"Morning My Day summary",               roles:["admin","manager","foreman","lead","crew"] },
     { key:"co_chase",          label:"Morning CO chase (open 2+ days)",      roles:["admin","manager","crew"] },
     { key:"rt_chase",          label:"Morning RT chase (needs scheduling)",  roles:["admin","manager"] },
   ]},
@@ -4350,7 +4355,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["jobprep.own","Job prep & redlines"],["resi.head","Head of Residential"],["matterport.own","Matterport scans"]].map(([cap,label])=>{
+                        {[["resi.head","Head of Residential"],["jobprep.own","Job prep"], ...HAT_REGISTRY.map(h => [h.cap, h.label + (h.shared ? " (shared)" : "")])].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -4362,7 +4367,24 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Surfaces the Company section of the Today worklist. Grant as people train in.</div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential.</div>
+                    </div>
+                  )}
+                  {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
+                    <div style={{marginTop:8,padding:"6px 8px",border:`1px dashed ${C.border}`,borderRadius:7}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COVERING</div>
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",fontSize:12,color:C.text}}>
+                        Hand {String(u.name||"").split(" ")[0]}'s hats to
+                        <select value={u.coverTo||""} onChange={e=>upd(u.id,{coverTo:e.target.value, coverUntil: e.target.value ? (u.coverUntil||"") : ""})}
+                          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"4px 6px",fontSize:12,fontFamily:"inherit"}}>
+                          <option value="">nobody</option>
+                          {list.filter(x=>x&&x.id!==u.id&&x.active!==false&&getAccess(x)!=="contractor").map(x=><option key={x.id} value={x.name}>{x.name}</option>)}
+                        </select>
+                        until
+                        <input type="date" value={u.coverUntil||""} onChange={e=>upd(u.id,{coverUntil:e.target.value})}
+                          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"3px 6px",fontSize:12,fontFamily:"inherit"}}/>
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Routes their My Day rows and personal tasks until the date passes, then routes back on its own.</div>
                     </div>
                   )}
                   {/* Foreman assignment — for crew/lead */}
@@ -48265,12 +48287,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-22 · App SW version: v426
+**Last manifest update:** 2026-09-23 · App SW version: v427
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — hats route the work (Invoicing, CO quotes, QC, Redlines, Scans) + Covering + morning digest** · 'shipped 2026-09-23' · 'SW v427' · Koy: head-of-residential auto-tasks all landed on him alone even for work he'd delegated by hat, and the old coordinator book digest no longer matched anyone's actual board. New **'HAT_REGISTRY'** (5 company hats, same 'caps'-driven pattern as 'resi.head'/'matterport.own' — never a hardcoded name): 'invoice.own' → invoicing (Ready to invoice, CO complete merge/invoice, RT complete merge/invoice), 'co.own' → CO "needs to be sent" + redline walk "CO owed", 'qc.own' and 'redline.own' are **shared** (a QC or redline walk shows on **every** holder's board at once; a QC row has no Done button and clears itself, for all holders, once the QC walk is logged on the job; a redline walk's Done clears it for all holders), 'matterport.own' unchanged but now routed through the same registry. Work with no hat (start POs, job prep, RT scheduling, approved-CO follow-ups) still lands on the Head of Residential, same as before. Settings → Team → COMPANY HATS lists all five (QC/Redlines marked "(shared)"); tick a box to assign. New **Covering**, head-only: the Covering control renders only on the Head of Residential's own row (gated on the 'resi.head' cap) — Settings → Team → "Hand '<name>''s hats to '<X>' until '<date>'" writes 'coverTo'/'coverUntil' on the head's own user doc; every route that would've gone to the head goes to the covering person instead through that date, then snaps back automatically the next day. Other hat holders (invoice/co/qc/redline/matterport) have no Covering control of their own — reassign their hat in Settings → Team instead. The head's own board gains a folded **"With others"** group showing rows that routed away, read-only. New pure routing helpers ('routeKeyOfAuto'/'routeKeyOfDuty'/'routeKeyOfRedline', 'ownersForRoute', 'hatHolderNames', 'coverName'/'activeCoverName', 'coveredFor') plus a fix so a hat holder's owned auto-row absorbs its own legacy delegated doc instead of showing both. **Redline walks** get two new My Day rows: **Walk done** (→ 'plans_prep', with Undo) while scheduled, **Write redline CO** (opens the Change Orders board) once a walk is 'co_owed' with no quote number yet. **Server digest**: new 'dailyMyDayDigest' (weekdays 6:45, pure module 'functions/myDayDigest.js' mirroring the same hat/covering/head-fallback logic) pushes a per-person **"☀️ Your day"** summary — e.g. *"2 overdue · 1 today · 3 to invoice · 1 redline walk"* — skipped when everything's zero; new notif pref 'myday_digest'. The old coordinator-wide 'dailyBookDigest' is retired to a logged no-op (left exported, not deleted, so Cloud Scheduler doesn't orphan). QC and Matterport counts are deliberately left out of the digest — Matterport already has its own 8am chase ('dailyMatterportChase'). Harness 'scripts/needs-dryrun.js' (34 assertions) and new 'scripts/mydaydigest-test.js' cover the routing/covering/digest logic. Guide 'public/sops/myday.html' gains a "Hats: who gets what" section. **Flip-day step:** tick the hats in Settings → Team — 'invoice.own' → Josh, 'co.own' → Jeromy, 'qc.own' → Koy + Josh, 'redline.own' → Brady + Koy, 'matterport.own' stays Justin (Koy's assignment choices; the code never hardcodes any of these names) — then 'firebase deploy --only functions:dailyMyDayDigest,functions:dailyBookDigest'. **Why it won't lose data:** zero new job fields — routing is a pure client-side read over existing 'caps'/auto-task/redline-walk data; 'coverTo'/'coverUntil' ride the existing per-user 'upd()' write path (additive fields on the 'settings/users' doc, same as every other per-user setting); the only writes on a routed row are the existing 'saveRedlineWalk'/'updateRedlineWalk' status change and the existing auto-task Done/Snooze/'clearAuto' paths — nothing new; the digest is a read-only Firestore scan with no writes at all; no loader, rules, or schema change anywhere in this ship.
 - **My Day — "Done" group (see what you finished)** · 'shipped 2026-09-22' · 'SW v426' · Koy: *"can we add a spot where i can see all my completed tasks."* New collapsed **Done** group at the bottom of My Day (below Mine / On-head / Sent), listing task cards I finished or that finished on me in the **last 30 days**, newest first, each showing 'done by <name>' + how long ago, with a one-tap **Reopen**. Scope = **both** (Koy's choice): assigned to me OR I sent it — new pure helper 'completedForMe(n, identity, nowMs)' = 'status==="done" && (isMine || assignedBy/createdBy me) && doneAt within 30 days'. **Task docs only** — auto rows (QC / invoice / scans) clear via 'clearedTasks' with no 'doneAt', so they can't show a real completion time and are intentionally excluded. Reopen is the existing 'patchNeed' status→open (fires the existing 'onNeedWrite' "sent back" branch only when someone reopens a task another person closed). Harness 'scripts/needs-dryrun.js' covers the both-scope + 30-day window. **Why it won't lose data:** render-only read over the already-loaded 'needs' ('completedForMe' is pure; no new field, no loader/rules/functions change); Reopen is the existing field-surgical 'patchNeed'.
 - **Matterport scans — one row per scan (kill the head-board AUTO duplicate)** · 'shipped 2026-09-22' · 'SW v425' · Koy: *"these ones underneath i dont want there. they are alot that are duplicates."* v423 put scans on **both** the scanner's board (a **SCAN** row with paste-link / schedule / no-scan) and the head board (an **AUTO** "Schedule Matterport Scan" row with → foreman / Pick person). A login that holds **both** the 'resi.head' and 'matterport.own' hats therefore saw every scan **twice**. Fix: the head auto-task render now **excludes 'category === "matterport"'** in both the head's own board block and the foreman's "On &lt;head&gt;" block, so Matterport scans render **only** as the scanner's SCAN rows (the useful ones). 'headAutoTasks' / 'scanAutoTasks' are unchanged — the scanner queue still derives its rows from the same source; only the head's duplicate AUTO render is dropped. **Why it won't lose data:** render-only — two '.filter(t => t.category !== "matterport")' guards on the head board's derived rows; no write path, no field, no function, no rules change. The scan itself is unchanged; it just shows once.
 - **Matterport scans — the before-drywall window (rough 85% → finish start)** · 'shipped 2026-09-22' · 'SW v424' · Koy: *"just put it on the list at 85% completion so we have time to schedule it"* + *"i accidentally cleared them all when they are still needed."* The v423 queue auto-flagged a scan on EVERY job that hit rough 100%, including service / T&M / EV / commercial jobs that never get scanned — so it filled with noise and a "clear all" swept up the real ones. Fix: a scan is needed only in the real **before-drywall window** — new shared pure helper **'matterportScanNeeded(job)'** = 'parseStage(roughStage) >= 85 && parseStage(finishStage) === 0 && matterportStatus !== "complete" && no scan link && !matterportDismissed'. It **opens at rough 85%** (early enough to schedule, matching the QC/invoice 80–85% triggers) and **closes once finish/drywall starts**, which auto-drops finished jobs with no clicking. Applied **everywhere**: the '_matterport' auto-task condition (My Day scanner queue, head board, Up Next, Today, Friday Packet all derive from 'computeTasks'), the two auto-flip sites (roughStage picker now flips 'matterportStatus:"needs"' at pct>=85 with finish==0, and the rough-status→complete flip gains the same finish gate), and the server-side 'dailyMatterportChase' (re-implements the same test: 'roughPct>=85 && finishPct===0 && …'). Task desc updated ("Rough is wrapping up — schedule the scan before drywall"). Harness 'scripts/needs-dryrun.js' covers the window (opens at 85, closes on finish start, honors complete/dismissed/link). **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** render / derivation only for the queue — 'matterportScanNeeded' is a pure read over existing fields ('roughStage'/'finishStage'/'matterportStatus'/'matterportLinks'/'matterportDismissed'), no new field, no loader/rules change; the auto-flip change only narrows WHEN the existing 'matterportStatus:"needs"' string is auto-set (still additive, still skipped when already set or a link exists), it never clears a user's value; the chase is a read-only scan. Finished jobs that had been auto-flagged simply stop showing (the scan window has passed) — their stored 'matterportStatus' is untouched and still visible on the Job Info card.
@@ -52202,6 +52225,65 @@ function resiHead(users) {
   return live.find(u => can(u, "resi.head")) || live.find(u => can(u, "jobprep.own")) || null;
 }
 function resiHeadName(users) { const h = resiHead(users); return (h && h.name) || ""; }
+
+// ── HAT REGISTRY (v427) ──────────────────────────────────────────────────────
+// Each company hat (a per-user `caps` grant, Settings → Team → COMPANY HATS)
+// owns one or more ROUTE KEYS. A My Day source (auto-task / duty / redline
+// walk) maps to a route key; the key's hat holders own the row; no holder (or
+// no key) → the Head of Residential. Shared hats = walked together: one row on
+// every holder's board, one Done (shared job/record state) clears it for all.
+// Koy 2026-09-22: invoicing → Josh, CO quotes → Jeromy, QC → Koy+Josh,
+// redlines → Brady+Koy, scans → Justin. Start POs are NOT a hat (head keeps).
+const HAT_REGISTRY = [
+  { cap:"invoice.own",    label:"Invoicing",           routes:["invoice"],    note:"Ready to invoice · CO/RT complete, merge or invoice" },
+  { cap:"co.own",         label:"Change order quotes", routes:["co_send"],    note:"CO needs to be sent · redline walk CO owed" },
+  { cap:"qc.own",         label:"QC walks",            routes:["qc"],         shared:true, note:"Walked together: one Done clears it for everyone" },
+  { cap:"redline.own",    label:"Redline walks",       routes:["redline"],    shared:true, note:"Scheduled redline walks, walked together" },
+  { cap:"matterport.own", label:"Matterport scans",    routes:["matterport"], note:"Rough 85% → scan before drywall" },
+];
+function routeKeyOfAuto(t) {
+  if (!t) return null;
+  const id = String(t.id || "");
+  if (t.category === "invoice") return "invoice";
+  if (t.category === "co") return /_send$/.test(id) ? "co_send" : /_done$/.test(id) ? "invoice" : null;
+  if (t.category === "rt") return /_done$/.test(id) ? "invoice" : null;
+  if (t.category === "qc") return "qc";
+  if (t.category === "matterport") return "matterport";
+  return null;
+}
+function routeKeyOfDuty(d) { return d && d.dutyType === "qc" ? "qc" : null; }
+function routeKeyOfRedline(w) {
+  if (!w) return null;
+  if (w.status === "scheduled") return "redline";
+  if (w.status === "co_owed" && !w.coQuoteNumber) return "co_send";
+  return null;
+}
+// COVERING: the covered person's user entry carries coverTo (name) +
+// coverUntil (YYYY-MM-DD, inclusive). Routing only — caps/permissions untouched.
+function activeCoverName(u, todayYmd) {
+  return (u && u.active !== false && u.coverTo && u.coverUntil && String(u.coverUntil) >= todayYmd) ? String(u.coverTo) : "";
+}
+function coverName(users, name, todayYmd) {
+  const u = (users || []).find(x => x && sameName(x.name, name));
+  return activeCoverName(u, todayYmd) || name;
+}
+function hatHolderNames(users, cap, todayYmd) {
+  const live = (users || []).filter(u => u && u.active !== false && u.name && Array.isArray(u.caps) && u.caps.includes(cap));
+  const out = [];
+  live.forEach(u => { const n = coverName(users, u.name, todayYmd); if (n && !out.some(x => sameName(x, n))) out.push(n); });
+  return out;
+}
+function ownersForRoute(routeKey, users, todayYmd) {
+  const hat = routeKey ? HAT_REGISTRY.find(h => h.routes.includes(routeKey)) : null;
+  const holders = hat ? hatHolderNames(users, hat.cap, todayYmd) : [];
+  if (holders.length) return holders;
+  const head = resiHeadName(users);
+  return head ? [coverName(users, head, todayYmd)] : [];
+}
+function coveredFor(users, me, todayYmd) {
+  return (users || []).filter(u => u && u.name && !sameName(u.name, me) && sameName(activeCoverName(u, todayYmd), me)).map(u => u.name);
+}
+
 // The Matterport scanner holds the matterport.own hat (Settings → Team → COMPANY
 // HATS). One person does every rough-in scan before drywall; the client gates
 // the "Matterport scans" queue on can(identity,"matterport.own") and the server
@@ -52358,17 +52440,19 @@ function autoDelegation(needs) {
   return m;
 }
 // What the head's row should show for auto-task `t`.
-function autoRowState(t, delegation, headName) {
+function autoRowState(t, delegation, owners) {
+  const list = Array.isArray(owners) ? owners : [owners];
+  const isOwner = (n) => list.some(o => o && sameName(n, o));
   const doc = (delegation && t && delegation.get(t.id)) || null;
   if (!doc) return { state: "none", doc: null, who: "" };
   // An open doc pointed back at the head is NOT delegated — it was taken back
   // (or reassigned to the head from the Needs board). Treat it as "none" so the
   // auto row gets its Push controls back instead of reading "with <the head>".
   if (doc.status !== "done") {
-    if (sameName(needAssignee(doc), headName)) return { state: "none", doc, who: "" };
+    if (isOwner(needAssignee(doc))) return { state: "none", doc, who: "" };
     return { state: "with", doc, who: needAssignee(doc) };
   }
-  if (doc.doneBy && !sameName(doc.doneBy, headName)) return { state: "verify", doc, who: doc.doneBy };
+  if (doc.doneBy && !isOwner(doc.doneBy)) return { state: "verify", doc, who: doc.doneBy };
   return { state: "none", doc, who: "" };
 }
 // The exact doc Push writes — same shape NeedQuickAdd.save() builds, plus
@@ -52429,9 +52513,10 @@ const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 // folded, order themselves by their most urgent row (lane), then overdue
 // count, then label; rows inside keep the lane sort. Pure — extracted by
 // scripts/needs-dryrun.js.
-const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
+const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", redline: "Redline walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
 function myDayCategoryOf(row) {
   if (!row) return "other";
+  if (row.kind === "redline") return row.routeKey === "co_send" ? "co" : "redline";
   if (row.kind === "need") return row.needKind === "task" ? "tasks" : row.needKind === "bodies" ? "bodies" : "needs";
   if (row.kind === "punch") return "punch";
   if (row.kind === "duty") return row.dutyType === "qc" ? "qc" : row.dutyType === "po" ? "po" : "prep";
@@ -52450,7 +52535,7 @@ function myDayCategories(rows) {
     .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -52460,6 +52545,13 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const headName = (head && head.name) || "";
   const headFirst = headName ? headName.split(" ")[0] : "the office";
   const iAmHead = !!(head && sameName(head.name, me));
+  const first = (n) => String(n || "").split(" ")[0];
+  // v427: routing is by OWNER (HAT_REGISTRY). Covering → I also act for them.
+  const coverees = coveredFor(users, me, todayYmd);
+  const iRunHead = iAmHead || coverees.some(n => sameName(n, headName));
+  const ownsRoute = (rk) => ownersForRoute(rk, users, todayYmd).some(o => sameName(o, me));
+  const ownerLabel = (rk) => ownersForRoute(rk, users, todayYmd).map(first).join(" + ");
+  const othersRows = [];   // head board only: routed-away rows, read-only
   const myJobs = myJobsFor(identity, users, jobs);
   const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
   const myTitle = myRec.title || myRec.role || "";
@@ -52472,7 +52564,6 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const runUndo = () => { if (!undo) return; if (undo.timer) clearTimeout(undo.timer); undo.revert(); setUndo(null); };
   const jobById = (id) => (jobs || []).find(j => j && j.id === id);
   const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
-  const first = (n) => String(n || "").split(" ")[0];
   const mdOf = (y) => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
 
   const needRow = (n, readOnly) => {
@@ -52504,7 +52595,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
 
   const openNeeds = (needs || []).filter(n => needIsOpen(n, todayYmd));
   const mineRows = [];
-  (iAmHead ? headQueue(needs, identity, todayYmd) : openNeeds.filter(n => isMine(n, identity))).forEach(n => mineRows.push(needRow(n, false)));
+  const seenNeed = new Set();
+  const addNeeds = (list) => list.forEach(n => { if (seenNeed.has(n.id)) return; seenNeed.add(n.id); mineRows.push(needRow(n, false)); });
+  addNeeds(iAmHead ? headQueue(needs, identity, todayYmd) : openNeeds.filter(n => isMine(n, identity)));
+  coverees.forEach(name => { const who = { name }; addNeeds(sameName(name, headName) ? headQueue(needs, who, todayYmd) : openNeeds.filter(n => isMine(n, who))); });
   punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
     tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
     onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
@@ -52530,7 +52624,15 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "done", doneAt: nowIso(), doneBy: me }, openDoc);
     stage("Cleared", () => { onUpdateJob({ ...job, clearedTasks: prev }, { clearedTasks: prev }); if (openDoc && openDoc.status !== "done") onPatchNeed(openDoc.id, { status: "open", doneAt: "", doneBy: "" }, openDoc); });
   };
-  if (iAmHead) {
+  // v427: an OPEN delegated doc held by an owner (e.g. a pre-v427 Push of an
+  // invoice task to Josh, who now wears the invoicing hat) is absorbed by the
+  // owned auto row: its need row is dropped from Mine and the row's Done closes
+  // it too — one row, one Done.
+  const absorbedDocIds = new Set();
+  // v427: each auto row goes to the holder(s) of its route's hat (ownersForRoute);
+  // unrouted rows / no holder -> the head. Rows routed away from the head show on
+  // the head board read-only under "With others".
+  {
     const dutyKeys = new Set((jobs || []).filter(j => j && !j.tempPed && !j.quickJob).flatMap(getCoordinatorDuties).map(d => d.jobId + "_" + d.id));
     // v425: Matterport scans render ONLY as the scanner's SCAN rows (with the
     // paste-link / schedule / no-scan controls), never as a head AUTO "Schedule
@@ -52539,15 +52641,25 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // there. they are alot that are duplicates"). Excluded on the head board.
     foldDutyTwins(headAutoTasks(jobs, cleared), dutyKeys).filter(t => t.category !== "matterport").forEach(t => {
       const job = jobById(t.jobId); if (!job) return;
-      const st = autoRowState(t, delegation, headName);
+      const rk = routeKeyOfAuto(t);
+      const owners = ownersForRoute(rk, users, todayYmd);
+      const mineToo = owners.some(o => sameName(o, me));
+      if (!mineToo) {
+        if (iRunHead) othersRows.push({ key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
+          sub: [t.jobName, `with ${owners.map(first).join(" + ")}`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
+        return;
+      }
+      const st = autoRowState(t, delegation, owners);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
       const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
-        sub: [t.jobName, t.desc].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
+        sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
         pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
       if (st.state === "none") {
-        row.canDone = true; row.onDone = () => clearAuto(t, job, null);
+        const ownDoc = st.doc && st.doc.status !== "done" ? st.doc : null;
+        if (ownDoc) absorbedDocIds.add(ownDoc.id);
+        row.canDone = true; row.onDone = () => clearAuto(t, job, ownDoc);
         row.actions = [
           ...(fm ? [{ label: `→ ${first(fm)}`, title: `Push to ${fm}, this job's foreman`, onClick: () => pushTo(t, job, fm), tone: "primary" }] : []),
           { label: "Pick person", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
@@ -52575,9 +52687,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       mineRows.push(row);
     });
   }
-  if (iAmHead) {
+  {
     const live = (jobs || []).filter(j => j && !j.tempPed && !j.quickJob);
-    [...live.flatMap(getCoordinatorDuties), ...(can(head, "jobprep.own") ? live.flatMap(getCompanyDuties) : [])].forEach(d => mineRows.push(dutyRow(d, false)));
+    live.flatMap(getCoordinatorDuties).forEach(d => {
+      const rk = routeKeyOfDuty(d);
+      if (rk ? ownsRoute(rk) : iRunHead) mineRows.push(dutyRow(d, false));
+      else if (iRunHead) othersRows.push({ ...dutyRow(d, true), sub: [d.jobName, `with ${ownerLabel(rk)}`] });
+    });
+    if (iRunHead && can(head, "jobprep.own")) live.flatMap(getCompanyDuties).forEach(d => mineRows.push(dutyRow(d, false)));
   }
   // v423: the Matterport scanner (matterport.own hat) gets the scans queue on
   // THEIR My Day too — not only the head board — with paste-link / schedule /
@@ -52586,7 +52703,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // task doc (that one shows under Tasks on me via the delegation join, so no
   // double). The head board excludes matterport auto-rows entirely (v425), so a
   // head who also holds the scanner hat sees each scan once — as a SCAN row.
-  if (can(identity, "matterport.own")) {
+  if (ownsRoute("matterport")) {
     scanAutoTasks(jobs, cleared).forEach(t => {
       const openDoc = delegation.get(t.id);
       if (openDoc && openDoc.status !== "done") return;
@@ -52619,6 +52736,36 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       });
     });
   }
+  // v427: redline walks (standalone redlineWalks records). Scheduled -> the
+  // redline hat (walked together); CO owed -> the CO-quote hat.
+  (redlineWalks || []).forEach(w => {
+    const rk = routeKeyOfRedline(w); if (!rk) return;
+    const job = w.jobId ? jobById(w.jobId) : null;
+    const name = (job && job.name) || w.address || w.clientName || "Redline walk";
+    // Walks made from the Job Prep strip carry walkDate only (no statusDate).
+    const wDate = w.statusDate || w.walkDate || "";
+    const owners = ownersForRoute(rk, users, todayYmd);
+    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate),
+      title: rk === "redline" ? `Redline walk · ${name}` : `Write redline CO · ${name}`,
+      tag: rk === "redline" ? "Walk" : "CO", tagColor: rk === "redline" ? C.purple : C.red,
+      sub: [wDate ? fmtDisplay(wDate) : "", owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean),
+      jobId: w.jobId || null, section: null, canDone: false, canSnooze: false };
+    if (!owners.some(o => sameName(o, me))) { if (iRunHead) othersRows.push({ ...row, sub: [name, `with ${owners.map(first).join(" + ")}`] }); return; }
+    row.actions = rk === "redline"
+      ? [{ label: "Walk done", title: "Walk finished: plans go to cleanup", tone: "primary", onClick: () => {
+          if (!onUpdateRedline) return; const prev = { ...w };
+          onUpdateRedline({ ...w, status: "plans_prep", statusDate: "" });
+          stage("Walk done", () => onUpdateRedline(prev)); } }]
+      // v427 fix: not everyone who can write a redline CO can also see the CO
+      // board (cos.view is admin/manager) — a foreman/lead covering the head
+      // tapping "Open COs" would otherwise land on a blank main area. Fall
+      // back to opening the job itself when there's no CO board to open.
+      : onOpenCOs
+        ? [{ label: "Open COs", title: "Write + send it from the CO board", tone: "ghost", onClick: () => onOpenCOs() }]
+        : (w.jobId && onOpenJob ? [{ label: "Open job", title: "Open the job", tone: "ghost", onClick: () => onOpenJob(w.jobId) }] : []);
+    mineRows.push(row);
+  });
+  if (absorbedDocIds.size) { for (let i = mineRows.length - 1; i >= 0; i--) { const r = mineRows[i]; if (r.kind === "need" && r.need && absorbedDocIds.has(r.need.id)) mineRows.splice(i, 1); } }
   const sortRows = (rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
@@ -52632,7 +52779,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // included — a task the other side put on hold must stay visible with its
   // "waiting on" line instead of silently vanishing.
   const liveNeeds = (needs || []).filter(n => n && n.status !== "done");
-  const headRows = iAmHead ? [] : (() => {
+  const headRows = iRunHead ? [] : (() => {
     // A doc the viewer created/sent belongs in SENT, not here — even when it's
     // assigned to the head about the viewer's own job (onHead true). Without the
     // `!sentByMe` guard a foreman's own ask to the head was swallowed by "On
@@ -52684,7 +52831,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     });
   const groups = [
     { key: "mine", title: "Mine", rows: sortRows(mineRows), byCat: myDayCategories(sortRows(mineRows)), empty: "All clear — nothing on you right now." },
-    ...(iAmHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
+    // v427: rows the head's board used to own that now route to another hat
+    // holder — read-only (no Done/Snooze/actions), folded by default.
+    ...(iRunHead && othersRows.length ? [{ key: "others", title: "With others", rows: sortRows(othersRows), byCat: myDayCategories(sortRows(othersRows)), empty: "" }] : []),
+    ...(iRunHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRows, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
     // v421: what I asked others for, with their latest update. Starts folded.
     { key: "sent", title: "Sent", rows: sortRows(sentRows), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
     // v426: everything I finished (mine + sent), last 30 days, newest first.
@@ -52840,11 +52990,12 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         {isOpen && g.byCat && (g.byCat.length
           ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {g.byCat.map(c => {
-                const open = openCats.has(c.key);
+                const ck = g.key === "mine" ? c.key : g.key + ":" + c.key;
+                const open = openCats.has(ck);
                 const [, laneColor] = MYDAY_BUCKETS[MYDAY_ORDER[c.top]] || MYDAY_BUCKETS.later;
                 return (
                   <div key={c.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${laneColor}`, borderRadius: 10 }}>
-                    <div onClick={() => toggleCat(c.key)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
+                    <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
                       <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
                       <span style={{ fontSize: 12, color: C.muted }}>{c.rows.length}</span>
@@ -58846,6 +58997,7 @@ function App() {
         <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
+          redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}/>
       )}
 
