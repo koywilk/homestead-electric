@@ -52932,7 +52932,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     stage("Voided", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "", ...VOID_CLEAR }, n));
   };
   const reopenNeed = (n) => {
-    if (n.voided) onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "", ...VOID_CLEAR }, n, { kind: "note", text: "Reopened" });
+    if (n.voided) onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "", ...VOID_CLEAR }, n, { kind: "reopen", text: "Reopened" });
     else onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n);
     toast.success("Reopened");
   };
@@ -52941,7 +52941,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const text = String(d.text || "").trim(); if (!text) return;
     const patch = {}; const what = [];
     if (text !== String(n.text || "").trim()) { patch.text = text; what.push("wording"); }
-    if ((d.dueDate || "") !== (n.dueDate || "")) { patch.dueDate = d.dueDate || ""; what.push(d.dueDate ? `due ${mdOf(d.dueDate)}` : "no due date"); }
+    if ((d.dueDate || "") !== (n.dueDate || "")) { patch.dueDate = d.dueDate || ""; if (!d.dueDate) patch.dueBucket = "week"; what.push(d.dueDate ? `due ${mdOf(d.dueDate)}` : "no due date"); }
     if (d.assignedTo && !sameName(d.assignedTo, needAssignee(n))) patch.assignedTo = d.assignedTo;
     if ((d.jobId || "") !== (n.jobId || "")) {
       const j = d.jobId ? (jobs || []).find(x => x && x.id === d.jobId) : null;
@@ -52973,7 +52973,9 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       // runs the head board. The assignee alone never gets Void (Done/Snooze).
       actions: canManageNeed(n) ? [
         { label: "Edit", title: "Change wording, due date, person or job", onClick: () => openEdit("need_" + n.id, n), tone: "ghost" },
-        { label: "Void", title: "Cancel this task (keeps a record)", onClick: () => openVoid("need_" + n.id), tone: "ghost" },
+        // Auto-task delegates: Void wouldn't cancel anything (the auto row just
+        // comes back on the head's board) — Take back is the tool there.
+        ...(n.autoTaskId ? [] : [{ label: "Void", title: "Cancel this task (keeps a record)", onClick: () => openVoid("need_" + n.id), tone: "ghost" }]),
       ] : undefined };
   };
   const dutyRow = (d, readOnly) => {
@@ -53966,7 +53968,19 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   // fields of one need can't revert each other); falls back to a full save.
   const patch     = (n, p) => onPatchNeed ? onPatchNeed(n.id, p, n) : (onSaveNeed && onSaveNeed({ ...n, ...p }));
   const markDone  = (n) => patch(n, { status: "done", doneAt: new Date().toISOString(), doneBy: myName });
-  const reopen    = (n) => patch(n, { status: "open", doneAt: "", doneBy: "" });
+  // v434: a VOIDED doc reopens with its void flags cleared (a stale voided:true
+  // on an open doc would later swallow the requester's "Task done" push), and
+  // only the sender or whoever runs the head board may un-void — the assignee
+  // can't (mirrors My Day's canManageNeed).
+  const boardHead = resiHead(users);
+  const boardRunsHead = !!(boardHead && (sameName(boardHead.name, myName) || coveredFor(users, myName, todayYmd).some(nm => sameName(nm, boardHead.name))));
+  const canUnvoid = (n) => !!myName && (sameName(n.assignedBy, myName) || sameName(n.createdBy, myName) || sameName(n.voidedBy, myName) || boardRunsHead);
+  const reopen    = (n) => {
+    if (!n.voided) { patch(n, { status: "open", doneAt: "", doneBy: "" }); return; }
+    const p = { status: "open", doneAt: "", doneBy: "", voided: false, voidedBy: "", voidedAt: "", voidReason: "" };
+    if (onPatchNeed) onPatchNeed(n.id, p, n, { kind: "reopen", text: "Reopened" });
+    else if (onSaveNeed) onSaveNeed({ ...n, ...p });
+  };
   // Delete is instant with a 10s Undo (no confirm popup). saveNeed re-creates
   // the identical doc id, so Undo is a byte-identical restore.
   const [undoDel, setUndoDel] = useState(null);
@@ -54102,8 +54116,16 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {doneToday.map(n => (
             <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: C.dim }}>
-              <span style={{ textDecoration: "line-through", flex: 1, minWidth: 0 }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
-              {canAdd && (
+              {n.voided ? (
+                <span style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.red, border: `1px solid ${C.red}66`, background: `${C.red}14` }}>Voided</span>
+                  <span style={{ textDecoration: "line-through" }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
+                  <span style={{ color: C.muted }}>voided by {String(n.voidedBy || n.doneBy || "?").split(" ")[0]}{n.voidReason ? ` · ${n.voidReason}` : ""}</span>
+                </span>
+              ) : (
+                <span style={{ textDecoration: "line-through", flex: 1, minWidth: 0 }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
+              )}
+              {canAdd && (!n.voided || canUnvoid(n)) && (
                 <button onClick={() => reopen(n)} title="Reopen"
                   style={{ border: `1px solid ${C.border}`, background: "none", borderRadius: 6, color: C.dim,
                     fontSize: 11, fontFamily: "inherit", padding: "3px 8px", cursor: "pointer" }}>Reopen</button>
@@ -56987,7 +57009,7 @@ function App() {
     const nowIso = new Date().toISOString();
     if ("assignedTo" in p) { p.assignedBy = identity?.name || ""; p.assignedAt = nowIso; }
     if (p.dueDate) { const b = dueBucketFromDate(p.dueDate); if (b) p.dueBucket = b; }
-    const entry = note ? { by: identity?.name || "", at: nowIso, kind: ["void", "edit"].includes(note.kind) ? note.kind : "note", text: String(note.text || "").trim() } : null;
+    const entry = note ? { by: identity?.name || "", at: nowIso, kind: ["void", "edit", "reopen"].includes(note.kind) ? note.kind : "note", text: String(note.text || "").trim() } : null;
     setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, ...p, ...(entry ? { updates: [...needUpdates(n), entry] } : {}) } : n));
     const upd = { updated_at: nowIso, saved_by: identity?.name || "" };
     Object.keys(p).forEach(k => { upd["data."+k] = p[k]; });
@@ -57019,9 +57041,9 @@ function App() {
   // unchanged, so onNeedWrite's update branch stays silent (no push).
   const editNeedUpdate = async (needId, entry, newText) => {
     const text = String(newText || "").trim();
-    if (!needId || !entry || !text || text === String(entry.text || "")) return;
+    if (!needId || !entry || !entry.at || !text || text === String(entry.text || "")) return;
     const editedAt = new Date().toISOString();
-    const match = (u) => !!u && u.by === entry.by && u.at === entry.at;
+    const match = (u) => !!u && u.by === entry.by && u.at === entry.at && (u.kind || "") === (entry.kind || "");
     const swap = (list, fn) => (Array.isArray(list) ? list : []).map(u => match(u) ? fn(u) : u);
     setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, updates: swap(n.updates, u => ({ ...u, text, editedAt })) } : n));
     try {

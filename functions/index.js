@@ -1377,8 +1377,11 @@ exports.onNeedWrite = functions.firestore
     const doneBy  = String(after.doneBy || "").trim();
     const creator = String(after.createdBy || "").trim();
     // v434: a VOID is closed-with-a-flag, not finished — no "Task done" echo;
-    //       branch 4 sends "Task voided" to the other side instead.
-    if (!wasDone && isDone && !after.voided && creator && doneBy && doneBy.toLowerCase() !== creator.toLowerCase()) {
+    //       branch 4 sends "Task voided" to the other side instead. Keyed on
+    //       the transition INTO a void, so a stale voided flag left on an open
+    //       doc can never swallow a real Done.
+    const becameVoid = !!after.voided && !(before && before.voided);
+    if (!wasDone && isDone && !becameVoid && creator && doneBy && doneBy.toLowerCase() !== creator.toLowerCase()) {
       tasks.push(sendToNameIfWanted(creator, "need_done", isBodies
         ? { title: "Bodies covered", body: `${doneBy} covered${onJob}: ${text}`, view: "myday" }
         : { title: "Task done",      body: `${doneBy} finished${onJob}: ${text}`, view: "myday" }));
@@ -1389,12 +1392,13 @@ exports.onNeedWrite = functions.firestore
     const reopenedBy = String(after.assignedBy || "").trim();
     //    v434: reopening a VOIDED task (or undoing a void) is not a send-back —
     //    its "Reopened" note rides branch 4; an Undo stays silent.
-    if (wasDone && !isDone && !(before && before.voided) && nextA && reopenedBy && nextA.toLowerCase() !== reopenedBy.toLowerCase()) {
+    const sentBack = !!(wasDone && !isDone && !(before && before.voided) && nextA && reopenedBy && nextA.toLowerCase() !== reopenedBy.toLowerCase());
+    if (sentBack) {
       tasks.push(sendToNameIfWanted(nextA, "need_assigned",
         { title: "Task sent back", body: `${reopenedBy} sent back${onJob}: ${text}`, view: "myday" }));
     }
     // 4. Update (v421) → the OTHER side of the task. data.updates grew by one
-    //    entry {by, at, kind: note|waiting|void|edit, text, until?}: author = assignee →
+    //    entry {by, at, kind: note|waiting|void|edit|reopen, text, until?}: author = assignee →
     //    the requester (assignedBy, else createdBy); anyone else → the
     //    assignee. Self-talk is silent. Mirrors needUpdateAudience() in App.js.
     const bu = Array.isArray(before && before.updates) ? before.updates : [];
@@ -1408,7 +1412,10 @@ exports.onNeedWrite = functions.firestore
       // v434: kind "void" / "edit" (system entries written with the change
       // itself). An edit that ALSO moved the task already pushed "assigned to
       // you" to the same person via branch 1 — don't push them twice.
-      const dupAssign = entry.kind === "edit" && assignPushed && lc(target) === lc(nextA);
+      const dupAssign = (entry.kind === "edit" && assignPushed && lc(target) === lc(nextA))
+        // v434: a "Reopened" system note rides as "Task update" unless the same
+        // write already pushed "Task sent back" to that person.
+        || (entry.kind === "reopen" && sentBack && lc(target) === lc(nextA));
       if (target && author && lc(target) !== lc(author) && !dupAssign) {
         const what = String(entry.text || "").slice(0, 120);
         const isWait = entry.kind === "waiting";

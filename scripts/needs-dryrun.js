@@ -318,6 +318,7 @@ eq(H.needUpdateLine(null), "", "null-safe");
 eq(H.needUpdateLine({ kind:"void", text:"" }), "voided", "void, no reason");
 eq(H.needUpdateLine({ kind:"void", text:"dup of #12" }), "voided — dup of #12", "void with reason");
 eq(H.needUpdateLine({ kind:"edit", text:"changed: wording, due 10/3" }), "changed: wording, due 10/3", "edit line");
+eq(H.needUpdateLine({ kind:"reopen", text:"Reopened" }), "Reopened", "reopen renders like a note");
 assert.ok(H.sentByMe(upTask, gage), "Gage sent it -> in Gage's Sent");
 assert.ok(!H.sentByMe(upTask, koy), "…not in Koy's (it's Koy's Mine)");
 assert.ok(H.sentByMe({ ...upTask, snoozedUntil:"2026-09-25" }, gage), "snoozed by the assignee stays in Sent (that's where 'waiting on' shows)");
