@@ -52907,6 +52907,22 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const keepFresh = (rows) => rows.filter(r => { const why = staleOf(r); if (why) { staleRows.push({ ...r, sub: [...(r.sub || []), `hidden: ${why}`], actions: undefined, canDone: false, canSnooze: false, scan: undefined, pushOpen: false }); return false; } return true; });
   const freshMine = keepFresh(mineRows);
   const freshOthers = keepFresh(othersRows);
+  // v431: Team pulse (head only) — ownedRows are the derived rows (auto / duty /
+  // redline; "scan" rows already carry kind "auto") from both Mine and With
+  // others, each keyed to its owner(s). Mine rows default to [me] when no
+  // `owners` was carried (single-owner); With-others rows already carry theirs
+  // (Ship 2 routing). ageDays mirrors staleReason's own date math off staleDate.
+  const ageDaysOf = (dateYmd) => {
+    const d = dateYmd ? parseAnyDate(dateYmd) : null;
+    if (!d) return 0;
+    return Math.max(0, Math.floor((new Date(todayYmd + "T00:00:00") - new Date(localYmd(d) + "T00:00:00")) / 864e5));
+  };
+  const ownedRows = iRunHead ? [
+    ...freshMine.filter(r => r.kind === "auto" || r.kind === "duty" || r.kind === "redline")
+      .map(r => ({ owners: r.owners || [me], bucket: r.bucket, ageDays: ageDaysOf(r.staleDate) })),
+    ...freshOthers.map(r => ({ owners: r.owners || [], bucket: r.bucket, ageDays: ageDaysOf(r.staleDate) })),
+  ] : [];
+  const pulse = iRunHead ? teamPulse({ needs, users, ownedRows, todayYmd }) : [];
   // Only the viewer's own actionable rows (Mine + Focus) are selectable / pinnable.
   freshMine.forEach(r => { r.sel = true; });
   const mineByKey = new Map(freshMine.map(r => [r.key, r]));
@@ -53341,6 +53357,52 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const barBtn = { fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: "#66A8FF", border: "1px solid #66A8FF55" };
   const mainGroups = groups.filter(g => g.main);
   const sideGroups = groups.filter(g => !g.main);
+  // v431: Team pulse (head only) — folded card, right column, above Sent.
+  // Tapping a person switches to Person view and opens that person's group
+  // (same "p:<name>" fold key the Person view itself uses).
+  const openPersonPulse = (name) => { pickView("person"); setOpenGroups(s => { const n = new Set(s); n.add("p:" + name); return n; }); };
+  const pulseOverdue = pulse.reduce((s, p) => s + p.overdue, 0);
+  const pulseOpen = openGroups.has("pulse");
+  const pulseCard = iRunHead ? (
+    <div key="pulse" style={{ marginBottom: 14 }}>
+      <div onClick={() => toggleGroup("pulse")} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
+        <span style={{ display: "inline-flex", transition: "transform .15s", transform: pulseOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+        <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>Team pulse</span>
+        <span style={{ fontSize: 12, color: C.muted }}>{pulse.length} people</span>
+        {pulseOverdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{pulseOverdue} overdue</span>}
+        <span style={{ flex: 1, height: 1, background: C.border }} />
+      </div>
+      {pulseOpen && (pulse.length
+        ? <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: C.surface }}>
+                  {["Person", "Open", "Overdue", "Oldest", "Done wk"].map((h, i) => (
+                    <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "7px 10px", color: C.dim, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pulse.map(p => {
+                  const redOverdue = p.overdue >= 2, redOldest = p.oldestDays >= 7;
+                  return (
+                    <tr key={p.name} onClick={() => openPersonPulse(p.name)} style={{ borderTop: `1px solid ${C.border}`, cursor: "pointer" }}>
+                      <td style={{ padding: "7px 10px", color: C.text, fontWeight: 600 }}>{p.name}</td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", color: C.text }}>{p.open}</td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOverdue ? C.red : C.text, fontWeight: redOverdue ? 700 : 400 }}>{p.overdue}</td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.oldestDays}d</td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", color: C.dim }}>{p.doneWeek}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>Nobody has open items or finished work this week.</div>)}
+    </div>
+  ) : null;
+  // Splices the pulse card in right before Sent (only when it exists — head only).
+  const sideNodes = sideGroups.flatMap(g => (g.key === "sent" && pulseCard) ? [pulseCard, Group(g)] : [Group(g)]);
   const staleFooter = staleRows.length > 0 && (
     <div key="stale" style={{ marginBottom: 14 }}>
       <div onClick={() => setShowStale(s => !s)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px", fontSize: 12, color: C.dim }}>
@@ -53411,8 +53473,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         </div>
       )}
       {narrow || groups.length === 1
-        ? <>{mainGroups.map(Group)}{staleFooter}{sideGroups.map(Group)}</>
-        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{mainGroups.map(Group)}{staleFooter}</div><div>{sideGroups.map(Group)}</div></div>}
+        ? <>{mainGroups.map(Group)}{staleFooter}{sideNodes}</>
+        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{mainGroups.map(Group)}{staleFooter}</div><div>{sideNodes}</div></div>}
       {/* v429 batch action bar (Command Deck dark, steel blue accent). */}
       {selectMode && (
         <div onClick={e => e.stopPropagation()} style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${(ON_MOBILE ? 92 : 24) + (undo ? 56 : 0)}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8996, background: "#1B2030", color: "#E6EAF1", borderRadius: 12, padding: "10px 12px", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 640, margin: "0 auto" }}>
