@@ -64,7 +64,8 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
   "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor",
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
-  "taskPhotoPath","needPhotos","teamPulse"];
+  "taskPhotoPath","needPhotos","teamPulse",
+  "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -453,5 +454,38 @@ eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue
 eq(pulse.find(p => p.name === "Gage Lund"), { name:"Gage Lund", open:2, overdue:2, oldestDays:13, doneWeek:0 }, "Gage: 2 open both overdue, oldest from createdAt");
 eq(pulse.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "Josh: 1 doc + 2 owned rows; done 9/21 counts, 9/10 doesn't");
 eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, overdue:0, oldestDays:1, doneWeek:0 }, "shared row counts for each owner");
+
+// ── usage tracking (v433) ───────────────────────────────────────────────────
+eq(H.usageSeenKey("koy", "views", "myday"), "koy|views|myday", "seen key shape");
+eq(H.shouldLogUsage([], "koy|views|myday"), true, "empty seen → log");
+eq(H.shouldLogUsage(["koy|views|myday"], "koy|views|myday"), false, "already seen today → skip");
+eq(H.shouldLogUsage(["josh|views|myday"], "koy|views|myday"), true, "other user on same device still logs");
+eq(H.shouldLogUsage(null, "koy|views|home"), true, "junk seen (null) → log");
+eq(H.shouldLogUsage("garbage", "koy|views|home"), true, "junk seen (string) → log");
+eq(H.shouldLogUsage([], ""), false, "empty key never logs");
+const uDocs = [
+  { views: { home: { koy: 3, josh: 1 }, myday: { gage: 2 } }, tabs: { "Job Info": { koy: 5 }, QC: { koy: 0 } }, updated_at: "x" },
+  { views: { home: { koy: 1 }, settings: { koy: 1 } }, tabs: { "Job Info": { josh: 1 }, Rough: { gage: 1 } } },
+  null,
+  { views: "junk" },
+];
+const roll = H.usageRollup(uDocs);
+eq(roll.views, [
+  { key:"myday", users:1, userDays:1 },
+  { key:"settings", users:1, userDays:1 },
+  { key:"home", users:2, userDays:3 },
+], "views: distinct users + user-days, least-used first, key tiebreak");
+eq(roll.tabs, [
+  { key:"Rough", users:1, userDays:1 },
+  { key:"Job Info", users:2, userDays:2 },
+], "tabs: zero-count rows dropped (QC koy:0), ascending");
+eq(H.usageRollup([]), { views: [], tabs: [] }, "no docs → empty");
+eq(H.usageRollup(undefined), { views: [], tabs: [] }, "undefined → empty");
+eq(H.usageLastDays("2026-09-23", 3), ["2026-09-21","2026-09-22","2026-09-23"], "last N days oldest first");
+eq(H.usageLastDays("2026-03-01", 2), ["2026-02-28","2026-03-01"], "crosses month end");
+eq(H.usageLastDays("2026-11-02", 2), ["2026-11-01","2026-11-02"], "DST week stays one per day");
+eq(H.usageWithZeros([{ key:"home", users:2, userDays:3 }], ["myday","home","cos","myday"]),
+  [{ key:"home", users:2, userDays:3 }, { key:"cos", users:0, userDays:0 }, { key:"myday", users:0, userDays:0 }],
+  "unseen known keys appended as 0 · 0 (sorted, deduped); seen rows untouched");
 
 console.log("needs-dryrun ok");

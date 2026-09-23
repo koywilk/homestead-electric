@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, arrayRemove, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp, deleteField } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, arrayRemove, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp, deleteField, increment } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
@@ -26220,6 +26220,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   };
 
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
+  // v433 usage tracking: count each job-tab open (once per device/user/day).
+  // No-op unless the internal app shell set _usageUser (never on share pages,
+  // never for contractors).
+  useEffect(() => { logUsage("tabs", tab); }, [tab]);
 
   // ── Up Next action dispatcher ───────────────────────────────────────
 
@@ -43971,6 +43975,65 @@ function NotifDoctor({ identity }) {
 // a device on an old version that's been seen recently glows red, so a stale
 // environment is IMPOSSIBLE TO HIDE (same philosophy as FleetHealth below
 // and the backup banner). Read-only here; pings happen elsewhere.
+// v433 — App usage report (admin, Settings). Reads the last 14 daily
+// settings/usage_<ymd> docs (missing days ignored) and lists every screen and
+// job tab least-used first. Known-but-never-opened entries come from the real
+// nav consts + TABS, so a screen nobody touches still shows up as 0 · 0.
+function UsageReportCard() {
+  const [days, setDays] = useState(null);   // null = loading; [{ymd, data}]
+  useEffect(() => {
+    let cancelled = false;
+    const ymds = usageLastDays(localYmd(), 14);
+    Promise.all(ymds.map(ymd =>
+      getDoc(doc(db, "settings", "usage_" + ymd))
+        .then(s => (s.exists() ? { ymd, data: s.data() } : null))
+        .catch(e => { console.warn("[HE usage] read failed:", ymd, e && e.message); return null; })
+    )).then(res => { if (!cancelled) setDays(res.filter(Boolean)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const viewLabels = {};
+  [...NAV_MAIN_TABS, ...NAV_MORE_TABS, NAV_SETTINGS_TAB, NAV_SUBS_TAB].forEach(t => { viewLabels[t.key] = t.label; });
+  const roll = usageRollup((days || []).map(d => d.data));
+  const viewRows = usageWithZeros(roll.views, Object.keys(viewLabels));
+  const tabRows = usageWithZeros(roll.tabs, TABS);
+
+  const table = (title, rows, labelOf) => (
+    <div style={{marginTop:12}}>
+      <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,marginBottom:4}}>{title}</div>
+      <div style={{display:"flex",fontSize:10,fontWeight:700,color:C.dim,padding:"4px 8px",borderBottom:`1px solid ${C.border}`}}>
+        <span style={{flex:1}}>Name</span>
+        <span style={{width:60,textAlign:"right"}}>People</span>
+        <span style={{width:80,textAlign:"right"}}>Person-days</span>
+      </div>
+      {rows.map(r => (
+        <div key={r.key} style={{display:"flex",alignItems:"center",fontSize:12,padding:"5px 8px",
+          borderBottom:`1px solid ${C.border}`,color:r.userDays===0?C.dim:C.text}}>
+          <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{labelOf(r.key)}</span>
+          <span style={{width:60,textAlign:"right",fontWeight:600}}>{r.users}</span>
+          <span style={{width:80,textAlign:"right",fontWeight:700,color:r.userDays===0?C.dim:"#2E477D"}}>{r.userDays}</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  if (days === null) return <div style={{fontSize:11,color:C.dim,padding:"12px 14px"}}>Loading…</div>;
+  return (
+    <div style={{padding:"12px 14px"}}>
+      <div style={{fontSize:11,color:C.dim}}>
+        {days.length
+          ? <>Collecting since <strong>{days[0].ymd}</strong> · {days.length} day{days.length===1?"":"s"}</>
+          : "No usage recorded yet — counts start as people open screens on this version."}
+      </div>
+      <div style={{fontSize:10,color:C.dim,marginTop:4}}>
+        Each person counts once per screen per day. Least-used first; 0 · 0 = nobody opened it.
+      </div>
+      {table("SCREENS", viewRows, k => viewLabels[k] || k)}
+      {table("JOB TABS", tabRows, k => k)}
+    </div>
+  );
+}
+
 function DeviceVersionsCard() {
   const [devices, setDevices] = useState(null);
   const [latest, setLatest] = useState(null);
@@ -48305,12 +48368,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-23 · App SW version: v432
+**Last manifest update:** 2026-09-23 · App SW version: v433
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Usage tracking — which screens and job tabs people actually open** · 'shipped 2026-09-23' · 'SW v433' · From the 2026-09-23 strategy pass: *measure before you cut* (v319's guess-deletion blank-screened production). The app now counts, once per device per person per day, every top-nav screen opened (App 'view') and every Job Detail tab opened (JobDetail 'tab'), into one doc per local day: 'settings/usage_<YYYY-MM-DD>' shaped '{ views: { <view>: { <userKey>: n } }, tabs: { <tab>: { <userKey>: n } }, updated_at }', written with a merge 'increment(1)'. The once-a-day throttle lives in localStorage 'he_usage_<ymd>' (old days pruned; falls back to an in-memory set if storage throws, so it never writes on every switch). Fire-and-forget — failures go to 'console.warn' only, never a toast, never blocks. **Only internal staff are counted:** the logger's user ('_usageUser') is set from the internal app shell's render, below every share-link / GC-portal / homeowner route return, and is null for contractors; the Job Board landing flash for field roles isn't counted (the view effect waits for the landing redirect). **Report (admin only):** Settings → **APP USAGE — LAST 14 DAYS** (folded) reads the last 14 daily docs and shows two tables, **Screens** and **Job tabs** — Name / People / Person-days, least-used first, with every real nav screen and every 'TABS' entry nobody opened listed as 0 · 0 (the lists come from the real nav consts 'NAV_MAIN_TABS' / 'NAV_MORE_TABS', which the header now renders from, and 'TABS' — no hand-written names). Pure helpers 'usageSeenKey' / 'shouldLogUsage' / 'usageRollup' / 'usageLastDays' / 'usageWithZeros' are vm-tested in 'scripts/needs-dryrun.js'. Run it ~2 weeks, then cut from data. **Why it won't lose data:** the only writes are new, additive 'settings/usage_*' docs via increment-merge — no existing doc, job field, loader, or Firestore rule is touched ('settings' is already open-write); the report is read-only; the nav refactor renders the identical tabs behind the identical permission gates.
 - **My Day — snooze by date works + by-name pushes find the right person** · 'shipped 2026-09-23' · 'SW v432' · Koy: *"I was trying to snooze a task using the date picker so I could snooze it longer than a week. When I click the calendar button, it just closes the whole thing."* The page container closes the snooze menu on any click, and tapping the date field bubbled up to it, unmounting the input before a date could be picked; the snooze menu now stops its own clicks, and a half-typed desktop date (year still being typed) no longer fires early. **Server:** every by-name push (manual re-nudge, RT/punch/CO assignment pushes, token lookup) now resolves names through one tested helper ('functions/nameMatch.js', 'scripts/namematch-test.js' in prebuild): exact full name first, then a word-boundary first-name match, **deactivated users never**, and a shared first name logs '[names] ambiguous' instead of silently picking whoever is first — matters more now that return trips can go to anyone. Needs 'firebase deploy --only functions' for the name fix (every function that sends by name). **Why it won't lose data:** snooze writes the same 'snoozedUntil' field as the 3-day/1-week buttons; the name helper only chooses who a push goes to — no reads or writes change.
 - **My Day — photos on tasks, Team pulse for the head** · 'shipped 2026-09-23' · 'SW v431' · Two additions to My Day. **Photos**: the quick-add sheet gets a '📷 Photo' chip (multi-pick, 44px previews, drop before saving); photos pick from the camera or the photo library, and are recompressed to JPEG ≤1920px before upload (same '_gcPrepUpload' prep as the GC portal) with a sticky "Uploading N photos…" toast until they attach; your own tasks and ones you sent carry a plain '📷' camera button on the row to add more (hidden while that row's upload runs); any row with photos shows 44px thumbnails (tap to open full-size), each with a per-photo '✕' remove for the uploader or the head, with a 10-second Undo before the file is actually deleted from Storage — Done rows show thumbnails read-only, no add/remove. **Team pulse**: a folded card ("Team pulse · N people · M overdue") visible only to the head (or whoever's covering), listing Person / Open / Overdue / Oldest / Done-this-week for everyone with open or recently-finished work, red at Overdue ≥ 2 or Oldest ≥ 7; tapping a person opens Person view on their group. A shared QC/redline row credits every co-owner, including a row someone pinned to Focus. Guide 'public/sops/myday.html' gains "Photos on tasks" and "Team pulse" sections. **Why it won't lose data:** photos live in a new 'photos' array inside the need doc's existing 'data' field, written only with 'arrayUnion'/'arrayRemove' — never a whole-field overwrite; Storage uploads go under the existing 'jobs/<job|_tasks>/task-photos/<needId>/' prefix, no Firestore or Storage rules change; a removed photo is undoable for 10 seconds before its Storage object is deleted; Team pulse only reads existing need/duty/route data, no new writes (an auto row pushed to someone counts once, on the delegate's task, whether the head or another hat owner pushed it; an open legacy doc still on its hat owner counts once, on that owner's auto row).
 - **Return trips — assign to anyone in the company** · 'shipped 2026-09-23' · 'SW v430' · Koy: *"I need to be able to assign return trips to anybody in the company, not just leads or foreman."* The RT card's ASSIGNED TO picker ('crewOptions' in 'ReturnTrips') now lists every active, non-contractor teammate instead of only foremen + leads; deactivated users and outside contractors stay out like every other roster picker, and a trip already assigned to someone no longer on that list keeps showing their name instead of going blank. Also in this ship: the Friday Packet no longer flags "no finish date — rough done Nd ago" (functions: 'fridayPacket' + 'sendTestFridayPacket'). **Why it won't lose data:** picker options only — the same 'assignedTo' string write as before; no new fields, no loader or rules change.
@@ -52290,6 +52354,146 @@ function userKeyOf(identity) {
   if (!identity) return "";
   return identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
+// ── Usage tracking (v433) ────────────────────────────────────────────────────
+// Which screens / job tabs people actually open, counted once per device per
+// user per day, into settings/usage_<YYYY-MM-DD>. Pure helpers below are
+// vm-tested in scripts/needs-dryrun.js; the writer (logUsage) is further down.
+function usageSeenKey(userKey, kind, key) {
+  return `${userKey}|${kind}|${key}`;
+}
+function shouldLogUsage(seenArr, k) {
+  if (!k) return false;
+  return !(Array.isArray(seenArr) && seenArr.includes(k));
+}
+// docs = array of daily usage doc data. users = distinct userKeys across days;
+// userDays = (user, day) pairs with a count > 0. Least-used first.
+function usageRollup(docs) {
+  const out = {};
+  for (const kind of ["views", "tabs"]) {
+    const acc = {};
+    for (const d of (Array.isArray(docs) ? docs : [])) {
+      const m = d && d[kind];
+      if (!m || typeof m !== "object") continue;
+      for (const key of Object.keys(m)) {
+        const per = m[key];
+        if (!per || typeof per !== "object") continue;
+        for (const u of Object.keys(per)) {
+          if (!(Number(per[u]) > 0)) continue;
+          const a = acc[key] || (acc[key] = { users: new Set(), userDays: 0 });
+          a.users.add(u);
+          a.userDays += 1;
+        }
+      }
+    }
+    out[kind] = Object.keys(acc)
+      .map(key => ({ key, users: acc[key].users.size, userDays: acc[key].userDays }))
+      .sort((a, b) => (a.userDays - b.userDays) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  }
+  return out;
+}
+// The n local dates ending at endYmd (inclusive), oldest first. Calendar-day
+// stepping (setDate), so DST weeks never skip or repeat a day.
+function usageLastDays(endYmd, n) {
+  const m = String(endYmd || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return [];
+  const days = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    d.setDate(d.getDate() - i);
+    days.push(localYmd(d));
+  }
+  return days;
+}
+// Append every known key that has no row as a "0 · 0" row (sorted, deduped).
+function usageWithZeros(rows, knownKeys) {
+  const seen = new Set((rows || []).map(r => r.key));
+  const zeros = Array.from(new Set(knownKeys || [])).filter(k => k && !seen.has(k)).sort()
+    .map(key => ({ key, users: 0, userDays: 0 }));
+  return (rows || []).concat(zeros);
+}
+
+// Top-nav tab lists — the App header renders straight from these (lifted out
+// of the JSX in v433 so the usage report can list every real screen, including
+// the ones nobody opened). perm = can() feature gate; tiers = access tiers.
+// The contractor-only "My Jobs" row and the dynamic Subcontractors entry stay
+// in the header JSX.
+const NAV_MAIN_TABS = [
+  { key: "myday", label: "My Day", perm: "myday.view" },
+  { key: "home", label: "Job Board" },
+  { key: "today", label: "Today", perm: "today.view" },
+  { key: "needs", label: "Needs", perm: "board.view" },
+  { key: "cos", label: "COs", perm: "cos.view" },
+  { key: "jobprep", label: "Job Prep", perm: "jobprep.view" },
+  { key: "contractors", label: "Contractors", perm: "users.manage" },
+  { key: "safety", label: "Safety" },
+  { key: "schedule", label: "Forecast" },
+  { key: "huddle", label: "Huddle", perm: "settings.view" },
+  { key: "scoreboard", label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
+  { key: "qc", label: "QC", tiers: ["admin", "manager"] },
+  { key: "appmap", label: "App Map" },
+];
+const NAV_MORE_TABS = [
+  { key: "nav", label: "Nav", icon: "mapPin" },
+  { key: "upcoming", label: "Upcoming", icon: "calendar" },
+  { key: "quotes", label: "Quotes", icon: "fileText", perm: "quotes.view" },
+  { key: "lutron", label: "Plan Changes", icon: "mapPin", perm: "lutron.view" },
+  { key: "tasks", label: "Tasks", icon: "check" },
+  { key: "timeoff", label: "Time Off", icon: "calendar" },
+];
+const NAV_SETTINGS_TAB = { key: "settings", label: "Settings" };
+const NAV_SUBS_TAB = { key: "subcontractors", label: "Subcontractors", icon: "hardHat" };
+const navTabVisible = (t, identity) =>
+  t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm));
+
+// Who usage is counted for: set from the internal app shell's render (never
+// from a share-link / GC-portal / homeowner page — those return before App's
+// hooks), and null for contractors. Same module-level pattern as
+// _setTaskOwnerFallback, so JobDetail needs no new prop.
+let _usageUser = null;
+const _usageMemSeen = new Set();   // session fallback when localStorage throws
+let _usagePruned = false;
+function _setUsageUser(identity) {
+  _usageUser = (identity && identity.id && getAccess(identity) !== "contractor") ? identity : null;
+}
+// Fire-and-forget: count one open of <kind>/<key> for today, at most once per
+// device per user per day. Never throws, never blocks, never toasts.
+function logUsage(kind, key) {
+  try {
+    const identity = _usageUser;
+    if (!identity || !key) return;
+    const uk = userKeyOf(identity);
+    const ymd = localYmd();
+    if (!uk || !ymd) return;
+    const k = usageSeenKey(uk, kind, key);
+    if (_usageMemSeen.has(ymd + "|" + k)) return;
+    const lsKey = "he_usage_" + ymd;
+    let seen = [], lsOk = true;
+    try { const raw = JSON.parse(localStorage.getItem(lsKey) || "[]"); if (Array.isArray(raw)) seen = raw; }
+    catch (e) { lsOk = false; }
+    if (!shouldLogUsage(seen, k)) { _usageMemSeen.add(ymd + "|" + k); return; }
+    _usageMemSeen.add(ymd + "|" + k);
+    if (lsOk) {
+      try { localStorage.setItem(lsKey, JSON.stringify(seen.concat(k))); } catch (e) {}
+      if (!_usagePruned) {
+        _usagePruned = true;
+        try {
+          const old = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const n = localStorage.key(i);
+            if (n && n.startsWith("he_usage_") && n !== lsKey) old.push(n);
+          }
+          old.forEach(n => localStorage.removeItem(n));
+        } catch (e) {}
+      }
+    }
+    setDoc(doc(db, "settings", "usage_" + ymd),
+      { [kind]: { [key]: { [uk]: increment(1) } }, updated_at: new Date().toISOString() },
+      { merge: true }
+    ).catch(e => console.warn("[HE usage] write failed:", e && e.message));
+  } catch (e) {
+    console.warn("[HE usage] skipped:", e && e.message);
+  }
+}
 // ── MY DAY Ship 3 helpers (v431) ────────────────────────────────────────────
 // Task photos live under the jobs/ prefix every other upload uses (Storage
 // rules are console-managed; staying under jobs/ inherits them). Jobless tasks
@@ -55084,6 +55288,12 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
+  // v433 usage tracking: count only for a logged-in internal identity. Set at
+  // render time (idempotent) so JobDetail's tab effect — a child effect, which
+  // runs before this component's effects — already sees it on first mount.
+  // Share-link / GC-portal / homeowner routes returned above, so they never
+  // reach this line.
+  _setUsageUser(identity);
   const [notifStatus,  setNotifStatus]  = useState(null); // null | 'loading' | 'ok' | string
   // notifIssue: null | 'ios-not-installed' | 'permission-default' | 'permission-denied' | 'no-tokens'
   // Replaces the old binary showNotifPrompt — captures every failure mode that
@@ -57247,6 +57457,13 @@ function App() {
     if ((t === "foreman" || isLeadTitle(t) || t === "crew") && can(identity, "myday.view")) setView("myday");
     setLandingApplied(true);
   }, [identity, users, landingApplied]);
+  // v433: count each screen open (once per device/user/day). Waits for the
+  // landing redirect so a foreman's pre-redirect "home" flash isn't counted as
+  // a Job Board visit.
+  useEffect(() => {
+    if (!landingApplied || !identity?.id) return;
+    logUsage("views", view);
+  }, [view, identity, landingApplied]);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [quickAdd, setQuickAdd] = useState(null);     // My Day quick-add sheet: null | {job?} preset
@@ -58087,21 +58304,8 @@ function App() {
         <div style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
-          : [
-              ...(can(identity,"myday.view")?[{key:"myday",label:"My Day"}]:[]),
-              {key:"home",label:"Job Board"},
-              ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
-              ...(can(identity,"board.view")?[{key:"needs",label:"Needs"}]:[]),
-              ...(can(identity,"cos.view")?[{key:"cos",label:"COs"}]:[]),
-              ...(can(identity,"jobprep.view")?[{key:"jobprep",label:"Job Prep"}]:[]),
-              ...(can(identity,"users.manage")?[{key:"contractors",label:"Contractors",badge:gcInboxOpen}]:[]),
-              {key:"safety",label:"Safety"},
-              {key:"schedule",label:"Forecast"},
-              ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
-              ...(can(identity,"scoreboard.editWeights")?[{key:"scoreboard",label:"Scoreboard"}]:[]),  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
-              ...((getAccess(identity)==="admin"||getAccess(identity)==="manager")?[{key:"qc",label:"QC"}]:[]),
-              {key:"appmap",label:"App Map"},
-            ]
+          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity))
+              .map(t=>t.key==="contractors"?{...t,badge:gcInboxOpen}:t)  // v433: list lives in NAV_MAIN_TABS (usage report reads it too)
         ).map(({key,label,icon,badge})=>{
           const active = view===key;
           return (
@@ -58125,13 +58329,8 @@ function App() {
             subcontractor) tucked here to keep the top bar short. Office only. */}
         {!isContractor && (()=>{
           const moreItems = [
-            {key:"nav",label:"Nav",icon:"mapPin"},
-            {key:"upcoming",label:"Upcoming",icon:"calendar"},
-            ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
-            ...(can(identity,"lutron.view")?[{key:"lutron",label:"Plan Changes",icon:"mapPin"}]:[]),
-            {key:"tasks",label:"Tasks",icon:"check"},
-            {key:"timeoff",label:"Time Off",icon:"calendar"},
-            ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors",icon:"hardHat"}]:[]),
+            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,identity)),
+            ...(contractorUsers.length>0?[{...NAV_SUBS_TAB,label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:NAV_SUBS_TAB.label}]:[]),
           ];
           const moreActive = moreItems.some(i=>i.key===view);
           return (
@@ -58178,7 +58377,7 @@ function App() {
               transition:"all 0.15s",letterSpacing:"0.02em",
               boxShadow:view==="settings"?`0 6px 18px ${D.accentGlow}`:"none",
               display:"inline-flex",alignItems:"center",gap:5}}>
-            <Icon name="settings" size={11} stroke={2.25}/>Settings
+            <Icon name="settings" size={11} stroke={2.25}/>{NAV_SETTINGS_TAB.label}
           </button>
         )}
         <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
@@ -59672,6 +59871,11 @@ function App() {
             {getAccess(identity)==="admin" && (
               <SettingsSection title="DEVICES — APP VERSIONS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
                 <DeviceVersionsCard/>
+              </SettingsSection>
+            )}
+            {getAccess(identity)==="admin" && (
+              <SettingsSection title="APP USAGE — LAST 14 DAYS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
+                <UsageReportCard/>
               </SettingsSection>
             )}
           </div>
