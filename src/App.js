@@ -48269,7 +48269,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **My Day — search, Category/Job/Person views, Focus today, batch select, stale footer, Sent · finished** · 'shipped 2026-09-23' · 'SW v429' · Ship 2 of the My Day rework. A **toolbar** under the title adds a search box ('Search tasks or jobs…', filters Mine/With others/On head/Sent/Sent · finished/Done and the person groups, force-opens any group or job/category line that matches) and a **Category | Job | Person** view toggle (Person only for whoever holds 'resi.head', remembered per device in 'localStorage', falls back to Category if the stored value is stale or Person-without-the-cap). **Focus today**: a always-visible steel-blue strip above the groups where you ★ up to 3 Mine rows as today's must-dos (pinned rows drop out of the normal groups so they don't double-count); pinning a 4th toasts "Focus holds 3 — unpin one first."; the pin list is per-user, stored in the new 'settings/mydayFocus' doc ('byUser.<key>', merge write) so it follows you across devices and resets each morning — yesterday's un-cleared pins show as "From M/D: N still open · Re-pin". **Select**: a Select button turns Mine/Focus rows into checkboxes (With-others, On-head, Sent, Done and stale rows are never selectable); a dark Command-Deck bar offers Done / Snooze 3d / Push to… (roster minus yourself) / Cancel, applies one row at a time so same-job rows never clobber each other, skips rows that can't do the action with a count in the summary toast, and only the last row stays Undo-able. **Hidden (stale) footer**: derived rows that are no longer worth seeing — archived/deleted/quote-stage jobs, redline walks 45+ days old, auto/duty rows 60+ days overdue — are pulled out of Mine into a folded "N hidden (stale) · Show" strip at 75% opacity with every action control removed (read-only); real task docs never go stale and search never touches this list. **Sent · finished**: a new folded group under Sent listing docs you sent that someone *else* finished in the last 30 days, so a sent-and-closed doc no longer lands in your own Done (Done now only shows docs *you* personally closed or that closed on you — a v426 semantics tightening: a sent doc with 'doneBy' unset can no longer land ambiguously in your Done). **Removed the two finish-date nags** ("In Between — Over 2 Months" and "Get Finish Start Date") — Koy: *"i will get finish dates when they come to me."* Both were derived auto-tasks ('_in_between_long' / '_finish_waiting'), never stored data, so removing them touched no job fields. Harness 'scripts/needs-dryrun.js' covers the new helpers ('isInactiveJob', 'staleReason', 'rowMatches', 'batchCaps', 'focusKeysToday', 'sentFinishedForMe', 'userKeyOf') and the completedForMe/sentFinishedForMe split. Guide 'public/sops/myday.html' gains sections for search & views, Focus today, Select, hidden stale rows, and Sent · finished. **Why it won't lose data:** the only new write is 'settings/mydayFocus' 'byUser.<key>', a merge write scoped to one user's key under an already open-write 'settings' doc (no rules change); batch actions reuse each row's own existing per-row writer ('onDone'/'onSnooze'/'onPick'/'patchNeed') one row at a time, nothing new; stale rows are hidden from view, never deleted — their stored data is untouched and they reappear if the underlying condition changes; the removed nags were derived, in-memory auto-tasks with no stored fields, so nothing was deleted from any job or doc.
+- **My Day — search, Category/Job/Person views, Focus today, batch select, stale footer, Sent · finished** · 'shipped 2026-09-23' · 'SW v429' · Ship 2 of the My Day rework. A **toolbar** under the title adds a search box ('Search tasks or jobs…', filters Mine/With others/On head/Sent/Sent · finished/Done and the person groups, force-opens any group or job/category line that matches) and a **Category | Job | Person** view toggle (Person only for the Head of Residential or whoever is covering — i.e. whoever currently holds 'resi.head', remembered per device in 'localStorage', falls back to Category if the stored value is stale or Person-without-the-cap). **Focus today**: a always-visible steel-blue strip above the groups where you ★ up to 3 Mine rows as today's must-dos (pinned rows drop out of the normal groups so they don't double-count); pinning a 4th toasts "Focus holds 3 — unpin one first."; the pin list is per-user, stored in the new 'settings/mydayFocus' doc ('byUser.<key>', merge write) so it follows you across devices and resets each morning — yesterday's un-cleared pins show as "From M/D: N still open · Re-pin". **Select**: a Select button turns Mine/Focus rows into checkboxes (With-others, On-head, Sent, Done and stale rows are never selectable); a dark Command-Deck bar offers Done / Snooze 3d / Push to… (roster minus yourself) / Cancel, applies one row at a time so same-job rows never clobber each other, skips rows that can't do the action with a count in the summary toast, and only the last row stays Undo-able. **Hidden (stale) footer**: derived rows that are no longer worth seeing — archived/deleted/quote-stage jobs, redline walks 45+ days old, auto/duty rows 60+ days overdue — are pulled out of Mine into a folded "N hidden (stale) · Show" strip at 75% opacity with every action control removed (read-only); real task docs never go stale, and neither does a row carrying one (an auto row that absorbed an open doc, or is in "with"/"verify" state — it holds a real task); **money rows never hide by age** (Koy 2026-09-23: "Never hide money rows") — invoicing, material deposits, CO quotes to send, CO/RT complete merge-or-invoice, and redline CO owed only hide if their job is archived/deleted/quote; search never touches this list. **Sent · finished**: a new folded group under Sent listing docs you sent that someone *else* finished in the last 30 days, so a sent-and-closed doc no longer lands in your own Done (Done now only shows docs *you* personally closed or that closed on you — a v426 semantics tightening: a sent doc with 'doneBy' unset can no longer land ambiguously in your Done). **Removed the two finish-date nags** ("In Between — Over 2 Months" and "Get Finish Start Date") — Koy: *"i will get finish dates when they come to me."* Both were derived auto-tasks ('_in_between_long' / '_finish_waiting'), never stored data, so removing them touched no job fields. Harness 'scripts/needs-dryrun.js' covers the new helpers ('isInactiveJob', 'staleReason', 'rowMatches', 'batchCaps', 'focusKeysToday', 'sentFinishedForMe', 'userKeyOf') and the completedForMe/sentFinishedForMe split. Guide 'public/sops/myday.html' gains sections for search & views, Focus today, Select, hidden stale rows, and Sent · finished. **Why it won't lose data:** the only new write is 'settings/mydayFocus' 'byUser.<key>', a merge write scoped to one user's key under an already open-write 'settings' doc (no rules change); batch actions reuse each row's own existing per-row writer ('onDone'/'onSnooze'/'onPick'/'patchNeed') one row at a time, nothing new; stale rows are hidden from view, never deleted — their stored data is untouched and they reappear if the underlying condition changes; the removed nags were derived, in-memory auto-tasks with no stored fields, so nothing was deleted from any job or doc.
 - **My Day — Invoicing hat includes material deposits (docs)** · 'shipped 2026-09-23' · 'SW v428' · Koy confirmed deposits belong to the invoicing hat (Josh): Material Deposit rough/finish and Invoice Overdue 5+ days were already 'category:"invoice"' auto-tasks, so v427 routed them to 'invoice.own' — this ship only makes the My Day guide ('public/sops/myday.html'), this entry and the HAT_REGISTRY note say so. Koy also OK'd that a covered head still sees unrouted duties/prep alongside the cover. **Why it won't lose data:** text-only — no logic, no writes, no fields.
 - **My Day — hats route the work (Invoicing, CO quotes, QC, Redlines, Scans) + Covering + morning digest** · 'shipped 2026-09-23' · 'SW v427' · Koy: head-of-residential auto-tasks all landed on him alone even for work he'd delegated by hat, and the old coordinator book digest no longer matched anyone's actual board. New **'HAT_REGISTRY'** (5 company hats, same 'caps'-driven pattern as 'resi.head'/'matterport.own' — never a hardcoded name): 'invoice.own' → invoicing (Ready to invoice, Invoice overdue 5+ days, Material Deposit rough/finish, CO complete merge/invoice, RT complete merge/invoice; the morning push counts only ready-to-invoice + CO/RT complete), 'co.own' → CO "needs to be sent" + redline walk "CO owed", 'qc.own' and 'redline.own' are **shared** (a QC or redline walk shows on **every** holder's board at once; a QC row has no Done button and clears itself, for all holders, once the QC walk is logged on the job; a redline walk's Done clears it for all holders), 'matterport.own' unchanged but now routed through the same registry. Work with no hat (start POs, job prep, RT scheduling, approved-CO follow-ups) still lands on the Head of Residential, same as before. Settings → Team → COMPANY HATS lists all five (QC/Redlines marked "(shared)"); tick a box to assign. New **Covering**, head-only: the Covering control renders only on the Head of Residential's own row (gated on the 'resi.head' cap) — Settings → Team → "Hand '<name>''s hats to '<X>' until '<date>'" writes 'coverTo'/'coverUntil' on the head's own user doc; every route that would've gone to the head goes to the covering person instead through that date, then snaps back automatically the next day. Other hat holders (invoice/co/qc/redline/matterport) have no Covering control of their own — reassign their hat in Settings → Team instead. The head's own board gains a folded **"With others"** group showing rows that routed away, read-only. New pure routing helpers ('routeKeyOfAuto'/'routeKeyOfDuty'/'routeKeyOfRedline', 'ownersForRoute', 'hatHolderNames', 'coverName'/'activeCoverName', 'coveredFor') plus a fix so a hat holder's owned auto-row absorbs its own legacy delegated doc instead of showing both. **Redline walks** get two new My Day rows: **Walk done** (→ 'plans_prep', with Undo) while scheduled, **Write redline CO** (opens the Change Orders board) once a walk is 'co_owed' with no quote number yet. **Server digest**: new 'dailyMyDayDigest' (weekdays 6:45, pure module 'functions/myDayDigest.js' mirroring the same hat/covering/head-fallback logic) pushes a per-person **"☀️ Your day"** summary — e.g. *"2 overdue · 1 today · 3 to invoice · 1 redline walk"* — skipped when everything's zero; new notif pref 'myday_digest'. The old coordinator-wide 'dailyBookDigest' is retired to a logged no-op (left exported, not deleted, so Cloud Scheduler doesn't orphan). QC and Matterport counts are deliberately left out of the digest — Matterport already has its own 8am chase ('dailyMatterportChase'). Harness 'scripts/needs-dryrun.js' (34 assertions) and new 'scripts/mydaydigest-test.js' cover the routing/covering/digest logic. Guide 'public/sops/myday.html' gains a "Hats: who gets what" section. **Flip-day step:** tick the hats in Settings → Team — 'invoice.own' → Josh, 'co.own' → Jeromy, 'qc.own' → Koy + Josh, 'redline.own' → Brady + Koy, 'matterport.own' stays Justin (Koy's assignment choices; the code never hardcodes any of these names) — then 'firebase deploy --only functions:dailyMyDayDigest,functions:dailyBookDigest'. **Why it won't lose data:** zero new job fields — routing is a pure client-side read over existing 'caps'/auto-task/redline-walk data; 'coverTo'/'coverUntil' ride the existing per-user 'upd()' write path (additive fields on the 'settings/users' doc, same as every other per-user setting); the only writes on a routed row are the existing 'saveRedlineWalk'/'updateRedlineWalk' status change and the existing auto-task Done/Snooze/'clearAuto' paths — nothing new; the digest is a read-only Firestore scan with no writes at all; no loader, rules, or schema change anywhere in this ship.
 - **My Day — "Done" group (see what you finished)** · 'shipped 2026-09-22' · 'SW v426' · Koy: *"can we add a spot where i can see all my completed tasks."* New collapsed **Done** group at the bottom of My Day (below Mine / On-head / Sent), listing task cards I finished or that finished on me in the **last 30 days**, newest first, each showing 'done by <name>' + how long ago, with a one-tap **Reopen**. Scope = **both** (Koy's choice): assigned to me OR I sent it — new pure helper 'completedForMe(n, identity, nowMs)' = 'status==="done" && (isMine || assignedBy/createdBy me) && doneAt within 30 days'. **Task docs only** — auto rows (QC / invoice / scans) clear via 'clearedTasks' with no 'doneAt', so they can't show a real completion time and are intentionally excluded. Reopen is the existing 'patchNeed' status→open (fires the existing 'onNeedWrite' "sent back" branch only when someone reopens a task another person closed). Harness 'scripts/needs-dryrun.js' covers the both-scope + 30-day window. **Why it won't lose data:** render-only read over the already-loaded 'needs' ('completedForMe' is pure; no new field, no loader/rules/functions change); Reopen is the existing field-surgical 'patchNeed'.
@@ -52205,9 +52205,13 @@ function completedForMe(n, identity, nowMs = Date.now()) {
 function isInactiveJob(j) { return !!(j && (j.archived || j.deleted || j.archivedAt || j.type === "quote")); }
 // Why a derived row should drop off My Day on its own (Koy 2026-09-23). Real
 // task docs (kind "need") never go stale — only derived rows. Hidden, not deleted.
+// r.money (invoicing, deposits, CO quotes, CO/RT merge-or-invoice, redline CO
+// owed): NEVER hides by age (Koy 2026-09-23: "Never hide money rows") — only
+// when its job is inactive (archived/deleted/quote).
 function staleReason(r, todayYmd) {
   if (!r || r.kind === "need" || r.kind === "punch") return "";
   if (r.job && isInactiveJob(r.job)) return r.job.type === "quote" ? "quote" : "job archived";
+  if (r.money) return "";
   const d = r.dateYmd ? parseAnyDate(r.dateYmd) : null;
   if (!d) return "";
   const days = Math.floor((new Date(todayYmd + "T00:00:00") - new Date(localYmd(d) + "T00:00:00")) / 864e5);
@@ -52594,6 +52598,11 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // that render's fresh jobs/needs, so two rows on the same job can't clobber
   // each other's whole-field writes (clearedTasks / taskDueDates / punch).
   const [batchQ, setBatchQ] = useState(null);
+  // Mirror for the unmount check: leaving My Day mid-batch stops the queue, so
+  // say how many rows never ran instead of failing silently.
+  const batchQRef = useRef(null);
+  batchQRef.current = batchQ;
+  useEffect(() => () => { const bq = batchQRef.current; if (bq && bq.keys && bq.keys.length) toast.warn(`${bq.keys.length} not applied — batch interrupted`); }, []);
   const stage =(label, revert) => { if (undo && undo.timer) clearTimeout(undo.timer); const timer = setTimeout(() => setUndo(null), 10000); setUndo({ label, revert, timer }); };
   const runUndo = () => { if (!undo) return; if (undo.timer) clearTimeout(undo.timer); undo.revert(); setUndo(null); };
   const jobById = (id) => (jobs || []).find(j => j && j.id === id);
@@ -52680,28 +52689,30 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       const owners = ownersForRoute(rk, users, todayYmd);
       const mineToo = owners.some(o => sameName(o, me));
       const staleDate = (job.taskDueDates || {})[t.id] || t.dueDate || "";
+      const staleMoney = rk === "invoice" || rk === "co_send"; // money never hides by age
       if (!mineToo) {
         if (iRunHead) othersRows.push({ key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
-          staleJob: job, staleDate, owners,
+          staleJob: job, staleDate, staleMoney, owners,
           sub: [t.jobName, `with ${owners.map(first).join(" + ")}`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
         return;
       }
       const st = autoRowState(t, delegation, owners);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
-      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate,
+      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate, staleMoney,
         sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
         pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
       if (st.state === "none") {
         const ownDoc = st.doc && st.doc.status !== "done" ? st.doc : null;
-        if (ownDoc) absorbedDocIds.add(ownDoc.id);
+        if (ownDoc) { absorbedDocIds.add(ownDoc.id); row.staleExempt = true; } // carries a real open doc — never stale-hidden
         row.canDone = true; row.onDone = () => clearAuto(t, job, ownDoc);
         row.actions = [
           ...(fm ? [{ label: `→ ${first(fm)}`, title: `Push to ${fm}, this job's foreman`, onClick: () => pushTo(t, job, fm), tone: "primary" }] : []),
           { label: "Pick person", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
         ];
       } else if (st.state === "with") {
+        row.staleExempt = true; // live delegated doc — never stale-hidden
         row.canDone = true; row.onDone = () => clearAuto(t, job, st.doc);
         row.actions = [
           // Take back CLOSES the delegate's doc (doneBy = the head) instead of
@@ -52712,6 +52723,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           { label: "Re-push", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
         ];
       } else { // verify
+        row.staleExempt = true; // head's verify-clear of a real closed doc — never stale-hidden
         row.canDone = true; row.onDone = () => clearAuto(t, job, null);
         row.actions = [
           // Send back keeps the doc's OWN assignee (st.who is who CLOSED it —
@@ -52782,7 +52794,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // Walks made from the Job Prep strip carry walkDate only (no statusDate).
     const wDate = w.statusDate || w.walkDate || "";
     const owners = ownersForRoute(rk, users, todayYmd);
-    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate,
+    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate, staleMoney: rk === "co_send",
       title: rk === "redline" ? `Redline walk · ${name}` : `Write redline CO · ${name}`,
       tag: rk === "redline" ? "Walk" : "CO", tagColor: rk === "redline" ? C.purple : C.red,
       sub: [wDate ? fmtDisplay(wDate) : "", owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean),
@@ -52806,8 +52818,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // v429: stale partition (Koy 2026-09-23). Derived rows on an inactive job, an
   // old redline walk, or 60+ days overdue drop off Mine / With others into a
   // read-only "N hidden (stale)" footer. Hidden, never deleted; search doesn't
-  // un-hide them. Real task docs never go stale (staleReason skips needs).
-  const staleOf = (r) => staleReason({ kind: r.kind, job: r.staleJob || null, dateYmd: r.staleDate || "" }, todayYmd);
+  // un-hide them. Real task docs never go stale (staleReason skips needs), and
+  // neither do auto rows carrying one (staleExempt: absorbed open doc / "with" /
+  // "verify" — hiding them would strand a real task in a read-only row).
+  const staleOf = (r) => r.staleExempt ? "" : staleReason({ kind: r.kind, job: r.staleJob || null, dateYmd: r.staleDate || "", money: !!r.staleMoney }, todayYmd);
   const staleRows = [];
   const keepFresh = (rows) => rows.filter(r => { const why = staleOf(r); if (why) { staleRows.push({ ...r, sub: [...(r.sub || []), `hidden: ${why}`], actions: undefined, canDone: false, canSnooze: false, scan: undefined, pushOpen: false }); return false; } return true; });
   const freshMine = keepFresh(mineRows);
@@ -52819,14 +52833,22 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // out of the Mine groups so nothing shows twice. Keys whose row closed drop.
   const pinnedRows = onSaveFocus ? focusKeysToday(focusEntry, todayYmd).map(k => mineByKey.get(k)).filter(Boolean) : [];
   const pinnedSet = new Set(pinnedRows.map(r => r.key));
-  const carryKeys = onSaveFocus && focusEntry && focusEntry.date && focusEntry.date !== todayYmd && Array.isArray(focusEntry.keys)
-    ? focusEntry.keys.filter(k => mineByKey.has(k)) : [];
+  // Carry = a previous day's pins. Read from the stored entry while it's still
+  // dated yesterday, or from prevDate/prevKeys once today's first pin rewrote it
+  // (so pinning something new first doesn't silently drop the Re-pin line).
+  // prev* are always written (""/[]) — the save is a deep merge, so omitting
+  // them would leave an old carry behind.
+  const carrySrc = !focusEntry ? null
+    : focusEntry.date && focusEntry.date !== todayYmd && Array.isArray(focusEntry.keys) ? { date: focusEntry.date, keys: focusEntry.keys }
+    : focusEntry.date === todayYmd && focusEntry.prevDate && Array.isArray(focusEntry.prevKeys) ? { date: focusEntry.prevDate, keys: focusEntry.prevKeys } : null;
+  const carryKeys = onSaveFocus && carrySrc ? carrySrc.keys.filter(k => mineByKey.has(k) && !pinnedSet.has(k)) : [];
   const toggleFocus = (key) => {
     const cur = pinnedRows.map(r => r.key);
     const next = cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];
     if (next.length > 3) { toast.info("Focus holds 3 — unpin one first."); return; }
-    onSaveFocus({ date: todayYmd, keys: next });
+    onSaveFocus({ date: todayYmd, keys: next, prevDate: carrySrc ? carrySrc.date : "", prevKeys: carrySrc ? carrySrc.keys : [] });
   };
+  const rePin = () => onSaveFocus({ date: todayYmd, keys: [...pinnedRows.map(r => r.key), ...carryKeys].slice(0, 3), prevDate: "", prevKeys: [] });
   const qOn = !!String(q || "").trim();
   const fq = (rows) => qOn ? rows.filter(r => rowMatches(r, q)) : rows;
   const view = (viewPref === "job" || (viewPref === "person" && iRunHead)) ? viewPref : "cat";
@@ -53172,6 +53194,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // Only keys still on Mine count (a row that closed since it was ticked drops).
   const selKeys = [...selected].filter(k => mineByKey.has(k));
   const runBatch = (op, who) => {
+    if (batchQ) return; // one batch at a time — a second would overwrite the running queue
     if (!selKeys.length || (op === "push" && !who)) return;
     setSelected(new Set()); setSelectMode(false);
     setBatchQ({ op, who: who || "", keys: selKeys, ok: 0, skip: 0 });
@@ -53271,7 +53294,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             : <div style={{ fontSize: 13, color: C.dim, padding: "2px 4px" }}>Pin up to 3 rows as today's must-dos.</div>}
           {carryKeys.length > 0 && (
             <div style={{ fontSize: 12, color: C.dim, marginTop: 8, padding: "0 4px" }}>
-              From {mdOf(focusEntry.date)}: {carryKeys.length} still open · {link("Re-pin", () => onSaveFocus({ date: todayYmd, keys: carryKeys.slice(0, 3) }))}
+              From {mdOf(carrySrc.date)}: {carryKeys.length} still open · {link("Re-pin", rePin)}
             </div>
           )}
         </div>
@@ -55441,7 +55464,8 @@ function App() {
           setTimeout(() => publishCcJobsIndex(loaded), 8000);
 
           // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
-          // set finish to "waiting_date" so the "Get Finish Start Date" task fires
+          // set finish to "waiting_date". (It used to feed the "Get Finish Start Date"
+          // auto-task; that task was removed in v429 — the status still shows on the job.)
           const ADVANCE_KEY = "heAutoAdvanceFinish_v1";
           if(!localStorage.getItem(ADVANCE_KEY)) {
             let advancedCount = 0;

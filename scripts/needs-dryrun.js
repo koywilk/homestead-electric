@@ -397,6 +397,12 @@ eq(H.staleReason({ kind:"auto", job:{}, dateYmd:"2026-07-25" }, T2), "60+ days o
 eq(H.staleReason({ kind:"duty", job:{}, dateYmd:"2026-07-26" }, T2), "", "59 days → keep");
 eq(H.staleReason({ kind:"need", job:{}, dateYmd:"2026-01-01" }, T2), "", "real task docs never go stale");
 eq(H.staleReason({ kind:"auto", job:{}, dateYmd:"" }, T2), "", "no date → keep");
+// Money rows never hide by age (Koy 2026-09-23) — only an inactive job hides them.
+eq(H.staleReason({ kind:"auto", job:{}, dateYmd:"2026-03-07", money:true }, T2), "", "money auto row 200 days old → keep");
+eq(H.staleReason({ kind:"auto", job:{ archived:true }, dateYmd:"2026-03-07", money:true }, T2), "job archived", "money row on archived job → hidden");
+eq(H.staleReason({ kind:"auto", job:{}, dateYmd:"2026-07-25", money:false }, T2), "60+ days overdue", "non-money auto 60 days → still stale");
+eq(H.staleReason({ kind:"redline", job:null, dateYmd:"2026-06-15", money:true }, T2), "", "redline co_send (money) 100 days → keep");
+eq(H.staleReason({ kind:"redline", job:null, dateYmd:"2026-08-09", money:false }, T2), "old walk", "redline walk route 45 days → still old walk");
 assert.ok(H.rowMatches({ title:"Order meter base", sub:["#1770 England"] }, "england"), "search hits sub");
 assert.ok(H.rowMatches({ title:"Order meter base", sub:[] }, "  METER "), "trim + case-insensitive");
 assert.ok(!H.rowMatches({ title:"x", sub:[] }, "zzz"), "miss");
