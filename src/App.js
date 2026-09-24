@@ -6963,8 +6963,10 @@ function NeedsAttention({jobs, onSelectJob}) {
     if(fqs.length) unanswered.push({job, name, count:fqs.length, phase:'Finish', questions:fqs});
 
     // Unsent POs
-    const roughPOs = (job.roughMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
-    const finPOs   = (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+    // v440: Material Tracking hidden (Job Sections) → no PO nags for the job.
+    const matsHidden = isSectionHidden(job, "materials");
+    const roughPOs = matsHidden ? [] : (job.roughMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+    const finPOs   = matsHidden ? [] : (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
     if(roughPOs.length) unsentPOs.push({job, name, count:roughPOs.length, phase:'Rough', orders:roughPOs});
     if(finPOs.length)   unsentPOs.push({job, name, count:finPOs.length, phase:'Finish', orders:finPOs});
 
@@ -10076,7 +10078,8 @@ function JobNoteCard({
             <span style={{ fontSize:11, fontWeight:700, color: C.text, flexShrink:0 }}>
               Promote {selected.size} to:
             </span>
-            {['punch','rt','co','po','question'].map(t => {
+            {/* v440: no PO chip when Material Tracking is hidden (Job Sections) */}
+            {['punch','rt','co','po','question'].filter(t => t !== 'po' || !isSectionHidden(job, 'materials')).map(t => {
               const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO', question:'Question' };
               const colors = { punch:'#6A5E97', rt:'#3E7D7A', co:'#B0892C', call:'#3B5BA5', po:'#B06A2C', question:'#6A7BAA' };
               const count = tally[t] || 0;
@@ -16828,7 +16831,7 @@ function HomeRunsPullSummary({namedFlat, pulled, total, pct}) {
 }
 
 
-function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false}) {
+function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [hoResponse,      setHoResponse]      = useState(null);
@@ -17262,7 +17265,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         tandem and quad breakers from tandemInfo so the order
                         reflects what the panel actually needs, not just the
                         raw 1-pole/2-pole counts. */}
-                    {onMatChange&&(()=>{
+                    {onMatChange&&!hideMaterials&&(()=>{
                       // Build the PO lines. Tandems AND quads now rebalance
                       // the underlying 1-pole and 2-pole counts so the order
                       // doesn't double up. Each tandem absorbs 2× 1-pole
@@ -17426,7 +17429,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         button is the convenient access point under the
                         breaker counts. Schedules stay BLANK until the user
                         types in them — never auto-populated from homeRuns. */}
-                    {onElectricalPanelsChange && (() => {
+                    {onElectricalPanelsChange && !hidePanelSchedules && (() => {
                       const existing = (electricalPanels||[]).find(ep =>
                         (ep.label||"").toLowerCase() === (p||"").toLowerCase());
                       const scrollAndPulse = (id) => {
@@ -17710,7 +17713,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           if(!n||cP.some(p=>(p||"").toLowerCase()===n.toLowerCase())) return;
           onHRChange({...homeRuns,customPanels:[...cP,n]});
           const eps=electricalPanels||[];
-          if(onElectricalPanelsChange && !eps.some(ep=>(ep.label||"").toLowerCase()===n.toLowerCase())){
+          // v440: no schedule to create when Panel Schedules is hidden (Job Sections).
+          if(onElectricalPanelsChange && !hidePanelSchedules && !eps.some(ep=>(ep.label||"").toLowerCase()===n.toLowerCase())){
             onElectricalPanelsChange([...eps,{id:uid(),label:n,location:"",size:"40/80",slotCount:40,circuits:{}}]);
             toast.success(`Added "${n}" — blank panel schedule created.`);
           }
@@ -18907,7 +18911,10 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
   // we started using them, need a way to remove jobs that are not theres."
   const allLutronJobs = useMemo(() => {
     return (jobs||[])
-      .filter(j => (j.lightingSystem||"")==="Lutron")
+      // v440: a job with Panelized Lighting turned off in Job Sections has no
+      // lighting package at all — drop it from both lists (its Restore here
+      // would only flip the Tech Lighting flag, which can't bring it back).
+      .filter(j => (j.lightingSystem||"")==="Lutron" && !isSectionHidden(j,"panelized"))
       .map(j => ({ job:j, rooms:(j.panelizedLighting?.lutronRooms||[]).filter(r=>(r.items||[]).length>0) }))
       .sort((a,b) => (a.job.name||"").localeCompare(b.job.name||""));
   }, [jobs]);
@@ -24664,60 +24671,141 @@ const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Q
 // touched, so turning a section back on — say a generator added mid-rough —
 // brings everything back exactly as it was.
 //
-// `legacy`: the v1 per-tab checkboxes (job.noPanelizedLighting /
-// job.noTapeLight) only shoved the tab to the end of the bar. Those jobs now
-// read as hidden, and toggling here writes the legacy flag too so the two can
-// never disagree.
+// `legacy`: an older per-job flag that already meant "this job doesn't have
+// it" (v1 tab checkboxes noPanelizedLighting / noTapeLight, v440 keypads
+// panelizedLighting.noKeypadLoads, Tech Lighting's
+// panelizedLighting.excludeFromLutronHub). For those the OLD FLAG IS THE
+// SOURCE OF TRUTH — everything else in the app (exports, the Plan Changes
+// view's Hide/Restore, the hub) already reads it — and toggling here writes
+// both, so the two can never disagree. Jobs that already had one set simply
+// show that switch as off; nothing about them changes.
+//
+// `parent`: a sub-switch (the Panelized Lighting extras). Hiding the parent
+// hides every child with it; the child's own setting is kept for when the
+// parent comes back on.
 //
 // `hasData(job)` powers the "this section has data on it — hide anyway?"
-// confirm. Generator data lives in homeowner_requests/{jobId}, not on the job,
-// so JobSectionsPanel checks that doc itself.
+// confirm. `asyncHasData(job)` is the same for data that lives in
+// homeowner_requests/{jobId} (generator loads, the LV company's collab
+// entries), which JobSectionsPanel reads at toggle time.
+//
+// v440 (Koy 2026-09-24: "search harder so that we can clean up jobs and not
+// have extra shit in jobs that don't need it"): a hidden section is gone
+// EVERYWHERE, not just on the card — partner links, the GC portal, the Job
+// Prep board and reminders all check isSectionHidden (or the server mirror of
+// it in functions/). Every job still starts with everything ON.
+const topFlag = (name) => ({
+  get: (j) => !!j[name],
+  set: (j, v) => ({ [name]: !!v }),
+});
+const plFlag = (name) => ({
+  get: (j) => !!(j.panelizedLighting && j.panelizedLighting[name]),
+  set: (j, v) => ({ panelizedLighting: { ...(j.panelizedLighting || {}), [name]: !!v } }),
+});
+// Links a Plans & Links card holds (top-level mirror + the multi-link list).
+const linkFieldHasData = (j, k) =>
+  !!(j[k] || "").trim() || ((j.linkSections || {})[k] || []).some(l => (l && l.url || "").trim());
+const kpRowsHaveData = (rows) => (rows || []).some(r => (r && r.name || "").trim());
+// The LV company's collab entries (homeowner_requests.lightingCollab): keypad
+// / panel arrays (mainKeypad, pl_*…), sections map, and free-text notes.
+const lvCollabHasData = (c) => {
+  if (!c || typeof c !== "object") return false;
+  if ((c.notes || "").trim() || (c.generalNotes || "").trim?.()) return true;
+  return Object.values(c).some(v => Array.isArray(v) ? v.length > 0
+    : (v && typeof v === "object") ? Object.values(v).some(x => Array.isArray(x) ? x.length > 0 : !!x) : false);
+};
+const hrDocHasData = async (jobId, test) => {
+  const snap = await getDoc(doc(db, 'homeowner_requests', jobId));
+  return test(snap.exists() ? snap.data() : {});
+};
 const JOB_SECTIONS = [
-  { key:"panelized", label:"Panelized Lighting", legacy:"noPanelizedLighting",
-    where:"Panelized Lighting tab · Lighting Schedules link",
+  { key:"panelized", label:"Panelized Lighting", legacy:topFlag("noPanelizedLighting"),
+    where:"Panelized Lighting tab · Lighting Schedules link · Tech Lighting's link · Plan Changes · LV / loads share links",
     hasData:(j)=>{ const pl=j.panelizedLighting||{};
       return (pl.loads||[]).length>0 || (pl.lutronRooms||[]).length>0 ||
-        Object.values(pl.cp4Loads||{}).some(a=>(a||[]).length>0) || !!(j.lightingLink||"").trim(); } },
-  { key:"tapeLight", label:"Tape Light", legacy:"noTapeLight",
+        Object.values(pl.cp4Loads||{}).some(a=>(a||[]).length>0) || linkFieldHasData(j,"lightingLink"); } },
+  { key:"keypads", label:"Keypads", parent:"panelized", legacy:plFlag("noKeypadLoads"),
+    where:"Panelized Lighting · Keypads (every floor)",
+    hasData:(j)=>{ const pl=j.panelizedLighting||{};
+      return ["mainKeypad","basementKeypad","upperKeypad"].some(k=>kpRowsHaveData(pl[k])) ||
+        Object.keys(pl).some(k=>k.endsWith("_keypad") && kpRowsHaveData(pl[k])) ||
+        Object.values(pl.confirmedKeypads||{}).some(Boolean); } },
+  { key:"panelLoads", label:"Panel Loads", parent:"panelized",
+    where:"Panelized Lighting · Panel Loads (lighting panels, modules, Savant slots)",
+    hasData:(j)=>{ const pl=j.panelizedLighting||{};
+      return Object.values(pl.cp4Loads||{}).some(a=>(a||[]).length>0) ||
+        Object.keys(pl.panelLayout||{}).length>0 || Object.keys(pl.savantV2||{}).length>0 ||
+        (pl.extraFloors||[]).length>0; } },
+  { key:"techLighting", label:"Tech Lighting's link", parent:"panelized",
+    legacy:plFlag("excludeFromLutronHub"), perm:"lutron.manage",
+    appliesTo:(j)=>(j.lightingSystem||"")==="Lutron",
+    where:"Lutron jobs · on Tech Lighting's hub link · Plan Changes · Copy hub link",
+    confirmOff:"Take this job off Tech Lighting's link? They won't see it on their hub link anymore, or be able to view its plan changes and chat. Nothing is deleted — turn it back on any time.",
+    hasData:()=>false },
+  { key:"lvCollab", label:"LV Collab Link", parent:"panelized",
+    where:"Panelized Lighting · Share collab link · LV Company Additions",
+    hasData:()=>false,
+    asyncHasData:(j)=>hrDocHasData(j.id, d=>lvCollabHasData(d.lightingCollab)) },
+  { key:"loadsShare", label:"Loads Share Link", parent:"panelized",
+    where:"Panelized Lighting · Share loads (AV programmer link)",
+    hasData:()=>false },
+  { key:"tapeLight", label:"Tape Light", legacy:topFlag("noTapeLight"),
     where:"Tape Light tab",
     hasData:(j)=>(j.tapeLights||[]).length>0 },
-  { key:"generator", label:"Generator", generator:true,
-    where:"Home Runs · Generator Load Selection + homeowner generator link",
-    hasData:()=>false },
+  { key:"generator", label:"Generator",
+    where:"Home Runs · Generator Load Selection · homeowner generator link",
+    hasData:()=>false,
+    asyncHasData:(j)=>hrDocHasData(j.id, d=>(d.genLoads||[]).length>0 || !!d.submitted) },
   { key:"panelSchedules", label:"Panel Schedules",
-    where:"Home Runs · Panel Schedules · Panel Schedules link",
-    hasData:(j)=>(j.electricalPanels||[]).some(p=>Object.keys(p.circuits||{}).length>0) || !!(j.panelLink||"").trim() },
+    where:"Home Runs · Panel Schedules + Create/Open schedule buttons · Panel Schedules link",
+    hasData:(j)=>(j.electricalPanels||[]).some(p=>Object.keys(p.circuits||{}).length>0) || linkFieldHasData(j,"panelLink") },
   { key:"liveView", label:"Live View Link",
-    where:"Home Runs · Share live view link",
+    where:"Home Runs · Share live view link (and the link itself)",
     hasData:()=>false },
   { key:"matterport", label:"Matterport",
-    where:"Job Info · Matterport · Matterport link · scan reminders",
-    hasData:(j)=>(j.matterportLinks||[]).some(l=>(l.url||"").trim()) || !!(j.matterportLink||"").trim() || !!j.matterportStatus },
+    where:"Job Info · Matterport · Matterport link · scan reminders · GC portal",
+    hasData:(j)=>(j.matterportLinks||[]).some(l=>(l.url||"").trim()) || linkFieldHasData(j,"matterportLink") || !!j.matterportStatus },
   { key:"tempPed", label:"Temp Pedestal",
-    where:"Job Info · Admin · Temp pedestal",
+    where:"Job Info · Admin · Temp pedestal · Job Prep board",
     hasData:(j)=>!!j.hasTempPed },
   { key:"materials", label:"Material Tracking",
-    where:"Rough + Finish · Material Tracking + Material Count List",
+    where:"Rough + Finish · Material Tracking + Count List · PO buttons on notes, punch, panels",
     hasData:(j)=>(j.roughMaterials||[]).length>0 || (j.finishMaterials||[]).length>0 ||
       (j.roughTally||[]).length>0 || (j.finishTally||[]).length>0 },
 ];
 const JOB_SECTION_BY_KEY = Object.fromEntries(JOB_SECTIONS.map(s => [s.key, s]));
 
-// Explicit hiddenSections entry wins; otherwise fall back to the legacy flag.
+// The switch's OWN state (ignores the parent). Legacy-backed switches read
+// the legacy flag; the rest read hiddenSections.
+const isSectionOwnHidden = (job, key) => {
+  if (!job) return false;
+  const s = JOB_SECTION_BY_KEY[key];
+  if (s?.legacy) return s.legacy.get(job);
+  return !!(job.hiddenSections || {})[key];
+};
+// Effective: hidden if this switch OR its parent is off.
 const isSectionHidden = (job, key) => {
   if (!job) return false;
-  const h = job.hiddenSections || {};
-  if (Object.prototype.hasOwnProperty.call(h, key)) return !!h[key];
-  const legacy = JOB_SECTION_BY_KEY[key]?.legacy;
-  return !!(legacy && job[legacy]);
+  const parent = JOB_SECTION_BY_KEY[key]?.parent;
+  return (parent ? isSectionHidden(job, parent) : false) || isSectionOwnHidden(job, key);
 };
+// Off Tech Lighting's hub / per-job page / Plan Changes / Monday digest.
+// functions/index.js techLightingWeeklyDigest mirrors this exact test.
+const offTechLightingLink = (job) => isSectionHidden(job, "techLighting");
+
+// "N hidden" for the panel header + Pre-Job Prep button. Counts only switches
+// turned off themselves — a child riding a hidden parent isn't a separate
+// decision — and only ones that apply to this job.
+const jobSectionsHiddenCount = (job) => JOB_SECTIONS.filter(s =>
+  (!s.appliesTo || s.appliesTo(job)) && isSectionOwnHidden(job, s.key) &&
+  !(s.parent && isSectionHidden(job, s.parent))).length;
 
 // Patch for one toggle. Always spreads the current map so a second switch
-// never wipes the first; mirrors the legacy flag for the two v1 sections.
+// never wipes the first; legacy-backed switches write their old flag too.
 const jobSectionPatch = (job, key, hidden) => {
   const patch = { hiddenSections: { ...(job?.hiddenSections || {}), [key]: !!hidden } };
   const legacy = JOB_SECTION_BY_KEY[key]?.legacy;
-  if (legacy) patch[legacy] = !!hidden;
+  if (legacy) Object.assign(patch, legacy.set(job || {}, hidden));
   return patch;
 };
 
@@ -24769,7 +24857,11 @@ function JobSectionsPanel({ job, u, identity }) {
   const [busyKey, setBusyKey] = useState("");
   const boxRef = useRef(null);
   const canEdit = can(identity, "job.sections");
-  const hiddenCount = JOB_SECTIONS.filter(s => isSectionHidden(job, s.key)).length;
+  // Only switches that apply to this job (Tech Lighting = Lutron jobs).
+  const visible = JOB_SECTIONS.filter(s => !s.appliesTo || s.appliesTo(job));
+  // Count only switches turned off themselves — a child riding a hidden
+  // parent isn't a separate decision.
+  const hiddenCount = jobSectionsHiddenCount(job);
 
   useEffect(() => {
     const h = () => {
@@ -24780,31 +24872,39 @@ function JobSectionsPanel({ job, u, identity }) {
     return () => window.removeEventListener('he-open-job-sections', h);
   }, []);
 
+  const canToggle = (s) => canEdit && (!s.perm || can(identity, s.perm));
+
   const toggle = async (s) => {
-    if (!canEdit || busyKey) return;
-    const turningOff = !isSectionHidden(job, s.key);
+    if (!canToggle(s) || busyKey) return;
+    if (s.parent && isSectionHidden(job, s.parent)) return; // parent is off
+    const turningOff = !isSectionOwnHidden(job, s.key);
     if (turningOff) {
-      let hasData = false;
-      try {
-        if (s.generator) {
-          setBusyKey(s.key);
-          const snap = await getDoc(doc(db, 'homeowner_requests', job.id));
-          const d = snap.exists() ? snap.data() : {};
-          hasData = (d.genLoads || []).length > 0 || !!d.submitted;
-        } else {
-          hasData = !!s.hasData(job);
-        }
-      } catch (e) {
-        hasData = true; // can't tell (offline) — ask rather than assume empty
-      } finally { setBusyKey(""); }
-      if (hasData) {
-        const ok = await showConfirm({
-          message: `${s.label} already has info on this job. Hide it anyway? Nothing gets deleted — turn it back on any time and it all comes back.`,
-          confirmLabel: "Hide it", cancelLabel: "Keep showing" });
+      if (s.confirmOff) {
+        const ok = await showConfirm({ message: s.confirmOff, danger: true,
+          confirmLabel: "Turn it off", cancelLabel: "Keep it on" });
         if (!ok) return;
+      } else {
+        let hasData = false;
+        try {
+          if (s.asyncHasData) {
+            setBusyKey(s.key);
+            hasData = !!s.hasData(job) || !!(await s.asyncHasData(job));
+          } else {
+            hasData = !!s.hasData(job);
+          }
+        } catch (e) {
+          hasData = true; // can't tell (offline) — ask rather than assume empty
+        } finally { setBusyKey(""); }
+        if (hasData) {
+          const ok = await showConfirm({
+            message: `${s.label} already has info on this job. Hide it anyway? Nothing gets deleted — turn it back on any time and it all comes back.`,
+            confirmLabel: "Hide it", cancelLabel: "Keep showing" });
+          if (!ok) return;
+        }
       }
     }
     u(jobSectionPatch(job, s.key, turningOff));
+    if (s.key === "techLighting") toast.success(turningOff ? "Removed from Tech Lighting's link" : "Back on Tech Lighting's link");
   };
 
   return (
@@ -24821,26 +24921,34 @@ function JobSectionsPanel({ job, u, identity }) {
       {open && (
         <div>
           <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
-            Turn off anything this job doesn&apos;t have, so it stops showing on the job card.
-            Nothing is deleted — turn it back on any time (say a generator gets added during rough) and everything comes back.
+            Turn off anything this job doesn&apos;t have. It disappears everywhere — the job card, share links,
+            the GC portal, reminders. Nothing is deleted — turn it back on any time (say a generator gets added
+            during rough) and everything comes back.
             {!canEdit && " Office or foreman can change these."}
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            {JOB_SECTIONS.map(s => {
-              const on = !isSectionHidden(job, s.key);
+            {visible.map(s => {
+              const parentOff = !!(s.parent && isSectionHidden(job, s.parent));
+              const on = !isSectionOwnHidden(job, s.key);
+              const shownOn = on && !parentOff;
+              const editable = canToggle(s) && !parentOff;
+              const parentLabel = s.parent ? JOB_SECTION_BY_KEY[s.parent]?.label : "";
               return (
                 <label key={s.key}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:8,
-                    background:on?C.surface:`${C.dim}12`,border:`1px solid ${on?C.border:C.dim+"44"}`,
-                    cursor:canEdit?"pointer":"default",opacity:busyKey===s.key?0.6:1}}>
-                  <input type="checkbox" checked={on} disabled={!canEdit || !!busyKey}
+                    marginLeft:s.parent?22:0,
+                    background:shownOn?C.surface:`${C.dim}12`,border:`1px solid ${shownOn?C.border:C.dim+"44"}`,
+                    cursor:editable?"pointer":"default",opacity:busyKey===s.key?0.6:(parentOff?0.55:1)}}>
+                  <input type="checkbox" checked={shownOn} disabled={!editable || !!busyKey}
                     onChange={()=>toggle(s)}
                     style={{accentColor:C.teal,width:16,height:16,flexShrink:0}}/>
                   <span style={{flex:1,minWidth:0}}>
-                    <span style={{display:"block",fontSize:13,fontWeight:600,color:on?C.text:C.dim}}>
-                      {s.label}{on ? "" : " — hidden"}
+                    <span style={{display:"block",fontSize:13,fontWeight:600,color:shownOn?C.text:C.dim}}>
+                      {s.label}{parentOff ? ` — off with ${parentLabel}` : (on ? "" : " — hidden")}
                     </span>
-                    <span style={{display:"block",fontSize:10,color:C.muted,marginTop:1}}>{s.where}</span>
+                    <span style={{display:"block",fontSize:10,color:C.muted,marginTop:1}}>
+                      {s.where}{s.perm && canEdit && !can(identity, s.perm) ? " · office only" : ""}
+                    </span>
                   </span>
                 </label>
               );
@@ -27805,7 +27913,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   items={job.roughInstructions}
                   onChange={v=>u({roughInstructions:v})}
                   color={C.rough}
-                  onAddMaterial={(text,source)=>{
+                  onAddMaterial={isSectionHidden(job,"materials") ? undefined : (text,source)=>{
                     const orders = job.roughMaterials||[];
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
                     if(openEntry){ u({roughMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)}); }
@@ -27830,7 +27938,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onJumpToRT={onJumpToRT}
                   assigneeOptions={punchAssigneeOptions}
                   myName={identity?.name}
-                  onAddMaterial={(text, source)=>{
+                  onAddMaterial={isSectionHidden(job,"materials") ? undefined : (text, source)=>{
                     const orders = job.roughMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
                       o.needsOrder&&!o.ordered&&!o.pickedUp&&
@@ -28104,7 +28212,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   items={job.finishInstructions}
                   onChange={v=>u({finishInstructions:v})}
                   color={C.finish}
-                  onAddMaterial={(text,source)=>{
+                  onAddMaterial={isSectionHidden(job,"materials") ? undefined : (text,source)=>{
                     const orders = job.finishMaterials||[];
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
                     if(openEntry){ u({finishMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)}); }
@@ -28125,7 +28233,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onJumpToRT={onJumpToRT}
                   assigneeOptions={punchAssigneeOptions}
                   myName={identity?.name}
-                  onAddMaterial={(text, source)=>{
+                  onAddMaterial={isSectionHidden(job,"materials") ? undefined : (text, source)=>{
                     const orders = job.finishMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
                       o.needsOrder&&!o.ordered&&!o.pickedUp&&
@@ -28227,7 +28335,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}
               hideGenerator={isSectionHidden(job,"generator")}
               hidePanelSchedules={isSectionHidden(job,"panelSchedules")}
-              hideLiveView={isSectionHidden(job,"liveView")}/>
+              hideLiveView={isSectionHidden(job,"liveView")}
+              hideMaterials={isSectionHidden(job,"materials")}/>
 
           )}
 
@@ -28242,58 +28351,30 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   it's turned off (e.g. from Plan Changes). */}
               <HiddenSectionBanner job={job} sectionKey="panelized" u={u} identity={identity}/>
 
-              {/* On Tech Lighting's link — office-only master switch for whether
-                  this Lutron job appears on the ?lightinghub= index AND whether
-                  its ?lutronshare= page renders. Same flag as the Plan Changes
-                  view's hide/Restore (excludeFromLutronHub) — one source of
-                  truth. Unchecking requires a confirm (Koy: an accidental
-                  uncheck must not silently pull a job off the partner's link). */}
-              {(job.lightingSystem||"Control 4")==="Lutron" && (() => {
-                const hubOn = !job.panelizedLighting?.excludeFromLutronHub;
-                const canManage = can(identity,"lutron.manage");
-                const setHubOn = async (next) => {
-                  if (!next) {
-                    const ok = await showConfirm({
-                      title: "Take this job off Tech Lighting's link?",
-                      message: "They won't see this job on their hub link anymore, or be able to view its plan changes and chat. You can turn it back on any time.",
-                      danger: true,
-                      confirmLabel: "Take it off the link",
-                    });
-                    if (!ok) return;
-                  }
-                  u({panelizedLighting:{...job.panelizedLighting, excludeFromLutronHub: !next}});
-                  toast.success(next ? "Back on Tech Lighting's link" : "Removed from Tech Lighting's link");
-                };
-                return (
-                  <div style={{marginBottom:12,padding:"8px 12px",background:hubOn?C.surface:`${C.dim}15`,
-                    border:`1px solid ${hubOn?C.border:C.dim+"55"}`,borderRadius:8,
-                    display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                    <label style={{display:"inline-flex",alignItems:"center",gap:8,
-                      cursor:canManage?"pointer":"not-allowed",fontSize:12,color:C.text,fontWeight:600,
-                      opacity:canManage?1:0.7}}>
-                      <input type="checkbox" checked={hubOn} disabled={!canManage}
-                        onChange={e=>canManage && setHubOn(e.target.checked)}
-                        style={{cursor:canManage?"pointer":"not-allowed"}}/>
-                      On Tech Lighting's link
-                    </label>
-                    <span style={{fontSize:10,color:hubOn?C.dim:C.orange,fontStyle:"italic"}}>
-                      {hubOn ? "They can see this job's plan changes and chat on their link."
-                             : "Hidden from Tech Lighting — they can't see this job."}
-                    </span>
-                  </div>
-                );
-              })()}
+              {/* v440: the "On Tech Lighting's link" checkbox that sat here moved
+                  to Job Info → Job Sections (sub-switch of Panelized Lighting,
+                  still office-only via lutron.manage, same confirm). It writes
+                  the SAME flag (panelizedLighting.excludeFromLutronHub) the Plan
+                  Changes view's Hide/Restore uses — one source of truth. */}
 
               {/* Plan Changes log — moved to the TOP of the tab (Koy 2026-07-09:
                   "needs to be at the top so it's easily visible to the crews").
                   Crews open this tab to log what changed in the field; making
                   them scroll past Loads/Keypads/Panel Loads buried it. */}
-              {(job.lightingSystem||"Control 4")==="Lutron" && (
+              {/* v440: off Tech Lighting's link → the log hides too, UNLESS changes
+                  were already logged (never hide someone's history out from
+                  under them). */}
+              {(job.lightingSystem||"Control 4")==="Lutron" &&
+                (!offTechLightingLink(job) || (job.panelizedLighting?.lutronRooms||[]).some(r=>(r.items||[]).length>0)) && (
                 <LutronRoomsSection job={job} u={u} planChangeAcks={planChangeAcks} planChangeThreads={planChangeThreads}/>
               )}
 
-              {/* Share Collab Link */}
+              {/* Share Collab Link — v440: collab half hides with Job Sections →
+                  LV Collab Link, hub half with Tech Lighting's link; the row
+                  disappears when both are off. */}
+              {(!isSectionHidden(job,"lvCollab") || ((job.lightingSystem||"Control 4")==="Lutron" && !offTechLightingLink(job))) && (
               <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                {!isSectionHidden(job,"lvCollab") && (<>
                 <button onClick={()=>{
                   const link=`${window.location.origin}/?lighting=${job.id}`;
                   navigator.clipboard.writeText(link).then(()=>toast.success('Lighting collab link copied! The low voltage company can view assignments and add their module/channel info.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
@@ -28303,9 +28384,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
                 <HelpDot section="lightinglinks"/>
-                {(job.lightingSystem||"Control 4")==="Lutron" && (
+                </>)}
+                {(job.lightingSystem||"Control 4")==="Lutron" && !offTechLightingLink(job) && (
                   <>
-                    <span style={{width:1,height:16,background:C.border}}/>
+                    {!isSectionHidden(job,"lvCollab") && <span style={{width:1,height:16,background:C.border}}/>}
                     <button onClick={()=>{
                       const link=`${window.location.origin}/?lightinghub=1`;
                       navigator.clipboard.writeText(link).then(()=>toast.success('Hub link copied! One link for the plans company — lists every Lutron job, no re-sending needed as new jobs start.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
@@ -28317,6 +28399,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </>
                 )}
               </div>
+              )}
 
               {/* Lighting Control System Selector */}
 
@@ -28771,7 +28854,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     the opposite of useful. Still shown for Control4/Savant/
                     Crestron, where Homestead does the engineering and an AV
                     programmer genuinely needs this list. */}
-                {(job.lightingSystem||"Control 4")!=="Lutron" && (
+                {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (
                   <button title="Copy a read-only link to send the AV programmer"
                     onClick={()=>{
                       const link = `${window.location.origin}/?loads=${job.id}`;
@@ -28782,7 +28865,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     Share loads
                   </button>
                 )}
-                {(job.lightingSystem||"Control 4")!=="Lutron" && (
+                {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (
                   <HelpDot section="lightinglinks"/>
                 )}
               </>}/>
@@ -28865,41 +28948,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );
               })()}
 
-              {/* Keypad Loads — entire section collapses when
-                  job.panelizedLighting.noKeypadLoads is true. Toggle button
-                  lives inline with the SectionHead so it's discoverable next
-                  to the section it controls. When hidden, a small banner
-                  takes its place with a "Show" button to reopen. All keypad
-                  data on the job doc stays put when hidden — flip the toggle
-                  back off and saved assignments come right back. */}
-              {job.panelizedLighting?.noKeypadLoads && (
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
-                  background:`${C.surface}`,border:`1px dashed ${C.border}`,borderRadius:8,
-                  padding:"10px 14px",marginTop:8,marginBottom:14}}>
-                  <div style={{fontSize:12,color:C.dim,fontStyle:"italic"}}>
-                    Keypad loads hidden — this system doesn't use keypad-driven loads.
-                  </div>
-                  <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: false}})}
-                    style={{background:"none",border:`1px solid ${sysAccentColor(job)}`,color:sysAccentColor(job),
-                      borderRadius:6,padding:"4px 12px",fontSize:11,fontWeight:700,
-                      cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
-                    Show keypads
-                  </button>
-                </div>
-              )}
-              {!job.panelizedLighting?.noKeypadLoads && (<>
-              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={sysAccentColor(job)}
-                action={
-                  <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: true}})}
-                    title="Hide keypad loads section (for systems without keypads)"
-                    style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,
-                      borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:600,
-                      cursor:"pointer",fontFamily:"inherit",
-                      display:"inline-flex",alignItems:"center",gap:4}}>
-                    <Icon name="eye" size={11} stroke={2}/>
-                    No keypad loads
-                  </button>
-                }/>
+              {/* Keypad Loads — v440: the inline "No keypad loads / Show keypads"
+                  buttons became Job Info → Job Sections → Keypads (same flag,
+                  panelizedLighting.noKeypadLoads, so jobs that already had
+                  keypads hidden stay hidden and the export still honors it).
+                  All keypad data stays put when hidden. */}
+              {!isSectionHidden(job,"keypads") && (<>
+              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={sysAccentColor(job)}/>
 
               {(()=>{
                 // Build assigned names set to filter from keypad/module suggestions
@@ -28964,6 +29019,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </>);})()}
               </>)}
 
+              {/* v440: Job Sections → Panel Loads hides everything from here to
+                  LV Company Additions (panels, modules, Savant slots, + Add
+                  Panel). cp4Loads / panelLayout / savantV2 are untouched. */}
+              {!isSectionHidden(job,"panelLoads") && (<>
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={sysAccentColor(job)}/>
 
               {(()=>{
@@ -29397,9 +29456,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                 );
               })()}
+              </>)}
 
-              {/* LV Company Additions */}
-              {lvCollab&&(()=>{
+              {/* LV Company Additions — v440: hides with Job Sections → LV Collab Link */}
+              {lvCollab&&!isSectionHidden(job,"lvCollab")&&(()=>{
                 const hasAny = [
                   ...(lvCollab.mainKeypad||[]),
                   ...(lvCollab.basementKeypad||[]),
@@ -30316,7 +30376,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     color:C.teal,fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",display:"inline-flex",alignItems:"center",gap:6}}>
                   Set job sections (generator, lighting, tape light…)
-                  {(()=>{const n=JOB_SECTIONS.filter(x=>isSectionHidden(job,x.key)).length;
+                  {(()=>{const n=jobSectionsHiddenCount(job);
                     return n>0?<span style={{color:C.dim,fontWeight:400}}>· {n} hidden</span>:null;})()}
                   <span aria-hidden>↓</span>
                 </button>
@@ -33523,7 +33583,7 @@ function buildJobActivity(job, cfg) {
     };
   });
   const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish")];
-  if (matsAll.length) groups.push({ key:"materials", label:"Materials & POs", items: matsAll });
+  if (matsAll.length && !isSectionHidden(job, "materials")) groups.push({ key:"materials", label:"Materials & POs", items: matsAll }); // v440
 
   // ── QUESTIONS ─────────────────────────────────────────────────────
   // Open homeowner-style questions per phase. job.roughQuestions / finishQuestions
@@ -45989,6 +46049,19 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
 }
 
 // ── Homeowner Generator Load Selection Page ──────────────────
+// v440: an outside link (homeowner generator, live view, loads, LV collab)
+// for a section turned off in Job Info → Job Sections. Same wording as the
+// Tech Lighting page when a job is pulled off their link. Read-only — the
+// section's data is untouched, and turning it back on revives the same link.
+function SectionNotSharedPage() {
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:'#5E6670',background:'#EEF0F3',boxSizing:'border-box'}}>
+      <div style={{fontSize:16,fontWeight:700,color:'#1B1F24'}}>This isn't being shared right now</div>
+      <div style={{fontSize:13,maxWidth:340,lineHeight:1.6}}>Homestead Electric has turned this off for this job. If you think that's a mistake, give them a call.</div>
+    </div>
+  );
+}
+
 function HomeownerPage({ jobId }) {
   const [job,        setJob]        = useState(null);
   const [genLoads,   setGenLoads]   = useState([]);
@@ -46097,6 +46170,7 @@ function HomeownerPage({ jobId }) {
 
   if(loading) return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:14,color:'#8A929D'}}>Loading…</div></div>;
   if(error)   return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center',padding:32,textAlign:'center'}}><div style={{fontSize:14,color:'#B23A3A'}}>{error}</div></div>;
+  if(job && isSectionHidden(job,"generator")) return <SectionNotSharedPage/>; // v440
   if(submitted) return (
     <div style={{...base,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:40,textAlign:'center'}}>
       <div style={{width:56,height:56,borderRadius:'50%',background:'#ECF2EE',border:'0.5px solid #CDE6D7',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,marginBottom:20}}>✓</div>
@@ -46335,6 +46409,7 @@ function HomeRunsSharePage({ jobId }) {
 
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A',fontSize:14}}>{error}</div>;
+  if(job && isSectionHidden(job,"liveView")) return <SectionNotSharedPage/>; // v440
 
   const hr = job?.homeRuns || {};
   const floors = [
@@ -46422,6 +46497,7 @@ function LoadsSharePage({ jobId }) {
 
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A',fontSize:14}}>{error}</div>;
+  if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"loadsShare"))) return <SectionNotSharedPage/>; // v440
 
   const loads = allSavantLoadsForJob(job);
   const baseline = job?.panelizedLighting?.baseline || null;
@@ -46623,6 +46699,7 @@ function LightingSharePage({ jobId }) {
 
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A'}}>{error}</div>;
+  if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"lvCollab"))) return <SectionNotSharedPage/>; // v440
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:SP.bg,minHeight:'100vh'}}>
@@ -46819,7 +46896,9 @@ function LightingHubPage() {
       // before this workflow started). See LutronAdditionsView for the toggle.
       // Jobs with changes Tech Lighting hasn't marked incorporated sort first
       // (most waiting on top), so one glance shows where work is pending.
-      setJobsList(all.filter(j => (j.lightingSystem||'')==='Lutron' && !j.panelizedLighting?.excludeFromLutronHub)
+      // v440: offTechLightingLink = the Tech Lighting switch OR Panelized
+      // Lighting turned off in Job Sections (same test as the Monday digest).
+      setJobsList(all.filter(j => (j.lightingSystem||'')==='Lutron' && !offTechLightingLink(j))
         .map(j => {
           const items = (j.panelizedLighting?.lutronRooms||[]).flatMap(r => r.items||[]);
           const acks = ackMap[j.id] || {};
@@ -46992,7 +47071,7 @@ function LutronAdditionsSharePage({ jobId }) {
   // Honor the office's "On Tech Lighting's link" switch on DIRECT links too —
   // without this, a bookmarked ?lutronshare= URL would keep working after the
   // job was taken off the hub, making the internal checkbox's promise a lie.
-  if(job?.panelizedLighting?.excludeFromLutronHub) return (
+  if(job && offTechLightingLink(job)) return (
     <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:'#5E6670',background:'#EEF0F3',boxSizing:'border-box'}}>
       <div style={{fontSize:16,fontWeight:700,color:'#1B1F24'}}>This job isn't being shared right now</div>
       <div style={{fontSize:13,maxWidth:340,lineHeight:1.6}}>Homestead Electric has paused sharing for this job. If you think that's a mistake, give them a call.</div>
@@ -48695,12 +48774,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v439
+**Last manifest update:** 2026-09-24 · App SW version: v440
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Job Sections round 2 — Panelized Lighting sub-switches + "off means gone everywhere"** · 'shipped 2026-09-24' · 'SW v440' · Koy: *"I really need you to search harder so that we can clean up jobs and not have extra shit in jobs that don't need it"* + *"What about on Tech Lighting's link and panelized lighting?"* + *"this is all going to start on, right? Nothing's going to change on any existing jobs."* **Five new switches under Panelized Lighting** (indented; off with the parent; counted only when turned off themselves): **Keypads** (replaces the in-tab "No keypad loads / Show keypads" buttons — same flag 'panelizedLighting.noKeypadLoads', so the export still honors it), **Panel Loads** (the whole panel/module/Savant section + "+ Add Panel"), **Tech Lighting's link** (Lutron jobs only, office-only via 'lutron.manage', same confirm; replaces the checkbox at the top of the tab — same flag 'panelizedLighting.excludeFromLutronHub' the Plan Changes view's Hide/Restore writes; off also hides Copy hub link and the Plan Changes log unless changes are already logged), **LV Collab Link** (Share collab row + LV Company Additions; has-data checks 'homeowner_requests.lightingCollab'), **Loads Share Link** (Share loads). Registry gains 'parent', 'appliesTo', 'perm', 'confirmOff', 'asyncHasData', and legacy '{get,set}' accessors — **a legacy-backed switch reads its old flag as the source of truth** (panelized/tapeLight/keypads/techLighting), toggling writes both. **A hidden section is now gone EVERYWHERE, not just on the card:** Tech Lighting's hub ('?lightinghub'), their per-job page ('?lutronshare'), the Plan Changes view and the Monday 'techLightingWeeklyDigest' all drop jobs with Panelized off ('offTechLightingLink'); the four outside links — homeowner generator ('?homeowner'), live view ('?homeruns'), loads ('?loads'), LV collab ('?lighting') — show a new 'SectionNotSharedPage' ("This isn't being shared right now") while their section is off; the GC portal mirror ('gcPortal.matterportView') sends an empty Matterport when hidden (portal shows nothing, 'gcPortalSubmit' refuses a scan date) and 'gcNotify' skips the "Matterport ready" email; the Job Prep board reads a hidden Temp Pedestal as N/A; Material Tracking hidden removes the Job Notes **PO** promote chip, the punch "Material needed" box ('onAddMaterial' undefined on both punch lists + legacy instructions), Home Runs panel-card **+ Add to PO**, the Needs Attention unsent-PO rows and the Activity "Materials & POs" group; Panel Schedules hidden removes the panel-card **Create / Open Panel Schedule** button and "+ Add Panel" no longer creates an invisible schedule. 'hasData' for Matterport / Lighting / Panel Schedules links now also reads 'linkSections.*'. SOPs updated: jobinfo, panelizedlighting, lightinglinks, homeruns. Tests: gcportal-test +2, gcnotify-test +1. **Needs 'firebase deploy --only functions'** (onJobUpdate + every gcPortal* callable rebuild the portal mirror; techLightingWeeklyDigest; dailyMatterportChase from v439). **Why it won't lose data:** no new field (still 'hiddenSections' + the four pre-existing flags); every switch starts ON and jobs that already had 'noKeypadLoads' / 'excludeFromLutronHub' / 'noPanelizedLighting' / 'noTapeLight' set show that switch OFF — the exact state they were already in; hiding stays render/filter-only (no section data is cleared or moved, a paused outside link revives on turn-on); the portal change only blanks the projected Matterport view for hidden jobs, never the job; no rules change.
 - **Job Sections — hide the parts of a job card a job doesn't have** · 'shipped 2026-09-24' · 'SW v439' · Koy: *"get rid of sections of a job card if they're not relevant to that job at all (things like panelized lighting, generator link…)"* + *"more hidden towards the bottom, so people aren't clicking things on and off by accident"* + *"foremen need to have it too… I can still go in and add, say, a generator section if one gets added during the rough-in."* New **Job Sections** panel, the LAST thing on Job Info, collapsed every time the job opens (header reads "Job Sections · N hidden"). Eight switches, each driven by the shared registry 'JOB_SECTIONS': **Panelized Lighting** (tab + Lighting Schedules link), **Tape Light** (tab), **Generator** (Home Runs → Generator Load Selection + homeowner link), **Panel Schedules** (Home Runs section + Panel Schedules link), **Live View Link** (Home Runs share row), **Matterport** (Job Info block + Matterport link + every scan reminder: 'matterportScanNeeded', both auto-flips to "needs", the job's Open-items group, the weekly rollup, and the server 'dailyMatterportChase'), **Temp Pedestal** (Admin row), **Material Tracking** (Material Tracking + Count List on Rough and Finish). A hidden section's tab leaves the tab bar entirely ('tabsForJob(job, activeTab)' — a deep link straight into a hidden tab still lands, with a "turned off for this job · Turn back on" banner). Turning a section OFF that already holds data asks first (generator checks 'homeowner_requests/{jobId}'; offline = assume data and ask); turning ON never asks. Pre-Job Prep gets a **Set job sections** jump button (a button, NOT a checklist item — adding to 'PREP_CHECKLIST_ITEMS' would flip every already-complete job back to prep-incomplete). Permission 'job.sections' = admin/manager/standard; leads/crew see the list read-only. Replaces the v1 in-tab "No panelized lighting / No tape light" checkboxes (which only moved the tab to the end and got flipped by accident); those jobs read as hidden via the 'legacy' flag and toggling writes both. SOPs updated: jobinfo, homeruns, panelizedlighting, tapelight, planslinks, rough. Harness 'needs-dryrun.js' +2 asserts. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** one new field, 'hiddenSections' (a '{key:true/false}' map inside the job's 'data', so the loader passes it through with no spread change), always written by spreading the existing map so one switch can't clobber another; hiding is render-only — no section's data ('panelizedLighting', 'tapeLights', 'genLoads', 'electricalPanels', 'matterportLinks', materials…) is read-for-write, cleared, or moved, so turning a section back on restores it exactly; the Matterport gates only NARROW when the existing 'matterportStatus:"needs"' is auto-set / surfaced, never clearing a stored value; no rules change.
 - **Questions — add a question from inside any room** · 'shipped 2026-09-23' · 'SW v438' · Koy: *"I need to be able to select a room, drop the room down, and then add a question from there… so you don't have to retype the room in every time."* In **By room** view every open room group (and General) now ends with its own **Add a question in <room>…** box — Enter or **+** adds the question with that room pre-filled. 'QAList' add logic is one writer ('addQuestion(text, room)') shared by the bottom add box and the per-room boxes, so the new question is byte-identical to one added the old way (same recipient default, 'addedBy'/'addedAt', room key omitted when General, and the room auto-opens). Per-room drafts are kept separately so typing in one room doesn't leak into another. The bottom box stays. Guide 'questions.html' updated. **Why it won't lose data:** same single append through the existing 'onChange([...questions, q])' path; no new fields.
 - **Set a plan sheet's floor from the inbox** · 'shipped 2026-09-23' · 'SW v437' · Koy didn't see *Fill floor/room* on a job whose FieldInk sheets are just "PG 1" — FieldInk sends no floor when the crew never set one for the sheet, so there was nothing to fill (rooms were already stored on import since v403, now visible in v436's Room box). Each sheet header in **Incoming from FieldInk** now has a **Set floor…** menu (the Loads list's floor sections): choosing one writes ONLY 'loads.<id>.office.floor' on the bridge for every load on that sheet via 'publishCcLoadOfficeMany' (office-owned key, already preferred by import + backfill), and fills BLANK floors on that sheet's already-imported Loads-list rows in one 'u()' patch; the header shows the office floor once set (the plan's floor, if any, is shown as the default). Guide updated. **Why it won't lose data:** the bridge write names only the office-owned 'office.floor' of the listed loads (merge-set, same shape as v400 suggestions); the job write only fills empty 'location' on fieldink-origin rows.
@@ -50927,8 +51007,11 @@ const JOBPREP_ADMIN_ITEMS = [
   { key:"tempPed",    boolKey:"hasTempPed",  chip:"TEMP PED", label:"Temp pedestal on site" },
 ];
 // done = existing boolean true; N/A = adminNA flag (boolean false); else outstanding.
+// v440: Temp Pedestal turned off in Job Info → Job Sections reads as N/A, so
+// the board stops counting it as outstanding on jobs that have no ped.
 const adminItemState = (job, item) =>
-  job[item.boolKey] ? "done" : ((job.adminNA||{})[item.key] ? "na" : "todo");
+  job[item.boolKey] ? "done"
+    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && isSectionHidden(job, "tempPed")) ? "na" : "todo");
 const adminAllHandled = (job) => JOBPREP_ADMIN_ITEMS.every(it => adminItemState(job, it) !== "todo");
 // The tab's job universe: full jobs only, until finish completes; next start on top.
 // roughProjectedStart is M/D/YYYY (DateInp storage) with legacy YYYY-MM-DD mixed in —

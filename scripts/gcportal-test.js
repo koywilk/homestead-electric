@@ -148,6 +148,14 @@ const v = projectJobForPortal("1773092930059", FIXTURE);
 t("returns a view", !!v);
 t("identity fields", v.id === "1773092930059" && v.name === "Kwellerish Residence" && v.simproNo === "1107");
 t("archived excluded", projectJobForPortal("x", { ...FIXTURE, archived: true }) === null);
+t("v440: Matterport hidden in Job Sections -> portal gets no status or links", (() => {
+  const h = projectJobForPortal("x", { ...FIXTURE, hiddenSections: { matterport: true } });
+  return h && h.matterport && h.matterport.status === "" && h.matterport.links.length === 0;
+})());
+t("v440: Matterport turned back on -> status + links return", (() => {
+  const h = projectJobForPortal("x", { ...FIXTURE, hiddenSections: { matterport: false } });
+  return h && h.matterport.status === "scheduled" && h.matterport.links.length > 0;
+})());
 
 console.log("leak-guard (forbidden content must be absent):");
 const json = JSON.stringify(v).toLowerCase();
