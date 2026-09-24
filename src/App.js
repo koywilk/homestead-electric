@@ -46212,6 +46212,15 @@ function HomeownerPage({ jobId }) {
   const chosenItems  = items.filter(it=>it.status==='chosen');
   const pendingItems = items.filter(it=>it.status==='pending');
   const offItems     = items.filter(it=>it.status==='off');
+  // v445 (Koy: "homerun notes to be shown on the generator link as well"): the
+  // crew's home-run note, looked up LIVE by the gen load's hrId from the job's
+  // own home runs (read-only; never copied into genLoads, so it's always current
+  // and the homeowner's own `notes` field stays theirs). Plain derivation, no hook.
+  const hrNotes = {};
+  flattenHomeRuns(job && job.homeRuns).forEach(r => { const t = String(r.note || '').trim(); if (r.id && t) hrNotes[r.id] = t; });
+  const hrNoteEl = (it) => (it && it.hrId && hrNotes[it.hrId])
+    ? <span style={{flexBasis:'100%',order:99,fontSize:11,fontWeight:400,color:'#6E7682',marginTop:1}}>{hrNotes[it.hrId]}</span>
+    : null;
   // Counter (item 3, client): circuits + slot fill from the REAL placement so
   // tandems/quads are reflected (matches the office panel schedule).
   const genUse = genPanelUsage(chosenItems);
@@ -46346,7 +46355,7 @@ function HomeownerPage({ jobId }) {
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                  {it.name||'Unnamed'}
+                  {it.name||'Unnamed'}{hrNoteEl(it)}
                   {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                   {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
@@ -46384,7 +46393,7 @@ function HomeownerPage({ jobId }) {
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                      {it.name||'Unnamed'}
+                      {it.name||'Unnamed'}{hrNoteEl(it)}
                   {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                       <span style={{fontSize:9,fontWeight:700,color:A,background:AB,
@@ -46421,7 +46430,7 @@ function HomeownerPage({ jobId }) {
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:500,color:'#5E6670',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                      {it.name||'Unnamed'}
+                      {it.name||'Unnamed'}{hrNoteEl(it)}
                   {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                       {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
@@ -48866,12 +48875,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v444
+**Last manifest update:** 2026-09-24 · App SW version: v445
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Generator link shows home run notes** · 'shipped 2026-09-24' · 'SW v445' · Koy: *"i need homerun notes to be shown on the generator link as well."* The homeowner generator page ('HomeownerPage') now shows each load's home-run 'note' under its name on all three lists (on the generator / recommended / not on it). The note is looked up LIVE from the job's own 'homeRuns' by the gen load's 'hrId' ('flattenHomeRuns') — never copied into 'genLoads', so it's always current and the homeowner's own per-load 'notes' field is untouched. Loads with no home run (manual adds) show nothing extra. Guide 'generatorlink.html' warns to keep internal comments out of home run notes since the homeowner sees them. **Why it won't lose data:** display-only; reads the job doc the page already loaded.
 - **My Day — the replies button looks like a button** · 'shipped 2026-09-24' · 'SW v444' · Koy: *"its hard to tell that you can click on the '2 updates' button in my day to see the replies… can we make that more obvious."* The grey '· N updates' text under a task's latest update is now an outlined accent pill **💬 N replies ▾** (shown whenever a task has any update, even one) that flips to **Hide replies ▴** while the thread is open; tapping it — or the latest line, as before — toggles the full oldest-first thread. Hidden in Select mode. Guide 'myday.html' updated. **Why it won't lose data:** display-only.
 - **Dismiss all switched loads + who/when on every check-off** · 'shipped 2026-09-24' · 'SW v443' · Koy: *"i need a 'dismiss all normal switching' or something so i dont have to individually dismiss all the loads that are not panelized"* + *"just like if its checked off in the other section, show who checked it off and date."* **Incoming from FieldInk:** **Dismiss N switched** (header, with a confirm) hides every waiting non-panel load (switched / dimmer / tape) in ONE 'publishCcLoadOfficeMany' merge-set of 'office.dismissed:true' (the field isn't told, no job data); the Dismissed view gains **Restore all N**. **Stamps:** the shared checklist shows '✓ <who> · <date>' under every checked row — Home Runs from the existing 'statusBy'/'statusAt'; loads via new 'loadPulledPatch(on)' → 'pulled' + 'pulledBy' + 'pulledAt' (M/D/YYYY, cleared on untick), written by BOTH the Loads Ran card and the Loads list's ✓ column (whose checkbox tooltip now shows the stamp). Guide updated. **Why it won't lose data:** dismiss writes only the office-owned flag on the bridge; 'pulledBy'/'pulledAt' are additive fields on existing load rows through the same single 'u()' patches.
 - **Home Runs Pulled is checkable + Panelized Lighting gets a Loads Ran card** · 'shipped 2026-09-24' · 'SW v442' · Koy: *"we should be able to mark homeruns pulled from this drop down, right now its just view only. and that panelized lighting needs the exact same thing so its easy to see and mark off loads ran."* New shared 'PullChecklistSummary' (collapsed progress card → one A-Z list split Not done / Done, each row a checkbox). **Home Runs:** 'HomeRunsPullSummary' now uses it; ticking writes the SAME 'status:"Pulled"' + 'statusBy' + 'statusAt' the row editor's Pulled select writes (unticking clears them) via one 'onHRChange' floor patch; counts still come from the named rows so the header and list never drift. **Panelized Lighting:** a **Loads Ran** card at the top of the tab lists every named load on the Loads list (room · floor · panel, load type chip); ticking flips the SAME per-load 'pulled' flag as the Loads list's ✓ column. Guides 'homeruns.html' + 'panelizedlighting.html' updated. **Why it won't lose data:** both writes reuse existing fields and existing one-patch paths ('onHRChange' floor array / 'u({panelizedLighting})'); no new fields.
