@@ -2146,6 +2146,7 @@ function matterportScanNeeded(job) {
   if (!job) return false;
   if ((job.matterportStatus || "") === "complete") return false;
   if (job.matterportDismissed) return false;
+  if (job.hiddenSections?.matterport) return false; // v438: Job Sections → Matterport off
   if (job.matterportLinks?.length || job.matterportLink) return false;
   return parseStage(job.roughStage) >= 85 && parseStage(job.finishStage) === 0;
 }
@@ -4001,6 +4002,10 @@ const PERMISSIONS = {
   // (defaultAssigneeFor), so opening creation doesn't flood the head. The Needs
   // page's own add button keeps board.add (that page is foreman+ anyway).
   "tasks.create":           ["admin","manager","standard","limited"],
+  // Job Info → Job Sections (v438): hide/show optional parts of a job card
+  // (generator, panelized, tape light, …). Office + foremen (Koy 2026-09-24:
+  // "foremen need to have it too"); leads/crew see the list read-only.
+  "job.sections":           ["admin","manager","standard"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -6112,6 +6117,7 @@ const ICON_PATHS = {
   checkCircle:  <><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></>,
   dollarSign:   <><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
   eye:          <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+  eyeOff:       <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>,
   radio:        <><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M7.76 16.24a6 6 0 0 1 0-8.48"/><path d="M20.49 3.51a12 12 0 0 1 0 16.97"/><path d="M3.51 20.49a12 12 0 0 1 0-16.97"/></>,
   external:     <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></>,
 };
@@ -16822,7 +16828,7 @@ function HomeRunsPullSummary({namedFlat, pulled, total, pct}) {
 }
 
 
-function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
+function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [hoResponse,      setHoResponse]      = useState(null);
@@ -17503,6 +17509,9 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           Data lives on job.electricalPanels; READS homeRuns (fill + the
           stay-in-sync effect, e.g. a 240V flip re-poles an untouched fill)
           but never writes it. */}
+      {/* hide* props = Job Info → Job Sections (v438). Render-only: the
+          genLoads load/save and electricalPanels data are untouched. */}
+      {!hidePanelSchedules&&(
       <Section label="Panel Schedules" color={C.accent} defaultOpen={false}>
         <ElectricalPanelSchedules
           panels={electricalPanels || []}
@@ -17519,9 +17528,11 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             toast.success(`"${n}" added to the panel list.`);
           }}/>
       </Section>
+      )}
 
       {/* Generator Load Selection — starts collapsed so the section header is
           quick to scan; foremen can expand when they need to pick/review loads. */}
+      {!hideGenerator&&(
       <Section label="Generator Load Selection" color={C.accent} defaultOpen={false}>
         {hoResponse?.submitted&&(
           <div style={{background:`${C.green}12`,border:`1px solid ${C.green}44`,borderRadius:10,
@@ -17589,6 +17600,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           )}
         </div>
       </Section>
+      )}
 
       {/* Response modal */}
       {showModal&&hoResponse&&(
@@ -17658,6 +17670,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       )}
 
       {/* Share Live View */}
+      {!hideLiveView&&(
       <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <button onClick={()=>{
           const link=`${window.location.origin}/?homeruns=${jobId}`;
@@ -17669,6 +17682,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
         <HelpDot section="liveviewlink"/>
       </div>
+      )}
 
       {/* Panels */}
       {(()=>{
@@ -24414,7 +24428,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
         LINKS
       </div>
 
-      {LINK_FIELDS.map(([k,l])=>{
+      {LINK_FIELDS.filter(([k])=>!(LINK_FIELD_SECTION[k] && isSectionHidden(job, LINK_FIELD_SECTION[k]))).map(([k,l])=>{
 
         const links = (job.linkSections?.[k]) || (job[k] ? [{id:k+"-0", url:job[k]}] : []);
 
@@ -24632,27 +24646,211 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 
 // Default tab order. Panelized Lighting + Tape Light sit just after Home Runs
 // because on lighting-heavy jobs the foreman hops between Home Runs and the
-// lighting tabs constantly. On jobs with NO panelized lighting / NO tape
-// light, though, those tabs are clutter — so `tabsForJob(job)` below moves
-// them to the far right when job.noPanelizedLighting / job.noTapeLight is set.
+// lighting tabs constantly.
 const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","QC"];
 
-// Per-job tab order. Tabs the job doesn't use get shuffled to the end so the
-// leading edge of the tab bar stays focused on what that job actually needs.
-// Both flags default to undefined (= keep in original slot), so existing jobs
-// are unaffected until the foreman flips the toggle inside the lighting tab.
-const tabsForJob = (job) => {
-  if(!job) return TABS;
-  const hideP = !!job.noPanelizedLighting;
-  const hideT = !!job.noTapeLight;
-  if(!hideP && !hideT) return TABS;
-  const ordered = TABS.filter(t => !(hideP && t==="Panelized Lighting") && !(hideT && t==="Tape Light"));
-  if(hideP) ordered.push("Panelized Lighting");
-  if(hideT) ordered.push("Tape Light");
-  return ordered;
+// ── Job Sections (v438, Koy 2026-09-24) ──────────────────────────────────────
+// "get rid of sections of a job card if they're not relevant to that job at
+// all (things like panelized lighting, generator link…)". Each entry is one
+// on/off switch in Job Info → Job Sections (bottom of the tab, collapsed, so
+// nobody flips them by accident). Office + foremen ("job.sections").
+//
+// Stored as job.hiddenSections = { [key]: true } inside the job's `data` map,
+// so the loader passes it through with no spread change. HIDING NEVER DELETES:
+// every renderer below just skips the section; the fields it edits (tapeLights,
+// panelizedLighting, genLoads, electricalPanels, matterportLinks, …) are never
+// touched, so turning a section back on — say a generator added mid-rough —
+// brings everything back exactly as it was.
+//
+// `legacy`: the v1 per-tab checkboxes (job.noPanelizedLighting /
+// job.noTapeLight) only shoved the tab to the end of the bar. Those jobs now
+// read as hidden, and toggling here writes the legacy flag too so the two can
+// never disagree.
+//
+// `hasData(job)` powers the "this section has data on it — hide anyway?"
+// confirm. Generator data lives in homeowner_requests/{jobId}, not on the job,
+// so JobSectionsPanel checks that doc itself.
+const JOB_SECTIONS = [
+  { key:"panelized", label:"Panelized Lighting", legacy:"noPanelizedLighting",
+    where:"Panelized Lighting tab · Lighting Schedules link",
+    hasData:(j)=>{ const pl=j.panelizedLighting||{};
+      return (pl.loads||[]).length>0 || (pl.lutronRooms||[]).length>0 ||
+        Object.values(pl.cp4Loads||{}).some(a=>(a||[]).length>0) || !!(j.lightingLink||"").trim(); } },
+  { key:"tapeLight", label:"Tape Light", legacy:"noTapeLight",
+    where:"Tape Light tab",
+    hasData:(j)=>(j.tapeLights||[]).length>0 },
+  { key:"generator", label:"Generator", generator:true,
+    where:"Home Runs · Generator Load Selection + homeowner generator link",
+    hasData:()=>false },
+  { key:"panelSchedules", label:"Panel Schedules",
+    where:"Home Runs · Panel Schedules · Panel Schedules link",
+    hasData:(j)=>(j.electricalPanels||[]).some(p=>Object.keys(p.circuits||{}).length>0) || !!(j.panelLink||"").trim() },
+  { key:"liveView", label:"Live View Link",
+    where:"Home Runs · Share live view link",
+    hasData:()=>false },
+  { key:"matterport", label:"Matterport",
+    where:"Job Info · Matterport · Matterport link · scan reminders",
+    hasData:(j)=>(j.matterportLinks||[]).some(l=>(l.url||"").trim()) || !!(j.matterportLink||"").trim() || !!j.matterportStatus },
+  { key:"tempPed", label:"Temp Pedestal",
+    where:"Job Info · Admin · Temp pedestal",
+    hasData:(j)=>!!j.hasTempPed },
+  { key:"materials", label:"Material Tracking",
+    where:"Rough + Finish · Material Tracking + Material Count List",
+    hasData:(j)=>(j.roughMaterials||[]).length>0 || (j.finishMaterials||[]).length>0 ||
+      (j.roughTally||[]).length>0 || (j.finishTally||[]).length>0 },
+];
+const JOB_SECTION_BY_KEY = Object.fromEntries(JOB_SECTIONS.map(s => [s.key, s]));
+
+// Explicit hiddenSections entry wins; otherwise fall back to the legacy flag.
+const isSectionHidden = (job, key) => {
+  if (!job) return false;
+  const h = job.hiddenSections || {};
+  if (Object.prototype.hasOwnProperty.call(h, key)) return !!h[key];
+  const legacy = JOB_SECTION_BY_KEY[key]?.legacy;
+  return !!(legacy && job[legacy]);
 };
+
+// Patch for one toggle. Always spreads the current map so a second switch
+// never wipes the first; mirrors the legacy flag for the two v1 sections.
+const jobSectionPatch = (job, key, hidden) => {
+  const patch = { hiddenSections: { ...(job?.hiddenSections || {}), [key]: !!hidden } };
+  const legacy = JOB_SECTION_BY_KEY[key]?.legacy;
+  if (legacy) patch[legacy] = !!hidden;
+  return patch;
+};
+
+// Tabs owned by a section — hidden from the bar entirely when it's off.
+const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight" };
+
+// Per-job tab list. A hidden section's tab drops out of the bar. `activeTab`
+// keeps a hidden tab visible if something deep-linked straight into it (e.g.
+// the Plan Changes view opens "Panelized Lighting"), so the page never shows
+// content under a tab bar with nothing selected.
+const tabsForJob = (job, activeTab) =>
+  TABS.filter(t => !SECTION_TABS[t] || !isSectionHidden(job, SECTION_TABS[t]) || t === activeTab);
+
+// Link fields on Plans & Links owned by a section.
+const LINK_FIELD_SECTION = { lightingLink:"panelized", panelLink:"panelSchedules", matterportLink:"matterport" };
+
+// Pre-Job Prep's "Set job sections" row fires this; the panel opens + scrolls
+// itself into view. Same window-event pattern as showConfirm / openPhoto.
+const openJobSectionsPanel = () => window.dispatchEvent(new CustomEvent('he-open-job-sections'));
+
+// Shown at the top of a section's tab only when you land on it while it's off.
+function HiddenSectionBanner({ job, sectionKey, u, identity }) {
+  if (!isSectionHidden(job, sectionKey)) return null;
+  const s = JOB_SECTION_BY_KEY[sectionKey];
+  const canEdit = can(identity, "job.sections");
+  return (
+    <div style={{marginBottom:12,padding:"10px 12px",background:`${C.dim}15`,border:`1px solid ${C.dim}55`,
+      borderRadius:8,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <Icon name="eyeOff" size={14}/>
+      <span style={{flex:1,minWidth:180,fontSize:12,color:C.text}}>
+        <b>{s.label}</b> is turned off for this job, so this tab is hidden. Everything saved here is kept.
+      </span>
+      {canEdit && (
+        <button type="button" onClick={()=>u(jobSectionPatch(job, sectionKey, false))}
+          style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontSize:11,fontWeight:700,
+            padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>Turn back on</button>
+      )}
+    </div>
+  );
+}
+
+// Job Info → Job Sections. Bottom of the tab, collapsed every time the job
+// opens (Koy: "more hidden towards the bottom, so people aren't clicking things
+// on and off by accident"). Header shows the hidden count so it's scannable
+// without opening. Turning a section OFF that already has data asks first;
+// turning one ON never asks.
+function JobSectionsPanel({ job, u, identity }) {
+  const [open, setOpen] = useState(false);
+  const [busyKey, setBusyKey] = useState("");
+  const boxRef = useRef(null);
+  const canEdit = can(identity, "job.sections");
+  const hiddenCount = JOB_SECTIONS.filter(s => isSectionHidden(job, s.key)).length;
+
+  useEffect(() => {
+    const h = () => {
+      setOpen(true);
+      setTimeout(() => boxRef.current?.scrollIntoView({ behavior:"smooth", block:"start" }), 50);
+    };
+    window.addEventListener('he-open-job-sections', h);
+    return () => window.removeEventListener('he-open-job-sections', h);
+  }, []);
+
+  const toggle = async (s) => {
+    if (!canEdit || busyKey) return;
+    const turningOff = !isSectionHidden(job, s.key);
+    if (turningOff) {
+      let hasData = false;
+      try {
+        if (s.generator) {
+          setBusyKey(s.key);
+          const snap = await getDoc(doc(db, 'homeowner_requests', job.id));
+          const d = snap.exists() ? snap.data() : {};
+          hasData = (d.genLoads || []).length > 0 || !!d.submitted;
+        } else {
+          hasData = !!s.hasData(job);
+        }
+      } catch (e) {
+        hasData = true; // can't tell (offline) — ask rather than assume empty
+      } finally { setBusyKey(""); }
+      if (hasData) {
+        const ok = await showConfirm({
+          message: `${s.label} already has info on this job. Hide it anyway? Nothing gets deleted — turn it back on any time and it all comes back.`,
+          confirmLabel: "Hide it", cancelLabel: "Keep showing" });
+        if (!ok) return;
+      }
+    }
+    u(jobSectionPatch(job, s.key, turningOff));
+  };
+
+  return (
+    <div ref={boxRef} style={{marginBottom:4}}>
+      <div onClick={()=>setOpen(o=>!o)}
+        style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+          borderBottom:`2px solid ${C.dim}44`,paddingBottom:7,marginBottom:open?14:0,marginTop:8,
+          cursor:"pointer",userSelect:"none"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color:C.dim}}>
+          Job Sections{hiddenCount>0 ? ` · ${hiddenCount} hidden` : ""}
+        </div>
+        <span style={{color:C.dim,fontSize:14,fontWeight:700,marginLeft:4}}>{open?"▾":"▸"}</span>
+      </div>
+      {open && (
+        <div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+            Turn off anything this job doesn&apos;t have, so it stops showing on the job card.
+            Nothing is deleted — turn it back on any time (say a generator gets added during rough) and everything comes back.
+            {!canEdit && " Office or foreman can change these."}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {JOB_SECTIONS.map(s => {
+              const on = !isSectionHidden(job, s.key);
+              return (
+                <label key={s.key}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:8,
+                    background:on?C.surface:`${C.dim}12`,border:`1px solid ${on?C.border:C.dim+"44"}`,
+                    cursor:canEdit?"pointer":"default",opacity:busyKey===s.key?0.6:1}}>
+                  <input type="checkbox" checked={on} disabled={!canEdit || !!busyKey}
+                    onChange={()=>toggle(s)}
+                    style={{accentColor:C.teal,width:16,height:16,flexShrink:0}}/>
+                  <span style={{flex:1,minWidth:0}}>
+                    <span style={{display:"block",fontSize:13,fontWeight:600,color:on?C.text:C.dim}}>
+                      {s.label}{on ? "" : " — hidden"}
+                    </span>
+                    <span style={{display:"block",fontSize:10,color:C.muted,marginTop:1}}>{s.where}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Item type options for Open Items (tasks/visits tied to a job)
 const ITEM_TYPES = ["Visit","Purchase","Call","Other"];
@@ -27282,7 +27480,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           flexShrink:0,overflowX:"auto",scrollbarWidth:"none"}}>
 
-          {tabsForJob(job).map(t=>(
+          {tabsForJob(job, tab).map(t=>(
 
             <button key={t} onClick={()=>setTab(t)}
 
@@ -27381,6 +27579,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             && parseStage(job.finishStage) === 0   // v424: before-drywall window only
                             && !job.matterportStatus
                             && !(job.matterportLinks?.length || job.matterportLink)
+                            && !job.hiddenSections?.matterport     // v438: Matterport off in Job Sections
                           ) ? { matterportStatus: "needs" } : {};
                           // Same pattern for QC — flip to "needs" on transition
                           // to complete if QC hasn't been touched. Preserves
@@ -27585,7 +27784,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};/* Auto-flip matterport to "needs" when rough hits 85% and finish hasn't started — the before-drywall scan window (v424), early enough to schedule. Skip if matterport is already set or a scan is uploaded. */const matterportFlip=(pct>=85&&parseStage(job.finishStage)===0&&!job.matterportStatus&&!(job.matterportLinks?.length||job.matterportLink))?{matterportStatus:"needs"}:{};/* Auto-flip QC to "needs" when stage hits 80% (same trigger as the auto Schedule QC task) OR when stage hits 100%. Skip if QC has any status already (scheduled / pass / fail / fixed / completed) so user-set values aren't clobbered. */const qcFlip=((pct>=80&&!job.roughQCTaskFired)||(v==="100%"&&job.roughStatus!=="complete"))&&!job.qcStatus?{qcStatus:"needs"}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...matterportFlip,...qcFlip,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};/* Auto-flip matterport to "needs" when rough hits 85% and finish hasn't started — the before-drywall scan window (v424), early enough to schedule. Skip if matterport is already set or a scan is uploaded. */const matterportFlip=(pct>=85&&parseStage(job.finishStage)===0&&!job.matterportStatus&&!(job.matterportLinks?.length||job.matterportLink)&&!job.hiddenSections?.matterport)?{matterportStatus:"needs"}:{};/* Auto-flip QC to "needs" when stage hits 80% (same trigger as the auto Schedule QC task) OR when stage hits 100%. Skip if QC has any status already (scheduled / pass / fail / fixed / completed) so user-set values aren't clobbered. */const qcFlip=((pct>=80&&!job.roughQCTaskFired)||(v==="100%"&&job.roughStatus!=="complete"))&&!job.qcStatus?{qcStatus:"needs"}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...matterportFlip,...qcFlip,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
@@ -27662,6 +27861,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   color={C.rough}/>
               )}
 
+              {!isSectionHidden(job,"materials")&&(<>
               <Section label="Material Tracking" color={C.rough}>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}
                   simproNo={job.simproNo} jobId={job.id} phase="rough"/>
@@ -27677,6 +27877,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     else u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
                   }}/>
               </Section>
+              </>)}
 
               <Section label="Daily Job Updates" color={C.rough}>
 
@@ -27954,6 +28155,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   color={C.finish}/>
               )}
 
+              {!isSectionHidden(job,"materials")&&(
               <div style={{marginTop:20}}>
 
                 <Section label="Finish Material Tracking" color={C.finish}>
@@ -27973,6 +28175,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </Section>
 
               </div>
+              )}
 
               <div style={{marginTop:20}}>
 
@@ -28021,7 +28224,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               onElectricalPanelsChange={v=>u({electricalPanels:v})}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
               finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
-              breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}/>
+              breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}
+              hideGenerator={isSectionHidden(job,"generator")}
+              hidePanelSchedules={isSectionHidden(job,"panelSchedules")}
+              hideLiveView={isSectionHidden(job,"liveView")}/>
 
           )}
 
@@ -28030,26 +28236,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <div>
 
-              {/* "No panelized lighting" toggle — flips job.noPanelizedLighting,    */}
-              {/* which tabsForJob() uses to shove this tab to the end of the bar.   */}
-              {/* Data-safety: this is a pure UI-order flag; existing lighting rows, */}
-              {/* modules, keypads are untouched and still live under this tab so    */}
-              {/* nothing is destroyed even if the toggle is flipped by accident.    */}
-              <div style={{marginBottom:12,padding:"8px 12px",background:job.noPanelizedLighting?`${C.dim}15`:C.surface,
-                border:`1px solid ${job.noPanelizedLighting?C.dim+"55":C.border}`,borderRadius:8,
-                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                <label style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:C.text,fontWeight:600}}>
-                  <input type="checkbox" checked={!!job.noPanelizedLighting}
-                    onChange={e=>u({noPanelizedLighting:e.target.checked})}
-                    style={{cursor:"pointer"}}/>
-                  No panelized lighting system on this job
-                </label>
-                {job.noPanelizedLighting&&(
-                  <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
-                    Tab moved to end of tab bar. Uncheck to restore its original position.
-                  </span>
-                )}
-              </div>
+              {/* v438: the old "No panelized lighting" checkbox lived here and got
+                  flipped by accident. The switch is now Job Info → Job Sections;
+                  this banner only shows if someone deep-links into the tab while
+                  it's turned off (e.g. from Plan Changes). */}
+              <HiddenSectionBanner job={job} sectionKey="panelized" u={u} identity={identity}/>
 
               {/* On Tech Lighting's link — office-only master switch for whether
                   this Lutron job appears on the ?lightinghub= index AND whether
@@ -29275,24 +29466,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <div>
 
-              {/* "No tape light" toggle — mirrors the panelized lighting one.      */}
-              {/* Flips job.noTapeLight, pushing this tab to the end via            */}
-              {/* tabsForJob(). Existing tapeLights array is preserved either way.  */}
-              <div style={{marginBottom:12,padding:"8px 12px",background:job.noTapeLight?`${C.dim}15`:C.surface,
-                border:`1px solid ${job.noTapeLight?C.dim+"55":C.border}`,borderRadius:8,
-                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                <label style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:C.text,fontWeight:600}}>
-                  <input type="checkbox" checked={!!job.noTapeLight}
-                    onChange={e=>u({noTapeLight:e.target.checked})}
-                    style={{cursor:"pointer"}}/>
-                  No tape light on this job
-                </label>
-                {job.noTapeLight&&(
-                  <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
-                    Tab moved to end of tab bar. Uncheck to restore its original position.
-                  </span>
-                )}
-              </div>
+              {/* v438: switch moved to Job Info → Job Sections (see Panelized). */}
+              <HiddenSectionBanner job={job} sectionKey="tapeLight" u={u} identity={identity}/>
 
               <Section label="Tape Light Locations" color={C.teal} defaultOpen={true}>
                 <TapeLightSection lights={job.tapeLights||[]} onChange={v=>u({tapeLights:v})}/>
@@ -30052,7 +30227,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     transition:"border-color 0.15s"}}/>
               </div>
 
-              {/* Matterport */}
+              {/* Matterport — hidden via Job Sections (v438) */}
+              {!isSectionHidden(job,"matterport")&&(
               <div style={{marginTop:12}}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <span>MATTERPORT</span>
@@ -30103,6 +30279,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                 );})()}
               </div>
+              )}
 
               <Section label="Pre-Job Prep" color={C.teal} defaultOpen={!allPrepChecked(job)}>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -30131,6 +30308,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 {allPrepChecked(job)&&(
                   <div style={{marginTop:10,fontSize:11,fontWeight:700,color:C.teal}}>✓ Prep Complete — Handed Off to Foreman</div>
                 )}
+                {/* v438: a jump link, NOT a checklist item — adding an item to
+                    PREP_CHECKLIST_ITEMS would flip every already-complete job
+                    back to "prep incomplete" and re-fire the prep nudges. */}
+                <button type="button" onClick={openJobSectionsPanel}
+                  style={{marginTop:10,background:"none",border:`1px dashed ${C.teal}66`,borderRadius:7,
+                    color:C.teal,fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
+                    fontFamily:"inherit",display:"inline-flex",alignItems:"center",gap:6}}>
+                  Set job sections (generator, lighting, tape light…)
+                  {(()=>{const n=JOB_SECTIONS.filter(x=>isSectionHidden(job,x.key)).length;
+                    return n>0?<span style={{color:C.dim,fontWeight:400}}>· {n} hidden</span>:null;})()}
+                  <span aria-hidden>↓</span>
+                </button>
                 <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
 
@@ -30146,6 +30335,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       style={{accentColor:C.teal,width:16,height:16}}/>
                     <span style={{fontSize:13,color:C.text}}>Pre-lien filed</span>
                   </label>
+                  {!isSectionHidden(job,"tempPed")&&(
                   <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                     <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
                       <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
@@ -30170,8 +30360,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       </div>
                     )}
                   </div>
+                  )}
                 </div>
               </Section>
+
+              {/* Job Sections — deliberately LAST and collapsed (v438). */}
+              <JobSectionsPanel job={job} u={u} identity={identity}/>
 
             </div>
 
@@ -33278,7 +33472,7 @@ function buildJobActivity(job, cfg) {
   // ── MATTERPORT ────────────────────────────────────────────────────
   const mpStatus = job.matterportStatus || "";
   const hasScan = !!(job.matterportLinks?.length || job.matterportLink);
-  if ((mpStatus === "needs" || mpStatus === "scheduled") && !hasScan) {
+  if ((mpStatus === "needs" || mpStatus === "scheduled") && !hasScan && !job.hiddenSections?.matterport) {
     groups.push({
       key:"matterport", label:"Matterport",
       items: [{ label: mpStatus === "needs" ? "Scan needed" : "Scan scheduled — no upload yet",
@@ -48479,12 +48673,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-23 · App SW version: v437
+**Last manifest update:** 2026-09-24 · App SW version: v438
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Job Sections — hide the parts of a job card a job doesn't have** · 'shipped 2026-09-24' · 'SW v438' · Koy: *"get rid of sections of a job card if they're not relevant to that job at all (things like panelized lighting, generator link…)"* + *"more hidden towards the bottom, so people aren't clicking things on and off by accident"* + *"foremen need to have it too… I can still go in and add, say, a generator section if one gets added during the rough-in."* New **Job Sections** panel, the LAST thing on Job Info, collapsed every time the job opens (header reads "Job Sections · N hidden"). Eight switches, each driven by the shared registry 'JOB_SECTIONS': **Panelized Lighting** (tab + Lighting Schedules link), **Tape Light** (tab), **Generator** (Home Runs → Generator Load Selection + homeowner link), **Panel Schedules** (Home Runs section + Panel Schedules link), **Live View Link** (Home Runs share row), **Matterport** (Job Info block + Matterport link + every scan reminder: 'matterportScanNeeded', both auto-flips to "needs", the job's Open-items group, the weekly rollup, and the server 'dailyMatterportChase'), **Temp Pedestal** (Admin row), **Material Tracking** (Material Tracking + Count List on Rough and Finish). A hidden section's tab leaves the tab bar entirely ('tabsForJob(job, activeTab)' — a deep link straight into a hidden tab still lands, with a "turned off for this job · Turn back on" banner). Turning a section OFF that already holds data asks first (generator checks 'homeowner_requests/{jobId}'; offline = assume data and ask); turning ON never asks. Pre-Job Prep gets a **Set job sections** jump button (a button, NOT a checklist item — adding to 'PREP_CHECKLIST_ITEMS' would flip every already-complete job back to prep-incomplete). Permission 'job.sections' = admin/manager/standard; leads/crew see the list read-only. Replaces the v1 in-tab "No panelized lighting / No tape light" checkboxes (which only moved the tab to the end and got flipped by accident); those jobs read as hidden via the 'legacy' flag and toggling writes both. SOPs updated: jobinfo, homeruns, panelizedlighting, tapelight, planslinks, rough. Harness 'needs-dryrun.js' +2 asserts. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** one new field, 'hiddenSections' (a '{key:true/false}' map inside the job's 'data', so the loader passes it through with no spread change), always written by spreading the existing map so one switch can't clobber another; hiding is render-only — no section's data ('panelizedLighting', 'tapeLights', 'genLoads', 'electricalPanels', 'matterportLinks', materials…) is read-for-write, cleared, or moved, so turning a section back on restores it exactly; the Matterport gates only NARROW when the existing 'matterportStatus:"needs"' is auto-set / surfaced, never clearing a stored value; no rules change.
 - **Set a plan sheet's floor from the inbox** · 'shipped 2026-09-23' · 'SW v437' · Koy didn't see *Fill floor/room* on a job whose FieldInk sheets are just "PG 1" — FieldInk sends no floor when the crew never set one for the sheet, so there was nothing to fill (rooms were already stored on import since v403, now visible in v436's Room box). Each sheet header in **Incoming from FieldInk** now has a **Set floor…** menu (the Loads list's floor sections): choosing one writes ONLY 'loads.<id>.office.floor' on the bridge for every load on that sheet via 'publishCcLoadOfficeMany' (office-owned key, already preferred by import + backfill), and fills BLANK floors on that sheet's already-imported Loads-list rows in one 'u()' patch; the header shows the office floor once set (the plan's floor, if any, is shown as the default). Guide updated. **Why it won't lose data:** the bridge write names only the office-owned 'office.floor' of the listed loads (merge-set, same shape as v400 suggestions); the job write only fills empty 'location' on fieldink-origin rows.
 - **FieldInk import brings the rooms and floors** · 'shipped 2026-09-23' · 'SW v436' · Koy: *"when a load is imported into the panelized lighting, it needs to import the rooms and floors."* FieldInk sends each load's 'floor' as the crew typed it for the plan SHEET ("Main Level", "2nd Floor"…) but 'ccLoadImportRows' only knew the keys main/basement/upper, so most loads imported with a BLANK floor into Unassigned. New pure 'ccFloorToSection' matches an existing Loads-list section case-insensitively, then synonyms (main/1st/first/level 1/ground → Main Level; basement/lower/bsmt → Basement; upper/2nd/second/level 2/upstairs → Upper Level), else keeps FieldInk's own text as its own section; an office-set 'office.floor' on the bridge wins. The **Room** (already stored on imported rows) now shows as an editable **Room** box on every Loads-list row, and loads sort by room within each floor. **Fill floor/room on N loads** (header, when any) backfills ONLY blank floor/room on earlier FieldInk imports. Tests: 'scripts/ccloads-suggest-test.js' (82 checks). Guide updated. **Why it won't lose data:** import stays append-only; the backfill is one 'u()' patch that only fills empty 'location'/'room' on fieldink-origin rows; 'room' is an existing row field.
 - **FieldInk import brings in panelized loads only** · 'shipped 2026-09-23' · 'SW v435' · Koy: *"when i hit import loads from field ink the panelized lighting tab, it imported all the regular switching loads too. it need to only import panelized loads."* 'ccLoadImportRows' now skips any incoming load whose FieldInk 'control' isn't 'panel' (switched / dimmer / tape stay on the plan's regular switching); the per-row **Import**, room **Import N** and header **Import all** only offer and count panel loads. **Cleanup:** when the job's Loads list still holds rows an older import created from non-panel loads (only rows with 'origin:"fieldink"' + a 'fieldLoadId' whose field load isn't panel), a red **Remove N switched loads imported by mistake** header button removes them after a confirm (hand-typed rows and panel loads are never touched). Tests: 'scripts/ccloads-suggest-test.js' (73 checks). Guide 'panelizedlighting.html' updated. **Why it won't lose data:** import is still append-only and idempotent; the cleanup is one confirmed 'u()' patch that filters ONLY fieldink-origin rows tied to a non-panel field load; the per-field job version history + recovery ledger cover it.
@@ -50050,7 +50245,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
       // happened, the status field just wasn't updated). Same guard the
       // existing matterport task uses.
       const hasScan = !!(j.matterportLinks?.length || j.matterportLink);
-      if(!hasScan) {
+      if(!hasScan && !j.hiddenSections?.matterport) {  // v438: Matterport off in Job Sections
         if(j.matterportStatus === "needs") {
           matterNeeds.push({ jobName, foreman, byDate: j.matterportStatusDate || "" });
         } else if(j.matterportStatus === "scheduled" && j.matterportStatusDate) {
