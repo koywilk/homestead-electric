@@ -65,7 +65,8 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor",
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
   "taskPhotoPath","needPhotos","teamPulse",
-  "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros"];
+  "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
+  "bucketOfYmd","needBucket","needPriority","prioRank","compareMyDayRows","mydayBadgeCount"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -510,5 +511,51 @@ eq(H.usageLastDays("2026-11-02", 2), ["2026-11-01","2026-11-02"], "DST week stay
 eq(H.usageWithZeros([{ key:"home", users:2, userDays:3 }], ["myday","home","cos","myday"]),
   [{ key:"home", users:2, userDays:3 }, { key:"cos", users:0, userDays:0 }, { key:"myday", users:0, userDays:0 }],
   "unseen known keys appended as 0 · 0 (sorted, deduped); seen rows untouched");
+
+// ── v446 — urgency, in-lane due-date sort, tab badge ────────────────────────
+eq(H.needPriority({ priority:"urgent" }), "urgent", "urgent");
+eq(H.needPriority({ priority:"low" }), "low", "low");
+eq(H.needPriority({}), "normal", "absent → normal (every pre-v446 doc)");
+eq(H.needPriority({ priority:"" }), "normal", "'' → normal (reset)");
+eq(H.needPriority({ priority:"junk" }), "normal", "junk → normal");
+eq([H.prioRank("urgent"), H.prioRank("normal"), H.prioRank("low"), H.prioRank(undefined)], [0, 1, 2, 1], "rank order; missing = normal");
+const sortIn = [
+  { key:"a", bucket:"later",   title:"Zed",   dueYmd:"2026-10-20" },
+  { key:"b", bucket:"today",   title:"Bee",   dueYmd:"2026-09-23" },
+  { key:"c", bucket:"overdue", title:"Cat",   dueYmd:"2026-09-20" },
+  { key:"d", bucket:"overdue", title:"Ant",   dueYmd:"2026-09-21" },
+  { key:"e", bucket:"week",    title:"Late",  dueYmd:"", prio:"urgent" },     // urgent beats every lane
+  { key:"f", bucket:"week",    title:"Alpha", dueYmd:"" },                    // undated: last in its lane
+  { key:"g", bucket:"week",    title:"Beta",  dueYmd:"2026-09-26" },
+  { key:"h", bucket:"overdue", title:"Low",   dueYmd:"2026-09-01", prio:"low" }, // low sinks below everything
+  { key:"i", bucket:"week",    title:"Same",  dueYmd:"2026-09-26" },
+];
+eq(sortIn.slice().sort(H.compareMyDayRows).map(r => r.key), ["e", "c", "d", "b", "g", "i", "f", "a", "h"],
+  "urgent first → lane → due date (undated last) → title; low last even when overdue");
+eq([{ bucket:"nope", title:"b" }, { bucket:"later", title:"a" }].sort(H.compareMyDayRows).map(r => r.title), ["a", "b"], "unknown lane sorts after Later");
+// myDayCategories: a category holding an urgent row floats above the most-urgent-lane order.
+const cats46 = H.myDayCategories([
+  { kind:"punch", bucket:"overdue", title:"p" },
+  { kind:"need", needKind:"task", bucket:"later", title:"t", prio:"urgent" },
+  { kind:"need", needKind:"need", bucket:"today", title:"n" },
+]);
+eq(cats46.map(c => c.key), ["tasks", "punch", "needs"], "urgent category first, then overdue punch, then today needs");
+eq(cats46[0].urgent, 1, "urgent count carried on the category");
+// Badge: open docs on me that are overdue / due today / urgent. Snoozed, done, others', later-dated excluded.
+const bT = "2026-09-23";
+const bNeeds = [
+  { id:"1", status:"open", assignedTo:"Gage Lund", dueDate:"2026-09-20" },                       // overdue ✓
+  { id:"2", status:"open", assignedTo:"Gage Lund", dueDate:bT },                                 // today ✓
+  { id:"3", status:"open", assignedTo:"Gage Lund", dueBucket:"tomorrow" },                       // bucket-only tomorrow reads as today ✓
+  { id:"4", status:"open", assignedTo:"Gage Lund", dueDate:"2026-10-20", priority:"urgent" },    // urgent ✓
+  { id:"5", status:"open", assignedTo:"Gage Lund", dueDate:"2026-10-20" },                       // later ✗
+  { id:"6", status:"open", assignedTo:"Gage Lund", dueDate:"2026-09-20", snoozedUntil:"2026-09-30" }, // snoozed ✗
+  { id:"7", status:"done", assignedTo:"Gage Lund", dueDate:"2026-09-20" },                       // done ✗
+  { id:"8", status:"open", assignedTo:"Koy Wilkinson", dueDate:"2026-09-20" },                   // not mine ✗
+  { id:"9", status:"open", assignedTo:"Gage Lund", dueBucket:"week" },                           // bucket-only week ✗
+];
+eq(H.mydayBadgeCount(bNeeds, gage, bT), 4, "badge = overdue + today + tomorrow-bucket + urgent");
+eq(H.mydayBadgeCount(bNeeds, null, bT), 0, "no identity → 0");
+eq(H.mydayBadgeCount([], gage, bT), 0, "no needs → 0");
 
 console.log("needs-dryrun ok");

@@ -56,6 +56,7 @@ messaging.onBackgroundMessage(payload => {
   const jobId   = payload.data?.jobId   || "";
   const section = payload.data?.section || "";
   const view    = payload.data?.view    || "";
+  const needId  = payload.data?.needId  || "";   // v446: task-loop pushes open My Day on this task
   // Server-supplied tag wins (stable across pushes for the same job+section);
   // fall back to a derived tag for older clients.
   const tag     = payload.data?.tag || `he-${jobId}-${section}`;
@@ -68,7 +69,7 @@ messaging.onBackgroundMessage(payload => {
     badge: "/icon-192.png",
     tag,                                // dedupes notifications for the same job+section
     renotify: false,                    // don't pop a fresh banner if the tag matches
-    data:  { jobId, section, view },
+    data:  { jobId, section, view, needId },
   });
 });
 
@@ -88,9 +89,11 @@ self.addEventListener("notificationclick", event => {
   const jobId   = ndata.jobId   || fcmData.jobId   || "";
   const section = ndata.section || fcmData.section || "";
   const view    = ndata.view    || fcmData.view    || "";
+  const needId  = ndata.needId  || fcmData.needId  || "";
 
+  // v446: `&need=<id>` makes My Day unfold to, scroll to and flash that task.
   const url = view
-    ? `${self.location.origin}/?view=${encodeURIComponent(view)}`
+    ? `${self.location.origin}/?view=${encodeURIComponent(view)}${needId ? `&need=${encodeURIComponent(needId)}` : ""}`
     : jobId
     ? `${self.location.origin}/?jobId=${encodeURIComponent(jobId)}&section=${encodeURIComponent(section || "")}`
     : self.location.origin + "/";

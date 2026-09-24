@@ -4245,6 +4245,8 @@ const NOTIF_CATEGORIES = [
     { key:"daily_update_missing", label:"No daily update logged today",      roles:["foreman"] },
     { key:"stale_job",         label:"Stale job (no update in 5+ days)",     roles:["admin","manager","foreman"] },
     { key:"myday_digest",      label:"Morning My Day summary",               roles:["admin","manager","foreman","lead","crew"] },
+    // v446: gated server-side in dailyMyDayDigest (chase branch) — a real toggle.
+    { key:"myday_chase",       label:"Overdue task chase (mornings, every other day)", roles:["admin","manager","foreman","lead","crew"] },
     { key:"co_chase",          label:"Morning CO chase (open 2+ days)",      roles:["admin","manager","crew"] },
     { key:"rt_chase",          label:"Morning RT chase (needs scheduling)",  roles:["admin","manager"] },
   ]},
@@ -5266,8 +5268,8 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
   const [assignedTo, setAssignedTo] = useState(() => (preset && preset.assignedTo) || defaultAssigneeFor(identity, users));
   const [job, setJob] = useState(() => (preset && preset.job) || null);
   const [due, setDue] = useState({ bucket: "tomorrow", date: "" });
-  const [open, setOpen] = useState(null); // "to" | "job" | "due" | null
-  const [other, setOther] = useState(false);
+  const [prio, setPrio] = useState("");   // v446 urgency: "" (normal) | "urgent" | "low"
+  const [open, setOpen] = useState(null); // "kind" | "to" | "job" | "due" | "prio" | null
   // v431: optional photos — picked here, uploaded by the root AFTER the doc is
   // saved (so they attach to a real need id). Previews are object URLs,
   // revoked on unmount; the File objects stay valid for the upload.
@@ -5302,6 +5304,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
       dueBucket: due.date ? (dueBucketFromDate(due.date) || "week") : due.bucket,
       dueDate: due.date || "",
       snoozedUntil: "",
+      priority: prio === "urgent" || prio === "low" ? prio : "",   // v446
       assignedTo: assignedTo || "", assignedBy: me, assignedAt: now,
       foreman: job ? (job.foreman || "") : (myTitle === "foreman" ? me : (myForemanName || "")),
       jobId: job ? job.id : "", jobName: job ? (job.name || "") : "",
@@ -5323,9 +5326,27 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
   const sub = (t) => <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", color: C.dim, margin: "12px 0 6px" }}>{t}</div>;
   const row = { display: "flex", gap: 6, flexWrap: "wrap" };
   const sel = { width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 16, padding: "10px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, marginTop: 6 };
-  const toLabel = !assignedTo ? "To: unassigned" : sameName(assignedTo, me) ? "To: me" : `To: ${first(assignedTo)}`;
-  const dueLabel = due.date ? `Due ${due.date.slice(5).replace("-", "/")}` : (due.bucket === "tomorrow" ? "Tomorrow" : "This week");
+  const toVal = !assignedTo ? "unassigned" : sameName(assignedTo, me) ? "me" : first(assignedTo);
+  const dueVal = due.date ? due.date.slice(5).replace("-", "/") : (due.bucket === "tomorrow" ? "Tomorrow" : "This week");
+  const prioVal = prio === "urgent" ? "Urgent" : prio === "low" ? "Low" : "Normal";
   const goes = !assignedTo ? "Saves unassigned — anyone can pick it up from Needs." : sameName(assignedTo, me) ? "Goes on your own day." : `Goes to ${first(assignedTo)}'s day — they get a push.`;
+  // v446: the option chips read as FIELDS now — "To: Koy ▾" with an icon and a
+  // caret, one look and you know it opens a picker (Koy: "hard to tell you can
+  // click the person to assign to a different person, as well as the other
+  // assigning options"). Tapping one opens its options below; tap again to fold.
+  const field = (key, lbl, val, iconName, hot) => {
+    const on = open === key;
+    return (
+      <button key={key} onMouseDown={e => e.preventDefault()} onClick={() => setOpen(o => o === key ? null : key)} aria-expanded={on} title={`Change ${lbl.toLowerCase()}`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 13, padding: "8px 9px 8px 11px", minHeight: 38, borderRadius: 9, fontFamily: "inherit", cursor: "pointer",
+          border: `1px solid ${on ? C.accent : (hot ? C.red : C.border)}`, background: on ? `${C.accent}14` : C.card, color: C.text, boxShadow: "0 1px 2px rgba(20,30,50,.06)" }}>
+        <Icon name={iconName} size={13} stroke={2.25} />
+        <span style={{ color: C.dim, fontWeight: 500 }}>{lbl}:</span>
+        <span style={{ fontWeight: 700, color: hot ? C.red : C.text }}>{val}</span>
+        <Icon name="chevronDown" size={13} stroke={2.5} />
+      </button>
+    );
+  };
 
   return (
     <SheetShell title="New need" onCancel={onClose} onDone={save} doneLabel="Save" doneDisabled={!text.trim()}>
@@ -5336,10 +5357,11 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
           style={{ display: "block", width: "100%", boxSizing: "border-box", padding: "12px 14px", fontSize: 17,
             fontFamily: "inherit", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, outline: "none", color: C.text }} />
         <div style={{ ...row, marginTop: 10 }}>
-          {chip(kind === "task" ? "Task" : "Need", true, () => setKind(k => k === "need" ? "task" : "need"))}
-          {chip(toLabel, open === "to", () => setOpen(o => o === "to" ? null : "to"))}
-          {chip(job ? `Job: ${String(job.name).slice(0, 22)}` : "+ job", open === "job", () => setOpen(o => o === "job" ? null : "job"), !job)}
-          {chip(dueLabel, open === "due", () => setOpen(o => o === "due" ? null : "due"))}
+          {field("to", "To", toVal, "user")}
+          {field("prio", "Urgency", prioVal, "flag", prio === "urgent")}
+          {field("due", "Due", dueVal, "calendar")}
+          {field("job", "Job", job ? String(job.name).slice(0, 22) : "none", "mapPin")}
+          {field("kind", "Type", kind === "task" ? "Task" : "Need", "check")}
           {onAddNeedPhotos && (
             <label onMouseDown={e => e.preventDefault()} title="Add a photo"
               style={{ fontSize: 13, padding: "8px 12px", minHeight: 36, boxSizing: "border-box", display: "inline-flex", alignItems: "center", borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
@@ -5361,20 +5383,38 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
             ))}
           </div>
         )}
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Tap a field to change it.</div>
+        {open === "kind" && (
+          <div>
+            {sub("Type")}
+            <div style={row}>
+              {chip("Need", kind === "need", () => setKind("need"))}
+              {chip("Task", kind === "task", () => setKind("task"))}
+            </div>
+          </div>
+        )}
         {open === "to" && (
           <div>
-            {sub("To")}
+            {sub("Who it's on")}
             <div style={row}>
-              {toPicks.map(([nm, lbl]) => chip(lbl, sameName(assignedTo, nm) && !other, () => { setAssignedTo(nm); setOther(false); }))}
-              {chip("Someone else…", other, () => setOther(o => !o), true)}
-              {assignedTo && chip("Unassign", false, () => { setAssignedTo(""); setOther(false); }, true)}
+              {toPicks.map(([nm, lbl]) => chip(lbl, sameName(assignedTo, nm), () => setAssignedTo(nm)))}
+              {assignedTo && chip("Unassign", false, () => setAssignedTo(""), true)}
             </div>
-            {other && (
-              <select value={roster.includes(assignedTo) ? assignedTo : ""} onChange={e => setAssignedTo(e.target.value)} style={sel}>
-                <option value="">Pick a person…</option>
-                {roster.map(nm => <option key={nm} value={nm}>{nm}</option>)}
-              </select>
-            )}
+            <select value={roster.includes(assignedTo) ? assignedTo : ""} onChange={e => setAssignedTo(e.target.value)} style={sel} title="Anyone in the company">
+              <option value="">Anyone else in the company…</option>
+              {roster.map(nm => <option key={nm} value={nm}>{nm}</option>)}
+            </select>
+          </div>
+        )}
+        {open === "prio" && (
+          <div>
+            {sub("Urgency")}
+            <div style={row}>
+              {chip("Urgent", prio === "urgent", () => setPrio("urgent"))}
+              {chip("Normal", !prio, () => setPrio(""))}
+              {chip("Low", prio === "low", () => setPrio("low"))}
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Urgent sorts to the top of their list and shows a red flag. Low sinks to the bottom.</div>
           </div>
         )}
         {open === "job" && (
@@ -6410,7 +6450,7 @@ function HelpDot({ section, label = "", color = C.blue }) {
 let _NUDGE_ROSTER = [];
 const _setNudgeRoster = (users) => { _NUDGE_ROSTER = (users||[]).map(u => u && u.name).filter(Boolean); };
 
-function RemindButton({ to = "", title, body, jobId, section, label = "Remind", people }) {
+function RemindButton({ to = "", title, body, jobId, section, label = "Remind", people, view = "", needId = "" }) {
   const [open, setOpen]   = useState(false);
   const [pos, setPos]     = useState({ top: 0, left: 0 });
   const [pick, setPick]   = useState(to);
@@ -6426,7 +6466,8 @@ function RemindButton({ to = "", title, body, jobId, section, label = "Remind", 
     if (!target) { setState("warn"); setMsg("Pick a person"); setTimeout(()=>{setState("idle");setMsg("");},2500); return; }
     setState("sending"); setMsg("");
     try {
-      const r = await httpsCallable(functions, "reNudge")({ toName: target, title, body, jobId, section, key: "renudge" });
+      // v446: optional view / needId deep-link (My Day Nudge lands on the task itself).
+      const r = await httpsCallable(functions, "reNudge")({ toName: target, title, body, jobId, section, view, needId, key: "renudge" });
       const d = r.data || {};
       if (d.ok) { setState("done"); setMsg(`Reminded ${(d.to||target).split(" ")[0]}`); setOpen(false); }
       else { setState("warn"); setMsg(d.message || "Couldn't send"); }
@@ -48875,12 +48916,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v445
+**Last manifest update:** 2026-09-24 · App SW version: v446
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day Ship 4 — urgency, Nudge + morning chase, tab badge, everyone lands here, a push opens the task, obvious assign controls** · 'shipped 2026-09-24' · 'SW v446' · Koy: *"lets make the my day tool the most effective tool we have for tracking needs and tasks"* → picked items 2, 3, 4 from the audit, plus *"add an urgency status that can be added to it and have them sort by that"* and *"received complaint that it is hard to tell you can click the person to assign to different person, as well as the other assigning options. make it easier."* **Urgency:** new additive field 'priority' inside a need doc's 'data' ('"urgent"' / '""' normal / '"low"'; absent reads as normal via 'needPriority'). Set on the + sheet (**Urgency** field: Urgent / Normal / Low) or in **Edit** (new Urgency select; the change is logged in the thread as "changed: urgent"). Urgent rows get a red left edge + red **URGENT** tag, Low a grey **Low** tag; the Needs board cards show the same pills; the "assigned to you" push is titled *URGENT task assigned to you*; the 6:45 digest line leads with 'N urgent'. **Sort (everywhere on My Day, 'compareMyDayRows'):** urgency → lane (overdue / today / week / later) → **due date inside the lane** (was A–Z by title, so the next thing due was buried; undated rows last) → title; a category holding an urgent row floats to the top of Mine ('myDayCategories' gains 'urgent'); Low sinks below everything, even overdue. Every derived row now carries 'dueYmd' (auto: 'taskDueDates' override or the rule date; prep duty: rough start; scan: the scheduled/needed date; redline: walk/status date). **Nudge:** Sent rows get a **Nudge** button — the existing manual-reminder push ('reNudge', 'renudge' pref; roster picker to redirect it) with a new optional 'view' + 'needId' so it lands on the task. **Morning chase (server, 'dailyMyDayDigest'):** pure 'chaseTargets' / 'chaseMessages' in 'functions/myDayDigest.js' — a doc **2+ days overdue** pushes its assignee on every EVEN day overdue (2, 4, 6…) unless the assignee posted an update in the last 48h; the requester ('assignedBy', else 'createdBy', when a different person) is pushed on every 5th day (5, 10, 15…); snoozed, done, undated, bodies and **Low** docs are never chased; covering applies to both sides; one push per person per role ("⏰ Still open on you" / "⏰ N overdue tasks on you" · "⏰ Still waiting on someone"), deep-linked to the task when it's a single one. New notif pref 'myday_chase' (all roles, default on, gated server-side). **Tab badge:** the My Day tab shows a red count ('mydayBadgeCount') of my open task docs that are overdue, due today (a bucket-only "Tomorrow" doc counts as today, as the board files it) or urgent. **Landing:** every internal role — office included — opens on My Day (was field roles only); contractors unchanged. **Push opens the task:** 'onNeedWrite' (all four branches), 'reNudge' and the chase carry 'needId'; 'sendFCM' data + the inbox item store it; the messaging SW appends '&need=<id>' to the '?view=myday' deep-link; the app reads it (before 'pendingView' strips the query), the bell inbox passes 'item.needId', and 'MyDay' ('jumpNeedId' / 'onJumped') finds the row in Focus / Mine (category or job line) / Sent / Sent · finished / Done / a Person group, unfolds its way there, scrolls to it and outlines it blue for 4 s; waits while 'needs' is still loading on a cold start. **Assign controls you can see:** the + sheet's chips are now labeled **fields** with an icon and a caret — 'To: Koy ▾', 'Urgency: Normal ▾', 'Due: Tomorrow ▾', 'Job: none ▾', 'Type: Need ▾' — plus a "Tap a field to change it" hint; the To picker always shows the full-company select (no more hidden "Someone else…" toggle). On the board, every task row the viewer may reassign (sender, self-made, or whoever runs the head board) shows a blue **To: &lt;name&gt; ▾** pill that opens the roster right under the row ("Move it to"); the head's auto rows read **Pick person ▾** / **Re-push ▾**. Harness: 'scripts/needs-dryrun.js' (+'needPriority' / 'prioRank' / 'compareMyDayRows' / 'mydayBadgeCount' / category float) and 'scripts/mydaydigest-test.js' (+urgent count, chase day rules, quiet-assignee skip, covering, message shapes). Guides 'myday.html' (Urgency, Move it, Nudge, "Getting to it faster") + 'needs.html' updated. **Needs 'firebase deploy --only functions:onNeedWrite,functions:reNudge,functions:dailyMyDayDigest'.** **Why it won't lose data:** one new additive field ('priority') inside 'data', written only by the + sheet on new docs and by Edit as a dotted 'data.priority' patch (absent = normal, so no backfill and no loader change — the needs loader returns 'data' verbatim); reassign-from-the-pill is the existing field-surgical 'patchNeed({assignedTo})'; Nudge and the chase are pushes + inbox writes only (the chase is read-only over 'needs', keyed on days-overdue so it writes nothing back); 'needId' is an additive string on push data / inbox items; the sort, badge, landing, and jump are render-only; no Firestore rules change.
 - **Generator link shows home run notes** · 'shipped 2026-09-24' · 'SW v445' · Koy: *"i need homerun notes to be shown on the generator link as well."* The homeowner generator page ('HomeownerPage') now shows each load's home-run 'note' under its name on all three lists (on the generator / recommended / not on it). The note is looked up LIVE from the job's own 'homeRuns' by the gen load's 'hrId' ('flattenHomeRuns') — never copied into 'genLoads', so it's always current and the homeowner's own per-load 'notes' field is untouched. Loads with no home run (manual adds) show nothing extra. Guide 'generatorlink.html' warns to keep internal comments out of home run notes since the homeowner sees them. **Why it won't lose data:** display-only; reads the job doc the page already loaded.
 - **My Day — the replies button looks like a button** · 'shipped 2026-09-24' · 'SW v444' · Koy: *"its hard to tell that you can click on the '2 updates' button in my day to see the replies… can we make that more obvious."* The grey '· N updates' text under a task's latest update is now an outlined accent pill **💬 N replies ▾** (shown whenever a task has any update, even one) that flips to **Hide replies ▴** while the thread is open; tapping it — or the latest line, as before — toggles the full oldest-first thread. Hidden in Select mode. Guide 'myday.html' updated. **Why it won't lose data:** display-only.
 - **Dismiss all switched loads + who/when on every check-off** · 'shipped 2026-09-24' · 'SW v443' · Koy: *"i need a 'dismiss all normal switching' or something so i dont have to individually dismiss all the loads that are not panelized"* + *"just like if its checked off in the other section, show who checked it off and date."* **Incoming from FieldInk:** **Dismiss N switched** (header, with a confirm) hides every waiting non-panel load (switched / dimmer / tape) in ONE 'publishCcLoadOfficeMany' merge-set of 'office.dismissed:true' (the field isn't told, no job data); the Dismissed view gains **Restore all N**. **Stamps:** the shared checklist shows '✓ <who> · <date>' under every checked row — Home Runs from the existing 'statusBy'/'statusAt'; loads via new 'loadPulledPatch(on)' → 'pulled' + 'pulledBy' + 'pulledAt' (M/D/YYYY, cleared on untick), written by BOTH the Loads Ran card and the Loads list's ✓ column (whose checkbox tooltip now shows the stamp). Guide updated. **Why it won't lose data:** dismiss writes only the office-owned flag on the bridge; 'pulledBy'/'pulledAt' are additive fields on existing load rows through the same single 'u()' patches.
@@ -52880,6 +52922,30 @@ function userKeyOf(identity) {
   if (!identity) return "";
   return identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
+// ── MY DAY Ship 4 helpers (v446) ────────────────────────────────────────────
+// Urgency on a task doc: `priority` inside data = "urgent" | "" (normal) |
+// "low". Absent (every pre-v446 doc) reads as normal. Derived rows (auto /
+// duty / punch / redline) have no priority and sort as normal.
+function needPriority(n) { const p = n && n.priority; return p === "urgent" || p === "low" ? p : "normal"; }
+function prioRank(p) { return p === "urgent" ? 0 : p === "low" ? 2 : 1; }
+// Row order everywhere on My Day (Koy 2026-09-24: "add an urgency status …
+// and have them sort by that"): urgency → lane → due date (undated rows last
+// inside a lane; pre-v446 sorted them A–Z, so the next thing due was buried)
+// → title. Pure; extracted by scripts/needs-dryrun.js.
+function compareMyDayRows(a, b) {
+  const pr = prioRank(a && a.prio) - prioRank(b && b.prio); if (pr) return pr;
+  const lane = (r) => { const i = MYDAY_ORDER.indexOf(r && r.bucket); return i < 0 ? MYDAY_ORDER.length : i; };
+  const lr = lane(a) - lane(b); if (lr) return lr;
+  const da = (a && a.dueYmd) || "", dueB = (b && b.dueYmd) || "";
+  if (da !== dueB) { if (!da) return 1; if (!dueB) return -1; return da < dueB ? -1 : 1; }
+  return String((a && a.title) || "").localeCompare(String((b && b.title) || ""));
+}
+// The My Day tab badge: open task docs on me that are overdue, due today, or
+// urgent. Docs only (punch / auto rows would need the whole board's math).
+function mydayBadgeCount(needs, identity, todayYmd) {
+  return (needs || []).filter(n => needIsOpen(n, todayYmd) && isMine(n, identity) &&
+    (needPriority(n) === "urgent" || ["overdue", "today"].includes(needBucket(n, todayYmd)))).length;
+}
 // ── Usage tracking (v433) ────────────────────────────────────────────────────
 // Which screens / job tabs people actually open, counted once per device per
 // user per day, into settings/usage_<YYYY-MM-DD>. Pure helpers below are
@@ -53375,12 +53441,14 @@ function myDayCategories(rows) {
   const m = new Map();
   for (const r of rows || []) { const k = myDayCategoryOf(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
   const lane = (r) => { const i = MYDAY_ORDER.indexOf(r && r.bucket); return i < 0 ? MYDAY_ORDER.length : i; };
+  // v446: a category holding an urgent row floats to the top, then the old
+  // most-urgent-lane → overdue-count → label order.
   return [...m.entries()]
-    .map(([key, rs]) => ({ key, label: MYDAY_CAT_LABELS[key] || key, rows: rs, top: Math.min(...rs.map(lane)), overdue: rs.filter(r => r.bucket === "overdue").length }))
-    .sort((a, b) => (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
+    .map(([key, rs]) => ({ key, label: MYDAY_CAT_LABELS[key] || key, rows: rs, top: Math.min(...rs.map(lane)), overdue: rs.filter(r => r.bucket === "overdue").length, urgent: rs.filter(r => r.prio === "urgent").length }))
+    .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus }) {
+function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -53433,6 +53501,13 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const jobById = (id) => (jobs || []).find(j => j && j.id === id);
   const cleared = new Set((jobs || []).flatMap(j => (j && j.clearedTasks) || []));
   const mdOf = (y) => { const p = String(y || "").split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
+  // v446: any stored date (M/D/YYYY or YYYY-MM-DD) → YMD for the in-lane due-date sort.
+  const ymdOf = (s) => { const d = s ? parseAnyDate(s) : null; return d ? localYmd(d) : ""; };
+  // v408 Push picker state + roster, declared BEFORE needRow so a need row can
+  // open the same roster panel for its "To: <name> ▾" pill (v446).
+  const [pushFor, setPushFor] = useState(null);   // row key / auto-task id whose roster panel is open
+  const roster = useMemo(() => (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort(), [users]);
+  const [flashKey, setFlashKey] = useState(null);  // v446: row highlighted after a push / inbox deep-link
 
   // v434: who may Edit / Void / Reopen-a-void a task doc.
   const canManageNeed = (n) => !!n && n.status !== "done" && needKind(n) !== "bodies" && !!me &&
@@ -53441,7 +53516,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const openEdit = (key, n) => {
     if (editFor === key) { closePanels(); return; }
     closePanels(); closeUpd();
-    setEditFor(key); setEditDraft({ text: n.text || "", dueDate: n.dueDate || "", assignedTo: needAssignee(n), jobId: n.jobId || "" });
+    setEditFor(key); setEditDraft({ text: n.text || "", dueDate: n.dueDate || "", assignedTo: needAssignee(n), jobId: n.jobId || "", priority: needPriority(n) });
   };
   const openVoid = (key) => { if (voidFor === key) { closePanels(); return; } closePanels(); closeUpd(); setVoidFor(key); };
   const VOID_CLEAR = { voided: false, voidedBy: "", voidedAt: "", voidReason: "" };
@@ -53464,6 +53539,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     if (text !== String(n.text || "").trim()) { patch.text = text; what.push("wording"); }
     if ((d.dueDate || "") !== (n.dueDate || "")) { patch.dueDate = d.dueDate || ""; if (!d.dueDate) patch.dueBucket = "week"; what.push(d.dueDate ? `due ${mdOf(d.dueDate)}` : "no due date"); }
     if (d.assignedTo && !sameName(d.assignedTo, needAssignee(n))) patch.assignedTo = d.assignedTo;
+    // v446: urgency. Stored as "" for normal so an unset doc and a reset-to-normal doc read the same.
+    if ((d.priority || "normal") !== needPriority(n)) { patch.priority = d.priority === "urgent" || d.priority === "low" ? d.priority : ""; what.push(d.priority === "urgent" ? "urgent" : d.priority === "low" ? "low priority" : "normal priority"); }
     if ((d.jobId || "") !== (n.jobId || "")) {
       const j = d.jobId ? (jobs || []).find(x => x && x.id === d.jobId) : null;
       patch.jobId = j ? j.id : ""; patch.jobName = j ? (j.name || "") : ""; patch.foreman = j ? (j.foreman || "") : "";
@@ -53478,10 +53555,27 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   };
   const needRow = (n, readOnly) => {
     const k = needKind(n);
+    const key = "need_" + n.id;
     const from = n.assignedBy && !sameName(n.assignedBy, me) ? n.assignedBy : (n.createdBy && !sameName(n.createdBy, me) ? n.createdBy : "");
-    return { key: "need_" + n.id, kind: "need", needKind: k, bucket: needBucket(n, todayYmd), title: n.text || "(no text)",
+    const assignee = needAssignee(n);
+    // v446: the sender (or whoever runs the head board) reassigns straight from
+    // the row's "To: <name> ▾" pill — the Edit panel was too hidden (Koy:
+    // "hard to tell you can click the person to assign to a different person").
+    const canReassign = canManageNeed(n);
+    // v446: Nudge on a doc I sent — the existing manual-reminder push
+    // (reNudge / renudge pref), deep-linked to this task on their My Day.
+    const nudge = readOnly && assignee && !sameName(assignee, me) && sentByMe(n, identity)
+      ? { to: assignee, title: `${first(me)} is asking about a task`, body: `${n.text || "a task"}${n.jobName ? ` · ${n.jobName}` : ""}`, needId: n.id } : null;
+    return { key, kind: "need", needKind: k, bucket: needBucket(n, todayYmd), title: n.text || "(no text)",
+      prio: needPriority(n), dueYmd: n.dueDate || "",
       tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need", tagColor: k === "task" ? C.teal : C.orange,
-      sub: [n.jobName, readOnly ? (sameName(n.createdBy, me) ? "you asked" : "") : (from ? `from ${first(from)}` : "")].filter(Boolean),
+      sub: [n.jobName, from ? `from ${first(from)}` : ""].filter(Boolean),
+      assignee, canReassign, nudge,
+      ...(canReassign ? {
+        pushOpen: pushFor === key, onTogglePick: () => setPushFor(p => p === key ? null : key),
+        pickRoster: roster.filter(nm => !sameName(nm, assignee)),
+        onPick: (who) => { setPushFor(null); if (!who || sameName(who, assignee)) return; onPatchNeed(n.id, { assignedTo: who }, n); toast.success(sameName(who, me) ? "Moved to you" : `Moved to ${first(who)}`); },
+      } : {}),
       jobId: n.jobId, section: null, canDone: !readOnly, canSnooze: !readOnly,
       // v421: every real doc can take an update from either side.
       need: n, canUpdate: !!onAddNeedUpdate, latest: lastNeedUpdate(n), nUpdates: needUpdates(n).length,
@@ -53513,6 +53607,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const owners = rk ? ownersForRoute(rk, users, todayYmd) : [me];
     return { key: "duty_" + d.jobId + "_" + d.id, kind: "duty", dutyType: d.dutyType, bucket, title: d.label,
       staleJob: job || null, staleDate: d.dutyType === "prep" ? ((job && job.roughScheduledDate) || "") : "",
+      dueYmd: d.dutyType === "prep" ? ymdOf(job && job.roughScheduledDate) : "",
       tag: d.dutyType === "qc" ? "QC" : d.dutyType === "po" ? "Start" : "Prep", tagColor: d.dutyType === "qc" ? C.purple : C.teal,
       sub: [d.jobName, readOnly ? `${headFirst}'s duty` : (d.foreman && !sameName(d.foreman, me) ? first(d.foreman) : "")].filter(Boolean),
       jobId: d.jobId, section: d.targetTab || null, canDone: !readOnly && isPO, canSnooze: false, owners,
@@ -53531,8 +53626,6 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // v408: auto-tasks are the HEAD's, all of them. Foremen see none (Koy: they
   // "don't really make sense for the foremans"). Each head row carries its
   // delegation state from the joined task doc (autoDelegation).
-  const [pushFor, setPushFor] = useState(null);   // auto-task id whose "Pick person" list is open
-  const roster = useMemo(() => (users || []).filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor").map(u => u.name).sort(), [users]);
   const delegation = autoDelegation(needs);
   const nowIso = () => new Date().toISOString();
   const pushTo = (t, job, who) => {
@@ -53582,14 +53675,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           const ost = autoRowState(t, delegation, owners);
           const pulseDocId = ost.state === "none" && ost.doc && ost.doc.status !== "done" ? ost.doc.id : "";
           othersRows.push({ key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
-            staleJob: job, staleDate, staleMoney, owners, pulseSkip: ost.state === "with", pulseDocId,
+            staleJob: job, staleDate, staleMoney, owners, pulseSkip: ost.state === "with", pulseDocId, dueYmd: ymdOf(staleDate),
             sub: [t.jobName, `with ${owners.map(first).join(" + ")}`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
         }
         return;
       }
       const st = autoRowState(t, delegation, owners);
       const fm = job.foreman && !sameName(job.foreman, me) ? job.foreman : "";
-      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate, staleMoney, owners,
+      const row = { key: "auto_" + t.id, kind: "auto", autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate, staleMoney, owners, dueYmd: ymdOf(staleDate),
         sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
@@ -53600,7 +53693,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         row.canDone = true; row.onDone = () => clearAuto(t, job, ownDoc);
         row.actions = [
           ...(fm ? [{ label: `→ ${first(fm)}`, title: `Push to ${fm}, this job's foreman`, onClick: () => pushTo(t, job, fm), tone: "primary" }] : []),
-          { label: "Pick person", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
+          { label: "Pick person ▾", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
         ];
       } else if (st.state === "with") {
         row.staleExempt = true; // live delegated doc — never stale-hidden
@@ -53611,7 +53704,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           // "none" again so the auto row comes back with its Push controls —
           // no ghost "with <the head>" row, no duplicate Task row on Mine.
           { label: "Take back", title: "Put it back on you", onClick: () => { onPatchNeed(st.doc.id, { status: "done", doneAt: nowIso(), doneBy: me }, st.doc); toast.success("Back on you"); }, tone: "ghost" },
-          { label: "Re-push", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
+          { label: "Re-push ▾", title: "Push to someone else", onClick: row.onTogglePick, tone: "ghost" },
         ];
       } else { // verify
         row.staleExempt = true; // head's verify-clear of a real closed doc — never stale-hidden
@@ -53654,7 +53747,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
         { matterportLinks: prevLinks, matterportLink: prevLink, matterportStatus: prevStatus, matterportStatusDate: prevDate, matterportDismissed: !!job.matterportDismissed });
       const writeJob = (patch, label) => { onUpdateJob({ ...job, ...patch }, patch); if (label) stage(label, revertScan); };
       mineRows.push({
-        key: "scan_" + t.id, kind: "auto", autoCategory: "matterport", staleJob: job, staleDate: "",
+        key: "scan_" + t.id, kind: "auto", autoCategory: "matterport", staleJob: job, staleDate: "", dueYmd: ymdOf(prevDate),
         bucket: urgencyBucket(prevDate), title: job.name || t.jobName || "Matterport scan",
         tag: "Scan", tagColor: C.rough,
         sub: [prevStatus === "scheduled" && prevDate ? `Scan scheduled ${fmtDisplay(prevDate)}` : (prevDate ? `Needs by ${fmtDisplay(prevDate)}` : "Rough complete — scan before drywall")].filter(Boolean),
@@ -53685,7 +53778,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // Walks made from the Job Prep strip carry walkDate only (no statusDate).
     const wDate = w.statusDate || w.walkDate || "";
     const owners = ownersForRoute(rk, users, todayYmd);
-    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate, staleMoney: rk === "co_send", owners,
+    const row = { key: "redline_" + w.id, kind: "redline", routeKey: rk, bucket: urgencyBucket(wDate), staleJob: job, staleDate: wDate, staleMoney: rk === "co_send", owners, dueYmd: ymdOf(wDate),
       title: rk === "redline" ? `Redline walk · ${name}` : `Write redline CO · ${name}`,
       tag: rk === "redline" ? "Walk" : "CO", tagColor: rk === "redline" ? C.purple : C.red,
       sub: [wDate ? fmtDisplay(wDate) : "", owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean),
@@ -53763,7 +53856,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const qOn = !!String(q || "").trim();
   const fq = (rows) => qOn ? rows.filter(r => rowMatches(r, q)) : rows;
   const view = (viewPref === "job" || (viewPref === "person" && iRunHead)) ? viewPref : "cat";
-  const sortRows =(rs) => rs.slice().sort((a, b) => (MYDAY_ORDER.indexOf(a.bucket) - MYDAY_ORDER.indexOf(b.bucket)) || String(a.title).localeCompare(String(b.title)));
+  const sortRows =(rs) => rs.slice().sort(compareMyDayRows);   // v446: urgency → lane → due date → title
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
   // Rows = task docs on the head about my jobs ∪ the head's auto rows on my
@@ -53822,7 +53915,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const v = !!n.voided;
     const canReopen = !v || sameName(n.assignedBy, me) || sameName(n.createdBy, me) || sameName(n.voidedBy, me) || iRunHead;
     return {
-      key: "done_" + n.id, kind: "need", needKind: k, bucket: "later",
+      key: "done_" + n.id, kind: "need", needKind: k, bucket: "later", prio: needPriority(n),
       title: n.text || "(no text)",
       tag: v ? "Voided" : k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need",
       tagColor: v ? C.red : k === "task" ? C.teal : C.orange,
@@ -53891,6 +53984,30 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     // v426: everything I finished (on me, or sent and closed myself), last 30 days, newest first.
     { key: "done", title: "Done", rows: fq(doneRows), empty: "Nothing finished in the last 30 days." },
   ];
+  // v446: a push / inbox tap carries the task id (`?view=myday&need=<id>`).
+  // Find the row wherever it lives (Focus strip, Mine category / job line,
+  // Sent, Done, a Person group), unfold its way there, scroll to it and flash
+  // it for a few seconds. Waits while `needs` is still empty (cold start);
+  // clears the request once needs are loaded even when the doc isn't found.
+  useEffect(() => {
+    if (!jumpNeedId) return;
+    let hit = null;
+    const inFocus = pinnedRows.find(r => r.need && r.need.id === jumpNeedId);
+    if (inFocus) hit = { r: inFocus };
+    else for (const g of groups) { const r = g.rows.find(x => x.need && x.need.id === jumpNeedId); if (r) { hit = { g, r }; break; } }
+    if (!hit) { if ((needs || []).length && onJumped) onJumped(); return; }
+    if (hit.g) {
+      const { g, r } = hit;
+      setOpenGroups(s => { const n = new Set(s); n.add(g.key); return n; });
+      if (g.byCat) { const c = g.byCat.find(c => c.rows.some(x => x.key === r.key)); if (c) setOpenCats(s => { const n = new Set(s); n.add(g.key === "mine" ? c.key : g.key + ":" + c.key); return n; }); }
+      if (g.byJob) { const jid = r.jobId || "_none"; setOpenHeadJobs(s => { const n = new Set(s); n.add(g.key === "head" ? jid : g.key + ":" + jid); return n; }); }
+    }
+    setFlashKey(hit.r.key);
+    const scrollT = setTimeout(() => { const el = document.getElementById("mdrow_" + hit.r.key); if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" }); }, 60);
+    const flashT = setTimeout(() => setFlashKey(null), 4000);
+    if (onJumped) onJumped();
+    return () => { clearTimeout(scrollT); clearTimeout(flashT); };
+  }, [jumpNeedId, needs]); // eslint-disable-line
   // v421 update panel state (Row is a plain render fn, so state lives here).
   const [updFor, setUpdFor] = useState(null);
   const [updKind, setUpdKind] = useState("note");
@@ -53920,8 +54037,9 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
     const canPick = !!r.sel && (caps.done || caps.snooze || caps.push);
     const isSel = selected.has(r.key);
     const pinned = pinnedSet.has(r.key);
+    const flashing = flashKey === r.key;   // v446: row a push / inbox tap deep-linked to
     return (
-      <div key={r.key} style={{ display: "flex", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : C.border}`, borderLeft: `4px solid ${bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44 }}>
+      <div key={r.key} id={"mdrow_" + r.key} style={{ display: "flex", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
@@ -53932,8 +54050,21 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
+            {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
+            {r.prio === "urgent" && <span title="Marked urgent" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: C.red }}><Icon name="flag" size={9} stroke={2.5} />Urgent</span>}
+            {r.prio === "low" && <span title="Low priority" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.muted, border: `1px solid ${C.border}` }}>Low</span>}
             {r.sub.map((s, i) => <span key={i}>{s}</span>)}
             {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
+            {/* v446: who it's on, as a visible control when the viewer can change it. */}
+            {r.canReassign && r.onTogglePick && !selectMode && (
+              <button onClick={e => { e.stopPropagation(); r.onTogglePick(); }} title="Change who this is on" aria-expanded={!!r.pushOpen}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "2px 7px 2px 8px", minHeight: 24, borderRadius: 999, cursor: "pointer",
+                  color: C.accent, border: `1px solid ${C.accent}`, background: r.pushOpen ? `${C.accent}14` : "transparent", whiteSpace: "nowrap" }}>
+                <Icon name="user" size={11} stroke={2.25} />
+                To: {r.assignee ? (sameName(r.assignee, me) ? "me" : first(r.assignee)) : "unassigned"}
+                <Icon name="chevronDown" size={11} stroke={2.5} />
+              </button>
+            )}
           </div>
           {r.latest && (
             <div onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
@@ -54055,13 +54186,15 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
             </div>
           )}
           {r.state === "verify" && <div style={{ fontSize: 12, color: C.green, fontWeight: 700, marginTop: 4 }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</div>}
-          {!selectMode && r.actions && r.actions.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-              {r.actions.map(a => (
+          {!selectMode && ((r.actions && r.actions.length > 0) || r.nudge) && (
+            <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
+              {(r.actions || []).map(a => (
                 <button key={a.label} title={a.title} onClick={e => { e.stopPropagation(); a.onClick(); }}
                   style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 700, padding: "6px 10px", minHeight: 32, borderRadius: 8, cursor: "pointer",
                     background: a.tone === "primary" ? C.blue : "transparent", color: a.tone === "primary" ? "#fff" : C.blue, border: `1px solid ${C.blue}` }}>{a.label}</button>
               ))}
+              {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
+              {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
             </div>
           )}
           {editFor === r.key && editDraft && r.need && !selectMode && (() => {
@@ -54082,6 +54215,13 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
                     <select value={people.find(nm => sameName(nm, editDraft.assignedTo)) || ""} onChange={e => set("assignedTo", e.target.value)} style={fld}>
                       {!editDraft.assignedTo && <option value="">Unassigned</option>}
                       {people.map(nm => <option key={nm} value={nm}>{nm}</option>)}
+                    </select>
+                  </label>
+                  <label style={lab}>Urgency
+                    <select value={editDraft.priority || "normal"} onChange={e => set("priority", e.target.value)} style={fld}>
+                      <option value="urgent">Urgent</option>
+                      <option value="normal">Normal</option>
+                      <option value="low">Low</option>
                     </select>
                   </label>
                   {!n.autoTaskId && (
@@ -54117,7 +54257,8 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           )}
           {r.pushOpen && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, padding: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
-              {r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who))).map(n => (
+              <div style={{ width: "100%", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.dim }}>{r.kind === "need" ? "Move it to" : "Push it to"}</div>
+              {(r.pickRoster || r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who)))).map(n => (
                 <button key={n} onClick={() => r.onPick(n)}
                   style={{ fontFamily: "inherit", fontSize: 12, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer", background: C.card, color: C.text, border: `1px solid ${C.border}` }}>{n}</button>
               ))}
@@ -54544,6 +54685,8 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
             ? pill(n.jobName, C.bg, C.dim, "mapPin", n.jobId && onSelectJob ? () => { const j = (jobs || []).find(x => x.id === n.jobId); if (j) onSelectJob(j); } : null)
             : pill("No job", C.bg, C.muted)}
           {aged(n) && pill("Carried over", "#F6EAEA", C.red, "flag")}
+          {needPriority(n) === "urgent" && pill("Urgent", C.red, "#fff", "flag")}
+          {needPriority(n) === "low" && pill("Low", C.bg, C.muted)}
           {n.dueBucket === "tomorrow"
             ? pill("Move to week", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "week" }))
             : pill("Pull to tomorrow", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "tomorrow" }))}
@@ -58169,6 +58312,8 @@ function App() {
   // itself is function-only). Display only — the inbox recounts from source.
   const [gcInboxOpen, setGcInboxOpen] = useState(0);
   useEffect(() => onSnapshot(doc(db,"settings","gcInbox"), s => setGcInboxOpen((s.exists() && Number(s.data().open)) || 0), () => {}), []);
+  // v446: My Day tab badge — my open task docs that are overdue, due today or urgent.
+  const mydayBadge = useMemo(() => mydayBadgeCount(needs, identity, localYmd()), [needs, identity]);
   const [moreOpen, setMoreOpen] = useState(false);  // top-nav "More" dropdown
   const [morePos, setMorePos] = useState({top:0,right:8});  // fixed-pos anchor (nav has overflow:auto, can't use absolute)
   const [activeForeman, setActiveForeman] = useState(null);
@@ -58183,11 +58328,13 @@ function App() {
   // supersedes the v217 lead "My Crew" landing). Office lands on the Job Board
   // as before; contractors are forced to their own view below. Once per session.
   const [landingApplied, setLandingApplied] = useState(false);
+  // v446 (Koy, 2026-09-24): EVERYONE internal lands on My Day now — office
+  // included — so the head's board is the first thing he sees, not a tap away.
+  // Contractors are still forced to their own view below.
   useEffect(() => {
     if (landingApplied) return;
     if (!identity?.id || !Array.isArray(users) || users.length === 0) return;
-    const t = getTitle(identity);
-    if ((t === "foreman" || isLeadTitle(t) || t === "crew") && can(identity, "myday.view")) setView("myday");
+    if (getAccess(identity) !== "contractor" && can(identity, "myday.view")) setView("myday");
     setLandingApplied(true);
   }, [identity, users, landingApplied]);
   // v433: count each screen open (once per device/user/day). Waits for the
@@ -58660,6 +58807,11 @@ function App() {
   // Deep-link to a top-level view (e.g. ?view=huddle from the daily Huddle
   // push). Applied once identity loads + permission allows. The Huddle then
   // defaults to the signed-in coordinator's own book.
+  // v446: `&need=<id>` rides along with `?view=myday` (task-loop pushes, Nudge,
+  // the overdue chase) so My Day opens ON that task. Read BEFORE pendingView's
+  // initializer strips the query string (hooks run in order).
+  const [pendingNeed, setPendingNeed] = useState(() => new URLSearchParams(window.location.search).get("need") || null);
+  const [mydayJump, setMydayJump] = useState(null);   // need id My Day should unfold / scroll to / flash
   const [pendingView, setPendingView] = useState(() => {
     const v = new URLSearchParams(window.location.search).get("view");
     if (v) { window.history.replaceState({}, "", window.location.pathname); return v; }
@@ -58670,7 +58822,7 @@ function App() {
     if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (pendingView === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop deep-links (need_assigned / need_done → My Day; bodies → Forecast).
-    else if (pendingView === "myday" && can(identity, "myday.view")) setView("myday");
+    else if (pendingView === "myday" && can(identity, "myday.view")) { setView("myday"); if (pendingNeed) { setMydayJump(pendingNeed); setPendingNeed(null); } }
     else if (pendingView === "needs" && can(identity, "board.view")) setView("needs");
     else if (pendingView === "schedule" && can(identity, "schedule.view")) setView("schedule");
     setPendingView(null);
@@ -58702,7 +58854,8 @@ function App() {
     if (item.view === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (item.view === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop items carry `view`, never jobId (so they land on the list, not a job).
-    else if (item.view === "myday" && can(identity, "myday.view")) setView("myday");
+    // v446: and `needId`, so the list opens on that task.
+    else if (item.view === "myday" && can(identity, "myday.view")) { setView("myday"); if (item.needId) setMydayJump(item.needId); }
     else if (item.view === "needs" && can(identity, "board.view")) setView("needs");
     else if (item.view === "schedule" && can(identity, "schedule.view")) setView("schedule");
   }, [identity, openJobById, markInboxRead]);
@@ -59038,8 +59191,10 @@ function App() {
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
           : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity))
-              .map(t=>t.key==="contractors"?{...t,badge:gcInboxOpen}:t)  // v433: list lives in NAV_MAIN_TABS (usage report reads it too)
-        ).map(({key,label,icon,badge})=>{
+              .map(t=>t.key==="contractors"?{...t,badge:gcInboxOpen,badgeTitle:gcInboxOpen+" contractor request"+(gcInboxOpen===1?"":"s")+" waiting"}  // v433: list lives in NAV_MAIN_TABS (usage report reads it too)
+                    :t.key==="myday"?{...t,badge:mydayBadge,badgeTitle:mydayBadge+" task"+(mydayBadge===1?"":"s")+" overdue, due today or urgent"}   // v446
+                    :t)
+        ).map(({key,label,icon,badge,badgeTitle})=>{
           const active = view===key;
           return (
             <button key={key} onClick={()=>navClick(key)}
@@ -59053,7 +59208,7 @@ function App() {
                 display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
-              {badge ? <span title={badge+" contractor request"+(badge===1?"":"s")+" waiting"} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#B23A3A",color:"#fff",font:"700 10px/16px system-ui",textAlign:"center"}}>{badge}</span> : null}
+              {badge ? <span title={badgeTitle||""} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#B23A3A",color:"#fff",font:"700 10px/16px system-ui",textAlign:"center"}}>{badge}</span> : null}
             </button>
           );
         })}
@@ -60510,7 +60665,8 @@ function App() {
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
-          focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}/>
+          focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
+          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}/>
       )}
 
       {view==="today"&&can(identity,"today.view")&&(

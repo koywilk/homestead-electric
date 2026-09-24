@@ -133,7 +133,7 @@ function coordUserOf(users, foremanName) {
 const inboxKeyOf = (user) =>
   (user && (user.id || String(user.name || "").trim().toLowerCase().replace(/\s+/g, "_"))) || null;
 
-async function logInboxNotif(user, { title, body, jobId, section, view }) {
+async function logInboxNotif(user, { title, body, jobId, section, view, needId }) {
   const key = inboxKeyOf(user);
   if (!key) return;
   try {
@@ -143,6 +143,7 @@ async function logInboxNotif(user, { title, body, jobId, section, view }) {
       jobId:   jobId   || "",
       section: section || "",
       view:    view    || "",
+      needId:  needId  || "",   // v446: task-loop items open My Day ON this task
       createdAt: new Date().toISOString(),
       read: false,
     });
@@ -212,7 +213,7 @@ async function removeStaleToken(token) {
   }
 }
 
-async function sendFCM(token, { title, body, jobId, section, view }) {
+async function sendFCM(token, { title, body, jobId, section, view, needId }) {
   if (!token) return;
   // Stable tag used for OS-level dedup (Android collapses dup notifications with
   // the same tag; web push uses it the same way). Without this, the iOS->Android
@@ -250,6 +251,7 @@ async function sendFCM(token, { title, body, jobId, section, view }) {
         jobId:   jobId   || "",
         section: section || "",
         view:    view    || "",
+        needId:  needId  || "",   // v446: the SW appends &need=<id> to the ?view=myday deep-link
         tag,
         link:    linkPath,
       },
@@ -363,7 +365,7 @@ exports.sendTestPush = functions.https.onCall(async (data) => {
 // `renudge` toggle. Returns a small report so the UI can toast the result.
 exports.reNudge = functions.https.onCall(async (data) => {
     requireAppKey(data);
-  const { toName, title, body, jobId, section, key } = data || {};
+  const { toName, title, body, jobId, section, view, needId, key } = data || {};
   if (!toName) throw new functions.https.HttpsError("invalid-argument", "toName required");
   const users = await getUsers();
   const n = String(toName).toLowerCase().trim();
@@ -373,11 +375,14 @@ exports.reNudge = functions.https.onCall(async (data) => {
   const tokens = getTokens(user);
   // Inbox write happens even with zero tokens — the reminder always lands
   // in their in-app bell, push is best-effort on top.
+  // v446: optional view + needId (My Day "Nudge") — lands on the task, not a job.
   await deliver(user, {
     title: title || "Reminder",
     body:  body  || "You have an open item that needs attention.",
     jobId: jobId || "",
     section: section || "",
+    view: String(view || "").slice(0, 32),
+    needId: String(needId || "").slice(0, 80),
   });
   return { ok: true, to: user.name, tokenCount: tokens.length };
 });
@@ -1354,6 +1359,8 @@ exports.onNeedWrite = functions.firestore
     const text   = _stripHtml(after.text || "").slice(0, 80) || "a task";
     const onJob  = after.jobName ? ` on ${after.jobName}` : "";
     const tasks  = [];
+    // v446: every task-loop push carries the doc id so My Day opens on that row.
+    const needId = context.params.needId;
 
     // 1. Assigned → the assignee. Skip self-assign and unchanged assignee.
     const prevA = before ? _needAssigneeOf(before) : "";
@@ -1366,9 +1373,9 @@ exports.onNeedWrite = functions.firestore
         ? { title: "Bodies requested",
             body:  `${by || "Someone"} needs ${after.count || "a"} ${after.count === 1 ? "body" : "bodies"}${onJob}${after.note ? ` — ${after.note}` : ""}`,
             view:  "schedule" }
-        : { title: "Task assigned to you",
+        : { title: after.priority === "urgent" ? "URGENT task assigned to you" : "Task assigned to you",
             body:  `${by || "Someone"} assigned you${onJob}: ${text}`,
-            view:  "myday" }));
+            view:  "myday", needId }));
     }
     // 2. Done → the person who asked (only on the open→done flip, only when
     //    someone ELSE closed it; legacy closes have no doneBy → silent).
@@ -1383,8 +1390,8 @@ exports.onNeedWrite = functions.firestore
     const becameVoid = !!after.voided && !(before && before.voided);
     if (!wasDone && isDone && !becameVoid && creator && doneBy && doneBy.toLowerCase() !== creator.toLowerCase()) {
       tasks.push(sendToNameIfWanted(creator, "need_done", isBodies
-        ? { title: "Bodies covered", body: `${doneBy} covered${onJob}: ${text}`, view: "myday" }
-        : { title: "Task done",      body: `${doneBy} finished${onJob}: ${text}`, view: "myday" }));
+        ? { title: "Bodies covered", body: `${doneBy} covered${onJob}: ${text}`, view: "myday", needId }
+        : { title: "Task done",      body: `${doneBy} finished${onJob}: ${text}`, view: "myday", needId }));
     }
     // 3. Sent back → the assignee. A done→open flip by someone OTHER than the
     //    assignee (v408: the head rejected the work on My Day). The assignee
@@ -1395,7 +1402,7 @@ exports.onNeedWrite = functions.firestore
     const sentBack = !!(wasDone && !isDone && !(before && before.voided) && nextA && reopenedBy && nextA.toLowerCase() !== reopenedBy.toLowerCase());
     if (sentBack) {
       tasks.push(sendToNameIfWanted(nextA, "need_assigned",
-        { title: "Task sent back", body: `${reopenedBy} sent back${onJob}: ${text}`, view: "myday" }));
+        { title: "Task sent back", body: `${reopenedBy} sent back${onJob}: ${text}`, view: "myday", needId }));
     }
     // 4. Update (v421) → the OTHER side of the task. data.updates grew by one
     //    entry {by, at, kind: note|waiting|void|edit|reopen, text, until?}: author = assignee →
@@ -1433,7 +1440,7 @@ exports.onNeedWrite = functions.firestore
           title = "Task update";
           body  = `${author}${onJob}: ${what} — ${text}`;
         }
-        tasks.push(sendToNameIfWanted(target, "need_update", { title, body, view: "myday" }));
+        tasks.push(sendToNameIfWanted(target, "need_update", { title, body, view: "myday", needId }));
       }
     }
     if (tasks.length) functions.logger.info("[onNeedWrite]", { id: context.params.needId, prevA, nextA, isDone, sends: tasks.length });
@@ -1904,14 +1911,23 @@ exports.dailyMyDayDigest = functions.pubsub
     const [jobsSnap, needsSnap, rlSnap] = await Promise.all([
       db.collection("jobs").get(), db.collection("needs").get(), db.collection("redlineWalks").get(),
     ]);
-    const counts = digestCounts({ users, jobs: env(jobsSnap), needs: env(needsSnap), redlines: env(rlSnap), todayYmd });
+    const needs = env(needsSnap);
+    const counts = digestCounts({ users, jobs: env(jobsSnap), needs, redlines: env(rlSnap), todayYmd });
     const sends = [];
     users.filter(u => u && u.active !== false && u.name).forEach(u => {
       const line = digestLine(counts.get(u.name));
       if (line) sends.push(deliverIfWanted(u, "myday_digest", { title: "☀️ Your day", body: line, view: "myday" }));
     });
+    // v446: overdue chase — assignee every other day overdue (2, 4, 6…) unless
+    // they replied in the last 48h; requester every 5th day. Own pref key
+    // `myday_chase` (NOTIF_CATEGORIES) so it can be muted apart from the digest.
+    const chases = chaseMessages(chaseTargets({ needs, users, todayYmd, nowMs: Date.now() }));
+    chases.forEach(c => {
+      const u = userByName(users, c.name);
+      if (u) sends.push(deliverIfWanted(u, "myday_chase", { title: c.title, body: c.body, view: c.view, needId: c.needId }));
+    });
     await Promise.all(sends);
-    functions.logger.info("[dailyMyDayDigest] ran", { sent: sends.length });
+    functions.logger.info("[dailyMyDayDigest] ran", { sent: sends.length, chases: chases.length });
     return null;
   });
 
@@ -3985,7 +4001,7 @@ const PACKET_DRIVE_FOLDER_ID = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
 
 const { google } = require("googleapis");
 const fridayPacketLib = require("./fridayPacket.js");
-const { digestCounts, digestLine } = require("./myDayDigest.js");
+const { digestCounts, digestLine, chaseTargets, chaseMessages } = require("./myDayDigest.js");
 
 // (The packet's date/escape/flatten helpers moved into ./fridayPacket.js with
 // the 2026-07-30 rewrite. _stripHtml stays — it has callers outside this block.)

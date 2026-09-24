@@ -142,7 +142,15 @@
   <h2 class="sec">Reading your list</h2>
   <div class="step"><div class="num">1</div><div class="body"><h3>Mine</h3>
     <p>Everything on <b>you</b>, folded into categories — Tasks on me, Punch, Invoicing, Start POs, Change orders, Return trips, Scheduling, QC walks. Each line shows its count and an <b>overdue</b> badge; the category with the most urgent item sits at the top. Tap a category to open it; inside, rows run overdue → today → this week → later. Tasks someone put on you, and punch items assigned to you, are always here. If you're a foreman, the automatic office tasks (POs, invoices, scheduling) are not yours anymore — they sit with Koy until he pushes one to you, and then it shows up here like any other task with the job on it.</p>
-    <p>Tap the row to open the job right where the item lives.</p></div></div>
+    <p>Tap the row to open the job right where the item lives.</p>
+    <p><b>Order inside a category:</b> anything marked <b>Urgent</b> (red flag) first, then overdue &rarr;
+    today &rarr; this week &rarr; later, and inside each of those the soonest due date first. Anything
+    marked <b>Low</b> sinks to the bottom. A category with an urgent row in it jumps to the top of the list.</p></div></div>
+  <div class="step"><div class="num">1b</div><div class="body"><h3>Urgency</h3>
+    <p>Every task has an urgency: <b>Urgent</b>, <b>Normal</b>, or <b>Low</b>. Set it on the + sheet
+    (the <b>Urgency</b> field) or later with <b>Edit</b>. Urgent rows get a red left edge and a red
+    <b>URGENT</b> tag, sort first, and the "assigned to you" push says URGENT in the title. Low means
+    "when you get to it" &mdash; it sorts last and the morning chase leaves it alone.</p></div></div>
   <div class="step"><div class="num">2</div><div class="body"><h3>On Koy</h3>
     <p>One line per job: <b>"Koy has 4 things on this job."</b> Tap it to see what he owes on your job — his tasks, his automatic ones, the QC walks and start POs. It's read-only. Need something from him on that job? <b>+ Add for Koy</b> is right there, already set to that job and to him.</p></div></div>
   <div class="step"><div class="num">3</div><div class="body">
@@ -166,7 +174,11 @@
   <div class="step"><div class="num">6</div><div class="body"><h3>Sent</h3>
     <p>Everything you asked someone else for, with their latest update under each one. Starts folded;
     the count on the header says how many are still open and how many are on hold. A reply from you
-    wakes a task the other side snoozed.</p></div></div>
+    wakes a task the other side snoozed.</p>
+    <p>Each Sent row shows a blue <b>To: &lt;name&gt; &#9662;</b> pill &mdash; tap it to move the task to
+    someone else on the spot &mdash; and a <b>Nudge</b> button that sends them a reminder push which opens
+    their My Day right on that task. Nudge is the same manual reminder as everywhere else in the app, so
+    it respects their "manual reminder" notification setting.</p></div></div>
   <div class="step"><div class="num">7</div><div class="body"><h3>Sent &middot; finished</h3>
     <p>A folded group right under Sent, showing things you asked for that <b>someone else</b> finished
     in the last 30 days &mdash; newest first. If you sent it and closed it yourself, it's in your own
@@ -177,8 +189,14 @@
     <p>The person who <b>sent</b> the task (or made it for themselves) sees <b>Edit</b> and <b>Void</b> under
     it, in Sent or in Mine. Koy (whoever runs the head board) can Edit or Void any open task. The person
     it's <b>on</b> doesn't get Void. They use Done or Snooze, or Reply to say it isn't needed.</p></div></div>
+  <div class="step"><div class="num">1b</div><div class="body"><h3>Move it to someone else</h3>
+    <p>The quickest way: tap the blue <b>To: &lt;name&gt; &#9662;</b> pill on the row (you see it on
+    tasks you sent, tasks you made for yourself, and &mdash; if you run the head board &mdash; on any open
+    task). A list of everyone in the company opens under the row; tap a name and it moves, with the usual
+    "assigned to you" push. The automatic rows on Koy's board work the same way: <b>&rarr; Gage</b> is one
+    tap to the job's foreman, <b>Pick person &#9662;</b> opens the same list.</p></div></div>
   <div class="step"><div class="num">2</div><div class="body"><h3>Edit</h3>
-    <p>Tap <b>Edit</b> to change the wording, the due date, who it's to, or the job ("No job" is allowed).
+    <p>Tap <b>Edit</b> to change the wording, the due date, who it's to, the urgency, or the job ("No job" is allowed).
     Tap <b>Save</b>. The other person gets a <i>Task changed</i> push, and the thread shows what changed,
     e.g. <i>changed: wording, due 10/3</i>. If you only move it to a different person, the new person
     gets the usual <i>Task assigned to you</i> push. Nothing else is added.</p></div></div>
@@ -309,12 +327,33 @@
     <p>On a phone it's the round <b>+</b> bottom-right. On a laptop it's the <b>+ Need</b> button. Inside
     a job there's a <b>+ Need</b> next to Refresh, and it fills the job in for you.</p></div></div>
   <div class="step"><div class="num">2</div><div class="body"><h3>Check who it's going to, then Save</h3>
-    <p>The <b>To:</b> chip is already set one step up the chain: a crew member's goes to their
-    foreman, a foreman's goes to Koy. Tap it to send it to someone else &mdash; anyone in the company,
-    including yourself. The other chips are optional: <b>Need</b> or <b>Task</b>, a job, and when it's due
-    (Tomorrow is the default).</p>
-    <p>Save. They get a push, it shows on their My Day, and it shows under <b>On Koy</b> (or whoever) on
-    yours so you can see it's still open.</p></div></div>
+    <p>Under the text box is a row of <b>fields</b>, each with a little arrow: <b>To</b>, <b>Urgency</b>,
+    <b>Due</b>, <b>Job</b>, <b>Type</b>, and <b>Photo</b>. Tap any of them to change it &mdash; the
+    options open right underneath. <b>To</b> is already set one step up the chain (a crew member's goes
+    to their foreman, a foreman's goes to Koy); tap it to pick Koy, yourself, your foreman, or anyone in
+    the company from the list. <b>Urgency</b> is Normal unless you say otherwise. <b>Due</b> is Tomorrow
+    unless you pick This week or a date.</p>
+    <p>Save. They get a push, it shows on their My Day, and it shows under <b>Sent</b> on yours so you
+    can see it's still open.</p></div></div>
+
+  <h2 class="sec">Getting to it faster</h2>
+  <div class="step"><div class="num">1</div><div class="body"><h3>You land here</h3>
+    <p>Everyone in the company opens the app on My Day now &mdash; office included. Job Board is one tap
+    away in the header.</p></div></div>
+  <div class="step"><div class="num">2</div><div class="body"><h3>The red number on the tab</h3>
+    <p>The <b>My Day</b> tab in the header shows a red count: your tasks that are overdue, due today, or
+    marked urgent. No number means nothing is pressing.</p></div></div>
+  <div class="step"><div class="num">3</div><div class="body"><h3>A push opens the task itself</h3>
+    <p>Tap a task push ("assigned to you", "Task update", a Nudge, the morning chase) or its line in the
+    bell inbox and My Day unfolds straight to that row, scrolls to it, and outlines it in blue for a few
+    seconds so you don't have to hunt.</p></div></div>
+  <div class="step"><div class="num">4</div><div class="body"><h3>The morning chase</h3>
+    <p>Weekday mornings, right after the "Your day" summary: if a task on you is <b>2 or more days
+    overdue</b> and you haven't replied on it in the last two days, you get a <b>"Still open on you"</b>
+    push &mdash; every other day it stays overdue (2, 4, 6&hellip;). The person who sent it gets a
+    <b>"Still waiting on someone"</b> push on day 5, 10, 15&hellip; Reply, snooze it, or mark it done and
+    the chase stops. Snoozed tasks, tasks with no due date, and Low-urgency tasks are never chased. You can
+    turn the chase off in Settings &rarr; Notifications ("Overdue task chase").</p></div></div>
 
   <div class="call key"><span class="lbl">Where things go</span>
     <p>Everything you add here also shows on the office <b>Needs</b> page under the person it's on.
@@ -323,7 +362,7 @@
     <p>Then Mine says <b>All clear</b>. That's the goal. Your jobs are still one tap away in the strip
     under the title, and <b>Job Board</b> / <b>My Crew</b> are in the header.</p></div>
 
-  <div class="foot">Homestead Electric · in-app guide · My Day and Needs shipped SW v398 · Ship 2 (search, views, Focus today, Select, stale rows, Sent · finished) SW v429 · Ship 3 (photos on tasks, Team pulse) SW v431.</div>
+  <div class="foot">Homestead Electric · in-app guide · My Day and Needs shipped SW v398 · Ship 2 (search, views, Focus today, Select, stale rows, Sent · finished) SW v429 · Ship 3 (photos on tasks, Team pulse) SW v431 · Ship 4 (urgency, Nudge + morning chase, tab badge, land-on-My-Day, push opens the task, To: pill) SW v446.</div>
 </div>
 </body>
 </html>
