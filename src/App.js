@@ -16766,6 +16766,13 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
 // and that panelized lighting needs the exact same thing"). Rows jump groups when
 // ticked; untick in the Done group to reverse. `items` = [{id, name, meta, chip,
 // chipBg, chipFg, done, warn, key}]; onToggle(item, nextDone) does the write.
+// v443: who/when on a load marked ran — the same stamp shape Home Runs uses
+// (statusBy + M/D/YYYY). Unticking clears it. Used by Loads Ran AND the Loads
+// list's ✓ column so the stamp is right whichever one you tick.
+function loadPulledPatch(on) {
+  const who = getIdentity();
+  return { pulled: !!on, pulledBy: on ? (who?.name || "") : "", pulledAt: on ? new Date().toLocaleDateString("en-US") : "" };
+}
 function PullChecklistSummary({title, items, doneWord, notWord, onToggle}) {
   const [open, setOpen] = useState(false);
   const total = items.length, done = items.filter(x=>x.done).length;
@@ -16788,6 +16795,9 @@ function PullChecklistSummary({title, items, doneWord, notWord, onToggle}) {
         <div style={{fontSize:10,color:C.dim,marginTop:1,wordBreak:'break-word'}}>
           {x.meta||'—'}{x.warn&&<span style={{color:C.red,fontWeight:700}}> · {x.warn}</span>}
         </div>
+        {x.done&&(x.by||x.at)&&(
+          <div style={{fontSize:10,color:C.green,fontWeight:600,marginTop:1}}>✓ {[x.by, x.at].filter(Boolean).join(' · ')}</div>
+        )}
       </div>
       {x.chip!==undefined&&(
         <span style={{flexShrink:0,fontSize:10,fontWeight:800,padding:'3px 7px',borderRadius:5,
@@ -16844,6 +16854,7 @@ function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
     chip: r.wire||'', chipBg: r.wire?(WIRE_COLORS[r.wire]||C.surface):C.surface,
     chipFg: r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
     done: r.status==='Pulled', warn: r.status==='Need Specs' ? 'Need Specs' : '',
+    by: r.statusBy||'', at: r.statusAt||'',
   }));
   return <PullChecklistSummary title="Home Runs Pulled" items={items} doneWord="Pulled" notWord="Not Pulled"
     onToggle={onTogglePulled ? (x, on) => onTogglePulled(x.fk, x.id, on) : null}/>;
@@ -18210,8 +18221,8 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
                             {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
                               style={{width:16,height:16,accentColor:color,cursor:"pointer",flexShrink:0}}/>}
-                            <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
-                              title="Mark as pulled"
+                            <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,loadPulledPatch(e.target.checked))}
+                              title={l.pulled ? `Ran${(l.pulledBy||l.pulledAt)?" — "+[l.pulledBy,l.pulledAt].filter(Boolean).join(" · "):""}` : "Mark as ran"}
                               style={{width:18,height:18,accentColor:C.green,cursor:"pointer",flexShrink:0}}/>
                             <span style={{fontSize:11,color:C.muted,flexShrink:0}}>{li+1}.</span>
                             <input
@@ -18263,8 +18274,8 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${color}0d`:"transparent"}}>
                           {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
                             style={{width:14,height:14,accentColor:color,cursor:"pointer",margin:0}}/>}
-                          <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
-                            title="Mark as pulled"
+                          <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,loadPulledPatch(e.target.checked))}
+                            title={l.pulled ? `Ran${(l.pulledBy||l.pulledAt)?" — "+[l.pulledBy,l.pulledAt].filter(Boolean).join(" · "):""}` : "Mark as ran"}
                             style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
                           <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
                           <div style={{display:"flex",alignItems:"center",gap:4}}>
@@ -28563,10 +28574,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const items = named.map(l => ({
                   id: l.id, name: l.name,
                   meta: [String(l.room||"").trim(), String(l.location||"").trim(), String(l.panel||"").trim()].filter(Boolean).join(" · "),
-                  chip: l.loadType || "", done: !!l.pulled,
+                  chip: l.loadType || "", done: !!l.pulled, by: l.pulledBy || "", at: l.pulledAt || "",
                 }));
                 return <PullChecklistSummary title="Loads Ran" items={items} doneWord="Ran" notWord="Not Ran"
-                  onToggle={(x, on) => { const cur = job.panelizedLighting || {}; u({ panelizedLighting: { ...cur, loads: (cur.loads || []).map(l => l && l.id === x.id ? { ...l, pulled: on } : l) } }); }}/>;
+                  onToggle={(x, on) => { const cur = job.panelizedLighting || {}; u({ panelizedLighting: { ...cur, loads: (cur.loads || []).map(l => l && l.id === x.id ? { ...l, ...loadPulledPatch(on) } : l) } }); }}/>;
               })()}
               {(()=>{
                 const everything = Object.values(ccLoadInbox || {}).filter(Boolean);
@@ -28614,6 +28625,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   : filter === "needs" ? (l.needsSwitch === true && !l.removedAt) : true;
                 const groups = ccLoadsGrouped(filter === "dismissed" ? dismissedRows : filter === "imported" ? importedRows : waiting.filter(passes));
                 const toImportAll = importable(incoming);
+                // v443 (Koy: "a 'dismiss all normal switching' … so i dont have to
+                // individually dismiss all the loads that are not panelized"): every
+                // WAITING non-panel load (switched / dimmer / tape) → office.dismissed in
+                // ONE merge-set via publishCcLoadOfficeMany; the field is never told and
+                // no job data changes. "Restore all" in the Dismissed view reverses it.
+                const switchedWaiting = waiting.filter(l => l.control !== "panel");
+                const dismissAllSwitched = () => {
+                  if (!switchedWaiting.length) return;
+                  if (!window.confirm(`Dismiss all ${switchedWaiting.length} regular-switching load${switchedWaiting.length===1?"":"s"} (switched, dimmer, tape)? They only hide from this inbox. Restore them any time from the Dismissed chip.`)) return;
+                  const patches = {}; switchedWaiting.forEach(l => { patches[l.id] = { dismissed: true }; });
+                  publishCcLoadOfficeMany(job.id, patches);
+                  toast.success(`Dismissed ${switchedWaiting.length} switched load${switchedWaiting.length===1?"":"s"}`);
+                };
+                const restoreAllDismissed = () => {
+                  if (!dismissedRows.length) return;
+                  const patches = {}; dismissedRows.forEach(l => { patches[l.id] = { dismissed: false }; });
+                  publishCcLoadOfficeMany(job.id, patches);
+                  toast.success(`Restored ${dismissedRows.length} load${dismissedRows.length===1?"":"s"}`);
+                };
                 // v435 cleanup: switched / dimmer / tape loads that the pre-v435 Import
                 // pulled into the Loads list by mistake. Only rows WE created from
                 // FieldInk (origin + fieldLoadId) whose field load isn't panel —
@@ -28766,6 +28796,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                         {chip("all", "All", null)}
                         {chip("pending", "Pending", all.pending)}
+                        {switchedWaiting.length > 0 && filter !== "dismissed" && filter !== "imported" && (
+                          <button onClick={dismissAllSwitched} title="Hide every regular-switching load (switched, dimmer, tape) from this inbox in one tap — only panel loads stay"
+                            style={{padding:"3px 10px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>
+                            Dismiss {switchedWaiting.length} switched
+                          </button>
+                        )}
+                        {filter === "dismissed" && dismissedRows.length > 0 && (
+                          <button onClick={restoreAllDismissed} title="Put every dismissed load back in the inbox"
+                            style={{padding:"3px 10px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"transparent",color:C.blue,border:`1px solid ${C.blue}`}}>
+                            Restore all {dismissedRows.length}
+                          </button>
+                        )}
                         {importedRows.length > 0 && chip("imported", "Imported", importedRows.length)}
                         {dismissedRows.length > 0 && chip("dismissed", "Dismissed", dismissedRows.length)}
                         {all.needs > 0 && (
@@ -48824,12 +48866,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v442
+**Last manifest update:** 2026-09-24 · App SW version: v443
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Dismiss all switched loads + who/when on every check-off** · 'shipped 2026-09-24' · 'SW v443' · Koy: *"i need a 'dismiss all normal switching' or something so i dont have to individually dismiss all the loads that are not panelized"* + *"just like if its checked off in the other section, show who checked it off and date."* **Incoming from FieldInk:** **Dismiss N switched** (header, with a confirm) hides every waiting non-panel load (switched / dimmer / tape) in ONE 'publishCcLoadOfficeMany' merge-set of 'office.dismissed:true' (the field isn't told, no job data); the Dismissed view gains **Restore all N**. **Stamps:** the shared checklist shows '✓ <who> · <date>' under every checked row — Home Runs from the existing 'statusBy'/'statusAt'; loads via new 'loadPulledPatch(on)' → 'pulled' + 'pulledBy' + 'pulledAt' (M/D/YYYY, cleared on untick), written by BOTH the Loads Ran card and the Loads list's ✓ column (whose checkbox tooltip now shows the stamp). Guide updated. **Why it won't lose data:** dismiss writes only the office-owned flag on the bridge; 'pulledBy'/'pulledAt' are additive fields on existing load rows through the same single 'u()' patches.
 - **Home Runs Pulled is checkable + Panelized Lighting gets a Loads Ran card** · 'shipped 2026-09-24' · 'SW v442' · Koy: *"we should be able to mark homeruns pulled from this drop down, right now its just view only. and that panelized lighting needs the exact same thing so its easy to see and mark off loads ran."* New shared 'PullChecklistSummary' (collapsed progress card → one A-Z list split Not done / Done, each row a checkbox). **Home Runs:** 'HomeRunsPullSummary' now uses it; ticking writes the SAME 'status:"Pulled"' + 'statusBy' + 'statusAt' the row editor's Pulled select writes (unticking clears them) via one 'onHRChange' floor patch; counts still come from the named rows so the header and list never drift. **Panelized Lighting:** a **Loads Ran** card at the top of the tab lists every named load on the Loads list (room · floor · panel, load type chip); ticking flips the SAME per-load 'pulled' flag as the Loads list's ✓ column. Guides 'homeruns.html' + 'panelizedlighting.html' updated. **Why it won't lose data:** both writes reuse existing fields and existing one-patch paths ('onHRChange' floor array / 'u({panelizedLighting})'); no new fields.
 - **FieldInk inbox hides loads once they're imported** · 'shipped 2026-09-24' · 'SW v441' · Koy: *"after a load is imported from field ink they need to hide so its not so confusing with so many loads on there."* The Panelized Lighting **Incoming from FieldInk** inbox now splits incoming loads into *waiting* (not yet on the job's Loads list) and *imported* (a 'pl.loads' row carries its 'fieldLoadId'): the default view, the header count and the panel/switched tally show only what's waiting; a new **Imported N** chip (beside Dismissed) shows the imported ones with their green *In Loads* tag. Nothing is written — hiding is derived from the Loads list, so deleting a row from the Loads list brings its load back into the inbox. Guide updated. **Why it won't lose data:** display-only filter; no reads or writes changed.
 - **Job Sections round 2 — Panelized Lighting sub-switches + "off means gone everywhere"** · 'shipped 2026-09-24' · 'SW v440' · Koy: *"I really need you to search harder so that we can clean up jobs and not have extra shit in jobs that don't need it"* + *"What about on Tech Lighting's link and panelized lighting?"* + *"this is all going to start on, right? Nothing's going to change on any existing jobs."* **Five new switches under Panelized Lighting** (indented; off with the parent; counted only when turned off themselves): **Keypads** (replaces the in-tab "No keypad loads / Show keypads" buttons — same flag 'panelizedLighting.noKeypadLoads', so the export still honors it), **Panel Loads** (the whole panel/module/Savant section + "+ Add Panel"), **Tech Lighting's link** (Lutron jobs only, office-only via 'lutron.manage', same confirm; replaces the checkbox at the top of the tab — same flag 'panelizedLighting.excludeFromLutronHub' the Plan Changes view's Hide/Restore writes; off also hides Copy hub link and the Plan Changes log unless changes are already logged), **LV Collab Link** (Share collab row + LV Company Additions; has-data checks 'homeowner_requests.lightingCollab'), **Loads Share Link** (Share loads). Registry gains 'parent', 'appliesTo', 'perm', 'confirmOff', 'asyncHasData', and legacy '{get,set}' accessors — **a legacy-backed switch reads its old flag as the source of truth** (panelized/tapeLight/keypads/techLighting), toggling writes both. **A hidden section is now gone EVERYWHERE, not just on the card:** Tech Lighting's hub ('?lightinghub'), their per-job page ('?lutronshare'), the Plan Changes view and the Monday 'techLightingWeeklyDigest' all drop jobs with Panelized off ('offTechLightingLink'); the four outside links — homeowner generator ('?homeowner'), live view ('?homeruns'), loads ('?loads'), LV collab ('?lighting') — show a new 'SectionNotSharedPage' ("This isn't being shared right now") while their section is off; the GC portal mirror ('gcPortal.matterportView') sends an empty Matterport when hidden (portal shows nothing, 'gcPortalSubmit' refuses a scan date) and 'gcNotify' skips the "Matterport ready" email; the Job Prep board reads a hidden Temp Pedestal as N/A; Material Tracking hidden removes the Job Notes **PO** promote chip, the punch "Material needed" box ('onAddMaterial' undefined on both punch lists + legacy instructions), Home Runs panel-card **+ Add to PO**, the Needs Attention unsent-PO rows and the Activity "Materials & POs" group; Panel Schedules hidden removes the panel-card **Create / Open Panel Schedule** button and "+ Add Panel" no longer creates an invisible schedule. 'hasData' for Matterport / Lighting / Panel Schedules links now also reads 'linkSections.*'. SOPs updated: jobinfo, panelizedlighting, lightinglinks, homeruns. Tests: gcportal-test +2, gcnotify-test +1. **Needs 'firebase deploy --only functions'** (onJobUpdate + every gcPortal* callable rebuild the portal mirror; techLightingWeeklyDigest; dailyMatterportChase from v439). **Why it won't lose data:** no new field (still 'hiddenSections' + the four pre-existing flags); every switch starts ON and jobs that already had 'noKeypadLoads' / 'excludeFromLutronHub' / 'noPanelizedLighting' / 'noTapeLight' set show that switch OFF — the exact state they were already in; hiding stays render/filter-only (no section data is cleared or moved, a paused outside link revives on turn-on); the portal change only blanks the projected Matterport view for hidden jobs, never the job; no rules change.
