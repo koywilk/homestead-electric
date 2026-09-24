@@ -28319,6 +28319,32 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   u({ panelizedLighting: { ...pl, loads: next } });
                   toast.success(`Filled floor/room on ${ids.size} load${ids.size===1?"":"s"}`);
                 };
+                // v437: the office sets a sheet's floor (FieldInk often has none — sheets
+                // named "PG 1"). Writes ONLY loads.<id>.office.floor on the bridge for
+                // every load on that sheet (office-owned key; import + backfill already
+                // prefer office.floor), and fills BLANK floors on that sheet's already-
+                // imported rows in one u() patch. Never overwrites a typed floor.
+                const sheetOf = (l) => String((l && l.sheet) || "").trim() || "No sheet";
+                const sheetOfficeFloor = (label) => {
+                  const fl = [...new Set(everything.filter(l => sheetOf(l) === label).map(l => String((l.office && l.office.floor) || "").trim()))];
+                  return fl.length === 1 ? fl[0] : "";
+                };
+                const setSheetFloor = (label, floor) => {
+                  const onSheet = everything.filter(l => sheetOf(l) === label);
+                  if (!onSheet.length) return;
+                  const patches = {};
+                  onSheet.forEach(l => { patches[l.id] = { floor: floor || "" }; });
+                  publishCcLoadOfficeMany(job.id, patches);
+                  if (!floor) return;
+                  const ids = new Set(onSheet.map(l => l.id));
+                  let filled = 0;
+                  const next = plLoads.map(r => {
+                    if (r && r.origin === "fieldink" && r.fieldLoadId && ids.has(r.fieldLoadId) && !String(r.location || "").trim()) { filled++; return { ...r, location: floor }; }
+                    return r;
+                  });
+                  if (filled) u({ panelizedLighting: { ...pl, loads: next } });
+                  toast.success(`${label} → ${floor}${filled ? ` · filled ${filled} imported load${filled===1?"":"s"}` : ""}`);
+                };
                 const removeStray = () => {
                   if (!strayImported.length) return;
                   if (!window.confirm(`Remove ${strayImported.length} regular-switching load${strayImported.length===1?"":"s"} that were imported from FieldInk by mistake? Panel loads and anything you typed yourself stay.`)) return;
@@ -28447,8 +28473,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {groups.map(g => (
                       <div key={g.key}>
                         <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:C.bg,borderTop:`1px solid ${C.border}`,fontSize:11,fontWeight:700,color:C.dim,letterSpacing:"0.04em",textTransform:"uppercase"}}>
-                          <span>{g.label}</span>{g.floor && <span style={{fontWeight:500,textTransform:"none",letterSpacing:0}}>· {g.floor}</span>}
+                          <span>{g.label}</span>{g.floor && !sheetOfficeFloor(g.key) && <span style={{fontWeight:500,textTransform:"none",letterSpacing:0}}>· {g.floor}</span>}
                           <span style={{fontWeight:500,textTransform:"none",letterSpacing:0}}>· {g.count} load{g.count===1?"":"s"}</span>
+                          <select value={sheetOfficeFloor(g.key)} onChange={e=>setSheetFloor(g.key, e.target.value)}
+                            title="Which floor this plan sheet is — tags every load on it and fills blank floors on loads already imported"
+                            style={{marginLeft:"auto",fontSize:11,fontWeight:600,textTransform:"none",letterSpacing:0,fontFamily:"inherit",padding:"3px 6px",borderRadius:6,
+                              border:`1px solid ${sheetOfficeFloor(g.key) ? sysAccentColor(job) : C.border}`,background:C.card,color:sheetOfficeFloor(g.key) ? C.text : C.dim}}>
+                            <option value="">{g.floor ? `Floor: ${g.floor} (from plan)` : "Set floor…"}</option>
+                            {floorOptions.map(f => <option key={f} value={f}>{f}</option>)}
+                          </select>
                         </div>
                         {g.rooms.map(r => {
                           const rkey = g.key + "|" + r.key;
@@ -48446,12 +48479,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-23 · App SW version: v436
+**Last manifest update:** 2026-09-23 · App SW version: v437
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Set a plan sheet's floor from the inbox** · 'shipped 2026-09-23' · 'SW v437' · Koy didn't see *Fill floor/room* on a job whose FieldInk sheets are just "PG 1" — FieldInk sends no floor when the crew never set one for the sheet, so there was nothing to fill (rooms were already stored on import since v403, now visible in v436's Room box). Each sheet header in **Incoming from FieldInk** now has a **Set floor…** menu (the Loads list's floor sections): choosing one writes ONLY 'loads.<id>.office.floor' on the bridge for every load on that sheet via 'publishCcLoadOfficeMany' (office-owned key, already preferred by import + backfill), and fills BLANK floors on that sheet's already-imported Loads-list rows in one 'u()' patch; the header shows the office floor once set (the plan's floor, if any, is shown as the default). Guide updated. **Why it won't lose data:** the bridge write names only the office-owned 'office.floor' of the listed loads (merge-set, same shape as v400 suggestions); the job write only fills empty 'location' on fieldink-origin rows.
 - **FieldInk import brings the rooms and floors** · 'shipped 2026-09-23' · 'SW v436' · Koy: *"when a load is imported into the panelized lighting, it needs to import the rooms and floors."* FieldInk sends each load's 'floor' as the crew typed it for the plan SHEET ("Main Level", "2nd Floor"…) but 'ccLoadImportRows' only knew the keys main/basement/upper, so most loads imported with a BLANK floor into Unassigned. New pure 'ccFloorToSection' matches an existing Loads-list section case-insensitively, then synonyms (main/1st/first/level 1/ground → Main Level; basement/lower/bsmt → Basement; upper/2nd/second/level 2/upstairs → Upper Level), else keeps FieldInk's own text as its own section; an office-set 'office.floor' on the bridge wins. The **Room** (already stored on imported rows) now shows as an editable **Room** box on every Loads-list row, and loads sort by room within each floor. **Fill floor/room on N loads** (header, when any) backfills ONLY blank floor/room on earlier FieldInk imports. Tests: 'scripts/ccloads-suggest-test.js' (82 checks). Guide updated. **Why it won't lose data:** import stays append-only; the backfill is one 'u()' patch that only fills empty 'location'/'room' on fieldink-origin rows; 'room' is an existing row field.
 - **FieldInk import brings in panelized loads only** · 'shipped 2026-09-23' · 'SW v435' · Koy: *"when i hit import loads from field ink the panelized lighting tab, it imported all the regular switching loads too. it need to only import panelized loads."* 'ccLoadImportRows' now skips any incoming load whose FieldInk 'control' isn't 'panel' (switched / dimmer / tape stay on the plan's regular switching); the per-row **Import**, room **Import N** and header **Import all** only offer and count panel loads. **Cleanup:** when the job's Loads list still holds rows an older import created from non-panel loads (only rows with 'origin:"fieldink"' + a 'fieldLoadId' whose field load isn't panel), a red **Remove N switched loads imported by mistake** header button removes them after a confirm (hand-typed rows and panel loads are never touched). Tests: 'scripts/ccloads-suggest-test.js' (73 checks). Guide 'panelizedlighting.html' updated. **Why it won't lose data:** import is still append-only and idempotent; the cleanup is one confirmed 'u()' patch that filters ONLY fieldink-origin rows tied to a non-panel field load; the per-field job version history + recovery ledger cover it.
 - **My Day — void / edit a sent task, Reply + edit your reply** · 'shipped 2026-09-23' · 'SW v434' · Koy (2026-09-23): "we need an option to either void or edit a need sent to somebody as well as a comment back". On a not-done task row I sent (Sent, and my own self-created rows in Mine) — or any task row for whoever runs the head board — two new actions: **Edit** opens an inline panel (wording, due date, To: roster, Job: active jobs + "No job"; an auto-task delegate hides Job) and saves one field-surgical 'patchNeed' of only the changed fields plus an update entry '{kind:"edit", text:"changed: wording, due 10/3, job"}' — unless ONLY the person changed (the assign push already covers that). **Void** opens a confirm with an optional reason; it closes the doc with a flag ('status:"done", doneBy, voided:true, voidedBy, voidedAt, voidReason') plus an update entry '{kind:"void"}' in the SAME write, with the usual 10-second Undo. A voided task leaves every open list (every open predicate already reads status), shows in the sender's **Sent · finished** tagged **VOIDED** (red) with who / when / why and **Reopen** (clears the flags + a "Reopened" note), and in the assignee's Done as "voided by <first>" (no Reopen for them). 'sentFinishedForMe' / 'completedForMe' / 'teamPulse' updated (voids never count as "done this week"), vm-tested in 'scripts/needs-dryrun.js'. The old note icon is now a **Reply** button (text on phones, icon + text on desktop); the thread opens oldest → newest; on my own replies a ✎ edits the text in place ("(edited)"), via a Firestore transaction ('editNeedUpdate') that re-reads the doc and swaps only that entry, so an entry appended at the same moment isn't lost; no push (array length unchanged). **Server (onNeedWrite):** a void never sends "Task done" (branch 2 skips 'voided'), reopening a void never sends "Task sent back" (branch 3 skips 'before.voided'); branch 4 titles "Task voided" / "Task changed" by entry kind, and skips an edit push when the same write already pushed "assigned to you" to that person. Needs 'firebase deploy --only functions:onNeedWrite'. The Needs board's Done today also tags voided docs VOIDED, and its Reopen clears the void flags (sender / head only). Void is hidden on auto-task delegate docs (Take back covers them). SOPs 'public/sops/myday.html' + 'needs.html' updated. **Why it won't lose data:** additive fields inside 'data' only; void is a closed-with-flag, never a delete (Reopen / Undo restore it); every write is dotted-path 'updateDoc' + 'arrayUnion'; reply edits go through a transaction that re-reads the array; no rules change.
