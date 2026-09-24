@@ -16760,74 +16760,93 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
 // grouped by wire) — `byName` below is the one place that lives; a future
 // wire-size-grouping pass means grouping notPulledFlat/pulledFlat by
 // `x.r.wire` before this sort, nothing else changes.
-function HomeRunsPullSummary({namedFlat, pulled, total, pct}) {
+// v442: shared pull/ran checklist — a collapsed progress card that expands into
+// one flat A-Z list split Not done / Done, each row CHECKABLE (Koy: "we should be
+// able to mark homeruns pulled from this drop down, right now its just view only.
+// and that panelized lighting needs the exact same thing"). Rows jump groups when
+// ticked; untick in the Done group to reverse. `items` = [{id, name, meta, chip,
+// chipBg, chipFg, done, warn, key}]; onToggle(item, nextDone) does the write.
+function PullChecklistSummary({title, items, doneWord, notWord, onToggle}) {
   const [open, setOpen] = useState(false);
-  const notPulled = total - pulled;
-  const byName = (a,b) => (a.r.name||'').toLowerCase().localeCompare((b.r.name||'').toLowerCase());
-  const notPulledFlat = namedFlat.filter(x=>x.r.status!=='Pulled').sort(byName);
-  const pulledFlat    = namedFlat.filter(x=>x.r.status==='Pulled').sort(byName);
-
-  const renderRow = (x) => {
-    const {r, floor} = x;
-    const isPulled = r.status==='Pulled', isNeedSpecs = r.status==='Need Specs';
-    const meta = [r.panel, floor, wireAmpsVolts(r.wire, r.v240)].filter(Boolean).join(' · ');
-    return (
-      <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 8px',
-        borderRadius:7,marginBottom:4,
-        background:isPulled?'rgba(62,125,90,0.08)':isNeedSpecs?'rgba(239,68,68,0.1)':'transparent',
-        border:`1px solid ${isPulled?'rgba(62,125,90,0.3)':isNeedSpecs?'rgba(239,68,68,0.3)':C.border}`}}>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.text,wordBreak:'break-word'}}>{r.name}</div>
-          <div style={{fontSize:10,color:C.dim,marginTop:1,wordBreak:'break-word'}}>
-            {meta||'—'}{isNeedSpecs&&<span style={{color:C.red,fontWeight:700}}> · Need Specs</span>}
-          </div>
+  const total = items.length, done = items.filter(x=>x.done).length;
+  const pct = total ? Math.round(done/total*100) : 0;
+  const byName = (a,b) => (a.name||'').toLowerCase().localeCompare((b.name||'').toLowerCase());
+  const notDone = items.filter(x=>!x.done).sort(byName);
+  const doneList = items.filter(x=>x.done).sort(byName);
+  const renderRow = (x) => (
+    <div key={x.key||x.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 8px',
+      borderRadius:7,marginBottom:4,
+      background:x.done?'rgba(62,125,90,0.08)':x.warn?'rgba(239,68,68,0.1)':'transparent',
+      border:`1px solid ${x.done?'rgba(62,125,90,0.3)':x.warn?'rgba(239,68,68,0.3)':C.border}`}}>
+      {onToggle&&(
+        <input type="checkbox" checked={!!x.done} onChange={e=>onToggle(x, e.target.checked)}
+          title={x.done?`Mark not ${doneWord.toLowerCase()}`:`Mark ${doneWord.toLowerCase()}`}
+          style={{width:18,height:18,accentColor:C.green,cursor:'pointer',flexShrink:0,margin:0}}/>
+      )}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:600,color:C.text,wordBreak:'break-word'}}>{x.name}</div>
+        <div style={{fontSize:10,color:C.dim,marginTop:1,wordBreak:'break-word'}}>
+          {x.meta||'—'}{x.warn&&<span style={{color:C.red,fontWeight:700}}> · {x.warn}</span>}
         </div>
-        <span style={{flexShrink:0,fontSize:10,fontWeight:800,padding:'3px 7px',borderRadius:5,
-          background:r.wire?(WIRE_COLORS[r.wire]||C.surface):C.surface,
-          color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
-          border:`1px solid ${r.wire?(WIRE_COLORS[r.wire]||C.border):C.border}`}}>
-          {r.wire||'—'}
-        </span>
       </div>
-    );
-  };
-
+      {x.chip!==undefined&&(
+        <span style={{flexShrink:0,fontSize:10,fontWeight:800,padding:'3px 7px',borderRadius:5,
+          background:x.chipBg||C.surface,color:x.chipFg||C.dim,border:`1px solid ${x.chipBg||C.border}`}}>
+          {x.chip||'—'}
+        </span>
+      )}
+    </div>
+  );
   return (
     <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
       border:`1px solid ${C.border}`,borderRadius:12}}>
       <button type="button" onClick={()=>setOpen(v=>!v)}
         style={{display:'flex',width:'100%',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',
           gap:8,background:'none',border:'none',padding:0,margin:0,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-        <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled{open?' ▴':' ▾'}</span>
+        <span style={{fontSize:12,fontWeight:700,color:C.text}}>{title}{open?' ▴':' ▾'}</span>
         <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>
-          {pulled} pulled · {notPulled} left
+          {done} {doneWord.toLowerCase()} · {total-done} left
         </span>
       </button>
       <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden',marginTop:8}}>
         <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
           borderRadius:99,transition:'width 0.4s ease'}}/>
       </div>
-
       {open&&(
         <div style={{marginTop:14}}>
-          {notPulledFlat.length>0&&(<>
+          {notDone.length>0&&(<>
             <div style={{fontSize:10,fontWeight:800,letterSpacing:'0.08em',color:C.red,
               textTransform:'uppercase',marginBottom:6}}>
-              Not Pulled · {notPulledFlat.length}
+              {notWord} · {notDone.length}
             </div>
-            {notPulledFlat.map(renderRow)}
+            {notDone.map(renderRow)}
           </>)}
-          {pulledFlat.length>0&&(<>
+          {doneList.length>0&&(<>
             <div style={{fontSize:10,fontWeight:800,letterSpacing:'0.08em',color:C.green,
-              textTransform:'uppercase',margin:notPulledFlat.length>0?'14px 0 6px':'0 0 6px'}}>
-              Pulled · {pulledFlat.length}
+              textTransform:'uppercase',margin:notDone.length>0?'14px 0 6px':'0 0 6px'}}>
+              {doneWord} · {doneList.length}
             </div>
-            {pulledFlat.map(renderRow)}
+            {doneList.map(renderRow)}
           </>)}
         </div>
       )}
     </div>
   );
+}
+
+// Home runs: same card, rows from the per-floor arrays (name-required, so the
+// counts match HomeRunsTab's pulled/total exactly). Ticking writes the SAME
+// status/statusBy/statusAt the row editor's Pulled select writes.
+function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
+  const items = namedFlat.map(({r, floor, fk}) => ({
+    id: r.id, key: (fk||'')+':'+r.id, fk, name: r.name,
+    meta: [r.panel, floor, wireAmpsVolts(r.wire, r.v240)].filter(Boolean).join(' · '),
+    chip: r.wire||'', chipBg: r.wire?(WIRE_COLORS[r.wire]||C.surface):C.surface,
+    chipFg: r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
+    done: r.status==='Pulled', warn: r.status==='Need Specs' ? 'Need Specs' : '',
+  }));
+  return <PullChecklistSummary title="Home Runs Pulled" items={items} doneWord="Pulled" notWord="Not Pulled"
+    onToggle={onTogglePulled ? (x, on) => onTogglePulled(x.fk, x.id, on) : null}/>;
 }
 
 
@@ -16940,7 +16959,16 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     ...((homeRuns.extraFloors||[]).map(ef=>[ef.key, ef.label||ef.key]))];
   const namedFlat=hrFloorDefs.flatMap(([k,label])=>(homeRuns[k]||[])
     .filter(r=>(r.name||'').trim())
-    .map(r=>({r, floor:label})));
+    .map(r=>({r, floor:label, fk:k})));
+  // v442: tick a home run pulled right from the summary — the same status write
+  // the row editor's Pulled select does (status + statusBy + statusAt).
+  const togglePulled = (fk, id, on) => {
+    const who = getIdentity();
+    onHRChange({...homeRuns, [fk]: (homeRuns[fk]||[]).map(r => r.id!==id ? r : {...r,
+      status: on ? "Pulled" : "",
+      statusBy: on ? (who?.name||"") : "",
+      statusAt: on ? new Date().toLocaleDateString("en-US") : "" })});
+  };
 
   return (
     <div>
@@ -16949,7 +16977,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           expand the full A-Z list; the Home Runs section below (By Panel/By
           Floor) is unchanged. */}
       {total>0&&(
-        <HomeRunsPullSummary namedFlat={namedFlat} pulled={pulled} total={total} pct={pct}/>
+        <HomeRunsPullSummary namedFlat={namedFlat} onTogglePulled={onHRChange ? togglePulled : null}/>
       )}
 
       <Section label="Home Runs" color={C.blue} defaultOpen={false}>
@@ -28524,6 +28552,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   suggestionAck; an obvious "needs a switch on the plan" marker sits
                   on field-flagged rows. Assigning a load to a panel output is still
                   the next increment. */}
+              {/* v442 Loads Ran — same checklist card as Home Runs Pulled (Koy: "panelized
+                  lighting needs the exact same thing so its easy to see and mark off loads
+                  ran"). Rows = the job's Loads list (named loads); ticking flips the SAME
+                  per-load `pulled` flag the Loads list's ✓ column writes. */}
+              {(()=>{
+                const plx = job.panelizedLighting || {};
+                const named = (plx.loads || []).filter(l => l && String(l.name || "").trim());
+                if (!named.length) return null;
+                const items = named.map(l => ({
+                  id: l.id, name: l.name,
+                  meta: [String(l.room||"").trim(), String(l.location||"").trim(), String(l.panel||"").trim()].filter(Boolean).join(" · "),
+                  chip: l.loadType || "", done: !!l.pulled,
+                }));
+                return <PullChecklistSummary title="Loads Ran" items={items} doneWord="Ran" notWord="Not Ran"
+                  onToggle={(x, on) => { const cur = job.panelizedLighting || {}; u({ panelizedLighting: { ...cur, loads: (cur.loads || []).map(l => l && l.id === x.id ? { ...l, pulled: on } : l) } }); }}/>;
+              })()}
               {(()=>{
                 const everything = Object.values(ccLoadInbox || {}).filter(Boolean);
                 const dismissedRows = everything.filter(l => l.office && l.office.dismissed);
@@ -48780,12 +48824,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v441
+**Last manifest update:** 2026-09-24 · App SW version: v442
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Home Runs Pulled is checkable + Panelized Lighting gets a Loads Ran card** · 'shipped 2026-09-24' · 'SW v442' · Koy: *"we should be able to mark homeruns pulled from this drop down, right now its just view only. and that panelized lighting needs the exact same thing so its easy to see and mark off loads ran."* New shared 'PullChecklistSummary' (collapsed progress card → one A-Z list split Not done / Done, each row a checkbox). **Home Runs:** 'HomeRunsPullSummary' now uses it; ticking writes the SAME 'status:"Pulled"' + 'statusBy' + 'statusAt' the row editor's Pulled select writes (unticking clears them) via one 'onHRChange' floor patch; counts still come from the named rows so the header and list never drift. **Panelized Lighting:** a **Loads Ran** card at the top of the tab lists every named load on the Loads list (room · floor · panel, load type chip); ticking flips the SAME per-load 'pulled' flag as the Loads list's ✓ column. Guides 'homeruns.html' + 'panelizedlighting.html' updated. **Why it won't lose data:** both writes reuse existing fields and existing one-patch paths ('onHRChange' floor array / 'u({panelizedLighting})'); no new fields.
 - **FieldInk inbox hides loads once they're imported** · 'shipped 2026-09-24' · 'SW v441' · Koy: *"after a load is imported from field ink they need to hide so its not so confusing with so many loads on there."* The Panelized Lighting **Incoming from FieldInk** inbox now splits incoming loads into *waiting* (not yet on the job's Loads list) and *imported* (a 'pl.loads' row carries its 'fieldLoadId'): the default view, the header count and the panel/switched tally show only what's waiting; a new **Imported N** chip (beside Dismissed) shows the imported ones with their green *In Loads* tag. Nothing is written — hiding is derived from the Loads list, so deleting a row from the Loads list brings its load back into the inbox. Guide updated. **Why it won't lose data:** display-only filter; no reads or writes changed.
 - **Job Sections round 2 — Panelized Lighting sub-switches + "off means gone everywhere"** · 'shipped 2026-09-24' · 'SW v440' · Koy: *"I really need you to search harder so that we can clean up jobs and not have extra shit in jobs that don't need it"* + *"What about on Tech Lighting's link and panelized lighting?"* + *"this is all going to start on, right? Nothing's going to change on any existing jobs."* **Five new switches under Panelized Lighting** (indented; off with the parent; counted only when turned off themselves): **Keypads** (replaces the in-tab "No keypad loads / Show keypads" buttons — same flag 'panelizedLighting.noKeypadLoads', so the export still honors it), **Panel Loads** (the whole panel/module/Savant section + "+ Add Panel"), **Tech Lighting's link** (Lutron jobs only, office-only via 'lutron.manage', same confirm; replaces the checkbox at the top of the tab — same flag 'panelizedLighting.excludeFromLutronHub' the Plan Changes view's Hide/Restore writes; off also hides Copy hub link and the Plan Changes log unless changes are already logged), **LV Collab Link** (Share collab row + LV Company Additions; has-data checks 'homeowner_requests.lightingCollab'), **Loads Share Link** (Share loads). Registry gains 'parent', 'appliesTo', 'perm', 'confirmOff', 'asyncHasData', and legacy '{get,set}' accessors — **a legacy-backed switch reads its old flag as the source of truth** (panelized/tapeLight/keypads/techLighting), toggling writes both. **A hidden section is now gone EVERYWHERE, not just on the card:** Tech Lighting's hub ('?lightinghub'), their per-job page ('?lutronshare'), the Plan Changes view and the Monday 'techLightingWeeklyDigest' all drop jobs with Panelized off ('offTechLightingLink'); the four outside links — homeowner generator ('?homeowner'), live view ('?homeruns'), loads ('?loads'), LV collab ('?lighting') — show a new 'SectionNotSharedPage' ("This isn't being shared right now") while their section is off; the GC portal mirror ('gcPortal.matterportView') sends an empty Matterport when hidden (portal shows nothing, 'gcPortalSubmit' refuses a scan date) and 'gcNotify' skips the "Matterport ready" email; the Job Prep board reads a hidden Temp Pedestal as N/A; Material Tracking hidden removes the Job Notes **PO** promote chip, the punch "Material needed" box ('onAddMaterial' undefined on both punch lists + legacy instructions), Home Runs panel-card **+ Add to PO**, the Needs Attention unsent-PO rows and the Activity "Materials & POs" group; Panel Schedules hidden removes the panel-card **Create / Open Panel Schedule** button and "+ Add Panel" no longer creates an invisible schedule. 'hasData' for Matterport / Lighting / Panel Schedules links now also reads 'linkSections.*'. SOPs updated: jobinfo, panelizedlighting, lightinglinks, homeruns. Tests: gcportal-test +2, gcnotify-test +1. **Needs 'firebase deploy --only functions'** (onJobUpdate + every gcPortal* callable rebuild the portal mirror; techLightingWeeklyDigest; dailyMatterportChase from v439). **Why it won't lose data:** no new field (still 'hiddenSections' + the four pre-existing flags); every switch starts ON and jobs that already had 'noKeypadLoads' / 'excludeFromLutronHub' / 'noPanelizedLighting' / 'noTapeLight' set show that switch OFF — the exact state they were already in; hiding stays render/filter-only (no section data is cleared or moved, a paused outside link revives on turn-on); the portal change only blanks the projected Matterport view for hidden jobs, never the job; no rules change.
 - **Job Sections — hide the parts of a job card a job doesn't have** · 'shipped 2026-09-24' · 'SW v439' · Koy: *"get rid of sections of a job card if they're not relevant to that job at all (things like panelized lighting, generator link…)"* + *"more hidden towards the bottom, so people aren't clicking things on and off by accident"* + *"foremen need to have it too… I can still go in and add, say, a generator section if one gets added during the rough-in."* New **Job Sections** panel, the LAST thing on Job Info, collapsed every time the job opens (header reads "Job Sections · N hidden"). Eight switches, each driven by the shared registry 'JOB_SECTIONS': **Panelized Lighting** (tab + Lighting Schedules link), **Tape Light** (tab), **Generator** (Home Runs → Generator Load Selection + homeowner link), **Panel Schedules** (Home Runs section + Panel Schedules link), **Live View Link** (Home Runs share row), **Matterport** (Job Info block + Matterport link + every scan reminder: 'matterportScanNeeded', both auto-flips to "needs", the job's Open-items group, the weekly rollup, and the server 'dailyMatterportChase'), **Temp Pedestal** (Admin row), **Material Tracking** (Material Tracking + Count List on Rough and Finish). A hidden section's tab leaves the tab bar entirely ('tabsForJob(job, activeTab)' — a deep link straight into a hidden tab still lands, with a "turned off for this job · Turn back on" banner). Turning a section OFF that already holds data asks first (generator checks 'homeowner_requests/{jobId}'; offline = assume data and ask); turning ON never asks. Pre-Job Prep gets a **Set job sections** jump button (a button, NOT a checklist item — adding to 'PREP_CHECKLIST_ITEMS' would flip every already-complete job back to prep-incomplete). Permission 'job.sections' = admin/manager/standard; leads/crew see the list read-only. Replaces the v1 in-tab "No panelized lighting / No tape light" checkboxes (which only moved the tab to the end and got flipped by accident); those jobs read as hidden via the 'legacy' flag and toggling writes both. SOPs updated: jobinfo, homeruns, panelizedlighting, tapelight, planslinks, rough. Harness 'needs-dryrun.js' +2 asserts. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** one new field, 'hiddenSections' (a '{key:true/false}' map inside the job's 'data', so the loader passes it through with no spread change), always written by spreading the existing map so one switch can't clobber another; hiding is render-only — no section's data ('panelizedLighting', 'tapeLights', 'genLoads', 'electricalPanels', 'matterportLinks', materials…) is read-for-write, cleared, or moved, so turning a section back on restores it exactly; the Matterport gates only NARROW when the existing 'matterportStatus:"needs"' is auto-set / surfaced, never clearing a stored value; no rules change.
