@@ -231,6 +231,12 @@ function returnTripsView(trips) {
 // scheduled/needs-by date when asking the GC to confirm or reschedule
 // (v343 audit — mirror previously omitted it).
 function matterportView(job) {
+  // v440: Matterport turned off in the app's Job Info → Job Sections — the job
+  // gets no scan, so the GC sees nothing (empty status = every portal surface
+  // skips it, and gcPortalSubmit refuses a matterport date as "not needed").
+  if (job && job.hiddenSections && job.hiddenSections.matterport) {
+    return { status: "", statusDate: "", links: [] };
+  }
   const links = (Array.isArray(job.matterportLinks) && job.matterportLinks.length
     ? job.matterportLinks
     : (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))

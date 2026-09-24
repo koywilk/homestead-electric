@@ -82,6 +82,10 @@ t("matterport-ready fires when link appears", (() => {
   const tr = N.detectTriggers({ name: "R" }, { name: "R", matterportLink: "https://my.matterport.com/x" });
   return tr.some((x) => x.type === "matterport");
 })());
+t("v440: matterport-ready suppressed when Matterport hidden in Job Sections", (() => {
+  const tr = N.detectTriggers({ name: "R" }, { name: "R", matterportLink: "https://my.matterport.com/x", hiddenSections: { matterport: true } });
+  return !tr.some((x) => x.type === "matterport");
+})());
 t("return-trip scheduled fires false→true", (() => {
   const tr = N.detectTriggers({ name: "R", returnTrips: [{ id: "1", rtScheduled: false }] }, { name: "R", returnTrips: [{ id: "1", rtScheduled: true, scheduledDate: "7/22" }] });
   return tr.some((x) => x.type === "returntrip" && x.payload.date === "7/22");

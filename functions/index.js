@@ -6101,6 +6101,10 @@ exports.techLightingWeeklyDigest = functions.pubsub
         const j = d.data()?.data || {}; // jobs ARE wrapped
         if (j.lightingSystem !== "Lutron") return;
         if (j.panelizedLighting?.excludeFromLutronHub) return;
+        // v440: Panelized Lighting turned off in Job Sections (App.js
+        // offTechLightingLink) — the job has no lighting package, so it's off
+        // Tech Lighting's link and out of this digest too.
+        if (j.noPanelizedLighting || (j.hiddenSections && j.hiddenSections.panelized)) return;
 
         const items   = (j.panelizedLighting?.lutronRooms || []).flatMap(r => r.items || []);
         const acks    = ackMap[d.id] || {};

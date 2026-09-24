@@ -214,7 +214,8 @@ function detectTriggers(before, after) {
   // 4. Matterport link newly available.
   const hadMp = !!(b.matterportLink || (Array.isArray(b.matterportLinks) && b.matterportLinks.length));
   const hasMp = !!(a.matterportLink || (Array.isArray(a.matterportLinks) && a.matterportLinks.length));
-  if (hasMp && !hadMp) out.push({ type: "matterport", payload: { jobName: name } });
+  const mpHidden = !!(a.hiddenSections && a.hiddenSections.matterport); // v440: Job Sections
+  if (hasMp && !hadMp && !mpHidden) out.push({ type: "matterport", payload: { jobName: name } });
 
   // 5. A return trip became scheduled (rtScheduled false→true on any trip).
   const rtSched = (arr) => new Set((Array.isArray(arr) ? arr : []).filter((r) => r && r.rtScheduled).map((r) => String(r.id)));
