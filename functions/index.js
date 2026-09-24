@@ -1771,7 +1771,7 @@ exports.dailyMatterportChase = functions.pubsub
       // matterportScanNeeded in App.js). Drops finished service/T&M jobs.
       const roughPct = parseInt(String(j.roughStage || "0"), 10) || 0;
       const finishPct = parseInt(String(j.finishStage || "0"), 10) || 0;
-      // v438: Matterport switched off in Job Info → Job Sections = no scan.
+      // v439: Matterport switched off in Job Info → Job Sections = no scan.
       const mpHidden = !!(j.hiddenSections && j.hiddenSections.matterport);
       if (roughPct >= 85 && finishPct === 0 && (j.matterportStatus || "") !== "complete" && !hasLink && !j.matterportDismissed && !mpHidden) {
         count++;

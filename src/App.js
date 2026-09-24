@@ -2146,7 +2146,7 @@ function matterportScanNeeded(job) {
   if (!job) return false;
   if ((job.matterportStatus || "") === "complete") return false;
   if (job.matterportDismissed) return false;
-  if (job.hiddenSections?.matterport) return false; // v438: Job Sections → Matterport off
+  if (job.hiddenSections?.matterport) return false; // v439: Job Sections → Matterport off
   if (job.matterportLinks?.length || job.matterportLink) return false;
   return parseStage(job.roughStage) >= 85 && parseStage(job.finishStage) === 0;
 }
@@ -4002,7 +4002,7 @@ const PERMISSIONS = {
   // (defaultAssigneeFor), so opening creation doesn't flood the head. The Needs
   // page's own add button keeps board.add (that page is foreman+ anyway).
   "tasks.create":           ["admin","manager","standard","limited"],
-  // Job Info → Job Sections (v438): hide/show optional parts of a job card
+  // Job Info → Job Sections (v439): hide/show optional parts of a job card
   // (generator, panelized, tape light, …). Office + foremen (Koy 2026-09-24:
   // "foremen need to have it too"); leads/crew see the list read-only.
   "job.sections":           ["admin","manager","standard"],
@@ -17509,7 +17509,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           Data lives on job.electricalPanels; READS homeRuns (fill + the
           stay-in-sync effect, e.g. a 240V flip re-poles an untouched fill)
           but never writes it. */}
-      {/* hide* props = Job Info → Job Sections (v438). Render-only: the
+      {/* hide* props = Job Info → Job Sections (v439). Render-only: the
           genLoads load/save and electricalPanels data are untouched. */}
       {!hidePanelSchedules&&(
       <Section label="Panel Schedules" color={C.accent} defaultOpen={false}>
@@ -24651,7 +24651,7 @@ const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Q
 
               "Change Orders","Return Trips","Open Items","QC"];
 
-// ── Job Sections (v438, Koy 2026-09-24) ──────────────────────────────────────
+// ── Job Sections (v439, Koy 2026-09-24) ──────────────────────────────────────
 // "get rid of sections of a job card if they're not relevant to that job at
 // all (things like panelized lighting, generator link…)". Each entry is one
 // on/off switch in Job Info → Job Sections (bottom of the tab, collapsed, so
@@ -27579,7 +27579,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             && parseStage(job.finishStage) === 0   // v424: before-drywall window only
                             && !job.matterportStatus
                             && !(job.matterportLinks?.length || job.matterportLink)
-                            && !job.hiddenSections?.matterport     // v438: Matterport off in Job Sections
+                            && !job.hiddenSections?.matterport     // v439: Matterport off in Job Sections
                           ) ? { matterportStatus: "needs" } : {};
                           // Same pattern for QC — flip to "needs" on transition
                           // to complete if QC hasn't been touched. Preserves
@@ -28236,7 +28236,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <div>
 
-              {/* v438: the old "No panelized lighting" checkbox lived here and got
+              {/* v439: the old "No panelized lighting" checkbox lived here and got
                   flipped by accident. The switch is now Job Info → Job Sections;
                   this banner only shows if someone deep-links into the tab while
                   it's turned off (e.g. from Plan Changes). */}
@@ -29466,7 +29466,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <div>
 
-              {/* v438: switch moved to Job Info → Job Sections (see Panelized). */}
+              {/* v439: switch moved to Job Info → Job Sections (see Panelized). */}
               <HiddenSectionBanner job={job} sectionKey="tapeLight" u={u} identity={identity}/>
 
               <Section label="Tape Light Locations" color={C.teal} defaultOpen={true}>
@@ -30227,7 +30227,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     transition:"border-color 0.15s"}}/>
               </div>
 
-              {/* Matterport — hidden via Job Sections (v438) */}
+              {/* Matterport — hidden via Job Sections (v439) */}
               {!isSectionHidden(job,"matterport")&&(
               <div style={{marginTop:12}}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -30308,7 +30308,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 {allPrepChecked(job)&&(
                   <div style={{marginTop:10,fontSize:11,fontWeight:700,color:C.teal}}>✓ Prep Complete — Handed Off to Foreman</div>
                 )}
-                {/* v438: a jump link, NOT a checklist item — adding an item to
+                {/* v439: a jump link, NOT a checklist item — adding an item to
                     PREP_CHECKLIST_ITEMS would flip every already-complete job
                     back to "prep incomplete" and re-fire the prep nudges. */}
                 <button type="button" onClick={openJobSectionsPanel}
@@ -30364,7 +30364,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               </Section>
 
-              {/* Job Sections — deliberately LAST and collapsed (v438). */}
+              {/* Job Sections — deliberately LAST and collapsed (v439). */}
               <JobSectionsPanel job={job} u={u} identity={identity}/>
 
             </div>
@@ -30761,21 +30761,34 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // so "viewing Designer → add" tags it Designer automatically.
   const defaultFor = (recipFilter && recipFilter!=="__unassigned__") ? recipFilter : "";
 
+  // One writer for every add box (bottom box + per-room boxes, v438).
+  const addQuestion = (q, roomVal) => {
+    if(!String(q||'').trim()) return false;
+    const who = getIdentity();
+    const r = String(roomVal||'').trim();
+    onChange([...questions, {id:uid(), question:q, answer:"", done:false, for:defaultFor, ...(r?{room:r}:{}), addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
+    openRoom(r);
+    return true;
+  };
+
   const add = (textArg) => {
 
     const q = typeof textArg==='string' ? textArg : draft;
 
-    if(!q.trim()) return;
-
-    const who = getIdentity();
-
-    const roomVal = roomDraft.trim();
-
-    onChange([...questions, {id:uid(), question:q, answer:"", done:false, for:defaultFor, ...(roomVal?{room:roomVal}:{}), addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
+    if(!addQuestion(q, roomDraft)) return;
 
     setDraft(""); setRoomDraft("");
-    openRoom(roomVal);
 
+  };
+
+  // v438 (Koy: "select a room, drop the room down, and then add a question from
+  // there"): each open room group has its own add box, room pre-filled. Drafts
+  // keyed by lowercase room ('' = General) so typing in one room doesn't leak.
+  const [roomAddDrafts, setRoomAddDrafts] = useState({});
+  const addInRoom = (rk, roomVal) => {
+    const q = roomAddDrafts[rk] || "";
+    if(!addQuestion(q, roomVal)) return;
+    setRoomAddDrafts(p=>({...p, [rk]: ""}));
   };
 
   const upd = (id, p) => onChange(questions.map(q=>q.id===id?{...q,...p}:q));
@@ -31252,6 +31265,15 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               <span style={{fontSize:10,color:C.dim,fontWeight:600}}>{g.questions.length}</span>
             </div>
             {!collapsed && g.questions.map(q=>renderQ(q,questions.indexOf(q),questions.indexOf(q)))}
+            {!collapsed && !hideAdd && (
+              <div style={{display:'flex',gap:6,alignItems:'center',margin:'2px 0 4px 18px'}}>
+                <Inp value={roomAddDrafts[rk]||""} onChange={e=>{ const v=e.target.value; setRoomAddDrafts(p=>({...p,[rk]:v})); }}
+                  placeholder={g.room ? `Add a question in ${g.label}…` : "Add a general question…"}
+                  onKeyDown={e=>e.key==='Enter'&&addInRoom(rk, g.room)}
+                  style={{flex:1,minWidth:140,fontSize:12}}/>
+                <Btn onClick={()=>addInRoom(rk, g.room)} variant="primary">+</Btn>
+              </div>
+            )}
           </div>
         );
       }); })() : open.map((q,i)=>renderQ(q,i,questions.indexOf(q))))}
@@ -48673,13 +48695,14 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v438
+**Last manifest update:** 2026-09-24 · App SW version: v439
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
-- **Job Sections — hide the parts of a job card a job doesn't have** · 'shipped 2026-09-24' · 'SW v438' · Koy: *"get rid of sections of a job card if they're not relevant to that job at all (things like panelized lighting, generator link…)"* + *"more hidden towards the bottom, so people aren't clicking things on and off by accident"* + *"foremen need to have it too… I can still go in and add, say, a generator section if one gets added during the rough-in."* New **Job Sections** panel, the LAST thing on Job Info, collapsed every time the job opens (header reads "Job Sections · N hidden"). Eight switches, each driven by the shared registry 'JOB_SECTIONS': **Panelized Lighting** (tab + Lighting Schedules link), **Tape Light** (tab), **Generator** (Home Runs → Generator Load Selection + homeowner link), **Panel Schedules** (Home Runs section + Panel Schedules link), **Live View Link** (Home Runs share row), **Matterport** (Job Info block + Matterport link + every scan reminder: 'matterportScanNeeded', both auto-flips to "needs", the job's Open-items group, the weekly rollup, and the server 'dailyMatterportChase'), **Temp Pedestal** (Admin row), **Material Tracking** (Material Tracking + Count List on Rough and Finish). A hidden section's tab leaves the tab bar entirely ('tabsForJob(job, activeTab)' — a deep link straight into a hidden tab still lands, with a "turned off for this job · Turn back on" banner). Turning a section OFF that already holds data asks first (generator checks 'homeowner_requests/{jobId}'; offline = assume data and ask); turning ON never asks. Pre-Job Prep gets a **Set job sections** jump button (a button, NOT a checklist item — adding to 'PREP_CHECKLIST_ITEMS' would flip every already-complete job back to prep-incomplete). Permission 'job.sections' = admin/manager/standard; leads/crew see the list read-only. Replaces the v1 in-tab "No panelized lighting / No tape light" checkboxes (which only moved the tab to the end and got flipped by accident); those jobs read as hidden via the 'legacy' flag and toggling writes both. SOPs updated: jobinfo, homeruns, panelizedlighting, tapelight, planslinks, rough. Harness 'needs-dryrun.js' +2 asserts. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** one new field, 'hiddenSections' (a '{key:true/false}' map inside the job's 'data', so the loader passes it through with no spread change), always written by spreading the existing map so one switch can't clobber another; hiding is render-only — no section's data ('panelizedLighting', 'tapeLights', 'genLoads', 'electricalPanels', 'matterportLinks', materials…) is read-for-write, cleared, or moved, so turning a section back on restores it exactly; the Matterport gates only NARROW when the existing 'matterportStatus:"needs"' is auto-set / surfaced, never clearing a stored value; no rules change.
+- **Job Sections — hide the parts of a job card a job doesn't have** · 'shipped 2026-09-24' · 'SW v439' · Koy: *"get rid of sections of a job card if they're not relevant to that job at all (things like panelized lighting, generator link…)"* + *"more hidden towards the bottom, so people aren't clicking things on and off by accident"* + *"foremen need to have it too… I can still go in and add, say, a generator section if one gets added during the rough-in."* New **Job Sections** panel, the LAST thing on Job Info, collapsed every time the job opens (header reads "Job Sections · N hidden"). Eight switches, each driven by the shared registry 'JOB_SECTIONS': **Panelized Lighting** (tab + Lighting Schedules link), **Tape Light** (tab), **Generator** (Home Runs → Generator Load Selection + homeowner link), **Panel Schedules** (Home Runs section + Panel Schedules link), **Live View Link** (Home Runs share row), **Matterport** (Job Info block + Matterport link + every scan reminder: 'matterportScanNeeded', both auto-flips to "needs", the job's Open-items group, the weekly rollup, and the server 'dailyMatterportChase'), **Temp Pedestal** (Admin row), **Material Tracking** (Material Tracking + Count List on Rough and Finish). A hidden section's tab leaves the tab bar entirely ('tabsForJob(job, activeTab)' — a deep link straight into a hidden tab still lands, with a "turned off for this job · Turn back on" banner). Turning a section OFF that already holds data asks first (generator checks 'homeowner_requests/{jobId}'; offline = assume data and ask); turning ON never asks. Pre-Job Prep gets a **Set job sections** jump button (a button, NOT a checklist item — adding to 'PREP_CHECKLIST_ITEMS' would flip every already-complete job back to prep-incomplete). Permission 'job.sections' = admin/manager/standard; leads/crew see the list read-only. Replaces the v1 in-tab "No panelized lighting / No tape light" checkboxes (which only moved the tab to the end and got flipped by accident); those jobs read as hidden via the 'legacy' flag and toggling writes both. SOPs updated: jobinfo, homeruns, panelizedlighting, tapelight, planslinks, rough. Harness 'needs-dryrun.js' +2 asserts. **Needs 'firebase deploy --only functions:dailyMatterportChase'.** **Why it won't lose data:** one new field, 'hiddenSections' (a '{key:true/false}' map inside the job's 'data', so the loader passes it through with no spread change), always written by spreading the existing map so one switch can't clobber another; hiding is render-only — no section's data ('panelizedLighting', 'tapeLights', 'genLoads', 'electricalPanels', 'matterportLinks', materials…) is read-for-write, cleared, or moved, so turning a section back on restores it exactly; the Matterport gates only NARROW when the existing 'matterportStatus:"needs"' is auto-set / surfaced, never clearing a stored value; no rules change.
+- **Questions — add a question from inside any room** · 'shipped 2026-09-23' · 'SW v438' · Koy: *"I need to be able to select a room, drop the room down, and then add a question from there… so you don't have to retype the room in every time."* In **By room** view every open room group (and General) now ends with its own **Add a question in <room>…** box — Enter or **+** adds the question with that room pre-filled. 'QAList' add logic is one writer ('addQuestion(text, room)') shared by the bottom add box and the per-room boxes, so the new question is byte-identical to one added the old way (same recipient default, 'addedBy'/'addedAt', room key omitted when General, and the room auto-opens). Per-room drafts are kept separately so typing in one room doesn't leak into another. The bottom box stays. Guide 'questions.html' updated. **Why it won't lose data:** same single append through the existing 'onChange([...questions, q])' path; no new fields.
 - **Set a plan sheet's floor from the inbox** · 'shipped 2026-09-23' · 'SW v437' · Koy didn't see *Fill floor/room* on a job whose FieldInk sheets are just "PG 1" — FieldInk sends no floor when the crew never set one for the sheet, so there was nothing to fill (rooms were already stored on import since v403, now visible in v436's Room box). Each sheet header in **Incoming from FieldInk** now has a **Set floor…** menu (the Loads list's floor sections): choosing one writes ONLY 'loads.<id>.office.floor' on the bridge for every load on that sheet via 'publishCcLoadOfficeMany' (office-owned key, already preferred by import + backfill), and fills BLANK floors on that sheet's already-imported Loads-list rows in one 'u()' patch; the header shows the office floor once set (the plan's floor, if any, is shown as the default). Guide updated. **Why it won't lose data:** the bridge write names only the office-owned 'office.floor' of the listed loads (merge-set, same shape as v400 suggestions); the job write only fills empty 'location' on fieldink-origin rows.
 - **FieldInk import brings the rooms and floors** · 'shipped 2026-09-23' · 'SW v436' · Koy: *"when a load is imported into the panelized lighting, it needs to import the rooms and floors."* FieldInk sends each load's 'floor' as the crew typed it for the plan SHEET ("Main Level", "2nd Floor"…) but 'ccLoadImportRows' only knew the keys main/basement/upper, so most loads imported with a BLANK floor into Unassigned. New pure 'ccFloorToSection' matches an existing Loads-list section case-insensitively, then synonyms (main/1st/first/level 1/ground → Main Level; basement/lower/bsmt → Basement; upper/2nd/second/level 2/upstairs → Upper Level), else keeps FieldInk's own text as its own section; an office-set 'office.floor' on the bridge wins. The **Room** (already stored on imported rows) now shows as an editable **Room** box on every Loads-list row, and loads sort by room within each floor. **Fill floor/room on N loads** (header, when any) backfills ONLY blank floor/room on earlier FieldInk imports. Tests: 'scripts/ccloads-suggest-test.js' (82 checks). Guide updated. **Why it won't lose data:** import stays append-only; the backfill is one 'u()' patch that only fills empty 'location'/'room' on fieldink-origin rows; 'room' is an existing row field.
 - **FieldInk import brings in panelized loads only** · 'shipped 2026-09-23' · 'SW v435' · Koy: *"when i hit import loads from field ink the panelized lighting tab, it imported all the regular switching loads too. it need to only import panelized loads."* 'ccLoadImportRows' now skips any incoming load whose FieldInk 'control' isn't 'panel' (switched / dimmer / tape stay on the plan's regular switching); the per-row **Import**, room **Import N** and header **Import all** only offer and count panel loads. **Cleanup:** when the job's Loads list still holds rows an older import created from non-panel loads (only rows with 'origin:"fieldink"' + a 'fieldLoadId' whose field load isn't panel), a red **Remove N switched loads imported by mistake** header button removes them after a confirm (hand-typed rows and panel loads are never touched). Tests: 'scripts/ccloads-suggest-test.js' (73 checks). Guide 'panelizedlighting.html' updated. **Why it won't lose data:** import is still append-only and idempotent; the cleanup is one confirmed 'u()' patch that filters ONLY fieldink-origin rows tied to a non-panel field load; the per-field job version history + recovery ledger cover it.
@@ -50245,7 +50268,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
       // happened, the status field just wasn't updated). Same guard the
       // existing matterport task uses.
       const hasScan = !!(j.matterportLinks?.length || j.matterportLink);
-      if(!hasScan && !j.hiddenSections?.matterport) {  // v438: Matterport off in Job Sections
+      if(!hasScan && !j.hiddenSections?.matterport) {  // v439: Matterport off in Job Sections
         if(j.matterportStatus === "needs") {
           matterNeeds.push({ jobName, foreman, byDate: j.matterportStatusDate || "" });
         } else if(j.matterportStatus === "scheduled" && j.matterportStatusDate) {
