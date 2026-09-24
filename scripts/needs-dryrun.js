@@ -231,6 +231,8 @@ assert.ok(!H.matterportScanNeeded({ roughStage:"70%", finishStage:"" }), "rough 
 assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"40%" }), "finish started (drywall up) -> dropped");
 assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", matterportStatus:"complete" }), "already complete -> not needed");
 assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", matterportDismissed:true }), "dismissed -> not needed");
+assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", hiddenSections:{ matterport:true } }), "Matterport off in Job Sections -> not needed");
+assert.ok(H.matterportScanNeeded({ roughStage:"100%", finishStage:"", hiddenSections:{ matterport:false } }), "Matterport turned back on -> needed again");
 assert.ok(!H.matterportScanNeeded({ roughStage:"100%", finishStage:"", matterportLinks:[{ url:"x" }] }), "scan link uploaded -> not needed");
 assert.ok(!H.matterportScanNeeded(null), "null-safe");
 
