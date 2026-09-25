@@ -426,7 +426,7 @@ custom floors; the fixed upper/main/basement keys are simply not created for com
 | `commercial.view` | admin, manager, standard, limited | see the mode switch (everyone internal — crews work both, Koy 2026-09-25) |
 | `comm.head` | hat (caps) — Brady | Head of Commercial — owner of commercial auto-tasks and duties nobody else's hat covers; falls back to `resi.head` |
 | `commstart.view` | admin, manager, standard | see the Job Start board (foremen read-only) |
-| `commstart.edit` | admin, manager (+ `comm.precon` / `comm.site` / `comm.head` hats) | check items, move on, edit the logs |
+| `commstart.edit` | admin, manager (+ `comm.precon` / `comm.site` / `comm.head` hats) | check items in **any** phase, move on, edit the logs — a phase's owner hat only decides whose My Day gets the row (Koy, 2026-09-25) |
 | `comm.precon` | hat (caps, shared) | Commercial pre-con — phases 1–5 (Brady, Justin) |
 | `comm.site` | hat (caps, shared) | Commercial site coordination — phase 6 (Zane, Abe) |
 | `job.division` | admin, manager | move a job between divisions |
@@ -480,11 +480,14 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 
 ### Still open
 
-3b. **Phases 7–12 owner:** defaulted to Brady/Justin (`comm.precon`). Should any of site
-    takeoff / temp power / Ufer / blockouts / underground / slab coordination sit with
-    Zane/Abe (`comm.site`) instead? One-word answer per phase is enough.
-3c. **Foremen on the Job Start board:** read-only as proposed, or hidden entirely until the
-    job is Ready to Start?
+3b. **Phases 7–12 owner** — answered: Koy, *"im not sure as long as they can access it i
+    dont think it needs to be specifically on them."* → Ownership is only a My Day routing
+    default (rows for 7–12 go to `comm.precon`), never an edit gate: **anyone with
+    `commstart.edit` can check any item in any phase** — Brady, Justin, Zane, Abe and the
+    office alike. Re-routing a phase to another hat later is a one-line registry change.
+3c. **Foremen on the Job Start board:** read-only as proposed (they can open it and see
+    every phase); editing stays with the hats + office. Widening edit to foremen is one
+    tier added to `commstart.edit` if it ever comes up.
 4. **Stages (§7):** is Pre-Con → Mobilizing → In Progress → Closeout → Complete right, or do
    you think in GC milestones (underground / rough / gear / trim / final)?
 5. **Progress:** one % per job, or per area × phase? What are the phases on your jobs?
