@@ -2114,6 +2114,64 @@ const PREP_CHECKLIST_ITEMS = [
   {key:"plansUploaded",  label:"Plans Uploaded to App & SimPro"},
   {key:"readyToHandOff", label:"Ready to Hand Off to Foreman"},
 ];
+
+// ── Commercial Job Start (spec §6, Koy's 12-step Commercial Electrical Job Start Process, 2026-09-25) ──
+// Every step is a PHASE; a job is in exactly one, derived from its checks. All
+// twelve are pre-construction (Brady · Justin = comm.precon; Zane · Abe = comm.site
+// on phase 6). item = [key, label, kind]; kind: "check" (default) | "trk" (derived
+// from the Gear & Submittals / RFI logs) | "photo" | "date".
+const COMM_START_STEPS = [
+  { n:1,  label:"Quote Approval / Contract Award", short:"CONTRACT AWARD", owner:"precon", items:[["award","AWARD DOC"],["permitResp","PERMIT RESPONSIBILITY"],["utility","UTILITY / SERVICE COORD"],["contacts","CONTACTS SET"]] },
+  { n:2,  label:"Project Setup & Initial Review", short:"PROJECT SETUP", owner:"precon", items:[["jobNo","JOB # / COST CODES"],["folders","PROJECT FOLDERS","trk"],["planReview","PLAN / SPEC REVIEW"],["schedule","SCHEDULE + MILESTONES"],["scope","SCOPE BY SYSTEM"]] },
+  { n:3,  label:"Request Vendor Submittals", short:"SUBMITTALS", owner:"precon", items:[["ced","CED SENT PLANS/SPECS"],["fa","FA CO. SENT PLANS/SPECS"],["longLead","LONG-LEAD REQUESTED","trk"],["leadTimes","LEAD TIMES + PRICING","trk"]] },
+  { n:4,  label:"Electrical Submittal Review", short:"SUBMITTAL REVIEW", owner:"precon", items:[["pmReview","PM / ESTIMATOR REVIEWED"],["dims","DIMENSIONS / CLEARANCES"],["rfis","RFI LIST","trk"],["toGc","SENT TO GC","trk"],["approved","ALL APPROVED","trk"],["comments","COMMENTS RESOLVED"]] },
+  { n:5,  label:"Release / Order Long-Lead Gear", short:"RELEASE GEAR", owner:"precon", items:[["released","RELEASED + PO","trk"],["shipDates","SHIP DATES IN WRITING","trk"],["procLog","PROCUREMENT LOG","trk"],["shipMode","SHIP COMPLETE / SPLIT","trk"],["storage","DELIVERY / STORAGE"]] },
+  { n:6,  label:"Preconstruction / Site Coordination", short:"SITE COORD", owner:"site", items:[["kickoff","GC KICKOFF ATTENDED"],["schedOk","SCHEDULE CONFIRMED"],["manpower","MANPOWER PLAN"],["milestones","MILESTONES SET"],["laydown","LAYDOWN / STORAGE"],["tempNeeds","TEMP POWER NEEDS"],["trailer","TRAILER / CONTAINER"],["crane","CRANE / FORKLIFT"],["rentals","RENTALS + DATES"],["bim","BIM / CLASH"]] },
+  { n:7,  label:"Site Work Takeoff & Ordering", short:"SITE TAKEOFF", owner:"precon", items:[["takeoff","SITE TAKEOFF DONE"],["pvc","PVC / CONDUIT"],["sweeps","SWEEPS / ELBOWS"],["duct","DUCT BANK"],["boxes","PULL BOXES / HANDHOLES"],["ground","GROUNDING"],["siteLt","SITE LIGHTING"],["util","UTILITY / SERVICE CONDUIT"],["vaults","UTILITY VAULTS"],["lvPath","COMM / FA PATHWAYS"],["tape","TAPE / SPACERS / ENCASEMENT"],["ordered","SITE MATERIAL ORDERED"]] },
+  { n:8,  label:"Temporary Power", short:"TEMP POWER", owner:"precon", items:[["req","REQUIREMENTS"],["tempUtil","TEMP UTILITY SERVICE"],["svc","SERVICE / METER / MAIN"],["dist","DISTRIBUTION"],["spider","SPIDER BOXES / GFCI"],["lighting","TEMP LIGHTING"],["trailerPwr","TRAILER POWER"],["cranePwr","CRANE / HOIST POWER"],["energized","INSPECTED + ENERGIZED","date"],["maint","MAINTENANCE OWNER"]] },
+  { n:9,  label:"Ufer / Concrete-Encased Electrode", short:"UFER", owner:"precon", items:[["footing","FOOTING SCHEDULE REVIEWED"],["config","ELECTRODE CONFIG"],["rebar","CONCRETE / REBAR COORD"],["installed","UFER INSTALLED"],["photos","PHOTOS","photo"],["insp","INSPECTION","date"],["gec","GEC ACCESS CONFIRMED"]] },
+  { n:10, label:"Foundation Electrical / Blockouts", short:"FOUNDATION", owner:"precon", items:[["overlay","DRAWINGS OVERLAID"],["svcCond","SERVICE CONDUITS"],["feeders","FEEDER CONDUITS"],["sleeves","SLEEVES"],["genXfmr","GEN / XFMR CONDUITS"],["siteLt2","SITE LIGHTING"],["lv","LV PATHWAYS"],["ground2","GROUNDING"],["penetr","ROOM PENETRATIONS"],["pads","HOUSEKEEPING PADS"],["blockouts","BLOCKOUTS BEFORE POUR"]] },
+  { n:11, label:"Building Underground", short:"UNDERGROUND", owner:"precon", items:[["trades","TRADE OVERLAY"],["layout","LAYOUT DONE"],["banks","BANKS / CROSSINGS FIRST"],["clear","CLEARANCES"],["stubs","STUB-UPS SET + SECURED"],["capped","CAPPED / SEALED"],["strings","PULL STRINGS"],["photos","PHOTOS + DIMENSIONS","photo"],["check","CONDUIT CHECK"],["insp","INSPECTED BEFORE COVER","date"]] },
+  { n:12, label:"Slab-on-Grade Coordination", short:"SLAB", owner:"precon", items:[["floorBoxes","FLOOR BOXES"],["equip","EQUIPMENT FEEDS"],["kitchen","KITCHEN"],["islands","ISLANDS / CASEWORK"],["floorRec","FLOOR RECEPTS"],["mech","MECHANICAL"],["special","SPECIALTY"],["lvSleeves","LV SLEEVES"],["control","DIMS FROM CONTROL LINES"],["prepour","PRE-POUR CHECKLIST / INSP","date"]] },
+];
+const COMM_PHASE_BY_N = Object.fromEntries(COMM_START_STEPS.map(p => [p.n, p]));
+const COMM_OWNER_LABEL = { precon:"Commercial pre-con", site:"Site coordination" };
+// job.commercial.start = { items:{ "n.key":{done,by,at} }, na:{ "n.key":true }, notes:{ n:"" }, overrides:{ n:{by,at,note} }, photos:{ "n.key":[…] }, dates:{ "n.key":"M/D/YYYY" } }
+const commStartOf = (j) => ((j && j.commercial && j.commercial.start) || { items:{}, na:{}, notes:{}, overrides:{} });
+const commItemKey = (n, k) => `${n}.${k}`;
+// Tracker items derive from the logs (spec §6.3) — never stored as checks.
+const commTrackerDone = (j, n, k) => {
+  const c = (j && j.commercial) || {};
+  const rows = Array.isArray(c.submittals) ? c.submittals : [];
+  const approved = (r) => r.status === "approved" || r.status === "approvedAsNoted";
+  const K = commItemKey(n, k);
+  switch (K) {
+    case "2.folders":   return !!(j.driveFolderId && j.docPull && j.docPull.status === "done");
+    case "3.longLead":  return rows.length > 0 && rows.every(r => !!r.requestedAt);
+    case "3.leadTimes": return rows.length > 0 && rows.every(r => !!r.leadTimeWeeks && !!r.priceConfirmed);
+    case "4.rfis":      return Array.isArray(c.rfis) && c.rfis.length > 0;
+    case "4.toGc":      return rows.length > 0 && rows.every(r => r.status && r.status !== "requested");
+    case "4.approved":  return rows.length > 0 && rows.every(approved);
+    case "5.released":  return rows.length > 0 && rows.filter(approved).length > 0 && rows.filter(approved).every(r => !!r.poNo && !!r.releasedAt);
+    case "5.shipDates": return rows.length > 0 && rows.filter(r => r.releasedAt).length > 0 && rows.filter(r => r.releasedAt).every(r => !!r.promisedShip);
+    case "5.procLog":   return rows.length > 0 && rows.every(r => !!r.requiredOnSite);
+    case "5.shipMode":  return rows.length > 0 && rows.filter(r => r.releasedAt).every(r => !!r.shipMode);
+    default: return false;
+  }
+};
+const commItemState = (j, n, k) => {
+  const p = COMM_PHASE_BY_N[n]; if (!p) return "todo";
+  const it = p.items.find(x => x[0] === k); const st = commStartOf(j); const K = commItemKey(n, k);
+  if (st.na && st.na[K]) return "na";
+  if (it && it[2] === "trk") return commTrackerDone(j, n, k) ? "done" : "todo";
+  return (st.items && st.items[K] && st.items[K].done) ? "done" : "todo";
+};
+const commPhaseChecked = (j, n) => COMM_PHASE_BY_N[n].items.every(([k]) => commItemState(j, n, k) !== "todo");
+const commPhaseClosed  = (j, n) => commPhaseChecked(j, n) || !!(commStartOf(j).overrides && commStartOf(j).overrides[n]);
+const commPhaseDone    = (j, n) => COMM_PHASE_BY_N[n].items.filter(([k]) => commItemState(j, n, k) !== "todo").length;
+// The ONLY state: first phase not closed. null = all twelve closed (Ready to Start / on site). Residential → null.
+const commPhase = (j) => { if (!j || j.division !== "commercial") return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
+const commOwedItems = (j) => COMM_START_STEPS.flatMap(p => (commStartOf(j).overrides && commStartOf(j).overrides[p.n]) ? p.items.filter(([k]) => commItemState(j, p.n, k) === "todo").map(([k, l]) => ({ n: p.n, k, label: l })) : []);
 const allPrepChecked = (job) => {
   // v388: an item marked Not Needed (prepNA map) counts as handled — some jobs
   // legitimately skip cabinet plans/appliance specs (or all of prep). NOTE:
@@ -24904,6 +24962,16 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","QC"];
+// ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Gear & Submittals","RFIs","Change Orders","Open Items"];
+const tabsFor = (job) => isCommercial(job) ? COMM_TABS : TABS;
+const COMM_SYSTEMS = [["gear","Service / gear"],["distribution","Distribution"],["lighting","Lighting"],["lightingControls","Lighting controls"],["branchPower","Branch power"],["fireAlarm","Fire alarm"],["lowVoltage","Low voltage"],["siteElectrical","Site electrical"],["generatorAts","Generator / ATS"],["ev","EV"],["other","Other"]];
+const COMM_MILESTONES = [["tempPower","Temp power"],["footing","Footing"],["underground","Underground"],["slab","Slab"],["walls","Walls"],["ceilings","Ceilings"],["permPower","Permanent power"],["startup","Startup"],["final","Final"]];
+const COMM_STAGES = [["","Auto (Pre-Con / Ready to Start)"],["inprogress","In Progress"],["hold","On Hold"],["closeout","Closeout"],["complete","Complete"]];
+const COMM_FIELDS = [["projectNo","Project #"],["gcPm","GC PM"],["gcSuper","GC Super"],["gcSuperPhone","Super phone"],["contractValue","Contract value"],["permitNo","Permit #"],["permitBy","Permit by","Homestead / GC / other"],["planSetRev","Plan set / rev"],["siteHours","Site hours"],["badgeReq","Badge / orientation"],["parkingNote","Parking"],["laydownNote","Laydown"],["tempPowerOwner","Temp power owner"]];
+const commOf = (j) => (j && j.commercial) || {};
+// One patch helper: always spreads the current nested object so a second write never wipes the first.
+const commPatch = (job, fn) => ({ commercial: fn({ ...(commOf(job)) }) });
 
 // ── Job Sections (v439, Koy 2026-09-24) ──────────────────────────────────────
 // "get rid of sections of a job card if they're not relevant to that job at
@@ -25064,7 +25132,7 @@ const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight
 // the Plan Changes view opens "Panelized Lighting"), so the page never shows
 // content under a tab bar with nothing selected.
 const tabsForJob = (job, activeTab) =>
-  TABS.filter(t => !SECTION_TABS[t] || !isSectionHidden(job, SECTION_TABS[t]) || t === activeTab);
+  tabsFor(job).filter(t => !SECTION_TABS[t] || !isSectionHidden(job, SECTION_TABS[t]) || t === activeTab);
 
 // Link fields on Plans & Links owned by a section.
 const LINK_FIELD_SECTION = { lightingLink:"panelized", panelLink:"panelSchedules", matterportLink:"matterport" };
@@ -26818,7 +26886,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     u(updatePatch);
   };
 
-  const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
+  const [tab, setTab] = useState(()=>initialTab && tabsFor(rawJob).includes(initialTab) ? initialTab : "Job Info");
+  // Commercial mode: if the job's division moved while open, a tab it no longer has falls back to Job Info.
+  useEffect(() => { if (!tabsFor(job).includes(tab)) setTab("Job Info"); }, [job.division]);   // eslint-disable-line
   // v433 usage tracking: count each job-tab open (once per device/user/day).
   // No-op unless the internal app shell set _usageUser (never on share pages,
   // never for contractors).
@@ -29867,6 +29937,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           )}
 
 
+          {(tab==="Job Start"||tab==="Gear & Submittals"||tab==="RFIs")&&(
+            <div style={{padding:"18px 4px",fontSize:12,color:C.dim}}>{tab} — coming in the Job Start ship.</div>
+          )}
+
           {tab==="Change Orders"&&(
 
             <div>
@@ -30669,6 +30743,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
               )}
 
+              {!isCommercial(job) && (<>
               <Section label="Pre-Job Prep" color={C.teal} defaultOpen={!allPrepChecked(job)}>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {PREP_CHECKLIST_ITEMS.map((item,i)=>{
@@ -30710,7 +30785,50 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
+              </>)}
 
+              {isCommercial(job) && (()=>{
+                const c = commOf(job); const cu = (fn) => u(commPatch(job, fn));
+                const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
+                const inp = {width:"100%",padding:"7px 9px",border:`1px solid ${C.border}`,borderRadius:7,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",boxSizing:"border-box"};
+                const sys = c.systems || {}; const ms = c.milestones || {};
+                return (<>
+                <Section label="Commercial" color={C.teal} defaultOpen>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:"10px 14px"}}>
+                    {COMM_FIELDS.map(([k,l,ph]) => (
+                      <div key={k}>{lbl(l)}<input value={c[k]||""} placeholder={ph||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x,[k]:v})); }} style={inp}/></div>
+                    ))}
+                  </div>
+                  <div style={{marginTop:14}}>
+                    {lbl("Stage")}
+                    <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap"}}>
+                      {COMM_STAGES.map(([k,l]) => { const on = (c.stage||"")===k; return (
+                        <button key={k||"auto"} onClick={()=>cu(x=>({...x, stage:k, stageDate: k ? new Date().toLocaleDateString("en-US") : ""}))}
+                          style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?C.teal:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
+                    </div>
+                    <div style={{fontSize:10,color:C.dim,marginTop:6}}>{commPhase(job)!==null ? `Auto: Phase ${commPhase(job)} · ${COMM_PHASE_BY_N[commPhase(job)].label} (pre-con, from the Job Start checklist)` : (c.stage ? `Set ${c.stageDate||""}` : "Auto: Ready to Start — all 12 pre-con phases closed. Set In Progress when the crew mobilizes.")}</div>
+                  </div>
+                </Section>
+                <Section label="Scope by system" color={C.teal} defaultOpen={!Object.values(sys).some(Boolean)}>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {COMM_SYSTEMS.map(([k,l]) => { const on=!!sys[k]; return (
+                      <span key={k} onClick={()=>cu(x=>({...x, systems:{...(x.systems||{}), [k]:!on}}))}
+                        style={{display:"inline-flex",alignItems:"center",gap:6,borderRadius:99,fontSize:10,fontWeight:700,letterSpacing:"0.05em",cursor:"pointer",userSelect:"none",minHeight:30,padding:"0 11px",
+                          border:`1px ${on?"solid":"dashed"} ${on?"#46916A":C.muted}`,color:on?"#46916A":C.dim,background:on?"#46916A0F":C.surface}}>
+                        <span>{on?"✓":"—"}</span>{l.toUpperCase()}</span>); })}
+                  </div>
+                  <div style={{fontSize:10,color:C.dim,marginTop:8}}>What this job has. The gear log and the on-site phases group by system; an off system just doesn't appear.</div>
+                </Section>
+                <Section label="Milestones" color={C.teal} defaultOpen={false}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:"10px 14px"}}>
+                    {COMM_MILESTONES.map(([k,l]) => (
+                      <div key={k}>{lbl(l)}<DateInp value={ms[k]||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, milestones:{...(x.milestones||{}), [k]:v}})); }}/></div>
+                    ))}
+                  </div>
+                  <div style={{fontSize:10,color:C.dim,marginTop:8}}>The dates the Forecast shows for a commercial job and the Ufer / underground reminders key on (from the GC schedule — phases 2 and 6).</div>
+                </Section>
+                </>);
+              })()}
               {can(identity,"job.division") && (
                 <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",margin:"6px 0 12px"}}>
                   <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>DIVISION</span>
@@ -32440,10 +32558,22 @@ const STAGE_SECTIONS = [
 
 ];
 
+// ── Commercial Job Board stages (spec §7). Pre-Con = the 12 Job Start phases; Ready to Start = all closed. ──
+const COMM_STAGE_SECTIONS = [
+  { key:"commPrecon",     label:"Pre-Con",        color:"#3E7D7A", test: j => !j.tempPed && !j.quickJob && commPhase(j) !== null },
+  { key:"commReady",      label:"Ready to Start", color:"#3E7D5A", test: j => !j.tempPed && !j.quickJob && commPhase(j) === null && !(commOf(j).stage) },
+  { key:"commInProgress", label:"In Progress",    color:"#3B5BA5", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "inprogress" },
+  { key:"commHold",       label:"On Hold",        color:"#B0892C", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "hold" },
+  { key:"commCloseout",   label:"Closeout",       color:"#6A5E97", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "closeout" },
+  { key:"completed",      label:"Complete",       color:"#3E7D5A", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "complete" },
+];
+// Quick jobs / temp peds keep their residential sections in front so an imported commercial temp ped still has a home.
+const COMM_BOARD_SECTIONS = [...STAGE_SECTIONS.filter(sec => sec.key.startsWith("quick") || sec.key.startsWith("tempPed")), ...COMM_STAGE_SECTIONS];
 
-function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true }) {
 
-  const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
+function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true, sections = STAGE_SECTIONS }) {
+
+  const initCollapsed = () => Object.fromEntries(sections.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
@@ -32453,7 +32583,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
     <div>
 
-      {STAGE_SECTIONS.map(sec => {
+      {sections.map(sec => {
 
         const sJobs = (() => {
           const filtered = jobs.filter(sec.test);
@@ -49175,12 +49305,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v450
+**Last manifest update:** 2026-09-25 · App SW version: v451
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Commercial mode — slice C: the commercial job card, the commercial Job Board, the commercial nav** · 'shipped 2026-09-25' · 'SW v451' · Koy: *"commercial jobs will have a completely different job prep process and process overall."* **Job card:** 'COMM_TABS' = Job Info · Activity · Photos · Plans & Links · Job Start · Gear & Submittals · RFIs · Change Orders · Open Items, served through the v439 per-job tab mechanism ('tabsFor(job)' → 'tabsForJob'), so Rough / Finish / Questions / Home Runs / Panelized / Tape Light / Return Trips / QC never render for a commercial job; a deep link into a tab the job doesn't have lands on Job Info; the three new tabs are placeholders until slice D. **Job Info** for a commercial job hides the residential Pre-Job Prep section and gains a **Commercial** section (project #, GC PM, GC super + phone, contract value, permit # + permit-by, plan set rev, site hours, badge / orientation, parking, laydown, temp-power owner, and a **Stage** pill: Auto / In Progress / On Hold / Closeout / Complete, date-stamped), **Scope by system** chips ('commercial.systems'), and **Milestones** dates ('commercial.milestones': temp power, footing, underground, slab, walls, ceilings, permanent power, startup, final — 'DateInp', M/D/YYYY). Every write is 'commPatch()' — the nested 'commercial' object spread-merged through the existing 'u()' → 'saveJob' funnel. **Job Board in Commercial mode:** 'COMM_STAGE_SECTIONS' (Pre-Con → Ready to Start → In Progress → On Hold → Closeout → Complete; quick jobs / temp peds keep their sections in front) via a new 'sections' prop on 'StageSectionList' (default = the residential list, so residential is untouched); the row pill reads 'PHASE n · <name> · done/total', or READY TO START / IN PROGRESS…; the pipeline tiles on the home and foreman pages follow the same buckets. **Pre-Con is derived, never stored:** 'COMM_START_STEPS' (Koy's 12-step Commercial Electrical Job Start Process — every step a phase, all pre-construction) + 'commPhase(job)' = the first phase with an item that is not done / N/A / covered by a move-on override; tracker items derive from the Gear & Submittals log and the Drive pull ('commTrackerDone'). Proven by 19 new cases in 'scripts/commercial-dryrun.js' (fresh → 1, last item advances, override → owed items, un-check pulls back, all closed → null, log truth table). **Nav:** tabs carry 'modes'; Commercial shows My Day · Job Board · Needs · COs · Contractors · Safety · Forecast · App Map (+ Nav, Time Off, Settings) and hides Today / Job Prep / Huddle / Scoreboard / QC / Upcoming / Quotes / Plan Changes / Tasks (residential engines); flipping the mode off a hidden tab lands on the Job Board. **Why it won't lose data:** additive nested writes only ('commercial.{fields, stage, stageDate, systems, milestones}' inside 'data', spread-merged from the freshest job); residential jobs never get the key; the 'sections' prop defaults to today's list; the tab list for residential jobs is byte-identical; no loader, rules, or functions changes.
 - **Commercial mode — slice B: Simpro Business Group sets the division, commercial imports build their Drive folder + pull plans on their own, residential chases skip commercial jobs** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"simpro does flag resi or commercial in the jobs settings → business group"* + *"i want the drive folder to be created and pull plans in from simpro automatically like it does in resi."* Three read-only probe runs against the tenant ('scripts/simpro-discover.js') found the Business Group is a **job custom field** ('/jobs/{id}/customFields/' → 'Business Group' = Residential / Commercial / Multi Family), not a job column, so the candidates poller ('_runSimproCandidateRefresh') now makes one 'customFields' call per **new** candidate (cached on the candidate afterwards), stores 'businessGroup' + 'divisionHint', and the Simpro Inbox row shows a COMMERCIAL / RESI pill (or "group unset — imports as <mode>"). **Import** writes 'division' from the hint ('resi' deletes the key; no hint → the current mode's stamp) and stamps 'simproBusinessGroup'. Mapping = 'config/app.commercialBusinessGroups', default Commercial + Multi Family (Koy: *"multifamily is probably commercial but unsure"* — a settings edit, never a deploy). **Existing jobs:** Settings → **COMMERCIAL DIVISION** (admin) → *Check divisions against Simpro* calls the new 'scanSimproDivisions' callable (every app job with a Simpro #, paced, read-only on Simpro, writes only 'settings/simproCandidates.divisionMismatches') and lists the jobs whose app division disagrees with Simpro, with per-row **Make Commercial / Residential** and **Apply all** — each Apply writes 'division' alone through 'updateJob'. **Drive:** new module helper 'runDriveChain(jobId, by)' = the Drive section's own two callables ('createJobDriveFolder' → 'pullJobDocsToDrive'); a commercial Simpro import fires it right after the create-only 'setDoc' (name + Simpro # arrive complete, so the half-typed-name problem that removed auto-create can't happen), and a hand-made commercial job fires it once its Simpro # settles (2 s, ≥ 4 digits, real name). Same Jobs parent folder, same '#<simpro> - <name>' naming (Koy: *"same parent folder is fine they are sorted there by job numbers anyway"*). Residential stays button-driven. **Functions (deploy needed):** 'isCommercialJob(data)' guard added to the per-job loops of 'dailyMorningChecks', 'dailyCoChase', 'dailyRtChase', 'dailyMatterportChase', 'dailyStaleJobChase', 'dailyUpdateMissing', 'techLightingWeeklyDigest', and the job lists of 'fridayPacket' / 'leadMeetingPrep'; 'onJobUpdate' skips the Job Prep Complete / QC ready / QC passed / Matterport pushes for commercial jobs; 'ensureJobDriveFolder''s "Drive Folder Linked" push goes to the 'comm.head' hat holder ('commHeadName()', falls back to 'resi.head' then Koy) for commercial jobs. Ledgers, backups, Drive matching, PO / CO syncs, needs, GC portal untouched. **Why it won't lose data:** the poller and the scan write only 'settings/simproCandidates'; Apply and import write 'division' (+ 'simproBusinessGroup') inside 'data' through the existing funnels; the Drive chain calls the same two callables the button calls and writes the same 'driveFolderId' / 'docPull' fields; every function change is a skip-guard or a push recipient — no write added or changed.
 - **Commercial mode — slice A, the foundation (invisible unless you flip the switch)** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"we need to start working on a commercial side of the app. i want it to be a completely separate mode that only shows our commercial jobs. so each job will need a way to assign resi or commercial."* Design: 'docs/superpowers/specs/2026-09-25-commercial-mode-design.md'; plan: 'docs/superpowers/plans/2026-09-25-commercial-mode-phase1.md'; mockup 'commercial-mockup.html'. **Division on the job:** 'division:"commercial"' inside 'job.data'; absent = residential, so every existing job is residential with zero writes ('jobDivision()' / 'isCommercial()'). **One filter at the top:** 'App()' now holds 'allJobs' and derives 'jobs' (the current mode's jobs) once with 'useMemo'; every view keeps its 'jobs' prop untouched, and everything that writes, merges, backs up, drains or restores reads 'allJobs' (the Task 2 audit: 'jobsRef', the daily safety backup, the Settings backup download, 'nextQuoteNumber', lookups-for-save, deep links). **The switch:** a RESI | COMMERCIAL pill in the header for everyone internal ('commercial.view', all four tiers; contractors never), device-local ('localStorage he_mode'); Commercial turns the header and active tab teal. **Landing:** 'defaultMode' on the user record (Settings → My Preferences "Land in", and Team Members "Lands in") picks the division once per session for people who mostly work commercial. The open drawer closes when the mode changes; a push or deep link to a job in the other division flips the mode and opens it. **Stamping:** every creation site (+ New Job / Temp Ped / Quick, foreman + subcontractor pages, quotes, both Upcoming promotes, Simpro import) writes 'division:"commercial"' only while in Commercial mode — residential mode writes no key. **Job Info → DIVISION** (admin/manager, 'job.division'): move a job either way after a confirm; the write is 'division' alone. New prebuild gate 'scripts/commercial-dryrun.js' (division helper truth table + a guard that 'jobsRef' can never track the filtered list). Nothing commercial is visible yet beyond the pill: the commercial job card, Job Board stages, nav, Simpro Business Group import, automatic Drive folder, Job Start phases, hats and My Day rows ship in slices B–D. **Why it won't lose data:** additive only — 'division' is a new key inside 'data' (unwraps through the existing loader spread, audited), 'defaultMode' rides the guarded 'saveUsers' whole-list write; no existing field renamed, retyped or removed; the 'allJobs' rename changes no write payload (every 'setJobs' updater was functional) and every offline / backup / restore path sees the full array exactly as before; no loader, 'firestore.rules', or functions changes.
 - **Panelized Lighting — download the load list (PDF / CSV), clean, no module assignments** · 'shipped 2026-09-25' · 'SW v448' · Koy: *"I would also love to be able to download a list of loads that is clean and organized without any modules assigned yet."* Two buttons on the **Loads** section header (Lutron / Control 4 / Crestron layout): **PDF** and **CSV**. Both build from the job's own 'panelizedLighting.loads' via the pure 'loadsListRows(loads, floorOrder)' — every named load, grouped **floor → room → A–Z** (floors in the tab's own order: Main Level, Basement, Upper Level, then extra floors, then anything unrecognized; blank room sorts last as "General"), numbered 1..N, with **Type** and **Watts** — and **no panel, module or channel columns**, so a lighting designer lays the panels out from a clean sheet. The PDF ('loadsListHtml' → new '_saveHtmlAsPdfPaged', a multi-page cousin of '_saveHtmlAsPdf', which captures one letter page only) carries the job name, address, system, load/floor counts and print date; the CSV ('loadsListCsv', BOM-prefixed so Excel reads UTF-8, '#,Floor,Room,Load,Type,Watts') is the editable copy. Harness 'needs-dryrun' covers ordering, numbering, unknown floors, dropped blanks and CSV escaping. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — both buttons only read 'loads' and write nothing to Firestore; no new field, no loader or rules change.
@@ -53285,30 +53416,31 @@ function usageWithZeros(rows, knownKeys) {
 const NAV_MAIN_TABS = [
   { key: "myday", label: "My Day", perm: "myday.view" },
   { key: "home", label: "Job Board" },
-  { key: "today", label: "Today", perm: "today.view" },
+  { key: "today", modes: ["resi"], label: "Today", perm: "today.view" },
   { key: "needs", label: "Needs", perm: "board.view" },
   { key: "cos", label: "COs", perm: "cos.view" },
-  { key: "jobprep", label: "Job Prep", perm: "jobprep.view" },
+  { key: "jobprep", modes: ["resi"], label: "Job Prep", perm: "jobprep.view" },
   { key: "contractors", label: "Contractors", perm: "users.manage" },
   { key: "safety", label: "Safety" },
   { key: "schedule", label: "Forecast" },
-  { key: "huddle", label: "Huddle", perm: "settings.view" },
-  { key: "scoreboard", label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
-  { key: "qc", label: "QC", tiers: ["admin", "manager"] },
+  { key: "huddle", modes: ["resi"], label: "Huddle", perm: "settings.view" },
+  { key: "scoreboard", modes: ["resi"], label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
+  { key: "qc", modes: ["resi"], label: "QC", tiers: ["admin", "manager"] },
   { key: "appmap", label: "App Map" },
 ];
 const NAV_MORE_TABS = [
   { key: "nav", label: "Nav", icon: "mapPin" },
-  { key: "upcoming", label: "Upcoming", icon: "calendar" },
-  { key: "quotes", label: "Quotes", icon: "fileText", perm: "quotes.view" },
-  { key: "lutron", label: "Plan Changes", icon: "mapPin", perm: "lutron.view" },
-  { key: "tasks", label: "Tasks", icon: "check" },
+  { key: "upcoming", modes: ["resi"], label: "Upcoming", icon: "calendar" },
+  { key: "quotes", modes: ["resi"], label: "Quotes", icon: "fileText", perm: "quotes.view" },
+  { key: "lutron", modes: ["resi"], label: "Plan Changes", icon: "mapPin", perm: "lutron.view" },
+  { key: "tasks", modes: ["resi"], label: "Tasks", icon: "check" },
   { key: "timeoff", label: "Time Off", icon: "calendar" },
 ];
 const NAV_SETTINGS_TAB = { key: "settings", label: "Settings" };
 const NAV_SUBS_TAB = { key: "subcontractors", label: "Subcontractors", icon: "hardHat" };
-const navTabVisible = (t, identity) =>
-  t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm));
+// Commercial mode: a tab with `modes` shows only in those modes (no `modes` = both).
+const navTabVisible = (t, identity, mode = "resi") =>
+  (!t.modes || t.modes.includes(mode)) && (t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm)));
 
 // Who usage is counted for: set from the internal app shell's render (never
 // from a share-link / GC-portal / homeowner page — those return before App's
@@ -58649,6 +58781,8 @@ function App() {
   }, [identity]);   // eslint-disable-line
   // The open drawer follows the mode — never a residential drawer over a commercial board.
   useEffect(() => { if (selected && jobDivision(selected) !== mode) setSelected(null); }, [mode]);   // eslint-disable-line
+  // …and so does the nav: a tab the new mode doesn't have falls back to the Job Board.
+  useEffect(() => { const t = [...NAV_MAIN_TABS, ...NAV_MORE_TABS].find(x => x.key === view); if (t && t.modes && !t.modes.includes(mode)) setView("home"); }, [mode]);   // eslint-disable-line
   // v433: count each screen open (once per device/user/day). Waits for the
   // landing redirect so a foreman's pre-redirect "home" flash isn't counted as
   // a Job Board visit.
@@ -58878,6 +59012,12 @@ function App() {
             <div style={{display:"flex",alignItems:"center",gap:7}}>
 
               {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
+              {isCommercial(job)&&(()=>{
+                const p=commPhase(job); const st=commOf(job).stage||"";
+                const lbl = p!==null ? `PHASE ${p} · ${COMM_PHASE_BY_N[p].short} · ${commPhaseDone(job,p)}/${COMM_PHASE_BY_N[p].items.length}` : st==="inprogress"?"IN PROGRESS":st==="hold"?"ON HOLD":st==="closeout"?"CLOSEOUT":st==="complete"?"COMPLETE":"READY TO START";
+                const col = p!==null?C.teal:st==="inprogress"?C.blue:st==="hold"?"#B0892C":st==="closeout"?C.purple:C.green;
+                return <span title={p!==null?COMM_PHASE_BY_N[p].label:"Commercial stage"} style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{lbl}</span>;
+              })()}
 
               <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.simproNo&&<span style={{color:C.dim,fontWeight:700,marginRight:5}}>#{job.simproNo}</span>}{job.name||"Untitled Job"}</span>
 
@@ -59519,7 +59659,7 @@ function App() {
         <div style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
-          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity))
+          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity,mode))
               .map(t=>t.key==="contractors"?{...t,badge:gcInboxOpen,badgeTitle:gcInboxOpen+" contractor request"+(gcInboxOpen===1?"":"s")+" waiting"}  // v433: list lives in NAV_MAIN_TABS (usage report reads it too)
                     :t.key==="myday"?{...t,badge:mydayBadge,badgeTitle:mydayBadge+" task"+(mydayBadge===1?"":"s")+" overdue, due today or urgent"}   // v446
                     :t)
@@ -59546,7 +59686,7 @@ function App() {
             subcontractor) tucked here to keep the top bar short. Office only. */}
         {!isContractor && (()=>{
           const moreItems = [
-            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,identity)),
+            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,identity,mode)),
             ...(contractorUsers.length>0?[{...NAV_SUBS_TAB,label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:NAV_SUBS_TAB.label}]:[]),
           ];
           const moreActive = moreItems.some(i=>i.key===view);
@@ -60046,7 +60186,7 @@ function App() {
 
                 <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
 
-                  {[
+                  {(mode==="commercial" ? [[jobs.length,"Total",C.text,jobs], ...COMM_STAGE_SECTIONS.map(sec=>{ const f=jobs.filter(sec.test); return [f.length,sec.label,sec.color,f]; })] : [
 
                     [jobs.length,"Total",C.text,jobs],
 
@@ -60062,7 +60202,7 @@ function App() {
 
                     [donJobs.length,"Completed",C.green,donJobs],
 
-                  ].map(([v,l,c,filt])=>(
+                  ]).map(([v,l,c,filt])=>(
 
                     <div key={l} onClick={()=>filt&&filt.length>0&&setStageModal({label:l,color:c,jobs:filt})}
 
@@ -60374,7 +60514,7 @@ function App() {
                   // screen search bar can find a job by its quote.
                   (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s))
                 ) : jobs);
-                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+                return <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
 
@@ -60450,7 +60590,7 @@ function App() {
 
                 const fNotStarted = fJobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0;}).length - fPrep;
 
-                return [[fJobs.length,"Total Jobs",C.blue],
+                return (mode==="commercial" ? [[fJobs.length,"Total Jobs",C.blue], ...COMM_STAGE_SECTIONS.map(sec=>[fJobs.filter(sec.test).length,sec.label,sec.color])] : [[fJobs.length,"Total Jobs",C.blue],
 
                   [fPrep,"Pre Job Prep",C.teal],
 
@@ -60462,7 +60602,7 @@ function App() {
 
                   [fFinish,"Finish",C.finish],
 
-                  [fDone,"Completed",C.green]].map(([v,l,c])=>(
+                  [fDone,"Completed",C.green]]).map(([v,l,c])=>(
 
                   <div key={l} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
 
@@ -60549,7 +60689,7 @@ function App() {
                   </div>
                 ):(
                   <>
-                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
+                  <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -60862,7 +61002,7 @@ function App() {
                         )}
                       </div>
                     ) : (
-                      <StageSectionList
+                      <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS}
                         jobs={cJobs}
                         JobRow={JobRow}
                         TempPedCard={TempPedCard}
