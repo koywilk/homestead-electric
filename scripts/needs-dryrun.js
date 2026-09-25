@@ -66,7 +66,8 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
   "taskPhotoPath","needPhotos","teamPulse",
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
-  "bucketOfYmd","needBucket","needPriority","prioRank","compareMyDayRows","mydayBadgeCount"];
+  "bucketOfYmd","needBucket","needPriority","prioRank","compareMyDayRows","mydayBadgeCount",
+  "loadsListRows","loadsListCsv"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -558,5 +559,27 @@ const bNeeds = [
 eq(H.mydayBadgeCount(bNeeds, gage, bT), 4, "badge = overdue + today + tomorrow-bucket + urgent");
 eq(H.mydayBadgeCount(bNeeds, null, bT), 0, "no identity → 0");
 eq(H.mydayBadgeCount([], gage, bT), 0, "no needs → 0");
+
+// ── v448 — loads list export (floor → room → A–Z, numbered, no module columns) ──
+const llRows = H.loadsListRows([
+  { id:"a", name:"Island Pendants", location:"Main Level", room:"Kitchen", loadType:"Dimming", watts:"180" },
+  { id:"b", name:" Cans ", location:"Upper Level", room:"Master Bed", loadType:"Dimming", watts:"" },
+  { id:"c", name:"Hall Sconces", location:"Main Level", room:"", loadType:"Switching", watts:"60" },
+  { id:"d", name:"Bar Cans", location:"main level", room:"Kitchen", loadType:"Dimming", watts:"120" },
+  { id:"e", name:"", location:"Main Level", room:"Kitchen" },                    // unnamed → dropped
+  { id:"f", name:"Garage", location:"Shop", room:"Bay 1", loadType:"Switching" }, // unknown floor → last
+  { id:"g", name:"Cans", location:"Basement", room:"Theater", loadType:"Dimming", watts:"240" },
+  null,
+], ["Main Level", "Basement", "Upper Level"]);
+eq(llRows.map(r => `${r.n}:${r.floor}/${r.room || "-"}/${r.name}`), [
+  "1:Main Level/Kitchen/Bar Cans", "2:Main Level/Kitchen/Island Pendants", "3:Main Level/-/Hall Sconces",
+  "4:Basement/Theater/Cans", "5:Upper Level/Master Bed/Cans", "6:Shop/Bay 1/Garage",
+], "floor order from the list (case-insensitive), rooms A–Z with blank room last, loads A–Z, unknown floor last, numbered 1..N");
+eq(llRows[1].watts, "180", "watts carried");
+eq(H.loadsListRows([], ["Main Level"]), [], "empty → []");
+eq(H.loadsListRows([{ name:"X" }], []), [{ id:"", name:"X", floor:"No floor", room:"", type:"", watts:"", n:1 }], "no floor → 'No floor'");
+const csv = H.loadsListCsv([{ n:1, floor:"Main Level", room:"Kitchen", name:'Pendants, "island"', type:"Dimming", watts:"180" }]);
+eq(csv, '#,Floor,Room,Load,Type,Watts\r\n1,Main Level,Kitchen,"Pendants, ""island""",Dimming,180\r\n', "CSV header + quoted/escaped cell");
+eq(H.loadsListCsv([]), "#,Floor,Room,Load,Type,Watts\r\n", "header only when empty");
 
 console.log("needs-dryrun ok");

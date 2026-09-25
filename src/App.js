@@ -3194,6 +3194,144 @@ async function downloadPanelSchedule(args) {
   }
 }
 
+// ─── Loads list export (v448) ───────────────────────────────────────────────
+// Koy (2026-09-25): "download a list of loads that is clean and organized
+// without any modules assigned yet." A design-stage handout for whoever lays
+// the panels out (Tech Lighting on Lutron jobs): every load on the job's
+// Loads list, floor → room → A–Z, numbered, with type and watts — and NO
+// panel / module / channel columns. Pure row + CSV builders (vm-tested in
+// scripts/needs-dryrun.js), an HTML builder, and a PAGED PDF saver — the
+// panel-cover saver above captures one letter page; a 120-load list needs
+// several.
+function loadsListRows(loads, floorOrder) {
+  const norm = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+  const canon = (floorOrder || []).map(f => norm(f)).filter(Boolean);
+  const order = canon.map(f => f.toLowerCase());
+  const floorIdx = (f) => { const i = order.indexOf(norm(f).toLowerCase()); return i < 0 ? 999 : i; };
+  // A load typed "main level" folds into the tab's own "Main Level" section.
+  const floorOf = (f) => { const i = floorIdx(f); return i < 999 ? canon[i] : (norm(f) || "No floor"); };
+  const rows = (loads || []).filter(l => l && norm(l.name)).map(l => ({
+    id: l.id || "", name: norm(l.name), floor: floorOf(l.location), room: norm(l.room),
+    type: norm(l.loadType), watts: norm(l.watts),
+  }));
+  rows.sort((a, b) => (floorIdx(a.floor) - floorIdx(b.floor)) || a.floor.localeCompare(b.floor)
+    || ((a.room ? 0 : 1) - (b.room ? 0 : 1)) || a.room.localeCompare(b.room) || a.name.localeCompare(b.name));
+  return rows.map((r, i) => ({ ...r, n: i + 1 }));
+}
+function loadsListCsv(rows) {
+  // (No bare quote inside a regex literal here — the needs-dryrun extractor
+  // brace-balances by skipping STRINGS and would read one as a string start.)
+  const Q = '"';
+  const cell = (v) => { const s = String(v == null ? "" : v); const needs = s.includes(",") || s.includes(Q) || s.includes("\n") || s.includes("\r"); return needs ? Q + s.split(Q).join(Q + Q) + Q : s; };
+  const lines = [["#", "Floor", "Room", "Load", "Type", "Watts"].join(",")];
+  (rows || []).forEach(r => lines.push([r.n, r.floor, r.room, r.name, r.type, r.watts].map(cell).join(",")));
+  return lines.join("\r\n") + "\r\n";
+}
+function loadsListHtml({ jobName, jobAddress, system, rows, dateStr }) {
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const floors = [];
+  (rows || []).forEach(r => {
+    let f = floors[floors.length - 1]; if (!f || f.floor !== r.floor) { f = { floor: r.floor, rooms: [] }; floors.push(f); }
+    let rm = f.rooms[f.rooms.length - 1]; if (!rm || rm.room !== r.room) { rm = { room: r.room, loads: [] }; f.rooms.push(rm); }
+    rm.loads.push(r);
+  });
+  const body = floors.map(f => `
+    <h2>${esc(f.floor)} <span class="cnt">${f.rooms.reduce((s, r) => s + r.loads.length, 0)} loads</span></h2>
+    ${f.rooms.map(rm => `
+      <table>
+        <thead><tr><th class="n">#</th><th>${esc(rm.room || "General")}</th><th class="t">Type</th><th class="w">Watts</th></tr></thead>
+        <tbody>${rm.loads.map(l => `<tr><td class="n">${l.n}</td><td>${esc(l.name)}</td><td class="t">${esc(l.type)}</td><td class="w">${esc(l.watts)}</td></tr>`).join("")}</tbody>
+      </table>`).join("")}`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(jobName)} — Lighting loads</title>
+  <style>
+    body{margin:0;padding:34px 40px;font:11px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1B1F24;background:#fff;width:816px;box-sizing:border-box}
+    h1{font-size:20px;margin:0 0 2px;letter-spacing:.02em}
+    .sub{color:#5E6670;font-size:11px;margin:0 0 4px}
+    .meta{display:flex;gap:14px;flex-wrap:wrap;color:#5E6670;font-size:10px;margin:0 0 14px;padding-bottom:8px;border-bottom:2px solid #1B1F24}
+    .meta b{color:#1B1F24}
+    h2{font-size:13px;margin:16px 0 6px;padding-bottom:3px;border-bottom:1px solid #1B1F24;letter-spacing:.04em;text-transform:uppercase}
+    h2 .cnt{font-weight:400;color:#5E6670;text-transform:none;letter-spacing:0;font-size:11px;margin-left:8px}
+    table{width:100%;border-collapse:collapse;margin:0 0 8px}
+    th{text-align:left;font-size:10px;color:#1B1F24;background:#EEF0F3;padding:4px 6px;border-bottom:1px solid #CDD3DB}
+    td{padding:3px 6px;border-bottom:1px solid #E1E4E9;vertical-align:top}
+    .n{width:30px;color:#8A929D;text-align:right}
+    .t{width:90px;color:#5E6670}
+    .w{width:56px;text-align:right}
+    .foot{margin-top:18px;color:#8A929D;font-size:9px}
+  </style></head><body>
+  <h1>${esc(jobName || "Job")} — Lighting loads</h1>
+  ${jobAddress ? `<div class="sub">${esc(jobAddress)}</div>` : ""}
+  <div class="meta"><span>System: <b>${esc(system || "")}</b></span><span>Loads: <b>${(rows || []).length}</b></span><span>Floors: <b>${floors.length}</b></span><span>Printed: <b>${esc(dateStr || "")}</b></span></div>
+  ${body || '<div class="sub">No loads on the list yet.</div>'}
+  <div class="foot">Load list only — no panel, module or channel assignments. Homestead Electric.</div>
+  </body></html>`;
+}
+// Multi-page cousin of _saveHtmlAsPdf: captures the whole document height and
+// slices it into letter pages. (Rows can split across a page edge — it's a
+// picture of the page, not reflowed text; the CSV is the editable copy.)
+async function _saveHtmlAsPdfPaged(html, filename) {
+  await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  if (typeof window.html2canvas !== "function" || !window.jspdf?.jsPDF) {
+    throw new Error("PDF libraries failed to load. Check your connection and try again.");
+  }
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:816px;height:1056px;border:0;";
+  document.body.appendChild(iframe);
+  try {
+    iframe.contentDocument.open();
+    iframe.contentDocument.write(html);
+    iframe.contentDocument.close();
+    await new Promise(r => setTimeout(r, 350));
+    const bodyEl = iframe.contentDocument.body;
+    const fullH = Math.max(bodyEl.scrollHeight, 1056);
+    iframe.style.height = fullH + "px";
+    const canvas = await window.html2canvas(bodyEl, {
+      scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false,
+      width: 816, height: fullH, windowWidth: 816, windowHeight: fullH,
+    });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+    const pdfW = pdf.internal.pageSize.getWidth(), pdfH = pdf.internal.pageSize.getHeight();
+    const margin = 12, imgW = pdfW - margin * 2, ptPerPx = imgW / canvas.width;
+    const pagePx = Math.floor((pdfH - margin * 2) / ptPerPx);
+    let y = 0, page = 0;
+    while (y < canvas.height) {
+      const h = Math.min(pagePx, canvas.height - y);
+      const slice = document.createElement("canvas"); slice.width = canvas.width; slice.height = h;
+      slice.getContext("2d").drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+      if (page > 0) pdf.addPage();
+      pdf.addImage(slice.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, h * ptPerPx);
+      y += h; page += 1;
+    }
+    pdf.save(filename);
+  } finally {
+    iframe.remove();
+  }
+}
+function _downloadTextFile(text, filename, mime) {
+  const blob = new Blob([text], { type: mime || "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+const _loadsFileBase = (job) => String((job && job.name) || "job").replace(/[\\/:*?"<>|]+/g, " ").trim();
+const _loadsToast = (k, m) => { try { if (typeof toast !== "undefined" && toast[k]) toast[k](m); } catch {} };
+async function downloadLoadsListPdf({ job, loads, floorOrder }) {
+  const rows = loadsListRows(loads, floorOrder);
+  const html = loadsListHtml({ jobName: job?.name, jobAddress: job?.address || "", system: job?.lightingSystem || "Control 4", rows, dateStr: new Date().toLocaleDateString("en-US") });
+  const filename = `Lighting loads — ${_loadsFileBase(job)}.pdf`;
+  try { _loadsToast("info", "Building PDF…"); await _saveHtmlAsPdfPaged(html, filename); _loadsToast("success", `Saved ${filename}`); return true; }
+  catch (e) { _loadsToast("error", "PDF download failed: " + e.message); return false; }
+}
+function downloadLoadsListCsv({ job, loads, floorOrder }) {
+  const rows = loadsListRows(loads, floorOrder);
+  const filename = `Lighting loads — ${_loadsFileBase(job)}.csv`;
+  _downloadTextFile("﻿" + loadsListCsv(rows), filename, "text/csv;charset=utf-8");   // BOM so Excel reads UTF-8
+  _loadsToast("success", `Saved ${filename}`);
+}
+
 // ─── Electrical (load center) panel schedule print ───────────────────────
 // Two-column odd/even breaker layout matching the standard Eaton/Square-D
 // panel schedule blank: circuit name on the outside, slot number in the
@@ -28971,6 +29109,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
 
               <SectionHead label="Loads" color={sysAccentColor(job)} action={<>
+                {/* v448 (Koy 2026-09-25): a clean, organized load list to hand
+                    out — floor → room → A–Z, type + watts, NO panel / module /
+                    channel columns. PDF for printing/emailing, CSV for a sheet. */}
+                {(()=>{
+                  const _pl = job.panelizedLighting || {};
+                  const _args = { job, loads: _pl.loads || [], floorOrder: ["Main Level","Basement","Upper Level",...((_pl.extraFloors)||[]).map(ef=>ef && ef.label).filter(Boolean)] };
+                  const _st = {padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:sysAccentColor(job),border:`1px solid ${sysAccentColor(job)}66`,display:"inline-flex",alignItems:"center",gap:5};
+                  return (<>
+                    <button title="Download the load list as a PDF — floor → room, type, watts; no panel or module columns" onClick={()=>downloadLoadsListPdf(_args)} style={_st}><Icon name="download" size={11} stroke={2.25}/>PDF</button>
+                    <button title="Download the same list as a CSV (opens in Excel / Sheets)" onClick={()=>downloadLoadsListCsv(_args)} style={_st}><Icon name="download" size={11} stroke={2.25}/>CSV</button>
+                  </>);
+                })()}
                 <button title={job.panelizedLighting?.baseline ? "Re-snapshot the current loads as the new baseline" : "Snapshot the current loads as the original-plans baseline"}
                   onClick={()=>{
                     const snap = allSavantLoadsForJob(job).map(l=>({ id:l.id, name:l.name, channel:l.assignedTo?.output||"", type:l.type, watts:l.wattage, keypad:l.keypad||"", room:l.room, floor:l.floor, panel:l.assignedTo?.panelLabel||"" }));
@@ -48918,12 +49068,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v447
+**Last manifest update:** 2026-09-25 · App SW version: v448
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Panelized Lighting — download the load list (PDF / CSV), clean, no module assignments** · 'shipped 2026-09-25' · 'SW v448' · Koy: *"I would also love to be able to download a list of loads that is clean and organized without any modules assigned yet."* Two buttons on the **Loads** section header (Lutron / Control 4 / Crestron layout): **PDF** and **CSV**. Both build from the job's own 'panelizedLighting.loads' via the pure 'loadsListRows(loads, floorOrder)' — every named load, grouped **floor → room → A–Z** (floors in the tab's own order: Main Level, Basement, Upper Level, then extra floors, then anything unrecognized; blank room sorts last as "General"), numbered 1..N, with **Type** and **Watts** — and **no panel, module or channel columns**, so a lighting designer lays the panels out from a clean sheet. The PDF ('loadsListHtml' → new '_saveHtmlAsPdfPaged', a multi-page cousin of '_saveHtmlAsPdf', which captures one letter page only) carries the job name, address, system, load/floor counts and print date; the CSV ('loadsListCsv', BOM-prefixed so Excel reads UTF-8, '#,Floor,Room,Load,Type,Watts') is the editable copy. Harness 'needs-dryrun' covers ordering, numbering, unknown floors, dropped blanks and CSV escaping. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — both buttons only read 'loads' and write nothing to Firestore; no new field, no loader or rules change.
 - **My Day — return trips stay with the head; no second overdue row for Josh on sign-off** · 'shipped 2026-09-25' · 'SW v447' · Koy: *"if a shared task is checked off by one it should be cleared on the other side. i have checked off buchsthaber return trip and it shows as overdue on joshs card. also josh should only share QC with me not return trips."* Root cause: signing an RT off sets it to 'complete', which spawns a **different** auto row on the same trip — '_rt_<id>_done' "Return Trip #N Complete — merge or invoice" — and v427 routed that row to the invoicing hat, dated from the old 'rtStatusDate', so it landed on Josh's board already overdue the moment Koy closed the trip. It was never a shared row failing to clear (QC / redline rows clear for every holder by construction); it was a second rule with a different owner. **Fix:** 'routeKeyOfAuto' returns 'null' for every 'category:"rt"' row — schedule, get-sign-off AND complete/merge-or-invoice all stay with the Head of Residential (Josh now shares only QC with Koy); the merge-or-invoice row is due from 'signedOffDate' (falls back to 'rtStatusDate') so it isn't born overdue; it stays in the never-hides money set ('staleMoney' now includes '_rt_*_done'); 'HAT_REGISTRY' note and the guide drop "RT" from the invoicing list; 'functions/myDayDigest.js' no longer bumps the invoicing count for completed RTs (CO complete unchanged). Tests: 'needs-dryrun' (RT done/sched → null), 'mydaydigest-test' (RT complete ≠ invoicing). **Needs 'firebase deploy --only functions:dailyMyDayDigest'.** **Why it won't lose data:** routing and due-date derivation only — no new field, no write path changed, no rules change; an RT row Josh already cleared via 'clearedTasks' stays cleared for the head too (same job-level list).
 - **My Day Ship 4 — urgency, Nudge + morning chase, tab badge, everyone lands here, a push opens the task, obvious assign controls** · 'shipped 2026-09-24' · 'SW v446' · Koy: *"lets make the my day tool the most effective tool we have for tracking needs and tasks"* → picked items 2, 3, 4 from the audit, plus *"add an urgency status that can be added to it and have them sort by that"* and *"received complaint that it is hard to tell you can click the person to assign to different person, as well as the other assigning options. make it easier."* **Urgency:** new additive field 'priority' inside a need doc's 'data' ('"urgent"' / '""' normal / '"low"'; absent reads as normal via 'needPriority'). Set on the + sheet (**Urgency** field: Urgent / Normal / Low) or in **Edit** (new Urgency select; the change is logged in the thread as "changed: urgent"). Urgent rows get a red left edge + red **URGENT** tag, Low a grey **Low** tag; the Needs board cards show the same pills; the "assigned to you" push is titled *URGENT task assigned to you*; the 6:45 digest line leads with 'N urgent'. **Sort (everywhere on My Day, 'compareMyDayRows'):** urgency → lane (overdue / today / week / later) → **due date inside the lane** (was A–Z by title, so the next thing due was buried; undated rows last) → title; a category holding an urgent row floats to the top of Mine ('myDayCategories' gains 'urgent'); Low sinks below everything, even overdue. Every derived row now carries 'dueYmd' (auto: 'taskDueDates' override or the rule date; prep duty: rough start; scan: the scheduled/needed date; redline: walk/status date). **Nudge:** Sent rows get a **Nudge** button — the existing manual-reminder push ('reNudge', 'renudge' pref; roster picker to redirect it) with a new optional 'view' + 'needId' so it lands on the task. **Morning chase (server, 'dailyMyDayDigest'):** pure 'chaseTargets' / 'chaseMessages' in 'functions/myDayDigest.js' — a doc **2+ days overdue** pushes its assignee on every EVEN day overdue (2, 4, 6…) unless the assignee posted an update in the last 48h; the requester ('assignedBy', else 'createdBy', when a different person) is pushed on every 5th day (5, 10, 15…); snoozed, done, undated, bodies and **Low** docs are never chased; covering applies to both sides; one push per person per role ("⏰ Still open on you" / "⏰ N overdue tasks on you" · "⏰ Still waiting on someone"), deep-linked to the task when it's a single one. New notif pref 'myday_chase' (all roles, default on, gated server-side). **Tab badge:** the My Day tab shows a red count ('mydayBadgeCount') of my open task docs that are overdue, due today (a bucket-only "Tomorrow" doc counts as today, as the board files it) or urgent. **Landing:** every internal role — office included — opens on My Day (was field roles only); contractors unchanged. **Push opens the task:** 'onNeedWrite' (all four branches), 'reNudge' and the chase carry 'needId'; 'sendFCM' data + the inbox item store it; the messaging SW appends '&need=<id>' to the '?view=myday' deep-link; the app reads it (before 'pendingView' strips the query), the bell inbox passes 'item.needId', and 'MyDay' ('jumpNeedId' / 'onJumped') finds the row in Focus / Mine (category or job line) / Sent / Sent · finished / Done / a Person group, unfolds its way there, scrolls to it and outlines it blue for 4 s; waits while 'needs' is still loading on a cold start. **Assign controls you can see:** the + sheet's chips are now labeled **fields** with an icon and a caret — 'To: Koy ▾', 'Urgency: Normal ▾', 'Due: Tomorrow ▾', 'Job: none ▾', 'Type: Need ▾' — plus a "Tap a field to change it" hint; the To picker always shows the full-company select (no more hidden "Someone else…" toggle). On the board, every task row the viewer may reassign (sender, self-made, or whoever runs the head board) shows a blue **To: &lt;name&gt; ▾** pill that opens the roster right under the row ("Move it to"); the head's auto rows read **Pick person ▾** / **Re-push ▾**. Harness: 'scripts/needs-dryrun.js' (+'needPriority' / 'prioRank' / 'compareMyDayRows' / 'mydayBadgeCount' / category float) and 'scripts/mydaydigest-test.js' (+urgent count, chase day rules, quiet-assignee skip, covering, message shapes). Guides 'myday.html' (Urgency, Move it, Nudge, "Getting to it faster") + 'needs.html' updated. **Needs 'firebase deploy --only functions:onNeedWrite,functions:reNudge,functions:dailyMyDayDigest'.** **Why it won't lose data:** one new additive field ('priority') inside 'data', written only by the + sheet on new docs and by Edit as a dotted 'data.priority' patch (absent = normal, so no backfill and no loader change — the needs loader returns 'data' verbatim); reassign-from-the-pill is the existing field-surgical 'patchNeed({assignedTo})'; Nudge and the chase are pushes + inbox writes only (the chase is read-only over 'needs', keyed on days-overdue so it writes nothing back); 'needId' is an additive string on push data / inbox items; the sort, badge, landing, and jump are render-only; no Firestore rules change.
 - **Generator link shows home run notes** · 'shipped 2026-09-24' · 'SW v445' · Koy: *"i need homerun notes to be shown on the generator link as well."* The homeowner generator page ('HomeownerPage') now shows each load's home-run 'note' under its name on all three lists (on the generator / recommended / not on it). The note is looked up LIVE from the job's own 'homeRuns' by the gen load's 'hrId' ('flattenHomeRuns') — never copied into 'genLoads', so it's always current and the homeowner's own per-load 'notes' field is untouched. Loads with no home run (manual adds) show nothing extra. Guide 'generatorlink.html' warns to keep internal comments out of home run notes since the homeowner sees them. **Why it won't lose data:** display-only; reads the job doc the page already loaded.
