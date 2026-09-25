@@ -554,8 +554,12 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 11. **Daily reports:** do your GCs require a daily log (crew count, hours, work done, weather,
     deliveries, delays)? That is the strongest candidate for the first Phase 2 tab.
 12. **GC portal:** should commercial GCs get portal links in Phase 1, or wait?
-14. **Multi Family business group:** treat as commercial (proposed default) or residential?
-    One word. The mapping is a settings value either way, never a deploy.
+14. **Multi Family business group** — answered: Koy, *"multifamily is probably commercial but
+    unsure."* → Ships as **commercial** (default mapping `["commercial","multi family"]`).
+    Because it's a per-job division, any single Multi Family job can be moved to Residential
+    from Job Info, and the whole group can be flipped later by editing
+    `config/app.commercialBusinessGroups` — no deploy. Revisit after the first Multi Family
+    job runs through Job Start.
 13. **Drive parent folder** — answered: Koy, *"same parent folder is fine they are sorted
     there by job numbers anyway."* → same `JOBS_PARENT_FOLDER_ID`, same `#<simproNo> - <name>`
     naming, no `COMM_JOBS_PARENT_FOLDER_ID`.
