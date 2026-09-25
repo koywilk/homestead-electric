@@ -2284,12 +2284,9 @@ async function _driveUploadResumable(auth, { name, mime, parentId, buffer }) {
   return j.id || "";
 }
 const DOC_PULL_STALE_MS = 12 * 60 * 1000;   // a "running" older than the 9-min function ceiling is a crashed run
-exports.pullJobDocsToDrive = functions
-  .runWith({ timeoutSeconds: 540, memory: "2GB" })
-  .https.onCall(async (data) => {
-    requireAppKey(data);
-    const jobId = String((data && data.jobId) || "").trim();
-    const providerKey = String((data && data.provider) || "simpro");
+// Commercial mode (2026-09-25): the pull body is a helper so the weekly
+// commercial re-pull (weeklyCommercialDocPull) and the callable share it.
+async function _pullJobDocs(jobId, providerKey, by) {
     const provider = DOC_PROVIDERS[providerKey];
     if (!jobId) throw new functions.https.HttpsError("invalid-argument", "Missing jobId");
     if (!provider) throw new functions.https.HttpsError("invalid-argument", `Unknown provider ${providerKey}`);
@@ -2307,7 +2304,7 @@ exports.pullJobDocsToDrive = functions
     }
     const startedAt = new Date().toISOString();
     let lastWrite = 0;
-    const state = { provider: providerKey, status: "running", startedAt, finishedAt: "", total: 0, done: 0, skipped: 0, errors: [], lastFile: "", by: String((data && data.by) || "") };
+    const state = { provider: providerKey, status: "running", startedAt, finishedAt: "", total: 0, done: 0, skipped: 0, errors: [], lastFile: "", by: String(by || "") };
     const save = async (force) => {
       if (!force && Date.now() - lastWrite < 3000) return;
       lastWrite = Date.now();
@@ -2363,8 +2360,39 @@ exports.pullJobDocsToDrive = functions
       functions.logger.error("pullJobDocsToDrive failed", { jobId, error: e.message });
       throw new functions.https.HttpsError("internal", state.message);
     }
+}
+
+
+
+exports.pullJobDocsToDrive = functions
+  .runWith({ timeoutSeconds: 540, memory: "2GB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    const jobId = String((data && data.jobId) || "").trim();
+    const providerKey = String((data && data.provider) || "simpro");
+    return _pullJobDocs(jobId, providerKey, (data && data.by) || "");
   });
 
+// Commercial jobs keep receiving revisions, addenda and approved submittals in
+// Simpro through pre-con, so re-pull every Monday while the job has no manual
+// stage (In Progress / Hold / Closeout / Complete). Dedupe makes it idempotent.
+exports.weeklyCommercialDocPull = functions
+  .runWith({ timeoutSeconds: 540, memory: "2GB" })
+  .pubsub.schedule("15 5 * * 1")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const snap = await db.collection("jobs").get();
+    let ran = 0, skipped = 0;
+    for (const d of snap.docs) {
+      const j = d.data()?.data || {};
+      if (!isCommercialJob(j) || !j.driveFolderId || !j.simproNo || j.type === "quote" || j.archived || j.deleted) continue;
+      if (j.commercial && j.commercial.stage) { skipped++; continue; }
+      try { await _pullJobDocs(d.id, "simpro", "weekly"); ran++; }
+      catch (e) { functions.logger.warn("weeklyCommercialDocPull: job failed", { jobId: d.id, error: e.message }); }
+    }
+    functions.logger.info("weeklyCommercialDocPull done", { ran, skipped });
+    return null;
+  });
 
 // ─── Get Simpro Job Financials ────────────────────────────────────────────────
 exports.getSimproJobFinancials = functions.https.onCall(async (data) => {

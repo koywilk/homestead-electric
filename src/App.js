@@ -4140,6 +4140,8 @@ const PERMISSIONS = {
   "users.manage":    ["admin","manager"],
   "commercial.view": ["admin","manager","standard","limited"],  // the Resi / Commercial switch — everyone internal (crews work both, Koy 2026-09-25); contractors never
   "job.division":    ["admin","manager"],                       // move a job between divisions (Job Info → DIVISION)
+  "commstart.view":  ["admin","manager","standard"],           // see the Job Start board (foremen read-only)
+  "commstart.edit":  ["admin","manager"],                       // check items in any phase, move on, edit the logs (+ the comm.* hats, see canEditJobStart)
   "job.delete":      ["admin"],
   "quotes.view":     ["admin","manager","standard"],
   "quotes.convert":  ["admin"],
@@ -4184,6 +4186,9 @@ const PERMISSIONS = {
   // it follows the ROLE, never a hardcoded name; scanOwner(users) resolves the
   // holder. Owns the "Matterport scans" queue on My Day + the morning chase.
   "matterport.own":         [],
+  "comm.head":              [],   // Head of Commercial (Brady) — fallback owner for every commercial row
+  "comm.precon":            [],   // Commercial pre-con — Job Start phases 1–5, 7–12 (Brady · Justin), shared
+  "comm.site":              [],   // Commercial site coordination — Job Start phase 6 (Zane · Abe), shared
   // v427 hat registry (HAT_REGISTRY) — per-user grants only, never by tier.
   "invoice.own":            [],
   "co.own":                 [],
@@ -4596,7 +4601,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["resi.head","Head of Residential"],["jobprep.own","Job prep"], ...HAT_REGISTRY.map(h => [h.cap, h.label + (h.shared ? " (shared)" : "")])].map(([cap,label])=>{
+                        {[["resi.head","Head of Residential"],["comm.head","Head of Commercial"],["jobprep.own","Job prep"], ...HAT_REGISTRY.map(h => [h.cap, h.label + (h.shared ? " (shared)" : "")])].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -4608,7 +4613,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential.</div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -6423,7 +6428,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -29937,9 +29942,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           )}
 
 
-          {(tab==="Job Start"||tab==="Gear & Submittals"||tab==="RFIs")&&(
-            <div style={{padding:"18px 4px",fontSize:12,color:C.dim}}>{tab} — coming in the Job Start ship.</div>
+          {tab==="Job Start"&&(
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>JOB START</div><HelpDot section="jobstart"/></div>
+              <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
+            </div>
           )}
+          {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
+          {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
 
           {tab==="Change Orders"&&(
 
@@ -33190,10 +33200,39 @@ const matchesForeman = (job, name) => {
 // behavior-identical — just no hardcoded name anymore.
 let _taskOwnerFallback = "";
 function _setTaskOwnerFallback(name) { _taskOwnerFallback = name || ""; }
+// ── Commercial auto-task rules (spec §6.5). Rows carry category "commstart" + a
+// route: "commstart" (comm.precon), "commsite" (comm.site), "commhead" (no hat →
+// Head of Commercial). Residential rules never run for a commercial job.
+function commercialTasks(job, tasks) {
+  const c = job.commercial || {}; const p = commPhase(job);
+  const rows = Array.isArray(c.submittals) ? c.submittals : [];
+  const ms = c.milestones || {};
+  const within = (dateStr, days) => { const d = parseAnyDate(dateStr); if (!d) return false; const diff = (d.getTime() - Date.now()) / 864e5; return diff <= days; };
+  const base = { jobId: job.id, jobName: job.name, type: "auto", category: "commstart", foreman: job.foreman || "", color: C.teal, cleared: false };
+  if (p !== null) {
+    const ph = COMM_PHASE_BY_N[p]; const done = commPhaseDone(job, p); const nxt = ph.items.find(([k]) => commItemState(job, p, k) === "todo");
+    const due = p === 9 ? (ms.footing || "") : (p === 11 || p === 12) ? (ms.slab || "") : p === 8 ? (ms.tempPower || "") : "";
+    tasks.push({ ...base, id: job.id + "_comm_phase", route: ph.owner === "site" ? "commsite" : "commstart",
+      title: `Phase ${p} · ${ph.label}: ${job.name || "Untitled"}`, desc: `${done}/${ph.items.length} done${nxt ? ` — NEXT: ${nxt[1]}` : ""}`, dueDate: due });
+    commOwedItems(job).forEach(o => tasks.push({ ...base, id: `${job.id}_comm_owed_${o.n}_${o.k}`, route: COMM_PHASE_BY_N[o.n].owner === "site" ? "commsite" : "commstart", color: "#B0892C",
+      title: `Owed: ${o.label} (phase ${o.n}) on ${job.name || "Untitled"}`, desc: "Moved on with this item still open — check it when it's done", dueDate: "" }));
+    if (ms.footing && within(ms.footing, 7) && !commPhaseClosed(job, 9)) tasks.push({ ...base, id: job.id + "_comm_ufer", route: "commstart", color: C.red, title: `Ufer before pour: ${job.name || "Untitled"}`, desc: `Footing ${ms.footing} — phase 9 not closed`, dueDate: ms.footing });
+    if (ms.slab && within(ms.slab, 7) && !commPhaseClosed(job, 11)) tasks.push({ ...base, id: job.id + "_comm_underground", route: "commstart", color: C.red, title: `Underground before slab: ${job.name || "Untitled"}`, desc: `Slab ${ms.slab} — phase 11 not closed`, dueDate: ms.slab });
+  } else if (!c.stage && (!job.foreman || job.foreman === "Unassigned")) {
+    tasks.push({ ...base, id: job.id + "_comm_ready", route: "commhead", color: C.green, title: `Ready to start — assign a foreman: ${job.name || "Untitled"}`, desc: "All 12 pre-con phases closed", dueDate: "" });
+  }
+  const open = rows.filter(r => r.releasedAt && !r.deliveredAt);
+  if (open.length) {
+    const monday = (() => { const d = new Date(); const day = d.getDay(); const diff = (day === 0 ? 6 : day - 1); d.setDate(d.getDate() - diff); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; })();
+    tasks.push({ ...base, id: job.id + "_comm_gearcheck", route: "commstart", title: `Gear check: ${job.name || "Untitled"}`, desc: `${open.length} released, not delivered — call the vendor, confirm ship dates`, dueDate: monday });
+    open.forEach(r => { const ps = parseAnyDate(r.promisedShip); if (ps && ps.getTime() < Date.now()) tasks.push({ ...base, id: `${job.id}_comm_gearlate_${r.id || r.item}`, route: "commstart", color: C.red, title: `Gear late: ${r.item || "item"} on ${job.name || "Untitled"}`, desc: `Promised ${r.promisedShip}, not delivered`, dueDate: r.promisedShip }); });
+  }
+}
 function computeTasks(jobs, opts) {
   const unassignedOwner = (opts && opts.unassignedOwner !== undefined) ? opts.unassignedOwner : _taskOwnerFallback;
   const tasks = [];
   jobs.forEach(job => {
+    if (isCommercial(job)) { commercialTasks(job, tasks); return; }   // Commercial mode: its own rules, none of the residential ones
     const foreman = job.foreman || unassignedOwner;
     const rs = job.roughStatus || "";
     const fs = job.finishStatus || "";
@@ -49305,12 +49344,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v451
+**Last manifest update:** 2026-09-25 · App SW version: v452
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Commercial mode — slice D: Job Start (the 12 pre-con phases), Gear & Submittals, RFIs, commercial hats + My Day rows, guides, weekly plan re-pull** · 'shipped 2026-09-25' · 'SW v452' · Koy: *"we are thinking for each number is a phase of it. so it can come up with the phase and checklist under, when all are checked it goes to the next phase and checklist"* + *"none of this is foreman phase? its all done pre construction there is no on site work yet"* + *"brady is head of commercial."* **Job Start tab** ('jobstart', Commercial mode, 'commstart.view' admin/manager/standard; editing = 'commstart.edit' or any 'comm.*' hat via 'canEditJobStart'): jobs grouped by their current phase 1–12 (empty phases hidden, owner names on each section from the hats), one 'JobStartCard' per job — name / GC / foreman, footing · underground · slab milestone strip (orange inside 10 days), GEAR pill (approved · released · LATE), OWED pill, the 12-segment phase bar (teal done · blue current · amber owed · grey upcoming; tap a number to look back or peek ahead), the current phase's chips (tap ○ → ✓ → N/A; double-border tracker chips jump to the log they derive from; photo items get a 'PhotoAttacher' under 'commercial.start.photos', date items a 'DateInp' under '.dates'), progress + NEXT, a phase note, and **MOVE ON WITH ITEMS OWED** (lists what is owed, optional note, stamps 'commercial.start.overrides[n] = {by, at, note}', never auto-cleared, Undo). Checking the last item advances the job with a toast; un-checking an earlier item pulls it back; all twelve closed → "Ready to Start". Search, foreman filter, **Mine** (phases my hat owns), Show complete. The same card is the job's **Job Start** tab; **Gear & Submittals** (one row per long-lead item: vendor, system, status requested → submitted → revise → approved / approved as noted, requested, lead weeks, price confirmed, PO, released, promised ship (LATE past due), required on site, ship mode, delivered, storage, comments, Mark checked, "Add the usual long-lead list") and **RFIs** (no., question, sent to / sent, answered, answer, blocks purchasing / underground) are the logs the phase 3, 4 and 5 tracker chips derive from. **Hats:** 'comm.head' (Head of Commercial — Brady), 'comm.precon' (shared, phases 1–5 + 7–12 — Brady · Justin), 'comm.site' (shared, phase 6 — Zane · Abe) in 'HAT_REGISTRY' / Team Members → COMPANY HATS; 'ownersForRoute' falls commercial routes back to 'commHeadName()' (then the resi head). **My Day:** 'computeTasks' runs 'commercialTasks()' for a commercial job instead of any residential rule — one "Phase n · <name>: <job>" row routed to the phase's hat, an "Owed: <item>" row per move-on leftover, a Monday "Gear check" while released gear is undelivered, red "Gear late" past a promised ship, "Ufer before pour" / "Underground before slab" inside 7 days of the milestone, and "Ready to start — assign a foreman" on the Head of Commercial. **Functions (deploy):** 'pullJobDocsToDrive''s body lifted into '_pullJobDocs()' (callable unchanged) + 'weeklyCommercialDocPull' (Mondays 05:15 MT: every commercial job with a Drive folder and Simpro # and no manual stage re-pulls — dedupe makes it idempotent). **Guides:** new 'public/sops/jobstart.html' + 'commercialmode.html' (HelpDots on the board, the drawer tab and next to the mode switch); 'jobinfo.html' and 'myday.html' gain commercial sections. **Why it won't lose data:** everything the board and the two logs write lives under 'data.commercial.{start, submittals, rfis}' and is spread-merged from the freshest job through the existing patch funnel (a second person checking a different phase never wipes the first); photos use the app's photo shape and 'PhotoAttacher'; hats are 'caps' entries via the guarded 'saveUsers'; auto rows are derived (Done / Snooze use the existing 'clearedTasks' / 'taskDueDates' writes); the functions change is a body lift plus a new schedule that calls it — no write added or changed.
 - **Commercial mode — slice C: the commercial job card, the commercial Job Board, the commercial nav** · 'shipped 2026-09-25' · 'SW v451' · Koy: *"commercial jobs will have a completely different job prep process and process overall."* **Job card:** 'COMM_TABS' = Job Info · Activity · Photos · Plans & Links · Job Start · Gear & Submittals · RFIs · Change Orders · Open Items, served through the v439 per-job tab mechanism ('tabsFor(job)' → 'tabsForJob'), so Rough / Finish / Questions / Home Runs / Panelized / Tape Light / Return Trips / QC never render for a commercial job; a deep link into a tab the job doesn't have lands on Job Info; the three new tabs are placeholders until slice D. **Job Info** for a commercial job hides the residential Pre-Job Prep section and gains a **Commercial** section (project #, GC PM, GC super + phone, contract value, permit # + permit-by, plan set rev, site hours, badge / orientation, parking, laydown, temp-power owner, and a **Stage** pill: Auto / In Progress / On Hold / Closeout / Complete, date-stamped), **Scope by system** chips ('commercial.systems'), and **Milestones** dates ('commercial.milestones': temp power, footing, underground, slab, walls, ceilings, permanent power, startup, final — 'DateInp', M/D/YYYY). Every write is 'commPatch()' — the nested 'commercial' object spread-merged through the existing 'u()' → 'saveJob' funnel. **Job Board in Commercial mode:** 'COMM_STAGE_SECTIONS' (Pre-Con → Ready to Start → In Progress → On Hold → Closeout → Complete; quick jobs / temp peds keep their sections in front) via a new 'sections' prop on 'StageSectionList' (default = the residential list, so residential is untouched); the row pill reads 'PHASE n · <name> · done/total', or READY TO START / IN PROGRESS…; the pipeline tiles on the home and foreman pages follow the same buckets. **Pre-Con is derived, never stored:** 'COMM_START_STEPS' (Koy's 12-step Commercial Electrical Job Start Process — every step a phase, all pre-construction) + 'commPhase(job)' = the first phase with an item that is not done / N/A / covered by a move-on override; tracker items derive from the Gear & Submittals log and the Drive pull ('commTrackerDone'). Proven by 19 new cases in 'scripts/commercial-dryrun.js' (fresh → 1, last item advances, override → owed items, un-check pulls back, all closed → null, log truth table). **Nav:** tabs carry 'modes'; Commercial shows My Day · Job Board · Needs · COs · Contractors · Safety · Forecast · App Map (+ Nav, Time Off, Settings) and hides Today / Job Prep / Huddle / Scoreboard / QC / Upcoming / Quotes / Plan Changes / Tasks (residential engines); flipping the mode off a hidden tab lands on the Job Board. **Why it won't lose data:** additive nested writes only ('commercial.{fields, stage, stageDate, systems, milestones}' inside 'data', spread-merged from the freshest job); residential jobs never get the key; the 'sections' prop defaults to today's list; the tab list for residential jobs is byte-identical; no loader, rules, or functions changes.
 - **Commercial mode — slice B: Simpro Business Group sets the division, commercial imports build their Drive folder + pull plans on their own, residential chases skip commercial jobs** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"simpro does flag resi or commercial in the jobs settings → business group"* + *"i want the drive folder to be created and pull plans in from simpro automatically like it does in resi."* Three read-only probe runs against the tenant ('scripts/simpro-discover.js') found the Business Group is a **job custom field** ('/jobs/{id}/customFields/' → 'Business Group' = Residential / Commercial / Multi Family), not a job column, so the candidates poller ('_runSimproCandidateRefresh') now makes one 'customFields' call per **new** candidate (cached on the candidate afterwards), stores 'businessGroup' + 'divisionHint', and the Simpro Inbox row shows a COMMERCIAL / RESI pill (or "group unset — imports as <mode>"). **Import** writes 'division' from the hint ('resi' deletes the key; no hint → the current mode's stamp) and stamps 'simproBusinessGroup'. Mapping = 'config/app.commercialBusinessGroups', default Commercial + Multi Family (Koy: *"multifamily is probably commercial but unsure"* — a settings edit, never a deploy). **Existing jobs:** Settings → **COMMERCIAL DIVISION** (admin) → *Check divisions against Simpro* calls the new 'scanSimproDivisions' callable (every app job with a Simpro #, paced, read-only on Simpro, writes only 'settings/simproCandidates.divisionMismatches') and lists the jobs whose app division disagrees with Simpro, with per-row **Make Commercial / Residential** and **Apply all** — each Apply writes 'division' alone through 'updateJob'. **Drive:** new module helper 'runDriveChain(jobId, by)' = the Drive section's own two callables ('createJobDriveFolder' → 'pullJobDocsToDrive'); a commercial Simpro import fires it right after the create-only 'setDoc' (name + Simpro # arrive complete, so the half-typed-name problem that removed auto-create can't happen), and a hand-made commercial job fires it once its Simpro # settles (2 s, ≥ 4 digits, real name). Same Jobs parent folder, same '#<simpro> - <name>' naming (Koy: *"same parent folder is fine they are sorted there by job numbers anyway"*). Residential stays button-driven. **Functions (deploy needed):** 'isCommercialJob(data)' guard added to the per-job loops of 'dailyMorningChecks', 'dailyCoChase', 'dailyRtChase', 'dailyMatterportChase', 'dailyStaleJobChase', 'dailyUpdateMissing', 'techLightingWeeklyDigest', and the job lists of 'fridayPacket' / 'leadMeetingPrep'; 'onJobUpdate' skips the Job Prep Complete / QC ready / QC passed / Matterport pushes for commercial jobs; 'ensureJobDriveFolder''s "Drive Folder Linked" push goes to the 'comm.head' hat holder ('commHeadName()', falls back to 'resi.head' then Koy) for commercial jobs. Ledgers, backups, Drive matching, PO / CO syncs, needs, GC portal untouched. **Why it won't lose data:** the poller and the scan write only 'settings/simproCandidates'; Apply and import write 'division' (+ 'simproBusinessGroup') inside 'data' through the existing funnels; the Drive chain calls the same two callables the button calls and writes the same 'driveFolderId' / 'docPull' fields; every function change is a skip-guard or a push recipient — no write added or changed.
 - **Commercial mode — slice A, the foundation (invisible unless you flip the switch)** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"we need to start working on a commercial side of the app. i want it to be a completely separate mode that only shows our commercial jobs. so each job will need a way to assign resi or commercial."* Design: 'docs/superpowers/specs/2026-09-25-commercial-mode-design.md'; plan: 'docs/superpowers/plans/2026-09-25-commercial-mode-phase1.md'; mockup 'commercial-mockup.html'. **Division on the job:** 'division:"commercial"' inside 'job.data'; absent = residential, so every existing job is residential with zero writes ('jobDivision()' / 'isCommercial()'). **One filter at the top:** 'App()' now holds 'allJobs' and derives 'jobs' (the current mode's jobs) once with 'useMemo'; every view keeps its 'jobs' prop untouched, and everything that writes, merges, backs up, drains or restores reads 'allJobs' (the Task 2 audit: 'jobsRef', the daily safety backup, the Settings backup download, 'nextQuoteNumber', lookups-for-save, deep links). **The switch:** a RESI | COMMERCIAL pill in the header for everyone internal ('commercial.view', all four tiers; contractors never), device-local ('localStorage he_mode'); Commercial turns the header and active tab teal. **Landing:** 'defaultMode' on the user record (Settings → My Preferences "Land in", and Team Members "Lands in") picks the division once per session for people who mostly work commercial. The open drawer closes when the mode changes; a push or deep link to a job in the other division flips the mode and opens it. **Stamping:** every creation site (+ New Job / Temp Ped / Quick, foreman + subcontractor pages, quotes, both Upcoming promotes, Simpro import) writes 'division:"commercial"' only while in Commercial mode — residential mode writes no key. **Job Info → DIVISION** (admin/manager, 'job.division'): move a job either way after a confirm; the write is 'division' alone. New prebuild gate 'scripts/commercial-dryrun.js' (division helper truth table + a guard that 'jobsRef' can never track the filtered list). Nothing commercial is visible yet beyond the pill: the commercial job card, Job Board stages, nav, Simpro Business Group import, automatic Drive folder, Job Start phases, hats and My Day rows ship in slices B–D. **Why it won't lose data:** additive only — 'division' is a new key inside 'data' (unwraps through the existing loader spread, audited), 'defaultMode' rides the guarded 'saveUsers' whole-list write; no existing field renamed, retyped or removed; the 'allJobs' rename changes no write payload (every 'setJobs' updater was functional) and every offline / backup / restore path sees the full array exactly as before; no loader, 'firestore.rules', or functions changes.
@@ -51947,6 +51987,301 @@ function JobPrepCompleteStrip({ open, onToggle, count, children, color = "#46916
   );
 }
 
+
+// ── COMMERCIAL JOB START (spec §6.6, mockup commercial-mockup.html) ────────────
+// One card per job; the CURRENT phase's checklist is open; checking the last
+// item rolls the job into the next phase (derived, never stored); MOVE ON WITH
+// ITEMS OWED closes a phase with an audit stamp and the owed items stay red.
+const canEditJobStart = (identity) => can(identity, "commstart.edit") || can(identity, "comm.precon") || can(identity, "comm.site") || can(identity, "comm.head");
+const commLocalDate = () => new Date().toLocaleDateString("en-US");
+const commSoon = (d, days = 10) => { const t = parseAnyDate(d); if (!t) return false; const diff = (t.getTime() - Date.now()) / 864e5; return diff >= 0 && diff <= days; };
+const commGearSummary = (job) => {
+  const rows = Array.isArray(commOf(job).submittals) ? commOf(job).submittals : [];
+  const appr = rows.filter(r => r.status === "approved" || r.status === "approvedAsNoted").length;
+  const rel = rows.filter(r => r.releasedAt).length;
+  const late = rows.filter(r => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now()).length;
+  return { n: rows.length, appr, rel, late };
+};
+function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenTab, ctx = "board" }) {
+  const [peek, setPeek] = useState(null);           // phase number expanded on the bar (look-back / preview)
+  const [ov, setOv] = useState(null);               // { n, note } while the move-on modal is open
+  const canEdit = canEditJobStart(identity);
+  const cur = commPhase(job); const st = commStartOf(job); const owed = commOwedItems(job); const g = commGearSummary(job);
+  const todayYmd = localYmd();
+  const ownerLabel = (n) => { const ph = COMM_PHASE_BY_N[n]; const rk = ph.owner === "site" ? "commsite" : "commstart"; const o = ownersForRoute(rk, users, todayYmd); return o.length ? o.map(x => String(x).split(" ")[0]).join(" · ") : COMM_OWNER_LABEL[ph.owner]; };
+  const patchStart = (fn) => onPatch(commPatch(job, c => ({ ...c, start: fn({ items:{}, na:{}, notes:{}, overrides:{}, photos:{}, dates:{}, ...(c.start || {}) }) })));
+  const tapChip = (n, k) => {
+    if (!canEdit) return;
+    const K = commItemKey(n, k); const state = commItemState(job, n, k);
+    const before = commPhase(job);
+    // Derive the after-state locally for the toast (the live snapshot re-groups the board).
+    const next = { ...job, commercial: { ...(job.commercial || {}), start: { ...st, items: { ...(st.items || {}) }, na: { ...(st.na || {}) } } } };
+    if (state === "todo") { next.commercial.start.items[K] = { done: true, by: (identity && identity.name) || "", at: commLocalDate() }; delete next.commercial.start.na[K]; }
+    else if (state === "done") { delete next.commercial.start.items[K]; next.commercial.start.na[K] = true; }
+    else { delete next.commercial.start.items[K]; delete next.commercial.start.na[K]; }
+    patchStart(x => ({ ...x, items: next.commercial.start.items, na: next.commercial.start.na }));
+    const after = commPhase(next);
+    if (after !== before) {
+      setPeek(null);
+      if (after === null) toast.success(`Phase 12 done — ${job.name || "job"} is Ready to Start: assign the foreman + crew`);
+      else if (before === null || after > before) toast.success(`Phase ${before} done — now in Phase ${after}: ${COMM_PHASE_BY_N[after].label}`);
+      else toast(`Unchecked — ${job.name || "job"} is back in Phase ${after}`);
+    }
+  };
+  const confirmMoveOn = () => {
+    const n = ov.n; const note = (ov.note || "").trim();
+    patchStart(x => ({ ...x, overrides: { ...(x.overrides || {}), [n]: { by: (identity && identity.name) || "", at: commLocalDate(), note } } }));
+    const next = { ...job, commercial: { ...(job.commercial || {}), start: { ...st, overrides: { ...(st.overrides || {}), [n]: { by: "x" } } } } };
+    const after = commPhase(next); setOv(null); setPeek(null);
+    toast.success(after === null ? `Moved on — ${job.name || "job"} is Ready to Start, items still owed` : `Moved on — now in Phase ${after}: ${COMM_PHASE_BY_N[after].label} · ${commOwedItems(next).length} item(s) owed`);
+  };
+  const undoMoveOn = (n) => { patchStart(x => { const o = { ...(x.overrides || {}) }; delete o[n]; return { ...x, overrides: o }; }); setPeek(null); toast(`Undo — back in Phase ${n}`); };
+  const chip = (n, k, label, kind) => {
+    const state = commItemState(job, n, k); const K = commItemKey(n, k);
+    const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
+    const locked = cur !== null && n > cur;
+    const col = locked ? C.muted : isOwed ? "#B0892C" : state === "done" ? "#46916A" : state === "na" ? C.dim : C.red;
+    const title = kind === "trk" ? "Derived from the Gear & Submittals / RFI logs — fill the log and this checks itself" : kind === "photo" ? "Photo item — tap to check, add photos below" : kind === "date" ? "Check + date" : (canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only");
+    return (
+      <span key={K} onClick={(e) => { e.stopPropagation(); if (locked) return; if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }} title={title}
+        style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em", cursor: locked || !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
+          border:`1px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${col}`, color: col, background: state === "done" ? "#46916A0F" : isOwed ? "#B0892C0F" : state === "na" ? C.surface : "#fff" }}>
+        <span>{state === "done" ? "✓" : state === "na" ? "—" : "○"}</span>{label}{state === "na" ? " · N/A" : ""}{isOwed ? " · OWED" : ""}{kind === "photo" ? " · PHOTO" : ""}
+      </span>
+    );
+  };
+  const phaseBlock = (n) => {
+    const ph = COMM_PHASE_BY_N[n]; const done = commPhaseDone(job, n); const o = st.overrides && st.overrides[n];
+    const kind = cur === null || n < cur ? "past" : n === cur ? "cur" : "future";
+    const owedHere = o ? ph.items.filter(([k]) => commItemState(job, n, k) === "todo") : [];
+    const nxt = ph.items.find(([k]) => commItemState(job, n, k) === "todo");
+    const photoItems = ph.items.filter(([k, , kd]) => kd === "photo"); const dateItems = ph.items.filter(([k, , kd]) => kd === "date");
+    return (
+      <div key={n} style={{ marginTop: 10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:"0.08em", color: kind === "cur" ? C.blue : kind === "past" ? C.teal : C.dim }}>PHASE {n} · {ph.label.toUpperCase()}</span>
+          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? "#B0892C" : C.green, background: owedHere.length ? "#B0892C15" : "#3E7D5A15", border:`1px solid ${owedHere.length ? "#B0892C40" : "#3E7D5A40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
+            : kind === "future" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
+            : <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#3B5BA515", border:"1px solid #3B5BA540" }}>CURRENT</span>}
+          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>{ph.items.map(([k, l, kd]) => chip(n, k, l, kd))}</div>
+        {kind !== "future" && (photoItems.length > 0 || dateItems.length > 0) && (
+          <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8 }}>
+            {dateItems.map(([k, l]) => (
+              <div key={k} style={{ minWidth:180 }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l} — DATE</div>
+                <DateInp value={(st.dates || {})[commItemKey(n, k)] || ""} onChange={e => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, dates: { ...(x.dates || {}), [commItemKey(n, k)]: v } })); }}/></div>
+            ))}
+            {photoItems.map(([k, l]) => (
+              <div key={k} style={{ flex:"1 1 240px" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l}</div>
+                <PhotoAttacher storagePath={`jobs/${job.id}/jobstart/${n}_${k}`} photos={(st.photos || {})[commItemKey(n, k)] || []} color={C.teal} label="Add photo"
+                  onChange={(next) => { if (canEdit) patchStart(x => ({ ...x, photos: { ...(x.photos || {}), [commItemKey(n, k)]: next } })); }}/></div>
+            ))}
+          </div>
+        )}
+        {kind === "cur" && (
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:10 }}>
+            <span style={{ fontSize:11, color:C.dim, fontWeight:600 }}><b style={{ color:C.text }}>{done}/{ph.items.length}</b></span>
+            {nxt && <span style={{ fontSize:11, color:C.orange, fontWeight:600 }}>NEXT: {nxt[1]}</span>}
+            <input value={(st.notes || {})[n] || ""} placeholder="Phase note…" onChange={e => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, notes: { ...(x.notes || {}), [n]: v } })); }} readOnly={!canEdit}
+              style={{ flex:"1 1 200px", padding:"6px 9px", border:`1px solid ${C.border}`, borderRadius:7, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff" }}/>
+            {canEdit && <button onClick={(e) => { e.stopPropagation(); setOv({ n, note:"" }); }} style={{ padding:"5px 10px", borderRadius:7, fontSize:10, fontWeight:700, letterSpacing:"0.04em", border:"1px solid #B0892C", background:"#fff", color:"#B0892C", cursor:"pointer", fontFamily:"inherit" }}>MOVE ON WITH ITEMS OWED</button>}
+          </div>
+        )}
+        {o && (
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:11, color:"#B0892C", fontWeight:600 }}>
+            Moved on {o.at} by {o.by}{o.note ? ` — ${o.note}` : ""}
+            {canEdit && <button onClick={(e) => { e.stopPropagation(); undoMoveOn(n); }} style={{ padding:"3px 8px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit" }}>↩ Undo</button>}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const show = []; if (peek && peek !== cur) show.push(peek); if (cur !== null) show.push(cur); show.sort((a, b) => a - b);
+  const ms = commOf(job).milestones || {};
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${owed.length ? "#B0892C" : cur !== null ? C.blue : C.green}`, borderRadius:12, padding:"14px 16px", marginBottom:12, boxShadow:"0 4px 16px rgba(15,31,61,0.08)" }}>
+      <div style={{ display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+        <div style={{ minWidth:200, flex:"1 1 200px" }}>
+          <div onClick={() => onSelectJob && onSelectJob(job)} style={{ fontWeight:700, fontSize:14, color:C.text, cursor: onSelectJob ? "pointer" : "default" }}>{job.name || "Untitled"}</div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:11, color:C.dim, flexWrap:"wrap" }}>
+            {job.foreman && job.foreman !== "Unassigned" && <span style={{ fontWeight:600 }}>{job.foreman}</span>}
+            {job.gc && <span style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px", fontSize:10, fontWeight:700 }}>{job.gc}</span>}
+            {job.simproNo && <span>Simpro #{job.simproNo}</span>}{commOf(job).projectNo && <span>Proj {commOf(job).projectNo}</span>}
+          </div>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
+            {[["footing","FOOTING"],["underground","UNDERGROUND"],["slab","SLAB"]].map(([k, l]) => ms[k] ? <span key={k} style={{ fontSize:10, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:6, padding:"2px 7px" }}>{l} <b style={{ color: commSoon(ms[k]) ? C.orange : C.text }}>{ms[k]}</b></span> : null)}
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"flex-start" }}>
+          <span onClick={() => onOpenTab && onOpenTab("Gear & Submittals")} title="Gear & Submittals log" style={{ fontSize:10, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", cursor: onOpenTab ? "pointer" : "default", color: g.late ? C.red : g.n ? C.teal : C.dim, background: g.late ? "#B23A3A15" : g.n ? "#3E7D7A15" : "#5E667015", border:`1px solid ${g.late ? "#B23A3A40" : g.n ? "#3E7D7A40" : "#5E667040"}` }}>GEAR · {g.appr} approved · {g.rel} released{g.late ? ` · ${g.late} LATE` : ""}</span>
+          {owed.length > 0 && <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", color:"#B0892C", background:"#B0892C15", border:"1px solid #B0892C40" }}>{owed.length} OWED IN EARLIER PHASES</span>}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:3, margin:"12px 0 4px" }}>
+        {COMM_START_STEPS.map(ph => { const n = ph.n; const cls = cur === null || n < cur ? ((st.overrides && st.overrides[n] && !commPhaseChecked(job, n)) ? "owed" : "done") : n === cur ? "cur" : "up";
+          const bg = cls === "done" ? C.teal : cls === "cur" ? C.blue : cls === "owed" ? "#B0892C" : C.muted;
+          return <div key={n} onClick={(e) => { e.stopPropagation(); setPeek(peek === n ? null : n); }} title={`Phase ${n}: ${ph.label}`}
+            style={{ flex:1, height:22, borderRadius:5, background:bg, color:"#fff", fontSize:10, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", opacity: cls === "up" ? .55 : 1, outline: peek === n ? `2px solid ${C.text}` : "none", boxShadow: cls === "cur" ? "0 0 0 2px #3B5BA540" : "none" }}>{n}</div>; })}
+      </div>
+      {cur === null && !peek && <div style={{ border:"1px dashed #46916A", borderRadius:10, padding:"10px 14px", fontSize:12, color:C.green, fontWeight:600, background:"#46916A08", marginTop:8 }}>✓ All 12 pre-con phases closed — Ready to Start. Assign the foreman + crew; set In Progress on Job Info when they mobilize.</div>}
+      {show.map(phaseBlock)}
+      {ov && (
+        <div style={{ marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08" }} onClick={e => e.stopPropagation()}>
+          <div style={{ fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5 }}>Move on from Phase {ov.n} — still owed, stays tracked</div>
+          {COMM_PHASE_BY_N[ov.n].items.filter(([k]) => commItemState(job, ov.n, k) === "todo").map(([k, l]) => <div key={k} style={{ fontSize:12, color:C.text, marginLeft:4 }}>· {l}</div>)}
+          <textarea value={ov.note} onChange={e => setOv({ ...ov, note: e.target.value })} placeholder="Note (optional) — e.g. gear submittal still with the engineer, GC needs us on underground Monday"
+            style={{ width:"100%", padding:"7px 9px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12.5, fontFamily:"inherit", color:C.text, outline:"none", marginTop:8, resize:"vertical", minHeight:44, boxSizing:"border-box" }}/>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
+            <button onClick={() => setOv(null)} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, fontWeight:600, fontSize:12, fontFamily:"inherit", cursor:"pointer" }}>Cancel</button>
+            <button onClick={confirmMoveOn} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #B0892C88", background:"#B0892C18", color:"#B0892C", fontWeight:700, fontSize:12, fontFamily:"inherit", cursor:"pointer" }}>Move on</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function JobStartBoard({ jobs = [], identity, users = [], onSelectJob, onUpdateJob }) {
+  const [q, setQ] = useState(""); const [fm, setFm] = useState(""); const [mine, setMine] = useState(false); const [showDone, setShowDone] = useState(false);
+  const [collapsed, setCollapsed] = useState({});
+  const me = identity && identity.name; const todayYmd = localYmd();
+  const included = (jobs || []).filter(j => j && isCommercial(j) && !j.tempPed && !j.quickJob && j.type !== "quote" && !isInactiveJob(j));
+  const live = included.filter(j => commPhase(j) !== null);
+  const past = included.filter(j => commPhase(j) === null);
+  const owedTotal = live.reduce((a, j) => a + commOwedItems(j).length, 0);
+  const foremen = [...new Set(included.map(j => j.foreman).filter(f => f && f !== "Unassigned"))].sort();
+  const matches = (j) => { const s = q.trim().toLowerCase(); if (s && !(`${j.name || ""} ${j.gc || ""} ${commOf(j).projectNo || ""} ${j.simproNo || ""}`.toLowerCase().includes(s))) return false; if (fm && j.foreman !== fm) return false; return true; };
+  const iOwn = (n) => { const ph = COMM_PHASE_BY_N[n]; return ownersForRoute(ph.owner === "site" ? "commsite" : "commstart", users, todayYmd).some(o => sameName(o, me)); };
+  const groups = COMM_START_STEPS.map(ph => [ph, live.filter(j => commPhase(j) === ph.n && matches(j))]).filter(([ph, rows]) => rows.length && (!mine || iOwn(ph.n)));
+  const sortRows = (rows) => rows.slice().sort((a, b) => { const da = parseAnyDate((commOf(a).milestones || {}).footing || "") ; const db = parseAnyDate((commOf(b).milestones || {}).footing || ""); return (da ? da.getTime() : 9e15) - (db ? db.getTime() : 9e15); });
+  const btn = (on) => ({ padding:"6px 12px", borderRadius:7, fontSize:12, border:`1px solid ${on ? C.teal : C.border}`, background: on ? C.teal : "#fff", color: on ? "#fff" : C.dim, cursor:"pointer", fontFamily:"inherit", fontWeight:600 });
+  return (
+    <div style={{ padding:"16px 18px 60px", maxWidth:1120, margin:"0 auto" }}>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:14 }}>
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, letterSpacing:"0.06em", color:C.text, lineHeight:1 }}>JOB START</div>
+            <HelpDot section="jobstart"/>
+          </div>
+          <div style={{ fontSize:12, color:C.dim, marginTop:4 }}><b>{live.length}</b> active · <b style={{ color:"#B0892C" }}>{owedTotal}</b> items owed in earlier phases · <b style={{ color:C.green }}>{past.length}</b> ready to start / on site</div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search jobs, GC, project #…" style={{ padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12, background:"#fff", color:C.text, fontFamily:"inherit", outline:"none", minWidth:200 }}/>
+          <select value={fm} onChange={e => setFm(e.target.value)} style={{ padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12, background:"#fff", color:C.text, fontFamily:"inherit" }}><option value="">All foremen</option>{foremen.map(f => <option key={f} value={f}>{f}</option>)}</select>
+          <button style={btn(mine)} onClick={() => setMine(m => !m)} title="Only the phases my hat owns">Mine</button>
+          <button style={btn(showDone)} onClick={() => setShowDone(v => !v)}>Show complete</button>
+        </div>
+      </div>
+      <div style={{ background:"#fff", border:`1px dashed ${C.muted}`, borderRadius:10, padding:"10px 14px", fontSize:12, color:C.dim, marginBottom:14 }}>
+        Each of the 12 steps is a <b style={{ color:C.text }}>phase</b>, all pre-construction. A job is in one phase at a time and its checklist is open on the card. Check the last item and the card rolls into the next phase. Tap a number on the bar to look back (owed items stay tappable) or peek ahead. <b style={{ color:C.text }}>Move on with items owed</b> closes a phase early — the items stay red until checked.
+      </div>
+      {groups.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:18, textAlign:"center", border:`1px dashed ${C.muted}`, borderRadius:10 }}>{live.length ? "No jobs match the filter." : "No commercial jobs in pre-con. Import one from Simpro or make one with + New Job while in Commercial mode."}</div>}
+      {groups.map(([ph, rows]) => (
+        <div key={ph.n} style={{ marginBottom:18 }}>
+          <div onClick={() => setCollapsed(c => ({ ...c, [ph.n]: !c[ph.n] }))} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:`2px solid ${C.border}`, marginBottom:10, cursor:"pointer", flexWrap:"wrap" }}>
+            <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:17, letterSpacing:"0.08em", color: ph.owner === "site" ? C.purple : C.teal }}>PHASE {ph.n} · {ph.label.toUpperCase()}</span>
+            <span style={{ fontSize:11, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px" }}>{rows.length}</span>
+            <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", color:C.dim, textTransform:"uppercase" }}>{ownersForRoute(ph.owner === "site" ? "commsite" : "commstart", users, todayYmd).map(x => String(x).split(" ")[0]).join(" · ") || COMM_OWNER_LABEL[ph.owner]}</span>
+            <span style={{ marginLeft:"auto", color:C.dim, fontSize:11 }}>{collapsed[ph.n] ? "▸" : "▾"}</span>
+          </div>
+          {!collapsed[ph.n] && sortRows(rows).map(j => <JobStartCard key={j.id} job={j} identity={identity} users={users} onPatch={(patch) => onUpdateJob(j.id, patch)} onSelectJob={onSelectJob} onOpenTab={(t) => onSelectJob && onSelectJob(j, t)} ctx="board"/>)}
+        </div>
+      ))}
+      {past.length > 0 && (showDone
+        ? <div style={{ marginBottom:18 }}><div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:17, letterSpacing:"0.08em", color:C.green, padding:"8px 0", borderBottom:`2px solid ${C.border}`, marginBottom:10 }}>READY TO START / ON SITE</div>{past.filter(matches).map(j => <JobStartCard key={j.id} job={j} identity={identity} users={users} onPatch={(patch) => onUpdateJob(j.id, patch)} onSelectJob={onSelectJob} onOpenTab={(t) => onSelectJob && onSelectJob(j, t)} ctx="board"/>)}</div>
+        : <div style={{ border:"1px dashed #46916A", borderRadius:10, padding:"10px 14px", fontSize:12, color:C.green, fontWeight:600, background:"#46916A08" }}>✓ {past.length} job{past.length > 1 ? "s" : ""} past phase 12 — {past.map(j => j.name).join(", ")} (Show complete)</div>)}
+    </div>
+  );
+}
+// Gear & Submittals — one row per long-lead item, phases 3 → 5 (spec §6.3). Phase 3/5 tracker chips derive from these rows.
+const COMM_SUBMITTAL_STATUS = [["requested","REQUESTED"],["submitted","SUBMITTED"],["revise","REVISE / RESUBMIT"],["approved","APPROVED"],["approvedAsNoted","APPROVED AS NOTED"]];
+const COMM_USUAL_LONG_LEAD = ["Switchgear","Switchboards","Transformers","Panelboards","Generator / ATS","Meter equipment","Lighting package","Lighting controls","Fire alarm","Specialty"];
+function CommSubmittalsTab({ job, u, identity }) {
+  const canEdit = canEditJobStart(identity);
+  const rows = Array.isArray(commOf(job).submittals) ? commOf(job).submittals : [];
+  const write = (next) => u(commPatch(job, c => ({ ...c, submittals: next })));
+  const setRow = (id, patch) => write(rows.map(r => r.id === id ? { ...r, ...patch } : r));
+  const add = (items) => write([...rows, ...items.map(item => ({ id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, item, vendor: "CED", system: "", requestedAt: "", leadTimeWeeks: "", priceConfirmed: false, status: "requested", submittedToGcAt: "", approvedAt: "", comments: "", poNo: "", releasedAt: "", promisedShip: "", requiredOnSite: "", shipMode: "", deliveredAt: "", storage: "", lastCheckedAt: "", lastCheckedBy: "" }))]);
+  const del = async (r) => { if (!await showConfirm(`Remove ${r.item || "this item"} from the gear log?`)) return; write(rows.filter(x => x.id !== r.id)); };
+  const late = (r) => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now();
+  const inp = { padding:"5px 7px", border:`1px solid ${C.border}`, borderRadius:6, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff", width:"100%", boxSizing:"border-box" };
+  const F = (r, k, ph, w) => <input value={r[k] || ""} placeholder={ph || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { [k]: e.target.value })} style={{ ...inp, width: w || "100%" }}/>;
+  const D = (r, k) => <DateInp value={r[k] || ""} onChange={e => { if (canEdit) setRow(r.id, { [k]: e.target.value }); }}/>;
+  const systems = COMM_SYSTEMS.filter(([k]) => (commOf(job).systems || {})[k]);
+  return (
+    <div>
+      <Section label="Gear & Submittals" color={C.teal} defaultOpen>
+        <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>One row per long-lead item. Phase 3 chips (requested, lead times) and phase 5 chips (released + PO, ship dates, procurement log, ship mode) <b>check themselves from these rows</b>. A released row past its promised ship date with no delivery shows LATE and lands on the pre-con My Day.</div>
+        {rows.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:14, border:`1px dashed ${C.muted}`, borderRadius:10, marginBottom:10 }}>No items yet.</div>}
+        {rows.map(r => (
+          <div key={r.id} style={{ border:`1px solid ${late(r) ? "#B23A3A55" : C.border}`, background: late(r) ? "#B23A3A06" : C.card, borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:"8px 10px", alignItems:"end" }}>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ITEM</div>{F(r, "item", "Switchgear")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>VENDOR</div><select value={r.vendor || ""} disabled={!canEdit} onChange={e => setRow(r.id, { vendor: e.target.value })} style={inp}><option value="CED">CED</option><option value="FA Co.">FA Co.</option><option value="Other">Other</option></select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SYSTEM</div><select value={r.system || ""} disabled={!canEdit} onChange={e => setRow(r.id, { system: e.target.value })} style={inp}><option value="">—</option>{(systems.length ? systems : COMM_SYSTEMS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STATUS</div><select value={r.status || "requested"} disabled={!canEdit} onChange={e => setRow(r.id, { status: e.target.value, ...(e.target.value === "approved" || e.target.value === "approvedAsNoted" ? { approvedAt: r.approvedAt || commLocalDate() } : {}), ...(e.target.value === "submitted" ? { submittedToGcAt: r.submittedToGcAt || commLocalDate() } : {}) })} style={{ ...inp, fontWeight:700, color: r.status === "approved" || r.status === "approvedAsNoted" ? C.green : r.status === "revise" ? C.red : C.blue }}>{COMM_SUBMITTAL_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUESTED</div>{D(r, "requestedAt")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>LEAD (WEEKS)</div>{F(r, "leadTimeWeeks", "22")}</div>
+              <div><label style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:C.text, cursor:"pointer", paddingBottom:6 }}><input type="checkbox" checked={!!r.priceConfirmed} disabled={!canEdit} onChange={e => setRow(r.id, { priceConfirmed: e.target.checked })}/>Price confirmed</label></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PO #</div>{F(r, "poNo", "PO-…")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RELEASED</div>{D(r, "releasedAt")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PROMISED SHIP {late(r) && <span style={{ color:C.red }}>· LATE</span>}</div>{D(r, "promisedShip")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUIRED ON SITE</div>{D(r, "requiredOnSite")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SHIP</div><select value={r.shipMode || ""} disabled={!canEdit} onChange={e => setRow(r.id, { shipMode: e.target.value })} style={inp}><option value="">—</option><option value="complete">Complete</option><option value="split">Multiple releases</option></select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>DELIVERED</div>{D(r, "deliveredAt")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STORAGE</div>{F(r, "storage", "laydown / conex")}</div>
+              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>COMMENTS</div>{F(r, "comments", "engineer / GC comments to resolve before release")}</div>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:11, color:C.dim }}>
+              {r.lastCheckedAt ? <span>Checked {r.lastCheckedAt}{r.lastCheckedBy ? ` by ${r.lastCheckedBy}` : ""}</span> : <span>Not checked yet</span>}
+              {canEdit && r.releasedAt && !r.deliveredAt && <button onClick={() => setRow(r.id, { lastCheckedAt: commLocalDate(), lastCheckedBy: (identity && identity.name) || "" })} style={{ padding:"4px 10px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit" }}>Mark checked</button>}
+              {canEdit && <button onClick={() => del(r)} style={{ marginLeft:"auto", padding:"4px 10px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.red, cursor:"pointer", fontFamily:"inherit" }}>Remove</button>}
+            </div>
+          </div>
+        ))}
+        {canEdit && <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={() => add(["New item"])} style={{ padding:"7px 12px", borderRadius:8, fontSize:12, fontWeight:700, border:"none", background:C.teal, color:"#fff", cursor:"pointer", fontFamily:"inherit" }}>+ Add item</button>
+          {rows.length === 0 && <button onClick={() => add(COMM_USUAL_LONG_LEAD)} style={{ padding:"7px 12px", borderRadius:8, fontSize:12, fontWeight:700, border:`1px solid ${C.teal}`, background:"#fff", color:C.teal, cursor:"pointer", fontFamily:"inherit" }}>Add the usual long-lead list</button>}
+        </div>}
+      </Section>
+    </div>
+  );
+}
+function CommRfisTab({ job, u, identity }) {
+  const canEdit = canEditJobStart(identity);
+  const rows = Array.isArray(commOf(job).rfis) ? commOf(job).rfis : [];
+  const write = (next) => u(commPatch(job, c => ({ ...c, rfis: next })));
+  const setRow = (id, patch) => write(rows.map(r => r.id === id ? { ...r, ...patch } : r));
+  const add = () => write([...rows, { id: `rfi_${Date.now()}`, no: String(rows.length + 1).padStart(3, "0"), question: "", sentTo: "", sentAt: commLocalDate(), answeredAt: "", answer: "", blocks: "" }]);
+  const del = async (r) => { if (!await showConfirm(`Remove RFI ${r.no}?`)) return; write(rows.filter(x => x.id !== r.id)); };
+  const inp = { padding:"5px 7px", border:`1px solid ${C.border}`, borderRadius:6, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff", width:"100%", boxSizing:"border-box" };
+  return (
+    <div>
+      <Section label="RFIs" color={C.teal} defaultOpen>
+        <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>Anything that needs clarifying before purchasing or underground. Phase 4's RFI LIST chip checks itself once there is a row; an open RFI that blocks purchasing shows on the gear pill.</div>
+        {rows.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:14, border:`1px dashed ${C.muted}`, borderRadius:10, marginBottom:10 }}>No RFIs yet.</div>}
+        {rows.map(r => (
+          <div key={r.id} style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 12px", marginBottom:8, background: r.answeredAt ? C.card : "#B0892C06" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"70px 1fr", gap:"8px 10px", alignItems:"end" }}>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RFI #</div><input value={r.no || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { no: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>QUESTION</div><input value={r.question || ""} readOnly={!canEdit} placeholder="Electrical room 112 — gear clearance vs. duct at 9 ft 2 in" onChange={e => setRow(r.id, { question: e.target.value })} style={inp}/></div>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:"8px 10px", alignItems:"end", marginTop:8 }}>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT TO</div><input value={r.sentTo || ""} readOnly={!canEdit} placeholder="GC / EOR" onChange={e => setRow(r.id, { sentTo: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT</div><DateInp value={r.sentAt || ""} onChange={e => { if (canEdit) setRow(r.id, { sentAt: e.target.value }); }}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWERED</div><DateInp value={r.answeredAt || ""} onChange={e => { if (canEdit) setRow(r.id, { answeredAt: e.target.value }); }}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>BLOCKS</div><select value={r.blocks || ""} disabled={!canEdit} onChange={e => setRow(r.id, { blocks: e.target.value })} style={inp}><option value="">—</option><option value="purchasing">Purchasing</option><option value="underground">Underground</option></select></div>
+              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWER</div><input value={r.answer || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { answer: e.target.value })} style={inp}/></div>
+            </div>
+            {canEdit && <div style={{ display:"flex", justifyContent:"flex-end", marginTop:6 }}><button onClick={() => del(r)} style={{ padding:"4px 10px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.red, cursor:"pointer", fontFamily:"inherit" }}>Remove</button></div>}
+          </div>
+        ))}
+        {canEdit && <button onClick={add} style={{ padding:"7px 12px", borderRadius:8, fontSize:12, fontWeight:700, border:"none", background:C.teal, color:"#fff", cursor:"pointer", fontFamily:"inherit" }}>+ Add RFI</button>}
+      </Section>
+    </div>
+  );
+}
+
 function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
   const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
@@ -53419,6 +53754,7 @@ const NAV_MAIN_TABS = [
   { key: "today", modes: ["resi"], label: "Today", perm: "today.view" },
   { key: "needs", label: "Needs", perm: "board.view" },
   { key: "cos", label: "COs", perm: "cos.view" },
+  { key: "jobstart", label: "Job Start", perm: "commstart.view", modes: ["commercial"] },
   { key: "jobprep", modes: ["resi"], label: "Job Prep", perm: "jobprep.view" },
   { key: "contractors", label: "Contractors", perm: "users.manage" },
   { key: "safety", label: "Safety" },
@@ -53541,6 +53877,12 @@ function resiHead(users) {
   return live.find(u => can(u, "resi.head")) || live.find(u => can(u, "jobprep.own")) || null;
 }
 function resiHeadName(users) { const h = resiHead(users); return (h && h.name) || ""; }
+// The Head of Commercial = the comm.head hat (Brady, 2026-09-25); falls back to the resi head.
+function commHead(users) {
+  const live = (users || []).filter(u => u && u.active !== false);
+  return live.find(u => can(u, "comm.head")) || resiHead(users);
+}
+function commHeadName(users) { const h = commHead(users); return (h && h.name) || ""; }
 
 // ── HAT REGISTRY (v427) ──────────────────────────────────────────────────────
 // Each company hat (a per-user `caps` grant, Settings → Team → COMPANY HATS)
@@ -53556,6 +53898,9 @@ const HAT_REGISTRY = [
   { cap:"qc.own",         label:"QC walks",            routes:["qc"],         shared:true, note:"Walked together: one Done clears it for everyone" },
   { cap:"redline.own",    label:"Redline walks",       routes:["redline"],    shared:true, note:"Scheduled redline walks, walked together" },
   { cap:"matterport.own", label:"Matterport scans",    routes:["matterport"], note:"Rough 85% → scan before drywall" },
+  // Commercial (2026-09-25): Job Start phases route to these; nobody wearing one → the Head of Commercial.
+  { cap:"comm.precon",    label:"Commercial pre-con",   routes:["commstart"],  shared:true, note:"Job Start phases 1–5 and 7–12 (Brady · Justin)" },
+  { cap:"comm.site",      label:"Commercial site coord", routes:["commsite"],  shared:true, note:"Job Start phase 6 — GC kickoff, laydown, temp power, rentals (Zane · Abe)" },
 ];
 function routeKeyOfAuto(t) {
   if (!t) return null;
@@ -53569,6 +53914,7 @@ function routeKeyOfAuto(t) {
   if (t.category === "rt") return null;
   if (t.category === "qc") return "qc";
   if (t.category === "matterport") return "matterport";
+  if (t.category === "commstart") return t.route || "commstart";   // Commercial: the row carries its phase's route (commstart / commsite / comm.head)
   return null;
 }
 function routeKeyOfDuty(d) { return d && d.dutyType === "qc" ? "qc" : null; }
@@ -53597,7 +53943,8 @@ function ownersForRoute(routeKey, users, todayYmd) {
   const hat = routeKey ? HAT_REGISTRY.find(h => h.routes.includes(routeKey)) : null;
   const holders = hat ? hatHolderNames(users, hat.cap, todayYmd) : [];
   if (holders.length) return holders;
-  const head = resiHeadName(users);
+  // Commercial routes fall back to the Head of Commercial (then the resi head inside commHeadName).
+  const head = (routeKey && /^comm/.test(routeKey)) ? commHeadName(users) : resiHeadName(users);
   return head ? [coverName(users, head, todayYmd)] : [];
 }
 function coveredFor(users, me, todayYmd) {
@@ -61184,6 +61531,16 @@ function App() {
           onUpdateRedline={updateRedlineWalk}
           onDeleteRedline={deleteRedlineWalk}
           onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
+          onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+        />
+      )}
+
+      {view==="jobstart"&&mode==="commercial"&&can(identity,"commstart.view")&&(
+        <JobStartBoard
+          jobs={jobs}
+          identity={identity}
+          users={users}
+          onSelectJob={(j, tab)=>{ const full = allJobs.find(x => x.id === j.id); if (full) { if (tab) setOpenTab(tab); setSelected(full); } }}
           onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
         />
       )}
