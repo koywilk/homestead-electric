@@ -121,8 +121,38 @@ const firstId = (list) => Array.isArray(list) && list.length && list[0] && list[
   // division. Confirm the setup list + the field name on a job (BusinessGroup
   // {ID, Name} per the public docs) + that the bulk /jobs/ list accepts it as
   // a column (bulk `columns=` silently rejects unknown names on this tenant).
-  await probe("business groups (setup list)", "GET", "/setup/businessGroups/?pageSize=20");
-  await probe("pending jobs — BusinessGroup as a bulk column", "GET", "/jobs/?Stage=Pending&columns=ID,Name,BusinessGroup&pageSize=3");
+  // Run 1 (2026-09-25): /setup/businessGroups/ → 404, bulk column → 422. So the
+  // name/path is something else on this tenant. Run 2: pull ONE pending job's
+  // full detail with no column filter and report every key that smells like a
+  // business group / division / tag, then try the likely alternative paths.
+  const pend = await probe("one pending job id", "GET", "/jobs/?Stage=Pending&pageSize=1");
+  const pendId = firstId(pend);
+  if (pendId) {
+    const full = await probe("that job — FULL detail (no columns filter)", "GET", `/jobs/${pendId}?display=detailed`);
+    if (full && typeof full === "object") {
+      const hits = [];
+      const walk = (v, p) => {
+        if (!v || typeof v !== "object") return;
+        for (const k of Object.keys(v)) {
+          const kp = p ? `${p}.${k}` : k;
+          if (/business|group|division|tag|custom|category|type/i.test(k)) hits.push(`${kp} = ${JSON.stringify(shape(v[k]))}`);
+          if (v[k] && typeof v[k] === "object" && !Array.isArray(v[k]) && kp.split(".").length < 3) walk(v[k], kp);
+        }
+      };
+      walk(full, "");
+      console.log(`    top-level keys: ${Object.keys(full).join(", ")}`);
+      console.log(hits.length ? `    business-group-ish keys:\n      ${hits.join("\n      ")}` : "    (no key on the job mentions business / group / division / tag / custom / category / type)");
+      out.probes.push({ label: "business-group-ish keys on a job", keys: Object.keys(full), hits });
+    }
+    await probe("that job — schema via OPTIONS", "OPTIONS", `/jobs/${pendId}`);
+    await probe("that job — custom fields (if Business Group is a custom field)", "GET", `/jobs/${pendId}/customFields/`);
+  }
+  await probe("jobs — bulk schema via OPTIONS", "OPTIONS", "/jobs/");
+  await probe("business groups — alt path 1", "GET", "/businessGroups/?pageSize=20");
+  await probe("business groups — alt path 2", "GET", "/setup/accounts/businessGroups/?pageSize=20");
+  await probe("business groups — alt path 3", "GET", "/setup/system/businessGroups/?pageSize=20");
+  await probe("job custom fields (setup)", "GET", "/setup/customFields/jobs/?pageSize=50");
+  await probe("job tags (setup)", "GET", "/setup/tags/jobs/?pageSize=50");
 
   // ── One job's cost centers + timesheets (pass a Simpro job number) ──
   if (JOB) {
