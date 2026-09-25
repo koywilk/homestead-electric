@@ -86,6 +86,10 @@ h1{font-family:var(--head);font-weight:400;font-size:34px;letter-spacing:.04em;m
 .chip.dim{color:var(--accent);background:var(--accent-soft)}
 .chip.sw{color:var(--purple);background:rgba(106,94,151,.12)}
 .chip.on{color:var(--green);background:var(--green-soft)}
+.chip.pan{color:var(--orange);background:rgba(176,106,44,.12)}
+.pending{margin-top:8px;border:1px dashed var(--orange);border-radius:10px;padding:8px 9px;background:transparent}
+.pending .ph{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--orange);margin-bottom:4px}
+.pending .zone{margin-bottom:4px}
 .chip.open{color:var(--muted);border:1px dashed var(--border)}
 .chip.over{color:var(--red);background:var(--red-soft)}
 .cb{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--muted);flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--accent-ink);background:transparent}
@@ -179,7 +183,7 @@ h1{font-family:var(--head);font-weight:400;font-size:34px;letter-spacing:.04em;m
           <button id="f_sw" aria-pressed="false" onclick="setFilter('Switching')">Switching</button>
         </div>
         <div class="seg" role="group" aria-label="Assigned filter">
-          <button id="a_un" aria-pressed="true" onclick="setAssignedFilter('unassigned')">Unassigned</button>
+          <button id="a_un" aria-pressed="true" onclick="setAssignedFilter('unassigned')">Needs a zone</button>
           <button id="a_all" aria-pressed="false" onclick="setAssignedFilter('all')">Everything</button>
         </div>
       </div>
@@ -238,7 +242,7 @@ let loads = [
   ["Rec Room Cans","Basement","Rec Room","Dimming",280], ["Gym","Basement","Gym","Switching",160], ["Mech Room","Basement","Mech","Switching",80],
 ].map((r,i)=>({ id:"l"+(i+1), name:r[0], floor:r[1], room:r[2], type:r[3], watts:r[4], assign:null }));
 // A few pre-assigned so the page opens mid-job.
-const pre = { l1:["p1","m1",1], l2:["p1","m1",2], l3:["p1","m1",3], l5:["p1","m2",1], l6:["p1","m2",2], l12:["p1","m3",1], l13:["p1","m3",2], l14:["p1","m3",3], l18:["p2","m4",1], l19:["p2","m4",2] };
+const pre = { l1:["p1","m1",1], l2:["p1","m1",2], l3:["p1","m1",3], l5:["p1","m2",1], l6:["p1","m2",2], l12:["p1","m3",1], l13:["p1","m3",2], l14:["p1","m3",3], l18:["p2","m4",1], l19:["p2","m4",2], l20:["p2",null,null], l21:["p2",null,null], l23:["p2",null,null] };
 Object.entries(pre).forEach(([id,[p,m,z]])=>{ const l=loads.find(x=>x.id===id); if(l) l.assign={panelId:p,moduleId:m,zone:z}; });
 
 const FLOOR_ORDER = ["Main Level","Upper Level","Basement"];
@@ -247,6 +251,8 @@ const byId = (id)=>loads.find(l=>l.id===id);
 const panelOf = (id)=>panels.find(p=>p.id===id);
 const modOf = (pid,mid)=>(panelOf(pid)||{modules:[]}).modules.find(m=>m.id===mid);
 const loadsOn = (pid,mid)=>loads.filter(l=>l.assign&&l.assign.panelId===pid&&l.assign.moduleId===mid);
+const onModule = (l)=>!!(l.assign&&l.assign.moduleId);
+const pendingOn = (pid)=>loads.filter(l=>l.assign&&l.assign.panelId===pid&&!l.assign.moduleId);
 const zoneLoad = (pid,mid,z)=>loadsOn(pid,mid).find(l=>l.assign.zone===z);
 const openZones = (pid,mid)=>{ const m=modOf(pid,mid); const t=MOD_TYPES[m.type]; const used=new Set(loadsOn(pid,mid).map(l=>l.assign.zone)); const out=[]; for(let z=1;z<=t.zones;z++) if(!used.has(z)) out.push(z); return out; };
 const esc = (s)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -258,26 +264,27 @@ function toggleSelect(){ selectMode=!selectMode; selected=new Set(); render(); }
 function toggleSel(id){ if(selected.has(id)) selected.delete(id); else selected.add(id); render(); }
 
 function renderStrip(){
-  const un=loads.filter(l=>!l.assign).length, on=loads.length-un;
+  const un=loads.filter(l=>!l.assign).length, pend=loads.filter(l=>l.assign&&!l.assign.moduleId).length, on=loads.filter(onModule).length;
   const zonesTotal=panels.reduce((s,p)=>s+p.modules.reduce((t,m)=>t+MOD_TYPES[m.type].zones,0),0);
   const zonesUsed=on;
   const overW=loads.filter(l=>l.assign&&overWatt(l)).length;
   document.getElementById("strip").innerHTML=`
     <div class="tile ${un?'warn':'good'}"><div class="k">Unassigned</div><div class="v">${un}<small>of ${loads.length} loads</small></div></div>
+    <div class="tile ${pend?'warn':''}"><div class="k">On a panel, no module</div><div class="v">${pend}<small>need a zone</small></div></div>
     <div class="tile"><div class="k">Zones</div><div class="v">${zonesUsed}<small>/ ${zonesTotal} used</small></div></div>
     <div class="tile"><div class="k">Panels · modules</div><div class="v">${panels.length}<small>· ${panels.reduce((s,p)=>s+p.modules.length,0)} modules</small></div></div>
     <div class="tile ${overW?'warn':''}"><div class="k">Zones over watts</div><div class="v">${overW}</div></div>`;
 }
 function capStr(t){ if(!t) return ''; if(Array.isArray(t.maxW)) return ' · ≤'+t.maxW[0]+'/'+t.maxW[1]+'W'; if(t.maxA) return ' · ≤'+t.maxA+'A/zone'; return ''; }
 function zoneMaxW(t,z){ if(!t) return 0; if(Array.isArray(t.maxW)) return t.maxW[(z||1)-1]||0; if(t.maxA) return t.maxA*120; return t.maxW||0; }
-function overWatt(l){ const m=modOf(l.assign.panelId,l.assign.moduleId); const t=m&&MOD_TYPES[m.type]; const cap=zoneMaxW(t,l.assign.zone); return !!(cap&&l.watts>cap); }
-function assignLabel(l){ if(!l.assign) return ""; const p=panelOf(l.assign.panelId); const m=modOf(l.assign.panelId,l.assign.moduleId); return `${p.label} · Mod ${m.num} · Z${l.assign.zone}`; }
+function overWatt(l){ if(!onModule(l)) return false; const m=modOf(l.assign.panelId,l.assign.moduleId); const t=m&&MOD_TYPES[m.type]; const cap=zoneMaxW(t,l.assign.zone); return !!(cap&&l.watts>cap); }
+function assignLabel(l){ if(!l.assign) return ""; const p=panelOf(l.assign.panelId); if(!l.assign.moduleId) return `${p.label} · no module yet`; const m=modOf(l.assign.panelId,l.assign.moduleId); return `${p.label} · Mod ${m.num} · Z${l.assign.zone}`; }
 
 function renderTray(){
   const q=(document.getElementById("q").value||"").trim().toLowerCase();
-  let list=loads.filter(l=>filter==="all"||l.type===filter).filter(l=>assignedFilter==="all"||!l.assign)
+  let list=loads.filter(l=>filter==="all"||l.type===filter).filter(l=>assignedFilter==="all"||!onModule(l))
     .filter(l=>!q||l.name.toLowerCase().includes(q)||l.room.toLowerCase().includes(q));
-  document.getElementById("trayCount").textContent=`${list.length}${assignedFilter==="unassigned"?" unassigned":""}`;
+  document.getElementById("trayCount").textContent=`${list.length}${assignedFilter==="unassigned"?" need a zone":""}`;
   document.getElementById("selBtn").textContent=selectMode?"Cancel":"Select";
   document.getElementById("selBtn").setAttribute("aria-pressed",String(selectMode));
   ["f_all","f_dim","f_sw"].forEach((id,i)=>document.getElementById(id).setAttribute("aria-pressed",String(filter===["all","Dimming","Switching"][i])));
@@ -288,10 +295,10 @@ function renderTray(){
   document.getElementById("tray").innerHTML=floors.map(f=>{
     const fl=list.filter(l=>l.floor===f); const rooms=[...new Set(fl.map(l=>l.room))].sort();
     return `<div class="floor"><div class="floorHead">${esc(f)}<span class="n">${fl.length}</span></div>${rooms.map(r=>`<div class="room"><div class="roomName">${esc(r)}</div>${fl.filter(l=>l.room===r).sort((a,b)=>a.name.localeCompare(b.name)).map(l=>`
-      <button class="load ${selected.has(l.id)?'sel':''}" onclick="${selectMode?`toggleSel('${l.id}')`:`openAssign('${l.id}')`}" title="${l.assign?'On '+esc(assignLabel(l))+' — tap to move or clear':'Tap to put this load on a zone'}">
+      <button class="load ${selected.has(l.id)?'sel':''}" onclick="${selectMode?`toggleSel('${l.id}')`:`openAssign('${l.id}')`}" title="${l.assign?(onModule(l)?'On ':'Parked on ')+esc(assignLabel(l))+' — tap to move or clear':'Tap to put this load on a panel or zone'}">
         ${selectMode?`<span class="cb">${selected.has(l.id)?'✓':''}</span>`:''}
         <span class="nm">${esc(l.name)}</span>
-        ${l.assign?`<span class="chip on">${esc(assignLabel(l))}</span>`:`<span class="chip ${l.type==='Dimming'?'dim':'sw'}">${l.type==='Dimming'?'Dim':'Switch'}</span>`}
+        ${l.assign?`<span class="chip ${onModule(l)?'on':'pan'}">${esc(assignLabel(l))}</span>`:`<span class="chip ${l.type==='Dimming'?'dim':'sw'}">${l.type==='Dimming'?'Dim':'Switch'}</span>`}
         <span class="w">${l.watts}W</span>
       </button>`).join("")}</div>`).join("")}</div>`;
   }).join("");
@@ -318,6 +325,7 @@ function renderPanels(){
         }).join("")}
         ${Array.from({length:Math.min(empties,2)}).map(()=>`<div class="slotEmpty"><button onclick="addModulePrompt('${p.id}')">+ Add module to open slot</button></div>`).join("")}
       </div>
+      ${(()=>{ const pend=pendingOn(p.id); if(!pend.length) return ''; return `<div class="pending"><div class="ph">On this panel, no module yet · ${pend.length}</div>${pend.map(l=>`<button class="zone" onclick="openAssign('${l.id}')" title="Pick a module and zone"><span class="z">·</span><span class="nm">${esc(l.name)}</span><span class="sub">${esc(l.room)} · ${l.watts}W · pick a module</span></button>`).join("")}</div>`; })()}
     </div>`;
   }).join("");
 }
@@ -331,12 +339,14 @@ function pickDefaultModule(){ const ids=sheet.loadIds; const want=byId(ids[0]).t
   const m=p.modules.find(m=>MOD_TYPES[m.type].kind===want&&openZones(p.id,m.id).length>=ids.length)||p.modules.find(m=>openZones(p.id,m.id).length>=ids.length)||null;
   sheet.moduleId=m?m.id:null; sheet.zone=m?openZones(p.id,m.id)[0]:null; }
 function sheetPanel(pid){ sheet.panelId=pid; pickDefaultModule(); render(); }
+function sheetPanelOnly(){ sheet.moduleId=null; sheet.zone=null; render(); }
 function sheetModule(mid){ sheet.moduleId=mid; sheet.zone=openZones(sheet.panelId,mid)[0]||null; render(); }
 function sheetZone(z){ sheet.zone=z; render(); }
 function closeSheet(){ sheet=null; render(); }
 function commitAssign(){
-  const ids=sheet.loadIds; if(!sheet.moduleId) return;
-  const free=openZones(sheet.panelId,sheet.moduleId).filter(z=>ids.length===1?true:true);
+  const ids=sheet.loadIds;
+  if(!sheet.moduleId){ const p=panelOf(sheet.panelId); ids.forEach(id=>{ byId(id).assign={panelId:sheet.panelId,moduleId:null,zone:null}; });
+    toast(ids.length===1?`${byId(ids[0]).name} → ${p.label}, no module yet`:`${ids.length} loads → ${p.label}, no module yet`); selected=new Set(); selectMode=false; sheet=null; render(); return; }
   if(ids.length===1){ const l=byId(ids[0]); const wasHere=l.assign&&l.assign.panelId===sheet.panelId&&l.assign.moduleId===sheet.moduleId&&l.assign.zone===sheet.zone;
     const occupant=zoneLoad(sheet.panelId,sheet.moduleId,sheet.zone); if(occupant&&occupant.id!==l.id){ occupant.assign=null; }
     l.assign={panelId:sheet.panelId,moduleId:sheet.moduleId,zone:sheet.zone}; toast(wasHere?"No change":`${l.name} → ${assignLabel(l)}`); }
@@ -344,16 +354,17 @@ function commitAssign(){
     toast(`${n} of ${ids.length} placed${n<ids.length?' — module ran out of zones':''}`); selected=new Set(); selectMode=false; }
   sheet=null; render();
 }
-function unassign(){ sheet.loadIds.forEach(id=>{ byId(id).assign=null; }); toast("Cleared from its zone"); sheet=null; render(); }
+function unassign(){ sheet.loadIds.forEach(id=>{ byId(id).assign=null; }); toast("Cleared — back to unassigned"); sheet=null; render(); }
+function backToPanel(){ sheet.loadIds.forEach(id=>{ const l=byId(id); if(l.assign) l.assign={panelId:l.assign.panelId,moduleId:null,zone:null}; }); toast("Off the module, still on the panel"); sheet=null; render(); }
 function fillZoneWith(loadId){ const l=byId(loadId); l.assign={panelId:sheet.panelId,moduleId:sheet.moduleId,zone:sheet.zone}; toast(`${l.name} → ${assignLabel(l)}`); sheet=null; render(); }
 
 function renderSheet(){
   const host=document.getElementById("sheetHost"); if(!sheet){ host.innerHTML=""; return; }
   if(sheet.kind==="fill"){ const p=panelOf(sheet.panelId), m=modOf(sheet.panelId,sheet.moduleId), t=MOD_TYPES[m.type];
-    const cands=loads.filter(l=>!l.assign).sort((a,b)=>(a.type===t.kind?0:1)-(b.type===t.kind?0:1)||a.floor.localeCompare(b.floor)||a.name.localeCompare(b.name));
+    const cands=loads.filter(l=>!onModule(l)).sort((a,b)=>((a.assign&&a.assign.panelId===p.id)?0:1)-((b.assign&&b.assign.panelId===p.id)?0:1)||(a.type===t.kind?0:1)-(b.type===t.kind?0:1)||a.floor.localeCompare(b.floor)||a.name.localeCompare(b.name));
     host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="Fill zone">
       <h4>${esc(p.label)} · Mod ${m.num} · Zone ${sheet.zone}</h4><div class="sub">${esc(t.label)}${zoneMaxW(t,sheet.zone)?' · up to '+zoneMaxW(t,sheet.zone)+'W on zone '+sheet.zone:''}. Pick an unassigned load. ${t.kind} loads first.</div>
-      <div class="chips">${cands.slice(0,40).map(l=>`<button class="pc" onclick="fillZoneWith('${l.id}')">${esc(l.name)}<small>${esc(l.room)} · ${l.watts}W${l.type!==t.kind?' · '+l.type:''}</small></button>`).join("")||'<span class="sub">Nothing left unassigned.</span>'}</div>
+      <div class="chips">${cands.slice(0,40).map(l=>`<button class="pc" onclick="fillZoneWith('${l.id}')">${esc(l.name)}<small>${esc(l.room)} · ${l.watts}W${l.type!==t.kind?' · '+l.type:''}${l.assign?' · parked here':''}</small></button>`).join("")||'<span class="sub">Nothing left unassigned.</span>'}</div>
       <div class="sheetActions"><span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button></div></div>`; return; }
   const ids=sheet.loadIds; const first=byId(ids[0]); const p=panelOf(sheet.panelId);
   const title=ids.length===1?first.name:`${ids.length} loads`;
@@ -364,9 +375,9 @@ function renderSheet(){
   host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="Assign">
     <h4>${esc(title)}</h4><div class="sub">${esc(subtitle)}</div>
     <div class="lbl">Panel</div><div class="chips">${panels.map(pp=>`<button class="pc" aria-pressed="${sheet.panelId===pp.id}" onclick="sheetPanel('${pp.id}')">${esc(pp.label)}<small>${pp.modules.reduce((s,m)=>s+openZones(pp.id,m.id).length,0)} open zones</small></button>`).join("")}</div>
-    <div class="lbl">Module</div><div class="chips">${mods||'<span class="sub">No modules in this panel yet.</span>'}<button class="pc" onclick="addModulePrompt('${p.id}')">+ New module…</button></div>
-    ${ids.length===1?`<div class="lbl">Zone</div><div class="chips">${zones||'<span class="sub">Pick a module first.</span>'}</div>`:`<div class="lbl">Zones</div><div class="sub">Fills the next ${ids.length} open zones in order.</div>`}
-    <div class="sheetActions">${first.assign&&ids.length===1?`<button class="btn danger" onclick="unassign()">Clear zone</button>`:''}<span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button><button class="btn primary" ${sheet.moduleId&&(ids.length>1||sheet.zone)?'':'disabled'} onclick="commitAssign()">${ids.length===1?(first.assign?'Move here':'Assign'):'Place '+ids.length}</button></div>
+    <div class="lbl">Module</div><div class="chips"><button class="pc" aria-pressed="${!sheet.moduleId}" onclick="sheetPanelOnly()">No module yet<small>just park it on ${esc(p.label)}</small></button>${mods}<button class="pc" onclick="addModulePrompt('${p.id}')">+ New module…</button></div>
+    ${!sheet.moduleId?`<div class="lbl">Zone</div><div class="sub">None yet — ${ids.length===1?'it':'they'} will sit in the panel's "no module yet" tray until you pick one.</div>`:ids.length===1?`<div class="lbl">Zone</div><div class="chips">${zones}</div>`:`<div class="lbl">Zones</div><div class="sub">Fills the next ${ids.length} open zones in order.</div>`}
+    <div class="sheetActions">${first.assign&&ids.length===1?`<button class="btn danger" onclick="unassign()">Clear</button>`:''}${onModule(first)&&ids.length===1?`<button class="btn ghost" onclick="backToPanel()">Off module, keep panel</button>`:''}<span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button><button class="btn primary" ${(!sheet.moduleId||ids.length>1||sheet.zone)?'':'disabled'} onclick="commitAssign()">${!sheet.moduleId?`Put on ${esc(p.label)} only`:ids.length===1?(first.assign?'Move here':'Assign'):'Place '+ids.length}</button></div>
   </div>`;
 }
 
@@ -383,10 +394,10 @@ function clearAll(){ loads.forEach(l=>l.assign=null); toast("All zones cleared (
 
 // ── Suggest layout: by floor → room, dimming to dimmer modules, switching to switching modules, creating modules as needed ──
 function suggestLayout(){
-  const un=loads.filter(l=>!l.assign).sort((a,b)=>FLOOR_ORDER.indexOf(a.floor)-FLOOR_ORDER.indexOf(b.floor)||a.room.localeCompare(b.room)||a.name.localeCompare(b.name));
+  const un=loads.filter(l=>!onModule(l)).sort((a,b)=>FLOOR_ORDER.indexOf(a.floor)-FLOOR_ORDER.indexOf(b.floor)||a.room.localeCompare(b.room)||a.name.localeCompare(b.name));
   const floorPanel={ "Main Level":"p1", "Basement":"p1", "Upper Level":"p2" };
   let placed=0, made=0;
-  un.forEach(l=>{ const p=panelOf(floorPanel[l.floor]||panels[0].id);
+  un.forEach(l=>{ const p=panelOf((l.assign&&l.assign.panelId)||floorPanel[l.floor]||panels[0].id);
     let m=p.modules.find(m=>MOD_TYPES[m.type].kind===l.type&&openZones(p.id,m.id).length&&(l.watts<=(zoneMaxW(MOD_TYPES[m.type],openZones(p.id,m.id)[0])||Infinity)));
     if(!m){ if(p.modules.length>=p.slots) return; const type=l.type==="Dimming"?"LQSE-4A5-120-D":"LQSE-4S8-120-D"; m={id:"m"+Date.now()+Math.random().toString(36).slice(2,5),num:p.modules.length+1,type}; p.modules.push(m); made++; }
     l.assign={panelId:p.id,moduleId:m.id,zone:openZones(p.id,m.id)[0]}; placed++; });
@@ -395,7 +406,7 @@ function suggestLayout(){
 
 // ── Batch deck ──
 function renderDeck(){ const h=document.getElementById("deckHost"); if(!selectMode){ h.innerHTML=""; return; }
-  h.innerHTML=`<div class="deck"><div class="inner"><b>${selected.size} selected</b><button ${selected.size?'':'disabled'} onclick="openBatch()">Put on a module…</button><button ${selected.size?'':'disabled'} onclick="selected.forEach(id=>byId(id).assign=null);selected=new Set();selectMode=false;toast('Cleared');render()">Clear zones</button><button class="cancel" onclick="toggleSelect()">Cancel</button></div></div>`; }
+  h.innerHTML=`<div class="deck"><div class="inner"><b>${selected.size} selected</b><button ${selected.size?'':'disabled'} onclick="openBatch()">Put on a panel / module…</button><button ${selected.size?'':'disabled'} onclick="selected.forEach(id=>byId(id).assign=null);selected=new Set();selectMode=false;toast('Cleared');render()">Clear</button><button class="cancel" onclick="toggleSelect()">Cancel</button></div></div>`; }
 
 render();
 </script>

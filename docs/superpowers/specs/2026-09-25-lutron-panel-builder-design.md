@@ -33,7 +33,11 @@ What the code does today, and why it fights him:
 ### Model: panel → module → zone, load assigned by reference
 
 - `panelizedLighting.panels = [{ id, label, where, slots, modules: [{ id, num, type }] }]`
-- each load in `panelizedLighting.loads[]` gains `assign: { panelId, moduleId, zone } | null`
+- each load in `panelizedLighting.loads[]` gains `assign: { panelId, moduleId, zone } | null`.
+  `moduleId` and `zone` may be `null`: the load is **parked on the panel with no module yet**
+  (Koy, 2026-09-25: "have the option to put on a panel too, that way I can separate panels without
+  having to set modules yet"). Parked loads count as needing a zone, show in the panel card's
+  "On this panel, no module yet" tray, and Suggest layout only ever fills them into that panel.
 - module type catalog is replaced by the verified Lutron list below (`kind`, zones, `maxW` /
   `maxA` per zone and per module).
 
@@ -50,7 +54,8 @@ derived: `loads.filter(l => l.assign?.moduleId === m.id)`.
   block per module with `MOD n · type · used/zones · ≤W`, a row per zone (filled or dashed
   "open zone"), and empty slot placeholders that add a module.
 - **One interaction, no drag** (the Crew Board v2 rule): tap a load → sheet with Panel chips →
-  Module chips (open-zone count, greyed when it can't fit) → Zone chips (occupied zones show who
+  Module chips (first chip is **No module yet**, which parks the load on the panel; then one per
+  module with its open-zone count, greyed when it can't fit) → Zone chips (occupied zones show who
   they'd bump) → Assign / Move here / Clear zone. Tap an open zone → sheet listing unassigned
   loads, matching type first. Select N loads → "Put on a module…" fills the next open zones in
   order and says how many didn't fit.
@@ -158,7 +163,7 @@ loads sitting on channels 5–8 of an "S8" (or 5 of a "T5") land unassigned and 
 ## Acceptance (once approved)
 
 - [ ] Open a Lutron job: summary strip, tray, panels render from existing data with zero loads lost (unassigned count = master loads not matched to a module row).
-- [ ] Tap load → assign; tap zone → move / clear; batch place; suggest layout; add module; add panel — all on phone and laptop, no drag.
+- [ ] Tap load → assign, or park on a panel with no module; tap zone → move / off-module-keep-panel / clear; batch place; suggest layout respects parked panels; add module; add panel — all on phone and laptop, no drag.
 - [ ] Capacity: slots, zones, watts shown and enforced (over-watt flagged red, full modules greyed in the sheet).
 - [ ] Every old consumer listed above reads the new model (or the mirror, if option B).
 - [ ] Guides `panelizedlighting.html` + `lightinglinks.html` updated; FEATURES entry; SW bump; `needs-dryrun` (or a new harness) covers migration + suggest layout.
