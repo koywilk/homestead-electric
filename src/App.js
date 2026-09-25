@@ -23942,6 +23942,22 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   );
 }
 
+// ── Commercial mode (2026-09-25): the Drive chain, callable without the UI ──
+// Exactly what the Drive section's buttons do — createJobDriveFolder, then
+// pullJobDocsToDrive — so a commercial job can run it on its own (spec §6.7):
+// at Simpro import (name + Simpro # arrive complete, so the half-typed-name
+// problem that removed auto-create can't happen) and when a hand-made
+// commercial job gets its Simpro #. Progress streams onto job.docPull as today.
+async function runDriveChain(jobId, by) {
+  const mk = httpsCallable(functions, "createJobDriveFolder");
+  const r1 = await mk({ jobId });
+  const folderId = r1?.data?.folderId || "";
+  if (!folderId) throw new Error("Could not create the Drive folder.");
+  const pull = httpsCallable(functions, "pullJobDocsToDrive", { timeout: 540000 });
+  const r2 = await pull({ jobId, provider: "simpro", by: by || "" }).catch(e => ({ data: { error: e.message || String(e) } }));
+  return { folderId, created: !r1?.data?.alreadyLinked, pull: r2?.data || {} };
+}
+
 function DriveFilesSection({ job, onUpdate }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -26446,6 +26462,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
   // name/address/gc/phone from Simpro. Never overwrites typed text.
   const { simproPulling, doPullSimpro } = useSimproAutoPull(jobRef, u);
+  // Commercial mode (spec §6.7): a hand-made commercial job runs the Drive chain
+  // once its Simpro # has settled (2 s after the last keystroke, ≥ 4 digits) and
+  // the name is real. One shot per job; the import path has its own trigger.
+  const driveChainFiredRef = useRef("");
+  useEffect(() => {
+    if (!isCommercial(job) || job.driveFolderId || driveChainFiredRef.current === job.id) return;
+    const sn = String(job.simproNo || "").trim();
+    if (!/^\d{4,}$/.test(sn) || String(job.name || "").trim().length < 3) return;
+    const t = setTimeout(() => {
+      driveChainFiredRef.current = job.id;
+      runDriveChain(job.id, getIdentity()?.name || "")
+        .then(r => { if (r.folderId) u({ driveFolderId: r.folderId }); toast.success(`Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`); })
+        .catch(e => { driveChainFiredRef.current = ""; toast.error(`Drive folder: ${e.message || e}`); });
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [job.id, job.simproNo, job.driveFolderId, job.name, job.division]);   // eslint-disable-line
 
   // ── QC Fail ↔ Return Trip check-off sync ────────────────────────────
   // When a QC walk fails, every open `fromQC` item in roughPunch/finishPunch
@@ -46010,7 +46042,7 @@ function GCPortalManager({ jobs, identity }) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity, onUpdateJob }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity, onUpdateJob, divisionMismatches = [], onScanDivisions }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -46177,6 +46209,34 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           <Icon name="bell" size={14}/> Send Test Notification
         </button>
       </SettingsSection>
+
+      {/* Commercial division — compare every job's app division with Simpro's Business Group (admin) */}
+      {getAccess(identity)==="admin" && onScanDivisions && (() => {
+        const byId = new Map((jobs||[]).map(j => [j.id, j]));
+        const live = (divisionMismatches||[]).filter(m => { const j = byId.get(m.jobId); return j && ((jobDivision(j)==="commercial") !== (m.simproDivision==="commercial")); });
+        const apply = (m) => { const j = byId.get(m.jobId); if (!j) return; const v = m.simproDivision==="commercial" ? "commercial" : ""; onUpdateJob({ ...j, division: v }, { division: v }); };
+        return (
+          <SettingsSection title="COMMERCIAL DIVISION" accent={{bg:"#E8F1F0", border:"#BFD9D6", text:"#2E5F5C"}}>
+            <div style={{fontSize:11,color:"#2E5F5C",marginBottom:10,lineHeight:1.5}}>
+              Each job's division (Residential / Commercial) comes from Simpro's <b>Business Group</b> at import. This checks every job that has a Simpro # against Simpro right now and lists the ones that disagree, so today's commercial jobs get sorted without hand-editing. Read-only on Simpro; nothing changes until you tap Apply.
+            </div>
+            <button onClick={onScanDivisions} style={{padding:"8px 14px",borderRadius:8,border:"1px solid #BFD9D6",background:"#fff",color:"#2E5F5C",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Check divisions against Simpro</button>
+            {live.length > 0 ? (
+              <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>
+                {live.map(m => (
+                  <div key={m.jobId} style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",background:"#fff",border:"1px solid #E1E4E9",borderRadius:8,padding:"8px 12px"}}>
+                    <div style={{flex:1,minWidth:200}}><div style={{fontSize:13,fontWeight:700,color:C.text}}>{m.name||"(unnamed)"}</div><div style={{fontSize:11,color:C.dim}}>Simpro #{m.simproNo} · Business Group: <b>{m.businessGroup||"—"}</b> · app says {m.appDivision==="commercial"?"Commercial":"Residential"}</div></div>
+                    <button onClick={()=>apply(m)} style={{padding:"6px 12px",borderRadius:7,border:"none",background:m.simproDivision==="commercial"?C.teal:C.accent,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Make {m.simproDivision==="commercial"?"Commercial":"Residential"}</button>
+                  </div>
+                ))}
+                <button onClick={()=>live.forEach(apply)} style={{alignSelf:"flex-start",padding:"6px 12px",borderRadius:7,border:"1px solid #BFD9D6",background:"#fff",color:"#2E5F5C",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Apply all ({live.length})</button>
+              </div>
+            ) : (
+              <div style={{fontSize:11,color:"#5E6670",marginTop:8}}>{(divisionMismatches||[]).length ? "Everything listed by the last scan has been applied." : "No scan yet, or the last scan found every job already in the right division."}</div>
+            )}
+          </SettingsSection>
+        );
+      })()}
 
       {/* My Preferences — personal defaults (scoped to the current user) */}
       {identity?.id && onSaveUsers && (
@@ -49115,12 +49175,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v449
+**Last manifest update:** 2026-09-25 · App SW version: v450
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Commercial mode — slice B: Simpro Business Group sets the division, commercial imports build their Drive folder + pull plans on their own, residential chases skip commercial jobs** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"simpro does flag resi or commercial in the jobs settings → business group"* + *"i want the drive folder to be created and pull plans in from simpro automatically like it does in resi."* Three read-only probe runs against the tenant ('scripts/simpro-discover.js') found the Business Group is a **job custom field** ('/jobs/{id}/customFields/' → 'Business Group' = Residential / Commercial / Multi Family), not a job column, so the candidates poller ('_runSimproCandidateRefresh') now makes one 'customFields' call per **new** candidate (cached on the candidate afterwards), stores 'businessGroup' + 'divisionHint', and the Simpro Inbox row shows a COMMERCIAL / RESI pill (or "group unset — imports as <mode>"). **Import** writes 'division' from the hint ('resi' deletes the key; no hint → the current mode's stamp) and stamps 'simproBusinessGroup'. Mapping = 'config/app.commercialBusinessGroups', default Commercial + Multi Family (Koy: *"multifamily is probably commercial but unsure"* — a settings edit, never a deploy). **Existing jobs:** Settings → **COMMERCIAL DIVISION** (admin) → *Check divisions against Simpro* calls the new 'scanSimproDivisions' callable (every app job with a Simpro #, paced, read-only on Simpro, writes only 'settings/simproCandidates.divisionMismatches') and lists the jobs whose app division disagrees with Simpro, with per-row **Make Commercial / Residential** and **Apply all** — each Apply writes 'division' alone through 'updateJob'. **Drive:** new module helper 'runDriveChain(jobId, by)' = the Drive section's own two callables ('createJobDriveFolder' → 'pullJobDocsToDrive'); a commercial Simpro import fires it right after the create-only 'setDoc' (name + Simpro # arrive complete, so the half-typed-name problem that removed auto-create can't happen), and a hand-made commercial job fires it once its Simpro # settles (2 s, ≥ 4 digits, real name). Same Jobs parent folder, same '#<simpro> - <name>' naming (Koy: *"same parent folder is fine they are sorted there by job numbers anyway"*). Residential stays button-driven. **Functions (deploy needed):** 'isCommercialJob(data)' guard added to the per-job loops of 'dailyMorningChecks', 'dailyCoChase', 'dailyRtChase', 'dailyMatterportChase', 'dailyStaleJobChase', 'dailyUpdateMissing', 'techLightingWeeklyDigest', and the job lists of 'fridayPacket' / 'leadMeetingPrep'; 'onJobUpdate' skips the Job Prep Complete / QC ready / QC passed / Matterport pushes for commercial jobs; 'ensureJobDriveFolder''s "Drive Folder Linked" push goes to the 'comm.head' hat holder ('commHeadName()', falls back to 'resi.head' then Koy) for commercial jobs. Ledgers, backups, Drive matching, PO / CO syncs, needs, GC portal untouched. **Why it won't lose data:** the poller and the scan write only 'settings/simproCandidates'; Apply and import write 'division' (+ 'simproBusinessGroup') inside 'data' through the existing funnels; the Drive chain calls the same two callables the button calls and writes the same 'driveFolderId' / 'docPull' fields; every function change is a skip-guard or a push recipient — no write added or changed.
 - **Commercial mode — slice A, the foundation (invisible unless you flip the switch)** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"we need to start working on a commercial side of the app. i want it to be a completely separate mode that only shows our commercial jobs. so each job will need a way to assign resi or commercial."* Design: 'docs/superpowers/specs/2026-09-25-commercial-mode-design.md'; plan: 'docs/superpowers/plans/2026-09-25-commercial-mode-phase1.md'; mockup 'commercial-mockup.html'. **Division on the job:** 'division:"commercial"' inside 'job.data'; absent = residential, so every existing job is residential with zero writes ('jobDivision()' / 'isCommercial()'). **One filter at the top:** 'App()' now holds 'allJobs' and derives 'jobs' (the current mode's jobs) once with 'useMemo'; every view keeps its 'jobs' prop untouched, and everything that writes, merges, backs up, drains or restores reads 'allJobs' (the Task 2 audit: 'jobsRef', the daily safety backup, the Settings backup download, 'nextQuoteNumber', lookups-for-save, deep links). **The switch:** a RESI | COMMERCIAL pill in the header for everyone internal ('commercial.view', all four tiers; contractors never), device-local ('localStorage he_mode'); Commercial turns the header and active tab teal. **Landing:** 'defaultMode' on the user record (Settings → My Preferences "Land in", and Team Members "Lands in") picks the division once per session for people who mostly work commercial. The open drawer closes when the mode changes; a push or deep link to a job in the other division flips the mode and opens it. **Stamping:** every creation site (+ New Job / Temp Ped / Quick, foreman + subcontractor pages, quotes, both Upcoming promotes, Simpro import) writes 'division:"commercial"' only while in Commercial mode — residential mode writes no key. **Job Info → DIVISION** (admin/manager, 'job.division'): move a job either way after a confirm; the write is 'division' alone. New prebuild gate 'scripts/commercial-dryrun.js' (division helper truth table + a guard that 'jobsRef' can never track the filtered list). Nothing commercial is visible yet beyond the pill: the commercial job card, Job Board stages, nav, Simpro Business Group import, automatic Drive folder, Job Start phases, hats and My Day rows ship in slices B–D. **Why it won't lose data:** additive only — 'division' is a new key inside 'data' (unwraps through the existing loader spread, audited), 'defaultMode' rides the guarded 'saveUsers' whole-list write; no existing field renamed, retyped or removed; the 'allJobs' rename changes no write payload (every 'setJobs' updater was functional) and every offline / backup / restore path sees the full array exactly as before; no loader, 'firestore.rules', or functions changes.
 - **Panelized Lighting — download the load list (PDF / CSV), clean, no module assignments** · 'shipped 2026-09-25' · 'SW v448' · Koy: *"I would also love to be able to download a list of loads that is clean and organized without any modules assigned yet."* Two buttons on the **Loads** section header (Lutron / Control 4 / Crestron layout): **PDF** and **CSV**. Both build from the job's own 'panelizedLighting.loads' via the pure 'loadsListRows(loads, floorOrder)' — every named load, grouped **floor → room → A–Z** (floors in the tab's own order: Main Level, Basement, Upper Level, then extra floors, then anything unrecognized; blank room sorts last as "General"), numbered 1..N, with **Type** and **Watts** — and **no panel, module or channel columns**, so a lighting designer lays the panels out from a clean sheet. The PDF ('loadsListHtml' → new '_saveHtmlAsPdfPaged', a multi-page cousin of '_saveHtmlAsPdf', which captures one letter page only) carries the job name, address, system, load/floor counts and print date; the CSV ('loadsListCsv', BOM-prefixed so Excel reads UTF-8, '#,Floor,Room,Load,Type,Watts') is the editable copy. Harness 'needs-dryrun' covers ordering, numbering, unknown floors, dropped blanks and CSV escaping. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — both buttons only read 'loads' and write nothing to Firestore; no new field, no loader or rules change.
 - **My Day — return trips stay with the head; no second overdue row for Josh on sign-off** · 'shipped 2026-09-25' · 'SW v447' · Koy: *"if a shared task is checked off by one it should be cleared on the other side. i have checked off buchsthaber return trip and it shows as overdue on joshs card. also josh should only share QC with me not return trips."* Root cause: signing an RT off sets it to 'complete', which spawns a **different** auto row on the same trip — '_rt_<id>_done' "Return Trip #N Complete — merge or invoice" — and v427 routed that row to the invoicing hat, dated from the old 'rtStatusDate', so it landed on Josh's board already overdue the moment Koy closed the trip. It was never a shared row failing to clear (QC / redline rows clear for every holder by construction); it was a second rule with a different owner. **Fix:** 'routeKeyOfAuto' returns 'null' for every 'category:"rt"' row — schedule, get-sign-off AND complete/merge-or-invoice all stay with the Head of Residential (Josh now shares only QC with Koy); the merge-or-invoice row is due from 'signedOffDate' (falls back to 'rtStatusDate') so it isn't born overdue; it stays in the never-hides money set ('staleMoney' now includes '_rt_*_done'); 'HAT_REGISTRY' note and the guide drop "RT" from the invoicing list; 'functions/myDayDigest.js' no longer bumps the invoicing count for completed RTs (CO complete unchanged). Tests: 'needs-dryrun' (RT done/sched → null), 'mydaydigest-test' (RT complete ≠ invoicing). **Needs 'firebase deploy --only functions:dailyMyDayDigest'.** **Why it won't lose data:** routing and due-date derivation only — no new field, no write path changed, no rules change; an RT row Josh already cleared via 'clearedTasks' stays cleared for the head too (same job-level list).
@@ -56771,6 +56832,7 @@ function App() {
   // 4h) and the on-demand Sync button. Each entry: {simproId, name, address,
   // customer, dateIssued, stage, firstSeenAt, lastSeenAt, ignored, ignoredAt}.
   const [simproCandidates, setSimproCandidates] = useState([]);
+  const [divisionMismatches, setDivisionMismatches] = useState([]);   // Commercial mode: Settings → COMMERCIAL DIVISION scan result (settings/simproCandidates.divisionMismatches)
   const [simproInboxOpen, setSimproInboxOpen] = useState(false);
   const [simproSyncing, setSimproSyncing] = useState(false);
 
@@ -57140,8 +57202,8 @@ function App() {
     // 4 hours; this listener picks up changes in real time so the header
     // badge count updates without a page reload.
     const unsubSimproCands = onSnapshot(doc(db,"settings","simproCandidates"), snap => {
-      if(snap.exists()) setSimproCandidates(snap.data().candidates || []);
-      else setSimproCandidates([]);
+      if(snap.exists()) { setSimproCandidates(snap.data().candidates || []); setDivisionMismatches(snap.data().divisionMismatches || []); }
+      else { setSimproCandidates([]); setDivisionMismatches([]); }
     }, err => console.error("Simpro candidates listener error:", err));
 
 
@@ -58393,6 +58455,10 @@ function App() {
     j.address = (() => { const norm = (x) => String(x || "").replace(/\s+/g, " ").trim().toLowerCase(); const a = String(cand.address || "").trim(); return !a || norm(a) === norm(cand.name) ? "" : a; })();
     j.simproNo = String(cand.simproId || "");
     j.customer = cand.customer || "";
+    // Division from Simpro's Business Group (custom field, read by the poller). No hint → the current mode's stamp stands.
+    if (cand.divisionHint === "commercial") j.division = "commercial";
+    else if (cand.divisionHint === "resi") delete j.division;
+    if (cand.businessGroup) j.simproBusinessGroup = String(cand.businessGroup);
     j.foreman = "Unassigned";
     j._importedFromSimpro = true;
     j.imported_at = new Date().toISOString();
@@ -58411,6 +58477,13 @@ function App() {
       });
       setSelected(j);
       setSimproInboxOpen(false);
+      // Commercial: Drive folder + Simpro plans by themselves (spec §6.7). Fire-and-forget;
+      // the Drive section shows the progress off job.docPull like the button does.
+      if (isCommercial(j) && j.simproNo && String(j.name||"").trim().length >= 3) {
+        runDriveChain(j.id, identity?.name || "")
+          .then(r => toast.success(`Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`))
+          .catch(e => toast.error(`Drive folder: ${e.message || e}`));
+      }
       toast.success(kind === "tempped" ? `Imported "${j.name}" as a temp ped — set foreman/lead to make it live` : kind === "quick" ? `Imported "${j.name}" as a quick job — set foreman/lead to make it live` : `Imported "${j.name}" — set foreman/lead to make it live`);
     } catch (e) {
       console.error("[HE] importSimproCandidate failed", e);
@@ -59289,6 +59362,9 @@ function App() {
                               <span style={{fontSize:10,fontWeight:600,color:C.muted,marginLeft:6}}>
                                 #{c.simproId}
                               </span>
+                              {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
+                              {c.divisionHint==="resi" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>RESI</span>}
+                              {!c.divisionHint && <span title="No Business Group on the Simpro job — imports into whichever mode you're in" style={{fontSize:9,fontWeight:700,color:C.amber,marginLeft:6,verticalAlign:"middle"}}>? group unset — imports as {mode==="commercial"?"Commercial":"Residential"}</span>}
                             </div>
                             {c.address && (
                               <div style={{fontSize:11,color:C.dim,marginTop:3}}>{c.address}</div>
@@ -61027,6 +61103,8 @@ function App() {
             colorOverrides={_colorOverrides}
             onSave={saveSettings}
             onSaveUsers={saveUsers}
+            divisionMismatches={divisionMismatches}
+            onScanDivisions={async()=>{ try { toast("Checking every job against Simpro — a minute or two…"); const r = await httpsCallable(functions, "scanSimproDivisions", { timeout: 540000 })({}); const d = r.data||{}; toast.success(`Checked ${d.checked||0} jobs — ${d.mismatches||0} to review${d.errors?` · ${d.errors} couldn't be read`:""}`); } catch(e) { toast.error(`Scan failed: ${e.message||e}`); } }}
             jobs={allJobs}   /* backup download must hold every job, both divisions */
             identity={identity}
             upcoming={upcoming}

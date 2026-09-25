@@ -84,6 +84,18 @@ function allPrepDone(job) {
   return (job.prepStage || "") === PREP_COMPLETE;
 }
 
+// ── Commercial division (2026-09-25) ─────────────────────────────────────────
+// data.division === "commercial" → the residential-process chases and pushes skip
+// the job (its process is the Job Start phases). Absent = residential.
+const isCommercialJob = (d) => !!(d && d.division === "commercial");
+// Head of Commercial = comm.head hat holder (Settings → Team → COMPANY HATS): Brady.
+// Falls back to resi.head, then "Koy" — never a hardcoded name in the callers.
+async function commHeadName(users) {
+  const live = (users || (await getUsers())).filter(u => u && u.active !== false && Array.isArray(u.caps));
+  const h = live.find(u => u.caps.includes("comm.head")) || live.find(u => u.caps.includes("resi.head"));
+  return (h && h.name) || "Koy";
+}
+
 async function getUsers() {
   const snap = await db.doc("settings/users").get();
   return (snap.exists && snap.data().list) ? snap.data().list : [];
@@ -655,7 +667,7 @@ exports.onJobUpdate = functions.firestore
     }
 
     // ── 5. Job prep complete ──────────────────────────────────
-    if (!allPrepDone(before) && allPrepDone(after)) {
+    if (!isCommercialJob(after) && !allPrepDone(before) && allPrepDone(after)) {   // Commercial mode: Job Start has its own rows
       tasks.push(sendToNameIfWanted(after.foreman, "prep_complete", {
         title: "✅ Job Prep Complete",
         body:  `Prep is done on ${name} — ready to roll`,
@@ -669,7 +681,7 @@ exports.onJobUpdate = functions.firestore
     }
 
     // ── 6. QC walk needs to be scheduled ─────────────────────
-    if (before.qcStatus !== "needs" && after.qcStatus === "needs") {
+    if (!isCommercialJob(after) && before.qcStatus !== "needs" && after.qcStatus === "needs") {
       tasks.push(sendToNameIfWanted(after.foreman, "qc_ready", {
         title: "🔍 QC Walk Ready to Schedule",
         body:  `${name} is ready for a QC walk — please schedule it`,
@@ -685,7 +697,7 @@ exports.onJobUpdate = functions.firestore
     // ── 6b. QC passed (pass or fixed) ────────────────────────
     const wasPass = after.qcStatus === "pass" || after.qcStatus === "fixed";
     const wasPassBefore = before.qcStatus === "pass" || before.qcStatus === "fixed";
-    if (!wasPassBefore && wasPass) {
+    if (!isCommercialJob(after) && !wasPassBefore && wasPass) {
       tasks.push(sendToNameIfWanted(after.foreman, "qc_passed", {
         title: "✅ QC Passed",
         body:  `${name} — all QC items resolved, QC is now passing`,
@@ -699,7 +711,7 @@ exports.onJobUpdate = functions.firestore
     }
 
     // ── 6c. Matterport scan complete ──────────────────────────
-    if (before.matterportStatus !== "complete" && after.matterportStatus === "complete") {
+    if (!isCommercialJob(after) && before.matterportStatus !== "complete" && after.matterportStatus === "complete") {
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "matterport", {
         title: "📷 Matterport Scan Complete",
         body:  `${name} — Matterport scan is done`,
@@ -1490,6 +1502,7 @@ exports.dailyMorningChecks = functions.pubsub
     const tasks = [];
 
     snap.docs.forEach(doc => {
+      if (isCommercialJob(doc.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const job = doc.data()?.data || {};
       if (!job.name) return;
       const name = job.name;
@@ -1530,6 +1543,7 @@ exports.dailyMorningChecks = functions.pubsub
     let staleQuestions     = 0; // unanswered question on a job idle > 3 days
 
     snap.docs.forEach(doc => {
+      if (isCommercialJob(doc.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const raw = doc.data() || {};
       const job = raw.data || {};
       if (!job.name) return;
@@ -1686,6 +1700,7 @@ exports.dailyCoChase = functions.pubsub
     let draftCount = 0;
     const staleJobs = new Set();
     snap.forEach(d => {
+      if (isCommercialJob(d.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const j = d.data()?.data || {};
       if (j.type === "quote") return;
       (j.changeOrders || []).forEach(co => {
@@ -1729,6 +1744,7 @@ exports.dailyRtChase = functions.pubsub
     const now = Date.now();
     const byCoord = {};
     snap.forEach(d => {
+      if (isCommercialJob(d.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const j = d.data()?.data || {};
       if (j.type === "quote") return;
       (j.returnTrips || []).forEach(rt => {
@@ -1771,6 +1787,7 @@ exports.dailyMatterportChase = functions.pubsub
     const snap = await db.collection("jobs").get();
     let count = 0, oldest = null;
     snap.forEach(d => {
+      if (isCommercialJob(d.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const j = (d.data() && d.data().data) || {};
       if (j.type === "quote") return;
       const hasLink = !!(j.matterportLink || (Array.isArray(j.matterportLinks) && j.matterportLinks.length));
@@ -1833,6 +1850,7 @@ exports.dailyStaleJobChase = functions.pubsub
     const byForeman = {}; // name → count
     const byCoord = {};    // coordId → {coord, count}
     snap.forEach(d => {
+      if (isCommercialJob(d.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const j = d.data()?.data || {};
       if (!_activeJob(j)) return;
       if (_ageDays(j.updated_at) < 5) return;
@@ -1865,6 +1883,7 @@ exports.dailyUpdateMissing = functions.pubsub
     const snap = await db.collection("jobs").get();
     const byForeman = {};
     snap.forEach(d => {
+      if (isCommercialJob(d.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
       const j = d.data()?.data || {};
       if (!_activeJob(j)) return;
       if (parseInt(j.roughStage, 10) === 0 && !j.roughStatus) return; // not started yet — no crew on site
@@ -4033,11 +4052,33 @@ function _stripHtml(s) {
 //     half-updating the doc.
 //   • Removes candidates whose Simpro job has been imported into the app
 //     (matched by simproNo) so they stop reappearing.
+// ── Commercial division from Simpro (2026-09-25) ─────────────────────────────
+// On this tenant the Business Group is a JOB CUSTOM FIELD (probe runs 1-3):
+//   GET /jobs/{id}/customFields/ → [{ CustomField:{Name:"Business Group"}, Value:"Residential"|"Commercial"|"Multi Family" }]
+// It is NOT on the job record, NOT accepted as a bulk `columns=` value (422), and
+// not on the cost center or customer — so it costs one call per job.
+async function _simproBusinessGroup(simproId) {
+  const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(simproId)}/customFields/`, null, { maxAttempts: 2 });
+  const rows = Array.isArray(r && r.data) ? r.data : [];
+  const bg = rows.find(x => x && x.CustomField && /^business\s*group$/i.test(String(x.CustomField.Name || "").trim()));
+  return bg && bg.Value != null ? String(bg.Value).trim() : "";
+}
+// Which group names count as commercial. config/app.commercialBusinessGroups
+// (array of names) wins; default = Commercial + Multi Family (Koy, 2026-09-25:
+// "multifamily is probably commercial but unsure" — a settings edit flips it).
+async function _commercialGroups() {
+  const snap = await db.doc("config/app").get().catch(() => null);
+  const list = snap && snap.exists && Array.isArray(snap.data().commercialBusinessGroups) ? snap.data().commercialBusinessGroups : ["commercial", "multi family"];
+  return list.map(x => String(x).toLowerCase().trim()).filter(Boolean);
+}
+const _divisionHintFor = (businessGroup, commGroups) => businessGroup ? (commGroups.includes(String(businessGroup).toLowerCase().trim()) ? "commercial" : "resi") : "";
+
 async function _runSimproCandidateRefresh() {
   // Walk Simpro /jobs/?Stage=Pending paginated. Defensive about field shape:
   // Simpro returns minimal columns by default, so we explicitly request
   // ID/Name/Description/Site/Customer/Stage to keep the inbox useful.
   const cols = encodeURIComponent("ID,Name,Description,Site,Customer,Stage,DateIssued");
+  const commGroups = await _commercialGroups();
   const fetched = [];
   let page = 1;
   const MAX_PAGES = 30;
@@ -4102,8 +4143,15 @@ async function _runSimproCandidateRefresh() {
     }
     const customer = (j.Customer && (j.Customer.CompanyName || j.Customer.Name)) || "";
     const dateIssued = j.DateIssued || "";
+    // Business Group (division): one customFields call per NEW candidate; a
+    // candidate seen on an earlier run keeps its cached value (re-runs cost nothing).
+    let businessGroup = existing.businessGroup || "";
+    if (!businessGroup) { try { businessGroup = await _simproBusinessGroup(simproId); } catch (e) { functions.logger.warn("refreshSimproCandidates: customFields failed", { simproId, error: e.message }); } }
+    const divisionHint = _divisionHintFor(businessGroup, commGroups);
 
     candidates.push({
+      businessGroup,
+      divisionHint,
       simproId,
       name,
       address,
@@ -4166,6 +4214,37 @@ exports.refreshSimproCandidates = functions
       functions.logger.error("refreshSimproCandidates failed", { error: e.message });
       throw new functions.https.HttpsError("internal", e.message || "Simpro fetch failed");
     }
+  });
+
+// ── Commercial division scan (2026-09-25) ────────────────────────────────────
+// Admin button in Settings → COMMERCIAL DIVISION. For every app job with a
+// Simpro #, read its Business Group and list the ones whose app `division`
+// disagrees. Writes ONLY settings/simproCandidates.divisionMismatches (merge);
+// never touches /jobs — the app's Apply button does that one job at a time.
+exports.scanSimproDivisions = functions
+  .runWith({ timeoutSeconds: 540, memory: "256MB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    const commGroups = await _commercialGroups();
+    const snap = await db.collection("jobs").get();
+    const mismatches = [];
+    let checked = 0, errors = 0;
+    const startedAt = new Date().toISOString();
+    for (const d of snap.docs) {
+      const j = d.data()?.data || {};
+      const sn = String(j.simproNo || "").trim();
+      if (!sn || j.type === "quote" || j.archived || j.deleted || j.archivedAt) continue;
+      let bg = "";
+      try { bg = await _simproBusinessGroup(sn); checked++; } catch (e) { errors++; continue; }
+      await new Promise(r => setTimeout(r, 350));   // stay under Simpro's per-token rate limit
+      const hint = _divisionHintFor(bg, commGroups);
+      if (!hint) continue;
+      const appDiv = j.division === "commercial" ? "commercial" : "resi";
+      if (hint !== appDiv) mismatches.push({ jobId: d.id, name: j.name || "", simproNo: sn, businessGroup: bg, simproDivision: hint, appDivision: appDiv });
+    }
+    await db.doc("settings/simproCandidates").set({ divisionMismatches: mismatches, divisionScan: { startedAt, finishedAt: new Date().toISOString(), checked, errors, mismatches: mismatches.length } }, { merge: true });
+    functions.logger.info("scanSimproDivisions done", { checked, errors, mismatches: mismatches.length });
+    return { checked, errors, mismatches: mismatches.length };
   });
 
 // Scheduled run every 4 hours. Uses the same helper so behaviour is
@@ -4403,7 +4482,7 @@ async function runLeadMeetingPrep({ testRun = false } = {}) {
     db.doc("settings/upcoming_jobs").get(),
     db.doc("settings/crewPTO").get(),
   ]);
-  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; });
+  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; }).filter(j => !isCommercialJob(j));   // Commercial mode: residential packet
   const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
   const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
 
@@ -4520,7 +4599,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
     db.doc("settings/crewPTO").get(),
     db.doc("settings/upcoming_jobs").get(),
   ]);
-  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}), updated_at: raw.updated_at || "" }; });
+  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}), updated_at: raw.updated_at || "" }; }).filter(j => !isCommercialJob(j));   // Commercial mode: residential lead meeting
   const needs = needSnap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; });
   const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
   const upcomingRaw = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
@@ -4769,7 +4848,7 @@ exports.ensureJobDriveFolder = functions.firestore
       return null;
     }
 
-    await sendToName("Koy", {
+    await sendToName(isCommercialJob(after) ? await commHeadName() : "Koy", {
       title: createdNew ? "📁 Drive Folder Created" : "📁 Drive Folder Linked",
       body:  `${after.name} → ${folderName}`,
       jobId, section: "Job Info",
@@ -6114,6 +6193,7 @@ exports.techLightingWeeklyDigest = functions.pubsub
       let jobsOutstanding = 0; // jobs with >=1 of either
 
       jobsSnap.forEach(d => {
+        if (isCommercialJob(d.data()?.data)) return;   // Commercial mode: residential-process chase — skip commercial jobs
         const j = d.data()?.data || {}; // jobs ARE wrapped
         if (j.lightingSystem !== "Lutron") return;
         if (j.panelizedLighting?.excludeFromLutronHub) return;
