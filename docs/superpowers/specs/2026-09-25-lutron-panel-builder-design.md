@@ -34,8 +34,8 @@ What the code does today, and why it fights him:
 
 - `panelizedLighting.panels = [{ id, label, where, slots, modules: [{ id, num, type }] }]`
 - each load in `panelizedLighting.loads[]` gains `assign: { panelId, moduleId, zone } | null`
-- module type catalog (`LQSE-4A` 4 zones dimming, `LQSE-2ECO` 2, `LQSE-S8` 8 switching,
-  `LQSE-T5` 5, `LQSE-2DAL` 2) gains `kind` and, where Tech Lighting confirms it, `maxW` per zone.
+- module type catalog is replaced by the verified Lutron list below (`kind`, zones, `maxW` /
+  `maxA` per zone and per module).
 
 Loads stay the single source of truth. Modules hold no copies. Everything a module "contains" is
 derived: `loads.filter(l => l.assign?.moduleId === m.id)`.
@@ -87,6 +87,52 @@ Additive: `panels` is a new array; `assign` is a new key on existing load rows; 
 arrays are never cleared by the builder. A wrong `assign` is one tap to fix; a wrong migration
 is visible immediately as "unassigned" rows, never as lost loads. Per-field job version history
 and the recovery ledger cover `panelizedLighting`.
+
+## Module catalog (verified 2026-09-25 against Lutron spec submittals; on the canvas as "Module catalog")
+
+Lutron's HomeWorks "Modules" list today is exactly eight 120 V DIN power modules. Ratings below
+are from Lutron's own spec sheets (3691126, 3691052, 3691060, 3691054, 3691278, 3691107, 3691251,
+369842, QSX Link Equipment sheet), not distributor pages.
+
+| Model | What | Zones | Per zone · module | Width | App today |
+|---|---|---|---|---|---|
+| LQSE-4A5-120-D | PRO LED+ phase adaptive dimmer; replaces every legacy RPM dimmer (App Note 840) | 4 | Z1 800 W INC/ELV, 6.6 A LED, 400 W fwd-phase LED; Z2–4 500 W, 4.2 A LED, 200 W fwd-phase; 16 A module | 12 DIN | **missing** |
+| LQSE-4S8-120-D | Switching, zero-cross relays, air gap per output; no general receptacles | 4 | 8 A/zone; 16 A max/module; 1/3 HP | 9 DIN | **"LQSE-S8" with 8 ch — wrong: 4 zones, 8 = amps** |
+| LQSE-4T5-120-D | 0–10 V dimming + switching relays | 4 | 5 A/zone; 20 A max/module; 50 mA 0–10 V | 9 DIN | **"LQSE-T5" with 5 ch — wrong: 4 zones, 5 = amps** |
+| LQSE-4T20-120-D | 0–10 V + Softswitch, heavy; receptacles OK; replaces RPM-4R; QSX only | 4 | 20 A/zone tungsten/general, 16 A LED drivers, 1 HP | 12 DIN | missing |
+| LQSE-4M-120-D | Motor control, interlocked raise/lower, motors only, one per zone | 4 | 5 A/zone; 16 A total | 9 DIN | missing |
+| LQSE-2HDC-D | HomeWorks Digital power module (Ketra / Lumaris / HW Digital drivers); QSX only | 2 buses | 64 loads per bus, 250 mA | 9 DIN | missing |
+| LQSE-1DAL2-D | DALI-2 single-bus master, current U.S. DALI part; QSX only | 1 bus | 64 loads, 64 zones | 9 DIN | missing |
+| LQSE-4A1-D | Adaptive dimmer 120–240 V, 1 A/zone (niche) | 4 | 1 A/zone; 4 A module | 9 DIN | missing, optional |
+| LQSE-4A-120-D | Phase adaptive dimmer — **discontinued** per Lutron's 2025 QSX panel spec (3691193) | 4 | Z1 400 W; Z2–4 250 W; 2 A LED; 10 A module | 12 DIN | as "LQSE-4A" (keep as legacy) |
+| LQSE-2ECO-D | EcoSystem loop controller (HomeWorks QS era; in QS panel spec 3691055, not the QSX one) | 2 loops | 64 drivers per loop | 9 DIN | as "LQSE-2ECO" (legacy) |
+| LQSE-2DAL-D | DALI v1, two buses; superseded by 1DAL2 on QSX | 2 buses | 64 loads, 16 zones per bus | 9 DIN | as "LQSE-2DAL" (legacy) |
+
+Legacy HW-RPM-4A/4U/4E/4J/4R/4M/4FSQ remote power modules are non-DIN cabinets and stay out of
+the picker (App Note 840 maps each to a DIN module above).
+
+**Panels (slots per enclosure, from 3691193 / 3691055):** current QSX feed-through line
+PD2-16T-DV (2), PD4-42T-DV (4, control), PD6-42T-DV (6), PD8-65T-DV (8, control), PD10-65T-DV
+(10); older QS line PD2-16F-120 (2), PD4-36F-120 (4), PD5-36F-120 (5), PD8-59F-120 (8),
+PD9-59F-120 (9); breaker panels PD8-65A-120… (8 + 8 AFCI breakers); PD8 retrofit subplate (8).
+Every module takes one slot regardless of DIN width. Which panels Homestead actually buys is still
+Koy's call; slot count stays editable per panel.
+
+**Catalog for the builder.** `kind` drives Suggest layout and type gating; `maxW` / `maxA` now
+have real values:
+
+- dimming: 4A5 (zones [800, 500, 500, 500] W, module 16 A), 4A legacy ([400, 250, 250, 250] W,
+  10 A), 4A1 (1 A/zone). Zone 1 is the big zone → Suggest puts each module's largest load there.
+  Refuse receptacles and non-dimmable loads.
+- switching: 4S8 (8 A/zone, 16 A module). 0-10V: 4T5 (5 A/zone, 20 A module), 4T20 (20 A/zone,
+  the only one that may switch receptacles).
+- motor: 4M (5 A/zone, 16 A module, motor loads only).
+- bus: 2HDC (2 × 64), 1DAL2 (1 × 64), 2ECO (2 × 64, legacy), 2DAL (2 × 64, legacy) — hold up to
+  their load count; the zone number is the fixture address.
+
+Migration: existing docs that stored "LQSE-S8" read as 4S8-120-D and "LQSE-T5" as 4T5-120-D;
+loads sitting on channels 5–8 of an "S8" (or 5 of a "T5") land unassigned and the builder says so.
+"LQSE-4A" stays valid as the legacy 4A-120-D. Default for a new module: 4A5-120-D.
 
 ## Koy's answers (2026-09-25)
 

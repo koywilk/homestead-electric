@@ -205,17 +205,24 @@ h1{font-family:var(--head);font-weight:400;font-size:34px;letter-spacing:.04em;m
 <script>
 // ── Module catalog (what the app already knows, plus zone/watt limits to confirm with Tech Lighting) ──
 const MOD_TYPES = {
-  "LQSE-4A":   { zones:4, kind:"Dimming",   label:"4-zone adaptive dimmer", maxW:800 },
-  "LQSE-2ECO": { zones:2, kind:"Dimming",   label:"2-zone ECO dimmer",      maxW:600 },
-  "LQSE-S8":   { zones:8, kind:"Switching", label:"8-zone switching" },
-  "LQSE-T5":   { zones:5, kind:"Switching", label:"5-zone switching" },
-  "LQSE-2DAL": { zones:2, kind:"Dimming",   label:"2-zone DALI" },
+  // Verified against Lutron spec submittals 2026-09-25 (see docs/superpowers/specs/2026-09-25-lutron-panel-builder-design.md).
+  // maxW is per zone, indexed by zone number (zone 1 is the big zone on dimmers). maxA is amps per zone on relays.
+  "LQSE-4A5-120-D": { zones:4, kind:"Dimming",   label:"PRO LED+ adaptive dimmer · 800/500/500/500 W", maxW:[800,500,500,500], moduleA:16 },
+  "LQSE-4S8-120-D": { zones:4, kind:"Switching", label:"Switching · 8 A/zone, 16 A module",            maxA:8,  moduleA:16 },
+  "LQSE-4T5-120-D": { zones:4, kind:"Switching", label:"0–10 V + switch · 5 A/zone, 20 A module",      maxA:5,  moduleA:20 },
+  "LQSE-4T20-120-D":{ zones:4, kind:"Switching", label:"0–10 V + Softswitch · 20 A/zone, receptacles OK", maxA:20 },
+  "LQSE-4M-120-D":  { zones:4, kind:"Motor",     label:"Motor raise/lower · 5 A/zone, 16 A module",     maxA:5,  moduleA:16 },
+  "LQSE-2HDC-D":    { zones:64, kind:"Bus",      label:"HomeWorks Digital · 2 buses × 64 loads", bus:true },
+  "LQSE-1DAL2-D":   { zones:64, kind:"Bus",      label:"DALI-2 · 1 bus × 64 loads", bus:true },
+  "LQSE-4A-120-D":  { zones:4, kind:"Dimming",   label:"Adaptive dimmer (discontinued) · 400/250/250/250 W", maxW:[400,250,250,250], moduleA:10, legacy:true },
+  "LQSE-2ECO-D":    { zones:64, kind:"Bus",      label:"EcoSystem · 2 loops × 64 (legacy)", bus:true, legacy:true },
+  "LQSE-2DAL-D":    { zones:64, kind:"Bus",      label:"DALI v1 · 2 buses × 64 (legacy)", bus:true, legacy:true },
 };
 // ── Sample job (example data, not a real job) ──
 let panels = [
   { id:"p1", label:"LCP 1", where:"Basement mech room", slots:8, modules:[
-      { id:"m1", num:1, type:"LQSE-4A" }, { id:"m2", num:2, type:"LQSE-4A" }, { id:"m3", num:3, type:"LQSE-S8" } ] },
-  { id:"p2", label:"LCP 2", where:"Upper hall closet", slots:6, modules:[ { id:"m4", num:1, type:"LQSE-4A" } ] },
+      { id:"m1", num:1, type:"LQSE-4A5-120-D" }, { id:"m2", num:2, type:"LQSE-4A5-120-D" }, { id:"m3", num:3, type:"LQSE-4S8-120-D" } ] },
+  { id:"p2", label:"LCP 2", where:"Upper hall closet", slots:6, modules:[ { id:"m4", num:1, type:"LQSE-4A5-120-D" } ] },
 ];
 let loads = [
   ["Kitchen Cans","Main Level","Kitchen","Dimming",240], ["Island Pendants","Main Level","Kitchen","Dimming",180], ["Under-cabinet LED","Main Level","Kitchen","Dimming",90],
@@ -261,7 +268,9 @@ function renderStrip(){
     <div class="tile"><div class="k">Panels · modules</div><div class="v">${panels.length}<small>· ${panels.reduce((s,p)=>s+p.modules.length,0)} modules</small></div></div>
     <div class="tile ${overW?'warn':''}"><div class="k">Zones over watts</div><div class="v">${overW}</div></div>`;
 }
-function overWatt(l){ const m=modOf(l.assign.panelId,l.assign.moduleId); const t=m&&MOD_TYPES[m.type]; return !!(t&&t.maxW&&l.watts>t.maxW); }
+function capStr(t){ if(!t) return ''; if(Array.isArray(t.maxW)) return ' · ≤'+t.maxW[0]+'/'+t.maxW[1]+'W'; if(t.maxA) return ' · ≤'+t.maxA+'A/zone'; return ''; }
+function zoneMaxW(t,z){ if(!t) return 0; if(Array.isArray(t.maxW)) return t.maxW[(z||1)-1]||0; if(t.maxA) return t.maxA*120; return t.maxW||0; }
+function overWatt(l){ const m=modOf(l.assign.panelId,l.assign.moduleId); const t=m&&MOD_TYPES[m.type]; const cap=zoneMaxW(t,l.assign.zone); return !!(cap&&l.watts>cap); }
 function assignLabel(l){ if(!l.assign) return ""; const p=panelOf(l.assign.panelId); const m=modOf(l.assign.panelId,l.assign.moduleId); return `${p.label} · Mod ${m.num} · Z${l.assign.zone}`; }
 
 function renderTray(){
@@ -305,7 +314,7 @@ function renderPanels(){
           const rows=[]; for(let z=1;z<=t.zones;z++){ const l=zoneLoad(p.id,m.id,z);
             rows.push(l?`<button class="zone ${overWatt(l)?'overz':''}" onclick="openAssign('${l.id}')" title="Move or clear"><span class="z">${z}</span><span class="nm">${esc(l.name)}</span><span class="sub">${esc(l.room)} · ${l.watts}W${overWatt(l)?' <b style="color:var(--red)">over</b>':''}</span></button>`
                          :`<button class="zone openz" onclick="openFill('${p.id}','${m.id}',${z})" title="Put a load here"><span class="z">${z}</span><span class="nm">open zone</span><span class="sub">tap to fill</span></button>`); }
-          return `<div class="mod ${full?'full':''}"><div class="modHead"><span class="num">MOD ${m.num}</span><span class="type">${esc(m.type)}</span><span class="cap">${on.length}/${t.zones} zones${t.maxW?' · ≤'+t.maxW+'W':''}</span></div>${rows.join("")}<div style="font-size:10.5px;color:var(--muted);margin-top:2px">${esc(t.label)}</div></div>`;
+          return `<div class="mod ${full?'full':''}"><div class="modHead"><span class="num">MOD ${m.num}</span><span class="type">${esc(m.type)}</span><span class="cap">${on.length}/${t.zones} ${t.bus?'loads':'zones'}${capStr(t)}</span></div>${rows.join("")}<div style="font-size:10.5px;color:var(--muted);margin-top:2px">${esc(t.label)}</div></div>`;
         }).join("")}
         ${Array.from({length:Math.min(empties,2)}).map(()=>`<div class="slotEmpty"><button onclick="addModulePrompt('${p.id}')">+ Add module to open slot</button></div>`).join("")}
       </div>
@@ -343,7 +352,7 @@ function renderSheet(){
   if(sheet.kind==="fill"){ const p=panelOf(sheet.panelId), m=modOf(sheet.panelId,sheet.moduleId), t=MOD_TYPES[m.type];
     const cands=loads.filter(l=>!l.assign).sort((a,b)=>(a.type===t.kind?0:1)-(b.type===t.kind?0:1)||a.floor.localeCompare(b.floor)||a.name.localeCompare(b.name));
     host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="Fill zone">
-      <h4>${esc(p.label)} · Mod ${m.num} · Zone ${sheet.zone}</h4><div class="sub">${esc(t.label)}${t.maxW?' · up to '+t.maxW+'W per zone':''}. Pick an unassigned load. ${t.kind} loads first.</div>
+      <h4>${esc(p.label)} · Mod ${m.num} · Zone ${sheet.zone}</h4><div class="sub">${esc(t.label)}${zoneMaxW(t,sheet.zone)?' · up to '+zoneMaxW(t,sheet.zone)+'W on zone '+sheet.zone:''}. Pick an unassigned load. ${t.kind} loads first.</div>
       <div class="chips">${cands.slice(0,40).map(l=>`<button class="pc" onclick="fillZoneWith('${l.id}')">${esc(l.name)}<small>${esc(l.room)} · ${l.watts}W${l.type!==t.kind?' · '+l.type:''}</small></button>`).join("")||'<span class="sub">Nothing left unassigned.</span>'}</div>
       <div class="sheetActions"><span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button></div></div>`; return; }
   const ids=sheet.loadIds; const first=byId(ids[0]); const p=panelOf(sheet.panelId);
@@ -365,7 +374,7 @@ function renderSheet(){
 function addModulePrompt(pid){ sheet={ kind:"newmod", panelId:pid, afterAssign: sheet&&sheet.kind==="assign"?sheet:null }; renderNewMod(); }
 function renderNewMod(){ const p=panelOf(sheet.panelId); const host=document.getElementById("sheetHost");
   host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="New module"><h4>New module in ${esc(p.label)}</h4><div class="sub">Slot ${p.modules.length+1} of ${p.slots}. Pick the type.</div>
-  <div class="chips">${Object.entries(MOD_TYPES).map(([k,t])=>`<button class="pc" onclick="addModule('${p.id}','${k}')">${k}<small>${esc(t.label)}</small></button>`).join("")}</div>
+  <div class="chips">${Object.entries(MOD_TYPES).filter(([k,t])=>!t.legacy).map(([k,t])=>`<button class="pc" onclick="addModule('${p.id}','${k}')">${k}<small>${esc(t.label)}</small></button>`).join("")}</div>
   <div class="sheetActions"><span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button></div></div>`; }
 function addModule(pid,type){ const p=panelOf(pid); if(p.modules.length>=p.slots){ toast(`${p.label} is full — ${p.slots} slots`); } const m={id:"m"+Date.now(),num:p.modules.length+1,type}; p.modules.push(m);
   const back=sheet&&sheet.afterAssign; sheet=back||null; if(back){ back.panelId=pid; back.moduleId=m.id; back.zone=1; } toast(`Mod ${m.num} · ${type} added to ${p.label}`); render(); }
@@ -378,8 +387,8 @@ function suggestLayout(){
   const floorPanel={ "Main Level":"p1", "Basement":"p1", "Upper Level":"p2" };
   let placed=0, made=0;
   un.forEach(l=>{ const p=panelOf(floorPanel[l.floor]||panels[0].id);
-    let m=p.modules.find(m=>MOD_TYPES[m.type].kind===l.type&&openZones(p.id,m.id).length&&(!MOD_TYPES[m.type].maxW||l.watts<=MOD_TYPES[m.type].maxW));
-    if(!m){ if(p.modules.length>=p.slots) return; const type=l.type==="Dimming"?"LQSE-4A":"LQSE-S8"; m={id:"m"+Date.now()+Math.random().toString(36).slice(2,5),num:p.modules.length+1,type}; p.modules.push(m); made++; }
+    let m=p.modules.find(m=>MOD_TYPES[m.type].kind===l.type&&openZones(p.id,m.id).length&&(l.watts<=(zoneMaxW(MOD_TYPES[m.type],openZones(p.id,m.id)[0])||Infinity)));
+    if(!m){ if(p.modules.length>=p.slots) return; const type=l.type==="Dimming"?"LQSE-4A5-120-D":"LQSE-4S8-120-D"; m={id:"m"+Date.now()+Math.random().toString(36).slice(2,5),num:p.modules.length+1,type}; p.modules.push(m); made++; }
     l.assign={panelId:p.id,moduleId:m.id,zone:openZones(p.id,m.id)[0]}; placed++; });
   toast(`Suggested: ${placed} loads placed, ${made} modules added — review and move what's wrong`); render();
 }
