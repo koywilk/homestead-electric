@@ -17,8 +17,8 @@ const a = src.indexOf(START), b = src.indexOf(END);
 if (a === -1 || b === -1 || b < a) { console.error("ccloads-suggest-test: markers not found in src/App.js"); process.exit(1); }
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection;", ctx);
-const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows, ccFloorToSection } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection; this.ccLoadSyncPlan = ccLoadSyncPlan; this.ccLoadWantFromField = ccLoadWantFromField;", ctx);
+const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows, ccFloorToSection, ccLoadSyncPlan, ccLoadWantFromField } = ctx;
 
 let fails = 0, n = 0;
 const eq = (name, got, want) => {
@@ -127,7 +127,7 @@ eq("v435: ONLY panelized loads import - switched / dimmer / tape are skipped", I
 eq("skipped = 3 non-panel + already-imported + gone-from-plan", IM.skipped, 5);
 eq("panel loads keep a blank Loads-list type", IM.rows.map(r => r.loadType), ["", ""]);
 eq("FieldInk floor maps to the Loads list floor section; an unknown floor keeps its own name", IM.rows.map(r => r.location), ["Main Level", "attic"]);
-eq("every row is a real newCentralLoad shape + room/fieldLoadId/origin", Object.keys(IM.rows[0]).sort(), ["fieldLoadId", "id", "loadType", "location", "name", "origin", "pulled", "room", "watts"]);
+eq("every row is a real newCentralLoad shape + room/fieldLoadId/origin", Object.keys(IM.rows[0]).sort(), ["fieldLoadId", "fieldSnap", "id", "loadType", "location", "name", "origin", "pulled", "room", "watts"]);
 eq("fieldLoadId is the ccloads id (the idempotency key)", IM.rows.map(r => r.fieldLoadId), ["c1", "noroom"]);
 eq("a load with no control never imports", ccLoadImportRows([{ id: "z", name: "Mystery", room: "R" }], [], mk).rows.length, 0);
 eq("an extra floor maps by its label; the three standard floors are LoadsList's literal section labels", ccLoadImportRows([{ id: "f", name: "N", room: "R", control: "panel", floor: "Loft" }, { id: "g", name: "M", room: "R", control: "panel", floor: "main" }], [], mk, { loft: "Loft" }).rows.map(r => r.location), ["Loft", "Main Level"]);
@@ -170,6 +170,41 @@ const ma = src.indexOf(MSTART);
 const mb = src.indexOf("\n}\n", ma);
 if (ma === -1 || mb === -1) { console.error("ccloads-suggest-test: publishCcLoadOfficeMany not found"); process.exit(1); }
 vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.publishCcLoadOffice = publishCcLoadOffice; this.publishCcLoadOfficeMany = publishCcLoadOfficeMany;", wctx);
+
+// ── v450 imported rows follow FieldInk (ccLoadSyncPlan) ─────────────────────
+{
+  const FO2 = ["Main Level", "Basement", "Upper Level"];
+  const mk2 = () => ({ id: "row" + Math.random().toString(36).slice(2, 6), name: "", location: "", loadType: "", watts: "", pulled: false });
+  const imp = ccLoadImportRows([{ id: "f1", name: "Cans", room: "Den", control: "panel", floor: "Main Level" }], [], mk2, FO2).rows[0];
+  eq("import stamps fieldSnap with what it took", imp.fieldSnap, { name: "Den Cans", room: "Den", location: "Main Level" });
+  // untouched row, FieldInk re-rooms it → auto
+  const row = { ...imp, id: "r1" };
+  const after = { f1: { id: "f1", name: "Cans", room: "Study", control: "panel", floor: "Main Level" } };
+  let plan = ccLoadSyncPlan([row], after, FO2);
+  eq("re-room on an untouched row → auto patch (name + room), snap refreshed", plan.auto, [{ id: "r1", fieldLoadId: "f1", patch: { name: "Study Cans", room: "Study", fieldSnap: { name: "Study Cans", room: "Study", location: "Main Level" } } }]);
+  eq("…and nothing manual", plan.manual, []);
+  // office renamed the row since import → name is manual, room still auto
+  const edited = { ...row, name: "Den Can Lights" };
+  plan = ccLoadSyncPlan([edited], after, FO2);
+  eq("office-edited name → manual; untouched room → auto", [plan.auto[0].patch.room, plan.auto[0].patch.name, plan.manual[0].changes], ["Study", undefined, [{ key: "name", from: "Den Can Lights", to: "Study Cans" }]]);
+  eq("manual patch carries the new value + snap", plan.manual[0].patch, { fieldSnap: { name: "Study Cans", room: "Study", location: "Main Level" }, name: "Study Cans" });
+  // legacy row (no fieldSnap) that differs → manual only
+  const legacy = { id: "r2", name: "Den Cans", room: "Den", location: "Main Level", origin: "fieldink", fieldLoadId: "f1" };
+  plan = ccLoadSyncPlan([legacy], after, FO2);
+  eq("pre-v450 row with no snap can't be told apart from an office edit → manual", [plan.auto.length, plan.manual.length, plan.manual[0].changes.map(c => c.key)], [0, 1, ["name", "room"]]);
+  // in sync → nothing
+  eq("row already matching FieldInk → no work", ccLoadSyncPlan([row], { f1: { id: "f1", name: "Cans", room: "Den", control: "panel", floor: "Main Level" } }, FO2), { auto: [], manual: [] });
+  // FieldInk floor blank never blanks a typed floor; office.floor on the bridge wins
+  eq("blank field floor keeps the row's floor", ccLoadSyncPlan([row], { f1: { id: "f1", name: "Cans", room: "Den", control: "panel" } }, FO2), { auto: [], manual: [] });
+  eq("office.floor on the bridge moves the row's floor", ccLoadSyncPlan([row], { f1: { id: "f1", name: "Cans", room: "Den", control: "panel", floor: "Main Level", office: { floor: "Basement" } } }, FO2).auto[0].patch.location, "Basement");
+  // skips: hand-typed rows, removed / non-panel field loads, missing field load
+  eq("hand-typed rows are never touched", ccLoadSyncPlan([{ id: "h", name: "X", room: "Y" }], after, FO2), { auto: [], manual: [] });
+  eq("gone-from-plan / switched field loads are skipped", ccLoadSyncPlan([row, row], { f1: { id: "f1", name: "Cans", room: "Study", control: "switched" } }, FO2), { auto: [], manual: [] });
+  eq("no field load → skipped", ccLoadSyncPlan([row], {}, FO2), { auto: [], manual: [] });
+  eq("null-safe", ccLoadSyncPlan(null, null, null), { auto: [], manual: [] });
+  eq("want = the import rule", ccLoadWantFromField({ name: "Kitchen Cans", room: "Kitchen", floor: "2nd floor" }, FO2), { name: "Kitchen Cans", room: "Kitchen", location: "Upper Level" });
+}
+
 (async () => {
   const patch = ccLoadSuggestPatch({ control: "switched" }, "panel", "Koy", T);
   const ok = await wctx.publishCcLoadOffice(1788319922110, "cg_abc", patch);

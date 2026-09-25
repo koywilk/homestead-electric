@@ -146,7 +146,8 @@
     <div class="body">
       <h3>Keep the three lists true to the wall</h3>
       <p><b>Loads</b> — every controlled load. <b>Keypads</b> — buttons per floor
-      section. <b>Panel Loads</b> — what lands in the lighting panel. Status flows with
+      section. <b>Panel Loads</b> — what lands in the lighting panel (on a Lutron job this is
+      the <b>Panel Builder</b>, next step down). Status flows with
       the work; update as you pull and terminate. The <b>Set baseline / Update
       baseline</b> button on the Loads header snapshots the current loads as the
       original-plans baseline — the read-only loads share the AV programmer gets is
@@ -160,6 +161,51 @@
     </div>
   </div>
 
+
+  <div class="step">
+    <div class="num">·</div>
+    <div class="body">
+      <h3>Lutron jobs: the Panel Builder — panels, modules, zones</h3>
+      <p>On a Lutron job the Panel Loads section is a builder: one card per <b>panel</b> (LCP 1,
+      LCP 2&hellip; with where it hangs and how many module slots it has), one block per
+      <b>module</b> inside it, one row per <b>zone</b>. Loads live once, on the Loads list above;
+      the builder only points at them, so renaming a load never breaks a module and a load can't
+      sit on two zones.</p>
+      <p><b>The Loads tray</b> sits beside the panels (above them on a phone): every load,
+      floor &rarr; room &rarr; A to Z, with a bubble that says how many still <b>need a zone</b>.
+      Search by load or room, narrow to <b>Dimming</b> or <b>Switching</b>, and flip
+      <b>Needs a zone</b> to <b>Everything</b> to review what's already placed.</p>
+      <p><b>Putting a load somewhere is one tap, no dragging.</b> Tap a load in the tray (or its
+      badge on the Loads list above, which reads <b>Assign</b> or where it already is), or tap an
+      open zone in a module. The
+      sheet asks <b>Panel &rarr; Module &rarr; Zone</b>, then <b>Assign</b>. The first module chip is
+      <b>No module yet</b> &mdash; that <b>parks</b> the load on the panel so you can split the house
+      into panels first and pick modules later. Parked loads show in orange under the panel in
+      <b>"On this panel, no module yet"</b>; tap one there to give it a module and zone.</p>
+      <p><b>Several at once:</b> <b>Select</b> in the tray (or on the Loads list) &rarr; tick loads &rarr;
+      <b>Put on a panel / module&hellip;</b>. With a module chosen it fills the next open zones in
+      order; with <b>No module yet</b> it parks them all on the panel.</p>
+      <p><b>Suggest layout</b> fills every load that has no module: floor by floor, room by room,
+      biggest load first, dimming onto dimmer modules, switching onto relays, motors onto a motor
+      module, adding modules when none fit and stopping when a panel is full. A parked load only
+      ever lands in its own panel. It's a starting point &mdash; every placement is one tap to change.</p>
+      <p><b>Watts and types are checked for you.</b> A zone row turns red with <b>over</b> when the
+      load beats that zone's limit (on the 4A5 dimmer zone 1 takes 800 W, zones 2&ndash;4 take
+      500 W; relay modules are amps &times; 120). The module chips grey out when they can't fit
+      the load and say <b>type differs</b> when a switched load is headed for a dimmer.</p>
+      <p><b>Modules:</b> <b>+ Module</b> on a panel (or an empty slot) picks from Lutron's current
+      list &mdash; 4A5 dimmer, 4S8 switching, 4T5 / 4T20 0&ndash;10 V, 4M motor, 2HDC HomeWorks
+      Digital, 1DAL2 DALI-2. The old app names <b>LQSE-S8</b> and <b>LQSE-T5</b> were really
+      4-zone modules (the 8 and 5 are amps), so a job that had loads on channels 5&ndash;8 will
+      find those loads <b>parked</b>, not lost. Removing a module parks its loads; removing a panel
+      sends its loads back to unassigned; nothing is ever deleted from the Loads list.</p>
+      <p><b>An old Lutron job opens already filled in</b> from its floor sections (Panel A / B / C
+      and any extras) &mdash; a grey note above the panels says what it read. Nothing is saved
+      until your first change in the builder. <b>Print</b> / <b>Download</b> on a panel card give
+      the same panel schedule as before, with parked loads in a trailing "No module yet" block.</p>
+    </div>
+  </div>
+
   <div class="call tip">
     <span class="lbl">Migrating a list from a doc? Bulk paste</span>
     <p>Next to Add Load and on each keypad section there's a <b>Bulk paste</b> — it takes
@@ -168,8 +214,9 @@
     double anything. If it detects nothing, it says so instead of quietly adding zero.</p>
     <p><b>The one gotcha:</b> LCP <b>module numbers</b> in a paste show in the preview
     but do NOT stick to the loads — the modal says so right there. After the paste,
-    run the <b>Assign to module</b> flow to put loads on their modules. Paste gets the
-    names in; assignment is its own step.</p>
+    run the <b>Assign to module</b> flow (Control 4 / Crestron) or tap the loads into the
+    <b>Panel Builder</b> (Lutron) to put loads on their modules. Paste gets the names in;
+    assignment is its own step.</p>
   </div>
 
   <div class="step">
@@ -191,6 +238,14 @@
       going one way? The room header's <b>Suggest room → Switched | Panel</b> suggests every
       load in it that isn't that kind yet, and <b>Withdraw N</b> pulls every pending one
       back.</p>
+      <p><b>Imported loads follow FieldInk.</b> Once a panel load is on the Loads list, it keeps
+      tracking the plan: rename it, move it to another room or another floor in FieldInk and the
+      Loads-list row updates on its own the next time the inbox refreshes (a small toast says how
+      many). The one exception is a row somebody edited <i>here</i> after importing it &mdash; the
+      app won't silently overwrite that. Those show <b>changed in FieldInk</b> in orange on the
+      inbox row (under the Imported chip) and an orange <b>Update N from FieldInk</b> button in the
+      inbox header; tap it, check the list it shows, and FieldInk's version wins. Watts, type,
+      pulled and panel / module assignments are never touched by this.</p>
       <p><b>The office never changes the load itself</b> — the field accepts or dismisses
       each suggestion on the plan (FieldInk has the Accept-all), and the status line tells
       you where it stands: <b>waiting on the field</b>, <b>accepted</b>, <b>dismissed</b>,
@@ -217,7 +272,8 @@
       fills blanks and never overwrites what you typed. Once a load is imported it <b>leaves the inbox</b>, so what's left is only what still
       needs you. The <b>Imported N</b> chip in the header shows the ones already on your Loads list,
       marked with a green <b>In Loads</b> tag. They can't import twice, so tap freely. Assigning them to a panel module
-      is still the Assign to module flow on the Loads list. If an older import pulled regular
+      is still its own step: the Assign to module flow on the Loads list (Control 4 / Crestron)
+      or the Panel Builder's tap-to-assign (Lutron). If an older import pulled regular
       switching loads onto the list, a red <b>Remove N switched loads imported by mistake</b>
       button in the header takes them back off. It asks first, and it never touches panel
       loads or rows you typed yourself.</p>
