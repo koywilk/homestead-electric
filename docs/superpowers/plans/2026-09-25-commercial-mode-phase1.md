@@ -287,7 +287,7 @@ Apply at every creation site: `const j = stampDivision(blankJob());` (59647, 601
 
 ### Task 6: Business Group → division (poller, candidate pill, import, mismatch scan)
 
-**Prerequisite:** Koy has run `node scripts/simpro-discover.js` (probes added 2026-09-25) and pasted the result — confirm (a) the setup list of business groups and their exact names, (b) whether the bulk `/jobs/?columns=…,BusinessGroup` call accepts the column on this tenant. If (b) fails, the poller reads it from `/jobs/{ID}` per candidate (≤ 30 Pending jobs — cheap) instead.
+**Confirmed on the tenant (2026-09-25, three probe runs):** the Business Group is a **job custom field** — `GET /jobs/{id}/customFields/` returns rows like `{ CustomField:{ ID, Name:"Business Group", Type:"List", ListItems:[…] }, Value:"Residential" }`; values are `Residential` / `Commercial` / `Multi Family` (setup list `/setup/accounts/businessGroups/` = `1:Residential, 2:Commercial, 3:Multi Family`). It is not on the job record, is rejected as a bulk column (422), and is not on the cost center or customer. **So: one `customFields` call per candidate / per scanned job, matched by `CustomField.Name === "Business Group"` (case-insensitive, trimmed).** Default mapping `["commercial","multi family"]` → commercial, pending Koy's Q14 answer.
 
 **Files:**
 - Modify: `functions/index.js` `_runSimproCandidateRefresh` (anchor: `grep -n "async function _runSimproCandidateRefresh" functions/index.js`, L4036) and the `cols` line (L4040)
@@ -299,14 +299,24 @@ Apply at every creation site: `const j = stampDivision(blankJob());` (59647, 601
 - `config/app.commercialBusinessGroups: ["commercial"]` (case-insensitive substring match; default when the doc has no key). Read server-side with `db.doc("config/app")`.
 - `scanSimproDivisions()` → writes `settings/simproCandidates.divisionMismatches: [{jobId, name, simproNo, businessGroup, scannedAt}]` for app jobs whose Simpro business group maps to commercial but `data.division !== "commercial"` (and the reverse: division commercial, group residential — `direction:"toResi"`).
 
-- [ ] **Step 1: Poller** — add `BusinessGroup` to `cols`; after `const customer = …`:
+- [ ] **Step 1: Poller** — do NOT touch `cols` (the bulk list rejects the field). Add one helper next to `_runSimproCandidateRefresh`:
 
 ```js
-const businessGroup = (j.BusinessGroup && (j.BusinessGroup.Name || j.BusinessGroup.name)) ? String(j.BusinessGroup.Name || j.BusinessGroup.name).trim() : "";
-const divisionHint = businessGroup ? (commGroups.some(g => businessGroup.toLowerCase().includes(g)) ? "commercial" : "resi") : "";
+// Business Group is a JOB CUSTOM FIELD on this tenant (probe 2026-09-25): one call per job.
+async function _simproBusinessGroup(simproId) {
+  const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(simproId)}/customFields/`, null, { maxAttempts: 2 });
+  const rows = Array.isArray(r && r.data) ? r.data : [];
+  const bg = rows.find(x => x && x.CustomField && /^business\s*group$/i.test(String(x.CustomField.Name || "").trim()));
+  return bg && bg.Value != null ? String(bg.Value).trim() : "";
+}
+async function _commercialGroups() {
+  const snap = await db.doc("config/app").get().catch(() => null);
+  const list = snap && snap.exists && Array.isArray(snap.data().commercialBusinessGroups) ? snap.data().commercialBusinessGroups : ["commercial", "multi family"];
+  return list.map(s => String(s).toLowerCase().trim()).filter(Boolean);
+}
 ```
 
-with `const commGroups = await _commercialGroups();` once at the top (`_commercialGroups` reads `config/app`, lowercases, defaults to `["commercial"]`). Store both on the candidate. If the bulk column is rejected (probe result), fetch `/jobs/${simproId}?columns=ID,BusinessGroup` per candidate with the existing `simproReqWithRetry`.
+In the candidate loop, after `const customer = …`: reuse the cached value when the candidate was seen before (`existing.businessGroup`, so re-runs cost nothing), else `const businessGroup = await _simproBusinessGroup(simproId);` (paced by the existing `sleep` in `simproReqWithRetry`); then `const divisionHint = businessGroup ? (commGroups.some(g => businessGroup.toLowerCase() === g) ? "commercial" : "resi") : "";` with `const commGroups = await _commercialGroups();` once at the top. Store `businessGroup` and `divisionHint` on the candidate. Exact match on the lowercased name (the three values are fixed list items), not substring.
 
 - [ ] **Step 2: Inbox row** — show `<span class pill teal>COMMERCIAL</span>` when `c.divisionHint==="commercial"`, a grey `RESI` when `"resi"`, and `? group: <name>` in dim text when `""` (unmapped → Task 4's stamp-from-mode applies, with the hint "unmapped business group — imports as <current mode>").
 
@@ -317,7 +327,7 @@ const div = cand.divisionHint === "commercial" ? "commercial" : cand.divisionHin
 if (div) j.division = div;
 ```
 
-- [ ] **Step 4: `scanSimproDivisions` callable** (admin, `requireAppKey`): load all app jobs with a `simproNo`; for each, `GET /jobs/{simproNo}?columns=ID,BusinessGroup` (paced like the discover script, ~3/s; skip quotes and jobs with `type:"quote"`); compute the mismatch list; write it with `merge:true` onto `settings/simproCandidates`. Return counts. Never touches `/jobs`.
+- [ ] **Step 4: `scanSimproDivisions` callable** (admin, `requireAppKey`, `timeoutSeconds: 540`): load all app jobs with a `simproNo`; for each (skip `type:"quote"`, archived / deleted flags), `await _simproBusinessGroup(simproNo)` (sequential, the retry helper's pacing keeps it under Simpro's ~60 req/min — ~100 jobs ≈ 2 minutes); compute the mismatch list; write it with `merge:true` onto `settings/simproCandidates`. Return counts. Never touches `/jobs`.
 
 - [ ] **Step 5: Settings → COMMERCIAL DIVISION section** (admin): button "Check divisions against Simpro" (calls the callable, shows counts), then the list from `simproCandidates.divisionMismatches` — one row per job with name, Simpro #, business group, and **Apply** (writes `division` only, via `updateJob(job, { division: "commercial" | "" })` from `allJobs`), plus "Apply all". Rows disappear as jobs are fixed (re-derive the list client-side against `allJobs` so it's live).
 

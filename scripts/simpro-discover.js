@@ -147,7 +147,12 @@ const firstId = (list) => Array.isArray(list) && list.length && list[0] && list[
     await probe("that job — schema via OPTIONS", "OPTIONS", `/jobs/${pendId}`);
     await probe("that job — custom fields (if Business Group is a custom field)", "GET", `/jobs/${pendId}/customFields/`);
   }
-  // Run 3 (2026-09-25): the job record has NO business-group key; the list lives
+  // Run 3 RESULT (2026-09-25): Business Group is a JOB CUSTOM FIELD —
+  // /jobs/{id}/customFields/ → { CustomField:{Name:"Business Group"}, Value:"Residential"|"Commercial"|"Multi Family" }.
+  // Setup list: /setup/accounts/businessGroups/ (1 Residential, 2 Commercial, 3 Multi Family).
+  // Not on the job record, not a bulk column (422), not on cost center or customer.
+  // (Probes kept so a re-run still shows it.)
+  // Run 3: the job record has NO business-group key; the list lives
   // at /setup/accounts/businessGroups/. Find WHERE a job links to its group —
   // the second custom field, a cost center, or the customer — and print it all
   // to the console so nothing has to be dug out of the JSON.

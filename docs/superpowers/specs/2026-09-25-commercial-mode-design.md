@@ -508,11 +508,18 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
      an admin-only **Apply** per row (writes `division` only, through `saveJob`). Nothing is
      backfilled automatically. This is how today's already-running commercial jobs get their
      division without hand-editing.
-   - Before any of this is built, run `node scripts/simpro-discover.js` once (two probes
-     added 2026-09-25: the setup list of business groups and `BusinessGroup` as a bulk
-     `/jobs/` column) — this tenant silently rejects unknown bulk columns, so the field name
-     has to be confirmed against real data first. If the bulk list refuses it, the poller
-     reads it from the per-job detail fetch the auto-pull already does.
+   - **Confirmed against the tenant (three probe runs, 2026-09-25):** the Business Group is
+     a **job custom field** named `Business Group` — read with `GET /jobs/{id}/customFields/`
+     (one call per job; the row is `{ CustomField:{ID, Name:"Business Group", Type:"List"},
+     Value:"Residential"|"Commercial"|"Multi Family" }`). The setup list is
+     `GET /setup/accounts/businessGroups/` → `1:Residential | 2:Commercial | 3:Multi Family`.
+     It is NOT on the job record, NOT accepted as a bulk `columns=` value (422), NOT on the
+     cost center or the customer. So the poller makes one `customFields` call per Pending
+     candidate (≤ ~30, paced) and stores `businessGroup: "<Value>"`; the mismatch scan
+     makes the same call per app job with a `simproNo`.
+   - **Multi Family:** a third group. Proposed default: **counts as commercial** (GC-run,
+     submittals, pay apps — the Job Start process fits it), so
+     `commercialBusinessGroups: ["commercial", "multi family"]`. Koy to confirm (Q14).
    - Follow-up decision for Koy: if a job's business group changes in Simpro after import,
      should the app follow it (poller flips `division`) or only flag it? Proposed: **flag
      only** (same mismatch list), never silently move a live job between boards.
@@ -547,6 +554,8 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 11. **Daily reports:** do your GCs require a daily log (crew count, hours, work done, weather,
     deliveries, delays)? That is the strongest candidate for the first Phase 2 tab.
 12. **GC portal:** should commercial GCs get portal links in Phase 1, or wait?
+14. **Multi Family business group:** treat as commercial (proposed default) or residential?
+    One word. The mapping is a settings value either way, never a deploy.
 13. **Drive parent folder** — answered: Koy, *"same parent folder is fine they are sorted
     there by job numbers anyway."* → same `JOBS_PARENT_FOLDER_ID`, same `#<simproNo> - <name>`
     naming, no `COMM_JOBS_PARENT_FOLDER_ID`.
