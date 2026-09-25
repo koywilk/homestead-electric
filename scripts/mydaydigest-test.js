@@ -30,6 +30,9 @@ const g = m.get("Gage Lund");
 assert.strictEqual(g.overdue, 1, "overdue open need counted; done + snoozed skipped");
 assert.strictEqual(g.today, 1, "due today counted");
 assert.strictEqual(m.get("Josh").hats.invoice, 2, "j1 invoice + j5 CO complete; dismissed/quote/cleared skipped");
+// v447: a completed return trip is the head's row, never an invoicing-hat count.
+const mRt = digestCounts({ users, jobs:[{ id:"j9", name:"RT job", returnTrips:[{ id:"r1", rtStatus:"complete" }] }], needs:[], redlines:[], todayYmd:T });
+assert.strictEqual(mRt.get("Josh").hats.invoice, 0, "RT complete does not count for the invoicing hat");
 assert.strictEqual(m.get("Jeromy").hats.co_send, 2, "c1 (default needs_sending) + redline r2 CO owed");
 assert.strictEqual(m.get("Koy Wilkinson").hats.redline, 1, "shared redline counts for Koy");
 assert.strictEqual(m.get("Brady").hats.redline, 1, "…and for Brady");

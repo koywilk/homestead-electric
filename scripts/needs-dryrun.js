@@ -364,7 +364,8 @@ eq(H.routeKeyOfAuto({ id:"j1_invoice", category:"invoice" }), "invoice", "invoic
 eq(H.routeKeyOfAuto({ id:"j1_co_c1_send", category:"co" }), "co_send", "CO needs-sending → co_send");
 eq(H.routeKeyOfAuto({ id:"j1_co_c1_done", category:"co" }), "invoice", "CO complete merge/invoice → invoice");
 eq(H.routeKeyOfAuto({ id:"j1_co_c1_approved", category:"co" }), null, "CO approved follow-up stays with head");
-eq(H.routeKeyOfAuto({ id:"j1_rt_r1_done", category:"rt" }), "invoice", "RT complete merge/invoice → invoice");
+eq(H.routeKeyOfAuto({ id:"j1_rt_r1_done", category:"rt" }), null, "v447: RT complete merge/invoice stays with the head");
+eq(H.routeKeyOfAuto({ id:"j1_rt_r1_sched", category:"rt" }), null, "RT get-sign-off stays with the head");
 eq(H.routeKeyOfAuto({ id:"j1_rough_po", category:"po" }), null, "start POs are not a hat");
 eq(H.routeKeyOfDuty({ dutyType:"qc" }), "qc", "QC duty → qc");
 eq(H.routeKeyOfDuty({ dutyType:"po" }), null, "PO duty → head");

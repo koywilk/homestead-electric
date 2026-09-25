@@ -44,8 +44,8 @@ function digestCounts({ users, jobs, needs, redlines, todayYmd }) {
       if ((co.coStatus || "needs_sending") === "needs_sending" && !cleared.has(`${j.id}_co_${co.id}_send`)) bump("co_send");
       if (co.coStatus === "completed" && !coDone.has(co.id) && !cleared.has(`${j.id}_co_${co.id}_done`)) bump("invoice");
     });
-    const rtDone = new Set(j.rtDoneDismissed || []);
-    (j.returnTrips || []).forEach(rt => { if (rt && rt.rtStatus === "complete" && !rtDone.has(rt.id) && !cleared.has(`${j.id}_rt_${rt.id}_done`)) bump("invoice"); });
+    // v447: return trips (including "complete — merge or invoice") are the
+    // head's rows, not the invoicing hat's — no RT bump here.
   });
   (redlines || []).forEach(w => {
     if (!w) return;

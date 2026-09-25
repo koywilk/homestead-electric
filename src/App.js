@@ -33153,7 +33153,9 @@ function computeTasks(jobs, opts) {
         title: `Return Trip #${i+1} Complete — merge or invoice`,
         desc: stripHtml(rt.scope) ? `Scope: ${stripHtml(rt.scope)}` : undefined,
         color: "#3E7D5A", cleared: false,
-        dueDate: rt.rtStatusDate||"",
+        // v447: due from the sign-off date, not the old scheduled date — the row
+        // was born overdue the moment an RT was signed off (Koy, 2026-09-25).
+        dueDate: rt.signedOffDate||rt.rtStatusDate||"",
       });
     });
 
@@ -48916,12 +48918,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-24 · App SW version: v446
+**Last manifest update:** 2026-09-25 · App SW version: v447
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — return trips stay with the head; no second overdue row for Josh on sign-off** · 'shipped 2026-09-25' · 'SW v447' · Koy: *"if a shared task is checked off by one it should be cleared on the other side. i have checked off buchsthaber return trip and it shows as overdue on joshs card. also josh should only share QC with me not return trips."* Root cause: signing an RT off sets it to 'complete', which spawns a **different** auto row on the same trip — '_rt_<id>_done' "Return Trip #N Complete — merge or invoice" — and v427 routed that row to the invoicing hat, dated from the old 'rtStatusDate', so it landed on Josh's board already overdue the moment Koy closed the trip. It was never a shared row failing to clear (QC / redline rows clear for every holder by construction); it was a second rule with a different owner. **Fix:** 'routeKeyOfAuto' returns 'null' for every 'category:"rt"' row — schedule, get-sign-off AND complete/merge-or-invoice all stay with the Head of Residential (Josh now shares only QC with Koy); the merge-or-invoice row is due from 'signedOffDate' (falls back to 'rtStatusDate') so it isn't born overdue; it stays in the never-hides money set ('staleMoney' now includes '_rt_*_done'); 'HAT_REGISTRY' note and the guide drop "RT" from the invoicing list; 'functions/myDayDigest.js' no longer bumps the invoicing count for completed RTs (CO complete unchanged). Tests: 'needs-dryrun' (RT done/sched → null), 'mydaydigest-test' (RT complete ≠ invoicing). **Needs 'firebase deploy --only functions:dailyMyDayDigest'.** **Why it won't lose data:** routing and due-date derivation only — no new field, no write path changed, no rules change; an RT row Josh already cleared via 'clearedTasks' stays cleared for the head too (same job-level list).
 - **My Day Ship 4 — urgency, Nudge + morning chase, tab badge, everyone lands here, a push opens the task, obvious assign controls** · 'shipped 2026-09-24' · 'SW v446' · Koy: *"lets make the my day tool the most effective tool we have for tracking needs and tasks"* → picked items 2, 3, 4 from the audit, plus *"add an urgency status that can be added to it and have them sort by that"* and *"received complaint that it is hard to tell you can click the person to assign to different person, as well as the other assigning options. make it easier."* **Urgency:** new additive field 'priority' inside a need doc's 'data' ('"urgent"' / '""' normal / '"low"'; absent reads as normal via 'needPriority'). Set on the + sheet (**Urgency** field: Urgent / Normal / Low) or in **Edit** (new Urgency select; the change is logged in the thread as "changed: urgent"). Urgent rows get a red left edge + red **URGENT** tag, Low a grey **Low** tag; the Needs board cards show the same pills; the "assigned to you" push is titled *URGENT task assigned to you*; the 6:45 digest line leads with 'N urgent'. **Sort (everywhere on My Day, 'compareMyDayRows'):** urgency → lane (overdue / today / week / later) → **due date inside the lane** (was A–Z by title, so the next thing due was buried; undated rows last) → title; a category holding an urgent row floats to the top of Mine ('myDayCategories' gains 'urgent'); Low sinks below everything, even overdue. Every derived row now carries 'dueYmd' (auto: 'taskDueDates' override or the rule date; prep duty: rough start; scan: the scheduled/needed date; redline: walk/status date). **Nudge:** Sent rows get a **Nudge** button — the existing manual-reminder push ('reNudge', 'renudge' pref; roster picker to redirect it) with a new optional 'view' + 'needId' so it lands on the task. **Morning chase (server, 'dailyMyDayDigest'):** pure 'chaseTargets' / 'chaseMessages' in 'functions/myDayDigest.js' — a doc **2+ days overdue** pushes its assignee on every EVEN day overdue (2, 4, 6…) unless the assignee posted an update in the last 48h; the requester ('assignedBy', else 'createdBy', when a different person) is pushed on every 5th day (5, 10, 15…); snoozed, done, undated, bodies and **Low** docs are never chased; covering applies to both sides; one push per person per role ("⏰ Still open on you" / "⏰ N overdue tasks on you" · "⏰ Still waiting on someone"), deep-linked to the task when it's a single one. New notif pref 'myday_chase' (all roles, default on, gated server-side). **Tab badge:** the My Day tab shows a red count ('mydayBadgeCount') of my open task docs that are overdue, due today (a bucket-only "Tomorrow" doc counts as today, as the board files it) or urgent. **Landing:** every internal role — office included — opens on My Day (was field roles only); contractors unchanged. **Push opens the task:** 'onNeedWrite' (all four branches), 'reNudge' and the chase carry 'needId'; 'sendFCM' data + the inbox item store it; the messaging SW appends '&need=<id>' to the '?view=myday' deep-link; the app reads it (before 'pendingView' strips the query), the bell inbox passes 'item.needId', and 'MyDay' ('jumpNeedId' / 'onJumped') finds the row in Focus / Mine (category or job line) / Sent / Sent · finished / Done / a Person group, unfolds its way there, scrolls to it and outlines it blue for 4 s; waits while 'needs' is still loading on a cold start. **Assign controls you can see:** the + sheet's chips are now labeled **fields** with an icon and a caret — 'To: Koy ▾', 'Urgency: Normal ▾', 'Due: Tomorrow ▾', 'Job: none ▾', 'Type: Need ▾' — plus a "Tap a field to change it" hint; the To picker always shows the full-company select (no more hidden "Someone else…" toggle). On the board, every task row the viewer may reassign (sender, self-made, or whoever runs the head board) shows a blue **To: &lt;name&gt; ▾** pill that opens the roster right under the row ("Move it to"); the head's auto rows read **Pick person ▾** / **Re-push ▾**. Harness: 'scripts/needs-dryrun.js' (+'needPriority' / 'prioRank' / 'compareMyDayRows' / 'mydayBadgeCount' / category float) and 'scripts/mydaydigest-test.js' (+urgent count, chase day rules, quiet-assignee skip, covering, message shapes). Guides 'myday.html' (Urgency, Move it, Nudge, "Getting to it faster") + 'needs.html' updated. **Needs 'firebase deploy --only functions:onNeedWrite,functions:reNudge,functions:dailyMyDayDigest'.** **Why it won't lose data:** one new additive field ('priority') inside 'data', written only by the + sheet on new docs and by Edit as a dotted 'data.priority' patch (absent = normal, so no backfill and no loader change — the needs loader returns 'data' verbatim); reassign-from-the-pill is the existing field-surgical 'patchNeed({assignedTo})'; Nudge and the chase are pushes + inbox writes only (the chase is read-only over 'needs', keyed on days-overdue so it writes nothing back); 'needId' is an additive string on push data / inbox items; the sort, badge, landing, and jump are render-only; no Firestore rules change.
 - **Generator link shows home run notes** · 'shipped 2026-09-24' · 'SW v445' · Koy: *"i need homerun notes to be shown on the generator link as well."* The homeowner generator page ('HomeownerPage') now shows each load's home-run 'note' under its name on all three lists (on the generator / recommended / not on it). The note is looked up LIVE from the job's own 'homeRuns' by the gen load's 'hrId' ('flattenHomeRuns') — never copied into 'genLoads', so it's always current and the homeowner's own per-load 'notes' field is untouched. Loads with no home run (manual adds) show nothing extra. Guide 'generatorlink.html' warns to keep internal comments out of home run notes since the homeowner sees them. **Why it won't lose data:** display-only; reads the job doc the page already loaded.
 - **My Day — the replies button looks like a button** · 'shipped 2026-09-24' · 'SW v444' · Koy: *"its hard to tell that you can click on the '2 updates' button in my day to see the replies… can we make that more obvious."* The grey '· N updates' text under a task's latest update is now an outlined accent pill **💬 N replies ▾** (shown whenever a task has any update, even one) that flips to **Hide replies ▴** while the thread is open; tapping it — or the latest line, as before — toggles the full oldest-first thread. Hidden in Select mode. Guide 'myday.html' updated. **Why it won't lose data:** display-only.
@@ -53146,7 +53149,7 @@ function resiHeadName(users) { const h = resiHead(users); return (h && h.name) |
 // Koy 2026-09-22: invoicing → Josh, CO quotes → Jeromy, QC → Koy+Josh,
 // redlines → Brady+Koy, scans → Justin. Start POs are NOT a hat (head keeps).
 const HAT_REGISTRY = [
-  { cap:"invoice.own",    label:"Invoicing",           routes:["invoice"],    note:"Ready to invoice · invoice overdue · material deposits · CO/RT complete, merge or invoice" },
+  { cap:"invoice.own",    label:"Invoicing",           routes:["invoice"],    note:"Ready to invoice · invoice overdue · material deposits · CO complete, merge or invoice" },
   { cap:"co.own",         label:"Change order quotes", routes:["co_send"],    note:"CO needs to be sent · redline walk CO owed" },
   { cap:"qc.own",         label:"QC walks",            routes:["qc"],         shared:true, note:"Walked together: one Done clears it for everyone" },
   { cap:"redline.own",    label:"Redline walks",       routes:["redline"],    shared:true, note:"Scheduled redline walks, walked together" },
@@ -53157,7 +53160,11 @@ function routeKeyOfAuto(t) {
   const id = String(t.id || "");
   if (t.category === "invoice") return "invoice";
   if (t.category === "co") return /_send$/.test(id) ? "co_send" : /_done$/.test(id) ? "invoice" : null;
-  if (t.category === "rt") return /_done$/.test(id) ? "invoice" : null;
+  // v447 (Koy 2026-09-25: "josh should only share QC with me not return trips"):
+  // every return-trip row — schedule, get sign-off, AND complete/merge-or-invoice —
+  // stays with the head. Signing an RT off used to hand its merge-or-invoice row
+  // to the invoicing hat as a new overdue row on the same trip.
+  if (t.category === "rt") return null;
   if (t.category === "qc") return "qc";
   if (t.category === "matterport") return "matterport";
   return null;
@@ -53664,7 +53671,9 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       const owners = ownersForRoute(rk, users, todayYmd);
       const mineToo = owners.some(o => sameName(o, me));
       const staleDate = (job.taskDueDates || {})[t.id] || t.dueDate || "";
-      const staleMoney = rk === "invoice" || rk === "co_send"; // money never hides by age
+      // money never hides by age — invoicing / CO-send routes, plus the RT
+      // merge-or-invoice row (v447: routed to the head now, still money).
+      const staleMoney = rk === "invoice" || rk === "co_send" || (t.category === "rt" && /_done$/.test(String(t.id)));
       if (!mineToo) {
         if (iRunHead) {
           // Team pulse: a row the owner Pushed on counts once, on the delegate's
