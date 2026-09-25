@@ -176,7 +176,8 @@ normalization. Run the `firestore-data-shape-audit` skill at implementation time
 | **Today, Huddle, Scoreboard, QC, Quotes, Upcoming, Plan Changes, Tasks** | **Hidden from the commercial nav in Phase 1.** Their engines are residential (rough/finish pulse counters, book chips, scoring rules, Lutron hub). Each comes back only when a commercial version is designed. Quotes are the likeliest early return (Q9). |
 | **Contractors, Safety, Time Off, Settings, App Map, Nav** | Shared, unchanged. |
 | **GC Portal** | Phase 2. The mirror rebuild should carry `division` so a link can be scoped to commercial jobs; commercial GCs are the ones who will actually use it. |
-| **Simpro inbox** | Visible in both modes (admin). Import gains the division choice (§3). |
+| **Simpro inbox** | Visible in both modes (admin). Import reads the division from the Business Group (§3) and, for commercial jobs, creates the Drive folder and pulls the Simpro plans automatically (§6.7). |
+| **Drive folder / Pull from Simpro** | Same `DriveFilesSection`, same callables, same folder naming — division-blind today. Commercial adds the automatic import chain and a weekly re-pull through pre-con (§6.7). |
 | **Push notifications / functions** | §5.1. |
 
 ### 5.1 Functions (one deploy, Phase 1)
@@ -265,7 +266,7 @@ Koy's list (**Koy edits this table, not the code**):
 | # | Step | Owner | Items (chip label · kind) |
 |---|---|---|---|
 | 1 | Quote Approval / Contract Award | `comm.precon` | AWARD DOC (PO / subcontract / NTP received) · check — PERMIT RESPONSIBILITY (who pulls; inspection reqs) · check + `permitBy` field — UTILITY / SERVICE COORD · check — CONTACTS SET (PM, super/foreman, GC contacts, comms process) · check, satisfied by Job Info contact fields |
-| 2 | Project Setup & Initial Review | `comm.precon` | JOB # / COST CODES / PURCHASING · check (job account = existing `jobAccount`) — PROJECT FOLDERS · check (Drive folder is auto; link rows) — PLAN / SPEC REVIEW · check — SCHEDULE + MILESTONES · check (fills §6.4 milestone dates) — SCOPE BY SYSTEM · check, satisfied when the systems checklist (§6.4) has been set |
+| 2 | Project Setup & Initial Review | `comm.precon` | JOB # / COST CODES / PURCHASING · check (job account = existing `jobAccount`) — PROJECT FOLDERS · **tracker**: Drive folder created + Simpro plans pulled (§6.7, automatic at import) — PLAN / SPEC REVIEW · check — SCHEDULE + MILESTONES · check (fills §6.4 milestone dates) — SCOPE BY SYSTEM · check, satisfied when the systems checklist (§6.4) has been set |
 | 3 | Request Vendor Submittals | `comm.precon` | CED SENT PLANS/SPECS · check — FA CO. SENT PLANS/SPECS · check — LONG-LEAD REQUESTED · **tracker**: every submittal-log row has a request date — LEAD TIMES + PRICING · **tracker**: every row has lead time + price confirmed |
 | 4 | Electrical Submittal Review | `comm.precon` | PM/ESTIMATOR REVIEWED · check — DIMENSIONS / CLEARANCES · check — RFI LIST · **tracker**: RFI log exists (0 open allowed) — SENT TO GC · **tracker**: every row ≥ submitted — ALL APPROVED · **tracker**: every row approved / approved-as-noted — COMMENTS RESOLVED · check |
 | 5 | Release / Order Long-Lead Gear | `comm.precon` | RELEASED + PO · **tracker**: every approved row has PO # + released date — SHIP DATES IN WRITING · **tracker**: every released row has promised ship — PROCUREMENT LOG · **tracker**: every row has required-on-site — SHIP COMPLETE / SPLIT · **tracker**: every row has a shipping mode — DELIVERY / STORAGE · check — WEEKLY GEAR CHECK · *not a chip*: a weekly My Day row (§6.5) |
@@ -363,6 +364,48 @@ foremen see it read-only; editing needs `comm.precon` / `comm.site` / `comm.head
 
 The same component mounts inside the job card as the **Job Start** tab (drawer twin), the way
 `JobPrepDrawerOverride` twins the board today.
+
+### 6.7 Drive folder + plans from Simpro — automatic for commercial (Koy, 2026-09-25)
+
+> "i want the drive folder to be created and pull plans in from simpro automatically like it
+> does in resi"
+
+**What residential does today (facts):** the Drive folder is made by the **Create Drive
+folder** button in `DriveFilesSection` (calls `createJobDriveFolder`), and on success the
+client immediately calls `pullJobDocsToDrive` (v413), which copies every Simpro attachment
+folder + file into the Drive folder with filename dedupe and streams progress onto
+`job.docPull`. The `ensureJobDriveFolder` trigger and `nightlyDriveSync` only **link** a
+folder Koy made by hand — auto-create was removed because the trigger fired on half-typed
+names. Folder name is `#<simproNo> - <name>` under one parent (`JOBS_PARENT_FOLDER_ID`).
+Everything keys on `name` + `simproNo`; `_needsDriveFolder` excludes only quotes. **So the
+whole chain is already division-blind — a commercial job gets exactly the residential
+behaviour with zero changes.** The ask is for it to be *automatic*, which residential isn't
+either.
+
+**Design — make it automatic where the half-typed-name problem can't happen:**
+
+| Trigger | Behaviour |
+|---|---|
+| Simpro import of a commercial job | The name and Simpro # arrive complete from Simpro, so right after the create-only `setDoc`, the import calls `createJobDriveFolder` then `pullJobDocsToDrive` — the same chain the button runs, no click. Toast: "Imported — Drive folder + plans pulling". |
+| Hand-made commercial job (+ New Job) | Runs the same chain the moment a Simpro # is entered and the name is ≥ 3 characters (the existing `useSimproAutoPull` already fires on `simproNo`; this rides beside it). Until then the button is there as today. |
+| Later Simpro uploads (revisions, addenda, approved submittals) | Commercial attachments keep growing through pre-con, so a **weekly re-pull** (Monday, with the gear check) runs `pullJobDocsToDrive` for every commercial job still in phases 1–12 — dedupe makes it idempotent. **Pull from Simpro** stays for on-demand. |
+| Residential | Unchanged — button-driven as today. (Turning the import chain on for residential too is a one-line follow-up if Koy wants it.) |
+
+**Hooks into the process:** phase 2's **PROJECT FOLDERS** chip becomes a tracker item —
+satisfied when `driveFolderId` is set and `docPull.status === "done"`. Plans & Links shows
+the Drive folder link automatically (it already lists the folder's files). Phase 2's
+**PLAN / SPEC REVIEW** stays a human check.
+
+**Functions changes (small, with the §5.1 deploy):** the "📁 Drive Folder Created / Linked"
+push goes to the `comm.head` hat (Brady) instead of Koy for commercial jobs; the weekly
+re-pull is a new scheduled function that calls the existing pull logic per job (needs the
+pull body lifted into a helper the callable and the schedule share). Optional: a
+`COMM_JOBS_PARENT_FOLDER_ID` if Koy wants commercial folders under a separate parent (Q13).
+
+**Data safety:** the only writes are the existing `data.driveFolderId` and `data.docPull`
+dotted paths, through the existing callables; the import chain is two client calls after the
+same create-only `setDoc` the import does today; no rules change; a failed pull leaves
+`docPull.status:"error"` on the job exactly as it does now.
 
 ## 7. The commercial job lifecycle
 
@@ -504,6 +547,8 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 11. **Daily reports:** do your GCs require a daily log (crew count, hours, work done, weather,
     deliveries, delays)? That is the strongest candidate for the first Phase 2 tab.
 12. **GC portal:** should commercial GCs get portal links in Phase 1, or wait?
+13. **Drive parent folder:** commercial job folders under the same Jobs parent as residential
+    (proposed, zero change), or a separate "Commercial Jobs" parent folder?
 
 ## 10. Testing (Phase 1)
 
