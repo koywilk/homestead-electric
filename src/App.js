@@ -2340,6 +2340,253 @@ const migrateFloorToModules = (arr) => {
   return order.map(k=>({ ...map[k], loads: map[k].loads.length ? map[k].loads : [newLoadRow(1)] }));
 };
 
+// ─── Lutron Panel Builder (v449) — panel → module → zone, loads assigned by reference ──
+// Koy 2026-09-25: "panelized lighting, specifically lutron needs a way better way to
+// organize and assign modules and panels etc." Design: docs/superpowers/specs/
+// 2026-09-25-lutron-panel-builder-design.md (canvas approved 2026-09-25).
+//
+// Model (all additive, nested inside panelizedLighting so the job loader's
+// {...raw.data} spread already carries it — no loader change):
+//   panelizedLighting.panels = [{ id, label, where, slots, modules:[{ id, num, type, bus, pdu }] }]
+//   panelizedLighting.loads[i].assign = { panelId, moduleId, zone } | null
+//     moduleId + zone null = PARKED on the panel with no module yet (Koy: "have the
+//     option to put on a panel too, that way I can separate panels without having
+//     to set modules yet").
+// Modules hold NO copies of loads — everything a module "contains" is derived from
+// loads[].assign, so a rename in the Loads list can never orphan a module row and a
+// load can never sit on two modules. The old cp4Loads.{floor} / extra-floor arrays
+// are READ ONCE by lutronMigrate (a Lutron job with no `panels` yet) and are never
+// written by the builder.
+//
+// Module catalog verified against Lutron's spec submittals (3691126, 3691052,
+// 3691060, 3691054, 3691278, 3691107, 3691251, 369842, QSX Link Equipment sheet).
+// maxW = watts per zone indexed by zone number (zone 1 is the big zone on dimmers);
+// maxA = amps per zone on relay modules; bus modules hold up to their load count.
+const LUTRON_MODULES = {
+  "LQSE-4A5-120-D": { zones:4,  kind:"dimming",   label:"PRO LED+ adaptive dimmer · 800 / 500 / 500 / 500 W", maxW:[800,500,500,500], moduleA:16 },
+  "LQSE-4S8-120-D": { zones:4,  kind:"switching", label:"Switching · 8 A per zone, 16 A module",              maxA:8,  moduleA:16 },
+  "LQSE-4T5-120-D": { zones:4,  kind:"0-10v",     label:"0–10 V + switch · 5 A per zone, 20 A module",        maxA:5,  moduleA:20 },
+  "LQSE-4T20-120-D":{ zones:4,  kind:"0-10v",     label:"0–10 V + Softswitch · 20 A per zone, receptacles OK", maxA:20 },
+  "LQSE-4M-120-D":  { zones:4,  kind:"motor",     label:"Motor raise / lower · 5 A per zone, motors only",     maxA:5,  moduleA:16 },
+  "LQSE-2HDC-D":    { zones:64, kind:"bus",       label:"HomeWorks Digital · 2 buses × 64 loads",             bus:true },
+  "LQSE-1DAL2-D":   { zones:64, kind:"bus",       label:"DALI-2 · 1 bus × 64 loads",                          bus:true },
+  "LQSE-4A1-D":     { zones:4,  kind:"dimming",   label:"Adaptive dimmer 120–240 V · 1 A per zone",           maxA:1,  moduleA:4 },
+  "LQSE-4A-120-D":  { zones:4,  kind:"dimming",   label:"Adaptive dimmer (discontinued) · 400 / 250 / 250 / 250 W", maxW:[400,250,250,250], moduleA:10, legacy:true },
+  "LQSE-2ECO-D":    { zones:64, kind:"bus",       label:"EcoSystem · 2 loops × 64 (legacy)",                  bus:true, legacy:true },
+  "LQSE-2DAL-D":    { zones:64, kind:"bus",       label:"DALI v1 · 2 buses × 64 (legacy)",                    bus:true, legacy:true },
+};
+// What older job docs stored (the pre-v449 LUT_MODULE_TYPES) → the real Lutron SKU.
+// "LQSE-S8" / "LQSE-T5" were 8- and 5-channel in the app; the real modules are
+// 4-zone (the 8 and 5 are amps per zone), so loads on channels 5–8 park instead.
+const LUTRON_TYPE_ALIASES = { "LQSE-4A":"LQSE-4A-120-D", "LQSE-S8":"LQSE-4S8-120-D", "LQSE-T5":"LQSE-4T5-120-D", "LQSE-2ECO":"LQSE-2ECO-D", "LQSE-2DAL":"LQSE-2DAL-D" };
+const LUTRON_DEFAULT_TYPE = "LQSE-4A5-120-D";
+function lutronNormalizeType(t) {
+  const s = String(t || "").trim().toUpperCase();
+  if (!s) return "";
+  return LUTRON_TYPE_ALIASES[s] || s;
+}
+function lutronModType(t) {
+  const n = lutronNormalizeType(t);
+  return LUTRON_MODULES[n] || { zones: 4, kind: "", label: n || "Module (type not set)", custom: true };
+}
+// Watts a zone may carry (0 = no limit known). Relay modules: amps × 120 V.
+function lutronZoneCap(type, zone) {
+  const t = lutronModType(type);
+  if (Array.isArray(t.maxW)) return t.maxW[(Number(zone) || 1) - 1] || 0;
+  if (t.maxA) return t.maxA * 120;
+  return 0;
+}
+function lutronLoadKind(loadType) {
+  const s = String(loadType || "").toLowerCase();
+  if (!s) return "";
+  if (s.includes("0-10")) return "0-10v";
+  if (s.includes("variable") || s.includes("motor") || s.includes("shade")) return "motor";
+  if (s.includes("switch") || s.includes("relay") || s.includes("fluor")) return "switching";
+  return "dimming"; // Dimming, MLV, ELV, LED
+}
+// Type gating from the spec sheets: 4M takes motors only; dimmers refuse
+// switched loads; switching / 0-10 V take anything but a motor; bus and
+// untyped modules take anything.
+function lutronKindFits(modType, loadType) {
+  const mk = lutronModType(modType).kind, lk = lutronLoadKind(loadType);
+  if (!mk || mk === "bus") return true;
+  if (mk === "motor") return lk === "motor";
+  if (lk === "motor") return false;
+  if (mk === "dimming") return lk === "" || lk === "dimming";
+  return true;
+}
+const lutronLoadsOn = (loads, panelId, moduleId) =>
+  (loads || []).filter(l => l && l.assign && l.assign.panelId === panelId && l.assign.moduleId === moduleId);
+function lutronOpenZones(panels, loads, panelId, moduleId) {
+  const p = (panels || []).find(x => x && x.id === panelId);
+  const m = p && (p.modules || []).find(x => x && x.id === moduleId);
+  if (!m) return [];
+  const t = lutronModType(m.type);
+  const used = new Set(lutronLoadsOn(loads, panelId, moduleId).map(l => Number(l.assign.zone)));
+  const out = [];
+  for (let z = 1; z <= t.zones; z++) if (!used.has(z)) out.push(z);
+  return out;
+}
+function lutronOverWatt(load, panels) {
+  const a = load && load.assign;
+  if (!a || !a.moduleId) return false;
+  const p = (panels || []).find(x => x && x.id === a.panelId);
+  const m = p && (p.modules || []).find(x => x && x.id === a.moduleId);
+  if (!m) return false;
+  const cap = lutronZoneCap(m.type, a.zone);
+  const w = parseFloat(load.watts);
+  return !!(cap && w > cap);
+}
+function lutronAssignLabel(load, panels) {
+  const a = load && load.assign;
+  if (!a) return "";
+  const p = (panels || []).find(x => x && x.id === a.panelId);
+  if (!p) return "";
+  const m = a.moduleId && (p.modules || []).find(x => x && x.id === a.moduleId);
+  if (!m) return `${p.label} · no module yet`;
+  return `${p.label} · Mod ${m.num} · Z${a.zone}`;
+}
+function lutronStats(panels, loads) {
+  let unassigned = 0, parked = 0, onZone = 0, overW = 0;
+  (loads || []).forEach(l => {
+    if (!l || !String(l.name || "").trim()) return;
+    if (!l.assign) unassigned++;
+    else if (!l.assign.moduleId) parked++;
+    else { onZone++; if (lutronOverWatt(l, panels)) overW++; }
+  });
+  const modules = (panels || []).reduce((s, p) => s + ((p && p.modules) || []).length, 0);
+  const zonesTotal = (panels || []).reduce((s, p) => s + ((p && p.modules) || []).reduce((t, m) => { const mt = lutronModType(m.type); return t + (mt.bus ? 0 : mt.zones); }, 0), 0);
+  return { unassigned, parked, onZone, overW, modules, zonesTotal, panels: (panels || []).length };
+}
+// One-time read of the pre-v449 shape: every floor section / extra floor with a
+// typed module or a named module row becomes a panel (A / B / C order matches the
+// old on-screen order: upper, main, basement, then extras; the panel id IS the old
+// floor key so the LV collab page's existing rows stay attached). Module rows link
+// to the master load by trimmed name (the same match assignedModMap used); a row
+// with no master match becomes a new master load (origin "module") so nothing is
+// lost. A row whose channel is past the real zone count (an old "S8" ch 5–8) parks
+// on the panel. Loads whose free-text Panel column names a panel park there too.
+// Pure: never writes; mkId supplies ids so the harness can pin them.
+function lutronMigrate(pl, labels, mkId) {
+  pl = pl || {}; labels = labels || {};
+  const std = [{ key: "upper", label: "Panel A" }, { key: "main", label: "Panel B" }, { key: "basement", label: "Panel C" }];
+  const sections = [
+    ...std.map(s => ({ key: s.key, label: String(labels[s.key] || "").trim() || s.label, rows: (pl.cp4Loads || {})[s.key] || [] })),
+    ...(pl.extraFloors || []).filter(Boolean).map(ef => ({ key: ef.key, label: String(ef.label || "").trim() || "Panel", rows: pl[ef.key] || [] })),
+  ];
+  const loads = (pl.loads || []).filter(Boolean).map(l => ({ ...l, assign: l.assign || null }));
+  const byName = new Map();
+  loads.forEach(l => { const k = String(l.name || "").trim().toLowerCase(); if (k && !byName.has(k)) byName.set(k, l); });
+  const panels = [];
+  let parked = 0, created = 0;
+  sections.forEach(sec => {
+    const mods = migrateFloorToModules(sec.rows).filter(m => m && (String(m.moduleType || "").trim() || (m.loads || []).some(l => l && String(l.name || "").trim())));
+    if (!mods.length) return;
+    const panel = { id: sec.key, label: sec.label, where: "", slots: Math.max(8, mods.length), modules: [] };
+    mods.forEach((m, i) => {
+      const type = lutronNormalizeType(m.moduleType);
+      const mod = { id: m.id || mkId(), num: String(m.modNum || (i + 1)), type, bus: m.bus || "", pdu: m.pdu || "" };
+      panel.modules.push(mod);
+      const zones = lutronModType(type).zones;
+      const used = new Set();
+      (m.loads || []).forEach(row => {
+        const name = String((row && row.name) || "").trim();
+        if (!name) return;
+        let load = byName.get(name.toLowerCase());
+        if (!load) {
+          load = { id: row.id || mkId(), name, location: "", room: "", loadType: row.loadType || "", watts: row.watts || "", pulled: !!row.pulled, origin: "module", assign: null };
+          loads.push(load); byName.set(name.toLowerCase(), load); created++;
+        }
+        if (load.assign && load.assign.moduleId) return; // first placement wins
+        let z = parseInt(row.ch, 10);
+        if (!(z >= 1 && z <= zones) || used.has(z)) { z = 0; for (let k = 1; k <= zones; k++) if (!used.has(k)) { z = k; break; } }
+        if (z) { used.add(z); load.assign = { panelId: panel.id, moduleId: mod.id, zone: z }; }
+        else { load.assign = { panelId: panel.id, moduleId: null, zone: null }; parked++; }
+      });
+    });
+    panels.push(panel);
+  });
+  const byLabel = new Map(panels.map(p => [p.label.toLowerCase(), p]));
+  loads.forEach(l => {
+    if (l.assign) return;
+    const p = byLabel.get(String(l.panel || "").trim().toLowerCase());
+    if (p) { l.assign = { panelId: p.id, moduleId: null, zone: null }; parked++; }
+  });
+  return { panels, loads, parked, created };
+}
+// Read side. A job that already has `panels` reads straight through; one without
+// gets the migrated view, cached per job on a signature of the inputs so the ids
+// minted for created loads / modules stay stable across renders until the first
+// builder write persists them.
+const _lutronViewCache = new Map();
+function lutronView(job, mkId) {
+  const pl = (job && job.panelizedLighting) || {};
+  if (Array.isArray(pl.panels)) return { panels: pl.panels.filter(Boolean), loads: (pl.loads || []).filter(Boolean), migrated: false };
+  const extras = (pl.extraFloors || []).filter(Boolean).map(ef => pl[ef.key]);
+  const sig = JSON.stringify([pl.cp4Loads, pl.extraFloors, extras, job && job.plSectionLabels, pl.loads]);
+  const key = (job && job.id) || "_";
+  const c = _lutronViewCache.get(key);
+  if (c && c.sig === sig) return c.view;
+  const m = lutronMigrate(pl, job && job.plSectionLabels, mkId || uid);
+  const view = { panels: m.panels, loads: m.loads, migrated: true, parked: m.parked, created: m.created };
+  _lutronViewCache.set(key, { sig, view });
+  return view;
+}
+// Suggest layout: walks every load that has no module (parked loads stay on
+// their own panel) floor → room → biggest watts first, and puts it on the first
+// module of a fitting kind with an open zone that can carry its watts; adds a
+// module of the right kind when none fits and a slot is open; stops when a panel
+// is full. Every placement is one tap to change afterwards.
+function lutronSuggestLayout(panels, loads, floorOrder, mkId) {
+  const P = (panels || []).filter(Boolean).map(p => ({ ...p, modules: [...(p.modules || [])] }));
+  const L = (loads || []).map(l => l ? { ...l } : l);
+  const ord = (fl) => { const i = (floorOrder || []).findIndex(f => String(f).toLowerCase() === String(fl || "").toLowerCase()); return i < 0 ? 99 : i; };
+  const todo = L.filter(l => l && String(l.name || "").trim() && !(l.assign && l.assign.moduleId))
+    .sort((a, b) => ord(a.location) - ord(b.location) || String(a.room || "").localeCompare(String(b.room || "")) || (parseFloat(b.watts) || 0) - (parseFloat(a.watts) || 0) || String(a.name || "").localeCompare(String(b.name || "")));
+  let placed = 0, made = 0, skipped = 0;
+  const usedZones = (p, m) => new Set(L.filter(l => l && l.assign && l.assign.panelId === p.id && l.assign.moduleId === m.id).map(l => Number(l.assign.zone)));
+  const fitIn = (p, m, l) => {
+    if (!lutronKindFits(m.type, l.loadType)) return 0;
+    const t = lutronModType(m.type), used = usedZones(p, m), w = parseFloat(l.watts) || 0;
+    for (let z = 1; z <= t.zones; z++) { if (used.has(z)) continue; const cap = lutronZoneCap(m.type, z); if (cap && w > cap) continue; return z; }
+    return 0;
+  };
+  const roomIn = (p, l) => p.modules.some(m => fitIn(p, m, l)) || p.modules.length < (Number(p.slots) || 0);
+  todo.forEach(l => {
+    const own = l.assign && P.find(x => x.id === l.assign.panelId);
+    const p = own || P.find(x => roomIn(x, l)) || P[0];
+    if (!p) { skipped++; return; }
+    let m = null, z = 0;
+    for (const mm of p.modules) { z = fitIn(p, mm, l); if (z) { m = mm; break; } }
+    if (!m) {
+      if (p.modules.length >= (Number(p.slots) || 0)) { skipped++; return; }
+      const kind = lutronLoadKind(l.loadType);
+      const type = kind === "motor" ? "LQSE-4M-120-D" : kind === "switching" ? "LQSE-4S8-120-D" : kind === "0-10v" ? "LQSE-4T5-120-D" : LUTRON_DEFAULT_TYPE;
+      m = { id: mkId(), num: String(p.modules.length + 1), type, bus: "", pdu: "" };
+      p.modules.push(m); made++;
+      z = fitIn(p, m, l);
+      if (!z) { skipped++; return; }
+    }
+    l.assign = { panelId: p.id, moduleId: m.id, zone: z };
+    placed++;
+  });
+  return { panels: P, loads: L, placed, made, skipped };
+}
+// The old nested module shape for one panel — feeds the unchanged
+// printPanelSchedule / downloadPanelSchedule and the LV collab page, so those
+// printouts look exactly like they did. Parked loads ride along as a trailing
+// "No module yet" block so nothing on the panel is missing from paper.
+function lutronLegacyModules(panel, loads) {
+  const row = (l, i) => ({ id: l.id, num: i + 1, name: l.name || "", ch: l.assign && l.assign.zone ? String(l.assign.zone) : "", loadType: l.loadType || "", watts: l.watts || "", keypad: "", pulled: !!l.pulled });
+  const out = ((panel && panel.modules) || []).map(m => ({
+    id: m.id, modNum: String(m.num || ""), moduleType: m.type || "", bus: m.bus || "", pdu: m.pdu || "", panel: "", breaker: "", phase: "", chainPos: "",
+    loads: lutronLoadsOn(loads, panel.id, m.id).sort((a, b) => (Number(a.assign.zone) || 0) - (Number(b.assign.zone) || 0)).map(row),
+  }));
+  const parked = (loads || []).filter(l => l && l.assign && l.assign.panelId === panel.id && !l.assign.moduleId && String(l.name || "").trim());
+  if (parked.length) out.push({ id: `${panel.id}_parked`, modNum: "—", moduleType: "No module yet", bus: "", pdu: "", panel: "", breaker: "", phase: "", chainPos: "", loads: parked.map(row) });
+  return out;
+}
+
 // ─── Savant Panel V2 — data shape + migration ─────────────────────────────
 //
 // V2 shape (additive — never replaces V1 fields, lives at panelizedLighting
@@ -2647,6 +2894,27 @@ function allSavantLoadsForJob(job) {
   const pl = job?.panelizedLighting || {};
   const labels = job?.plSectionLabels || {};
   const out = [];
+
+  // v449: Lutron jobs answer from the Panel Builder model — every named
+  // master load once, assignedTo = its panel (+ module / zone when it has
+  // one, null when parked or unassigned). Feeds the loads share page grouping
+  // and the Set-baseline snapshot with the same row shape as below.
+  if ((job?.lightingSystem || "") === "Lutron") {
+    const v = lutronView(job);
+    v.loads.forEach(l => {
+      if (!l || !String(l.name || "").trim()) return;
+      const a = l.assign;
+      const p = a && v.panels.find(x => x && x.id === a.panelId);
+      const m = p && a.moduleId && (p.modules || []).find(x => x && x.id === a.moduleId);
+      out.push({
+        id: l.id, name: l.name, room: l.room || "", floor: l.location || "",
+        type: l.loadType ? (String(l.loadType).toLowerCase().includes("dim") ? "dim" : "switch") : "",
+        wattage: l.watts || "", pulled: !!l.pulled, notes: l.notes || "",
+        assignedTo: p ? { floor: p.id, panelLabel: p.label, moduleId: m ? m.id : null, modNum: m ? m.num : "", output: m && a.zone ? String(a.zone) : "", slots: [], sku: m ? m.type : "" } : null,
+      });
+    });
+    return out;
+  }
 
   // Standard floors + any extras the user added.
   const standardFloors = [
@@ -18149,7 +18417,7 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
 }
 
 // ── Central Loads List ────────────────────────────────────────
-function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule,color=C.purple}) {
+function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule,onAssignLoad=null,onBatchAssign=null,parkedIds=null,color=C.purple}) {
   // Collapsed state per floor section. Set of floor labels that are
   // currently EXPANDED — anything not in the set is collapsed. Starts empty
   // so every section comes up collapsed by default; click the header to
@@ -18222,6 +18490,26 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
   // Columns: [select?] [pulled] [#] [name] [floor] [panel] [type] [watts] [del]
   const COL = selecting ? "20px 16px 24px 1fr 100px 100px 72px 52px 20px" : "16px 24px 1fr 100px 100px 72px 52px 20px";
   const mob = ON_MOBILE;
+  // v449 (Lutron): the assignment badge is a BUTTON that opens the Panel
+  // Builder's assign sheet — green-ish accent when the load has a zone, orange
+  // when it's parked on a panel with no module, dashed "Assign" when it's on
+  // nothing. Other systems keep the read-only ✓ badge from assignedModMap.
+  const assignChip = (l, assignedLabels, extra={}) => {
+    if (!onAssignLoad) return assignedLabels ? (
+      <span title={assignedLabels.join(", ")}
+        style={{fontSize:9,fontWeight:800,color:color,background:`${color}15`,border:`1px solid ${color}33`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"default",flexShrink:0,...extra}}>
+        ✓ {assignedLabels[0]}
+      </span>) : null;
+    const parked = !!(parkedIds && parkedIds.has(l.id));
+    const has = !!assignedLabels;
+    const col = parked ? C.orange : has ? color : C.muted;
+    return (
+      <button onClick={()=>onAssignLoad(l.id)} title={has ? `${assignedLabels[0]} — tap to move, park or clear` : "Tap to put this load on a panel or zone"}
+        style={{fontSize:9,fontWeight:800,color:col,background:has?`${col}15`:"transparent",border:`1px ${has?"solid":"dashed"} ${col}${has?"33":"88"}`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"pointer",fontFamily:"inherit",flexShrink:0,...extra}}>
+        {has ? assignedLabels[0] : "Assign"}
+      </button>
+    );
+  };
 
   return (
     <div style={{marginBottom:22}}>
@@ -18301,6 +18589,13 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
               Add to Module
             </button>
           </>}
+          {onBatchAssign&&(
+            <button onClick={()=>{ const ids=[...selected]; exitSelect(); onBatchAssign(ids); }}
+              title="Put the selected loads on a panel — with a module and zones, or parked with no module yet"
+              style={{background:color,color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+              Put on a panel / module…
+            </button>
+          )}
           <button onClick={exitSelect}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
             Clear
@@ -18391,7 +18686,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                     )}
                     {(!multiFloor || expanded) && groups[fl].map(l=>{
                       const li=flatSorted.indexOf(l);
-                      const assignedLabels=assignedModMap.has(l.name?.trim())?assignedModMap.get(l.name.trim()):null;
+                      const assignedLabels=assignedModMap.has(l.id)?assignedModMap.get(l.id):assignedModMap.has(l.name?.trim())?assignedModMap.get(l.name.trim()):null;
                       if(mob) return (
                         <div key={l.id} style={{marginBottom:6,borderRadius:8,padding:"8px 10px",
                           background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${color}0d`:C.surface,
@@ -18436,14 +18731,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               style={{fontSize:11,flex:"0 0 auto"}}/>
                             <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W"
                               style={{textAlign:"center",fontSize:11,width:46,flexShrink:0}}/>
-                            {assignedLabels&&(
-                              <span title={assignedLabels.join(", ")}
-                                style={{fontSize:9,fontWeight:800,color:color,background:`${color}15`,
-                                  border:`1px solid ${color}33`,borderRadius:99,padding:"2px 7px",
-                                  whiteSpace:"nowrap",cursor:"default"}}>
-                                ✓ {assignedLabels[0]}
-                              </span>
-                            )}
+                            {assignChip(l, assignedLabels)}
                           </div>
                         </div>
                       );
@@ -18465,14 +18753,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                                 padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box",
                                 flex:1}}/>
-                            {assignedLabels&&(
-                              <span title={assignedLabels.join(", ")}
-                                style={{fontSize:9,fontWeight:800,color:color,background:`${color}15`,
-                                  border:`1px solid ${color}33`,borderRadius:99,padding:"2px 6px",
-                                  whiteSpace:"nowrap",flexShrink:0,cursor:"default"}}>
-                                ✓ {assignedLabels[0]}
-                              </span>
-                            )}
+                            {assignChip(l, assignedLabels, {padding:"2px 6px"})}
                           </div>
                           <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
                             placeholder="Floor / area"
@@ -22998,6 +23279,377 @@ function SheetActions({ onCancel, onSave, onDelete, saveLabel="Save", deleteLabe
 }
 
 
+
+// ─── Lutron Panel Builder — the Panel Loads section on a Lutron job (v449) ──────
+// Summary strip → one card per panel (slot meter, a block per module with a row
+// per zone, a "no module yet" tray for parked loads) → + Panel / Suggest layout.
+// One interaction, no drag (the Crew Board v2 rule): tap a load → Panel chips →
+// Module chips (first chip parks it: "No module yet") → Zone chips → Assign.
+// Tap an open zone → pick a load (parked-on-this-panel loads first). The Loads
+// list above reaches the same sheet through _lutronBuilderApi (its chips /
+// "Put on a panel / module…"). Every action is ONE u() patch on panelizedLighting
+// (H6); the first write also persists the migrated panels + assigns and leaves
+// the old floor arrays untouched. Control 4 / Crestron keep PanelModulesSection.
+const _lutronBuilderApi = { current: null };
+function LutronPanelBuilder({ job, u }) {
+  const pl = job.panelizedLighting || {};
+  const view = lutronView(job);
+  const { panels, loads } = view;
+  const [sheet, setSheet] = useState(null);
+  const accent = C.blue;
+  const mob = ON_MOBILE;
+  const floorOrder = ["Main Level", "Basement", "Upper Level", ...(pl.extraFloors || []).map(ef => ef && ef.label).filter(Boolean)];
+  const named = (l) => !!(l && String(l.name || "").trim());
+  const stats = lutronStats(panels, loads);
+  const panelOf = (id) => panels.find(p => p && p.id === id);
+  const modOf = (pid, mid) => { const p = panelOf(pid); return p && (p.modules || []).find(m => m && m.id === mid); };
+  const loadsOn = (pid, mid) => lutronLoadsOn(loads, pid, mid);
+  const parkedOn = (pid) => loads.filter(l => named(l) && l.assign && l.assign.panelId === pid && !l.assign.moduleId);
+  const openZones = (pid, mid) => lutronOpenZones(panels, loads, pid, mid);
+  const byId = (id) => loads.find(l => l && l.id === id);
+  const zoneLoad = (pid, mid, z) => loadsOn(pid, mid).find(l => Number(l.assign.zone) === Number(z));
+  const label = (l) => lutronAssignLabel(l, panels);
+  const onModule = (l) => !!(l && l.assign && l.assign.moduleId);
+
+  // Writes — ONE u() per action. Spreads the CURRENT panelizedLighting so no
+  // sibling (keypads, lutronRooms, cp4Loads, baseline…) is ever dropped.
+  const commit = (nextPanels, nextLoads, msg) => {
+    const cur = job.panelizedLighting || {};
+    u({ panelizedLighting: { ...cur, panels: nextPanels, loads: nextLoads, lutronBuilderAt: cur.lutronBuilderAt || new Date().toISOString() } });
+    if (msg) { try { toast.success(msg); } catch {} }
+  };
+  const mapLoads = (fn) => loads.map(l => l ? fn(l) : l);
+  const say = (n, one, many) => n === 1 ? one : many;
+
+  // ── sheets ──
+  const pickDefault = (s) => {
+    const ids = s.loadIds; const p = panelOf(s.panelId); if (!p) { s.moduleId = null; s.zone = null; return s; }
+    const first = byId(ids[0]);
+    const m = (p.modules || []).find(mm => lutronKindFits(mm.type, first && first.loadType) && openZones(p.id, mm.id).length >= ids.length)
+      || (p.modules || []).find(mm => openZones(p.id, mm.id).length >= ids.length) || null;
+    s.moduleId = m ? m.id : null; s.zone = m ? openZones(p.id, m.id)[0] : null; return s;
+  };
+  const openAssign = (loadId) => {
+    const l = byId(loadId); if (!l) return;
+    const a = l.assign;
+    if (a && panelOf(a.panelId)) setSheet({ kind: "assign", loadIds: [loadId], panelId: a.panelId, moduleId: modOf(a.panelId, a.moduleId) ? a.moduleId : null, zone: a.zone || null });
+    else if (panels.length) setSheet(pickDefault({ kind: "assign", loadIds: [loadId], panelId: panels[0].id, moduleId: null, zone: null }));
+    else setSheet({ kind: "panel", panelId: null, thenAssign: [loadId] });
+  };
+  const openBatch = (ids) => {
+    const list = (ids || []).filter(id => byId(id)); if (!list.length) return;
+    if (!panels.length) { setSheet({ kind: "panel", panelId: null, thenAssign: list }); return; }
+    setSheet(pickDefault({ kind: "assign", loadIds: list, panelId: panels[0].id, moduleId: null, zone: null }));
+  };
+  _lutronBuilderApi.current = { openAssign, openBatch };
+  const closeSheet = () => setSheet(null);
+
+  const commitAssign = () => {
+    const s = sheet; const ids = s.loadIds; const p = panelOf(s.panelId); if (!p) return;
+    if (!s.moduleId) {
+      commit(panels, mapLoads(l => ids.includes(l.id) ? { ...l, assign: { panelId: p.id, moduleId: null, zone: null } } : l),
+        ids.length === 1 ? `${byId(ids[0]).name} → ${p.label}, no module yet` : `${ids.length} loads → ${p.label}, no module yet`);
+      setSheet(null); return;
+    }
+    const m = modOf(p.id, s.moduleId); if (!m) return;
+    if (ids.length === 1) {
+      const l = byId(ids[0]); const z = Number(s.zone) || openZones(p.id, m.id)[0]; if (!z) return;
+      const occ = zoneLoad(p.id, m.id, z);
+      const next = mapLoads(x => x.id === l.id ? { ...x, assign: { panelId: p.id, moduleId: m.id, zone: z } }
+        : (occ && x.id === occ.id) ? { ...x, assign: { panelId: p.id, moduleId: null, zone: null } } : x);
+      commit(panels, next, `${l.name} → ${p.label} · Mod ${m.num} · Z${z}${occ && occ.id !== l.id ? ` (${occ.name} parked on ${p.label})` : ""}`);
+    } else {
+      let zs = openZones(p.id, m.id); let n = 0;
+      const take = {}; ids.forEach(id => { if (zs.length) { take[id] = zs.shift(); n++; } });
+      commit(panels, mapLoads(x => take[x.id] ? { ...x, assign: { panelId: p.id, moduleId: m.id, zone: take[x.id] } } : x),
+        `${n} of ${ids.length} placed on Mod ${m.num}${n < ids.length ? " — module ran out of zones" : ""}`);
+    }
+    setSheet(null);
+  };
+  const clearAssign = () => { const ids = sheet.loadIds; commit(panels, mapLoads(l => ids.includes(l.id) ? { ...l, assign: null } : l), "Cleared — back to unassigned"); setSheet(null); };
+  const backToPanel = () => { const ids = sheet.loadIds; commit(panels, mapLoads(l => ids.includes(l.id) && l.assign ? { ...l, assign: { panelId: l.assign.panelId, moduleId: null, zone: null } } : l), "Off the module, still on the panel"); setSheet(null); };
+  const fillZoneWith = (loadId) => {
+    const s = sheet; const l = byId(loadId); const m = modOf(s.panelId, s.moduleId); if (!l || !m) return;
+    commit(panels, mapLoads(x => x.id === loadId ? { ...x, assign: { panelId: s.panelId, moduleId: s.moduleId, zone: s.zone } } : x), `${l.name} → ${panelOf(s.panelId).label} · Mod ${m.num} · Z${s.zone}`);
+    setSheet(null);
+  };
+
+  // ── panels / modules ──
+  const savePanel = (form) => {
+    const isNew = !sheet.panelId;
+    const lbl = String(form.label || "").trim() || `LCP ${panels.length + 1}`;
+    const slots = Math.max(1, Math.min(40, parseInt(form.slots, 10) || 8));
+    let nextPanels, pid;
+    if (isNew) { pid = "pnl_" + uid(); nextPanels = [...panels, { id: pid, label: lbl, where: String(form.where || "").trim(), slots, modules: [] }]; }
+    else { pid = sheet.panelId; nextPanels = panels.map(p => p.id === pid ? { ...p, label: lbl, where: String(form.where || "").trim(), slots } : p); }
+    const then = sheet.thenAssign;
+    commit(nextPanels, loads, isNew ? `${lbl} added` : `${lbl} saved`);
+    if (then && then.length) setSheet({ kind: "assign", loadIds: then, panelId: pid, moduleId: null, zone: null });
+    else setSheet(null);
+  };
+  const removePanel = () => {
+    const p = panelOf(sheet.panelId); if (!p) return;
+    const on = loads.filter(l => l.assign && l.assign.panelId === p.id).length;
+    if (!window.confirm(`Remove ${p.label}?${on ? ` Its ${on} load${say(on, "", "s")} go back to unassigned — nothing is deleted from the Loads list.` : ""}`)) return;
+    commit(panels.filter(x => x.id !== p.id), mapLoads(l => l.assign && l.assign.panelId === p.id ? { ...l, assign: null } : l), `${p.label} removed`);
+    setSheet(null);
+  };
+  const addModule = (pid, type) => {
+    const p = panelOf(pid); if (!p) return;
+    if ((p.modules || []).length >= (Number(p.slots) || 0)) { try { toast.error(`${p.label} is full — ${p.slots} slots. Raise the slot count on the panel to add more.`); } catch {} return; }
+    const m = { id: "mod_" + uid(), num: String((p.modules || []).length + 1), type: lutronNormalizeType(type), bus: "", pdu: "" };
+    const nextPanels = panels.map(x => x.id === pid ? { ...x, modules: [...(x.modules || []), m] } : x);
+    const back = sheet && sheet.kind === "newmod" && sheet.back;
+    commit(nextPanels, loads, `Mod ${m.num} · ${m.type || "type not set"} added to ${p.label}`);
+    if (back) setSheet({ ...back, panelId: pid, moduleId: m.id, zone: 1 }); else setSheet(null);
+  };
+  const updModule = (pid, mid, patch) => commit(panels.map(p => p.id === pid ? { ...p, modules: (p.modules || []).map(m => m.id === mid ? { ...m, ...patch } : m) } : p), loads);
+  const removeModule = (pid, mid) => {
+    const p = panelOf(pid), m = modOf(pid, mid); if (!m) return;
+    const on = loadsOn(pid, mid).length;
+    if (!window.confirm(`Remove Mod ${m.num} from ${p.label}?${on ? ` Its ${on} load${say(on, "", "s")} stay on ${p.label} with no module.` : ""}`)) return;
+    commit(panels.map(x => x.id === pid ? { ...x, modules: (x.modules || []).filter(mm => mm.id !== mid) } : x),
+      mapLoads(l => l.assign && l.assign.moduleId === mid ? { ...l, assign: { panelId: pid, moduleId: null, zone: null } } : l), `Mod ${m.num} removed`);
+  };
+  const suggest = () => {
+    if (!panels.length) { setSheet({ kind: "panel", panelId: null }); return; }
+    const r = lutronSuggestLayout(panels, loads, floorOrder, () => "mod_" + uid());
+    if (!r.placed && !r.made) { try { toast.success(r.skipped ? "Nothing fit — panels are full or the loads need a bigger module" : "Every load already has a zone"); } catch {} return; }
+    commit(r.panels, r.loads, `Suggested: ${r.placed} placed, ${r.made} module${say(r.made, "", "s")} added${r.skipped ? `, ${r.skipped} didn't fit` : ""} — review and move what's wrong`);
+  };
+  const printPanel = (p, download) => {
+    const args = { jobName: job.name || "", jobAddress: job.address || "", system: "Lutron", panelLabel: p.label, modules: lutronLegacyModules(p, loads) };
+    if (download) downloadPanelSchedule(args); else printPanelSchedule(args);
+  };
+
+  // ── styles ──
+  const btn = (primary, extra = {}) => ({ padding: "6px 10px", borderRadius: 8, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 5,
+    background: primary ? accent : "transparent", color: primary ? "#fff" : accent, border: `1px solid ${primary ? accent : accent + "66"}`, ...extra });
+  const chip = (on, disabled = false, extra = {}) => ({ fontFamily: "inherit", fontSize: 12, fontWeight: on ? 700 : 600, padding: "7px 11px", minHeight: 40, borderRadius: 999, cursor: disabled ? "default" : "pointer", textAlign: "left",
+    background: on ? accent : C.card, color: on ? "#fff" : disabled ? C.muted : C.text, border: `1px solid ${on ? accent : C.border}`, opacity: disabled ? 0.55 : 1, display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15, ...extra });
+  const small = (on) => ({ fontSize: 10, fontWeight: 500, color: on ? "rgba(255,255,255,0.85)" : C.dim });
+  const lbl = { fontSize: 10, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: C.dim, margin: "12px 0 6px" };
+  const chips = { display: "flex", gap: 6, flexWrap: "wrap" };
+  const zoneRow = (dashed, over) => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", fontFamily: "inherit", background: C.card, border: `1px ${dashed ? "dashed" : "solid"} ${over ? C.red : dashed ? "#CDD3DB" : C.border}`, borderRadius: 7, padding: "5px 7px", marginBottom: 4, minHeight: 34, color: dashed ? C.muted : C.text, cursor: "pointer" });
+
+  const tile = (k, v, s, warn) => (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", flex: "1 1 130px", minWidth: 120 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.dim }}>{k}</div>
+      <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 24, letterSpacing: "0.03em", lineHeight: 1.05, color: warn ? C.orange : C.text }}>{v}{s && <span style={{ fontSize: 11, color: C.dim, marginLeft: 5, fontFamily: "'DM Sans',system-ui,sans-serif" }}>{s}</span>}</div>
+    </div>
+  );
+
+  // ── sheet bodies ──
+  const renderSheet = () => {
+    if (!sheet) return null;
+    if (sheet.kind === "panel") {
+      const p = sheet.panelId ? panelOf(sheet.panelId) : null;
+      return <LutronPanelForm key={sheet.panelId || "new"} panel={p} nextLabel={`LCP ${panels.length + 1}`} onSave={savePanel} onRemove={p ? removePanel : null} onClose={closeSheet} accent={accent}/>;
+    }
+    if (sheet.kind === "newmod") {
+      const p = panelOf(sheet.panelId); if (!p) return null;
+      const cur = new Set((p.modules || []).map(m => lutronNormalizeType(m.type)));
+      return (
+        <SavantSheet onClose={closeSheet}>
+          <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.05em" }}>New module in {p.label}</div>
+          <div style={{ fontSize: 12, color: C.dim }}>Slot {(p.modules || []).length + 1} of {p.slots}. Pick the module.</div>
+          <div style={{ ...chips, marginTop: 10 }}>
+            {Object.entries(LUTRON_MODULES).filter(([k, t]) => !t.legacy || cur.has(k)).map(([k, t]) => (
+              <button key={k} onClick={() => addModule(p.id, k)} style={chip(false)}>{k}<span style={small(false)}>{t.label}</span></button>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button onClick={closeSheet} style={btn(false, { color: C.dim, borderColor: C.border })}>Cancel</button></div>
+        </SavantSheet>
+      );
+    }
+    if (sheet.kind === "fill") {
+      const p = panelOf(sheet.panelId), m = modOf(sheet.panelId, sheet.moduleId); if (!p || !m) return null;
+      const t = lutronModType(m.type); const cap = lutronZoneCap(m.type, sheet.zone);
+      const cands = loads.filter(l => named(l) && !onModule(l))
+        .sort((a, b) => ((a.assign && a.assign.panelId === p.id) ? 0 : 1) - ((b.assign && b.assign.panelId === p.id) ? 0 : 1) || (lutronKindFits(m.type, a.loadType) ? 0 : 1) - (lutronKindFits(m.type, b.loadType) ? 0 : 1) || String(a.location || "").localeCompare(String(b.location || "")) || String(a.name || "").localeCompare(String(b.name || "")));
+      return (
+        <SavantSheet onClose={closeSheet}>
+          <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.05em" }}>{p.label} · Mod {m.num} · Zone {sheet.zone}</div>
+          <div style={{ fontSize: 12, color: C.dim }}>{t.label}{cap ? ` · up to ${cap} W on this zone` : ""}. Pick a load — the ones parked on {p.label} come first.</div>
+          <div style={{ ...chips, marginTop: 10, maxHeight: "48vh", overflowY: "auto" }}>
+            {cands.slice(0, 80).map(l => { const fits = lutronKindFits(m.type, l.loadType); const w = parseFloat(l.watts) || 0; const over = cap && w > cap;
+              return <button key={l.id} onClick={() => fillZoneWith(l.id)} style={chip(false, false, { borderColor: over ? C.red : C.border })}>{l.name}<span style={small(false)}>{[l.room, l.location].filter(Boolean).join(" · ")}{l.watts ? ` · ${l.watts}W` : ""}{!fits ? ` · ${l.loadType} on a ${t.kind} module` : ""}{over ? " · over the zone limit" : ""}{l.assign && l.assign.panelId === p.id ? " · parked here" : ""}</span></button>; })}
+            {!cands.length && <span style={{ fontSize: 12, color: C.dim }}>Nothing left without a zone.</span>}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button onClick={closeSheet} style={btn(false, { color: C.dim, borderColor: C.border })}>Cancel</button></div>
+        </SavantSheet>
+      );
+    }
+    // assign
+    const ids = sheet.loadIds.filter(id => byId(id)); if (!ids.length) return null;
+    const first = byId(ids[0]); const p = panelOf(sheet.panelId) || panels[0]; if (!p) return null;
+    const title = ids.length === 1 ? first.name : `${ids.length} loads`;
+    const sub = ids.length === 1 ? [first.room, first.location, first.loadType, first.watts ? `${first.watts}W` : ""].filter(Boolean).join(" · ") + (first.assign ? ` · now ${onModule(first) ? "on" : "parked on"} ${label(first)}` : " · not on a panel yet")
+      : ids.map(id => byId(id).name).slice(0, 4).join(", ") + (ids.length > 4 ? "…" : "");
+    const m = sheet.moduleId ? modOf(p.id, sheet.moduleId) : null;
+    const zones = m ? (() => { const t = lutronModType(m.type); if (t.bus) return null; const out = []; for (let z = 1; z <= t.zones; z++) { const occ = zoneLoad(p.id, m.id, z); const mine = ids.length === 1 && occ && occ.id === ids[0]; const cap = lutronZoneCap(m.type, z); out.push(
+      <button key={z} onClick={() => setSheet({ ...sheet, zone: z })} style={chip(Number(sheet.zone) === z)} title={occ && !mine ? `${occ.name} is here — choosing it parks that load on ${p.label}` : cap ? `Up to ${cap} W` : ""}>Z{z}<span style={small(Number(sheet.zone) === z)}>{occ ? (mine ? "this load" : `↔ ${occ.name}`) : cap ? `open · ≤${cap}W` : "open"}</span></button>); } return out; })() : null;
+    const canGo = !sheet.moduleId || ids.length > 1 || !!sheet.zone || (m && lutronModType(m.type).bus);
+    return (
+      <SavantSheet onClose={closeSheet}>
+        <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.05em" }}>{title}</div>
+        <div style={{ fontSize: 12, color: C.dim }}>{sub}</div>
+        <div style={lbl}>Panel</div>
+        <div style={chips}>
+          {panels.map(pp => { const open = (pp.modules || []).reduce((s, mm) => s + (lutronModType(mm.type).bus ? 0 : openZones(pp.id, mm.id).length), 0); const on = p.id === pp.id;
+            return <button key={pp.id} onClick={() => setSheet(pickDefault({ ...sheet, panelId: pp.id }))} style={chip(on)}>{pp.label}<span style={small(on)}>{open} open zone{say(open, "", "s")}{pp.where ? ` · ${pp.where}` : ""}</span></button>; })}
+          <button onClick={() => setSheet({ kind: "panel", panelId: null, thenAssign: ids })} style={chip(false, false, { borderStyle: "dashed", color: accent })}>+ New panel…</button>
+        </div>
+        <div style={lbl}>Module</div>
+        <div style={chips}>
+          <button onClick={() => setSheet({ ...sheet, moduleId: null, zone: null })} style={chip(!sheet.moduleId, false, { borderStyle: sheet.moduleId ? "dashed" : "solid", borderColor: sheet.moduleId ? C.orange : accent, color: sheet.moduleId ? C.orange : "#fff", background: sheet.moduleId ? C.card : C.orange })}>No module yet<span style={small(!sheet.moduleId)}>just park {ids.length === 1 ? "it" : "them"} on {p.label}</span></button>
+          {(p.modules || []).map(mm => { const t = lutronModType(mm.type); const oz = t.bus ? 99 : openZones(p.id, mm.id).length; const mismatch = ids.some(id => !lutronKindFits(mm.type, byId(id).loadType)); const dis = oz < ids.length; const on = sheet.moduleId === mm.id;
+            return <button key={mm.id} disabled={dis} onClick={() => setSheet({ ...sheet, moduleId: mm.id, zone: t.bus ? null : (openZones(p.id, mm.id)[0] || null) })} style={chip(on, dis)}>Mod {mm.num}<span style={small(on)}>{mm.type || "type not set"} · {t.bus ? `${loadsOn(p.id, mm.id).length} loads` : `${oz} open`}{mismatch ? " · type differs" : ""}</span></button>; })}
+          <button onClick={() => setSheet({ kind: "newmod", panelId: p.id, back: { ...sheet, panelId: p.id } })} style={chip(false, false, { borderStyle: "dashed", color: accent })}>+ New module…</button>
+        </div>
+        {!sheet.moduleId ? <><div style={lbl}>Zone</div><div style={{ fontSize: 12, color: C.dim }}>None yet — {ids.length === 1 ? "it" : "they"} will sit in {p.label}'s "no module yet" tray until you pick one.</div></>
+          : m && lutronModType(m.type).bus ? <><div style={lbl}>Address</div><div style={{ fontSize: 12, color: C.dim }}>Next open address on the bus — {loadsOn(p.id, m.id).length + 1} of {lutronModType(m.type).zones}.</div></>
+          : ids.length === 1 ? <><div style={lbl}>Zone</div><div style={chips}>{zones}</div><div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>Picking a filled zone parks that load on the panel.</div></>
+          : <><div style={lbl}>Zones</div><div style={{ fontSize: 12, color: C.dim }}>Fills the next {ids.length} open zones in order.</div></>}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
+          {first.assign && <button onClick={clearAssign} style={btn(false, { color: C.red, borderColor: C.red + "66" })}>Clear</button>}
+          {onModule(first) && ids.length === 1 && <button onClick={backToPanel} style={btn(false, { color: C.orange, borderColor: C.orange + "66" })}>Off module, keep panel</button>}
+          <span style={{ flex: 1 }}/>
+          <button onClick={closeSheet} style={btn(false, { color: C.dim, borderColor: C.border })}>Cancel</button>
+          <button disabled={!canGo} onClick={commitAssign} style={btn(true, { opacity: canGo ? 1 : 0.5, cursor: canGo ? "pointer" : "default" })}>
+            {!sheet.moduleId ? `Put on ${p.label} only` : ids.length === 1 ? (first.assign ? "Move here" : "Assign") : `Place ${ids.length}`}
+          </button>
+        </div>
+      </SavantSheet>
+    );
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {/* Summary strip */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        {tile("Unassigned", stats.unassigned, `of ${loads.filter(named).length} loads`, stats.unassigned > 0)}
+        {tile("On a panel, no module", stats.parked, "need a zone", stats.parked > 0)}
+        {tile("Zones", stats.onZone, `/ ${stats.zonesTotal} used`)}
+        {tile("Panels · modules", stats.panels, `· ${stats.modules} module${say(stats.modules, "", "s")}`)}
+        {tile("Zones over watts", stats.overW, "", stats.overW > 0)}
+      </div>
+      {view.migrated && (panels.length > 0 || view.created > 0) && (
+        <div style={{ fontSize: 11, color: C.dim, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 8, padding: "6px 10px", marginBottom: 10 }}>
+          Read from this job's old panel sections: {panels.length} panel{say(panels.length, "", "s")}, {stats.modules} module{say(stats.modules, "", "s")}{view.created ? `, ${view.created} load${say(view.created, "", "s")} that were only on a module added to the Loads list` : ""}{view.parked ? `, ${view.parked} parked with no module` : ""}. Nothing is written until your first change here.
+        </div>
+      )}
+      {panels.length === 0 && (
+        <div style={{ fontSize: 12, color: C.dim, textAlign: "center", padding: "18px 12px", border: `1px dashed ${C.border}`, borderRadius: 10, background: C.surface, marginBottom: 10 }}>
+          No panels yet. Add the first panel (LCP 1), then tap loads in the list above to put them on it — with or without a module.
+        </div>
+      )}
+      {panels.map(p => {
+        const used = (p.modules || []).length, slots = Number(p.slots) || 0, pct = slots ? Math.round(used / slots * 100) : 0;
+        const parked = parkedOn(p.id);
+        const empties = Math.max(0, slots - used);
+        return (
+          <div key={p.id} style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.card, padding: "10px 12px", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <button onClick={() => setSheet({ kind: "panel", panelId: p.id })} title="Rename, set the location or slot count, or remove this panel"
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.05em", color: accent, textAlign: "left" }}>{p.label}</button>
+              {p.where && <span style={{ fontSize: 12, color: C.dim }}>{p.where}</span>}
+              <div style={{ flex: 1, minWidth: 140, display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: C.dim }}>
+                <span style={{ whiteSpace: "nowrap", color: used > slots ? C.red : used === slots ? C.orange : C.dim }}>{used}/{slots} slots</span>
+                <div style={{ flex: 1, height: 6, borderRadius: 3, background: C.surface, border: `1px solid ${C.border}`, overflow: "hidden" }}><div style={{ width: `${Math.min(100, pct)}%`, height: "100%", background: used >= slots ? C.orange : accent }}/></div>
+              </div>
+              <button onClick={() => setSheet({ kind: "newmod", panelId: p.id })} style={btn(false)}><Icon name="plus" size={11} stroke={2.5}/>Module</button>
+              <button onClick={() => printPanel(p, false)} title={`Print ${p.label} schedule`} style={btn(false, { color: accent })}><Icon name="fileText" size={11} stroke={2}/>{mob ? "" : "Print"}</button>
+              <button onClick={() => printPanel(p, true)} title={`Download ${p.label} schedule`} style={btn(false, { color: C.dim, borderColor: C.border })}><Icon name="download" size={11} stroke={2}/>{mob ? "" : "Download"}</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(auto-fill,minmax(230px,1fr))", gap: 8 }}>
+              {(p.modules || []).map(m => {
+                const t = lutronModType(m.type); const on = loadsOn(p.id, m.id); const full = !t.bus && on.length >= t.zones;
+                const rows = [];
+                if (t.bus) {
+                  on.slice().sort((a, b) => (Number(a.assign.zone) || 0) - (Number(b.assign.zone) || 0)).forEach(l => rows.push(
+                    <button key={l.id} onClick={() => openAssign(l.id)} style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18, color: C.muted }}>{l.assign.zone}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}</span></button>));
+                  if (on.length < t.zones) rows.push(<button key="open" onClick={() => setSheet({ kind: "fill", panelId: p.id, moduleId: m.id, zone: (on.reduce((mx, l) => Math.max(mx, Number(l.assign.zone) || 0), 0) + 1) })} style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18 }}>{on.length + 1}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open address</span><span style={{ fontSize: 10.5 }}>tap to fill</span></button>);
+                } else {
+                  for (let z = 1; z <= t.zones; z++) { const l = zoneLoad(p.id, m.id, z); const over = l && lutronOverWatt(l, panels); const cap = lutronZoneCap(m.type, z);
+                    rows.push(l
+                      ? <button key={z} onClick={() => openAssign(l.id)} title="Move or clear" style={zoneRow(false, over)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>{z}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: over ? C.red : C.dim, whiteSpace: "nowrap", fontWeight: over ? 700 : 400 }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}{over ? ` · over ${cap}W` : ""}</span></button>
+                      : <button key={z} onClick={() => setSheet({ kind: "fill", panelId: p.id, moduleId: m.id, zone: z })} title="Put a load here" style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16 }}>{z}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open zone</span><span style={{ fontSize: 10.5 }}>{cap ? `≤${cap}W` : "tap to fill"}</span></button>); }
+                }
+                return (
+                  <div key={m.id} style={{ border: `1px solid ${full ? accent + "66" : C.border}`, borderRadius: 10, background: C.surface, padding: "8px 9px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 17, letterSpacing: "0.04em" }}>MOD</span>
+                      <Inp value={m.num || ""} onChange={e => updModule(p.id, m.id, { num: e.target.value })} style={{ width: 34, textAlign: "center", fontSize: 11, fontWeight: 700, padding: "3px 4px" }}/>
+                      <Sel value={lutronNormalizeType(m.type)} onChange={e => updModule(p.id, m.id, { type: e.target.value })}
+                        options={["", ...Object.keys(LUTRON_MODULES).filter(k => !LUTRON_MODULES[k].legacy || k === lutronNormalizeType(m.type)), ...(t.custom ? [lutronNormalizeType(m.type)] : [])]}
+                        style={{ fontSize: 10, fontWeight: 700, color: accent, padding: "3px 6px", maxWidth: 150 }}/>
+                      <span style={{ marginLeft: "auto", fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{on.length}/{t.zones} {t.bus ? "loads" : "zones"}{Array.isArray(t.maxW) ? ` · ≤${t.maxW[0]}/${t.maxW[1]}W` : t.maxA ? ` · ≤${t.maxA}A` : ""}</span>
+                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
+                    </div>
+                    {rows}
+                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>{t.label}</div>
+                  </div>
+                );
+              })}
+              {Array.from({ length: Math.min(empties, 2) }).map((_, i) => (
+                <div key={"e" + i} style={{ border: `1px dashed ${C.border}`, borderRadius: 10, minHeight: 64, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <button onClick={() => setSheet({ kind: "newmod", panelId: p.id })} style={{ border: "none", background: "transparent", color: accent, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>+ Add module to open slot</button>
+                </div>
+              ))}
+            </div>
+            {parked.length > 0 && (
+              <div style={{ marginTop: 8, border: `1px dashed ${C.orange}`, borderRadius: 10, padding: "8px 9px" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.orange, marginBottom: 4 }}>On this panel, no module yet · {parked.length}</div>
+                {parked.slice().sort((a, b) => String(a.room || "").localeCompare(String(b.room || "")) || String(a.name || "").localeCompare(String(b.name || ""))).map(l => (
+                  <button key={l.id} onClick={() => openAssign(l.id)} title="Pick a module and zone" style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>·</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")} · pick a module</span></button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => setSheet({ kind: "panel", panelId: null })} style={{ ...btn(false, { borderStyle: "dashed" }), flex: 1, justifyContent: "center", padding: "10px 12px", fontSize: 12 }}><Icon name="plus" size={12} stroke={2.5}/>Add panel</button>
+        {panels.length > 0 && (stats.unassigned + stats.parked) > 0 && (
+          <button onClick={suggest} title="Fill open zones floor → room, dimming on dimmers, switching on relays; adds modules when none fit. Every placement is one tap to change." style={btn(true, { padding: "10px 14px", fontSize: 12 })}><Icon name="zap" size={12} stroke={2.25}/>Suggest layout</button>
+        )}
+      </div>
+      {renderSheet()}
+    </div>
+  );
+}
+// Panel add / edit sheet — label, where it hangs, slot count (the Lutron QSX
+// panels hold 2 / 4 / 6 / 8 / 10 modules; editable because retrofit cabinets
+// and mixed panels exist).
+function LutronPanelForm({ panel, nextLabel, onSave, onRemove, onClose, accent }) {
+  const [form, setForm] = useState(() => ({ label: panel ? panel.label : "", where: panel ? (panel.where || "") : "", slots: panel ? String(panel.slots || 8) : "8" }));
+  const inp = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", color: C.text, width: "100%", boxSizing: "border-box" };
+  const lbl = { fontSize: 10, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: C.dim, margin: "12px 0 6px" };
+  const sizes = [2, 4, 6, 8, 10];
+  return (
+    <SavantSheet onClose={onClose}>
+      <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.05em" }}>{panel ? panel.label : "New panel"}</div>
+      <div style={lbl}>Panel name</div>
+      <input value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder={nextLabel} autoFocus={!panel} style={inp}/>
+      <div style={lbl}>Where it hangs</div>
+      <input value={form.where} onChange={e => setForm({ ...form, where: e.target.value })} placeholder="Basement mech room, upper hall closet…" style={inp}/>
+      <div style={lbl}>Module slots</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        {sizes.map(n => <button key={n} onClick={() => setForm({ ...form, slots: String(n) })} style={{ fontFamily: "inherit", fontSize: 12, fontWeight: 700, padding: "7px 12px", minHeight: 40, borderRadius: 999, cursor: "pointer", background: String(n) === form.slots ? accent : C.card, color: String(n) === form.slots ? "#fff" : C.text, border: `1px solid ${String(n) === form.slots ? accent : C.border}` }}>{n}</button>)}
+        <input value={form.slots} onChange={e => setForm({ ...form, slots: e.target.value.replace(/[^0-9]/g, "") })} style={{ ...inp, width: 64, textAlign: "center" }} title="Any other slot count"/>
+      </div>
+      <div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>Lutron's 120 V panels hold 2, 4, 6, 8 or 10 modules. Every module takes one slot.</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 16, flexWrap: "wrap" }}>
+        {onRemove && <button onClick={onRemove} style={{ padding: "6px 10px", borderRadius: 8, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, background: "transparent", color: C.red, border: `1px solid ${C.red}66` }}>Remove panel</button>}
+        <span style={{ flex: 1 }}/>
+        <button onClick={onClose} style={{ padding: "6px 10px", borderRadius: 8, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, background: "transparent", color: C.dim, border: `1px solid ${C.border}` }}>Cancel</button>
+        <button onClick={() => onSave(form)} style={{ padding: "8px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 800, background: accent, color: "#fff", border: `1px solid ${accent}` }}>{panel ? "Save" : "Add panel"}</button>
+      </div>
+    </SavantSheet>
+  );
+}
+
 function PanelModulesSection({
   modules, onChange, system, allLoads=[],
   // Optional cross-panel move support — when provided, the Move dropdown
@@ -24951,7 +25603,7 @@ const JOB_SECTIONS = [
   { key:"panelLoads", label:"Panel Loads", parent:"panelized",
     where:"Panelized Lighting · Panel Loads (lighting panels, modules, Savant slots)",
     hasData:(j)=>{ const pl=j.panelizedLighting||{};
-      return Object.values(pl.cp4Loads||{}).some(a=>(a||[]).length>0) ||
+      return (pl.panels||[]).length>0 || Object.values(pl.cp4Loads||{}).some(a=>(a||[]).length>0) ||
         Object.keys(pl.panelLayout||{}).length>0 || Object.keys(pl.savantV2||{}).length>0 ||
         (pl.extraFloors||[]).length>0; } },
   { key:"techLighting", label:"Tech Lighting's link", parent:"panelized",
@@ -29183,9 +29835,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${ef.label}`});
                   });
                 });
-                // Build map of load name → "Mod X — Panel" label for assignment badges
+                // Build map of load name → "Mod X — Panel" label for assignment badges.
+                // v449: on a Lutron job the map is keyed by load ID from the Panel
+                // Builder model (panels → modules → zones; parked = no module yet)
+                // and the badge opens the builder's assign sheet.
+                const _isLutTab = (job.lightingSystem||"Control 4")==="Lutron";
+                const _lutV = _isLutTab ? lutronView(job) : null;
                 const assignedModMap = new Map();
-                const _allFloorData = [
+                const parkedIds = new Set();
+                if (_lutV) _lutV.loads.forEach(l=>{ if(!l||!l.assign||!String(l.name||"").trim()) return; assignedModMap.set(l.id, [lutronAssignLabel(l, _lutV.panels)]); if(!l.assign.moduleId) parkedIds.add(l.id); });
+                const _allFloorData = _isLutTab ? [] : [
                   ..._stdPanelOrder.map(({k})=>({mods:migrateFloorToModules(pl.cp4Loads?.[k]||[]),fl:_labelForStd(k)})),
                   ...(pl.extraFloors||[]).map(ef=>({mods:migrateFloorToModules(pl[ef.key]||[]),fl:ef.label})),
                 ];
@@ -29224,9 +29883,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       // before plSectionLabels was customized.
                       ...((pl.loads||[]).map(l=>(l?.panel||"").trim()).filter(Boolean)),
                     ])).filter(Boolean).sort()}
-                    allModules={allModules}
+                    allModules={_isLutTab?[]:allModules}
                     assignedModMap={assignedModMap}
                     onAssignToModule={onAssignToModule}
+                    onAssignLoad={_isLutTab?((id)=>{ if(_lutronBuilderApi.current) _lutronBuilderApi.current.openAssign(id); }):null}
+                    onBatchAssign={_isLutTab?((ids)=>{ if(_lutronBuilderApi.current) _lutronBuilderApi.current.openBatch(ids); }):null}
+                    parkedIds={_isLutTab?parkedIds:null}
                     color={sysAccentColor(job)}/>
                 );
               })()}
@@ -29244,8 +29906,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const _pl=job.panelizedLighting;
                 const _assignedNames=new Set();
                 const _stdF=[{k:"main"},{k:"basement"},{k:"upper"}];
+                if ((job.lightingSystem||"Control 4")==="Lutron") {
+                  // v449: a load "is on a module" per the Panel Builder model.
+                  lutronView(job).loads.forEach(l=>{ if(l&&l.assign&&l.assign.moduleId&&String(l.name||"").trim()) _assignedNames.add(l.name.trim()); });
+                } else {
                 _stdF.forEach(({k})=>migrateFloorToModules(_pl.cp4Loads?.[k]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_assignedNames.add(l.name.trim());})));
                 (_pl.extraFloors||[]).forEach(ef=>migrateFloorToModules(_pl[ef.key]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_assignedNames.add(l.name.trim());})));
+                }
                 const al=(_pl.loads||[]).filter(l=>!_assignedNames.has(l.name?.trim()||""));
                 return (<>
 
@@ -29483,7 +30150,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <SavantSlotFirstTab job={job} u={u}/>
                 )}
 
-                {(job.lightingSystem||"Control 4")!=="Savant" && _stdPanels.map(({floor,defaultLabel})=>{
+                {/* v449: Lutron jobs get the Panel Builder (panels → modules →
+                    zones, loads assigned by reference, park-on-panel). Control 4
+                    / Crestron keep the floor-section module editor below. */}
+                {(job.lightingSystem||"Control 4")==="Lutron" && (
+                  <LutronPanelBuilder job={job} u={u}/>
+                )}
+
+                {!["Savant","Lutron"].includes(job.lightingSystem||"Control 4") && _stdPanels.map(({floor,defaultLabel})=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[]);
                   const _panelLabel = (job.plSectionLabels?.[floor]||"").trim() || defaultLabel;
                   return (
@@ -29594,7 +30268,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   );
                 })}
 
-                {(job.lightingSystem||"Control 4")!=="Savant" && (job.panelizedLighting.extraFloors||[]).map(ef=>{
+                {!["Savant","Lutron"].includes(job.lightingSystem||"Control 4") && (job.panelizedLighting.extraFloors||[]).map(ef=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting[ef.key])||[]);
                   return (
                   <div key={ef.key} style={{marginBottom:16}}>
@@ -29707,7 +30381,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </>);
               })()}
 
-              {(()=>{
+              {(job.lightingSystem||"Control 4")!=="Lutron" && (()=>{
                 // Next-letter default. 3 std panels (A,B,C) + extras already
                 // added → suggest the next letter (D, E, F…). If the user
                 // submits empty, we use that letter as the label so they can
@@ -47063,12 +47737,15 @@ function LightingSharePage({ jobId }) {
         );
       })}
 
-      {/* Panel load sections — module-block layout */}
-      {panelFloors.map(floor => {
-        const rawLoads = pl.cp4Loads?.[floor]||[];
-        const extraFloorRaw = pl[floor]||[];
-        const rawData = rawLoads.length ? rawLoads : extraFloorRaw;
-        const mods = migrateFloorToModules(rawData);
+      {/* Panel load sections — module-block layout. v449: Lutron jobs read the
+          Panel Builder model (panels → modules → zones; parked loads ride as a
+          trailing "No module yet" block). The LV rows stay keyed cp4_<panel id>
+          and a migrated panel's id IS its old floor key, so nothing Tech
+          Lighting typed moves. Other systems read the floor arrays as before. */}
+      {(sys==='Lutron'
+        ? (()=>{ const v = lutronView(job); return v.panels.map(p => ({ floor:p.id, panelLabel:p.label, mods:lutronLegacyModules(p, v.loads) })); })()
+        : panelFloors.map(floor => { const rawLoads = pl.cp4Loads?.[floor]||[]; const extraFloorRaw = pl[floor]||[]; const rawData = rawLoads.length ? rawLoads : extraFloorRaw; return { floor, panelLabel:floorLabel(floor), mods:migrateFloorToModules(rawData) }; })
+      ).map(({floor, panelLabel, mods}) => {
         const hasAnyLoad = mods.some(m=>m.loads.some(l=>l.name));
         const lvKey = 'cp4_'+floor;
         const lvRows = getSection(lvKey);
@@ -47080,7 +47757,7 @@ function LightingSharePage({ jobId }) {
         return (
           <div key={floor} style={{background:SP.card,border:`1px solid ${SP.border}`,borderRadius:10,marginBottom:12,overflow:'hidden'}}>
             <div style={{background:SP.text,padding:'8px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{floorLabel(floor).toUpperCase()} — PANEL LOADS</span>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{panelLabel.toUpperCase()} — PANEL LOADS</span>
               <span style={{background:SP.accent,borderRadius:5,padding:'1px 8px',fontSize:10,fontWeight:700,color:'#fff'}}>{sys}</span>
             </div>
             <div style={{padding:'10px 12px'}}>
@@ -49068,12 +49745,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v448
+**Last manifest update:** 2026-09-25 · App SW version: v449
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Lutron Panel Builder — panels → modules → zones, loads assigned by reference, park-on-panel** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"panelized lighting, specifically lutron needs a way better way to organize and assign modules and panels etc."* and *"can i have the option to put on a panel too? that way i can seperate panels without having to set modules yet."* Design approved on the /design canvas first (spec: 'docs/superpowers/specs/2026-09-25-lutron-panel-builder-design.md'). On a **Lutron** job the Panel Loads section is now 'LutronPanelBuilder': a summary strip (unassigned · on a panel with no module · zones used · panels/modules · zones over watts), one card per panel (name, where it hangs, slot meter, **+ Module**, Print / Download), one block per module with a row per zone (filled rows show room + watts and flag **over** the zone's watt cap in red; open rows say the cap), an orange **"On this panel, no module yet"** tray for parked loads, **+ Add panel** and **Suggest layout**. One interaction, no drag: tap a load (in the Loads list above — its badge is now the button — or on a zone) → bottom sheet with **Panel** chips → **Module** chips (first chip is **No module yet** = park it) → **Zone** chips (picking a filled zone parks that load) → **Assign / Move here / Put on LCP 1 only**; **Off module, keep panel** and **Clear** on placed loads; Loads-list **Select → Put on a panel / module…** fills the next open zones in order. Tap an open zone → pick a load, parked-on-this-panel first. **Suggest layout** walks loads with no module floor → room → biggest watts first, dimming onto dimmers and switching onto relays with headroom, adds a module of the right kind when none fits, keeps a parked load in its own panel, stops when a panel is full. **Model:** 'panelizedLighting.panels = [{ id, label, where, slots, modules:[{ id, num, type, bus, pdu }] }]' and 'loads[i].assign = { panelId, moduleId, zone } | null' (module + zone null = parked). Modules hold no copies of loads. **Module catalog** ('LUTRON_MODULES', verified against Lutron spec submittals): 4A5-120-D (zone 1 800 W, zones 2–4 500 W), 4S8-120-D (8 A/zone), 4T5-120-D (5 A), 4T20-120-D (20 A, receptacles OK), 4M-120-D (motors only), 2HDC-D and 1DAL2-D (bus, 64 loads), 4A1-D; legacy 4A-120-D (discontinued), 2ECO-D, 2DAL-D stay selectable only where a job already has them. The app's old 'LQSE-S8' (8 ch) and 'LQSE-T5' (5 ch) were wrong SKUs — both are 4-zone (8 / 5 are amps) — and are read as 4S8-120-D / 4T5-120-D. **Migration (read-side, 'lutronMigrate'):** a Lutron job with no 'panels' yet is shown from its old floor sections (upper → Panel A, main → Panel B, basement → Panel C, then extras; the panel id IS the old floor key) — module rows link to the master load by trimmed name, a row with no master match becomes a master load ('origin:"module"'), a channel past the real zone count takes the next open zone or parks, and a load whose free-text Panel column names a panel parks there. Nothing is written until the first change in the builder, which persists 'panels' + 'assign' in ONE 'u()' patch; the old 'cp4Loads' / extra-floor arrays are never touched. **Readers moved (option A):** Loads-list badges + batch action, keypad suggestions ('_assignedNames'), the per-panel **Print / Download** schedule ('lutronLegacyModules' feeds the unchanged 'printPanelSchedule'; parked loads print as a trailing "No module yet" block), the LV collab page '?lighting=' (same adapter; Tech Lighting's own rows stay keyed 'cp4_<old floor key>'), the loads share / **Set baseline** rows ('allSavantLoadsForJob' Lutron branch), Job Sections' has-data check. Control 4 / Crestron keep 'PanelModulesSection'; Savant untouched. Harness 'needs-dryrun' covers aliases, caps, type gating, migration (labels, zones, parking, created loads, S8 overflow), the cached read view, open zones, over-watt, labels, stats, suggest layout (zone 1 for the biggest dimmer, parked stays home, motor → 4M, full panel skips) and the print adapter. Guides 'panelizedlighting.html' + 'lightinglinks.html' updated. **Why it won't lose data:** purely additive — 'panels' is a new array and 'assign' a new key on existing load rows, both nested in 'panelizedLighting' (already in the loader spread; no loader, rules or function change); the builder never clears, rewrites or reads back the old floor arrays after the first write, every write spreads the current 'panelizedLighting' so keypads / lutronRooms / baseline / cp4Loads ride along, deleting a module or panel only nulls 'assign' (never deletes a load), and a wrong placement is one tap to fix and visible immediately as "unassigned" or "no module yet" — never as a lost load.
 - **Panelized Lighting — download the load list (PDF / CSV), clean, no module assignments** · 'shipped 2026-09-25' · 'SW v448' · Koy: *"I would also love to be able to download a list of loads that is clean and organized without any modules assigned yet."* Two buttons on the **Loads** section header (Lutron / Control 4 / Crestron layout): **PDF** and **CSV**. Both build from the job's own 'panelizedLighting.loads' via the pure 'loadsListRows(loads, floorOrder)' — every named load, grouped **floor → room → A–Z** (floors in the tab's own order: Main Level, Basement, Upper Level, then extra floors, then anything unrecognized; blank room sorts last as "General"), numbered 1..N, with **Type** and **Watts** — and **no panel, module or channel columns**, so a lighting designer lays the panels out from a clean sheet. The PDF ('loadsListHtml' → new '_saveHtmlAsPdfPaged', a multi-page cousin of '_saveHtmlAsPdf', which captures one letter page only) carries the job name, address, system, load/floor counts and print date; the CSV ('loadsListCsv', BOM-prefixed so Excel reads UTF-8, '#,Floor,Room,Load,Type,Watts') is the editable copy. Harness 'needs-dryrun' covers ordering, numbering, unknown floors, dropped blanks and CSV escaping. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — both buttons only read 'loads' and write nothing to Firestore; no new field, no loader or rules change.
 - **My Day — return trips stay with the head; no second overdue row for Josh on sign-off** · 'shipped 2026-09-25' · 'SW v447' · Koy: *"if a shared task is checked off by one it should be cleared on the other side. i have checked off buchsthaber return trip and it shows as overdue on joshs card. also josh should only share QC with me not return trips."* Root cause: signing an RT off sets it to 'complete', which spawns a **different** auto row on the same trip — '_rt_<id>_done' "Return Trip #N Complete — merge or invoice" — and v427 routed that row to the invoicing hat, dated from the old 'rtStatusDate', so it landed on Josh's board already overdue the moment Koy closed the trip. It was never a shared row failing to clear (QC / redline rows clear for every holder by construction); it was a second rule with a different owner. **Fix:** 'routeKeyOfAuto' returns 'null' for every 'category:"rt"' row — schedule, get-sign-off AND complete/merge-or-invoice all stay with the Head of Residential (Josh now shares only QC with Koy); the merge-or-invoice row is due from 'signedOffDate' (falls back to 'rtStatusDate') so it isn't born overdue; it stays in the never-hides money set ('staleMoney' now includes '_rt_*_done'); 'HAT_REGISTRY' note and the guide drop "RT" from the invoicing list; 'functions/myDayDigest.js' no longer bumps the invoicing count for completed RTs (CO complete unchanged). Tests: 'needs-dryrun' (RT done/sched → null), 'mydaydigest-test' (RT complete ≠ invoicing). **Needs 'firebase deploy --only functions:dailyMyDayDigest'.** **Why it won't lose data:** routing and due-date derivation only — no new field, no write path changed, no rules change; an RT row Josh already cleared via 'clearedTasks' stays cleared for the head too (same job-level list).
 - **My Day Ship 4 — urgency, Nudge + morning chase, tab badge, everyone lands here, a push opens the task, obvious assign controls** · 'shipped 2026-09-24' · 'SW v446' · Koy: *"lets make the my day tool the most effective tool we have for tracking needs and tasks"* → picked items 2, 3, 4 from the audit, plus *"add an urgency status that can be added to it and have them sort by that"* and *"received complaint that it is hard to tell you can click the person to assign to different person, as well as the other assigning options. make it easier."* **Urgency:** new additive field 'priority' inside a need doc's 'data' ('"urgent"' / '""' normal / '"low"'; absent reads as normal via 'needPriority'). Set on the + sheet (**Urgency** field: Urgent / Normal / Low) or in **Edit** (new Urgency select; the change is logged in the thread as "changed: urgent"). Urgent rows get a red left edge + red **URGENT** tag, Low a grey **Low** tag; the Needs board cards show the same pills; the "assigned to you" push is titled *URGENT task assigned to you*; the 6:45 digest line leads with 'N urgent'. **Sort (everywhere on My Day, 'compareMyDayRows'):** urgency → lane (overdue / today / week / later) → **due date inside the lane** (was A–Z by title, so the next thing due was buried; undated rows last) → title; a category holding an urgent row floats to the top of Mine ('myDayCategories' gains 'urgent'); Low sinks below everything, even overdue. Every derived row now carries 'dueYmd' (auto: 'taskDueDates' override or the rule date; prep duty: rough start; scan: the scheduled/needed date; redline: walk/status date). **Nudge:** Sent rows get a **Nudge** button — the existing manual-reminder push ('reNudge', 'renudge' pref; roster picker to redirect it) with a new optional 'view' + 'needId' so it lands on the task. **Morning chase (server, 'dailyMyDayDigest'):** pure 'chaseTargets' / 'chaseMessages' in 'functions/myDayDigest.js' — a doc **2+ days overdue** pushes its assignee on every EVEN day overdue (2, 4, 6…) unless the assignee posted an update in the last 48h; the requester ('assignedBy', else 'createdBy', when a different person) is pushed on every 5th day (5, 10, 15…); snoozed, done, undated, bodies and **Low** docs are never chased; covering applies to both sides; one push per person per role ("⏰ Still open on you" / "⏰ N overdue tasks on you" · "⏰ Still waiting on someone"), deep-linked to the task when it's a single one. New notif pref 'myday_chase' (all roles, default on, gated server-side). **Tab badge:** the My Day tab shows a red count ('mydayBadgeCount') of my open task docs that are overdue, due today (a bucket-only "Tomorrow" doc counts as today, as the board files it) or urgent. **Landing:** every internal role — office included — opens on My Day (was field roles only); contractors unchanged. **Push opens the task:** 'onNeedWrite' (all four branches), 'reNudge' and the chase carry 'needId'; 'sendFCM' data + the inbox item store it; the messaging SW appends '&need=<id>' to the '?view=myday' deep-link; the app reads it (before 'pendingView' strips the query), the bell inbox passes 'item.needId', and 'MyDay' ('jumpNeedId' / 'onJumped') finds the row in Focus / Mine (category or job line) / Sent / Sent · finished / Done / a Person group, unfolds its way there, scrolls to it and outlines it blue for 4 s; waits while 'needs' is still loading on a cold start. **Assign controls you can see:** the + sheet's chips are now labeled **fields** with an icon and a caret — 'To: Koy ▾', 'Urgency: Normal ▾', 'Due: Tomorrow ▾', 'Job: none ▾', 'Type: Need ▾' — plus a "Tap a field to change it" hint; the To picker always shows the full-company select (no more hidden "Someone else…" toggle). On the board, every task row the viewer may reassign (sender, self-made, or whoever runs the head board) shows a blue **To: &lt;name&gt; ▾** pill that opens the roster right under the row ("Move it to"); the head's auto rows read **Pick person ▾** / **Re-push ▾**. Harness: 'scripts/needs-dryrun.js' (+'needPriority' / 'prioRank' / 'compareMyDayRows' / 'mydayBadgeCount' / category float) and 'scripts/mydaydigest-test.js' (+urgent count, chase day rules, quiet-assignee skip, covering, message shapes). Guides 'myday.html' (Urgency, Move it, Nudge, "Getting to it faster") + 'needs.html' updated. **Needs 'firebase deploy --only functions:onNeedWrite,functions:reNudge,functions:dailyMyDayDigest'.** **Why it won't lose data:** one new additive field ('priority') inside 'data', written only by the + sheet on new docs and by Edit as a dotted 'data.priority' patch (absent = normal, so no backfill and no loader change — the needs loader returns 'data' verbatim); reassign-from-the-pill is the existing field-surgical 'patchNeed({assignedTo})'; Nudge and the chase are pushes + inbox writes only (the chase is read-only over 'needs', keyed on days-overdue so it writes nothing back); 'needId' is an additive string on push data / inbox items; the sort, badge, landing, and jump are render-only; no Firestore rules change.

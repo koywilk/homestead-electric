@@ -67,7 +67,8 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "taskPhotoPath","needPhotos","teamPulse",
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
   "bucketOfYmd","needBucket","needPriority","prioRank","compareMyDayRows","mydayBadgeCount",
-  "loadsListRows","loadsListCsv"];
+  "loadsListRows","loadsListCsv",
+  "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -79,6 +80,15 @@ const combined = [
   extractLine("MYDAY_ORDER"),
   extractConst("MYDAY_CAT_LABELS"),
   extractArray("HAT_REGISTRY"),
+  // v449 Lutron Panel Builder — the pure model helpers + their inputs.
+  "let _uidT = 0; const uid = () => 't' + (++_uidT);",
+  "const newLoadRow = (num) => ({ id:uid(), num, name:\"\", ch:\"\", loadType:\"\", watts:\"\", keypad:\"\", pulled:false });",
+  extractConst("migrateFloorToModules"),
+  extractConst("LUTRON_MODULES"),
+  extractConst("LUTRON_TYPE_ALIASES"),
+  extractLine("LUTRON_DEFAULT_TYPE"),
+  extractConst("lutronLoadsOn"),
+  extractLine("_lutronViewCache"),
   ...FN.map(extractFunction),
   `({ ${FN.join(", ")}, can, HAT_REGISTRY })`,
 ].join("\n");
@@ -581,5 +591,94 @@ eq(H.loadsListRows([{ name:"X" }], []), [{ id:"", name:"X", floor:"No floor", ro
 const csv = H.loadsListCsv([{ n:1, floor:"Main Level", room:"Kitchen", name:'Pendants, "island"', type:"Dimming", watts:"180" }]);
 eq(csv, '#,Floor,Room,Load,Type,Watts\r\n1,Main Level,Kitchen,"Pendants, ""island""",Dimming,180\r\n', "CSV header + quoted/escaped cell");
 eq(H.loadsListCsv([]), "#,Floor,Room,Load,Type,Watts\r\n", "header only when empty");
+
+// ── v449 — Lutron Panel Builder: catalog, migration, assignment, suggest ──
+eq(H.lutronNormalizeType(" lqse-s8 "), "LQSE-4S8-120-D", "old S8 alias → real SKU");
+eq(H.lutronNormalizeType("LQSE-4A"), "LQSE-4A-120-D", "old 4A alias → discontinued 4A");
+eq(H.lutronNormalizeType(""), "", "blank stays blank");
+eq(H.lutronModType("LQSE-S8").zones, 4, "an old S8 is a 4-zone module (8 = amps)");
+eq(H.lutronModType("LQSE-T5").zones, 4, "an old T5 is a 4-zone module (5 = amps)");
+eq(H.lutronModType("SOMETHING-ELSE").custom, true, "unknown type → custom, 4 zones");
+eq([H.lutronZoneCap("LQSE-4A5-120-D",1), H.lutronZoneCap("LQSE-4A5-120-D",3), H.lutronZoneCap("LQSE-4S8-120-D",2), H.lutronZoneCap("LQSE-2HDC-D",1)], [800,500,960,0], "zone caps: dimmer per-zone table, relay amps × 120, bus none");
+eq([H.lutronLoadKind("Dimming"),H.lutronLoadKind("MLV"),H.lutronLoadKind("Switching"),H.lutronLoadKind("Relay"),H.lutronLoadKind("0-10V"),H.lutronLoadKind("Variable Speed"),H.lutronLoadKind("")], ["dimming","dimming","switching","switching","0-10v","motor",""], "load kinds");
+eq([H.lutronKindFits("LQSE-4A5-120-D","Switching"), H.lutronKindFits("LQSE-4S8-120-D","Dimming"), H.lutronKindFits("LQSE-4M-120-D","Dimming"), H.lutronKindFits("LQSE-4M-120-D","Variable Speed"), H.lutronKindFits("", "Switching"), H.lutronKindFits("LQSE-2HDC-D","Switching")], [false,true,false,true,true,true], "type gating: dimmers refuse switched, motor module takes motors only, untyped/bus take all");
+
+// Migration from the pre-v449 shape: upper → Panel A, main → Panel B (custom label wins), extras after.
+const oldPl = {
+  loads: [
+    { id:"l1", name:"Kitchen Cans", location:"Main Level", room:"Kitchen", loadType:"Dimming", watts:"240" },
+    { id:"l2", name:"Island Pendants", location:"Main Level", room:"Kitchen", loadType:"Dimming", watts:"180" },
+    { id:"l3", name:"Garage", location:"Main Level", room:"Garage", loadType:"Switching", watts:"300", panel:"LCP 2" },
+    { id:"l4", name:"Porch", location:"Main Level", room:"Exterior", loadType:"Switching", watts:"80" },
+  ],
+  cp4Loads: {
+    main: [ { id:"m1", modNum:"1", moduleType:"LQSE-4A", loads:[ { id:"r1", num:1, name:"Kitchen Cans", ch:"1", watts:"240" }, { id:"r2", num:2, name:"island pendants ", ch:"", watts:"180" }, { id:"r3", num:3, name:"Nook Chandelier", ch:"3", loadType:"Dimming", watts:"150", pulled:true } ] },
+            { id:"m2", modNum:"2", moduleType:"LQSE-S8", loads:[ { id:"r4", num:1, name:"Porch", ch:"6" } ] } ],
+    upper: [ { id:"u1", num:1, name:"", moduleType:"", mod:"1", ch:"" } ],          // default empty rows → no panel
+    basement: [],
+  },
+  extraFloors: [ { key:"pl_lcp_2", label:"LCP 2" } ],
+  pl_lcp_2: [ { id:"x1", modNum:"1", moduleType:"", loads:[ { id:"x2", num:1, name:"" } ] } ],  // untyped, unnamed → no panel
+};
+let n = 0; const mk = () => "id" + (++n);
+const mig = H.lutronMigrate(oldPl, { main:"LCP 1" }, mk);
+eq(mig.panels.map(p => `${p.id}:${p.label}:${p.slots}:${p.modules.map(m => m.num + "/" + m.type).join(",")}`), ["main:LCP 1:8:1/LQSE-4A-120-D,2/LQSE-4S8-120-D"], "only sections with a typed module or a named row become panels; id = old floor key; custom label wins; types normalized");
+const byId = Object.fromEntries(mig.loads.map(l => [l.id, l]));
+eq(byId.l1.assign, { panelId:"main", moduleId:"m1", zone:1 }, "row ch 1 → zone 1");
+eq(byId.l2.assign, { panelId:"main", moduleId:"m1", zone:2 }, "blank ch → next open zone; name match is trimmed + case-insensitive");
+eq(byId.l4.assign, { panelId:"main", moduleId:"m2", zone:1 }, "old S8 ch 6 is past the real 4 zones → next open zone on that module");
+const migS8 = H.lutronMigrate({ loads:[], cp4Loads:{ main:[{ id:"s8", modNum:"1", moduleType:"LQSE-S8", loads:[1,2,3,4,5,6].map(i => ({ id:"r"+i, num:i, name:"L"+i, ch:String(i) })) }] } }, {}, mk);
+eq(migS8.loads.map(l => l.assign.zone), [1,2,3,4,null,null], "six loads on an old 8-ch S8: four zones fill, the rest park on the panel");
+eq(migS8.parked, 2, "parked count");
+eq(byId.l3.assign, null, "Panel column naming a section that is NOT a panel stays unassigned");
+const created = mig.loads.find(l => l.name === "Nook Chandelier");
+eq([!!created, created.origin, created.pulled, created.assign.zone, created.watts], [true, "module", true, 3, "150"], "a module row with no master load becomes a master load (origin module) on its zone");
+eq([mig.created, mig.parked, mig.loads.length], [1, 0, 5], "counts");
+eq(H.lutronMigrate({}, {}, mk), { panels:[], loads:[], parked:0, created:0 }, "empty job → nothing");
+const mig2 = H.lutronMigrate({ loads:[{ id:"a", name:"X", panel:"lcp 1" }], cp4Loads:{ main:[{ id:"m", modNum:"1", moduleType:"LQSE-4A5-120-D", loads:[{ id:"r", num:1, name:"" }] }] } }, { main:"LCP 1" }, mk);
+eq(mig2.loads[0].assign, { panelId:"main", moduleId:null, zone:null }, "Panel column matching a real panel (case-insensitive) → parked there");
+
+// Read side: a job with `panels` reads straight through; one without is migrated and cached.
+eq(H.lutronView({ id:"j", panelizedLighting:{ panels:[{ id:"p", label:"LCP 1", slots:8, modules:[] }], loads:[{ id:"l", name:"A" }] } }).migrated, false, "panels present → no migration");
+const v1 = H.lutronView({ id:"j2", panelizedLighting: oldPl, plSectionLabels:{ main:"LCP 1" } });
+const v2 = H.lutronView({ id:"j2", panelizedLighting: oldPl, plSectionLabels:{ main:"LCP 1" } });
+eq(v1 === v2, true, "same inputs → same cached view (stable ids until the first write)");
+eq(v1.migrated, true, "migrated flag");
+
+// Assignment helpers on the new model.
+const panels = [ { id:"p1", label:"LCP 1", slots:8, modules:[ { id:"a", num:"1", type:"LQSE-4A5-120-D" }, { id:"b", num:"2", type:"LQSE-4S8-120-D" } ] }, { id:"p2", label:"LCP 2", slots:4, modules:[] } ];
+const loads = [
+  { id:"1", name:"Cans", loadType:"Dimming", watts:"900", assign:{ panelId:"p1", moduleId:"a", zone:1 } },
+  { id:"2", name:"Pendants", loadType:"Dimming", watts:"600", assign:{ panelId:"p1", moduleId:"a", zone:2 } },
+  { id:"3", name:"Garage", loadType:"Switching", watts:"300", assign:{ panelId:"p1", moduleId:null, zone:null } },
+  { id:"4", name:"Porch", loadType:"Switching", watts:"80", assign:null },
+  { id:"5", name:"", assign:null },
+];
+eq(H.lutronOpenZones(panels, loads, "p1", "a"), [3,4], "open zones");
+eq(H.lutronOpenZones(panels, loads, "p1", "zz"), [], "unknown module → none");
+eq([H.lutronOverWatt(loads[0], panels), H.lutronOverWatt(loads[1], panels), H.lutronOverWatt(loads[2], panels)], [true, true, false], "900 W on zone 1 (≤800) and 600 W on zone 2 (≤500) are over; parked never is");
+eq([H.lutronAssignLabel(loads[0], panels), H.lutronAssignLabel(loads[2], panels), H.lutronAssignLabel(loads[3], panels), H.lutronAssignLabel({ assign:{ panelId:"p1", moduleId:"gone", zone:1 } }, panels)], ["LCP 1 · Mod 1 · Z1", "LCP 1 · no module yet", "", "LCP 1 · no module yet"], "labels; a vanished module reads as parked");
+eq(H.lutronStats(panels, loads), { unassigned:1, parked:1, onZone:2, overW:2, modules:2, zonesTotal:8, panels:2 }, "stats skip unnamed loads");
+
+// Suggest layout: parked stays on its own panel, dimming → dimmer, switching → relay, adds a module when none fits, biggest load first.
+const sug = H.lutronSuggestLayout(panels, [
+  { id:"1", name:"Cans", loadType:"Dimming", watts:"240", location:"Main Level", room:"Kitchen", assign:null },
+  { id:"2", name:"Big Chandelier", loadType:"Dimming", watts:"700", location:"Main Level", room:"Kitchen", assign:null },
+  { id:"3", name:"Garage", loadType:"Switching", watts:"300", location:"Main Level", room:"Garage", assign:{ panelId:"p2", moduleId:null, zone:null } },
+  { id:"4", name:"Shade", loadType:"Variable Speed", watts:"", location:"Upper Level", room:"Master", assign:null },
+], ["Main Level","Basement","Upper Level"], () => "new" + (++n));
+const sBy = Object.fromEntries(sug.loads.map(l => [l.id, l]));
+eq([sBy["2"].assign.moduleId, sBy["2"].assign.zone, sBy["1"].assign.moduleId, sBy["1"].assign.zone], ["a", 1, "a", 2], "biggest dimmer takes zone 1 of the dimmer module, next takes zone 2");
+eq(sBy["3"].assign.panelId, "p2", "a parked load is placed in ITS panel");
+eq(sug.panels[1].modules.map(m => m.type), ["LQSE-4S8-120-D"], "…on a switching module created there");
+eq(sug.panels[0].modules.map(m => m.type), ["LQSE-4A5-120-D","LQSE-4S8-120-D","LQSE-4M-120-D"], "a motor load gets a motor module, never a dimmer");
+eq([sug.placed, sug.made, sug.skipped], [4, 2, 0], "counts");
+const full = H.lutronSuggestLayout([{ id:"p", label:"P", slots:1, modules:[{ id:"m", num:"1", type:"LQSE-4M-120-D" }] }], [{ id:"1", name:"Cans", loadType:"Dimming", watts:"100", assign:null }], [], () => "x");
+eq([full.placed, full.skipped, full.loads[0].assign], [0, 1, null], "full panel + no fitting module → skipped, untouched");
+
+// Print / LV share adapter: the old nested shape, zones in order, parked loads as a trailing block.
+const leg = H.lutronLegacyModules(panels[0], loads);
+eq(leg.map(m => `${m.modNum}:${m.moduleType}:${m.loads.map(l => l.ch + l.name).join("|")}`), ["1:LQSE-4A5-120-D:1Cans|2Pendants", "2:LQSE-4S8-120-D:", "—:No module yet:Garage"], "legacy modules for print");
+eq(leg[0].loads[0], { id:"1", num:1, name:"Cans", ch:"1", loadType:"Dimming", watts:"900", keypad:"", pulled:false }, "row shape printPanelSchedule reads");
 
 console.log("needs-dryrun ok");

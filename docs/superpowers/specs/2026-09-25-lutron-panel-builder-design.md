@@ -1,6 +1,6 @@
 # Lutron Panel Builder — design (draft for Koy)
 
-**Status:** Design phase — Koy is shaping it in /design first (canvas: https://claude.ai/artifact/AmASTdBUAU4avf4A41b2nf). No app code until he approves the canvas.
+**Status:** SHIPPED as SW v449 (2026-09-25) — Koy approved the canvas (https://claude.ai/artifact/AmASTdBUAU4avf4A41b2nf) with the park-on-panel addition; see FEATURES.md v449 for what shipped. Code: `LUTRON_MODULES` + `lutron*` helpers (after `migrateFloorToModules`), `LutronPanelBuilder` / `LutronPanelForm` (before `PanelModulesSection`), Loads-list `onAssignLoad` / `onBatchAssign` / `parkedIds`, Lutron branches in the tab, `LightingSharePage`, `allSavantLoadsForJob`, `hasData`.
 **Date:** 2026-09-25 · **Owner:** Koy
 **Mockup:** https://claude.ai/artifact/BxxWDH4iimqu9xpoqAM5o3 (clickable; private until shared)
 **Replaces:** the Lutron / Control 4 / Crestron "Panel Loads" section (`PanelModulesSection`) and the
