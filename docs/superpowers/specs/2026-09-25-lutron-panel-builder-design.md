@@ -1,6 +1,6 @@
 # Lutron Panel Builder — design (draft for Koy)
 
-**Status:** Draft, awaiting Koy's answers to the open questions below
+**Status:** Design phase — Koy is shaping it in /design first (canvas: https://claude.ai/artifact/AmASTdBUAU4avf4A41b2nf). No app code until he approves the canvas.
 **Date:** 2026-09-25 · **Owner:** Koy
 **Mockup:** https://claude.ai/artifact/BxxWDH4iimqu9xpoqAM5o3 (clickable; private until shared)
 **Replaces:** the Lutron / Control 4 / Crestron "Panel Loads" section (`PanelModulesSection`) and the
@@ -88,7 +88,15 @@ arrays are never cleared by the builder. A wrong `assign` is one tap to fix; a w
 is visible immediately as "unassigned" rows, never as lost loads. Per-field job version history
 and the recovery ledger cover `panelizedLighting`.
 
-## Open questions for Koy
+## Koy's answers (2026-09-25)
+
+- Homestead assigns modules on Lutron jobs → the builder is the source; the PDF goes to Tech Lighting.
+- Panel slot counts / module list / watt limits: unknown yet → confirm with Tech Lighting before enforcing; the builder ships with slot count editable per panel and watt limits off until set.
+- Word on screen: **zones**.
+- Lutron only for the first ship (Control 4 / Crestron keep today's section).
+- Migration: option A, the clean move, once the design is approved.
+
+## Open questions (original list, kept for the record)
 
 1. **Who assigns modules on a Lutron job — Homestead or Tech Lighting?** The guide says Tech
    Lighting sends the loads list on Lutron jobs. If they design the panels, the builder is a
