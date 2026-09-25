@@ -206,8 +206,12 @@ sub-items, three owners, and two trackers**.
 |---|---|---|---|
 | `comm.precon` | Commercial pre-con (shared) | Brady, Justin | Steps 1–5 |
 | `comm.site` | Commercial site coordination (shared) | Zane, Abe | Step 6 |
-| — (the job's `foreman`) | — | job foreman | Steps 7–12 |
-| `comm.head` | Head of Commercial | (Koy to name) | fallback owner for every commercial row nobody wears the hat for; sees all |
+| `comm.precon` (same hat) | | Brady, Justin | Steps 7–12 — **all twelve steps are pre-construction; there is no on-site work in this process** (Koy, 2026-09-25: *"none of this is foreman phase? its all done pre construction there is no on site work yet"*). Open: whether any of 7–12 should sit with Zane/Abe instead (Q3b). |
+| `comm.head` | Head of Commercial | **Brady** (Koy, 2026-09-25) | fallback owner for every commercial row nobody wears the hat for; sees all |
+
+The job's foreman owns nothing in this process. Foremen see the Job Start board read-only
+(so they know what state a job is in before they mobilize) and take over when the on-site
+phases arrive in Phase 2.
 
 Shared hats follow the existing rule ("walked together: one row on both" boards). Resolution
 follows `resiHead(users)`: nobody wearing `comm.precon` → `comm.head` → `resi.head`.
@@ -240,8 +244,8 @@ That is the core mechanic:
 - **After phase 12** the job leaves Job Start: `commPhase(j)` returns `null`, the Job Board
   moves it to **In Progress** (§7), and Phase 2's above-slab tracking takes over.
 
-Phases 1–6 are office / pre-con (Brady & Justin, then Zane & Abe); 7–12 are the foreman's.
-Each phase is a group of items; each item is a **check** (chip), a **field** (a value on Job
+All twelve phases are pre-construction — Brady & Justin, with Zane & Abe on phase 6. Nothing
+here is on-site work; the job mobilizes only after phase 12 closes. Each phase is a group of items; each item is a **check** (chip), a **field** (a value on Job
 Info), a **photo** item (chip + the existing `PhotoAttacher`), or a **tracker** item whose
 done-state is *derived* from a log (§6.3). All of it lives under `job.commercial.start`:
 
@@ -266,17 +270,18 @@ Koy's list (**Koy edits this table, not the code**):
 | 4 | Electrical Submittal Review | `comm.precon` | PM/ESTIMATOR REVIEWED · check — DIMENSIONS / CLEARANCES · check — RFI LIST · **tracker**: RFI log exists (0 open allowed) — SENT TO GC · **tracker**: every row ≥ submitted — ALL APPROVED · **tracker**: every row approved / approved-as-noted — COMMENTS RESOLVED · check |
 | 5 | Release / Order Long-Lead Gear | `comm.precon` | RELEASED + PO · **tracker**: every approved row has PO # + released date — SHIP DATES IN WRITING · **tracker**: every released row has promised ship — PROCUREMENT LOG · **tracker**: every row has required-on-site — SHIP COMPLETE / SPLIT · **tracker**: every row has a shipping mode — DELIVERY / STORAGE · check — WEEKLY GEAR CHECK · *not a chip*: a weekly My Day row (§6.5) |
 | 6 | Preconstruction / Site Coordination | `comm.site` | GC KICKOFF ATTENDED · check — SCHEDULE CONFIRMED · check — MANPOWER PLAN · check — MILESTONES SET · check, satisfied when §6.4 milestone dates are in — LAYDOWN / STORAGE · check — TEMP POWER NEEDS · check — TRAILER / CONTAINER · check — CRANE / FORKLIFT · check — RENTALS + DATES · check — BIM / CLASH · check (N/A common) |
-| 7 | Site Work Takeoff & Ordering | foreman (+ `comm.precon`) | SITE TAKEOFF DONE · check — SITE MATERIAL ORDERED · check — the ten material lines (PVC, sweeps, duct bank, pull boxes, grounding, site lighting, utility/service, vaults, comm/FA pathways, tape/spacers/encasement) are a **sub-checklist** inside the step, each N/A-able |
-| 8 | Temporary Power | foreman | REQUIREMENTS · check — TEMP UTILITY SERVICE · check — SERVICE / METER / MAIN · check — DISTRIBUTION · check — SPIDER BOXES / GFCI · check — TEMP LIGHTING · check — TRAILER POWER · check — CRANE / HOIST POWER · check — INSPECTED + ENERGIZED · check + date — MAINTENANCE OWNER · field |
-| 9 | Ufer / CEE | foreman | FOOTING SCHEDULE REVIEWED · check — ELECTRODE CONFIG · check — CONCRETE / REBAR COORD · check — UFER INSTALLED · check — PHOTOS · **photo** — INSPECTION · check + date — GEC ACCESS CONFIRMED · check |
-| 10 | Foundation Electrical / Blockouts | foreman | DRAWINGS OVERLAID · check — SERVICE CONDUITS · SLEEVES · FEEDERS · GEN / XFMR CONDUITS · SITE LIGHTING · LV PATHWAYS · GROUNDING · ROOM PENETRATIONS · HOUSEKEEPING PADS · checks (N/A-able) — BLOCKOUTS BEFORE POUR · check |
-| 11 | Building Underground | foreman | TRADE OVERLAY · check — LAYOUT DONE · check — BANKS / CROSSINGS FIRST · check — CLEARANCES · check — STUB-UPS SET + SECURED · check — CAPPED / SEALED · check — PULL STRINGS · check — PHOTOS + DIMENSIONS · **photo** — CONDUIT CHECK · check — INSPECTED BEFORE COVER · check + date |
-| 12 | Slab-on-Grade Coordination | foreman | FLOOR BOXES · EQUIPMENT FEEDS · KITCHEN · ISLANDS / CASEWORK · FLOOR RECEPTS · MECHANICAL · SPECIALTY · LV SLEEVES · checks (N/A-able) — DIMS FROM CONTROL LINES · check — PRE-POUR CHECKLIST / INSPECTION · check + date |
+| 7 | Site Work Takeoff & Ordering | `comm.precon` | SITE TAKEOFF DONE · check — SITE MATERIAL ORDERED · check — the ten material lines (PVC, sweeps, duct bank, pull boxes, grounding, site lighting, utility/service, vaults, comm/FA pathways, tape/spacers/encasement) are a **sub-checklist** inside the step, each N/A-able |
+| 8 | Temporary Power | `comm.precon` | REQUIREMENTS · check — TEMP UTILITY SERVICE · check — SERVICE / METER / MAIN · check — DISTRIBUTION · check — SPIDER BOXES / GFCI · check — TEMP LIGHTING · check — TRAILER POWER · check — CRANE / HOIST POWER · check — INSPECTED + ENERGIZED · check + date — MAINTENANCE OWNER · field |
+| 9 | Ufer / CEE | `comm.precon` | FOOTING SCHEDULE REVIEWED · check — ELECTRODE CONFIG · check — CONCRETE / REBAR COORD · check — UFER INSTALLED · check — PHOTOS · **photo** — INSPECTION · check + date — GEC ACCESS CONFIRMED · check |
+| 10 | Foundation Electrical / Blockouts | `comm.precon` | DRAWINGS OVERLAID · check — SERVICE CONDUITS · SLEEVES · FEEDERS · GEN / XFMR CONDUITS · SITE LIGHTING · LV PATHWAYS · GROUNDING · ROOM PENETRATIONS · HOUSEKEEPING PADS · checks (N/A-able) — BLOCKOUTS BEFORE POUR · check |
+| 11 | Building Underground | `comm.precon` | TRADE OVERLAY · check — LAYOUT DONE · check — BANKS / CROSSINGS FIRST · check — CLEARANCES · check — STUB-UPS SET + SECURED · check — CAPPED / SEALED · check — PULL STRINGS · check — PHOTOS + DIMENSIONS · **photo** — CONDUIT CHECK · check — INSPECTED BEFORE COVER · check + date |
+| 12 | Slab-on-Grade Coordination | `comm.precon` | FLOOR BOXES · EQUIPMENT FEEDS · KITCHEN · ISLANDS / CASEWORK · FLOOR RECEPTS · MECHANICAL · SPECIALTY · LV SLEEVES · checks (N/A-able) — DIMS FROM CONTROL LINES · check — PRE-POUR CHECKLIST / INSPECTION · check + date |
 
 **Gate:** `commPhase(j)` (above) is the only state. `commPhaseChecked(j, n)` = every item in
 phase *n* done or N/A (tracker items evaluate their rule). A phase is *closed* when checked
-**or** `start.overrides[n]` exists. "Cleared to mobilize" = phases 1–6 closed — it is a
-derived label for the Job Board, not a separate flag.
+**or** `start.overrides[n]` exists. **"Ready to start"** = all twelve phases closed
+(`commPhase(j) === null`) — a derived Job Board stage, not a separate flag. That is the
+moment the job leaves pre-construction and a foreman and crew can be put on it.
 
 ### 6.3 The two trackers (logs, not chips)
 
@@ -319,12 +324,13 @@ alarm, specialty. The Job Start board shows a **GEAR** summary pill per job
 
 | Row | Owner | Fires while |
 |---|---|---|
-| "Phase <n> · <phase name>: <job>" | the phase's owner hat (1–5 `comm.precon`, 6 `comm.site`, 7–12 the foreman) | the job's current phase is *n* — one row per job, it changes owner as the job advances |
+| "Phase <n> · <phase name>: <job>" | the phase's owner hat (`comm.precon`, or `comm.site` for phase 6) | the job's current phase is *n* — one row per job, it changes owner as the job advances |
 | "Owed: <item> on <job>" | the owning hat of that item's phase | an item in an earlier phase was left owed by a move-on override (never clears until checked — same as residential) |
 | "Gear check: <job>" (weekly, Monday) | `comm.precon` | any submittal row released and not delivered — Koy's *"don't wait until the promised delivery date to discover a delay"*. Done stamps `lastCheckedAt` on every open row. |
 | "Gear late: <item> on <job>" | `comm.precon` | `promisedShip` past, not delivered |
-| "Ufer before pour: <job>" | foreman | `milestones.footing` within 7 days and step 9 not complete |
-| "Underground inspection: <job>" | foreman | `milestones.slab` within 7 days and step 11 "inspected before cover" not done |
+| "Ufer before pour: <job>" | `comm.precon` | `milestones.footing` within 7 days and phase 9 not closed |
+| "Underground before slab: <job>" | `comm.precon` | `milestones.slab` within 7 days and phase 11 not closed |
+| "Ready to start — assign a foreman: <job>" | `comm.head` | all twelve phases closed and the job has no foreman / no Crew Planner assignment |
 
 All rows use the existing `computeTasks` shape (`category`, `jobId`, `dueDate`, cleared via
 `clearedTasks`), so Push / snooze / Done / verify work unchanged. Owners resolve through hats
@@ -333,10 +339,11 @@ exactly like `resi.head`. Server nudges for these are Phase 2 (client rows are e
 ### 6.6 The Job Start board (top-nav tab, replaces the "Pre-Con" tab in the earlier draft)
 
 Nav key `jobstart`, label **Job Start**, perm `commstart.view` (admin, manager, standard —
-foremen need steps 7–12). Layout (see mockup):
+foremen see it read-only; editing needs `comm.precon` / `comm.site` / `comm.head`). Layout
+(see mockup):
 
-- **Header:** JOB START · counts: active · in pre-con (phases 1–6) · in job start (7–12) ·
-  items owed in earlier phases · past slab.
+- **Header:** JOB START · counts: active (in a phase) · items owed in earlier phases ·
+  ready to start (all twelve closed).
 - **Grouped by phase**, 1 → 12, each group a collapsible section headed "PHASE 5 · RELEASE /
   ORDER LONG-LEAD GEAR · Brady · Justin" with the job count; empty phases are hidden. Inside,
   **one card per job in that phase**, sorted by nearest milestone. Card header: name, GC,
@@ -363,17 +370,17 @@ The same component mounts inside the job card as the **Job Start** tab (drawer t
 
 | Stage | Test | Colour |
 |---|---|---|
-| **Pre-Con** | `commPhase(j)` in 1–6 — row pill shows `PHASE 3 · SUBMITTALS` | teal |
-| **Job Start** | `commPhase(j)` in 7–12 — row pill shows `PHASE 9 · UFER` | grey |
-| **In Progress** | `commPhase(j) === null` (all twelve closed) and `stage` not hold/closeout/complete | blue |
+| **Pre-Con** | `commPhase(j)` in 1–12 — row pill shows `PHASE 3 · SUBMITTALS`; every job starts here | teal |
+| **Ready to Start** | `commPhase(j) === null` (all twelve closed) and `stage === ""` — waiting on a foreman and a crew | green |
+| **In Progress** | `stage === "inprogress"` — set from the Job Info pill when the crew mobilizes (Phase 2: auto when the Crew Planner first schedules the job) | blue |
 | **On Hold** | `stage === "hold"` | amber (app's existing hold colour) |
 | **Closeout** | `stage === "closeout"` | purple |
 | **Complete** | `stage === "complete"` | green, collapsed by default |
 
 `commercial.stage` is set from a pill on Job Info (like `InProgressModePill`), with a date
 stamp. There is no rough % / finish %; Phase 2 adds per-area phase tracking (below) for the
-work above the slab (walls → ceilings → permanent power → startup → final, Koy's milestone
-list).
+on-site work (temp power → underground → slab → walls → ceilings → permanent power → startup
+→ final, Koy's milestone list) — that is where the foreman's checklists live.
 
 ### Job card tabs (`COMM_TABS`, used by `tabsForJob` when `isCommercial(job)`)
 
@@ -417,8 +424,9 @@ custom floors; the fixed upper/main/basement keys are simply not created for com
 | Key | Tiers | Purpose |
 |---|---|---|
 | `commercial.view` | admin, manager, standard, limited | see the mode switch (everyone internal — crews work both, Koy 2026-09-25) |
-| `comm.head` | hat (caps) | Head of Commercial — owner of commercial auto-tasks and duties; falls back to `resi.head` |
-| `commstart.view` | admin, manager, standard | the Job Start board (foremen own phases 7–12) |
+| `comm.head` | hat (caps) — Brady | Head of Commercial — owner of commercial auto-tasks and duties nobody else's hat covers; falls back to `resi.head` |
+| `commstart.view` | admin, manager, standard | see the Job Start board (foremen read-only) |
+| `commstart.edit` | admin, manager (+ `comm.precon` / `comm.site` / `comm.head` hats) | check items, move on, edit the logs |
 | `comm.precon` | hat (caps, shared) | Commercial pre-con — phases 1–5 (Brady, Justin) |
 | `comm.site` | hat (caps, shared) | Commercial site coordination — phase 6 (Zane, Abe) |
 | `job.division` | admin, manager | move a job between divisions |
@@ -466,10 +474,17 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
      should the app follow it (poller flips `division`) or only flag it? Proposed: **flag
      only** (same mismatch list), never silently move a live job between boards.
 
+3. **Pre-con checklist.** Answered by the pasted *Commercial Electrical Job Start Process*
+   (§6.2) — Brady/Justin own it, Zane/Abe own step 6, every step is pre-construction, and
+   **Brady is Head of Commercial** (`comm.head`).
+
 ### Still open
 
-3. **Pre-con checklist (§6):** which items are real for Homestead, which are missing, which
-   are Justin's vs yours? Is there a commercial PM who owns lane 2 instead of you?
+3b. **Phases 7–12 owner:** defaulted to Brady/Justin (`comm.precon`). Should any of site
+    takeoff / temp power / Ufer / blockouts / underground / slab coordination sit with
+    Zane/Abe (`comm.site`) instead? One-word answer per phase is enough.
+3c. **Foremen on the Job Start board:** read-only as proposed, or hidden entirely until the
+    job is Ready to Start?
 4. **Stages (§7):** is Pre-Con → Mobilizing → In Progress → Closeout → Complete right, or do
    you think in GC milestones (underground / rough / gear / trim / final)?
 5. **Progress:** one % per job, or per area × phase? What are the phases on your jobs?
@@ -538,7 +553,8 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 - [ ] New / imported / promoted jobs in Commercial mode carry `division:"commercial"`; Job Info can move a job either way with a confirm; only `division` changes on that write.
 - [ ] Commercial job card shows the `COMM_TABS` list; residential-only tabs never render for it.
 - [ ] Job Start board: jobs grouped by current phase (1–12), the current phase's checklist open on the card, checking the last item rolls the job into the next phase with a toast, move-on override per phase with audit stamp + owed badges + Undo, header counts, look-back / peek on the phase bar.
-- [ ] Owners resolve by hat: phases 1–5 → `comm.precon`, 6 → `comm.site`, 7–12 → the job's foreman; one "Phase n: <job>" My Day row per job, changing owner as the job advances; owed items keep their rows.
+- [ ] Owners resolve by hat: phases 1–5 and 7–12 → `comm.precon`, 6 → `comm.site`, fallback `comm.head`; never the foreman; one "Phase n: <job>" My Day row per job, changing owner as the job advances; owed items keep their rows.
+- [ ] All twelve closed → the job shows under Ready to Start; nothing in the process is gated on a foreman or on-site work.
 - [ ] Gear & Submittals log drives the phase 3 and 5 tracker chips; late rows flag the GEAR pill.
 - [ ] Offline save, backup snapshot and restore all operate on `allJobs`.
 - [ ] Deep links from pushes / My Day / Needs auto-switch the mode.
