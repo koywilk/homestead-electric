@@ -23341,6 +23341,11 @@ function LutronPanelBuilder({ job, u }) {
   const view = lutronView(job);
   const { panels, loads } = view;
   const [sheet, setSheet] = useState(null);
+  // v451: the approved canvas's Loads TRAY — the working surface for
+  // assignment (search, All / Dimming / Switching, Needs a zone / Everything,
+  // Select → batch). The editing Loads list above the section stays the place
+  // to rename, re-room and mark loads ran.
+  const [tray, setTray] = useState({ q: "", kind: "all", mode: "needs", select: false, selected: [] });
   const accent = C.blue;
   const mob = ON_MOBILE;
   const floorOrder = ["Main Level", "Basement", "Upper Level", ...(pl.extraFloors || []).map(ef => ef && ef.label).filter(Boolean)];
@@ -23569,6 +23574,80 @@ function LutronPanelBuilder({ job, u }) {
     );
   };
 
+  const renderTray = () => {
+    const q = tray.q.trim().toLowerCase();
+    const needs = loads.filter(l => named(l) && !onModule(l)).length;
+    const list = loads.filter(named)
+      .filter(l => tray.kind === "all" || (tray.kind === "dimming" ? lutronLoadKind(l.loadType) === "dimming" : lutronLoadKind(l.loadType) !== "dimming"))
+      .filter(l => tray.mode === "all" || !onModule(l))
+      .filter(l => !q || String(l.name || "").toLowerCase().includes(q) || String(l.room || "").toLowerCase().includes(q) || String(l.location || "").toLowerCase().includes(q));
+    const ord = (fl) => { const i = floorOrder.findIndex(f => String(f).toLowerCase() === String(fl || "").toLowerCase()); return i < 0 ? 99 : i; };
+    const floorOf = (l) => String(l.location || "").trim() || "No floor";
+    const floors = [...new Set(list.map(floorOf))].sort((a, b) => ord(a) - ord(b) || a.localeCompare(b));
+    const sel = new Set(tray.selected);
+    const toggleSel = (id) => setTray(t => ({ ...t, selected: t.selected.includes(id) ? t.selected.filter(x => x !== id) : [...t.selected, id] }));
+    const exitSelect = () => setTray(t => ({ ...t, select: false, selected: [] }));
+    const seg = (on) => ({ fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "5px 9px", border: "none", background: on ? C.text : "transparent", color: on ? "#fff" : C.dim, cursor: "pointer", borderRadius: 6, whiteSpace: "nowrap" });
+    const segWrap = { display: "inline-flex", gap: 2, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 2 };
+    const chipOf = (l) => onModule(l) ? { bg: `${C.green}18`, col: C.green, txt: label(l) } : l.assign ? { bg: `${C.orange}18`, col: C.orange, txt: label(l) } : lutronLoadKind(l.loadType) === "dimming" ? { bg: `${accent}18`, col: accent, txt: "Dim" } : { bg: `${C.purple}18`, col: C.purple, txt: l.loadType ? (lutronLoadKind(l.loadType) === "switching" ? "Switch" : l.loadType) : "No type" };
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, letterSpacing: "0.06em", color: accent }}>Loads</span>
+          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 999, padding: "2px 8px", color: needs ? C.orange : C.green, background: needs ? `${C.orange}18` : `${C.green}18`, whiteSpace: "nowrap" }}>{needs ? `${needs} need a zone` : "all on zones"}</span>
+          <span style={{ flex: 1 }}/>
+          <button onClick={() => setTray(t => ({ ...t, select: !t.select, selected: [] }))} style={btn(tray.select, { padding: "4px 10px" })}>{tray.select ? "Cancel" : "Select"}</button>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={tray.q} onChange={e => setTray(t => ({ ...t, q: e.target.value }))} placeholder="Search loads or rooms…" aria-label="Search loads or rooms"
+            style={{ flex: "1 1 140px", minWidth: 0, fontFamily: "inherit", fontSize: 13, padding: "7px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, outline: "none" }}/>
+          <div style={segWrap}>
+            {[["all", "All"], ["dimming", "Dimming"], ["switching", "Switching"]].map(([k, t]) => <button key={k} onClick={() => setTray(x => ({ ...x, kind: k }))} style={seg(tray.kind === k)}>{t}</button>)}
+          </div>
+          <div style={segWrap}>
+            {[["needs", "Needs a zone"], ["all", "Everything"]].map(([k, t]) => <button key={k} onClick={() => setTray(x => ({ ...x, mode: k }))} style={seg(tray.mode === k)}>{t}</button>)}
+          </div>
+        </div>
+        {tray.select && tray.selected.length > 0 && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", background: `${accent}0d`, border: `1px solid ${accent}33`, borderRadius: 8, padding: "6px 8px" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: accent }}>{tray.selected.length} selected</span>
+            <button onClick={() => { const ids = tray.selected; exitSelect(); openBatch(ids); }} style={btn(true, { padding: "5px 10px" })}>Put on a panel / module…</button>
+            <button onClick={() => { const ids = new Set(tray.selected); exitSelect(); commit(panels, mapLoads(l => ids.has(l.id) ? { ...l, assign: null } : l), "Cleared"); }} style={btn(false, { padding: "5px 10px", color: C.dim, borderColor: C.border })}>Clear</button>
+          </div>
+        )}
+        <div style={{ overflowY: "auto", maxHeight: mob ? "55vh" : "72vh", minHeight: 80 }}>
+          {!list.length && <div style={{ fontSize: 12, color: C.dim, textAlign: "center", padding: "16px 8px", border: `1px dashed ${C.border}`, borderRadius: 8 }}>{tray.mode === "needs" && !q ? "Every load has a zone. Switch to Everything to review." : "No loads match."}</div>}
+          {floors.map(fl => {
+            const rows = list.filter(l => floorOf(l) === fl);
+            const rooms = [...new Set(rows.map(l => String(l.room || "").trim()))].sort((a, b) => (a || "\uffff").localeCompare(b || "\uffff"));
+            return (
+              <div key={fl} style={{ marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: accent, margin: "6px 0 4px" }}>
+                  {fl}<span style={{ fontWeight: 600, color: C.dim, letterSpacing: 0, textTransform: "none" }}>{rows.length}</span><span style={{ flex: 1, height: 1, background: `${accent}28` }}/>
+                </div>
+                {rooms.map(r => (
+                  <div key={r || "_"}>
+                    {r && <div style={{ fontSize: 10.5, fontWeight: 700, color: C.dim, margin: "4px 0 2px 2px" }}>{r}</div>}
+                    {rows.filter(l => String(l.room || "").trim() === r).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))).map(l => { const c = chipOf(l); const on = sel.has(l.id);
+                      return (
+                        <button key={l.id} onClick={() => tray.select ? toggleSel(l.id) : openAssign(l.id)} title={l.assign ? `${onModule(l) ? "On" : "Parked on"} ${label(l)} — tap to move, park or clear` : "Tap to put this load on a panel or zone"}
+                          style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", fontFamily: "inherit", background: on ? `${accent}12` : C.surface, border: `1px solid ${on ? accent : C.border}`, borderRadius: 9, padding: "7px 9px", minHeight: 40, color: C.text, cursor: "pointer", marginBottom: 4 }}>
+                          {tray.select && <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${on ? accent : C.border}`, background: on ? accent : "transparent", color: "#fff", fontSize: 11, lineHeight: "16px", textAlign: "center", flexShrink: 0 }}>{on ? "✓" : ""}</span>}
+                          <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
+                          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: c.col, background: c.bg, whiteSpace: "nowrap" }}>{c.txt}</span>
+                          <span style={{ fontSize: 12, color: C.dim, width: 44, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{l.watts ? `${l.watts}W` : ""}</span>
+                        </button>
+                      ); })}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ marginBottom: 16 }}>
       {/* Summary strip */}
@@ -23579,6 +23658,9 @@ function LutronPanelBuilder({ job, u }) {
         {tile("Panels · modules", stats.panels, `· ${stats.modules} module${say(stats.modules, "", "s")}`)}
         {tile("Zones over watts", stats.overW, "", stats.overW > 0)}
       </div>
+      <div style={{ display: mob ? "block" : "grid", gridTemplateColumns: mob ? undefined : "minmax(280px, 360px) minmax(0, 1fr)", gap: 12, alignItems: "start" }}>
+      <div style={{ marginBottom: mob ? 12 : 0 }}>{renderTray()}</div>
+      <div style={{ minWidth: 0 }}>
       {view.migrated && (panels.length > 0 || view.created > 0) && (
         <div style={{ fontSize: 11, color: C.dim, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 8, padding: "6px 10px", marginBottom: 10 }}>
           Read from this job's old panel sections: {panels.length} panel{say(panels.length, "", "s")}, {stats.modules} module{say(stats.modules, "", "s")}{view.created ? `, ${view.created} load${say(view.created, "", "s")} that were only on a module added to the Loads list` : ""}{view.parked ? `, ${view.parked} parked with no module` : ""}. Nothing is written until your first change here.
@@ -23659,6 +23741,8 @@ function LutronPanelBuilder({ job, u }) {
         {panels.length > 0 && (stats.unassigned + stats.parked) > 0 && (
           <button onClick={suggest} title="Fill open zones floor → room, dimming on dimmers, switching on relays; adds modules when none fit. Every placement is one tap to change." style={btn(true, { padding: "10px 14px", fontSize: 12 })}><Icon name="zap" size={12} stroke={2.25}/>Suggest layout</button>
         )}
+      </div>
+      </div>
       </div>
       {renderSheet()}
     </div>
@@ -49829,12 +49913,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v450
+**Last manifest update:** 2026-09-25 · App SW version: v451
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Lutron Panel Builder — the Loads tray from the canvas (search, Dimming / Switching, Needs a zone / Everything, Select)** · 'shipped 2026-09-25' · 'SW v451' · Koy, on Miller: *"I am not seeing the little bubble that says '22 needed zone' or something on the loads list. Why isn't it looking like the mockup you sent?"* v449 had reused the editing Loads list as the tray; the approved canvas has its own tray beside the panels. Now 'LutronPanelBuilder' renders that tray (left of the panels on desktop, above them on phones): **Loads** header with the **N need a zone** bubble (green "all on zones" when done), **Search loads or rooms**, **All / Dimming / Switching** and **Needs a zone / Everything** toggles, rows grouped floor → room → A–Z with a Dim / Switch chip (or the green zone / orange "no module yet" chip once placed) and watts, tap → the assign sheet, **Select** → tick rows → **Put on a panel / module…** or **Clear**. The editing Loads list above the section stays the place to rename, re-room and mark loads ran. **Why it won't lose data:** display-only plus the same two writes the builder already made (assign via the sheet, Clear = 'assign: null' on the ticked rows); no new field.
 - **Incoming from FieldInk — imported loads follow FieldInk (rename / re-room / re-floor)** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"it seems like the list of loads isnt correct in cc, i have re roomed and labled some in field ink and feel like it hasnt changed on cc side."* Root cause: an imported row was a one-time copy — 'ccLoadImportRows' composed the name, room and floor once and nothing ever re-read the live field load (v436's Fill floor/room only filled blanks). Now every imported row ('origin:"fieldink"') is compared with its live 'ccloads' load by the pure 'ccLoadSyncPlan(rows, inbox, floorOptions)': the field-owned bits are the composed name, the room and the floor section ('ccLoadWantFromField', the same rule Import uses; a blank field floor never blanks a typed floor; 'office.floor' on the bridge still wins). Rows that still hold exactly what we last took from FieldInk ('fieldSnap', stamped on every import from now on and refreshed by every sync) are **auto-applied** by a JobDetail effect in ONE 'u()' patch with a toast; rows the office edited since import, or pre-v450 rows with no snap, are **manual**: an orange **Update N from FieldInk** button in the inbox header (confirm lists the changes) and a "changed in FieldInk: room Den → Study" note on the inbox row under the Imported chip. Watts, type, pulled and panel / module assignments are never touched. If the inbox itself still shows the old room, FieldInk didn't republish — that's the FieldInk side. Harness 'ccloads-suggest-test' covers snap stamping, auto vs manual, legacy rows, blank floors, office.floor, skips. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** only 'name', 'room', 'location' and the new 'fieldSnap' on rows that came from FieldInk change, only to values FieldInk holds right now; the auto path writes only rows the office never edited (proved by the snap), the manual path asks first and lists every change; every write spreads the current 'panelizedLighting' and maps the existing 'loads' array in place (no row added, removed or reordered), so Lutron 'assign', 'pulled', watts and type ride along untouched.
 - **Lutron Panel Builder — panels → modules → zones, loads assigned by reference, park-on-panel** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"panelized lighting, specifically lutron needs a way better way to organize and assign modules and panels etc."* and *"can i have the option to put on a panel too? that way i can seperate panels without having to set modules yet."* Design approved on the /design canvas first (spec: 'docs/superpowers/specs/2026-09-25-lutron-panel-builder-design.md'). On a **Lutron** job the Panel Loads section is now 'LutronPanelBuilder': a summary strip (unassigned · on a panel with no module · zones used · panels/modules · zones over watts), one card per panel (name, where it hangs, slot meter, **+ Module**, Print / Download), one block per module with a row per zone (filled rows show room + watts and flag **over** the zone's watt cap in red; open rows say the cap), an orange **"On this panel, no module yet"** tray for parked loads, **+ Add panel** and **Suggest layout**. One interaction, no drag: tap a load (in the Loads list above — its badge is now the button — or on a zone) → bottom sheet with **Panel** chips → **Module** chips (first chip is **No module yet** = park it) → **Zone** chips (picking a filled zone parks that load) → **Assign / Move here / Put on LCP 1 only**; **Off module, keep panel** and **Clear** on placed loads; Loads-list **Select → Put on a panel / module…** fills the next open zones in order. Tap an open zone → pick a load, parked-on-this-panel first. **Suggest layout** walks loads with no module floor → room → biggest watts first, dimming onto dimmers and switching onto relays with headroom, adds a module of the right kind when none fits, keeps a parked load in its own panel, stops when a panel is full. **Model:** 'panelizedLighting.panels = [{ id, label, where, slots, modules:[{ id, num, type, bus, pdu }] }]' and 'loads[i].assign = { panelId, moduleId, zone } | null' (module + zone null = parked). Modules hold no copies of loads. **Module catalog** ('LUTRON_MODULES', verified against Lutron spec submittals): 4A5-120-D (zone 1 800 W, zones 2–4 500 W), 4S8-120-D (8 A/zone), 4T5-120-D (5 A), 4T20-120-D (20 A, receptacles OK), 4M-120-D (motors only), 2HDC-D and 1DAL2-D (bus, 64 loads), 4A1-D; legacy 4A-120-D (discontinued), 2ECO-D, 2DAL-D stay selectable only where a job already has them. The app's old 'LQSE-S8' (8 ch) and 'LQSE-T5' (5 ch) were wrong SKUs — both are 4-zone (8 / 5 are amps) — and are read as 4S8-120-D / 4T5-120-D. **Migration (read-side, 'lutronMigrate'):** a Lutron job with no 'panels' yet is shown from its old floor sections (upper → Panel A, main → Panel B, basement → Panel C, then extras; the panel id IS the old floor key) — module rows link to the master load by trimmed name, a row with no master match becomes a master load ('origin:"module"'), a channel past the real zone count takes the next open zone or parks, and a load whose free-text Panel column names a panel parks there. Nothing is written until the first change in the builder, which persists 'panels' + 'assign' in ONE 'u()' patch; the old 'cp4Loads' / extra-floor arrays are never touched. **Readers moved (option A):** Loads-list badges + batch action, keypad suggestions ('_assignedNames'), the per-panel **Print / Download** schedule ('lutronLegacyModules' feeds the unchanged 'printPanelSchedule'; parked loads print as a trailing "No module yet" block), the LV collab page '?lighting=' (same adapter; Tech Lighting's own rows stay keyed 'cp4_<old floor key>'), the loads share / **Set baseline** rows ('allSavantLoadsForJob' Lutron branch), Job Sections' has-data check. Control 4 / Crestron keep 'PanelModulesSection'; Savant untouched. Harness 'needs-dryrun' covers aliases, caps, type gating, migration (labels, zones, parking, created loads, S8 overflow), the cached read view, open zones, over-watt, labels, stats, suggest layout (zone 1 for the biggest dimmer, parked stays home, motor → 4M, full panel skips) and the print adapter. Guides 'panelizedlighting.html' + 'lightinglinks.html' updated. **Why it won't lose data:** purely additive — 'panels' is a new array and 'assign' a new key on existing load rows, both nested in 'panelizedLighting' (already in the loader spread; no loader, rules or function change); the builder never clears, rewrites or reads back the old floor arrays after the first write, every write spreads the current 'panelizedLighting' so keypads / lutronRooms / baseline / cp4Loads ride along, deleting a module or panel only nulls 'assign' (never deletes a load), and a wrong placement is one tap to fix and visible immediately as "unassigned" or "no module yet" — never as a lost load.
 - **Panelized Lighting — download the load list (PDF / CSV), clean, no module assignments** · 'shipped 2026-09-25' · 'SW v448' · Koy: *"I would also love to be able to download a list of loads that is clean and organized without any modules assigned yet."* Two buttons on the **Loads** section header (Lutron / Control 4 / Crestron layout): **PDF** and **CSV**. Both build from the job's own 'panelizedLighting.loads' via the pure 'loadsListRows(loads, floorOrder)' — every named load, grouped **floor → room → A–Z** (floors in the tab's own order: Main Level, Basement, Upper Level, then extra floors, then anything unrecognized; blank room sorts last as "General"), numbered 1..N, with **Type** and **Watts** — and **no panel, module or channel columns**, so a lighting designer lays the panels out from a clean sheet. The PDF ('loadsListHtml' → new '_saveHtmlAsPdfPaged', a multi-page cousin of '_saveHtmlAsPdf', which captures one letter page only) carries the job name, address, system, load/floor counts and print date; the CSV ('loadsListCsv', BOM-prefixed so Excel reads UTF-8, '#,Floor,Room,Load,Type,Watts') is the editable copy. Harness 'needs-dryrun' covers ordering, numbering, unknown floors, dropped blanks and CSV escaping. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — both buttons only read 'loads' and write nothing to Firestore; no new field, no loader or rules change.
