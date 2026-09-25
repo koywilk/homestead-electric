@@ -3942,6 +3942,8 @@ const PERMISSIONS = {
   "pipeline.manage": ["admin","manager"],
   "settings.view":   ["admin","manager"],
   "users.manage":    ["admin","manager"],
+  "commercial.view": ["admin","manager","standard","limited"],  // the Resi / Commercial switch — everyone internal (crews work both, Koy 2026-09-25); contractors never
+  "job.division":    ["admin","manager"],                       // move a job between divisions (Job Info → DIVISION)
   "job.delete":      ["admin"],
   "quotes.view":     ["admin","manager","standard"],
   "quotes.convert":  ["admin"],
@@ -4377,6 +4379,17 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     {access==="standard" && "Can view all cards, add tasks, see schedule and pipeline (no manage)"}
                     {access==="limited"  && "Home screen and job editing only — no settings, pipeline, or tasks"}
                   </div>
+                  {(access==="admin"||access==="manager") && (
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>LANDS IN</div>
+                      <select value={u.defaultMode||""} onChange={e=>upd(u.id,{defaultMode:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        <option value="">Residential (default)</option>
+                        <option value="commercial">Commercial</option>
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which division they land in at login — for people who mostly work commercial</div>
+                    </div>
+                  )}
                   {/* Company hats — per-user grants for centralized duties (job
                       prep + redlines, job starts). These surface the Company
                       section of the Today worklist for THIS person only — not
@@ -30516,6 +30529,27 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
 
+              {can(identity,"job.division") && (
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",margin:"6px 0 12px"}}>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>DIVISION</span>
+                  <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                    {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => {
+                      const on = jobDivision(job) === k;
+                      return <button key={k} disabled={on} onClick={async()=>{
+                        const name = job.name || "this job";
+                        const msg = k==="commercial"
+                          ? `Move ${name} to Commercial? It leaves every residential board and its residential tabs are hidden. Nothing is deleted.`
+                          : `Move ${name} to Residential? It leaves the commercial boards. Nothing is deleted.`;
+                        if (!await showConfirm(msg)) return;
+                        u({ division: k==="commercial" ? "commercial" : "" });   // "" reads as resi; the key is never deleted (patch funnel)
+                        toast.success(k==="commercial" ? "Moved to Commercial" : "Moved to Residential");
+                      }} style={{border:"none",padding:"6px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.05em",cursor:on?"default":"pointer",fontFamily:"inherit",
+                           background: on ? (k==="commercial"?C.teal:C.accent) : "#fff", color: on ? "#fff" : C.dim}}>{l}</button>;
+                    })}
+                  </div>
+                  <span style={{fontSize:10,color:C.dim}}>Set from Simpro's Business Group at import. Moving a job writes only its division.</span>
+                </div>
+              )}
               <Section label="Admin" color={C.dim} defaultOpen={!(job.jobAccount && job.preLien)}>
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
@@ -46032,6 +46066,19 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           <div style={{fontSize:10,color:"#5E6670",marginTop:6,lineHeight:1.4}}>
             Applied the next time the schedule loads. Saved to your user record — not shared with other people.
           </div>
+          {can(identity,"commercial.view") && (
+            <div style={{marginTop:16}}>
+              <label style={{display:"block",fontSize:10,color:"#2E477D",fontWeight:700,letterSpacing:"0.05em",textTransform:"uppercase",marginBottom:4}}>Land in</label>
+              <select value={identity.defaultMode||""}
+                onChange={async (e)=>{ const v=e.target.value; const updatedList=(users||[]).map(u => u.id===identity.id ? {...u, defaultMode:v} : u);
+                  try { await onSaveUsers(updatedList); toast.success(v ? "You'll land in Commercial" : "You'll land in Residential"); } catch (err) { toast.error("Couldn't save preference: " + (err.message||"unknown")); } }}
+                style={{width:"100%",maxWidth:360,padding:"9px 12px",borderRadius:8,border:"1px solid #CDD9EC",background:"#fff",fontSize:13,fontFamily:"inherit",color:"#1B1F24",cursor:"pointer"}}>
+                <option value="">Residential (default)</option>
+                <option value="commercial">Commercial</option>
+              </select>
+              <div style={{fontSize:10,color:"#5E6670",marginTop:6,lineHeight:1.4}}>Which division the app opens in when you log in. The RESI / COMMERCIAL switch in the header changes it any time.</div>
+            </div>
+          )}
         </SettingsSection>
       )}
 
@@ -56542,7 +56589,11 @@ function App() {
   // `jobs` = the current mode's jobs, derived once. Every view keeps its `jobs`
   // prop. Nothing that WRITES may use `jobs`: writes, merges, backups and
   // lookups-for-save go through `allJobs` (audit table: plan Task 2).
-  const mode = "resi";  // TEMP — becomes state in plan Task 3
+  // Device-level mode: which division every screen shows. localStorage only.
+  const [mode, _setMode] = useState(readMode);
+  const setMode = useCallback((m) => { const v = m === "commercial" ? "commercial" : "resi"; _setMode(v); try { localStorage.setItem(MODE_KEY, v); } catch {} }, []);
+  // A job made while in Commercial mode is commercial. Residential mode writes NO key (absent = resi).
+  const stampDivision = (j) => mode === "commercial" ? { ...j, division: "commercial" } : j;
   const jobs = useMemo(() => allJobs.filter(j => jobDivision(j) === mode), [allJobs, mode]);
   const [upcoming, setUpcoming] = useState([]);
   // Which Upcoming entry to expand when the Upcoming tab mounts — set by tapping
@@ -58180,7 +58231,7 @@ function App() {
       toast.error("Importing Simpro jobs is admin-only.");
       return;
     }
-    const j = kind === "quick" ? blankQuickJob() : blankJob();
+    const j = stampDivision(kind === "quick" ? blankQuickJob() : blankJob());   // division from the current mode until the Business Group hint lands (plan Task 6)
     if (kind === "tempped") j.tempPed = true;
     j.name = cand.name || "";
     // v414: a candidate cached by the pre-fix refresh carries the SITE NAME as
@@ -58361,6 +58412,18 @@ function App() {
     if (getAccess(identity) !== "contractor" && can(identity, "myday.view")) setView("myday");
     setLandingApplied(true);
   }, [identity, users, landingApplied]);
+  // Commercial mode: land in the person's default division once per session
+  // (Settings → My Preferences / Team Members → LANDS IN). No commercial.view →
+  // always residential, whatever the device remembered.
+  const modeAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!identity?.id || modeAppliedRef.current) return;
+    modeAppliedRef.current = true;
+    if (!can(identity, "commercial.view")) { setMode("resi"); return; }
+    if (identity.defaultMode === "commercial") setMode("commercial");
+  }, [identity]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The open drawer follows the mode — never a residential drawer over a commercial board.
+  useEffect(() => { if (selected && jobDivision(selected) !== mode) setSelected(null); }, [mode]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v433: count each screen open (once per device/user/day). Waits for the
   // landing redirect so a foreman's pre-redirect "home" flash isn't counted as
   // a Job Board visit.
@@ -58800,12 +58863,14 @@ function App() {
   // ── Helper: open a job by ID and jump to a section ───────────────────────
   const openJobById = useCallback((jobId, section) => {
     if (!jobId) return;
-    const job = allJobs.find(j => j.id === jobId);   // both divisions — a push may name a job in the other mode (plan Task 3 switches the mode)
+    const job = allJobs.find(j => j.id === jobId);   // both divisions — a push may name a job in the other mode
     if (job) {
+      const div = jobDivision(job);
+      if (div !== mode && (div === "resi" || can(identity, "commercial.view"))) { setMode(div); toast(`Switched to ${div === "commercial" ? "Commercial" : "Residential"}`); }
       setOpenTab(section || null);
       setSelected(job);
     }
-  }, [allJobs]);
+  }, [allJobs, mode, identity, setMode]);
 
   // ── On mount: check URL params for deep-link (background notification tap) ─
   const [pendingNav, setPendingNav] = useState(() => {
@@ -59192,7 +59257,7 @@ function App() {
 
 
       {/* ── COMMAND NAV (dark console) ── */}
-      <div style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom:`1px solid ${D.hair}`}}>
+      <div style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
         {/* ROW 1 — flag wordmark + live status */}
         <div style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
           <div style={{width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
@@ -59206,6 +59271,18 @@ function App() {
             <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
           </div>
+          {can(identity,"commercial.view") && (
+            <div style={{display:"flex",alignItems:"center",gap:6}} title="Residential / Commercial — only changes what you see on this device">
+              <div style={{display:"flex",border:`1px solid ${D.chipLine}`,borderRadius:99,overflow:"hidden",background:D.chipBg}}>
+                {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => (
+                  <button key={k} onClick={()=>{ if (mode!==k) { setMode(k); toast.success(k==="commercial" ? "Commercial — only commercial jobs everywhere" : "Residential"); } }}
+                    style={{border:"none",background: mode===k ? (k==="commercial" ? C.teal : C.accent) : "transparent", color: mode===k ? "#fff" : D.text,
+                      fontSize:10,fontWeight:700,letterSpacing:"0.1em",padding:"5px 11px",cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+                ))}
+              </div>
+              <HelpDot section="commercialmode"/>
+            </div>
+          )}
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
             <HeaderDateWeather/>
           </div>
@@ -59225,10 +59302,10 @@ function App() {
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
-                background: active ? C.accent : "transparent",
+                background: active ? (mode==="commercial" ? C.teal : C.accent) : "transparent",
                 color: active ? "#fff" : "#9AA3B2",
                 transition:"all 0.15s",letterSpacing:"0.02em",
-                boxShadow: active ? `0 6px 18px ${D.accentGlow}` : "none",
+                boxShadow: active ? `0 6px 18px ${mode==="commercial" ? "rgba(62,125,122,.5)" : D.accentGlow}` : "none",
                 display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
@@ -59647,19 +59724,19 @@ function App() {
                     </>
                   )}
                 </div>
-                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankQuickJob());j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.02em"}}>
                   + Quick
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setAllJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankJob());j.foreman="Unassigned";j.tempPed=true;setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.02em"}}>
                   + Temp Ped
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankJob());j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
@@ -60112,7 +60189,7 @@ function App() {
 
                 <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
 
-                <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
                   style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
 
@@ -60236,7 +60313,7 @@ function App() {
                 {filtered.length===0?(
                   <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
                     <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
-                    <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
+                    <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
                       style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
                         fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                       + Add First Job
@@ -60533,7 +60610,7 @@ function App() {
                       {!isContractor&&(
                         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
                           <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
-                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
+                          <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                             + New Job
@@ -60549,7 +60626,7 @@ function App() {
                       <div style={{textAlign:"center",padding:"40px 0",color:C.dim}}>
                         <div style={{fontSize:13,marginBottom:16}}>No jobs assigned to {firstName} yet</div>
                         {!isContractor&&(
-                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
+                          <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                             + Assign First Job
@@ -60601,7 +60678,7 @@ function App() {
             <div style={{fontSize:11,color:C.dim}}>{jobs.filter(j=>j.type==="quote").length} quote{jobs.filter(j=>j.type==="quote").length!==1?"s":""}</div>
             {can(identity,"quotes.view")&&(
               <button onClick={()=>{
-                const j=blankJob();
+                const j=stampDivision(blankJob());
                 j.type="quote";
                 j.quoteNumber=nextQuoteNumber(allJobs);
                 j.foreman="Unassigned";
@@ -60645,14 +60722,14 @@ function App() {
             saveAllUpcoming(next);
           }}
           onPromote={(u)=>{
-            const j=blankJob();
+            const j=stampDivision(blankJob());
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             const next=upcoming.filter(x=>x.id!==u.id);
             setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("home"); saveJob(j); saveAllUpcoming(next);
           }}
           onPromoteToQuote={(u)=>{
-            const j=blankJob();
+            const j=stampDivision(blankJob());
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             j.type="quote"; j.quoteNumber=nextQuoteNumber(allJobs);
             const next=upcoming.filter(x=>x.id!==u.id);
