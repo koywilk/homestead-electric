@@ -233,6 +233,14 @@
       going one way? The room header's <b>Suggest room → Switched | Panel</b> suggests every
       load in it that isn't that kind yet, and <b>Withdraw N</b> pulls every pending one
       back.</p>
+      <p><b>Imported loads follow FieldInk.</b> Once a panel load is on the Loads list, it keeps
+      tracking the plan: rename it, move it to another room or another floor in FieldInk and the
+      Loads-list row updates on its own the next time the inbox refreshes (a small toast says how
+      many). The one exception is a row somebody edited <i>here</i> after importing it &mdash; the
+      app won't silently overwrite that. Those show <b>changed in FieldInk</b> in orange on the
+      inbox row (under the Imported chip) and an orange <b>Update N from FieldInk</b> button in the
+      inbox header; tap it, check the list it shows, and FieldInk's version wins. Watts, type,
+      pulled and panel / module assignments are never touched by this.</p>
       <p><b>The office never changes the load itself</b> — the field accepts or dismisses
       each suggestion on the plan (FieldInk has the Accept-all), and the status line tells
       you where it stands: <b>waiting on the field</b>, <b>accepted</b>, <b>dismissed</b>,

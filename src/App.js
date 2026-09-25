@@ -802,9 +802,54 @@ function ccLoadImportRows(loads, existingRows, mk, floorOptions = []) {
     const name = room && !base.toLowerCase().includes(room.toLowerCase()) ? `${room} ${base}` : base;
     // An office-set floor on the bridge (office.floor) wins over the plan sheet's.
     const location = ccFloorToSection((l.office && l.office.floor) || l.floor, opts);
-    rows.push({ ...mk(), name, location, loadType: LT[l.control] ?? "", room, fieldLoadId: l.id, origin: "fieldink" });
+    // v450: remember what we took from FieldInk so later field edits can flow
+    // through automatically (ccLoadSyncPlan) without trampling office edits.
+    rows.push({ ...mk(), name, location, loadType: LT[l.control] ?? "", room, fieldLoadId: l.id, origin: "fieldink", fieldSnap: { name, room, location } });
   }
   return { rows, skipped };
+}
+// v450 SYNC (Koy 2026-09-25: "i have re roomed and labled some in field ink and
+// feel like it hasnt changed on cc side"): an imported row used to be a one-time
+// copy — FieldInk's later renames / re-rooms / floor changes never reached the
+// Loads list. Now every imported row (origin fieldink) is compared with its live
+// field load. What FieldInk owns: the composed name, the room, the floor section.
+//   auto   — the row still holds exactly what we last took from FieldInk
+//            (fieldSnap), so the office never touched it → apply silently.
+//   manual — the office edited that field since (or the row predates fieldSnap,
+//            so we can't tell) → offered as one tap: "Update N from FieldInk".
+// A blank field floor never blanks a typed floor. Both patches refresh
+// fieldSnap so the NEXT field change flows automatically. Pure.
+function ccLoadWantFromField(l, opts) {
+  const room = String((l && l.room) || "").trim(), base = String((l && (l.name || l.loadId)) || "Load").trim();
+  const name = room && !base.toLowerCase().includes(room.toLowerCase()) ? `${room} ${base}` : base;
+  const location = ccFloorToSection((l && l.office && l.office.floor) || (l && l.floor), opts);
+  return { name, room, location };
+}
+function ccLoadSyncPlan(rows, inboxById, floorOptions = []) {
+  const opts = Array.isArray(floorOptions) ? floorOptions : ["Main Level", "Basement", "Upper Level"];
+  const auto = [], manual = [];
+  for (const r of rows || []) {
+    if (!r || r.origin !== "fieldink" || !r.fieldLoadId) continue;
+    const f = inboxById && inboxById[r.fieldLoadId];
+    if (!f || f.removedAt || f.control !== "panel") continue;
+    const want = ccLoadWantFromField(f, opts);
+    const snap = r.fieldSnap && typeof r.fieldSnap === "object" ? r.fieldSnap : null;
+    const autoPatch = {}, changes = [];
+    for (const k of ["name", "room", "location"]) {
+      const cur = String(r[k] || ""), w = String(want[k] || "");
+      if (cur === w) continue;
+      if (k === "location" && !w) continue;
+      if (snap && cur === String(snap[k] || "")) autoPatch[k] = w;
+      else changes.push({ key: k, from: cur, to: w });
+    }
+    if (Object.keys(autoPatch).length) auto.push({ id: r.id, fieldLoadId: r.fieldLoadId, patch: { ...autoPatch, fieldSnap: want } });
+    if (changes.length) {
+      const patch = { fieldSnap: want };
+      changes.forEach(c => { patch[c.key] = c.to; });
+      manual.push({ id: r.id, fieldLoadId: r.fieldLoadId, name: String(r.name || ""), changes, patch });
+    }
+  }
+  return { auto, manual };
 }
 // ── end ccloads SUGGEST derivations ─────────────────────────────────────────
 
@@ -27768,6 +27813,24 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
   }, [job.id]);
 
+  // v450: imported Loads-list rows FOLLOW FieldInk. Whenever the inbox or the
+  // job's loads change, apply the safe half of ccLoadSyncPlan (rows the office
+  // never edited since import) in ONE u() patch; the office-edited half waits
+  // for the "Update N from FieldInk" button in the inbox header. Converges: after
+  // the write the rows equal what FieldInk has and fieldSnap matches, so the next
+  // run finds nothing. Precedent: the field-questions adopt effect below.
+  useEffect(() => {
+    const pl = job.panelizedLighting || {};
+    const rows = pl.loads || [];
+    if (!rows.length || !Object.keys(ccLoadInbox || {}).length) return;
+    const floorOptions = ["Main Level", "Basement", "Upper Level", ...(pl.extraFloors || []).map(ef => ef && ef.label).filter(Boolean)];
+    const plan = ccLoadSyncPlan(rows, ccLoadInbox, floorOptions);
+    if (!plan.auto.length) return;
+    const byIdP = {}; plan.auto.forEach(e => { byIdP[e.id] = e.patch; });
+    u({ panelizedLighting: { ...pl, loads: rows.map(r => r && byIdP[r.id] ? { ...r, ...byIdP[r.id] } : r) } });
+    try { toast.success(`Updated ${plan.auto.length} imported load${plan.auto.length === 1 ? "" : "s"} from FieldInk`); } catch {}
+  }, [ccLoadInbox, job.panelizedLighting, job.id]);
+
   // ── CREW FIELD QUESTIONS → the job's Questions ────────────────────────────
   // A crew drops a Question/Problem on a live plan link (?crew=) → FieldInk
   // forwards it to field-ink ccfieldnotes/<jobId>/notes. Fold each one into the
@@ -29529,6 +29592,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   if (filled) u({ panelizedLighting: { ...pl, loads: next } });
                   toast.success(`${label} → ${floor}${filled ? ` · filled ${filled} imported load${filled===1?"":"s"}` : ""}`);
                 };
+                // v450: imported rows the office edited since import (or that
+                // predate fieldSnap) whose FieldInk name / room / floor moved on.
+                // Untouched rows already followed automatically (JobDetail effect).
+                const syncPlan = ccLoadSyncPlan(plLoads, fieldById, floorOptions);
+                const manualByField = {}; syncPlan.manual.forEach(e => { manualByField[e.fieldLoadId] = e; });
+                const KEY_WORD = { name: "name", room: "room", location: "floor" };
+                const applyManualSync = () => {
+                  const m = syncPlan.manual; if (!m.length) return;
+                  const lines = m.slice(0, 8).map(e => `• ${e.name || "(unnamed)"}: ${e.changes.map(c => `${KEY_WORD[c.key]} ${c.from || "—"} → ${c.to || "—"}`).join(", ")}`);
+                  if (!window.confirm(`Update ${m.length} imported load${m.length===1?"":"s"} from FieldInk? These were edited here since import, so they didn't follow automatically.\n\n${lines.join("\n")}${m.length > 8 ? `\n… and ${m.length - 8} more` : ""}`)) return;
+                  const byIdP = {}; m.forEach(e => { byIdP[e.id] = e.patch; });
+                  u({ panelizedLighting: { ...pl, loads: plLoads.map(r => r && byIdP[r.id] ? { ...r, ...byIdP[r.id] } : r) } });
+                  toast.success(`Updated ${m.length} load${m.length===1?"":"s"} from FieldInk`);
+                };
                 const removeStray = () => {
                   if (!strayImported.length) return;
                   if (!window.confirm(`Remove ${strayImported.length} regular-switching load${strayImported.length===1?"":"s"} that were imported from FieldInk by mistake? Panel loads and anything you typed yourself stay.`)) return;
@@ -29654,6 +29731,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             Fill floor/room on {fillable.length} load{fillable.length===1?"":"s"}
                           </button>
                         )}
+                        {syncPlan.manual.length > 0 && (
+                          <button onClick={applyManualSync} title="FieldInk renamed, re-roomed or re-floored these loads after they were imported, and they were edited here too — tap to take FieldInk's version (you'll see the list first)"
+                            style={{padding:"3px 10px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:C.orange,color:"#fff",border:`1px solid ${C.orange}`}}>
+                            Update {syncPlan.manual.length} from FieldInk
+                          </button>
+                        )}
                         {strayImported.length > 0 && (
                           <button onClick={removeStray} title="These regular-switching loads were pulled in by the old Import; only panelized loads belong on this list"
                             style={{padding:"3px 10px",borderRadius:999,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"transparent",color:C.red,border:`1px solid ${C.red}`}}>
@@ -29729,6 +29812,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                         <span title="What the plan has now" style={{fontSize:10,fontWeight:700,color:l.control==="tape"?C.dim:"#fff",background:l.control==="tape"?C.surface:l.removedAt?C.muted:C.text,border:`1px solid ${l.control==="tape"?C.border:"transparent"}`,borderRadius:999,padding:"1px 8px",whiteSpace:"nowrap",letterSpacing:"0.02em"}}>{ctrlLabel(l)}</span>
                                         {l.removedAt && <span style={{fontSize:10,color:C.red,fontWeight:700}}>gone from plan</span>}
                                         {imported && <span title="Already on this job's Loads list" style={{fontSize:10,fontWeight:700,color:C.green,border:`1px solid ${C.green}`,borderRadius:999,padding:"1px 7px",whiteSpace:"nowrap"}}>In Loads</span>}
+                                        {imported && manualByField[l.id] && <span title="FieldInk changed this after import and the Loads-list row was edited here too — use Update from FieldInk in the header to take FieldInk's version" style={{fontSize:10,fontWeight:700,color:C.orange,whiteSpace:"nowrap"}}>changed in FieldInk: {manualByField[l.id].changes.map(c => `${KEY_WORD[c.key]} ${c.from || "—"} → ${c.to || "—"}`).join(" · ")}</span>}
                                         {needs && needsPill}
                                       </div>
                                       {fixtxt(l) && <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{fixtxt(l)}</div>}
@@ -49745,12 +49829,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v449
+**Last manifest update:** 2026-09-25 · App SW version: v450
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Incoming from FieldInk — imported loads follow FieldInk (rename / re-room / re-floor)** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"it seems like the list of loads isnt correct in cc, i have re roomed and labled some in field ink and feel like it hasnt changed on cc side."* Root cause: an imported row was a one-time copy — 'ccLoadImportRows' composed the name, room and floor once and nothing ever re-read the live field load (v436's Fill floor/room only filled blanks). Now every imported row ('origin:"fieldink"') is compared with its live 'ccloads' load by the pure 'ccLoadSyncPlan(rows, inbox, floorOptions)': the field-owned bits are the composed name, the room and the floor section ('ccLoadWantFromField', the same rule Import uses; a blank field floor never blanks a typed floor; 'office.floor' on the bridge still wins). Rows that still hold exactly what we last took from FieldInk ('fieldSnap', stamped on every import from now on and refreshed by every sync) are **auto-applied** by a JobDetail effect in ONE 'u()' patch with a toast; rows the office edited since import, or pre-v450 rows with no snap, are **manual**: an orange **Update N from FieldInk** button in the inbox header (confirm lists the changes) and a "changed in FieldInk: room Den → Study" note on the inbox row under the Imported chip. Watts, type, pulled and panel / module assignments are never touched. If the inbox itself still shows the old room, FieldInk didn't republish — that's the FieldInk side. Harness 'ccloads-suggest-test' covers snap stamping, auto vs manual, legacy rows, blank floors, office.floor, skips. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** only 'name', 'room', 'location' and the new 'fieldSnap' on rows that came from FieldInk change, only to values FieldInk holds right now; the auto path writes only rows the office never edited (proved by the snap), the manual path asks first and lists every change; every write spreads the current 'panelizedLighting' and maps the existing 'loads' array in place (no row added, removed or reordered), so Lutron 'assign', 'pulled', watts and type ride along untouched.
 - **Lutron Panel Builder — panels → modules → zones, loads assigned by reference, park-on-panel** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"panelized lighting, specifically lutron needs a way better way to organize and assign modules and panels etc."* and *"can i have the option to put on a panel too? that way i can seperate panels without having to set modules yet."* Design approved on the /design canvas first (spec: 'docs/superpowers/specs/2026-09-25-lutron-panel-builder-design.md'). On a **Lutron** job the Panel Loads section is now 'LutronPanelBuilder': a summary strip (unassigned · on a panel with no module · zones used · panels/modules · zones over watts), one card per panel (name, where it hangs, slot meter, **+ Module**, Print / Download), one block per module with a row per zone (filled rows show room + watts and flag **over** the zone's watt cap in red; open rows say the cap), an orange **"On this panel, no module yet"** tray for parked loads, **+ Add panel** and **Suggest layout**. One interaction, no drag: tap a load (in the Loads list above — its badge is now the button — or on a zone) → bottom sheet with **Panel** chips → **Module** chips (first chip is **No module yet** = park it) → **Zone** chips (picking a filled zone parks that load) → **Assign / Move here / Put on LCP 1 only**; **Off module, keep panel** and **Clear** on placed loads; Loads-list **Select → Put on a panel / module…** fills the next open zones in order. Tap an open zone → pick a load, parked-on-this-panel first. **Suggest layout** walks loads with no module floor → room → biggest watts first, dimming onto dimmers and switching onto relays with headroom, adds a module of the right kind when none fits, keeps a parked load in its own panel, stops when a panel is full. **Model:** 'panelizedLighting.panels = [{ id, label, where, slots, modules:[{ id, num, type, bus, pdu }] }]' and 'loads[i].assign = { panelId, moduleId, zone } | null' (module + zone null = parked). Modules hold no copies of loads. **Module catalog** ('LUTRON_MODULES', verified against Lutron spec submittals): 4A5-120-D (zone 1 800 W, zones 2–4 500 W), 4S8-120-D (8 A/zone), 4T5-120-D (5 A), 4T20-120-D (20 A, receptacles OK), 4M-120-D (motors only), 2HDC-D and 1DAL2-D (bus, 64 loads), 4A1-D; legacy 4A-120-D (discontinued), 2ECO-D, 2DAL-D stay selectable only where a job already has them. The app's old 'LQSE-S8' (8 ch) and 'LQSE-T5' (5 ch) were wrong SKUs — both are 4-zone (8 / 5 are amps) — and are read as 4S8-120-D / 4T5-120-D. **Migration (read-side, 'lutronMigrate'):** a Lutron job with no 'panels' yet is shown from its old floor sections (upper → Panel A, main → Panel B, basement → Panel C, then extras; the panel id IS the old floor key) — module rows link to the master load by trimmed name, a row with no master match becomes a master load ('origin:"module"'), a channel past the real zone count takes the next open zone or parks, and a load whose free-text Panel column names a panel parks there. Nothing is written until the first change in the builder, which persists 'panels' + 'assign' in ONE 'u()' patch; the old 'cp4Loads' / extra-floor arrays are never touched. **Readers moved (option A):** Loads-list badges + batch action, keypad suggestions ('_assignedNames'), the per-panel **Print / Download** schedule ('lutronLegacyModules' feeds the unchanged 'printPanelSchedule'; parked loads print as a trailing "No module yet" block), the LV collab page '?lighting=' (same adapter; Tech Lighting's own rows stay keyed 'cp4_<old floor key>'), the loads share / **Set baseline** rows ('allSavantLoadsForJob' Lutron branch), Job Sections' has-data check. Control 4 / Crestron keep 'PanelModulesSection'; Savant untouched. Harness 'needs-dryrun' covers aliases, caps, type gating, migration (labels, zones, parking, created loads, S8 overflow), the cached read view, open zones, over-watt, labels, stats, suggest layout (zone 1 for the biggest dimmer, parked stays home, motor → 4M, full panel skips) and the print adapter. Guides 'panelizedlighting.html' + 'lightinglinks.html' updated. **Why it won't lose data:** purely additive — 'panels' is a new array and 'assign' a new key on existing load rows, both nested in 'panelizedLighting' (already in the loader spread; no loader, rules or function change); the builder never clears, rewrites or reads back the old floor arrays after the first write, every write spreads the current 'panelizedLighting' so keypads / lutronRooms / baseline / cp4Loads ride along, deleting a module or panel only nulls 'assign' (never deletes a load), and a wrong placement is one tap to fix and visible immediately as "unassigned" or "no module yet" — never as a lost load.
 - **Panelized Lighting — download the load list (PDF / CSV), clean, no module assignments** · 'shipped 2026-09-25' · 'SW v448' · Koy: *"I would also love to be able to download a list of loads that is clean and organized without any modules assigned yet."* Two buttons on the **Loads** section header (Lutron / Control 4 / Crestron layout): **PDF** and **CSV**. Both build from the job's own 'panelizedLighting.loads' via the pure 'loadsListRows(loads, floorOrder)' — every named load, grouped **floor → room → A–Z** (floors in the tab's own order: Main Level, Basement, Upper Level, then extra floors, then anything unrecognized; blank room sorts last as "General"), numbered 1..N, with **Type** and **Watts** — and **no panel, module or channel columns**, so a lighting designer lays the panels out from a clean sheet. The PDF ('loadsListHtml' → new '_saveHtmlAsPdfPaged', a multi-page cousin of '_saveHtmlAsPdf', which captures one letter page only) carries the job name, address, system, load/floor counts and print date; the CSV ('loadsListCsv', BOM-prefixed so Excel reads UTF-8, '#,Floor,Room,Load,Type,Watts') is the editable copy. Harness 'needs-dryrun' covers ordering, numbering, unknown floors, dropped blanks and CSV escaping. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — both buttons only read 'loads' and write nothing to Firestore; no new field, no loader or rules change.
 - **My Day — return trips stay with the head; no second overdue row for Josh on sign-off** · 'shipped 2026-09-25' · 'SW v447' · Koy: *"if a shared task is checked off by one it should be cleared on the other side. i have checked off buchsthaber return trip and it shows as overdue on joshs card. also josh should only share QC with me not return trips."* Root cause: signing an RT off sets it to 'complete', which spawns a **different** auto row on the same trip — '_rt_<id>_done' "Return Trip #N Complete — merge or invoice" — and v427 routed that row to the invoicing hat, dated from the old 'rtStatusDate', so it landed on Josh's board already overdue the moment Koy closed the trip. It was never a shared row failing to clear (QC / redline rows clear for every holder by construction); it was a second rule with a different owner. **Fix:** 'routeKeyOfAuto' returns 'null' for every 'category:"rt"' row — schedule, get-sign-off AND complete/merge-or-invoice all stay with the Head of Residential (Josh now shares only QC with Koy); the merge-or-invoice row is due from 'signedOffDate' (falls back to 'rtStatusDate') so it isn't born overdue; it stays in the never-hides money set ('staleMoney' now includes '_rt_*_done'); 'HAT_REGISTRY' note and the guide drop "RT" from the invoicing list; 'functions/myDayDigest.js' no longer bumps the invoicing count for completed RTs (CO complete unchanged). Tests: 'needs-dryrun' (RT done/sched → null), 'mydaydigest-test' (RT complete ≠ invoicing). **Needs 'firebase deploy --only functions:dailyMyDayDigest'.** **Why it won't lose data:** routing and due-date derivation only — no new field, no write path changed, no rules change; an RT row Josh already cleared via 'clearedTasks' stays cleared for the head too (same job-level list).
