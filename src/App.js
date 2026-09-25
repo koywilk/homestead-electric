@@ -58422,9 +58422,9 @@ function App() {
     modeAppliedRef.current = true;
     if (!can(identity, "commercial.view")) { setMode("resi"); return; }
     if (identity.defaultMode === "commercial") setMode("commercial");
-  }, [identity]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [identity]);   // eslint-disable-line
   // The open drawer follows the mode — never a residential drawer over a commercial board.
-  useEffect(() => { if (selected && jobDivision(selected) !== mode) setSelected(null); }, [mode]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selected && jobDivision(selected) !== mode) setSelected(null); }, [mode]);   // eslint-disable-line
   // v433: count each screen open (once per device/user/day). Waits for the
   // landing redirect so a foreman's pre-redirect "home" flash isn't counted as
   // a Job Board visit.
