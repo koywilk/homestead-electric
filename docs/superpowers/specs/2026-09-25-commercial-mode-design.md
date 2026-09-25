@@ -399,8 +399,8 @@ the Drive folder link automatically (it already lists the folder's files). Phase
 **Functions changes (small, with the §5.1 deploy):** the "📁 Drive Folder Created / Linked"
 push goes to the `comm.head` hat (Brady) instead of Koy for commercial jobs; the weekly
 re-pull is a new scheduled function that calls the existing pull logic per job (needs the
-pull body lifted into a helper the callable and the schedule share). Optional: a
-`COMM_JOBS_PARENT_FOLDER_ID` if Koy wants commercial folders under a separate parent (Q13).
+pull body lifted into a helper the callable and the schedule share). Folders go under the
+same Jobs parent as residential — they sort by job number there (Koy, Q13).
 
 **Data safety:** the only writes are the existing `data.driveFolderId` and `data.docPull`
 dotted paths, through the existing callables; the import chain is two client calls after the
@@ -547,8 +547,9 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 11. **Daily reports:** do your GCs require a daily log (crew count, hours, work done, weather,
     deliveries, delays)? That is the strongest candidate for the first Phase 2 tab.
 12. **GC portal:** should commercial GCs get portal links in Phase 1, or wait?
-13. **Drive parent folder:** commercial job folders under the same Jobs parent as residential
-    (proposed, zero change), or a separate "Commercial Jobs" parent folder?
+13. **Drive parent folder** — answered: Koy, *"same parent folder is fine they are sorted
+    there by job numbers anyway."* → same `JOBS_PARENT_FOLDER_ID`, same `#<simproNo> - <name>`
+    naming, no `COMM_JOBS_PARENT_FOLDER_ID`.
 
 ## 10. Testing (Phase 1)
 
