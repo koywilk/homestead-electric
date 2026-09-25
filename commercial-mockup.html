@@ -19,7 +19,6 @@
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   body{margin:0; background:var(--bg); color:var(--text); font-family:'DM Sans',-apple-system,sans-serif; font-size:14px;}
-  .bebas{font-family:'Bebas Neue',sans-serif;}
 
   /* ── Command header ── */
   .cmdbar{background:linear-gradient(180deg,var(--d-bg1),var(--d-bg2)); border-bottom:1px solid var(--d-hair); padding:10px 18px 12px; position:sticky; top:0; z-index:5;}
@@ -48,25 +47,27 @@
   .subcounts{font-size:12px; color:var(--dim); margin-top:4px;}
   .subcounts b{font-weight:700;}
   .controls{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
-  .controls input[type=text]{padding:6px 10px; border-radius:7px; border:1px solid var(--border); font-size:12px; background:#fff; color:var(--text); font-family:inherit; outline:none; min-width:220px;}
+  .controls input[type=text]{padding:6px 10px; border-radius:7px; border:1px solid var(--border); font-size:12px; background:#fff; color:var(--text); font-family:inherit; outline:none; min-width:200px;}
   .btn{padding:6px 12px; border-radius:7px; font-size:12px; border:1px solid var(--border); background:#fff; color:var(--dim); cursor:pointer; font-family:inherit; font-weight:600;}
   .btn.on{background:var(--accent); color:#fff; border-color:var(--accent);}
   .btn.teal{background:var(--teal); color:#fff; border-color:var(--teal);}
   .btn.amber{border-color:var(--amber); color:var(--amber); background:#fff;}
-  .btn.amber:hover{background:#B0892C12;}
+  .btn.sm{padding:3px 8px; font-size:10px;}
 
-  /* ── Stage sections (Job Board) ── */
+  /* ── Sections ── */
   .stage{margin-bottom:18px;}
-  .stagehead{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:2px solid var(--border); margin-bottom:10px; cursor:pointer;}
+  .stagehead{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:2px solid var(--border); margin-bottom:10px; cursor:pointer; flex-wrap:wrap;}
   .stagehead .t{font-family:'Bebas Neue',sans-serif; font-size:17px; letter-spacing:0.08em;}
   .stagehead .n{font-size:11px; font-weight:700; color:var(--dim); background:var(--surface); border:1px solid var(--border); border-radius:99px; padding:1px 8px;}
+  .stagehead .who{font-size:10px; font-weight:700; letter-spacing:0.06em; color:var(--dim); text-transform:uppercase;}
   .stagehead .caret{margin-left:auto; color:var(--dim); font-size:11px;}
   .stage.collapsed .rows{display:none;}
 
   .row{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:8px; box-shadow:0 4px 16px rgba(15,31,61,0.08); display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
   .row.needs{border-left:3px solid var(--red);}
   .row.ok{border-left:3px solid var(--done);}
-  .row.overridden{border-left:3px solid var(--amber);}
+  .row.owed{border-left:3px solid var(--amber);}
+  .row.cur{border-left:3px solid var(--blue);}
   .jobinfo{min-width:200px; flex:1 1 200px;}
   .jobname{font-weight:700; font-size:14px; color:var(--text); cursor:pointer;}
   .jobname:hover{color:var(--accent); text-decoration:underline;}
@@ -82,64 +83,74 @@
   .pill.purple{background:#6A5E9715; color:var(--purple); border-color:#6A5E9740;}
   .pill.gc{background:var(--surface); color:var(--dim); border-color:var(--border); letter-spacing:0;}
 
-  /* ── Lanes (Job Prep) ── */
-  .lane{margin-bottom:26px;}
-  .lanehead{display:flex; align-items:center; gap:10px; margin-bottom:12px; padding-bottom:8px; flex-wrap:wrap; cursor:pointer;}
-  .lanehead .t{font-family:'Bebas Neue',sans-serif; font-size:18px; letter-spacing:0.08em;}
-  .lane.admin .lanehead{border-bottom:2px solid #3B5BA522;} .lane.admin .t{color:var(--blue);}
-  .lane.prep .lanehead{border-bottom:2px solid #3E7D7A22;} .lane.prep .t{color:var(--teal);}
-  .lanehead .who{margin-left:auto; font-size:10px; font-weight:700; letter-spacing:0.06em; color:var(--dim); text-transform:uppercase;}
-  .lane.collapsed .lanebody{display:none;}
-
+  /* ── Job Start card ── */
+  .jcard{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:12px; box-shadow:0 4px 16px rgba(15,31,61,0.08);}
+  .jcard.cur{border-left:3px solid var(--blue);}
+  .jcard.hasowed{border-left:3px solid var(--amber);}
+  .jtop{display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap;}
+  .miles{display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;}
+  .mile{font-size:10px; font-weight:700; color:var(--dim); background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:2px 7px;}
+  .mile b{color:var(--text);}
+  .mile.soon b{color:var(--orange);}
+  .bar{display:flex; gap:3px; margin:12px 0 4px;}
+  .seg{flex:1; height:22px; border-radius:5px; background:var(--muted); color:#fff; font-size:10px; font-weight:800; display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:.55;}
+  .seg.done{background:var(--teal); opacity:1;}
+  .seg.cur{background:var(--blue); opacity:1; box-shadow:0 0 0 2px #3B5BA540;}
+  .seg.owed{background:var(--amber); opacity:1;}
+  .seg.peek{outline:2px solid var(--text);}
+  .phasehead{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:10px 0 8px;}
+  .phasehead .ph{font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.08em; color:var(--blue);}
+  .phasehead.past .ph{color:var(--teal);} .phasehead.future .ph{color:var(--dim);}
+  .phasehead .own{font-size:10px; font-weight:800; letter-spacing:0.08em; color:var(--dim); text-transform:uppercase; margin-left:auto;}
   .chips{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
   .chip{display:inline-flex; align-items:center; gap:6px; border-radius:99px; font-size:10px; font-weight:700; letter-spacing:0.05em; cursor:pointer; user-select:none; border:1px solid var(--red); color:var(--red); background:#fff; min-height:30px; padding:0 11px;}
   .chip.done{border-color:var(--done); color:var(--done); background:#46916A0F;}
   .chip.na{border-color:var(--muted); color:var(--dim); border-style:dashed; background:var(--surface);}
+  .chip.owedc{border-color:var(--amber); color:var(--amber); background:#B0892C0F;}
+  .chip.lock{border-color:var(--muted); color:var(--muted); cursor:default; background:#fff;}
+  .chip.trk{border-style:double;}
   .chip .g{font-size:11px;}
-  .prog{font-size:11px; color:var(--dim); font-weight:600; white-space:nowrap;}
-  .prog b{color:var(--text);}
+  .foot{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px;}
+  .prog{font-size:11px; color:var(--dim); font-weight:600; white-space:nowrap;} .prog b{color:var(--text);}
   .next{font-size:11px; color:var(--orange); font-weight:600;}
-  .ovnote{font-size:11px; color:var(--amber); font-weight:600; width:100%;}
-  .strip{border:1px dashed var(--done); border-radius:10px; padding:10px 14px; font-size:12px; color:var(--green); font-weight:600; background:#46916A08; cursor:pointer;}
+  .ovnote{font-size:11px; color:var(--amber); font-weight:600;}
+  .strip{border:1px dashed var(--done); border-radius:10px; padding:10px 14px; font-size:12px; color:var(--green); font-weight:600; background:#46916A08;}
+  .empty{font-size:12px; color:var(--dim); padding:18px; text-align:center; border:1px dashed var(--muted); border-radius:10px;}
 
-  /* ── Job drawer ── */
-  .overlay{position:fixed; inset:0; background:rgba(20,24,33,.45); display:none; z-index:20;}
-  .overlay.open{display:block;}
-  .drawer{position:fixed; top:0; right:0; bottom:0; width:min(760px,100%); background:var(--bg); z-index:21; transform:translateX(100%); transition:transform .2s; overflow:auto; box-shadow:-12px 0 40px rgba(0,0,0,.25);}
-  .drawer.open{transform:none;}
+  /* ── Drawer ── */
+  .overlay{position:fixed; inset:0; background:rgba(20,24,33,.45); display:none; z-index:20;} .overlay.open{display:block;}
+  .drawer{position:fixed; top:0; right:0; bottom:0; width:min(780px,100%); background:var(--bg); z-index:21; transform:translateX(100%); transition:transform .2s; overflow:auto; box-shadow:-12px 0 40px rgba(0,0,0,.25);} .drawer.open{transform:none;}
   .dhead{background:linear-gradient(180deg,var(--d-bg1),var(--d-bg2)); color:var(--d-bright); padding:14px 18px 10px; position:sticky; top:0; z-index:2;}
   .dhead .name{font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:0.05em; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
   .dhead .x{margin-left:auto; font:600 12px 'DM Sans'; color:var(--d-text); cursor:pointer; padding:4px 8px;}
   .dhead .sub{font-size:11px; color:var(--d-text); margin-top:2px;}
-  .dtabs{display:flex; gap:4px; margin-top:10px; overflow-x:auto; scrollbar-width:none;}
-  .dtabs::-webkit-scrollbar{display:none;}
-  .dtab{padding:6px 12px; font-size:11px; font-weight:600; color:var(--d-text); border-radius:7px; white-space:nowrap; cursor:pointer;}
-  .dtab.on{background:var(--teal); color:#fff;}
+  .dtabs{display:flex; gap:4px; margin-top:10px; overflow-x:auto; scrollbar-width:none;} .dtabs::-webkit-scrollbar{display:none;}
+  .dtab{padding:6px 12px; font-size:11px; font-weight:600; color:var(--d-text); border-radius:7px; white-space:nowrap; cursor:pointer;} .dtab.on{background:var(--teal); color:#fff;}
   .dbody{padding:16px 18px 60px;}
   .card{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px; box-shadow:0 4px 16px rgba(15,31,61,0.06);}
   .card h3{font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.08em; margin:0 0 10px; color:var(--dim); font-weight:400;}
   .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px 14px;}
   .f label{display:block; font-size:9px; font-weight:800; letter-spacing:0.1em; color:var(--dim); text-transform:uppercase; margin-bottom:3px;}
   .f input{width:100%; padding:7px 9px; border:1px solid var(--border); border-radius:7px; font:500 13px 'DM Sans'; color:var(--text); background:#fff;}
-  .seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
-  .seg button{border:0; background:#fff; color:var(--dim); font:700 11px 'DM Sans'; letter-spacing:0.05em; padding:7px 12px; cursor:pointer;}
-  .seg button.on{background:var(--teal); color:#fff;}
-  .seg.stage button.on{background:var(--blue);}
+  .segc{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; flex-wrap:wrap;}
+  .segc button{border:0; background:#fff; color:var(--dim); font:700 11px 'DM Sans'; letter-spacing:0.05em; padding:7px 12px; cursor:pointer;}
+  .segc button.on{background:var(--teal); color:#fff;}
   .hint{font-size:11px; color:var(--dim); margin-top:6px;}
-  .empty{font-size:12px; color:var(--dim); padding:18px; text-align:center; border:1px dashed var(--muted); border-radius:10px;}
+  table{width:100%; border-collapse:collapse; font-size:11px;}
+  th{font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:var(--dim); text-align:left; padding:6px 6px; border-bottom:1px solid var(--border);}
+  td{padding:7px 6px; border-bottom:1px solid var(--surface); vertical-align:top;}
+  tr.late td{background:#B23A3A08;}
+  .tblwrap{overflow-x:auto;}
 
-  /* ── Modal ── */
-  .modal{position:fixed; inset:0; background:rgba(20,24,33,.55); display:none; align-items:center; justify-content:center; z-index:30; padding:16px;}
-  .modal.open{display:flex;}
+  .modal{position:fixed; inset:0; background:rgba(20,24,33,.55); display:none; align-items:center; justify-content:center; z-index:30; padding:16px;} .modal.open{display:flex;}
   .mbox{background:#fff; border-radius:12px; width:min(460px,100%); padding:18px 20px; box-shadow:0 20px 60px rgba(0,0,0,.35);}
   .mbox h2{font-family:'Bebas Neue',sans-serif; font-size:22px; letter-spacing:0.06em; margin:0 0 6px; font-weight:400;}
   .mbox p{font-size:13px; color:var(--dim); margin:0 0 10px;}
   .mbox ul{margin:0 0 12px 18px; padding:0; font-size:13px;}
   .mbox textarea{width:100%; border:1px solid var(--border); border-radius:7px; padding:8px; font:13px 'DM Sans'; min-height:60px; margin-bottom:12px;}
   .mrow{display:flex; gap:8px; justify-content:flex-end;}
-  .toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--d-bg1); color:var(--d-bright); font-size:12px; font-weight:600; padding:9px 14px; border-radius:99px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:40;}
-  .toast.show{opacity:1;}
-  @media (max-width:520px){ .wrap{padding:12px 12px 80px;} .row{padding:10px 12px;} .modeswitch{margin-left:0;} }
+  .toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--d-bg1); color:var(--d-bright); font-size:12px; font-weight:600; padding:9px 14px; border-radius:99px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:40; max-width:92vw; text-align:center;} .toast.show{opacity:1;}
+  @media (max-width:520px){ .wrap{padding:12px 12px 80px;} .row,.jcard{padding:10px 12px;} .modeswitch{margin-left:0;} .seg{font-size:9px;} }
 </style>
 </head>
 <body class="comm">
@@ -147,118 +158,117 @@
 <div class="cmdbar">
   <div class="brandrow">
     <div class="brand">HOMESTEAD ELECTRIC <span class="div">COMMERCIAL</span> <span class="mock">MOCKUP</span></div>
-    <div class="modeswitch" id="modeswitch">
-      <button data-mode="resi">RESI</button>
-      <button data-mode="comm" class="on">COMMERCIAL</button>
-    </div>
+    <div class="modeswitch" id="modeswitch"><button data-mode="resi">RESI</button><button data-mode="comm" class="on">COMMERCIAL</button></div>
   </div>
   <div class="tabs" id="tabs"></div>
 </div>
 
 <div class="wrap" id="page"></div>
-
-<!-- Job drawer -->
 <div class="overlay" id="overlay"></div>
 <div class="drawer" id="drawer"></div>
 
-<!-- Override modal -->
 <div class="modal" id="modal">
   <div class="mbox">
-    <h2>Mobilize without full pre-con?</h2>
-    <p>These items stay red on the Pre-Con board with an OVERRIDE badge until they're actually checked off. Nothing gets forgotten. Undo any time.</p>
+    <h2 id="modalTitle">Move on with items owed?</h2>
+    <p>The job moves to the next phase now. These items stay red with an OWED badge inside this phase — and keep their My Day rows — until they're actually checked. Undo any time.</p>
     <ul id="modalItems"></ul>
     <textarea placeholder="Note (optional) — e.g. gear submittal still with the engineer, GC needs us on underground Monday"></textarea>
-    <div class="mrow"><button class="btn" id="modalCancel">Cancel</button><button class="btn amber" id="modalOk">Mark Cleared to Mobilize</button></div>
+    <div class="mrow"><button class="btn" id="modalCancel">Cancel</button><button class="btn amber" id="modalOk">Move on</button></div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
-/* ───────────────────────── fake data ───────────────────────── */
-const PEOPLE = { Gage:"#3B5BA5", Owen:"#6A5E97", Braden:"#3E7D7A", Nelson:"#B06A2C", Koy:"#3E7D5A" };
+/* ───────────────────────── registry: Koy's 12-step Job Start Process ───────────────────────── */
+// owner: "precon" = comm.precon hat (Brady · Justin), "site" = comm.site hat (Zane · Abe), "foreman" = the job's foreman.
+// kind: "check" (chip) | "trk" (derived from the Gear & Submittals log) | "photo" (chip + PhotoAttacher) | "date" (chip + date)
+const OWNER = { precon:"Brady · Justin", site:"Zane · Abe", foreman:"Foreman" };
+const PHASES = [
+  { n:1,  label:"Quote Approval / Contract Award", owner:"precon", items:[["award","AWARD DOC"],["permitResp","PERMIT RESPONSIBILITY"],["utility","UTILITY / SERVICE COORD"],["contacts","CONTACTS SET"]] },
+  { n:2,  label:"Project Setup & Initial Review", owner:"precon", items:[["jobNo","JOB # / COST CODES"],["folders","PROJECT FOLDERS"],["planReview","PLAN / SPEC REVIEW"],["schedule","SCHEDULE + MILESTONES"],["scope","SCOPE BY SYSTEM"]] },
+  { n:3,  label:"Request Vendor Submittals", owner:"precon", items:[["ced","CED SENT PLANS/SPECS"],["fa","FA CO. SENT PLANS/SPECS"],["longLead","LONG-LEAD REQUESTED","trk"],["leadTimes","LEAD TIMES + PRICING","trk"]] },
+  { n:4,  label:"Electrical Submittal Review", owner:"precon", items:[["pmReview","PM / ESTIMATOR REVIEWED"],["dims","DIMENSIONS / CLEARANCES"],["rfis","RFI LIST","trk"],["toGc","SENT TO GC","trk"],["approved","ALL APPROVED","trk"],["comments","COMMENTS RESOLVED"]] },
+  { n:5,  label:"Release / Order Long-Lead Gear", owner:"precon", items:[["released","RELEASED + PO","trk"],["shipDates","SHIP DATES IN WRITING","trk"],["procLog","PROCUREMENT LOG","trk"],["shipMode","SHIP COMPLETE / SPLIT","trk"],["storage","DELIVERY / STORAGE"]] },
+  { n:6,  label:"Preconstruction / Site Coordination", owner:"site", items:[["kickoff","GC KICKOFF ATTENDED"],["schedOk","SCHEDULE CONFIRMED"],["manpower","MANPOWER PLAN"],["milestones","MILESTONES SET"],["laydown","LAYDOWN / STORAGE"],["tempNeeds","TEMP POWER NEEDS"],["trailer","TRAILER / CONTAINER"],["crane","CRANE / FORKLIFT"],["rentals","RENTALS + DATES"],["bim","BIM / CLASH"]] },
+  { n:7,  label:"Site Work Takeoff & Ordering", owner:"foreman", items:[["takeoff","SITE TAKEOFF DONE"],["pvc","PVC / CONDUIT"],["sweeps","SWEEPS / ELBOWS"],["duct","DUCT BANK"],["boxes","PULL BOXES / HANDHOLES"],["ground","GROUNDING"],["siteLt","SITE LIGHTING"],["util","UTILITY / SERVICE CONDUIT"],["vaults","UTILITY VAULTS"],["lvPath","COMM / FA PATHWAYS"],["tape","TAPE / SPACERS / ENCASEMENT"],["ordered","SITE MATERIAL ORDERED"]] },
+  { n:8,  label:"Temporary Power", owner:"foreman", items:[["req","REQUIREMENTS"],["tempUtil","TEMP UTILITY SERVICE"],["svc","SERVICE / METER / MAIN"],["dist","DISTRIBUTION"],["spider","SPIDER BOXES / GFCI"],["lighting","TEMP LIGHTING"],["trailerPwr","TRAILER POWER"],["cranePwr","CRANE / HOIST POWER"],["energized","INSPECTED + ENERGIZED","date"],["maint","MAINTENANCE OWNER"]] },
+  { n:9,  label:"Ufer / Concrete-Encased Electrode", owner:"foreman", items:[["footing","FOOTING SCHEDULE REVIEWED"],["config","ELECTRODE CONFIG"],["rebar","CONCRETE / REBAR COORD"],["installed","UFER INSTALLED"],["photos","PHOTOS","photo"],["insp","INSPECTION","date"],["gec","GEC ACCESS CONFIRMED"]] },
+  { n:10, label:"Foundation Electrical / Blockouts", owner:"foreman", items:[["overlay","DRAWINGS OVERLAID"],["svcCond","SERVICE CONDUITS"],["feeders","FEEDER CONDUITS"],["sleeves","SLEEVES"],["genXfmr","GEN / XFMR CONDUITS"],["siteLt2","SITE LIGHTING"],["lv","LV PATHWAYS"],["ground2","GROUNDING"],["penetr","ROOM PENETRATIONS"],["pads","HOUSEKEEPING PADS"],["blockouts","BLOCKOUTS BEFORE POUR"]] },
+  { n:11, label:"Building Underground", owner:"foreman", items:[["trades","TRADE OVERLAY"],["layout","LAYOUT DONE"],["banks","BANKS / CROSSINGS FIRST"],["clear","CLEARANCES"],["stubs","STUB-UPS SET + SECURED"],["capped","CAPPED / SEALED"],["strings","PULL STRINGS"],["photos","PHOTOS + DIMENSIONS","photo"],["check","CONDUIT CHECK"],["insp","INSPECTED BEFORE COVER","date"]] },
+  { n:12, label:"Slab-on-Grade Coordination", owner:"foreman", items:[["floorBoxes","FLOOR BOXES"],["equip","EQUIPMENT FEEDS"],["kitchen","KITCHEN"],["islands","ISLANDS / CASEWORK"],["floorRec","FLOOR RECEPTS"],["mech","MECHANICAL"],["special","SPECIALTY"],["lvSleeves","LV SLEEVES"],["control","DIMS FROM CONTROL LINES"],["prepour","PRE-POUR CHECKLIST / INSP","date"]] },
+];
+const PHASE = Object.fromEntries(PHASES.map(p=>[p.n,p]));
+const PEOPLE = { Gage:"#3B5BA5", Owen:"#6A5E97", Braden:"#3E7D7A", Nelson:"#B06A2C", Zane:"#3E7D5A", Abe:"#6A5E97" };
 
-const ADMIN_ITEMS = [
-  ["jobAccount","ACCOUNT"],["preLien","PRELIM NOTICE"],["coi","COI SENT"],["subcontract","CONTRACT"],
-  ["sov","SOV"],["billingSetup","BILLING"],["permit","PERMIT"]];
-const PRECON_ITEMS = [
-  ["plansCurrent","PLANS + SPECS"],["submittalsSent","SUBMITTALS SENT"],["submittalsApproved","SUBMITTALS OK"],
-  ["longLeadOrdered","LONG-LEAD ORDERED"],["gcSchedule","GC SCHEDULE"],["kickoff","KICKOFF"],
-  ["siteLogistics","SITE LOGISTICS"],["foremanHandoff","HAND-OFF"]];
+// helpers to build fake state: allDone(n) marks every item of phases 1..n done
+const doneThrough = (n, except=[]) => { const o={}; PHASES.filter(p=>p.n<=n).forEach(p=>p.items.forEach(([k])=>{ const key=p.n+"."+k; if(!except.includes(key)) o[key]={done:true,by:"—",at:"—"}; })); return o; };
 
-// division absent = resi (the real rule). Only commercial jobs carry `commercial`.
 const JOBS = [
-  { id:"c1", division:"commercial", name:"Ridgeline Dental — TI Suite 210", gc:"Layton Construction", foreman:"Gage", simpro:"1892", projectNo:"LC-24-0311",
-    gcPm:"Dana Whitfield", gcSuper:"Mike Torres", contractValue:"$184,500", permitNo:"", planSetRev:"Rev 2 (9/12)", mobilize:"10/6/2026",
-    commercial:{ stage:"", prep:{plansCurrent:true,gcSchedule:true,kickoff:true}, prepNA:{}, admin:{jobAccount:true,preLien:true,coi:true,subcontract:true}, adminNA:{}, prepOverride:null } },
-  { id:"c2", division:"commercial", name:"Summit Storage — Bldg B & C", gc:"Big-D Construction", foreman:"Braden", simpro:"1874", projectNo:"BD-7781",
-    gcPm:"Chris Lam", gcSuper:"Andy Ruiz", contractValue:"$412,000", permitNo:"E-26-04412", planSetRev:"IFC 8/2", mobilize:"9/8/2026",
-    commercial:{ stage:"inprogress", prep:{plansCurrent:true,submittalsSent:true,submittalsApproved:true,longLeadOrdered:true,gcSchedule:true,kickoff:true,siteLogistics:true,foremanHandoff:true}, prepNA:{}, admin:{jobAccount:true,preLien:true,coi:true,subcontract:true,sov:true,billingSetup:true,permit:true}, adminNA:{}, prepOverride:null } },
-  { id:"c3", division:"commercial", name:"Wasatch Credit Union — Branch Remodel", gc:"Jacobsen", foreman:"Owen", simpro:"1901", projectNo:"JC-2609",
-    gcPm:"Sara Kim", gcSuper:"Tom Bell", contractValue:"$96,200", permitNo:"E-26-05120", planSetRev:"Rev 1", mobilize:"9/22/2026",
-    commercial:{ stage:"", prep:{plansCurrent:true,submittalsSent:true,gcSchedule:true,kickoff:true,siteLogistics:true,foremanHandoff:true}, prepNA:{longLeadOrdered:true}, admin:{jobAccount:true,preLien:true,coi:true,subcontract:true,permit:true}, adminNA:{sov:true,billingSetup:true},
-      prepOverride:{on:true,by:"Koy",at:"9/19/2026",note:"Fixture submittal still with engineer; GC needs demo + rough Monday"} } },
-  { id:"c4", division:"commercial", name:"Herriman Fire Station 103 — Gear Replacement", gc:"Hogan", foreman:"Nelson", simpro:"1866", projectNo:"HG-1150",
-    gcPm:"Ben Ortiz", gcSuper:"Ben Ortiz", contractValue:"$238,000", permitNo:"E-26-03980", planSetRev:"IFC", mobilize:"7/14/2026",
-    commercial:{ stage:"closeout", prep:{plansCurrent:true,submittalsSent:true,submittalsApproved:true,longLeadOrdered:true,gcSchedule:true,kickoff:true,siteLogistics:true,foremanHandoff:true}, prepNA:{}, admin:{jobAccount:true,preLien:true,coi:true,subcontract:true,sov:true,billingSetup:true,permit:true}, adminNA:{}, prepOverride:null } },
-  // residential — no `division`, no `commercial`
+  { id:"c1", division:"commercial", name:"Ridgeline Dental — TI Suite 210", gc:"Layton Construction", foreman:"Gage", simpro:"1892", projectNo:"LC-24-0311", gcPm:"Dana Whitfield", gcSuper:"Mike Torres", contractValue:"$184,500", permitNo:"", planSetRev:"Rev 2 (9/12)",
+    miles:{footing:"10/6/2026",underground:"10/13/2026",slab:"10/20/2026"},
+    commercial:{ stage:"", start:{ items:{...doneThrough(2), "3.ced":{done:true}}, na:{}, notes:{}, overrides:{} },
+      submittals:[ {item:"Switchgear",vendor:"CED",status:"requested",lead:"22 wk",po:"",ship:"",req:"12/1/2026"}, {item:"Panelboards",vendor:"CED",status:"requested",lead:"8 wk",po:"",ship:"",req:"11/10/2026"}, {item:"Lighting package",vendor:"CED",status:"",lead:"",po:"",ship:"",req:"1/5/2027"}, {item:"Fire alarm",vendor:"FA Co.",status:"",lead:"",po:"",ship:"",req:"1/5/2027"} ] } },
+  { id:"c2", division:"commercial", name:"Summit Storage — Bldg B & C", gc:"Big-D Construction", foreman:"Braden", simpro:"1874", projectNo:"BD-7781", gcPm:"Chris Lam", gcSuper:"Andy Ruiz", contractValue:"$412,000", permitNo:"E-26-04412", planSetRev:"IFC 8/2",
+    miles:{footing:"8/18/2026",underground:"9/22/2026",slab:"10/2/2026"},
+    commercial:{ stage:"", start:{ items:{...doneThrough(10), "11.trades":{done:true}, "11.layout":{done:true}, "11.banks":{done:true}}, na:{"8.cranePwr":true,"10.genXfmr":true}, notes:{11:"Big-D wants the east bank in before the plumber's 4\" main crosses — Thursday."}, overrides:{} },
+      submittals:[ {item:"Switchgear",vendor:"CED",status:"approved",lead:"26 wk",po:"PO-4471",ship:"2/14/2027",req:"2/20/2027"}, {item:"Transformers",vendor:"CED",status:"approved",lead:"18 wk",po:"PO-4472",ship:"1/12/2027",req:"2/20/2027"}, {item:"Panelboards",vendor:"CED",status:"approvedAsNoted",lead:"9 wk",po:"PO-4480",ship:"11/20/2026",req:"12/1/2026"}, {item:"Site lighting",vendor:"CED",status:"approved",lead:"12 wk",po:"PO-4490",ship:"9/12/2026",req:"9/15/2026",delivered:""} ] } },
+  { id:"c3", division:"commercial", name:"Wasatch Credit Union — Branch Remodel", gc:"Jacobsen", foreman:"Owen", simpro:"1901", projectNo:"JC-2609", gcPm:"Sara Kim", gcSuper:"Tom Bell", contractValue:"$96,200", permitNo:"E-26-05120", planSetRev:"Rev 1",
+    miles:{footing:"9/29/2026",underground:"10/6/2026",slab:"10/9/2026"},
+    commercial:{ stage:"", start:{ items:{...doneThrough(6, ["4.approved","5.released","5.shipDates"]), "7.takeoff":{done:true}, "7.pvc":{done:true}}, na:{"6.bim":true,"6.crane":true},
+      notes:{}, overrides:{ 4:{by:"Brady",at:"9/19/2026",note:"Fixture submittal still with the engineer — GC needs demo + underground Monday"}, 5:{by:"Brady",at:"9/19/2026",note:""} } },
+      submittals:[ {item:"Panelboards",vendor:"CED",status:"approved",lead:"8 wk",po:"PO-4501",ship:"11/2/2026",req:"11/9/2026"}, {item:"Lighting package",vendor:"CED",status:"revise",lead:"10 wk",po:"",ship:"",req:"11/16/2026"} ] } },
+  { id:"c4", division:"commercial", name:"Herriman Fire Station 103 — Gear Replacement", gc:"Hogan", foreman:"Nelson", simpro:"1866", projectNo:"HG-1150", gcPm:"Ben Ortiz", gcSuper:"Ben Ortiz", contractValue:"$238,000", permitNo:"E-26-03980", planSetRev:"IFC",
+    miles:{footing:"5/4/2026",underground:"5/18/2026",slab:"6/1/2026"},
+    commercial:{ stage:"closeout", start:{ items:doneThrough(12), na:{}, notes:{}, overrides:{} }, submittals:[ {item:"Switchgear",vendor:"CED",status:"approved",lead:"24 wk",po:"PO-4102",ship:"7/1/2026",req:"7/10/2026",delivered:"6/29/2026"} ] } },
   { id:"r1", name:"Bukhshtaber", gc:"Split Rock Custom Homes", foreman:"Gage", simpro:"1840", resiStage:"Rough In Progress" },
   { id:"r2", name:"Larsen Residence", gc:"Alpine Homes", foreman:"Owen", simpro:"1855", resiStage:"Pre Job Prep" },
   { id:"r3", name:"Kimball — Lot 14", gc:"Ivory Homes", foreman:"Braden", simpro:"1861", resiStage:"Finish In Progress" },
 ];
 const jobDivision = j => j.division === "commercial" ? "commercial" : "resi";
 
+/* ───────────────────────── derived rules (mirror spec §6.2) ───────────────────────── */
+const st = j => j.commercial.start;
+const key = (n,k) => n+"."+k;
+const itemState = (j,n,k) => { const s=st(j); const K=key(n,k); return s.items[K]&&s.items[K].done ? "done" : s.na[K] ? "na" : "todo"; };
+const phaseChecked = (j,n) => PHASE[n].items.every(([k]) => itemState(j,n,k)!=="todo");
+const phaseClosed  = (j,n) => phaseChecked(j,n) || !!st(j).overrides[n];
+const commPhase    = j => { for (const p of PHASES) if (!phaseClosed(j,p.n)) return p.n; return null; };   // derived, never stored
+const owedItems    = j => PHASES.flatMap(p => st(j).overrides[p.n] ? p.items.filter(([k])=>itemState(j,p.n,k)==="todo").map(([k,l])=>[p.n,k,l]) : []);
+const phaseDone    = (j,n) => PHASE[n].items.filter(([k])=>itemState(j,n,k)!=="todo").length;
+const ownerOf      = (j,n) => PHASE[n].owner==="foreman" ? j.foreman : OWNER[PHASE[n].owner];
+const gearSummary  = j => { const s=j.commercial.submittals||[]; const appr=s.filter(x=>/approved/.test(x.status)).length; const rel=s.filter(x=>x.po).length; const late=s.filter(x=>x.po&&!x.delivered&&x.ship&&new Date(x.ship)<new Date("2026-09-25")).length; return {n:s.length,appr,rel,late}; };
+const boardStage   = j => { const p=commPhase(j); const s=j.commercial.stage; if(s==="hold")return"hold"; if(s==="closeout")return"closeout"; if(s==="complete")return"complete"; if(p!==null) return p<=6?"precon":"jobstart"; return "inprogress"; };
+const STAGES = [["precon","Pre-Con","teal"],["jobstart","Job Start","grey"],["inprogress","In Progress","blue"],["hold","On Hold","amber"],["closeout","Closeout","purple"],["complete","Complete","green"]];
+
 /* ───────────────────────── app state ───────────────────────── */
-let mode = "comm";
-let view = "home";
-let openJob = null, openTab = "Job Info";
-const collapsed = { stageComplete:true, laneAdmin:false, lanePrep:false };
-
+let mode="comm", view="jobstart", openJob=null, openTab="Job Start", peek={};   // peek[jobId] = phase number expanded on the bar
+const collapsed = { complete:true };
 const NAV = {
-  comm: [["myday","My Day"],["home","Job Board"],["needs","Needs"],["cos","COs"],["commprep","Pre-Con"],["contractors","Contractors"],["safety","Safety"],["schedule","Forecast"],["settings","Settings"]],
-  resi: [["myday","My Day"],["home","Job Board"],["today","Today"],["needs","Needs"],["cos","COs"],["jobprep","Job Prep"],["contractors","Contractors"],["safety","Safety"],["schedule","Forecast"],["huddle","Huddle"],["scoreboard","Scoreboard"],["qc","QC"],["settings","Settings"]],
-};
+  comm:[["myday","My Day"],["home","Job Board"],["needs","Needs"],["cos","COs"],["jobstart","Job Start"],["contractors","Contractors"],["safety","Safety"],["schedule","Forecast"],["settings","Settings"]],
+  resi:[["myday","My Day"],["home","Job Board"],["today","Today"],["needs","Needs"],["cos","COs"],["jobprep","Job Prep"],["contractors","Contractors"],["safety","Safety"],["schedule","Forecast"],["huddle","Huddle"],["scoreboard","Scoreboard"],["qc","QC"],["settings","Settings"]] };
 
-/* ───────────────────────── derived rules (mirror the spec) ───────────────────────── */
-const precon = j => j.commercial || {};
-const itemState = (map, na, k) => map[k] ? "done" : na[k] ? "na" : "todo";
-const laneDone = (items, map, na) => items.every(([k]) => map[k] || na[k]);
-const commPrepChecked = j => laneDone(PRECON_ITEMS, precon(j).prep||{}, precon(j).prepNA||{});
-const commCleared = j => commPrepChecked(j) || !!(precon(j).prepOverride && precon(j).prepOverride.on);
-const commStageOf = j => {
-  if (!commCleared(j)) return "precon";
-  const s = precon(j).stage || "";
-  return s === "" || s === "mobilized" ? "mobilizing" : s;
-};
-const STAGES = [
-  ["precon","Pre-Con","teal"],["mobilizing","Mobilizing","grey"],["inprogress","In Progress","blue"],
-  ["hold","On Hold","amber"],["closeout","Closeout","purple"],["complete","Complete","green"]];
-
-/* ───────────────────────── render ───────────────────────── */
 const $ = s => document.querySelector(s);
-const toast = (m) => { const t=$("#toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),1800); };
+const toast = m => { const t=$("#toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2400); };
 const fdot = f => `<span class="fdot" style="background:${PEOPLE[f]||'#999'}"></span>${f}`;
+const labelOf = k => (NAV.comm.concat(NAV.resi).find(([x])=>x===k)||[k,k])[1];
+const soon = d => { const t=(new Date(d)-new Date("2026-09-25"))/864e5; return t>=0 && t<=10; };
 
 function renderTabs(){
   $("#tabs").innerHTML = NAV[mode].map(([k,l]) => `<div class="tab ${view===k?'on':''}" data-view="${k}">${l}</div>`).join("");
-  document.querySelectorAll("#tabs .tab").forEach(t => t.onclick = () => { view = t.dataset.view; render(); });
+  document.querySelectorAll("#tabs .tab").forEach(t => t.onclick = () => { view=t.dataset.view; render(); });
   document.querySelectorAll("#modeswitch button").forEach(b => b.classList.toggle("on", b.dataset.mode===mode));
   document.body.classList.toggle("comm", mode==="comm");
 }
-
 function render(){
   renderTabs();
-  const jobs = JOBS.filter(j => jobDivision(j) === (mode==="comm" ? "commercial" : "resi"));   // THE filter
+  const jobs = JOBS.filter(j => jobDivision(j) === (mode==="comm"?"commercial":"resi"));   // THE filter — once, at the top
   const p = $("#page");
-  if (mode === "resi") {
-    if (view === "home") p.innerHTML = resiBoard(jobs); else p.innerHTML = `<div class="empty">Residential ${labelOf(view)} — unchanged from today. Commercial jobs never appear here.</div>`;
-    return;
-  }
-  if (view === "home") p.innerHTML = commBoard(jobs);
-  else if (view === "commprep") p.innerHTML = commPrep(jobs);
+  if (mode==="resi") { p.innerHTML = view==="home" ? resiBoard(jobs) : `<div class="empty">Residential ${labelOf(view)} — unchanged from today. Commercial jobs never appear here.</div>`; return; }
+  if (view==="home") p.innerHTML = commBoard(jobs);
+  else if (view==="jobstart") p.innerHTML = jobStart(jobs);
   else p.innerHTML = `<div class="empty">${labelOf(view)} in Commercial mode = the same screen you know, showing only the ${jobs.length} commercial jobs (Needs and My Day follow the job they're attached to).</div>`;
   wire();
 }
-const labelOf = k => (NAV.comm.concat(NAV.resi).find(([x])=>x===k)||[k,k])[1];
 
 function resiBoard(jobs){
   return `<div class="note"><b>Residential mode</b> — exactly today's Job Board. The 4 commercial jobs are filtered out at the top of the app, so no residential screen, chase, or count ever sees them.</div>
@@ -267,131 +277,150 @@ function resiBoard(jobs){
 }
 
 function commBoard(jobs){
-  const groups = STAGES.map(([k,l,c]) => [k,l,c, jobs.filter(j => commStageOf(j)===k)]);
-  return `<div class="note"><b>Commercial Job Board</b> — grouped by the commercial stages (no Rough / Finish). Tap a job name to open its card. Tap a stage header to collapse it.</div>
-  <div class="pagehead"><div><h1>JOB BOARD</h1><div class="subcounts"><b>${jobs.length}</b> commercial jobs · <b>${jobs.filter(j=>!commCleared(j)).length}</b> in pre-con · <b>${jobs.filter(j=>commStageOf(j)==="inprogress").length}</b> in progress</div></div>
+  const groups = STAGES.map(([k,l,c]) => [k,l,c, jobs.filter(j=>boardStage(j)===k)]);
+  return `<div class="note"><b>Commercial Job Board</b> — grouped by the commercial stages (no Rough / Finish). Pre-Con = phases 1–6, Job Start = phases 7–12; the pill says which phase. Tap a job name to open its card.</div>
+  <div class="pagehead"><div><h1>JOB BOARD</h1><div class="subcounts"><b>${jobs.length}</b> commercial jobs · <b>${jobs.filter(j=>boardStage(j)==="precon").length}</b> in pre-con · <b>${jobs.filter(j=>boardStage(j)==="jobstart").length}</b> in job start</div></div>
   <div class="controls"><input type="text" placeholder="Search jobs, GC, project #…"/><button class="btn">Flagged</button><button class="btn teal">+ New Job</button></div></div>
-  ${groups.map(([k,l,c,rows]) => `<div class="stage ${k==="complete"&&collapsed.stageComplete?'collapsed':''}" data-stage="${k}">
-     <div class="stagehead"><span class="t" style="color:var(--${c==='grey'?'dim':c})">${l.toUpperCase()}</span><span class="n">${rows.length}</span><span class="caret">▾</span></div>
-     <div class="rows">${rows.length ? rows.map(j => boardRow(j)).join("") : `<div class="empty">No jobs in ${l}</div>`}</div></div>`).join("")}`;
+  ${groups.map(([k,l,c,rows]) => `<div class="stage ${k==="complete"&&collapsed.complete?'collapsed':''}" data-stage="${k}">
+    <div class="stagehead"><span class="t" style="color:var(--${c==='grey'?'dim':c})">${l.toUpperCase()}</span><span class="n">${rows.length}</span><span class="caret">▾</span></div>
+    <div class="rows">${rows.length ? rows.map(j => { const p=commPhase(j); const owed=owedItems(j).length; return `<div class="row ${p!==null?(owed?'owed':'cur'):'ok'}"><div class="jobinfo"><div class="jobname" data-open="${j.id}">${j.name}</div>
+      <div class="jobmeta">${fdot(j.foreman)} · Simpro #${j.simpro} · Proj ${j.projectNo} · <span class="pill gc">${j.gc}</span> · Super: ${j.gcSuper}</div></div>
+      ${p!==null?`<span class="pill ${p<=6?'teal':'grey'}">PHASE ${p} · ${PHASE[p].label.split(" / ")[0].toUpperCase()}</span><span class="prog"><b>${phaseDone(j,p)}/${PHASE[p].items.length}</b></span>`:""}
+      ${owed?`<span class="pill amber">${owed} OWED</span>`:""}
+      ${boardStage(j)==="inprogress"?`<span class="pill blue">IN PROGRESS</span>`:""}${boardStage(j)==="closeout"?`<span class="pill purple">CLOSEOUT</span>`:""}
+    </div>`; }).join("") : `<div class="empty">No jobs in ${l}</div>`}</div></div>`).join("")}`;
 }
-function boardRow(j){
-  const c = precon(j); const held = !commCleared(j); const ov = c.prepOverride && c.prepOverride.on && !commPrepChecked(j);
-  const done = PRECON_ITEMS.filter(([k]) => c.prep[k]||c.prepNA[k]).length;
-  return `<div class="row ${held?'needs':ov?'overridden':''}"><div class="jobinfo"><div class="jobname" data-open="${j.id}">${j.name}</div>
-    <div class="jobmeta">${fdot(j.foreman)} · Simpro #${j.simpro} · Proj ${j.projectNo} · <span class="pill gc">${j.gc}</span> · Super: ${j.gcSuper}</div></div>
-    ${held ? `<span class="prog">Pre-con <b>${done}/${PRECON_ITEMS.length}</b></span><span class="pill teal">MOBILIZE ${j.mobilize}</span>` : ""}
-    ${ov ? `<span class="pill amber">OVERRIDE · ${PRECON_ITEMS.length-done} OWED</span>` : ""}
-    ${commStageOf(j)==="inprogress" ? `<span class="pill blue">IN PROGRESS</span>` : ""}
-    ${commStageOf(j)==="closeout" ? `<span class="pill purple">CLOSEOUT</span>` : ""}
+
+/* ───────────────────────── Job Start board ───────────────────────── */
+function chip(j,n,k,label,kind,ctx){
+  const s = itemState(j,n,k); const cur = commPhase(j); const isOwed = s==="todo" && !!st(j).overrides[n];
+  const locked = cur!==null && n>cur;
+  const cls = locked?"lock": isOwed?"owedc": s;
+  const g = s==="done"?"✓":s==="na"?"—":"○";
+  const kindTag = kind==="trk"?" trk":"";
+  const title = kind==="trk"?"derived from the Gear & Submittals log":kind==="photo"?"opens PhotoAttacher":kind==="date"?"check + date":"tap: ○ → ✓ → N/A";
+  return `<span class="chip ${cls}${kindTag}" ${locked?"":`data-chip="${j.id}|${n}|${k}|${ctx}"`} title="${title}"><span class="g">${g}</span>${label}${s==="na"?" · N/A":""}${isOwed?" · OWED":""}${kind==="photo"?" · PHOTO":""}</span>`;
+}
+function phaseBlock(j,n,ctx){
+  const cur = commPhase(j); const p = PHASE[n]; const done=phaseDone(j,n); const ov=st(j).overrides[n];
+  const kind = cur===null||n<cur ? "past" : n===cur ? "cur" : "future";
+  const owedHere = ov ? p.items.filter(([k])=>itemState(j,n,k)==="todo") : [];
+  const nxt = p.items.find(([k])=>itemState(j,n,k)==="todo");
+  return `<div class="phasehead ${kind}"><span class="ph">PHASE ${n} · ${p.label.toUpperCase()}</span>${kind==="past"?`<span class="pill ${owedHere.length?'amber':'green'}">${owedHere.length?owedHere.length+' OWED':'DONE'}</span>`:kind==="future"?`<span class="pill grey">UP NEXT</span>`:`<span class="pill blue">CURRENT</span>`}<span class="own">${ownerOf(j,n)}</span></div>
+    <div class="chips">${p.items.map(([k,l,kd])=>chip(j,n,k,l,kd,ctx)).join("")}</div>
+    ${kind==="cur" ? `<div class="foot"><span class="prog"><b>${done}/${p.items.length}</b></span>${nxt?`<span class="next">NEXT: ${nxt[1]}</span>`:""}
+      ${st(j).notes[n]?`<span class="hint" style="margin:0">${st(j).notes[n]}</span>`:""}
+      <button class="btn amber sm" data-override="${j.id}|${n}" style="margin-left:auto">MOVE ON WITH ITEMS OWED</button></div>` : ""}
+    ${ov ? `<div class="foot"><span class="ovnote">Moved on ${ov.at} by ${ov.by}${ov.note?" — "+ov.note:""}</span><button class="btn sm" data-undo="${j.id}|${n}">↩ Undo</button></div>` : ""}`;
+}
+function jobCard(j, ctx){
+  const cur = commPhase(j); const owed = owedItems(j); const g = gearSummary(j); const pk = peek[j.id];
+  const segs = PHASES.map(p => { const n=p.n; const cls = cur===null||n<cur ? (st(j).overrides[n]&&!phaseChecked(j,n)?"owed":"done") : n===cur?"cur":""; return `<div class="seg ${cls} ${pk===n?'peek':''}" data-peek="${j.id}|${n}" title="Phase ${n}: ${p.label}">${n}</div>`; }).join("");
+  const showPhases = [];
+  if (pk && pk!==cur) showPhases.push(pk);
+  if (cur!==null) showPhases.push(cur);
+  return `<div class="jcard ${owed.length?'hasowed':'cur'}" id="card-${ctx}-${j.id}">
+    <div class="jtop"><div class="jobinfo"><div class="jobname" ${ctx==="board"?`data-open="${j.id}"`:""}>${j.name}</div>
+      <div class="jobmeta">${fdot(j.foreman)} · <span class="pill gc">${j.gc}</span> · Proj ${j.projectNo}</div>
+      <div class="miles">${Object.entries(j.miles).map(([k,v])=>`<span class="mile ${soon(v)?'soon':''}">${k.toUpperCase()} <b>${v}</b></span>`).join("")}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start">
+        <span class="pill ${g.late?'red':g.n?'teal':'grey'}" title="Gear & Submittals log">GEAR · ${g.appr} approved · ${g.rel} released${g.late?' · '+g.late+' LATE':''}</span>
+        ${owed.length?`<span class="pill amber">${owed.length} OWED IN EARLIER PHASES</span>`:""}</div></div>
+    <div class="bar">${segs}</div>
+    ${cur===null && !pk ? `<div class="strip">✓ All 12 phases closed — the job is past the slab and lives under In Progress on the Job Board.</div>` : ""}
+    ${showPhases.sort((a,b)=>a-b).map(n=>phaseBlock(j,n,ctx)).join("")}
   </div>`;
 }
-
-function chip(j, lane, k, label){
-  const c = precon(j); const map = lane==="admin"?c.admin:c.prep; const na = lane==="admin"?c.adminNA:c.prepNA;
-  const st = itemState(map, na, k);
-  const g = st==="done"?"✓":st==="na"?"—":"○";
-  return `<span class="chip ${st}" data-chip="${j.id}|${lane}|${k}" title="tap: toggle · long-press / ▾: Not needed"><span class="g">${g}</span>${label}${st==="na"?" · N/A":""}</span>`;
-}
-function commPrep(jobs){
-  const live = jobs.filter(j => commStageOf(j)!=="complete");
-  const held = live.filter(j=>!commCleared(j)).length, onOv = live.filter(j=>precon(j).prepOverride&&precon(j).prepOverride.on&&!commPrepChecked(j)).length;
-  const adminOpen = live.filter(j => !laneDone(ADMIN_ITEMS, precon(j).admin, precon(j).adminNA));
-  const adminDone = live.filter(j =>  laneDone(ADMIN_ITEMS, precon(j).admin, precon(j).adminNA));
-  const prepOpen  = live.filter(j => !commPrepChecked(j));
-  const prepDone  = live.filter(j =>  commPrepChecked(j));
-  return `<div class="note"><b>Pre-Con board</b> — the commercial Job Prep. Same mechanics as the residential tab (chips, N/A, two lanes, override with audit stamp); different items. Tap a chip to cycle ○ → ✓ → N/A. Lane 2 gates the job; lane 1 is tracked.</div>
-  <div class="pagehead"><div><h1>PRE-CON</h1><div class="subcounts"><b>${live.length}</b> active · <b style="color:var(--red)">${held}</b> held in pre-con · <b style="color:var(--amber)">${onOv}</b> mobilized on override · <b style="color:var(--green)">${live.length-held}</b> cleared to mobilize</div></div>
-  <div class="controls"><input type="text" placeholder="Search…"/><button class="btn">Show complete</button></div></div>
-
-  <div class="lane admin ${collapsed.laneAdmin?'collapsed':''}" data-lane="laneAdmin"><div class="lanehead"><span class="t">OFFICE ADMIN</span><span class="pill blue">${adminOpen.length} open</span><span class="who">Justin's lane</span></div>
-   <div class="lanebody">${adminOpen.map(j => `<div class="row needs"><div class="jobinfo"><div class="jobname" data-open="${j.id}">${j.name}</div><div class="jobmeta">${fdot(j.foreman)} · ${j.gc} · mobilize ${j.mobilize}</div></div>
-      <div class="chips">${ADMIN_ITEMS.map(([k,l])=>chip(j,"admin",k,l)).join("")}</div></div>`).join("")}
-     ${adminDone.length?`<div class="strip">✓ ${adminDone.length} job${adminDone.length>1?'s':''} complete — ${adminDone.map(j=>j.name.split(" — ")[0]).join(", ")}</div>`:""}</div></div>
-
-  <div class="lane prep ${collapsed.lanePrep?'collapsed':''}" data-lane="lanePrep"><div class="lanehead"><span class="t">PRE-CON CHECKLIST</span><span class="pill teal">${prepOpen.length} open</span><span class="who">Koy's lane</span></div>
-   <div class="lanebody">${prepOpen.map(j => { const c=precon(j); const ov=c.prepOverride&&c.prepOverride.on; const done=PRECON_ITEMS.filter(([k])=>c.prep[k]||c.prepNA[k]).length; const nxt=PRECON_ITEMS.find(([k])=>!c.prep[k]&&!c.prepNA[k]);
-      return `<div class="row ${ov?'overridden':'needs'}"><div class="jobinfo"><div class="jobname" data-open="${j.id}">${j.name}</div><div class="jobmeta">${fdot(j.foreman)} · ${j.gc} · <span class="pill teal">MOBILIZE ${j.mobilize}</span> ${ov?`<span class="pill amber">OVERRIDE · ${c.prepOverride.by} ${c.prepOverride.at}</span>`:""}</div></div>
-        <div class="chips">${PRECON_ITEMS.map(([k,l])=>chip(j,"prep",k,l)).join("")}</div>
-        <span class="prog"><b>${done}/${PRECON_ITEMS.length}</b></span>${nxt?`<span class="next">NEXT: ${nxt[1]}</span>`:""}
-        ${ov ? `<div class="ovnote">${c.prepOverride.note||""} <button class="btn" data-undo="${j.id}" style="margin-left:8px">↩ Undo override</button></div>` : `<button class="btn amber" data-override="${j.id}">MOBILIZE WITHOUT FULL PREP</button>`}
-      </div>`; }).join("")}
-     ${prepDone.length?`<div class="strip">✓ ${prepDone.length} job${prepDone.length>1?'s':''} fully prepped — ${prepDone.map(j=>j.name.split(" — ")[0]).join(", ")}</div>`:""}</div></div>`;
+function jobStart(jobs){
+  const live = jobs.filter(j => commPhase(j)!==null);
+  const past = jobs.filter(j => commPhase(j)===null);
+  const owedTotal = live.reduce((a,j)=>a+owedItems(j).length,0);
+  const groups = PHASES.map(p => [p, live.filter(j=>commPhase(j)===p.n)]).filter(([,rows])=>rows.length);
+  return `<div class="note"><b>Job Start</b> — each of the 12 steps is a <b>phase</b>. A job is in one phase at a time; its checklist is open on the card. Check the last item and the card rolls into the next phase's section on its own. Tap a number on the bar to look back at a finished phase (owed items stay tappable) or peek ahead. <b>Move on with items owed</b> closes a phase early — the items stay red until checked.</div>
+  <div class="pagehead"><div><h1>JOB START</h1><div class="subcounts"><b>${live.length}</b> active · <b style="color:var(--teal)">${live.filter(j=>commPhase(j)<=6).length}</b> in pre-con (1–6) · <b>${live.filter(j=>commPhase(j)>6).length}</b> in job start (7–12) · <b style="color:var(--amber)">${owedTotal}</b> items owed in earlier phases · <b style="color:var(--green)">${past.length}</b> past slab</div></div>
+  <div class="controls"><input type="text" placeholder="Search…"/><button class="btn">Mine</button><button class="btn">Show complete</button></div></div>
+  ${groups.map(([p,rows]) => `<div class="stage" data-stage="p${p.n}"><div class="stagehead"><span class="t" style="color:var(--${p.owner==='foreman'?'dim':'teal'})">PHASE ${p.n} · ${p.label.toUpperCase()}</span><span class="n">${rows.length}</span><span class="who">${OWNER[p.owner]||"Foreman"}</span><span class="caret">▾</span></div>
+    <div class="rows">${rows.map(j=>jobCard(j,"board")).join("")}</div></div>`).join("")}
+  ${past.length?`<div class="strip">✓ ${past.length} job${past.length>1?'s':''} past phase 12 — ${past.map(j=>j.name.split(" — ")[0]).join(", ")} (Show complete)</div>`:""}`;
 }
 
-/* ───────────────────────── job drawer ───────────────────────── */
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Pre-Con","Change Orders","Open Items"];
-function openDrawer(id, tab){ openJob = JOBS.find(j=>j.id===id); openTab = tab||"Job Info"; renderDrawer(); $("#overlay").classList.add("open"); $("#drawer").classList.add("open"); }
+/* ───────────────────────── drawer ───────────────────────── */
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Gear & Submittals","RFIs","Change Orders","Open Items"];
+function openDrawer(id, tab){ openJob=JOBS.find(j=>j.id===id); openTab=tab||"Job Start"; renderDrawer(); $("#overlay").classList.add("open"); $("#drawer").classList.add("open"); }
 function closeDrawer(){ $("#overlay").classList.remove("open"); $("#drawer").classList.remove("open"); openJob=null; }
+const STATUS_LBL = { "":"—", requested:"REQUESTED", submitted:"SUBMITTED", revise:"REVISE / RESUBMIT", approved:"APPROVED", approvedAsNoted:"APPROVED AS NOTED" };
 function renderDrawer(){
-  const j = openJob; if(!j) return; const c = precon(j);
-  const stage = commStageOf(j);
-  let body = "";
-  if (openTab==="Job Info") body = `
-    <div class="card"><h3>JOB</h3><div class="grid">
-      ${[["Job name",j.name],["Address","(from Simpro)"],["GC",j.gc],["Foreman",j.foreman],["Lead","—"],["Simpro Job #",j.simpro]].map(([l,v])=>`<div class="f"><label>${l}</label><input value="${v}"/></div>`).join("")}
-    </div></div>
-    <div class="card"><h3>DIVISION · STAGE</h3>
-      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end">
-        <div class="f"><label>Division</label><div class="seg"><button data-div="resi">RESI</button><button class="on" data-div="comm">COMMERCIAL</button></div><div class="hint">Admin / manager. Moving a job asks once; nothing is deleted.</div></div>
-        <div class="f"><label>Stage</label><div class="seg stage">${STAGES.filter(([k])=>k!=="precon").map(([k,l])=>`<button data-stage="${k}" class="${(stage===k)?'on':''}" ${!commCleared(j)?'disabled':''}>${l.toUpperCase()}</button>`).join("")}</div><div class="hint">${commCleared(j)?"Stamped with a date on change.":"Locked until cleared to mobilize (Pre-Con tab)."}</div></div>
-      </div></div>
-    <div class="card"><h3>COMMERCIAL</h3><div class="grid">
-      ${[["Project #",j.projectNo],["GC PM",j.gcPm],["GC Super",j.gcSuper],["Super phone","801-555-0142"],["Contract value",j.contractValue],["Permit #",j.permitNo||""],["Plan set / rev",j.planSetRev],["Mobilize date",j.mobilize],["Site hours","6:30–3:30, no Sat"],["Badge / orientation","GC orientation Tue 6:15"],["Parking","Lot C, south gate"],["Laydown","Conex behind Bldg B"]].map(([l,v])=>`<div class="f"><label>${l}</label><input value="${v}" placeholder="—"/></div>`).join("")}
-    </div></div>
+  const j=openJob; if(!j) return; const p=commPhase(j); let body="";
+  if (openTab==="Job Start") body = jobCard(j,"drawer");
+  else if (openTab==="Job Info") body = `
+    <div class="card"><h3>JOB</h3><div class="grid">${[["Job name",j.name],["Address","(from Simpro)"],["GC",j.gc],["Foreman",j.foreman],["Lead","—"],["Simpro Job #",j.simpro]].map(([l,v])=>`<div class="f"><label>${l}</label><input value="${v}"/></div>`).join("")}</div></div>
+    <div class="card"><h3>DIVISION · STAGE</h3><div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end">
+      <div class="f"><label>Division</label><div class="segc"><button data-div="resi">RESI</button><button class="on" data-div="comm">COMMERCIAL</button></div><div class="hint">From Simpro's Business Group at import; admin / manager can move it. Nothing is deleted.</div></div>
+      <div class="f"><label>Stage</label><div class="segc"><button class="on" disabled>${p!==null?`PHASE ${p} · ${p<=6?'PRE-CON':'JOB START'}`:'IN PROGRESS'}</button>${["hold","closeout","complete"].map(s=>`<button data-stage="${s}" class="${j.commercial.stage===s?'on':''}">${s.toUpperCase()}</button>`).join("")}</div><div class="hint">${p!==null?"Pre-Con / Job Start come from the phase — derived, never set by hand.":"Past phase 12. Hold / Closeout / Complete are set here, date-stamped."}</div></div></div></div>
+    <div class="card"><h3>COMMERCIAL</h3><div class="grid">${[["Project #",j.projectNo],["GC PM",j.gcPm],["GC Super",j.gcSuper],["Super phone","801-555-0142"],["Contract value",j.contractValue],["Permit #",j.permitNo||""],["Permit by","Homestead"],["Plan set / rev",j.planSetRev],["Site hours","6:30–3:30, no Sat"],["Badge / orientation","GC orientation Tue 6:15"],["Parking","Lot C, south gate"],["Laydown","Conex behind Bldg B"],["Temp power owner","Homestead"]].map(([l,v])=>`<div class="f"><label>${l}</label><input value="${v}" placeholder="—"/></div>`).join("")}</div></div>
+    <div class="card"><h3>SCOPE BY SYSTEM (PHASE 2)</h3><div class="chips">${[["Service / gear",1],["Distribution",1],["Lighting",1],["Lighting controls",1],["Branch power",1],["Fire alarm",1],["Low voltage",1],["Site electrical",1],["Generator / ATS",0],["EV",0]].map(([l,on])=>`<span class="chip ${on?'done':'na'}"><span class="g">${on?'✓':'—'}</span>${l.toUpperCase()}</span>`).join("")}</div><div class="hint">What this job has. The Gear log and later phases group by system; an off system just doesn't appear.</div></div>
+    <div class="card"><h3>MILESTONES (PHASES 2 + 6)</h3><div class="grid">${[["Temp power","9/28/2026"],["Footing",j.miles.footing],["Underground",j.miles.underground],["Slab",j.miles.slab],["Walls",""],["Ceilings",""],["Permanent power",""],["Startup",""],["Final",""]].map(([l,v])=>`<div class="f"><label>${l}</label><input value="${v}" placeholder="M/D/YYYY"/></div>`).join("")}</div><div class="hint">These are the dates Forecast / Crew Planner shows for a commercial job and the dates the Ufer / underground reminders key on.</div></div>
     <div class="card"><h3>JOB SECTIONS · 3 hidden</h3><div class="hint">Same v439 panel. Matterport, Generator, Temp Pedestal off for this job.</div></div>`;
-  else if (openTab==="Pre-Con") {
-    const done = PRECON_ITEMS.filter(([k])=>c.prep[k]||c.prepNA[k]).length; const ov=c.prepOverride&&c.prepOverride.on;
-    body = `<div class="card"><h3>OFFICE ADMIN · JUSTIN</h3><div class="chips">${ADMIN_ITEMS.map(([k,l])=>chip(j,"admin",k,l)).join("")}</div></div>
-    <div class="card"><h3>PRE-CON CHECKLIST · KOY <span class="prog" style="margin-left:8px"><b>${done}/${PRECON_ITEMS.length}</b></span></h3><div class="chips">${PRECON_ITEMS.map(([k,l])=>chip(j,"prep",k,l)).join("")}</div>
-      <div style="margin-top:12px">${commPrepChecked(j)?`<span class="pill green">CLEARED TO MOBILIZE — all items checked</span>`:ov?`<span class="pill amber">MOBILIZED ON OVERRIDE · ${c.prepOverride.by} ${c.prepOverride.at}</span> <div class="ovnote">${c.prepOverride.note||""}</div><button class="btn" data-undo="${j.id}" style="margin-top:8px">↩ Undo override</button>`:`<span class="pill red">HELD IN PRE-CON</span> <button class="btn amber" data-override="${j.id}" style="margin-left:8px">MOBILIZE WITHOUT FULL PREP</button>`}</div></div>
-    <div class="card"><h3>MY DAY</h3><div class="hint">${commPrepChecked(j)?"No open pre-con row.":`"Pre-Con: ${j.name.split(" — ")[0]}" sits on the Head of Commercial's My Day until every item is checked${ov?" (override active)":""}.`}</div></div>`;
-  }
-  else if (openTab==="Change Orders") body = `<div class="card"><h3>CHANGE ORDERS</h3><div class="hint">The existing CO tracker, unchanged — same pipeline, quote #, photos, Send to Simpro. Phase 2 question: PCO → COR naming + T&amp;M tickets signed by the super.</div></div>`;
-  else if (openTab==="Plans & Links") body = `<div class="card"><h3>PLANS &amp; LINKS</h3><div class="grid">${["Plans","Redlines","Spec book","Submittals folder","Drive folder","GC schedule"].map(l=>`<div class="f"><label>${l}</label><input placeholder="paste link…"/></div>`).join("")}</div><div class="hint">Existing component; commercial jobs get Spec book + Submittals folder rows in the registry.</div></div>`;
+  else if (openTab==="Gear & Submittals") body = `<div class="card"><h3>GEAR & SUBMITTALS — one row per long-lead item (phases 3 → 5)</h3><div class="tblwrap"><table><thead><tr><th>Item</th><th>Vendor</th><th>Lead</th><th>Status</th><th>PO</th><th>Promised ship</th><th>Required on site</th><th>Checked</th></tr></thead><tbody>
+    ${(j.commercial.submittals||[]).map(r=>{ const late=r.po&&!r.delivered&&r.ship&&new Date(r.ship)<new Date("2026-09-25"); return `<tr class="${late?'late':''}"><td><b>${r.item}</b></td><td>${r.vendor}</td><td>${r.lead||"—"}</td><td><span class="pill ${/approved/.test(r.status)?'green':r.status==='revise'?'red':r.status?'blue':'grey'}">${STATUS_LBL[r.status]}</span></td><td>${r.po||"—"}</td><td>${r.ship||"—"}${late?' <span class="pill red">LATE</span>':''}</td><td>${r.req||"—"}</td><td><button class="btn sm">Mark checked</button></td></tr>`; }).join("")}
+    </tbody></table></div><div class="hint">Phase 3 chips (requested, lead times) and phase 5 chips (released + PO, ship dates, procurement log, ship mode) are <b>derived from these rows</b> — you fill the row, the chip checks itself. "Gear check: &lt;job&gt;" lands on Brady / Justin's My Day every Monday while anything is released and not delivered. + Add item.</div></div>`;
+  else if (openTab==="RFIs") body = `<div class="card"><h3>RFIs</h3><div class="tblwrap"><table><thead><tr><th>#</th><th>Question</th><th>Sent to</th><th>Sent</th><th>Answer</th><th>Blocks</th></tr></thead><tbody>
+    <tr><td>001</td><td>Electrical room 112 — gear clearance vs. mechanical duct at 9'-2"</td><td>Layton / EOR</td><td>9/15</td><td>—</td><td><span class="pill red">PURCHASING</span></td></tr>
+    <tr><td>002</td><td>Site lighting pole bases — 24" or 30" dia?</td><td>Civil</td><td>9/18</td><td>30" per rev 2 (9/22)</td><td><span class="pill grey">UNDERGROUND</span></td></tr>
+    </tbody></table></div><div class="hint">Phase 4's RFI LIST chip is satisfied when the log exists; open RFIs that block purchasing keep the GEAR pill honest.</div></div>`;
+  else if (openTab==="Change Orders") body = `<div class="card"><h3>CHANGE ORDERS</h3><div class="hint">The existing CO tracker, unchanged — same pipeline, quote #, photos, Send to Simpro. Open question: PCO → COR naming + T&amp;M tickets signed by the super.</div></div>`;
+  else if (openTab==="Plans & Links") body = `<div class="card"><h3>PLANS &amp; LINKS</h3><div class="grid">${["Plans","Redlines","Spec book","Submittals folder","GC schedule","Drive folder"].map(l=>`<div class="f"><label>${l}</label><input placeholder="paste link…"/></div>`).join("")}</div><div class="hint">Existing component; commercial jobs get Spec book, Submittals folder and GC schedule rows.</div></div>`;
   else body = `<div class="card"><h3>${openTab.toUpperCase()}</h3><div class="hint">Existing component, as-is. Reads division-neutral fields.</div></div>`;
 
-  $("#drawer").innerHTML = `<div class="dhead"><div class="name">${j.name} <span class="pill teal">COMMERCIAL</span><span class="x" id="dclose">✕ Close</span></div>
+  $("#drawer").innerHTML = `<div class="dhead"><div class="name">${j.name} <span class="pill teal">COMMERCIAL</span>${p!==null?`<span class="pill ${p<=6?'teal':'grey'}">PHASE ${p}</span>`:""}<span class="x" id="dclose">✕ Close</span></div>
     <div class="sub">${j.gc} · Proj ${j.projectNo} · Simpro #${j.simpro} · ${fdot(j.foreman)}</div>
     <div class="dtabs">${COMM_TABS.map(t=>`<div class="dtab ${t===openTab?'on':''}" data-tab="${t}">${t}</div>`).join("")}</div></div>
-    <div class="dbody"><div class="note" style="margin-bottom:12px"><b>Commercial job card</b> — 7 tabs (Phase 1). Rough / Finish / Home Runs / Panelized / Tape Light / QC / Return Trips are not in this list, the same way Job Sections drops a tab today.</div>${body}</div>`;
+    <div class="dbody"><div class="note" style="margin-bottom:12px"><b>Commercial job card</b> — 9 tabs (Phase 1). Rough / Finish / Home Runs / Panelized / Tape Light / QC / Return Trips are not in this list, the same way Job Sections drops a tab today.</div>${body}</div>`;
   $("#dclose").onclick = closeDrawer;
-  document.querySelectorAll(".dtab").forEach(t => t.onclick = () => { openTab=t.dataset.tab; renderDrawer(); });
-  document.querySelectorAll("[data-div]").forEach(b => b.onclick = () => { if(b.dataset.div==="resi") toast(`Move "${j.name.split(" — ")[0]}" to Residential? (confirm) — only \`division\` is written`); });
-  document.querySelectorAll("[data-stage]").forEach(b => b.onclick = () => { c.stage=b.dataset.stage; toast(`Stage → ${b.textContent} · stamped ${new Date().toLocaleDateString()}`); renderDrawer(); render(); });
+  const D = $("#drawer");
+  D.querySelectorAll(".dtab").forEach(t => t.onclick = () => { openTab=t.dataset.tab; renderDrawer(); });
+  D.querySelectorAll("[data-div]").forEach(b => b.onclick = () => { if(b.dataset.div==="resi") toast(`Move "${j.name.split(" — ")[0]}" to Residential? (confirm) — only \`division\` is written`); });
+  D.querySelectorAll("button[data-stage]").forEach(b => b.onclick = () => { j.commercial.stage = j.commercial.stage===b.dataset.stage ? "" : b.dataset.stage; toast(`Stage → ${j.commercial.stage||"In Progress"} · stamped`); renderDrawer(); render(); });
   wire($("#drawer"));
 }
 
 /* ───────────────────────── interactions ───────────────────────── */
-let pendingOverride = null;
+let pending=null;
 function wire(root){
   root = root || document;
-  root.querySelectorAll("[data-open]").forEach(el => el.onclick = () => openDrawer(el.dataset.open, view==="commprep"?"Pre-Con":"Job Info"));
+  root.querySelectorAll("[data-open]").forEach(el => el.onclick = () => openDrawer(el.dataset.open, view==="home"?"Job Info":"Job Start"));
   root.querySelectorAll("[data-chip]").forEach(el => el.onclick = () => {
-    const [id,lane,k] = el.dataset.chip.split("|"); const j = JOBS.find(x=>x.id===id); const c=precon(j);
-    const map = lane==="admin"?c.admin:c.prep, na = lane==="admin"?c.adminNA:c.prepNA;
-    const st = itemState(map,na,k);
-    if (st==="todo") { map[k]=true; delete na[k]; }
-    else if (st==="done") { delete map[k]; na[k]=true; }
-    else { delete map[k]; delete na[k]; }
+    const [id,n,k] = el.dataset.chip.split("|"); const j=JOBS.find(x=>x.id===id); const N=+n; const s=st(j); const K=key(N,k);
+    const before = commPhase(j); const state = itemState(j,N,k);
+    if (state==="todo") { s.items[K]={done:true,by:"You",at:"now"}; delete s.na[K]; }
+    else if (state==="done") { delete s.items[K]; s.na[K]=true; }
+    else { delete s.items[K]; delete s.na[K]; }
+    const after = commPhase(j);
+    if (after!==before) {
+      if (after===null) toast(`Phase 12 done — ${j.name.split(" — ")[0]} is past the slab and now In Progress`);
+      else if (before===null || after>before) toast(`Phase ${before} done — now in Phase ${after}: ${PHASE[after].label}`);
+      else toast(`Unchecked — ${j.name.split(" — ")[0]} is back in Phase ${after}`);
+      peek[id]=null;
+    }
     render(); if(openJob) renderDrawer();
   });
+  root.querySelectorAll("[data-peek]").forEach(el => el.onclick = () => { const [id,n]=el.dataset.peek.split("|"); peek[id] = peek[id]===+n ? null : +n; render(); if(openJob) renderDrawer(); });
   root.querySelectorAll("[data-override]").forEach(el => el.onclick = () => {
-    const j = JOBS.find(x=>x.id===el.dataset.override); pendingOverride = j; const c=precon(j);
-    $("#modalItems").innerHTML = PRECON_ITEMS.filter(([k])=>!c.prep[k]&&!c.prepNA[k]).map(([,l])=>`<li>${l}</li>`).join("");
+    const [id,n]=el.dataset.override.split("|"); const j=JOBS.find(x=>x.id===id); pending={j,n:+n};
+    $("#modalTitle").textContent = `Move on from Phase ${n} with items owed?`;
+    $("#modalItems").innerHTML = PHASE[+n].items.filter(([k])=>itemState(j,+n,k)==="todo").map(([,l])=>`<li>${l}</li>`).join("") || "<li>(nothing outstanding — just check the last item instead)</li>";
     $("#modal").classList.add("open");
   });
-  root.querySelectorAll("[data-undo]").forEach(el => el.onclick = () => { const j=JOBS.find(x=>x.id===el.dataset.undo); precon(j).prepOverride=null; toast("Override removed — job is held in pre-con again"); render(); if(openJob) renderDrawer(); });
-  root.querySelectorAll(".stagehead").forEach(h => h.onclick = () => { const s=h.parentElement; s.classList.toggle("collapsed"); if(s.dataset.stage==="complete") collapsed.stageComplete=s.classList.contains("collapsed"); });
-  root.querySelectorAll(".lanehead").forEach(h => h.onclick = () => { const l=h.parentElement; l.classList.toggle("collapsed"); collapsed[l.dataset.lane]=l.classList.contains("collapsed"); });
+  root.querySelectorAll("[data-undo]").forEach(el => el.onclick = () => { const [id,n]=el.dataset.undo.split("|"); const j=JOBS.find(x=>x.id===id); delete st(j).overrides[+n]; peek[id]=null; toast(`Undo — ${j.name.split(" — ")[0]} is back in Phase ${commPhase(j)}`); render(); if(openJob) renderDrawer(); });
+  root.querySelectorAll(".stagehead").forEach(h => h.onclick = () => { const s=h.parentElement; s.classList.toggle("collapsed"); if(s.dataset.stage==="complete") collapsed.complete=s.classList.contains("collapsed"); });
 }
-$("#modalCancel").onclick = () => { $("#modal").classList.remove("open"); pendingOverride=null; };
-$("#modalOk").onclick = () => { if(pendingOverride){ precon(pendingOverride).prepOverride={on:true,by:"Koy",at:new Date().toLocaleDateString(),note:$("#modal textarea").value}; toast("Cleared to mobilize — items stay owed on the board"); } $("#modal").classList.remove("open"); $("#modal textarea").value=""; pendingOverride=null; render(); if(openJob) renderDrawer(); };
+$("#modalCancel").onclick = () => { $("#modal").classList.remove("open"); pending=null; };
+$("#modalOk").onclick = () => { if(pending){ const {j,n}=pending; st(j).overrides[n]={by:"Brady",at:"9/25/2026",note:$("#modal textarea").value}; peek[j.id]=null; const after=commPhase(j); toast(after===null?`Moved on — past the slab, In Progress`:`Moved on — now in Phase ${after}: ${PHASE[after].label} · ${owedItems(j).length} item(s) owed`); } $("#modal").classList.remove("open"); $("#modal textarea").value=""; pending=null; render(); if(openJob) renderDrawer(); };
 $("#overlay").onclick = closeDrawer;
 document.querySelectorAll("#modeswitch button").forEach(b => b.onclick = () => {
-  mode = b.dataset.mode;
-  if (openJob && (jobDivision(openJob)==="commercial") !== (mode==="comm")) closeDrawer();   // selected job follows the mode
-  if (!NAV[mode].some(([k])=>k===view)) view = "home";
+  mode=b.dataset.mode;
+  if (openJob && (jobDivision(openJob)==="commercial") !== (mode==="comm")) closeDrawer();
+  if (!NAV[mode].some(([k])=>k===view)) view="home";
   toast(mode==="comm" ? "Switched to Commercial — only commercial jobs everywhere" : "Switched to Residential — today's app, commercial jobs hidden");
   render();
 });
