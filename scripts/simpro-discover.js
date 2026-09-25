@@ -115,6 +115,15 @@ const firstId = (list) => Array.isArray(list) && list.length && list[0] && list[
   await probe("labor rates (alt path)", "GET", "/setup/laborRates/?pageSize=5");
   await probe("activities / non-job time (exists?)", "GET", "/setup/activities/?pageSize=5");
 
+  // ── Business groups (Commercial mode, 2026-09-25) ──
+  // Koy: Simpro flags resi vs commercial under Job settings → Business Group.
+  // The candidate poller wants to read it so an import can pre-set the job's
+  // division. Confirm the setup list + the field name on a job (BusinessGroup
+  // {ID, Name} per the public docs) + that the bulk /jobs/ list accepts it as
+  // a column (bulk `columns=` silently rejects unknown names on this tenant).
+  await probe("business groups (setup list)", "GET", "/setup/businessGroups/?pageSize=20");
+  await probe("pending jobs — BusinessGroup as a bulk column", "GET", "/jobs/?Stage=Pending&columns=ID,Name,BusinessGroup&pageSize=3");
+
   // ── One job's cost centers + timesheets (pass a Simpro job number) ──
   if (JOB) {
     await probe("job header", "GET", `/jobs/${JOB}`);

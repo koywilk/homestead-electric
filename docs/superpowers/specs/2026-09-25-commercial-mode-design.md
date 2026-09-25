@@ -109,7 +109,7 @@ normalization. Run the `firestore-data-shape-audit` skill at implementation time
 | Path | Behaviour |
 |---|---|
 | "+ New Job" / "+ Temp Ped" / "+ Quick" while in Commercial mode | `division:"commercial"` on the blank job. In Residential mode the key is not written at all. |
-| Simpro Import (inbox modal) | A fourth choice next to job / temp ped / quick: **Division: Resi · Commercial**, defaulting to the current mode. Candidate rows show a `COMMERCIAL?` hint if Simpro can tell us (Open question Q2). |
+| Simpro Import (inbox modal) | `division` comes from the candidate's Simpro **Business Group** (Q2, answered): the poller stores `businessGroup` on each candidate, the row shows a COMMERCIAL pill, and Import writes the division with no picker. Missing / unmapped group → defaults to the current mode with an "unmapped group" hint. |
 | Job Info → **Division** control (admin/manager, new perm `job.division`) | Segmented Resi / Commercial. Switching asks once: "Move *X* to Commercial? It leaves every residential board and its residential tabs are hidden. Nothing is deleted." Writes `division` only; every other field stays. The job is still in `allJobs`, so it reappears the moment the mode changes. |
 | Upcoming → Promote | Inherits the mode the promote happens in. |
 | Quotes → Convert | Keeps whatever `division` the quote had (quotes get the division of the mode they were created in). |
@@ -120,14 +120,13 @@ normalization. Run the `firestore-data-shape-audit` skill at implementation time
   `he_mode` (try/catch, same idiom as `myday.view`), written on every change. Device-local,
   like every other view preference — the same person on a phone and a desktop can be in
   different modes, which is fine.
-- **Default per user (optional, Phase 1.5):** `defaultMode` on the user record next to
-  `defaultScheduleView` (Settings → My Preferences), for people who live in one division.
-  Login → `myday` stays, but the mode is set from `defaultMode` before the landing.
-- **Who sees the switch:** new perm `commercial.view`. Tier default `["admin","manager"]`
-  plus a per-user hat `commercial.crew` (empty tier list, granted through `caps[]` like the
-  existing hats) so the specific foremen / leads / crew who run commercial work get it. No
-  `commercial.view` → no switch, the app is residential exactly as today, and any commercial
-  job the person is deep-linked to (§4 "deep links") still opens.
+- **Default per user (Phase 1):** `defaultMode` on the user record next to
+  `defaultScheduleView` (Settings → My Preferences, and settable per person in Team Members),
+  for the people who do mostly commercial. Login → `myday` stays, but the mode is set from
+  `defaultMode` before the landing; absent = residential = today.
+- **Who sees the switch:** new perm `commercial.view`, all four internal tiers (crews work
+  both divisions — Koy, 2026-09-25). Contractors never see it. A person deep-linked to a job
+  in the other division still opens it (§4 "deep links").
 - **Where it lives:** in the command header, left of the tab strip: a two-segment pill
   `RESI | COMMERCIAL`. Commercial mode recolours the header accent (the mockup uses the app's
   existing teal `#3E7D7A`, never amber) and prefixes the brand with **COMMERCIAL** so nobody
@@ -285,8 +284,7 @@ custom floors; the fixed upper/main/basement keys are simply not created for com
 
 | Key | Tiers | Purpose |
 |---|---|---|
-| `commercial.view` | admin, manager (+ `commercial.crew` hat) | see the mode switch |
-| `commercial.crew` | hat (caps) | field people who work commercial jobs |
+| `commercial.view` | admin, manager, standard, limited | see the mode switch (everyone internal — crews work both, Koy 2026-09-25) |
 | `comm.head` | hat (caps) | Head of Commercial — owner of commercial auto-tasks and duties; falls back to `resi.head` |
 | `commprep.view` | admin, manager | the commercial Job Prep board (mirrors `jobprep.view`) |
 | `job.division` | admin, manager | move a job between divisions |
@@ -296,12 +294,46 @@ Nothing is hardcoded to a person (the `resiHead(users)` rule).
 
 ## 9. Open questions for Koy (answers change the build)
 
-1. **Who runs commercial?** Same foremen and crews as residential, a dedicated commercial
-   crew, or a mix? (Decides whether `commercial.crew` is a hat on a few people or everyone,
-   and whether `defaultMode` on the user record is needed in Phase 1.)
-2. **Can Simpro tell us a job is commercial** — job type, a tag, a cost-center name, the
-   customer type, or a naming convention? If yes, the candidate poller can pre-set the
-   division and the import needs no choice. (`scripts/simpro-discover.js` can probe this.)
+### Answered 2026-09-25
+
+1. **Who runs commercial?** Koy: *"Crews can be on both but there will probably be people who
+   do mostly commercial."* → Decisions:
+   - `commercial.view` is granted to **everyone internal** (all four tiers) — no
+     `commercial.crew` hat. Anyone can flip the switch, because anyone may be sent to a
+     commercial job. (§8 updated.)
+   - **`defaultMode` on the user record ships in Phase 1**, not 1.5: Settings → My
+     Preferences ("Land in: Residential / Commercial"), and Team Members can set it for a
+     person. The mostly-commercial people land on the commercial My Day; everyone else lands
+     exactly where they do today.
+   - The Crew Planner stays one company-wide planner (the "busy on a resi job" rule in §5).
+     Q8 is therefore only about presentation, not a second planner.
+2. **Can Simpro tell us?** Koy: *"simpro does flag resi or commercial in the jobs settings →
+   business group."* → Decisions:
+   - **Simpro's Business Group is the source of truth for `division` at import.** The
+     candidate poller adds `BusinessGroup` to the columns it requests, stores
+     `businessGroup: "<Name>"` on each candidate, and the import pre-sets `division` from it
+     — the import gets no division picker unless the group is missing or unmapped, in which
+     case it defaults to the current mode and shows an "unmapped group" hint.
+   - The mapping is a small map in `config/app` (`commercialBusinessGroups: ["Commercial"]`,
+     matched case-insensitively) so a renamed or added group is a settings edit, not a
+     deploy. The Job Info **Division** control (§3) stays as the manual correction.
+   - **Existing jobs:** the same poller run reports every app job whose Simpro business
+     group is commercial but whose `division` is absent, into
+     `settings/simproCandidates.divisionMismatches`. Settings → Simpro shows the list with
+     an admin-only **Apply** per row (writes `division` only, through `saveJob`). Nothing is
+     backfilled automatically. This is how today's already-running commercial jobs get their
+     division without hand-editing.
+   - Before any of this is built, run `node scripts/simpro-discover.js` once (two probes
+     added 2026-09-25: the setup list of business groups and `BusinessGroup` as a bulk
+     `/jobs/` column) — this tenant silently rejects unknown bulk columns, so the field name
+     has to be confirmed against real data first. If the bulk list refuses it, the poller
+     reads it from the per-job detail fetch the auto-pull already does.
+   - Follow-up decision for Koy: if a job's business group changes in Simpro after import,
+     should the app follow it (poller flips `division`) or only flag it? Proposed: **flag
+     only** (same mismatch list), never silently move a live job between boards.
+
+### Still open
+
 3. **Pre-con checklist (§6):** which items are real for Homestead, which are missing, which
    are Justin's vs yours? Is there a commercial PM who owns lane 2 instead of you?
 4. **Stages (§7):** is Pre-Con → Mobilizing → In Progress → Closeout → Complete right, or do
