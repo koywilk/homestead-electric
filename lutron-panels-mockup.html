@@ -1,0 +1,392 @@
+<title>Lutron Panel Builder</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap">
+<style>
+:root{
+  --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9; --muted:#8A929D;
+  --text:#1B1F24; --dim:#5E6670; --accent:#3B5BA5; --accent-ink:#FFFFFF; --accent-soft:rgba(59,91,165,.10);
+  --green:#3E7D5A; --green-soft:rgba(62,125,90,.12); --red:#B23A3A; --red-soft:rgba(178,58,58,.10);
+  --orange:#B06A2C; --orange-soft:rgba(176,106,44,.12); --purple:#6A5E97;
+  --deck:#1B2030; --deck-ink:#E6EAF1; --deck-accent:#66A8FF;
+  --shadow:0 1px 2px rgba(16,24,40,.06), 0 12px 32px -12px rgba(16,24,40,.25);
+  --head:'Bebas Neue','Oswald','Arial Narrow',sans-serif;
+  --body:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#141821; --surface:#1B2030; --card:#222732; --border:#2A2F3A; --muted:#6F7887;
+    --text:#E6EAF1; --dim:#9AA3B2; --accent:#66A8FF; --accent-ink:#0B1220; --accent-soft:rgba(102,168,255,.14);
+    --green:#46C78A; --green-soft:rgba(70,199,138,.14); --red:#E06A60; --red-soft:rgba(224,106,96,.14);
+    --orange:#D98A4A; --orange-soft:rgba(217,138,74,.14); --purple:#A393E0;
+    --deck:#0F131B; --deck-ink:#E6EAF1; --deck-accent:#66A8FF;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 14px 36px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#141821; --surface:#1B2030; --card:#222732; --border:#2A2F3A; --muted:#6F7887;
+  --text:#E6EAF1; --dim:#9AA3B2; --accent:#66A8FF; --accent-ink:#0B1220; --accent-soft:rgba(102,168,255,.14);
+  --green:#46C78A; --green-soft:rgba(70,199,138,.14); --red:#E06A60; --red-soft:rgba(224,106,96,.14);
+  --orange:#D98A4A; --orange-soft:rgba(217,138,74,.14); --purple:#A393E0;
+  --deck:#0F131B; --deck-ink:#E6EAF1; --deck-accent:#66A8FF;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 14px 36px -14px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:14px;line-height:1.45;-webkit-text-size-adjust:100%}
+button{font-family:inherit;cursor:pointer}
+input{font-family:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding-block:20px 160px;padding-inline:16px}
+.eyebrow{font-family:var(--head);font-size:13px;letter-spacing:.14em;color:var(--accent)}
+h1{font-family:var(--head);font-weight:400;font-size:34px;letter-spacing:.04em;margin:2px 0 4px;line-height:1;text-wrap:balance}
+.lede{color:var(--dim);font-size:13px;margin:0 0 14px;max-width:70ch}
+.note{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:12.5px;color:var(--dim);margin-bottom:16px;max-width:90ch}
+.note b{color:var(--text)}
+.note ul{margin:6px 0 0;padding-left:18px}
+.note li{margin:2px 0}
+
+/* summary strip */
+.strip{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px 12px;min-width:120px;flex:1 1 140px}
+.tile .k{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.tile .v{font-family:var(--head);font-size:26px;letter-spacing:.03em;line-height:1.05;font-variant-numeric:tabular-nums}
+.tile .v small{font-family:var(--body);font-size:12px;color:var(--dim);letter-spacing:0;margin-left:4px}
+.tile.warn .v{color:var(--orange)}
+.tile.good .v{color:var(--green)}
+
+/* layout */
+.cols{display:grid;grid-template-columns:minmax(300px,1fr) minmax(0,1.6fr);gap:18px;align-items:start}
+@media (max-width:860px){.cols{grid-template-columns:1fr}}
+.sectionTitle{font-family:var(--head);font-size:19px;letter-spacing:.07em;color:var(--text);margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.sectionTitle .count{font-family:var(--body);font-size:11px;letter-spacing:0;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:1px 8px;color:var(--dim)}
+.sectionTitle .spacer{flex:1}
+.toolbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.search{flex:1 1 160px;min-width:0;font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--card)}
+.seg button{border:none;background:transparent;color:var(--text);font-size:12px;font-weight:500;padding:6px 10px;min-height:32px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);font-weight:700}
+.btn{font-size:12px;font-weight:700;padding:6px 10px;min-height:32px;border-radius:8px;border:1px solid var(--accent);background:transparent;color:var(--accent);display:inline-flex;align-items:center;gap:5px}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.ghost{border-color:var(--border);color:var(--dim)}
+.btn:focus-visible,.seg button:focus-visible,.load:focus-visible,.zone:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* tray */
+.tray{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px}
+.floor{margin-bottom:10px}
+.floor:last-child{margin-bottom:0}
+.floorHead{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);padding:4px 2px 6px;border-bottom:1px solid var(--border);margin-bottom:6px}
+.floorHead .n{margin-left:auto;font-weight:600;letter-spacing:0;text-transform:none;color:var(--muted)}
+.room{margin:6px 0 8px}
+.roomName{font-size:11px;font-weight:700;color:var(--dim);margin:0 2px 4px}
+.load{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:7px 9px;margin-bottom:5px;color:var(--text);min-height:40px}
+.load:hover{border-color:var(--accent)}
+.load.sel{border-color:var(--accent);background:var(--accent-soft)}
+.load .nm{flex:1;min-width:0;font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.load .w{font-variant-numeric:tabular-nums;color:var(--dim);font-size:12px;width:44px;text-align:right}
+.chip{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;border-radius:4px;padding:1px 6px;white-space:nowrap}
+.chip.dim{color:var(--accent);background:var(--accent-soft)}
+.chip.sw{color:var(--purple);background:rgba(106,94,151,.12)}
+.chip.on{color:var(--green);background:var(--green-soft)}
+.chip.open{color:var(--muted);border:1px dashed var(--border)}
+.chip.over{color:var(--red);background:var(--red-soft)}
+.cb{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--muted);flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--accent-ink);background:transparent}
+.load.sel .cb{background:var(--accent);border-color:var(--accent)}
+.empty{padding:14px;text-align:center;color:var(--dim);font-size:13px;background:var(--surface);border:1px dashed var(--border);border-radius:10px}
+
+/* panels */
+.panel{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 12px 12px;margin-bottom:12px;box-shadow:var(--shadow)}
+.panelHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.panelHead h3{font-family:var(--head);font-size:22px;letter-spacing:.05em;margin:0;font-weight:400}
+.panelHead .where{color:var(--dim);font-size:12px}
+.meter{flex:1 1 140px;min-width:120px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.meter .bar{flex:1;height:6px;border-radius:3px;background:var(--surface);border:1px solid var(--border);overflow:hidden}
+.meter .fill{height:100%;background:var(--accent)}
+.meter.warn .fill{background:var(--orange)}
+.meter.over .fill{background:var(--red)}
+.mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.mod{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:8px 9px}
+.mod.full{border-color:var(--green)}
+.modHead{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.modHead .num{font-family:var(--head);font-size:18px;letter-spacing:.04em;color:var(--text)}
+.modHead .type{font-size:11px;font-weight:700;color:var(--dim)}
+.modHead .cap{margin-left:auto;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.zone{display:flex;align-items:center;gap:6px;width:100%;text-align:left;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:5px 7px;margin-bottom:4px;min-height:34px;color:var(--text)}
+.zone .z{font-size:10px;font-weight:800;color:var(--muted);width:16px;font-variant-numeric:tabular-nums}
+.zone .nm{flex:1;min-width:0;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zone .sub{font-size:10.5px;color:var(--dim);white-space:nowrap}
+.zone.openz{border-style:dashed;color:var(--muted)}
+.zone.openz .nm{color:var(--muted);font-weight:500}
+.zone.overz{border-color:var(--red)}
+.slotEmpty{border:1px dashed var(--border);border-radius:10px;min-height:64px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px;background:transparent}
+.slotEmpty button{border:none;background:transparent;color:var(--accent);font-weight:700;font-size:12px}
+.addPanel{width:100%;border:1px dashed var(--accent);border-radius:12px;background:transparent;color:var(--accent);font-weight:700;padding:12px;font-size:13px}
+
+/* sheet */
+.scrim{position:fixed;inset:0;background:rgba(12,16,26,.45);z-index:50}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:51;background:var(--card);border-top:1px solid var(--border);border-radius:16px 16px 0 0;padding:14px 16px;padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));max-height:86vh;overflow:auto;box-shadow:0 -12px 40px rgba(0,0,0,.25)}
+@media (min-width:700px){.sheet{left:50%;right:auto;bottom:auto;top:50%;transform:translate(-50%,-50%);width:560px;border-radius:14px;border:1px solid var(--border);padding:16px 18px}}
+.sheet h4{font-family:var(--head);font-size:22px;letter-spacing:.05em;margin:0 0 2px;font-weight:400}
+.sheet .sub{color:var(--dim);font-size:12.5px;margin-bottom:10px}
+.lbl{font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:12px 0 6px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.pc{font-size:13px;font-weight:600;padding:8px 12px;min-height:38px;border-radius:999px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+.pc[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+.pc:disabled{opacity:.4;cursor:not-allowed}
+.pc small{font-weight:500;opacity:.8;margin-left:4px}
+.sheetActions{display:flex;gap:8px;margin-top:14px;align-items:center}
+.sheetActions .spacer{flex:1}
+.danger{color:var(--red);border-color:var(--red)}
+
+/* command deck (batch) */
+.deck{position:fixed;left:16px;right:16px;bottom:0;padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));padding-top:10px;z-index:40;pointer-events:none}
+.deck .inner{pointer-events:auto;max-width:640px;margin:0 auto;background:var(--deck);color:var(--deck-ink);border-radius:12px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.deck .inner b{margin-right:4px}
+.deck button{font-size:13px;font-weight:700;padding:8px 12px;min-height:36px;border-radius:8px;background:transparent;color:var(--deck-accent);border:1px solid rgba(102,168,255,.4)}
+.deck button.cancel{margin-left:auto;color:#9AA3B2;border-color:#2E3440}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(90px + env(safe-area-inset-bottom,0px));background:var(--deck);color:var(--deck-ink);border-radius:10px;padding:9px 14px;font-size:13px;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin:6px 0 12px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.sw{width:10px;height:10px;border-radius:3px;display:inline-block}
+@media (prefers-reduced-motion:no-preference){.load,.zone,.pc{transition:border-color .12s,background .12s}}
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">Homestead Electric · Panelized Lighting · Lutron</div>
+  <h1>Panel Builder</h1>
+  <p class="lede">Clickable mockup. Loads live in one list; panels hold modules; modules hold zones. Tap any load to put it on a zone, tap any zone to move or clear it. No dragging anywhere, so it works the same on a phone and a laptop.</p>
+
+  <div class="note">
+    <b>What's different from today's Panel Loads section.</b>
+    <ul>
+      <li>A panel is a <b>panel</b> (LCP 1, LCP 2…), with a location and a module-slot count. Today a panel is a floor section, and extra panels are "extra floors".</li>
+      <li>A load is assigned by <b>reference</b>. Today assigning copies the load's name into the module's own list, so renames drift and one load can be on two modules.</li>
+      <li>Capacity is visible: zones used per module, slots used per panel, watts per dimmer zone, and unassigned count, all before anything is printed.</li>
+      <li><b>Suggest layout</b> fills modules from the tray by room and type, and you correct it. Today every load is placed by hand through a dropdown.</li>
+    </ul>
+  </div>
+
+  <div class="strip" id="strip"></div>
+
+  <div class="cols">
+    <section>
+      <div class="sectionTitle">Loads <span class="count" id="trayCount"></span><span class="spacer"></span>
+        <button class="btn ghost" id="selBtn" aria-pressed="false" onclick="toggleSelect()">Select</button>
+      </div>
+      <div class="toolbar">
+        <input class="search" id="q" placeholder="Search loads or rooms…" oninput="render()">
+        <div class="seg" role="group" aria-label="Type filter">
+          <button id="f_all" aria-pressed="true" onclick="setFilter('all')">All</button>
+          <button id="f_dim" aria-pressed="false" onclick="setFilter('Dimming')">Dimming</button>
+          <button id="f_sw" aria-pressed="false" onclick="setFilter('Switching')">Switching</button>
+        </div>
+        <div class="seg" role="group" aria-label="Assigned filter">
+          <button id="a_un" aria-pressed="true" onclick="setAssignedFilter('unassigned')">Unassigned</button>
+          <button id="a_all" aria-pressed="false" onclick="setAssignedFilter('all')">Everything</button>
+        </div>
+      </div>
+      <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>Dimming</span><span><i class="sw" style="background:var(--purple)"></i>Switching</span><span><i class="sw" style="background:var(--green)"></i>On a zone</span></div>
+      <div class="tray" id="tray"></div>
+    </section>
+
+    <section>
+      <div class="sectionTitle">Panels <span class="count" id="panelCount"></span><span class="spacer"></span>
+        <button class="btn" onclick="suggestLayout()">Suggest layout</button>
+        <button class="btn ghost" onclick="clearAll()">Clear all zones</button>
+      </div>
+      <div id="panels"></div>
+      <button class="addPanel" onclick="addPanel()">+ Add panel</button>
+    </section>
+  </div>
+</div>
+
+<div id="sheetHost"></div>
+<div id="deckHost"></div>
+<div id="toastHost"></div>
+
+<script>
+// ── Module catalog (what the app already knows, plus zone/watt limits to confirm with Tech Lighting) ──
+const MOD_TYPES = {
+  "LQSE-4A":   { zones:4, kind:"Dimming",   label:"4-zone adaptive dimmer", maxW:800 },
+  "LQSE-2ECO": { zones:2, kind:"Dimming",   label:"2-zone ECO dimmer",      maxW:600 },
+  "LQSE-S8":   { zones:8, kind:"Switching", label:"8-zone switching" },
+  "LQSE-T5":   { zones:5, kind:"Switching", label:"5-zone switching" },
+  "LQSE-2DAL": { zones:2, kind:"Dimming",   label:"2-zone DALI" },
+};
+// ── Sample job (example data, not a real job) ──
+let panels = [
+  { id:"p1", label:"LCP 1", where:"Basement mech room", slots:8, modules:[
+      { id:"m1", num:1, type:"LQSE-4A" }, { id:"m2", num:2, type:"LQSE-4A" }, { id:"m3", num:3, type:"LQSE-S8" } ] },
+  { id:"p2", label:"LCP 2", where:"Upper hall closet", slots:6, modules:[ { id:"m4", num:1, type:"LQSE-4A" } ] },
+];
+let loads = [
+  ["Kitchen Cans","Main Level","Kitchen","Dimming",240], ["Island Pendants","Main Level","Kitchen","Dimming",180], ["Under-cabinet LED","Main Level","Kitchen","Dimming",90],
+  ["Nook Chandelier","Main Level","Nook","Dimming",150], ["Great Room Cans","Main Level","Great Room","Dimming",320], ["Great Room Sconces","Main Level","Great Room","Dimming",120],
+  ["Fireplace Accent","Main Level","Great Room","Dimming",60], ["Dining Chandelier","Main Level","Dining","Dimming",200], ["Dining Cans","Main Level","Dining","Dimming",160],
+  ["Entry Pendant","Main Level","Entry","Dimming",100], ["Powder Sconces","Main Level","Powder","Dimming",60], ["Mudroom Cans","Main Level","Mudroom","Switching",120],
+  ["Pantry","Main Level","Pantry","Switching",40], ["Garage","Main Level","Garage","Switching",300], ["Front Porch","Main Level","Exterior","Switching",80],
+  ["Rear Patio","Main Level","Exterior","Switching",120], ["Landscape Uplights","Main Level","Exterior","Switching",150],
+  ["Master Cans","Upper Level","Master Bed","Dimming",240], ["Master Sconces","Upper Level","Master Bed","Dimming",80], ["Master Bath Vanity","Upper Level","Master Bath","Dimming",120],
+  ["Master Bath Cans","Upper Level","Master Bath","Dimming",120], ["Closet","Upper Level","Master Closet","Switching",60], ["Hall Cans","Upper Level","Hall","Dimming",120],
+  ["Bed 2 Cans","Upper Level","Bed 2","Dimming",120], ["Bed 3 Cans","Upper Level","Bed 3","Dimming",120], ["Laundry","Upper Level","Laundry","Switching",60],
+  ["Theater Cans","Basement","Theater","Dimming",180], ["Theater Step Lights","Basement","Theater","Dimming",40], ["Bar Pendants","Basement","Bar","Dimming",150],
+  ["Rec Room Cans","Basement","Rec Room","Dimming",280], ["Gym","Basement","Gym","Switching",160], ["Mech Room","Basement","Mech","Switching",80],
+].map((r,i)=>({ id:"l"+(i+1), name:r[0], floor:r[1], room:r[2], type:r[3], watts:r[4], assign:null }));
+// A few pre-assigned so the page opens mid-job.
+const pre = { l1:["p1","m1",1], l2:["p1","m1",2], l3:["p1","m1",3], l5:["p1","m2",1], l6:["p1","m2",2], l12:["p1","m3",1], l13:["p1","m3",2], l14:["p1","m3",3], l18:["p2","m4",1], l19:["p2","m4",2] };
+Object.entries(pre).forEach(([id,[p,m,z]])=>{ const l=loads.find(x=>x.id===id); if(l) l.assign={panelId:p,moduleId:m,zone:z}; });
+
+const FLOOR_ORDER = ["Main Level","Upper Level","Basement"];
+let filter="all", assignedFilter="unassigned", selectMode=false, selected=new Set(), sheet=null, toastT=null;
+const byId = (id)=>loads.find(l=>l.id===id);
+const panelOf = (id)=>panels.find(p=>p.id===id);
+const modOf = (pid,mid)=>(panelOf(pid)||{modules:[]}).modules.find(m=>m.id===mid);
+const loadsOn = (pid,mid)=>loads.filter(l=>l.assign&&l.assign.panelId===pid&&l.assign.moduleId===mid);
+const zoneLoad = (pid,mid,z)=>loadsOn(pid,mid).find(l=>l.assign.zone===z);
+const openZones = (pid,mid)=>{ const m=modOf(pid,mid); const t=MOD_TYPES[m.type]; const used=new Set(loadsOn(pid,mid).map(l=>l.assign.zone)); const out=[]; for(let z=1;z<=t.zones;z++) if(!used.has(z)) out.push(z); return out; };
+const esc = (s)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toast(msg){ const h=document.getElementById("toastHost"); h.innerHTML=`<div class="toast">${esc(msg)}</div>`; clearTimeout(toastT); toastT=setTimeout(()=>h.innerHTML="",2200); }
+
+function setFilter(f){ filter=f; render(); }
+function setAssignedFilter(f){ assignedFilter=f; render(); }
+function toggleSelect(){ selectMode=!selectMode; selected=new Set(); render(); }
+function toggleSel(id){ if(selected.has(id)) selected.delete(id); else selected.add(id); render(); }
+
+function renderStrip(){
+  const un=loads.filter(l=>!l.assign).length, on=loads.length-un;
+  const zonesTotal=panels.reduce((s,p)=>s+p.modules.reduce((t,m)=>t+MOD_TYPES[m.type].zones,0),0);
+  const zonesUsed=on;
+  const overW=loads.filter(l=>l.assign&&overWatt(l)).length;
+  document.getElementById("strip").innerHTML=`
+    <div class="tile ${un?'warn':'good'}"><div class="k">Unassigned</div><div class="v">${un}<small>of ${loads.length} loads</small></div></div>
+    <div class="tile"><div class="k">Zones</div><div class="v">${zonesUsed}<small>/ ${zonesTotal} used</small></div></div>
+    <div class="tile"><div class="k">Panels · modules</div><div class="v">${panels.length}<small>· ${panels.reduce((s,p)=>s+p.modules.length,0)} modules</small></div></div>
+    <div class="tile ${overW?'warn':''}"><div class="k">Zones over watts</div><div class="v">${overW}</div></div>`;
+}
+function overWatt(l){ const m=modOf(l.assign.panelId,l.assign.moduleId); const t=m&&MOD_TYPES[m.type]; return !!(t&&t.maxW&&l.watts>t.maxW); }
+function assignLabel(l){ if(!l.assign) return ""; const p=panelOf(l.assign.panelId); const m=modOf(l.assign.panelId,l.assign.moduleId); return `${p.label} · Mod ${m.num} · Z${l.assign.zone}`; }
+
+function renderTray(){
+  const q=(document.getElementById("q").value||"").trim().toLowerCase();
+  let list=loads.filter(l=>filter==="all"||l.type===filter).filter(l=>assignedFilter==="all"||!l.assign)
+    .filter(l=>!q||l.name.toLowerCase().includes(q)||l.room.toLowerCase().includes(q));
+  document.getElementById("trayCount").textContent=`${list.length}${assignedFilter==="unassigned"?" unassigned":""}`;
+  document.getElementById("selBtn").textContent=selectMode?"Cancel":"Select";
+  document.getElementById("selBtn").setAttribute("aria-pressed",String(selectMode));
+  ["f_all","f_dim","f_sw"].forEach((id,i)=>document.getElementById(id).setAttribute("aria-pressed",String(filter===["all","Dimming","Switching"][i])));
+  document.getElementById("a_un").setAttribute("aria-pressed",String(assignedFilter==="unassigned"));
+  document.getElementById("a_all").setAttribute("aria-pressed",String(assignedFilter==="all"));
+  if(!list.length){ document.getElementById("tray").innerHTML=`<div class="empty">${assignedFilter==="unassigned"?"Every load is on a zone. Switch to Everything to review.":"No loads match."}</div>`; return; }
+  const floors=[...new Set(list.map(l=>l.floor))].sort((a,b)=>FLOOR_ORDER.indexOf(a)-FLOOR_ORDER.indexOf(b));
+  document.getElementById("tray").innerHTML=floors.map(f=>{
+    const fl=list.filter(l=>l.floor===f); const rooms=[...new Set(fl.map(l=>l.room))].sort();
+    return `<div class="floor"><div class="floorHead">${esc(f)}<span class="n">${fl.length}</span></div>${rooms.map(r=>`<div class="room"><div class="roomName">${esc(r)}</div>${fl.filter(l=>l.room===r).sort((a,b)=>a.name.localeCompare(b.name)).map(l=>`
+      <button class="load ${selected.has(l.id)?'sel':''}" onclick="${selectMode?`toggleSel('${l.id}')`:`openAssign('${l.id}')`}" title="${l.assign?'On '+esc(assignLabel(l))+' — tap to move or clear':'Tap to put this load on a zone'}">
+        ${selectMode?`<span class="cb">${selected.has(l.id)?'✓':''}</span>`:''}
+        <span class="nm">${esc(l.name)}</span>
+        ${l.assign?`<span class="chip on">${esc(assignLabel(l))}</span>`:`<span class="chip ${l.type==='Dimming'?'dim':'sw'}">${l.type==='Dimming'?'Dim':'Switch'}</span>`}
+        <span class="w">${l.watts}W</span>
+      </button>`).join("")}</div>`).join("")}</div>`;
+  }).join("");
+}
+
+function renderPanels(){
+  document.getElementById("panelCount").textContent=panels.length;
+  document.getElementById("panels").innerHTML=panels.map(p=>{
+    const used=p.modules.length, pct=Math.round(used/p.slots*100);
+    const empties=Math.max(0,p.slots-used);
+    return `<div class="panel">
+      <div class="panelHead">
+        <h3>${esc(p.label)}</h3><span class="where">${esc(p.where)}</span>
+        <div class="meter ${used>p.slots?'over':used===p.slots?'warn':''}"><span>${used}/${p.slots} slots</span><div class="bar"><div class="fill" style="width:${Math.min(100,pct)}%"></div></div></div>
+        <button class="btn ghost" onclick="addModulePrompt('${p.id}')">+ Module</button>
+      </div>
+      <div class="mods">
+        ${p.modules.map(m=>{
+          const t=MOD_TYPES[m.type]; const on=loadsOn(p.id,m.id); const full=on.length>=t.zones;
+          const rows=[]; for(let z=1;z<=t.zones;z++){ const l=zoneLoad(p.id,m.id,z);
+            rows.push(l?`<button class="zone ${overWatt(l)?'overz':''}" onclick="openAssign('${l.id}')" title="Move or clear"><span class="z">${z}</span><span class="nm">${esc(l.name)}</span><span class="sub">${esc(l.room)} · ${l.watts}W${overWatt(l)?' <b style="color:var(--red)">over</b>':''}</span></button>`
+                         :`<button class="zone openz" onclick="openFill('${p.id}','${m.id}',${z})" title="Put a load here"><span class="z">${z}</span><span class="nm">open zone</span><span class="sub">tap to fill</span></button>`); }
+          return `<div class="mod ${full?'full':''}"><div class="modHead"><span class="num">MOD ${m.num}</span><span class="type">${esc(m.type)}</span><span class="cap">${on.length}/${t.zones} zones${t.maxW?' · ≤'+t.maxW+'W':''}</span></div>${rows.join("")}<div style="font-size:10.5px;color:var(--muted);margin-top:2px">${esc(t.label)}</div></div>`;
+        }).join("")}
+        ${Array.from({length:Math.min(empties,2)}).map(()=>`<div class="slotEmpty"><button onclick="addModulePrompt('${p.id}')">+ Add module to open slot</button></div>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+}
+function render(){ renderStrip(); renderTray(); renderPanels(); renderDeck(); renderSheet(); }
+
+// ── Assign sheet: Panel → Module → Zone, "next open zone" default ──
+function openAssign(loadId){ const l=byId(loadId); const a=l.assign; sheet={ kind:"assign", loadIds:[loadId], panelId:a?a.panelId:panels[0].id, moduleId:a?a.moduleId:null, zone:a?a.zone:null }; if(!a) pickDefaultModule(); render(); }
+function openFill(pid,mid,z){ sheet={ kind:"fill", panelId:pid, moduleId:mid, zone:z }; render(); }
+function openBatch(){ if(!selected.size) return; sheet={ kind:"assign", loadIds:[...selected], panelId:panels[0].id, moduleId:null, zone:null }; pickDefaultModule(); render(); }
+function pickDefaultModule(){ const ids=sheet.loadIds; const want=byId(ids[0]).type; const p=panelOf(sheet.panelId);
+  const m=p.modules.find(m=>MOD_TYPES[m.type].kind===want&&openZones(p.id,m.id).length>=ids.length)||p.modules.find(m=>openZones(p.id,m.id).length>=ids.length)||null;
+  sheet.moduleId=m?m.id:null; sheet.zone=m?openZones(p.id,m.id)[0]:null; }
+function sheetPanel(pid){ sheet.panelId=pid; pickDefaultModule(); render(); }
+function sheetModule(mid){ sheet.moduleId=mid; sheet.zone=openZones(sheet.panelId,mid)[0]||null; render(); }
+function sheetZone(z){ sheet.zone=z; render(); }
+function closeSheet(){ sheet=null; render(); }
+function commitAssign(){
+  const ids=sheet.loadIds; if(!sheet.moduleId) return;
+  const free=openZones(sheet.panelId,sheet.moduleId).filter(z=>ids.length===1?true:true);
+  if(ids.length===1){ const l=byId(ids[0]); const wasHere=l.assign&&l.assign.panelId===sheet.panelId&&l.assign.moduleId===sheet.moduleId&&l.assign.zone===sheet.zone;
+    const occupant=zoneLoad(sheet.panelId,sheet.moduleId,sheet.zone); if(occupant&&occupant.id!==l.id){ occupant.assign=null; }
+    l.assign={panelId:sheet.panelId,moduleId:sheet.moduleId,zone:sheet.zone}; toast(wasHere?"No change":`${l.name} → ${assignLabel(l)}`); }
+  else { let zs=openZones(sheet.panelId,sheet.moduleId); let n=0; ids.forEach(id=>{ const l=byId(id); if(!zs.length) return; l.assign={panelId:sheet.panelId,moduleId:sheet.moduleId,zone:zs.shift()}; n++; });
+    toast(`${n} of ${ids.length} placed${n<ids.length?' — module ran out of zones':''}`); selected=new Set(); selectMode=false; }
+  sheet=null; render();
+}
+function unassign(){ sheet.loadIds.forEach(id=>{ byId(id).assign=null; }); toast("Cleared from its zone"); sheet=null; render(); }
+function fillZoneWith(loadId){ const l=byId(loadId); l.assign={panelId:sheet.panelId,moduleId:sheet.moduleId,zone:sheet.zone}; toast(`${l.name} → ${assignLabel(l)}`); sheet=null; render(); }
+
+function renderSheet(){
+  const host=document.getElementById("sheetHost"); if(!sheet){ host.innerHTML=""; return; }
+  if(sheet.kind==="fill"){ const p=panelOf(sheet.panelId), m=modOf(sheet.panelId,sheet.moduleId), t=MOD_TYPES[m.type];
+    const cands=loads.filter(l=>!l.assign).sort((a,b)=>(a.type===t.kind?0:1)-(b.type===t.kind?0:1)||a.floor.localeCompare(b.floor)||a.name.localeCompare(b.name));
+    host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="Fill zone">
+      <h4>${esc(p.label)} · Mod ${m.num} · Zone ${sheet.zone}</h4><div class="sub">${esc(t.label)}${t.maxW?' · up to '+t.maxW+'W per zone':''}. Pick an unassigned load. ${t.kind} loads first.</div>
+      <div class="chips">${cands.slice(0,40).map(l=>`<button class="pc" onclick="fillZoneWith('${l.id}')">${esc(l.name)}<small>${esc(l.room)} · ${l.watts}W${l.type!==t.kind?' · '+l.type:''}</small></button>`).join("")||'<span class="sub">Nothing left unassigned.</span>'}</div>
+      <div class="sheetActions"><span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button></div></div>`; return; }
+  const ids=sheet.loadIds; const first=byId(ids[0]); const p=panelOf(sheet.panelId);
+  const title=ids.length===1?first.name:`${ids.length} loads`;
+  const subtitle=ids.length===1?`${first.room} · ${first.floor} · ${first.type} · ${first.watts}W${first.assign?' · now on '+assignLabel(first):''}`:`${ids.map(id=>byId(id).name).slice(0,4).join(", ")}${ids.length>4?'…':''}`;
+  const mods=p.modules.map(m=>{ const oz=openZones(p.id,m.id); const t=MOD_TYPES[m.type]; const mismatch=ids.some(id=>byId(id).type!==t.kind);
+    return `<button class="pc" aria-pressed="${sheet.moduleId===m.id}" ${oz.length<ids.length?'disabled':''} onclick="sheetModule('${m.id}')">Mod ${m.num}<small>${esc(m.type)} · ${oz.length} open${mismatch?' · type differs':''}</small></button>`; }).join("");
+  const zones = sheet.moduleId ? (()=>{ const m=modOf(p.id,sheet.moduleId); const t=MOD_TYPES[m.type]; const out=[]; for(let z=1;z<=t.zones;z++){ const occ=zoneLoad(p.id,sheet.moduleId,z); const mine=ids.length===1&&occ&&occ.id===ids[0]; out.push(`<button class="pc" aria-pressed="${sheet.zone===z}" onclick="sheetZone(${z})" title="${occ&&!mine?'Occupied by '+esc(occ.name)+' — choosing it will bump that load off':''}">Z${z}<small>${occ?(mine?'this load':'↔ '+esc(occ.name)):'open'}</small></button>`); } return out.join(""); })() : "";
+  host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="Assign">
+    <h4>${esc(title)}</h4><div class="sub">${esc(subtitle)}</div>
+    <div class="lbl">Panel</div><div class="chips">${panels.map(pp=>`<button class="pc" aria-pressed="${sheet.panelId===pp.id}" onclick="sheetPanel('${pp.id}')">${esc(pp.label)}<small>${pp.modules.reduce((s,m)=>s+openZones(pp.id,m.id).length,0)} open zones</small></button>`).join("")}</div>
+    <div class="lbl">Module</div><div class="chips">${mods||'<span class="sub">No modules in this panel yet.</span>'}<button class="pc" onclick="addModulePrompt('${p.id}')">+ New module…</button></div>
+    ${ids.length===1?`<div class="lbl">Zone</div><div class="chips">${zones||'<span class="sub">Pick a module first.</span>'}</div>`:`<div class="lbl">Zones</div><div class="sub">Fills the next ${ids.length} open zones in order.</div>`}
+    <div class="sheetActions">${first.assign&&ids.length===1?`<button class="btn danger" onclick="unassign()">Clear zone</button>`:''}<span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button><button class="btn primary" ${sheet.moduleId&&(ids.length>1||sheet.zone)?'':'disabled'} onclick="commitAssign()">${ids.length===1?(first.assign?'Move here':'Assign'):'Place '+ids.length}</button></div>
+  </div>`;
+}
+
+// ── Add module / panel (in-page pickers; the real app uses its bottom sheet) ──
+function addModulePrompt(pid){ sheet={ kind:"newmod", panelId:pid, afterAssign: sheet&&sheet.kind==="assign"?sheet:null }; renderNewMod(); }
+function renderNewMod(){ const p=panelOf(sheet.panelId); const host=document.getElementById("sheetHost");
+  host.innerHTML=`<div class="scrim" onclick="closeSheet()"></div><div class="sheet" role="dialog" aria-label="New module"><h4>New module in ${esc(p.label)}</h4><div class="sub">Slot ${p.modules.length+1} of ${p.slots}. Pick the type.</div>
+  <div class="chips">${Object.entries(MOD_TYPES).map(([k,t])=>`<button class="pc" onclick="addModule('${p.id}','${k}')">${k}<small>${esc(t.label)}</small></button>`).join("")}</div>
+  <div class="sheetActions"><span class="spacer"></span><button class="btn ghost" onclick="closeSheet()">Cancel</button></div></div>`; }
+function addModule(pid,type){ const p=panelOf(pid); if(p.modules.length>=p.slots){ toast(`${p.label} is full — ${p.slots} slots`); } const m={id:"m"+Date.now(),num:p.modules.length+1,type}; p.modules.push(m);
+  const back=sheet&&sheet.afterAssign; sheet=back||null; if(back){ back.panelId=pid; back.moduleId=m.id; back.zone=1; } toast(`Mod ${m.num} · ${type} added to ${p.label}`); render(); }
+function addPanel(){ const n=panels.length+1; panels.push({ id:"p"+Date.now(), label:`LCP ${n}`, where:"(set location)", slots:8, modules:[] }); toast(`LCP ${n} added — rename and set slots in the real app`); render(); }
+function clearAll(){ loads.forEach(l=>l.assign=null); toast("All zones cleared (mockup only)"); render(); }
+
+// ── Suggest layout: by floor → room, dimming to dimmer modules, switching to switching modules, creating modules as needed ──
+function suggestLayout(){
+  const un=loads.filter(l=>!l.assign).sort((a,b)=>FLOOR_ORDER.indexOf(a.floor)-FLOOR_ORDER.indexOf(b.floor)||a.room.localeCompare(b.room)||a.name.localeCompare(b.name));
+  const floorPanel={ "Main Level":"p1", "Basement":"p1", "Upper Level":"p2" };
+  let placed=0, made=0;
+  un.forEach(l=>{ const p=panelOf(floorPanel[l.floor]||panels[0].id);
+    let m=p.modules.find(m=>MOD_TYPES[m.type].kind===l.type&&openZones(p.id,m.id).length&&(!MOD_TYPES[m.type].maxW||l.watts<=MOD_TYPES[m.type].maxW));
+    if(!m){ if(p.modules.length>=p.slots) return; const type=l.type==="Dimming"?"LQSE-4A":"LQSE-S8"; m={id:"m"+Date.now()+Math.random().toString(36).slice(2,5),num:p.modules.length+1,type}; p.modules.push(m); made++; }
+    l.assign={panelId:p.id,moduleId:m.id,zone:openZones(p.id,m.id)[0]}; placed++; });
+  toast(`Suggested: ${placed} loads placed, ${made} modules added — review and move what's wrong`); render();
+}
+
+// ── Batch deck ──
+function renderDeck(){ const h=document.getElementById("deckHost"); if(!selectMode){ h.innerHTML=""; return; }
+  h.innerHTML=`<div class="deck"><div class="inner"><b>${selected.size} selected</b><button ${selected.size?'':'disabled'} onclick="openBatch()">Put on a module…</button><button ${selected.size?'':'disabled'} onclick="selected.forEach(id=>byId(id).assign=null);selected=new Set();selectMode=false;toast('Cleared');render()">Clear zones</button><button class="cancel" onclick="toggleSelect()">Cancel</button></div></div>`; }
+
+render();
+</script>
