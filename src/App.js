@@ -52879,6 +52879,16 @@ function completedForMe(n, identity, nowMs = Date.now()) {
   return Number.isFinite(t) && (nowMs - t) <= 30 * 24 * 60 * 60 * 1000;
 }
 
+// ── Commercial division (spec docs/superpowers/specs/2026-09-25-commercial-mode-design.md) ──
+// `division` lives inside job.data. Absent / "" / anything unknown = residential,
+// so every job that exists today is residential without a single write. Never
+// read job.type or quickJob/tempPed for this — those are orthogonal.
+const jobDivision = (j) => (j && j.division === "commercial") ? "commercial" : "resi";
+const isCommercial = (j) => jobDivision(j) === "commercial";
+// Device-level mode (same idiom as myday.view / planner.mode). Never a job field.
+const MODE_KEY = "he_mode";
+const readMode = () => { try { return localStorage.getItem(MODE_KEY) === "commercial" ? "commercial" : "resi"; } catch { return "resi"; } };
+
 // ── MY DAY Ship 2 helpers (v429) ────────────────────────────────────────────
 // Inactive = the Job Board's own archive gate (see allJobs filter) + quotes.
 function isInactiveJob(j) { return !!(j && (j.archived || j.deleted || j.archivedAt || j.type === "quote")); }
@@ -56528,7 +56538,12 @@ function App() {
 
   // submitPin removed — replaced by UserPicker identity system
 
-  const [jobs,     setJobs]     = useState([]);
+  const [allJobs, setAllJobs] = useState([]);   // EVERY job, both divisions — the only source of truth (Commercial mode, 2026-09-25)
+  // `jobs` = the current mode's jobs, derived once. Every view keeps its `jobs`
+  // prop. Nothing that WRITES may use `jobs`: writes, merges, backups and
+  // lookups-for-save go through `allJobs` (audit table: plan Task 2).
+  const mode = "resi";  // TEMP — becomes state in plan Task 3
+  const jobs = useMemo(() => allJobs.filter(j => jobDivision(j) === mode), [allJobs, mode]);
   const [upcoming, setUpcoming] = useState([]);
   // Which Upcoming entry to expand when the Upcoming tab mounts — set by tapping
   // a pipeline row in Forecast → Starts (Koy 2026-07-29). Cleared by UpcomingJobs
@@ -56576,7 +56591,7 @@ function App() {
   // pendingUpcomingDeletes / pendingUpcomingSaves no longer needed — upcoming uses one-time load
 
 
-  const jobsRef   = useRef(jobs);
+  const jobsRef   = useRef(allJobs);
 
   const isDirty   = useRef(false);
 
@@ -56593,7 +56608,7 @@ function App() {
   const upcomingPending = useRef(null);
   const upcomingSaveTimer = useRef(null);
 
-  useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+  useEffect(()=>{ jobsRef.current = allJobs; },[allJobs]);
 
   // ── Org membership join, once per SESSION (CC-SIDE SPEC, KC1 stage B) ───────
   // Every page load, not once ever: an anonymous field-ink uid isn't stable
@@ -56633,7 +56648,7 @@ function App() {
 
       const b = localStorage.getItem('hejobs_backup');
 
-      if(b) { const p=JSON.parse(b); if(p?.length) setJobs(migrate(p)); }
+      if(b) { const p=JSON.parse(b); if(p?.length) setAllJobs(migrate(p)); }
 
     } catch(e){}
 
@@ -56732,7 +56747,7 @@ function App() {
           // and a box being typed vanished mid-keystroke. Guard on BOTH.
           const _inFlight = (id) => !!saveTimers.current[id] ||
             !!(pendingPatches.current[id] && Object.keys(pendingPatches.current[id]).length > 0);
-          setJobs(prev => {
+          setAllJobs(prev => {
             if(!loaded.some(j => _inFlight(j.id))) return loaded;
             return loaded.map(sj => {
               if(_inFlight(sj.id)) {
@@ -56998,7 +57013,7 @@ function App() {
   // Automatic daily safety backup — separate from the normal rolling backup
   // Kept under a dated key so it can't be accidentally overwritten
   useEffect(() => {
-    if(!jobs.length) return;
+    if(!allJobs.length) return;
     const today = new Date().toISOString().split("T")[0];
     const key = `he_daily_backup_${today}`;
     if(!localStorage.getItem(key)) {
@@ -57022,7 +57037,7 @@ function App() {
         try { localStorage.removeItem('hejobs_backup'); } catch(e){}
       }
       // Save a minimal version: just id, name, type, quoteNumber, foreman, roughStatus, finishStatus
-      const compact = jobs.map(j => ({
+      const compact = allJobs.map(j => ({
         id:j.id, name:j.name, address:j.address, gc:j.gc, foreman:j.foreman,
         type:j.type, quoteNumber:j.quoteNumber, simproNo:j.simproNo,
         roughStatus:j.roughStatus, finishStatus:j.finishStatus,
@@ -57030,11 +57045,11 @@ function App() {
         prepStage:j.prepStage, updated_at:j.updated_at,
       }));
       try {
-        localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs: compact}));
-        console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+        localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: allJobs.length, jobs: compact}));
+        console.log(`[HE] Daily safety backup saved: ${allJobs.length} jobs (${today})`);
       } catch(e) { console.warn("[HE] Daily backup failed:", e); }
     }
-  }, [jobs.length]);
+  }, [allJobs.length]);
 
 
   // Save a single job — uses field-level merge when a patch is provided
@@ -57560,7 +57575,7 @@ function App() {
       const patch = { ...(pendingPatches.current[jid] || {}) };
       if (job && Object.keys(patch).length > 0) saveJob(job, patch);
     });
-  }, [syncHealth.synced, isOnline, jobs.length]); // eslint-disable-line
+  }, [syncHealth.synced, isOnline, allJobs.length]); // eslint-disable-line
 
   const wasOnlineRef = useRef(isOnline);
   useEffect(() => {
@@ -58105,7 +58120,7 @@ function App() {
   // ms after the user clicks out. Only patch `selected` when it's actually
   // pointing at this job (i.e. modal is open on this job).
   const updateJob = (updated, patch) => {
-    setJobs(js => js.map(j => j.id === updated.id ? updated : j));
+    setAllJobs(js => js.map(j => j.id === updated.id ? updated : j));
     setSelected(s => (s && s.id === updated.id) ? updated : s);
     saveJob(updated, patch);
   };
@@ -58183,7 +58198,7 @@ function App() {
         data: j,
         updated_at: new Date().toISOString(),
       });
-      setJobs(js => [j, ...js]);
+      setAllJobs(js => [j, ...js]);
       // Remove from candidates doc — pull the freshest list from state, drop
       // this one, write back. Real-time listener will pick up the change.
       const filtered = simproCandidates.filter(c => String(c.simproId) !== String(cand.simproId));
@@ -58266,7 +58281,7 @@ function App() {
 
     if(!await showConfirm("Delete this job site?")) return;
 
-    setJobs(js=>js.filter(j=>j.id!==id));
+    setAllJobs(js=>js.filter(j=>j.id!==id));
 
     if(selected?.id===id) setSelected(null);
 
@@ -58400,7 +58415,7 @@ function App() {
   // QC punches don't have RT linkages so they only update the punch tree.
   // Returns the new full job (or null if the item couldn't be found).
   const togglePunchItemDone = (jobId, phase, itemId) => {
-    const job = jobs.find(j => j.id === jobId);
+    const job = allJobs.find(j => j.id === jobId);
     if(!job) return null;
     const phaseKey = phase === "Rough" ? "roughPunch"
                    : phase === "Finish" ? "finishPunch"
@@ -58785,12 +58800,12 @@ function App() {
   // ── Helper: open a job by ID and jump to a section ───────────────────────
   const openJobById = useCallback((jobId, section) => {
     if (!jobId) return;
-    const job = jobs.find(j => j.id === jobId);
+    const job = allJobs.find(j => j.id === jobId);   // both divisions — a push may name a job in the other mode (plan Task 3 switches the mode)
     if (job) {
       setOpenTab(section || null);
       setSelected(job);
     }
-  }, [jobs]);
+  }, [allJobs]);
 
   // ── On mount: check URL params for deep-link (background notification tap) ─
   const [pendingNav, setPendingNav] = useState(() => {
@@ -58808,10 +58823,10 @@ function App() {
 
   // Once jobs are loaded, apply any pending navigation from URL params
   useEffect(() => {
-    if (!pendingNav || !jobs.length) return;
+    if (!pendingNav || !allJobs.length) return;
     openJobById(pendingNav.jobId, pendingNav.section);
     setPendingNav(null);
-  }, [jobs, pendingNav, openJobById]);
+  }, [allJobs, pendingNav, openJobById]);
 
   // Deep-link to a top-level view (e.g. ?view=huddle from the daily Huddle
   // push). Applied once identity loads + permission allows. The Huddle then
@@ -59592,7 +59607,7 @@ function App() {
                           <button onClick={async()=>{
                               setShowUtilMenu(false);
                               try {
-                                const result = await syncDriveFoldersToJobs(jobs, updateJob);
+                                const result = await syncDriveFoldersToJobs(allJobs, updateJob);
                                 const msg = `Drive Sync Complete!\n\n` +
                                   `${result.matched.length} new match${result.matched.length===1?"":"es"} linked` +
                                   (result.matched.length > 0 ? ":\n" + result.matched.map(m=>`  ${m.folderName} → ${m.jobName}`).join("\n") : "") +
@@ -59632,19 +59647,19 @@ function App() {
                     </>
                   )}
                 </div>
-                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.02em"}}>
                   + Quick
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.02em"}}>
                   + Temp Ped
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
@@ -59682,9 +59697,9 @@ function App() {
                   </div>
                   {hits.slice(0,12).map(job=>(
                     job.quickJob
-                      ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                      ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                       : job.tempPed
-                      ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                      ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                       : <JobRow key={job.id} job={job} fc={_foremanColors[job.foreman]||"#6E7682"} showForeman={true}/>
                   ))}
                   {hits.length===0 && <div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
@@ -60015,9 +60030,9 @@ function App() {
                           {/* Jobs under this lead */}
                           {leadMap[lead].map(job=>(
                             job.quickJob
-                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                               : job.tempPed
-                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                               : <JobRow key={job.id} job={job} fc={fc2} showForeman={false}/>
                           ))}
                         </div>
@@ -60054,7 +60069,7 @@ function App() {
                   // screen search bar can find a job by its quote.
                   (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s))
                 ) : jobs);
-                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
 
@@ -60097,7 +60112,7 @@ function App() {
 
                 <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
 
-                <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
                   style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
 
@@ -60221,7 +60236,7 @@ function App() {
                 {filtered.length===0?(
                   <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
                     <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
-                    <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
+                    <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
                       style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
                         fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                       + Add First Job
@@ -60229,7 +60244,7 @@ function App() {
                   </div>
                 ):(
                   <>
-                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
+                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -60282,7 +60297,7 @@ function App() {
                     fTasks={fTasks}
                     prepTasks={prepTasks}
                     jobs={jobs}                    onSelectJob={(job)=>setSelected(job)}
-                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+                    onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
                     activeForeman={activeForeman}
                     foremenList={_foremen}
                   />
@@ -60400,7 +60415,7 @@ function App() {
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
-              setJobs(js=>js.map(j=>j.id===q.id?updated:j));
+              setAllJobs(js=>js.map(j=>j.id===q.id?updated:j));
               saveJob(updated,{type:"", simproNo:q.simproNo||""});
               setSelected(updated);
             }}
@@ -60429,7 +60444,7 @@ function App() {
                 return;
               }
               setUpcoming(next);
-              setJobs(js=>js.filter(j=>j.id!==job.id));
+              setAllJobs(js=>js.filter(j=>j.id!==job.id));
               if(selected?.id===job.id) setSelected(null);
               deleteJobRemote(job.id);
               setView("upcoming");
@@ -60470,7 +60485,7 @@ function App() {
               }
               setUpcoming(next);
               // Now it's safe to remove the quote job — upcoming already has the data.
-              setJobs(js=>js.filter(j=>j.id!==q.id));
+              setAllJobs(js=>js.filter(j=>j.id!==q.id));
               if(selected?.id===q.id) setSelected(null);
               deleteJobRemote(q.id);
               setView("upcoming");
@@ -60518,7 +60533,7 @@ function App() {
                       {!isContractor&&(
                         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
                           <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
-                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                             + New Job
@@ -60534,7 +60549,7 @@ function App() {
                       <div style={{textAlign:"center",padding:"40px 0",color:C.dim}}>
                         <div style={{fontSize:13,marginBottom:16}}>No jobs assigned to {firstName} yet</div>
                         {!isContractor&&(
-                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                             + Assign First Job
@@ -60547,7 +60562,7 @@ function App() {
                         JobRow={JobRow}
                         TempPedCard={TempPedCard}
                         onSelectJob={(j)=>setSelected(j)}
-                        onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+                        onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
                         onDeleteJob={isContractor?null:(id)=>deleteJob(id)}
                         fc={cColor}
                         startCollapsed={true}
@@ -60574,7 +60589,7 @@ function App() {
       {view==="tasks"&&can(identity,"tasks.view")&&(
         <Tasks
           jobs={jobs}          onSelectJob={(job)=>setSelected(job)}
-          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+          onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           foremenList={_foremen}
         />
       )}
@@ -60588,9 +60603,9 @@ function App() {
               <button onClick={()=>{
                 const j=blankJob();
                 j.type="quote";
-                j.quoteNumber=nextQuoteNumber(jobs);
+                j.quoteNumber=nextQuoteNumber(allJobs);
                 j.foreman="Unassigned";
-                setJobs(js=>[j,...js]);
+                setAllJobs(js=>[j,...js]);
                 setSelected(j);
               }}
                 style={{marginLeft:"auto",background:C.accent,color:"#000",border:"none",borderRadius:8,
@@ -60603,7 +60618,7 @@ function App() {
             JobRow={JobRow}
             TempPedCard={TempPedCard}
             onSelectJob={(j)=>setSelected(j)}
-            onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+            onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
             onDeleteJob={(id)=>deleteJob(id)}
             startCollapsed={true}
           />
@@ -60612,7 +60627,7 @@ function App() {
 
       {view==="nav"&&<NavView jobs={jobs}/>}
 
-      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity} onPatchJob={(jobId,patch)=>{ const j=jobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/>}
+      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/>}
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
@@ -60633,15 +60648,15 @@ function App() {
             const j=blankJob();
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             const next=upcoming.filter(x=>x.id!==u.id);
-            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
+            setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("home"); saveJob(j); saveAllUpcoming(next);
           }}
           onPromoteToQuote={(u)=>{
             const j=blankJob();
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
-            j.type="quote"; j.quoteNumber=nextQuoteNumber(jobs);
+            j.type="quote"; j.quoteNumber=nextQuoteNumber(allJobs);
             const next=upcoming.filter(x=>x.id!==u.id);
-            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
+            setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("quotes"); saveJob(j); saveAllUpcoming(next);
           }}
         />
@@ -60704,13 +60719,13 @@ function App() {
             if (full) setSelected(full);
           }}
           onUpdateCO={(jobId, coId, patch) => {
-            const job = jobs.find(j => j.id === jobId);
+            const job = allJobs.find(j => j.id === jobId);
             if (!job) return;
             const nextCOs = (job.changeOrders || []).map(co =>
               co && co.id === coId ? { ...co, ...patch } : co
             );
             const updated = { ...job, changeOrders: nextCOs };
-            setJobs(prev => prev.map(j => j.id === jobId ? updated : j));
+            setAllJobs(prev => prev.map(j => j.id === jobId ? updated : j));
             saveJob(updated, { changeOrders: nextCOs });
           }}/>
       )}
@@ -60724,7 +60739,7 @@ function App() {
           onUpdateRedline={updateRedlineWalk}
           onDeleteRedline={deleteRedlineWalk}
           onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
-          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+          onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
         />
       )}
 
@@ -60783,7 +60798,7 @@ function App() {
             colorOverrides={_colorOverrides}
             onSave={saveSettings}
             onSaveUsers={saveUsers}
-            jobs={jobs}
+            jobs={allJobs}   /* backup download must hold every job, both divisions */
             identity={identity}
             upcoming={upcoming}
             onUpdateJob={updateJob}
