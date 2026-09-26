@@ -36551,8 +36551,15 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // ── QC Walk tracker (admin/manager) ──────────────────────────────────────
 // One place for every job's QC walk: status, stage (rough/finish), scheduled
 // date, and open failed items. Read-only aggregation over the jobs list.
-function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
+// v457: the QC tracker lives on My Day now (Koy: "My QC tab that I made to track
+// QCs, I want all that moved into my My Day section only, so I can track
+// everything that I need to track"). `embedded` renders it as a folded card in
+// My Day's side column instead of a page of its own; the buckets, the Schedule
+// date pick, the status select and the writes are the same code either way.
+function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
   const [q, setQ] = useState("");
+  const [cardOpen, setCardOpen] = useState(() => { try { return localStorage.getItem("qc.cardOpen") === "1"; } catch { return false; } });
+  const toggleCard = () => setCardOpen(v => { const nv = !v; try { localStorage.setItem("qc.cardOpen", nv ? "1" : "0"); } catch {} return nv; });
   const [collapsed, setCollapsed] = useState(()=>new Set(["failed","overdue","needs","scheduled","other","done","unmatched"]));
   const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
   const [showDates, setShowDates] = useState(()=>{ try { return localStorage.getItem("qc.showDates")!=="0"; } catch { return true; } });
@@ -36647,17 +36654,39 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   );
   const fmtD = (d) => { if(!d) return ""; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 
+  const openCount = rows.filter(r=>{ const b=bucketOf(r); return b==="failed"||b==="overdue"||b==="needs"; }).length;
+  const schedCount = rows.filter(r=>bucketOf(r)==="scheduled").length;
+  if(embedded && !cardOpen) return (
+    <div style={{marginBottom:14}}>
+      <div onClick={toggleCard} style={{display:"flex",alignItems:"center",gap:8,minHeight:36,cursor:"pointer",userSelect:"none",margin:"0 2px 6px"}}>
+        <span style={{display:"inline-flex",color:C.dim}}><Icon name="chevronRight" size={16} stroke={2.25}/></span>
+        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,letterSpacing:"0.07em",color:C.text}}>QC walks</span>
+        <span style={{fontSize:12,color:C.muted}}>{rows.length} walks</span>
+        {openCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#B23A3A",background:"#B23A3A18",borderRadius:5,padding:"1px 6px"}}>{openCount} need action</span>}
+        {schedCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#3B5BA5",background:"#3B5BA518",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
+        <span style={{flex:1,height:1,background:C.border}}/>
+      </div>
+    </div>
+  );
   return (
-    <div style={{padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4}}>
+    <div style={embedded ? {marginBottom:14} : {padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4,...(embedded?{minHeight:36,margin:"0 2px 6px"}:{})}}>
+        {embedded ? (
+          <span onClick={toggleCard} style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none"}}>
+            <span style={{display:"inline-flex",transform:"rotate(90deg)",color:C.dim}}><Icon name="chevronRight" size={16} stroke={2.25}/></span>
+            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,letterSpacing:"0.07em",color:C.text}}>QC walks</span>
+            <span style={{fontSize:12,color:C.muted}}>{rows.length} walks</span>
+          </span>
+        ) : (<>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
         <div style={{fontSize:12,color:C.dim}}>{rows.length} QC walks (rough + finish)</div>
+        </>)}
         <span style={{flex:1}}/>
         <button onClick={toggleDates} title="Show/hide scheduled dates" style={{padding:"7px 12px",fontSize:12,fontWeight:600,border:`1px solid ${showDates?C.accent:C.border}`,borderRadius:8,background:showDates?`${C.accent}15`:"transparent",color:showDates?C.accent:C.dim,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{showDates?"Dates: on":"Dates: off"}</button>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search jobs…"
-          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:narrow?"100%":200,boxSizing:"border-box"}}/>
+          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:(narrow||embedded)?"100%":200,boxSizing:"border-box"}}/>
       </div>
-      <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>
+      {!embedded && <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>}
 
       {BUCKETS.map(b=>{
         let list = rows.filter(r=>bucketOf(r)===b.key);
@@ -36705,7 +36734,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
           </div>
         );
       })}
-      {rows.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+      {rows.length===0 && <div style={{textAlign:"center",padding:embedded?"14px 0":"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
 }
@@ -50211,12 +50240,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v456
+**Last manifest update:** 2026-09-25 · App SW version: v457
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — the QC walks tracker moves onto My Day; the QC tab is gone** · 'shipped 2026-09-26' · 'SW v457' · Koy: *"My QC tab that I made to track QCs, I want all that moved into my My Day section only, so I can track everything that I need to track. I want it in there for sure."* 'QCView' (the bucketed rough + finish QC walk tracker: Failed / Past due / Needs scheduling / Scheduled / Has QC items / Passed, with Schedule-on-a-date → Google Calendar and the status select) gains 'embedded': My Day renders it as a folded **QC walks** card at the top of the side column (header pills: *N need action* · *N scheduled*; open state remembered per device in 'localStorage qc.cardOpen'), handed in by 'App()' as 'qcTracker' for admin / manager in Residential mode — the same gate the tab had. The 'qc' nav tab and its 'view==="qc"' route are removed; the drawer's QC tab and its 'qc.html' guide are untouched. Guide 'myday.html' gains a "QC walks" section. **Why it won't lose data:** same component, same two writes ('qcStatus'/'qcStatusDate' and 'finishQcStatus'/'finishQcStatusDate' through 'updateJob'), only mounted in a different place; no field, loader, rules or function change.
 - **Commercial mode — the Job Board's Crew Schedule is strictly commercial too** · 'shipped 2026-09-26' · 'SW v456' · Koy: *"the commercial side is still showing resi side jobs just not the names. i dont want anything residential on the commercial side, including that"* — *"im talking job board crew schedule right now."* The Job Board's **Crew Schedule** strip ('SimproCrewSchedule') fetches every Simpro schedule entry for the week and drew one block per Simpro project per day; a residential project matched no job on the commercial board, so its block still appeared with the crew and no name. The component now takes 'strictDivision' (true in Commercial mode, same pattern as the Forecast's v454 fix): 'modeSnos' = the Simpro #s of the division's jobs, 'scheduleV' = the raw Simpro list filtered to those, and the staff list, the crew filter and the per-day blocks all read 'scheduleV'. Residential passes 'false' and reads the raw list, byte-identical to before. Left as is, on purpose, for a separate decision: the Forecast / Crew Planner's app-assignment double-booking guard still says "also elsewhere" / "another job" (no name) when someone is on the other division's job that day. **Why it won't lose data:** display filter on a fetched list; the component has no write path.
 - **Commercial mode — merged with the Lutron Panel Builder ships; the division preview script gets '--apply'** · 'shipped 2026-09-25' · 'SW v455' · Koy: *"any way for you to auto pull the commercial jobs from that paste i ran into the app so i dont have to do it manually after the push"* + *"i just deployed something, so make sure this is good to go again."* This ship is the merge of the Commercial-mode branch (slices A–D, v449–v454 on that branch) with 'main''s Lutron Panel Builder / Incoming-from-FieldInk ships (v449–v451 on 'main' — the two lines of work reused the same three numbers, which is why this lands as v455). No code conflicted: the only collisions were the FEATURES.md header + entry list (both kept) and the SW version. 'scripts/commercial-division-preview.js --apply' now moves the jobs it lists under WOULD MOVE TO COMMERCIAL ('--resi-too' adds the residential moves): a Firestore REST PATCH with an updateMask on 'data.division' + 'updated_at' only, 'currentDocument.exists' so it never creates a doc, Simpro read-only. Without '--apply' the script is unchanged and read-only. **Why it won't lose data:** the merge adds no write; '--apply' writes the same single field the Settings → COMMERCIAL DIVISION → Apply button writes, on the same docs, and only when Koy runs it by hand with the flag.
 - **Commercial mode — strictly commercial: no residential on the Forecast, My Day or Needs** · 'shipped 2026-09-25' · 'SW v454' · Koy: *"when I'm on the commercial side, I don't want to be able to see any residential jobs scheduled. It needs to be strictly commercial only on the side of it. No residential."* The job rows were already mode-filtered, but three things still leaked: **(1)** the Forecast / Crew Planner's Simpro overlays (calendar pills, "also on <job> (Simpro)" chips, Simpro hours) came from every Simpro entry — 'SchedulingForecast' now takes 'strictDivision' (true in Commercial mode) and filters both Simpro fetches to the division's Simpro job #s ('modeSnos' / 'simproScheduleV' / 'crewWeekSimproV'; residential passes 'false' and is byte-identical); **(2)** Needs / My Day rows for a need whose job is in the other division — 'needsForMode' in 'App()' keeps a need only when its job is in the current mode, has no job, or the job no longer exists (the My Day badge counts the same list); **(3)** residential redline-walk rows on My Day — 'redlineWalksForMode' is empty in Commercial mode. The planner's app-assignment double-booking guard still says "also elsewhere" / "another job" without naming it, so nobody gets double-booked but no residential job is shown. **Why it won't lose data:** display filters only; no write path changes ('_saveCrewData' still merges the whole week's assignments; needs are never rewritten).
@@ -54635,7 +54665,6 @@ const NAV_MAIN_TABS = [
   { key: "schedule", label: "Forecast" },
   { key: "huddle", modes: ["resi"], label: "Huddle", perm: "settings.view" },
   { key: "scoreboard", modes: ["resi"], label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
-  { key: "qc", modes: ["resi"], label: "QC", tiers: ["admin", "manager"] },
   { key: "appmap", label: "App Map" },
 ];
 const NAV_MORE_TABS = [
@@ -55078,7 +55107,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -56119,6 +56148,9 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   ) : null;
   // Splices the pulse card in right before Sent (only when it exists — head only).
   const sideNodes = sideGroups.flatMap(g => (g.key === "sent" && pulseCard) ? [pulseCard, Group(g)] : [Group(g)]);
+  // v457: the QC walks tracker (was its own QC tab) sits at the top of the side
+  // column for whoever the app hands it to (admin / manager, Residential mode).
+  if (qcTracker) sideNodes.unshift(<div key="qc">{qcTracker}</div>);
   const staleFooter = staleRows.length > 0 && (
     <div key="stale" style={{ marginBottom: 14 }}>
       <div onClick={() => setShowStale(s => !s)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px", fontSize: 12, color: C.dim }}>
@@ -62302,7 +62334,6 @@ function App() {
 
       {view==="nav"&&<NavView jobs={jobs}/>}
 
-      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/>}
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
@@ -62359,6 +62390,7 @@ function App() {
 
       {view==="myday"&&can(identity,"myday.view")&&(
         <MyDay identity={identity} users={users} jobs={jobs} needs={needsForMode} onAddNeedUpdate={addNeedUpdate} onEditNeedUpdate={editNeedUpdate}
+          qcTracker={mode!=="commercial"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager") ? <QCView embedded jobs={jobs} identity={identity} onSelectJob={(j)=>setSelected(j)} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/> : null}
           onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto} photoBusyIds={needPhotoBusy}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
