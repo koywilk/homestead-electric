@@ -36551,6 +36551,57 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // ── QC Walk tracker (admin/manager) ──────────────────────────────────────
 // One place for every job's QC walk: status, stage (rough/finish), scheduled
 // date, and open failed items. Read-only aggregation over the jobs list.
+// ── QC walk tracker helpers (module level since v460 so My Day's "QC walks"
+// category header can show the need-action count without opening the tracker).
+const _localYmdToday = () => { const t=new Date(); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`; };
+const qcCountOpen = (punch, onlyFromQC=false) => {
+  // Route everything through normFloor so legacy ARRAY-shaped floors count too
+  // (they used to be skipped here while the job's QC tab showed the items).
+  const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
+  if(!punch) return 0;
+  if(Array.isArray(punch)) return punch.filter(ok).length; // legacy flat punch list (old qcPunch)
+  const fl = (v) => {
+    if(!v) return 0;
+    const f = normFloor(v); // handles both floor shapes: {general,rooms,hotcheck} and legacy []
+    return f.general.filter(ok).length + f.hotcheck.filter(ok).length +
+      f.rooms.reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
+  };
+  return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
+};
+// One row per phase per job that has any QC activity (a status or open QC items).
+function qcWalkRows(jobs, q="") {
+  const s = String(q||"").trim().toLowerCase();
+  const out = [];
+  (jobs||[]).forEach(j=>{
+    const label = jobLabel(j)||"Untitled";
+    if(s && !label.toLowerCase().includes(s)) return;
+    // Rough QC (legacy qcStatus is rough-driven). Date is manual only.
+    const rStatus=j.qcStatus||"", rFailed=qcCountOpen(j.roughPunch,true);
+    if(rStatus||rFailed>0){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||""), failed:rFailed, started:parseStage(j.roughStage)>0 }); }
+    // Finish QC
+    const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=qcCountOpen(j.finishPunch,true)+qcCountOpen(j.qcPunch);
+    if(fStatus||fFailed>0){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||""), failed:fFailed, started:parseStage(j.finishStage)>0 }); }
+  });
+  return out;
+}
+// Smart bucketing: a resulted status (pass/fail) goes to its bucket regardless
+// of date; a "scheduled" walk whose date has passed moves out of Scheduled into
+// "Past due — log result" so it can't be forgotten.
+function qcBucketOf(r, todayYmd) {
+  if(r.status==="fail") return "failed";
+  if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
+  if(r.status==="scheduled"){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
+  if(r.status==="needs") return "needs";
+  return "other";
+}
+// {walks, needAction, scheduled} for a header pill: need action = failed + past due + needs scheduling.
+function qcTrackerCounts(jobs) {
+  const today = _localYmdToday(); const rows = qcWalkRows(jobs);
+  let needAction = 0, scheduled = 0;
+  rows.forEach(r => { const b = qcBucketOf(r, today); if (b==="failed"||b==="overdue"||b==="needs") needAction++; else if (b==="scheduled") scheduled++; });
+  return { walks: rows.length, needAction, scheduled };
+}
+
 // v457: the QC tracker lives on My Day now (Koy: "My QC tab that I made to track
 // QCs, I want all that moved into my My Day section only, so I can track
 // everything that I need to track"). `embedded` renders it as a folded card in
@@ -36595,50 +36646,9 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
     scheduleOnCal(r, dateStr);
     setSchedFor(null);
   };
-  const countOpen = (punch, onlyFromQC=false) => {
-    // BUG FIX: this used to skip legacy ARRAY-shaped floors entirely
-    // (`if(Array.isArray(f)) return 0`), so jobs whose punch floors are still
-    // in the old flat-array shape showed their QC items inside the job (the
-    // QC tab normalizes via normFloor) but counted 0 here and never got a
-    // tracker row. Route everything through normFloor so both surfaces agree.
-    const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
-    if(!punch) return 0;
-    if(Array.isArray(punch)) return punch.filter(ok).length; // legacy flat punch list (old qcPunch)
-    const fl = (v) => {
-      if(!v) return 0;
-      const f = normFloor(v); // handles both floor shapes: {general,rooms,hotcheck} and legacy []
-      return f.general.filter(ok).length + f.hotcheck.filter(ok).length +
-        f.rooms.reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
-    };
-    return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
-  };
-  const rows = useMemo(()=>{
-    const s = q.trim().toLowerCase();
-    const out = [];
-    (jobs||[]).forEach(j=>{
-      const label = jobLabel(j)||"Untitled";
-      if(s && !label.toLowerCase().includes(s)) return;
-      // Rough QC (legacy qcStatus is rough-driven). Date is manual only.
-      const rStatus=j.qcStatus||"", rFailed=countOpen(j.roughPunch,true);
-      if(rStatus||rFailed>0){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||""), failed:rFailed, started:parseStage(j.roughStage)>0 }); }
-      // Finish QC
-      const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=countOpen(j.finishPunch,true)+countOpen(j.qcPunch);
-      if(fStatus||fFailed>0){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||""), failed:fFailed, started:parseStage(j.finishStage)>0 }); }
-    });
-    return out;
-  }, [jobs, q]);
-
-  const _td=new Date(); const todayYmd=`${_td.getFullYear()}-${String(_td.getMonth()+1).padStart(2,"0")}-${String(_td.getDate()).padStart(2,"0")}`;
-  // Smart bucketing: a resulted status (pass/fail) goes to its bucket regardless
-  // of date; a "scheduled" walk whose date has passed moves out of Scheduled into
-  // "Past due — log result" so it can't be forgotten.
-  const bucketOf = (r) => {
-    if(r.status==="fail") return "failed";
-    if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
-    if(r.status==="scheduled"){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
-    if(r.status==="needs") return "needs";
-    return "other";
-  };
+  const rows = useMemo(()=>qcWalkRows(jobs, q), [jobs, q]);
+  const todayYmd = _localYmdToday();
+  const bucketOf = (r) => qcBucketOf(r, todayYmd);
   const BUCKETS = [
     {key:"failed",    label:"Failed — needs return", color:"#B23A3A"},
     {key:"overdue",   label:"Past due — log result", color:"#B0892C"},
@@ -42956,6 +42966,12 @@ function getCoordinatorDuties(job) {
 function getCompanyDuties(job) {
   if (!job || job.tempPed) return [];
   if ((job.prepStage || "") === "Job Prep Complete") return [];
+  // v460: PREP NOT NEEDED (every item N/A in prepNA) and an all-ticked checklist
+  // are prep-complete everywhere else (allPrepChecked) — this row only read the
+  // legacy prepStage field, so skipped jobs kept a "Job prep — not started" row
+  // on My Day (Koy: "i have marked them as job prep not needed, so they
+  // shouldn't show there anymore").
+  if (allPrepChecked(job)) return [];
   if (parseStage(job.roughStage) !== 0) return [];
   const prep = job.prepStage || "";
   return [{ jobId: job.id, jobName: job.name || job.id, foreman: job.foreman || "",
@@ -50228,12 +50244,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v459
+**Last manifest update:** 2026-09-25 · App SW version: v460
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — jobs marked PREP NOT NEEDED leave the Job prep category** · 'shipped 2026-09-26' · 'SW v460' · Koy: *"there is also a bunch of job prep in that section where i have marked them as job prep not needed, so they shouldn't show there anymore."* Two things feed Mine → **Job prep**: the auto "Pre Job Prep" task (already gated on 'allPrepChecked', which counts N/A items as handled since v388) and the company duty row "Job prep — not started" / "Prep: <stage>" from 'getCompanyDuties', which only checked the legacy 'prepStage === "Job Prep Complete"'. A job skipped with PREP NOT NEEDED (every item in 'prepNA') — or with every item ticked but a stale stage field — kept that duty row. 'getCompanyDuties' now returns nothing when 'allPrepChecked(job)' is true, the same test every other prep gate uses. **Also in this ship** (Koy: *"put the 2 need action so its visible without clicking on the qc dropdown as well"*): the tracker's row / bucket logic is lifted to module level ('qcCountOpen', 'qcWalkRows', 'qcBucketOf', 'qcTrackerCounts') so Mine's **QC walks** category header carries the red *N need action* and blue *N scheduled* pills while folded; 'QCView' uses the same helpers. **Why it won't lose data:** read-only derivation; nothing written or changed on the job.
 - **My Day — one QC walks section: the tracker lives inside Mine → QC walks** · 'shipped 2026-09-26' · 'SW v459' · Koy, on v457's side card: *"why do i have two qc tabs. keep the one on the bottom left and make it have everything qc."* The bottom-left one is Mine's **QC walks** category (the auto rows — "Schedule QC Walk", QC duty rows); the right one was the tracker card. The tracker ('QCView embedded') now renders **inside** that category card, under its own rows, with a small "ALL QC WALKS · N" label (+ *need action* / *scheduled* pills), the Dates toggle, search and the same buckets. 'withQcCat' keeps a "QC walks" category in Mine even when no QC row is on the viewer today, so the tracker always has a home (0 rows shown on the header). The side-column card is gone; the tracker's own fold state ('qc.cardOpen') is retired — the category's fold is the only fold. Category view only (Job / Person views show Mine differently). Guide 'myday.html' updated. **Why it won't lose data:** render placement only; the same two QC status writes; no field, loader, rules or function change.
 - **My Day — Team pulse lists everyone** · 'shipped 2026-09-26' · 'SW v458' · Koy: *"why is keegan or brady [not] in my team pulse of myday… keegan and brady are not on it. they need to be."* 'teamPulse' only listed people with an open task doc, a routed derived row, or something finished in the last 7 days, so anyone idle that week vanished from the card. It now returns every active internal person (contractors and deactivated users still excluded), sorted overdue → open → A–Z, so idle people sit at the bottom with zeros (Oldest shows "–" when nothing is open). 'scripts/needs-dryrun.js' gains the idle-person case. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; no writes.
 - **My Day — the QC walks tracker moves onto My Day; the QC tab is gone** · 'shipped 2026-09-26' · 'SW v457' · Koy: *"My QC tab that I made to track QCs, I want all that moved into my My Day section only, so I can track everything that I need to track. I want it in there for sure."* 'QCView' (the bucketed rough + finish QC walk tracker: Failed / Past due / Needs scheduling / Scheduled / Has QC items / Passed, with Schedule-on-a-date → Google Calendar and the status select) gains 'embedded': My Day renders it as a folded **QC walks** card at the top of the side column (header pills: *N need action* · *N scheduled*; open state remembered per device in 'localStorage qc.cardOpen'), handed in by 'App()' as 'qcTracker' for admin / manager in Residential mode — the same gate the tab had. The 'qc' nav tab and its 'view==="qc"' route are removed; the drawer's QC tab and its 'qc.html' guide are untouched. Guide 'myday.html' gains a "QC walks" section. **Why it won't lose data:** same component, same two writes ('qcStatus'/'qcStatusDate' and 'finishQcStatus'/'finishQcStatusDate' through 'updateJob'), only mounted in a different place; no field, loader, rules or function change.
@@ -55469,6 +55486,7 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
   // others, each keyed to its owner(s). Mine rows default to [me] when no
   // `owners` was carried (single-owner); With-others rows already carry theirs
   // (Ship 2 routing). ageDays mirrors staleReason's own date math off staleDate.
+  const qcCounts = useMemo(() => qcTracker ? qcTrackerCounts(jobs) : null, [qcTracker, jobs]);
   const withQcCat = (cats) => {
     if (!qcTracker) return cats;
     if (cats.some(c => c.key === "qc")) return cats;
@@ -56004,6 +56022,8 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
                       <span style={{ fontSize: 12, color: C.muted }}>{c.rows.length}</span>
                       {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
                       {c.overdue === 0 && c.top === 1 && <span style={{ fontSize: 10, fontWeight: 700, color: C.blue }}>today</span>}
+                      {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
+                      {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.scheduled > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#3B5BA5", background: "#3B5BA518", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.scheduled} scheduled</span>}
                     </div>
                     {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}{g.key === "mine" && c.key === "qc" && qcTracker}</div>}
                   </div>
