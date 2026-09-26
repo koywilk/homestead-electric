@@ -7,6 +7,8 @@
       "disallowLegacyRuntimeConfig": true,
       "ignore": [
         "node_modules",
+        "node_modules.nosync",
+        "node_modules.icloud-dead",
         ".git",
         "firebase-debug.log",
         "firebase-debug.*.log",
