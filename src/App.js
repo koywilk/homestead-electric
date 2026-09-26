@@ -36146,8 +36146,17 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
 
 // ── Simpro Crew Schedule ──────────────────────────────────────
 
-function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSelectJob }) {
-  const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro
+function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSelectJob, strictDivision = false }) {
+  const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro (every division)
+  // Commercial mode (strictDivision): only the Simpro entries of this division's
+  // jobs exist as far as the rest of the component is concerned — the staff list,
+  // the per-day blocks and the crew filter all read `scheduleV`. Without this,
+  // a residential entry still drew a block on the day (no name, just the crew)
+  // because its ProjectID matched no job on the commercial board (Koy, v456:
+  // "the commercial side is still showing resi side jobs just not the names").
+  // Residential passes false and reads the raw list, byte-identical to before.
+  const modeSnos = useMemo(() => strictDivision ? new Set((jobs || []).map(j => String(j.simproNo || "")).filter(Boolean)) : null, [jobs, strictDivision]);
+  const scheduleV = useMemo(() => (schedule && modeSnos) ? schedule.filter(s => modeSnos.has(String((s && s.Project && s.Project.ProjectID) || (s && s.Reference) || ""))) : schedule, [schedule, modeSnos]);
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState(null);
   const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
@@ -36200,12 +36209,12 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
   // All unique staff names across job-type entries
   const allStaff = useMemo(() => {
-    if (!schedule) return [];
+    if (!scheduleV) return [];
     const names = [...new Set(
-      schedule.filter(s => s.Type === "job").map(s => s.Staff?.Name).filter(Boolean)
+      scheduleV.filter(s => s.Type === "job").map(s => s.Staff?.Name).filter(Boolean)
     )].sort();
     return names;
-  }, [schedule]);
+  }, [scheduleV]);
 
   // Match a SimPro staff name to a user's full name. First-name-only matching
   // conflated people who share a first name (two Jacobs landed in each other's
@@ -36339,8 +36348,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
   // Group entries by date, filtered by person
   const byDate = useMemo(() => {
-    if (!schedule) return {};
-    const jobEntries = schedule.filter(s => s.Type === "job");
+    if (!scheduleV) return {};
+    const jobEntries = scheduleV.filter(s => s.Type === "job");
     const crewMatch  = personFilter.startsWith("crew_")  ? foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter) : null;
     const filtered = personFilter === "all" ? jobEntries
       : personFilter === "mycrew" ? jobEntries.filter(s => myCrewNames.includes(s.Staff?.Name))
@@ -36352,15 +36361,15 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       map[s.Date].push(s);
     });
     return map;
-  }, [schedule, personFilter, myCrewNames, foremanCrews]);
+  }, [scheduleV, personFilter, myCrewNames, foremanCrews]);
 
   // For each date, one block per job showing all crew with earliest start → latest end
   const crewByDateAndJob = useMemo(() => {
-    if (!schedule) return {};
+    if (!scheduleV) return {};
     const out = {};
     weekDates.forEach(d => {
       const ymd = toYMD(d);
-      const dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
+      const dayEntries = (scheduleV || []).filter(s => s.Type === "job" && s.Date === ymd);
 
       const byProject = {};
       dayEntries.forEach(s => {
@@ -36380,7 +36389,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       out[ymd] = blocks.sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
     });
     return out;
-  }, [schedule, weekDates]);
+  }, [scheduleV, weekDates]);
 
   const todayYMD = toYMD(new Date());
 
@@ -50202,12 +50211,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v455
+**Last manifest update:** 2026-09-25 · App SW version: v456
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Commercial mode — the Job Board's Crew Schedule is strictly commercial too** · 'shipped 2026-09-26' · 'SW v456' · Koy: *"the commercial side is still showing resi side jobs just not the names. i dont want anything residential on the commercial side, including that"* — *"im talking job board crew schedule right now."* The Job Board's **Crew Schedule** strip ('SimproCrewSchedule') fetches every Simpro schedule entry for the week and drew one block per Simpro project per day; a residential project matched no job on the commercial board, so its block still appeared with the crew and no name. The component now takes 'strictDivision' (true in Commercial mode, same pattern as the Forecast's v454 fix): 'modeSnos' = the Simpro #s of the division's jobs, 'scheduleV' = the raw Simpro list filtered to those, and the staff list, the crew filter and the per-day blocks all read 'scheduleV'. Residential passes 'false' and reads the raw list, byte-identical to before. Left as is, on purpose, for a separate decision: the Forecast / Crew Planner's app-assignment double-booking guard still says "also elsewhere" / "another job" (no name) when someone is on the other division's job that day. **Why it won't lose data:** display filter on a fetched list; the component has no write path.
 - **Commercial mode — merged with the Lutron Panel Builder ships; the division preview script gets '--apply'** · 'shipped 2026-09-25' · 'SW v455' · Koy: *"any way for you to auto pull the commercial jobs from that paste i ran into the app so i dont have to do it manually after the push"* + *"i just deployed something, so make sure this is good to go again."* This ship is the merge of the Commercial-mode branch (slices A–D, v449–v454 on that branch) with 'main''s Lutron Panel Builder / Incoming-from-FieldInk ships (v449–v451 on 'main' — the two lines of work reused the same three numbers, which is why this lands as v455). No code conflicted: the only collisions were the FEATURES.md header + entry list (both kept) and the SW version. 'scripts/commercial-division-preview.js --apply' now moves the jobs it lists under WOULD MOVE TO COMMERCIAL ('--resi-too' adds the residential moves): a Firestore REST PATCH with an updateMask on 'data.division' + 'updated_at' only, 'currentDocument.exists' so it never creates a doc, Simpro read-only. Without '--apply' the script is unchanged and read-only. **Why it won't lose data:** the merge adds no write; '--apply' writes the same single field the Settings → COMMERCIAL DIVISION → Apply button writes, on the same docs, and only when Koy runs it by hand with the flag.
 - **Commercial mode — strictly commercial: no residential on the Forecast, My Day or Needs** · 'shipped 2026-09-25' · 'SW v454' · Koy: *"when I'm on the commercial side, I don't want to be able to see any residential jobs scheduled. It needs to be strictly commercial only on the side of it. No residential."* The job rows were already mode-filtered, but three things still leaked: **(1)** the Forecast / Crew Planner's Simpro overlays (calendar pills, "also on <job> (Simpro)" chips, Simpro hours) came from every Simpro entry — 'SchedulingForecast' now takes 'strictDivision' (true in Commercial mode) and filters both Simpro fetches to the division's Simpro job #s ('modeSnos' / 'simproScheduleV' / 'crewWeekSimproV'; residential passes 'false' and is byte-identical); **(2)** Needs / My Day rows for a need whose job is in the other division — 'needsForMode' in 'App()' keeps a need only when its job is in the current mode, has no job, or the job no longer exists (the My Day badge counts the same list); **(3)** residential redline-walk rows on My Day — 'redlineWalksForMode' is empty in Commercial mode. The planner's app-assignment double-booking guard still says "also elsewhere" / "another job" without naming it, so nobody gets double-booked but no residential job is shown. **Why it won't lose data:** display filters only; no write path changes ('_saveCrewData' still merges the whole week's assignments; needs are never rewritten).
 - **Commercial mode — Job Info points at the Job Start checklist** · 'shipped 2026-09-25' · 'SW v453' · Koy, testing: *"I was inside of the job card, and they turned green"* — he was tapping the Scope-by-system chips on Job Info, not the pre-con checklist, and nothing on Job Info said where the checklist was. A teal **Open the Job Start checklist — Phase n of 12 · done/total** button now sits under the Stage line and switches the card to the Job Start tab; the Scope-by-system hint says it is not a checklist. Why it won't lose data: read-only UI, no writes.
@@ -61375,6 +61385,7 @@ function App() {
           {/* ── SIMPRO CREW SCHEDULE ── */}
           <SimproCrewSchedule
             jobs={jobs}
+            strictDivision={mode==="commercial"}
             identity={identity}
             users={users}
             foremanColors={_allPersonColors}
