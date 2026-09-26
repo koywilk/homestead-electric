@@ -66,7 +66,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
   "taskPhotoPath","needPhotos","teamPulse",
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
-  "bucketOfYmd","needBucket","needPriority","prioRank","compareMyDayRows","mydayBadgeCount",
+  "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "loadsListRows","loadsListCsv",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -495,6 +495,13 @@ eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, 
 const pulseV = H.teamPulse({ needs:[...pNeeds, { id:"g", status:"done", assignedTo:"Josh", doneBy:"Josh", doneAt:"2026-09-22T12:00:00", voided:true, voidedBy:"Josh" }], users:pUsers, ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
 eq(pulseV.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "voided doc doesn't count as done this week");
 
+// ── v461: urgency on every row ─────────────────────────────────────────────
+eq(H.rowPriority({ kind:"need", key:"need_1", need:{ priority:"urgent" } }, { need_1:{ prio:"low" } }), "urgent", "need row reads the doc, never the map");
+eq(H.rowPriority({ kind:"auto", key:"auto_j1_prep" }, { auto_j1_prep:{ prio:"urgent", by:"Koy" } }), "urgent", "derived row reads the shared map by key");
+eq(H.rowPriority({ kind:"duty", key:"duty_j1_coord_rough_qc" }, { duty_j1_coord_rough_qc:{ prio:"" } }), "normal", "cleared mark → normal");
+eq(H.rowPriority({ kind:"punch", key:"punch_j1_i9" }, {}), "normal", "no mark → normal");
+eq(H.rowPriority({ kind:"redline", key:"redline_w1" }, null), "normal", "no map → normal");
+eq(H.rowPriority({ kind:"auto", key:"auto_x" }, { auto_x:{ prio:"junk" } }), "normal", "junk value → normal");
 // ── usage tracking (v433) ───────────────────────────────────────────────────
 eq(H.usageSeenKey("koy", "views", "myday"), "koy|views|myday", "seen key shape");
 eq(H.shouldLogUsage([], "koy|views|myday"), true, "empty seen → log");

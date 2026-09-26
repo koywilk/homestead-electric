@@ -50244,12 +50244,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v460
+**Last manifest update:** 2026-09-25 · App SW version: v461
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — every row can be marked urgent** · 'shipped 2026-09-26' · 'SW v461' · Koy: *"Every task should be able to be marked as urgent."* Urgency existed only on need docs ('priority', set on the + sheet or in Edit); auto reminders, duty rows (QC walks, start POs, prep), punch items, redline walks and scan rows had no doc to carry it. New **!** button in every actionable row's action cluster (Mine, Focus, and rows the viewer may reassign) flips Urgent ↔ Normal: a need row writes the doc's own 'priority' through 'patchNeed' (thread note "changed: urgent", the same write Edit does); a derived row writes 'settings/mydayPriority.byKey[rowKey] = { prio, by, at }' (one shared doc, merge-on-one-key like the Focus pins, so the mark is company-wide and survives reloads; "" clears). 'rowPriority(row, map)' stamps derived rows in Mine, With others and the foreman's On-head list before the stale split, so the existing sort ('compareMyDayRows'), red edge, URGENT tag and category float all apply unchanged. Row keys are stable ('auto_<taskId>', 'duty_<jobId>_<dutyId>', 'punch_<jobId>_<itemId>', 'redline_<walkId>', 'scan_<taskId>'). Harness 'scripts/needs-dryrun.js' covers 'rowPriority'. Guide 'myday.html' updated. Not in this ship: Low from the ! button (Edit still does Low on docs), the tab badge (docs only, as before). **Why it won't lose data:** need docs get the existing dotted 'data.priority' patch; derived rows write one new key under a new 'settings/mydayPriority' doc with 'merge:true' (never the whole map; 'settings' is already open-write, no rules change); nothing on any job is written.
 - **My Day — jobs marked PREP NOT NEEDED leave the Job prep category** · 'shipped 2026-09-26' · 'SW v460' · Koy: *"there is also a bunch of job prep in that section where i have marked them as job prep not needed, so they shouldn't show there anymore."* Two things feed Mine → **Job prep**: the auto "Pre Job Prep" task (already gated on 'allPrepChecked', which counts N/A items as handled since v388) and the company duty row "Job prep — not started" / "Prep: <stage>" from 'getCompanyDuties', which only checked the legacy 'prepStage === "Job Prep Complete"'. A job skipped with PREP NOT NEEDED (every item in 'prepNA') — or with every item ticked but a stale stage field — kept that duty row. 'getCompanyDuties' now returns nothing when 'allPrepChecked(job)' is true, the same test every other prep gate uses. **Also in this ship** (Koy: *"put the 2 need action so its visible without clicking on the qc dropdown as well"*): the tracker's row / bucket logic is lifted to module level ('qcCountOpen', 'qcWalkRows', 'qcBucketOf', 'qcTrackerCounts') so Mine's **QC walks** category header carries the red *N need action* and blue *N scheduled* pills while folded; 'QCView' uses the same helpers. **Why it won't lose data:** read-only derivation; nothing written or changed on the job.
 - **My Day — one QC walks section: the tracker lives inside Mine → QC walks** · 'shipped 2026-09-26' · 'SW v459' · Koy, on v457's side card: *"why do i have two qc tabs. keep the one on the bottom left and make it have everything qc."* The bottom-left one is Mine's **QC walks** category (the auto rows — "Schedule QC Walk", QC duty rows); the right one was the tracker card. The tracker ('QCView embedded') now renders **inside** that category card, under its own rows, with a small "ALL QC WALKS · N" label (+ *need action* / *scheduled* pills), the Dates toggle, search and the same buckets. 'withQcCat' keeps a "QC walks" category in Mine even when no QC row is on the viewer today, so the tracker always has a home (0 rows shown on the header). The side-column card is gone; the tracker's own fold state ('qc.cardOpen') is retired — the category's fold is the only fold. Category view only (Job / Person views show Mine differently). Guide 'myday.html' updated. **Why it won't lose data:** render placement only; the same two QC status writes; no field, loader, rules or function change.
 - **My Day — Team pulse lists everyone** · 'shipped 2026-09-26' · 'SW v458' · Koy: *"why is keegan or brady [not] in my team pulse of myday… keegan and brady are not on it. they need to be."* 'teamPulse' only listed people with an open task doc, a routed derived row, or something finished in the last 7 days, so anyone idle that week vanished from the card. It now returns every active internal person (contractors and deactivated users still excluded), sorted overdue → open → A–Z, so idle people sit at the bottom with zeros (Oldest shows "–" when nothing is open). 'scripts/needs-dryrun.js' gains the idle-person case. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; no writes.
@@ -54578,6 +54579,18 @@ function userKeyOf(identity) {
 // duty / punch / redline) have no priority and sort as normal.
 function needPriority(n) { const p = n && n.priority; return p === "urgent" || p === "low" ? p : "normal"; }
 function prioRank(p) { return p === "urgent" ? 0 : p === "low" ? 2 : 1; }
+// v461: urgency on EVERY row (Koy: "Every task should be able to be marked as
+// urgent."). A need doc keeps `priority` on the doc; a derived row (auto / duty /
+// punch / redline / scan) has no doc, so its mark lives in
+// settings/mydayPriority.byKey[rowKey] = { prio, by, at } — one shared doc, so
+// everyone sees the same urgency. Row keys are stable across sessions
+// ("auto_<taskId>", "duty_<jobId>_<dutyId>", "punch_<jobId>_<itemId>", …).
+function rowPriority(row, prioMap) {
+  if (!row) return "normal";
+  if (row.kind === "need") return needPriority(row.need);
+  const e = prioMap && prioMap[row.key]; const p = e && e.prio;
+  return p === "urgent" || p === "low" ? p : "normal";
+}
 // Row order everywhere on My Day (Koy 2026-09-24: "add an urgency status …
 // and have them sort by that"): urgency → lane → due date (undated rows last
 // inside a lane; pre-v446 sorted them A–Z, so the next thing due was buried)
@@ -55117,7 +55130,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -55479,6 +55492,10 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
   const staleOf = (r) => r.staleExempt ? "" : staleReason({ kind: r.kind, job: r.staleJob || null, dateYmd: r.staleDate || "", money: !!r.staleMoney }, todayYmd);
   const staleRows = [];
   const keepFresh = (rows) => rows.filter(r => { const why = staleOf(r); if (why) { staleRows.push({ ...r, sub: [...(r.sub || []), `hidden: ${why}`], actions: undefined, canDone: false, canSnooze: false, scan: undefined, pushOpen: false }); return false; } return true; });
+  // v461: derived rows read their urgency from the shared map (need rows already
+  // carry the doc's own priority).
+  const stampPrio = (rows) => rows.forEach(r => { if (r.kind !== "need") r.prio = rowPriority(r, prioMap); });
+  stampPrio(mineRows); stampPrio(othersRows);
   const freshMine = keepFresh(mineRows);
   const freshOthers = keepFresh(othersRows);
   // v431: Team pulse (head only) — ownedRows are the derived rows (auto / duty /
@@ -55562,6 +55579,7 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
       rows.push({ key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
         sub: [t.jobName, st.state === "with" ? `with ${first(st.who)}` : `${headFirst}'s`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
     });
+    stampPrio(rows);
     return rows;
   })();
   // One line per job (v408 head group; v429 also the Mine "Job" view).
@@ -55710,6 +55728,21 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
   // hands back its undo; stage it in the single Undo slot.
   const rmPhoto = (n, p) => { if (!onRemoveNeedPhoto || !n) return; const undoFn = onRemoveNeedPhoto(n.id, p); if (undoFn) stage("Photo removed", undoFn); };
   const canRmPhoto = (p) => !!p && (sameName(p.by, me) || iRunHead);
+  // v461: one tap flips a row Urgent ↔ Normal. A need doc writes its own
+  // `priority` (same field Edit writes, logged in the thread); anything else
+  // writes the shared settings/mydayPriority map by row key.
+  const toggleUrgent = (r) => {
+    const next = r.prio === "urgent" ? "" : "urgent";
+    if (r.kind === "need") {
+      if (!r.need || !onPatchNeed) return;
+      onPatchNeed(r.need.id, { priority: next }, r.need, { kind: "edit", text: next ? "changed: urgent" : "changed: normal priority" });
+    } else {
+      if (!onSetPrio) return;
+      onSetPrio(r.key, next);
+    }
+    toast.success(next ? "Marked urgent" : "Urgent cleared");
+  };
+  const canMarkUrgent = (r) => !r.readOnly && (r.sel || r.canReassign) && (r.kind === "need" ? !!(r.need && onPatchNeed) : !!onSetPrio);
   const Row = (r) => {
     const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
     const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
@@ -55947,6 +55980,10 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
             </div>
           )}
         </div>
+        {!selectMode && canMarkUrgent(r) && (
+          <button onClick={() => toggleUrgent(r)} title={r.prio === "urgent" ? "Urgent — tap to clear" : "Mark urgent"} aria-pressed={r.prio === "urgent"}
+            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.muted, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
+        )}
         {!selectMode && r.sel && onSaveFocus && (
           <button onClick={() => toggleFocus(r.key)} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} aria-pressed={pinned}
             style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.muted, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
@@ -58225,6 +58262,7 @@ function App() {
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
   const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
+  const [mydayPrio, setMydayPrio] = useState({});     // v461: settings/mydayPriority.byKey — urgency on derived rows (shared)
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
   // the inbox UI; this one is intentionally duplicated rather than lifted to
@@ -58637,6 +58675,10 @@ function App() {
     const unsubMydayFocus = onSnapshot(doc(db, "settings", "mydayFocus"),
       s => setMydayFocus((s.exists() && s.data() && s.data().byUser) || {}),
       e => console.warn("[HE] mydayFocus listener", e));
+    // v461: urgency marks on derived My Day rows — settings/mydayPriority.byKey.
+    const unsubMydayPrio = onSnapshot(doc(db, "settings", "mydayPriority"),
+      s => setMydayPrio((s.exists() && s.data() && s.data().byKey) || {}),
+      e => console.warn("[HE] mydayPriority listener", e));
 
     // Suggestions feed (for Today tab event stream) — read-only listener.
     // Docs are flat (no `data` envelope) since suggestions are written directly
@@ -58676,7 +58718,7 @@ function App() {
       window.removeEventListener('focus', onReturn);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('online', onNetUp);
-      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
+      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubMydayPrio(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
     }; // cleanup on unmount
 
   },[]);
@@ -59832,6 +59874,16 @@ function App() {
     setMydayFocus(m => ({ ...m, [key]: entry }));            // optimistic
     try { await setDoc(doc(db, "settings", "mydayFocus"), { byUser: { [key]: entry } }, { merge: true }); }
     catch (e) { console.warn("[HE] mydayFocus save failed", e); toast.error("Couldn't save focus pins"); }
+  };
+  // v461: urgency on a derived My Day row — settings/mydayPriority.byKey[rowKey].
+  // Same merge-on-one-key write as the Focus pins: only this row's entry is
+  // touched, nobody else's marks are rewritten. "" clears (entry kept for audit).
+  const saveMyDayPrio = async (key, prio) => {
+    if (!key) return;
+    const entry = { prio: prio === "urgent" || prio === "low" ? prio : "", by: (identity && identity.name) || "", at: new Date().toISOString() };
+    setMydayPrio(m => ({ ...m, [key]: entry }));            // optimistic
+    try { await setDoc(doc(db, "settings", "mydayPriority"), { byKey: { [key]: entry } }, { merge: true }); }
+    catch (e) { console.warn("[HE] mydayPriority save failed", e); toast.error("Couldn't save urgency"); }
   };
 
   // ── Simpro inbox handlers ──────────────────────────────────────────
@@ -62418,6 +62470,7 @@ function App() {
           redlineWalks={redlineWalksForMode} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
+          prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
           jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}/>
       )}
 
