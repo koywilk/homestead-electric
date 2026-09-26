@@ -483,7 +483,11 @@ const pNeeds = [
 ];
 const pRows = [{ owners:["Josh"], bucket:"overdue", ageDays:9 }, { owners:["Koy Wilkinson","Josh"], bucket:"today", ageDays:1 }];
 const pulse = H.teamPulse({ needs:pNeeds, users:pUsers, ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
-eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue desc, then open desc; inactive/contractor/idle excluded");
+eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue desc, then open desc; inactive/contractor excluded");
+// v458: an idle person (no open doc, nothing done this week) still shows, with zeros, after everyone with work.
+const pulseIdle = H.teamPulse({ needs:pNeeds, users:[...pUsers, { name:"Keegan" }, { name:"Brady" }], ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
+eq(pulseIdle.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson","Brady","Keegan"], "idle people listed after everyone with work, A–Z");
+eq(pulseIdle.find(p => p.name === "Keegan"), { name:"Keegan", open:0, overdue:0, oldestDays:0, doneWeek:0 }, "idle person shows zeros");
 eq(pulse.find(p => p.name === "Gage Lund"), { name:"Gage Lund", open:2, overdue:2, oldestDays:13, doneWeek:0 }, "Gage: 2 open both overdue, oldest from createdAt");
 eq(pulse.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "Josh: 1 doc + 2 owned rows; done 9/21 counts, 9/10 doesn't");
 eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, overdue:0, oldestDays:1, doneWeek:0 }, "shared row counts for each owner");

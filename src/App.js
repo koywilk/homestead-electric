@@ -50240,12 +50240,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v457
+**Last manifest update:** 2026-09-25 · App SW version: v458
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — Team pulse lists everyone** · 'shipped 2026-09-26' · 'SW v458' · Koy: *"why is keegan or brady [not] in my team pulse of myday… keegan and brady are not on it. they need to be."* 'teamPulse' only listed people with an open task doc, a routed derived row, or something finished in the last 7 days, so anyone idle that week vanished from the card. It now returns every active internal person (contractors and deactivated users still excluded), sorted overdue → open → A–Z, so idle people sit at the bottom with zeros (Oldest shows "–" when nothing is open). 'scripts/needs-dryrun.js' gains the idle-person case. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; no writes.
 - **My Day — the QC walks tracker moves onto My Day; the QC tab is gone** · 'shipped 2026-09-26' · 'SW v457' · Koy: *"My QC tab that I made to track QCs, I want all that moved into my My Day section only, so I can track everything that I need to track. I want it in there for sure."* 'QCView' (the bucketed rough + finish QC walk tracker: Failed / Past due / Needs scheduling / Scheduled / Has QC items / Passed, with Schedule-on-a-date → Google Calendar and the status select) gains 'embedded': My Day renders it as a folded **QC walks** card at the top of the side column (header pills: *N need action* · *N scheduled*; open state remembered per device in 'localStorage qc.cardOpen'), handed in by 'App()' as 'qcTracker' for admin / manager in Residential mode — the same gate the tab had. The 'qc' nav tab and its 'view==="qc"' route are removed; the drawer's QC tab and its 'qc.html' guide are untouched. Guide 'myday.html' gains a "QC walks" section. **Why it won't lose data:** same component, same two writes ('qcStatus'/'qcStatusDate' and 'finishQcStatus'/'finishQcStatusDate' through 'updateJob'), only mounted in a different place; no field, loader, rules or function change.
 - **Commercial mode — the Job Board's Crew Schedule is strictly commercial too** · 'shipped 2026-09-26' · 'SW v456' · Koy: *"the commercial side is still showing resi side jobs just not the names. i dont want anything residential on the commercial side, including that"* — *"im talking job board crew schedule right now."* The Job Board's **Crew Schedule** strip ('SimproCrewSchedule') fetches every Simpro schedule entry for the week and drew one block per Simpro project per day; a residential project matched no job on the commercial board, so its block still appeared with the crew and no name. The component now takes 'strictDivision' (true in Commercial mode, same pattern as the Forecast's v454 fix): 'modeSnos' = the Simpro #s of the division's jobs, 'scheduleV' = the raw Simpro list filtered to those, and the staff list, the crew filter and the per-day blocks all read 'scheduleV'. Residential passes 'false' and reads the raw list, byte-identical to before. Left as is, on purpose, for a separate decision: the Forecast / Crew Planner's app-assignment double-booking guard still says "also elsewhere" / "another job" (no name) when someone is on the other division's job that day. **Why it won't lose data:** display filter on a fetched list; the component has no write path.
 - **Commercial mode — merged with the Lutron Panel Builder ships; the division preview script gets '--apply'** · 'shipped 2026-09-25' · 'SW v455' · Koy: *"any way for you to auto pull the commercial jobs from that paste i ran into the app so i dont have to do it manually after the push"* + *"i just deployed something, so make sure this is good to go again."* This ship is the merge of the Commercial-mode branch (slices A–D, v449–v454 on that branch) with 'main''s Lutron Panel Builder / Incoming-from-FieldInk ships (v449–v451 on 'main' — the two lines of work reused the same three numbers, which is why this lands as v455). No code conflicted: the only collisions were the FEATURES.md header + entry list (both kept) and the SW version. 'scripts/commercial-division-preview.js --apply' now moves the jobs it lists under WOULD MOVE TO COMMERCIAL ('--resi-too' adds the residential moves): a Firestore REST PATCH with an updateMask on 'data.division' + 'updated_at' only, 'currentDocument.exists' so it never creates a doc, Simpro read-only. Without '--apply' the script is unchanged and read-only. **Why it won't lose data:** the merge adds no write; '--apply' writes the same single field the Settings → COMMERCIAL DIVISION → Apply button writes, on the same docs, and only when Koy runs it by hand with the flag.
@@ -54769,7 +54770,10 @@ function teamPulse(opts) {
     who.open++; if (r.bucket === "overdue") who.overdue++;
     who.oldestDays = Math.max(who.oldestDays, r.ageDays || 0);
   }));
-  return [...rowFor.values()].filter(p => p.open || p.doneWeek)
+  // v458: every active internal person, zeros included (Koy: "keegan and brady are
+  // not on it. they need to be."). Before, someone with no open task doc and
+  // nothing finished this week dropped off the card entirely.
+  return [...rowFor.values()]
     .sort((a, b) => (b.overdue - a.overdue) || (b.open - a.open) || a.name.localeCompare(b.name));
 }
 // The Head of Residential = whoever holds the resi.head hat (Settings → Team →
@@ -56135,7 +56139,7 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
                       <td style={{ padding: "7px 10px", color: clickable ? C.text : C.dim, fontWeight: 600 }}>{p.name}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: C.text }}>{p.open}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: redOverdue ? C.red : C.text, fontWeight: redOverdue ? 700 : 400 }}>{p.overdue}</td>
-                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.oldestDays}d</td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.open > 0 ? `${p.oldestDays}d` : "–"}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: C.dim }}>{p.doneWeek}</td>
                     </tr>
                   );
