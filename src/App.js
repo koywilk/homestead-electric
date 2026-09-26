@@ -36558,8 +36558,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // date pick, the status select and the writes are the same code either way.
 function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
   const [q, setQ] = useState("");
-  const [cardOpen, setCardOpen] = useState(() => { try { return localStorage.getItem("qc.cardOpen") === "1"; } catch { return false; } });
-  const toggleCard = () => setCardOpen(v => { const nv = !v; try { localStorage.setItem("qc.cardOpen", nv ? "1" : "0"); } catch {} return nv; });
+
   const [collapsed, setCollapsed] = useState(()=>new Set(["failed","overdue","needs","scheduled","other","done","unmatched"]));
   const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
   const [showDates, setShowDates] = useState(()=>{ try { return localStorage.getItem("qc.showDates")!=="0"; } catch { return true; } });
@@ -36656,26 +36655,15 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
 
   const openCount = rows.filter(r=>{ const b=bucketOf(r); return b==="failed"||b==="overdue"||b==="needs"; }).length;
   const schedCount = rows.filter(r=>bucketOf(r)==="scheduled").length;
-  if(embedded && !cardOpen) return (
-    <div style={{marginBottom:14}}>
-      <div onClick={toggleCard} style={{display:"flex",alignItems:"center",gap:8,minHeight:36,cursor:"pointer",userSelect:"none",margin:"0 2px 6px"}}>
-        <span style={{display:"inline-flex",color:C.dim}}><Icon name="chevronRight" size={16} stroke={2.25}/></span>
-        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,letterSpacing:"0.07em",color:C.text}}>QC walks</span>
-        <span style={{fontSize:12,color:C.muted}}>{rows.length} walks</span>
-        {openCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#B23A3A",background:"#B23A3A18",borderRadius:5,padding:"1px 6px"}}>{openCount} need action</span>}
-        {schedCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#3B5BA5",background:"#3B5BA518",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
-        <span style={{flex:1,height:1,background:C.border}}/>
-      </div>
-    </div>
-  );
   return (
-    <div style={embedded ? {marginBottom:14} : {padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4,...(embedded?{minHeight:36,margin:"0 2px 6px"}:{})}}>
+    <div style={embedded ? {marginTop:4,paddingTop:10,borderTop:`1px dashed ${C.border}`} : {padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4,...(embedded?{gap:8,marginBottom:8}:{})}}>
         {embedded ? (
-          <span onClick={toggleCard} style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none"}}>
-            <span style={{display:"inline-flex",transform:"rotate(90deg)",color:C.dim}}><Icon name="chevronRight" size={16} stroke={2.25}/></span>
-            <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:19,letterSpacing:"0.07em",color:C.text}}>QC walks</span>
-            <span style={{fontSize:12,color:C.muted}}>{rows.length} walks</span>
+          <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim}}>All QC walks</span>
+            <span style={{fontSize:12,color:C.muted}}>{rows.length}</span>
+            {openCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#B23A3A",background:"#B23A3A18",borderRadius:5,padding:"1px 6px"}}>{openCount} need action</span>}
+            {schedCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#3B5BA5",background:"#3B5BA518",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
           </span>
         ) : (<>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
@@ -50240,12 +50228,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v458
+**Last manifest update:** 2026-09-25 · App SW version: v459
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — one QC walks section: the tracker lives inside Mine → QC walks** · 'shipped 2026-09-26' · 'SW v459' · Koy, on v457's side card: *"why do i have two qc tabs. keep the one on the bottom left and make it have everything qc."* The bottom-left one is Mine's **QC walks** category (the auto rows — "Schedule QC Walk", QC duty rows); the right one was the tracker card. The tracker ('QCView embedded') now renders **inside** that category card, under its own rows, with a small "ALL QC WALKS · N" label (+ *need action* / *scheduled* pills), the Dates toggle, search and the same buckets. 'withQcCat' keeps a "QC walks" category in Mine even when no QC row is on the viewer today, so the tracker always has a home (0 rows shown on the header). The side-column card is gone; the tracker's own fold state ('qc.cardOpen') is retired — the category's fold is the only fold. Category view only (Job / Person views show Mine differently). Guide 'myday.html' updated. **Why it won't lose data:** render placement only; the same two QC status writes; no field, loader, rules or function change.
 - **My Day — Team pulse lists everyone** · 'shipped 2026-09-26' · 'SW v458' · Koy: *"why is keegan or brady [not] in my team pulse of myday… keegan and brady are not on it. they need to be."* 'teamPulse' only listed people with an open task doc, a routed derived row, or something finished in the last 7 days, so anyone idle that week vanished from the card. It now returns every active internal person (contractors and deactivated users still excluded), sorted overdue → open → A–Z, so idle people sit at the bottom with zeros (Oldest shows "–" when nothing is open). 'scripts/needs-dryrun.js' gains the idle-person case. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; no writes.
 - **My Day — the QC walks tracker moves onto My Day; the QC tab is gone** · 'shipped 2026-09-26' · 'SW v457' · Koy: *"My QC tab that I made to track QCs, I want all that moved into my My Day section only, so I can track everything that I need to track. I want it in there for sure."* 'QCView' (the bucketed rough + finish QC walk tracker: Failed / Past due / Needs scheduling / Scheduled / Has QC items / Passed, with Schedule-on-a-date → Google Calendar and the status select) gains 'embedded': My Day renders it as a folded **QC walks** card at the top of the side column (header pills: *N need action* · *N scheduled*; open state remembered per device in 'localStorage qc.cardOpen'), handed in by 'App()' as 'qcTracker' for admin / manager in Residential mode — the same gate the tab had. The 'qc' nav tab and its 'view==="qc"' route are removed; the drawer's QC tab and its 'qc.html' guide are untouched. Guide 'myday.html' gains a "QC walks" section. **Why it won't lose data:** same component, same two writes ('qcStatus'/'qcStatusDate' and 'finishQcStatus'/'finishQcStatusDate' through 'updateJob'), only mounted in a different place; no field, loader, rules or function change.
 - **Commercial mode — the Job Board's Crew Schedule is strictly commercial too** · 'shipped 2026-09-26' · 'SW v456' · Koy: *"the commercial side is still showing resi side jobs just not the names. i dont want anything residential on the commercial side, including that"* — *"im talking job board crew schedule right now."* The Job Board's **Crew Schedule** strip ('SimproCrewSchedule') fetches every Simpro schedule entry for the week and drew one block per Simpro project per day; a residential project matched no job on the commercial board, so its block still appeared with the crew and no name. The component now takes 'strictDivision' (true in Commercial mode, same pattern as the Forecast's v454 fix): 'modeSnos' = the Simpro #s of the division's jobs, 'scheduleV' = the raw Simpro list filtered to those, and the staff list, the crew filter and the per-day blocks all read 'scheduleV'. Residential passes 'false' and reads the raw list, byte-identical to before. Left as is, on purpose, for a separate decision: the Forecast / Crew Planner's app-assignment double-booking guard still says "also elsewhere" / "another job" (no name) when someone is on the other division's job that day. **Why it won't lose data:** display filter on a fetched list; the component has no write path.
@@ -55480,6 +55469,11 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
   // others, each keyed to its owner(s). Mine rows default to [me] when no
   // `owners` was carried (single-owner); With-others rows already carry theirs
   // (Ship 2 routing). ageDays mirrors staleReason's own date math off staleDate.
+  const withQcCat = (cats) => {
+    if (!qcTracker) return cats;
+    if (cats.some(c => c.key === "qc")) return cats;
+    return [...cats, { key: "qc", label: MYDAY_CAT_LABELS.qc, rows: [], top: MYDAY_ORDER.length, overdue: 0, urgent: 0 }];
+  };
   const ageDaysOf = (dateYmd) => {
     const d = dateYmd ? parseAnyDate(dateYmd) : null;
     if (!d) return 0;
@@ -55634,9 +55628,14 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
   })();
   const groups = [
     ...(view === "person" ? personGroups : [
+      // v459: the QC walks tracker (was its own tab, then a side card — Koy: "why do
+      // i have two qc tabs. keep the one on the bottom left and make it have
+      // everything qc") rides INSIDE Mine's "QC walks" category, under that
+      // category's own rows. If no QC row is on me today the category still
+      // exists (with 0 rows) so the tracker has a home.
       view === "job"
         ? { key: "mine", title: "Mine", rows: mineQ, byJob: byJobOf(mineQ), main: true, empty: "All clear — nothing on you right now." }
-        : { key: "mine", title: "Mine", rows: mineQ, byCat: myDayCategories(mineQ), main: true, empty: "All clear — nothing on you right now." },
+        : { key: "mine", title: "Mine", rows: mineQ, byCat: withQcCat(myDayCategories(mineQ)), main: true, empty: "All clear — nothing on you right now." },
       // v427: rows the head's board used to own that now route to another hat
       // holder — read-only (no Done/Snooze/actions), folded by default.
       ...(iRunHead && freshOthers.length ? [{ key: "others", title: "With others", rows: othersQ, byCat: myDayCategories(othersQ), empty: "" }] : []),
@@ -56006,7 +56005,7 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
                       {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
                       {c.overdue === 0 && c.top === 1 && <span style={{ fontSize: 10, fontWeight: 700, color: C.blue }}>today</span>}
                     </div>
-                    {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}</div>}
+                    {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}{g.key === "mine" && c.key === "qc" && qcTracker}</div>}
                   </div>
                 );
               })}
@@ -56152,9 +56151,7 @@ function MyDay({ qcTracker = null, identity, users = [], jobs = [], needs = [], 
   ) : null;
   // Splices the pulse card in right before Sent (only when it exists — head only).
   const sideNodes = sideGroups.flatMap(g => (g.key === "sent" && pulseCard) ? [pulseCard, Group(g)] : [Group(g)]);
-  // v457: the QC walks tracker (was its own QC tab) sits at the top of the side
-  // column for whoever the app hands it to (admin / manager, Residential mode).
-  if (qcTracker) sideNodes.unshift(<div key="qc">{qcTracker}</div>);
+
   const staleFooter = staleRows.length > 0 && (
     <div key="stale" style={{ marginBottom: 14 }}>
       <div onClick={() => setShowStale(s => !s)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px", fontSize: 12, color: C.dim }}>
