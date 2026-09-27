@@ -2159,6 +2159,64 @@ const PREP_CHECKLIST_ITEMS = [
   {key:"plansUploaded",  label:"Plans Uploaded to App & SimPro"},
   {key:"readyToHandOff", label:"Ready to Hand Off to Foreman"},
 ];
+
+// ── Commercial Job Start (spec §6, Koy's 12-step Commercial Electrical Job Start Process, 2026-09-25) ──
+// Every step is a PHASE; a job is in exactly one, derived from its checks. All
+// twelve are pre-construction (Brady · Justin = comm.precon; Zane · Abe = comm.site
+// on phase 6). item = [key, label, kind]; kind: "check" (default) | "trk" (derived
+// from the Gear & Submittals / RFI logs) | "photo" | "date".
+const COMM_START_STEPS = [
+  { n:1,  label:"Quote Approval / Contract Award", short:"CONTRACT AWARD", owner:"precon", items:[["award","AWARD DOC"],["permitResp","PERMIT RESPONSIBILITY"],["utility","UTILITY / SERVICE COORD"],["contacts","CONTACTS SET"]] },
+  { n:2,  label:"Project Setup & Initial Review", short:"PROJECT SETUP", owner:"precon", items:[["jobNo","JOB # / COST CODES"],["folders","PROJECT FOLDERS","trk"],["planReview","PLAN / SPEC REVIEW"],["schedule","SCHEDULE + MILESTONES"],["scope","SCOPE BY SYSTEM"]] },
+  { n:3,  label:"Request Vendor Submittals", short:"SUBMITTALS", owner:"precon", items:[["ced","CED SENT PLANS/SPECS"],["fa","FA CO. SENT PLANS/SPECS"],["longLead","LONG-LEAD REQUESTED","trk"],["leadTimes","LEAD TIMES + PRICING","trk"]] },
+  { n:4,  label:"Electrical Submittal Review", short:"SUBMITTAL REVIEW", owner:"precon", items:[["pmReview","PM / ESTIMATOR REVIEWED"],["dims","DIMENSIONS / CLEARANCES"],["rfis","RFI LIST","trk"],["toGc","SENT TO GC","trk"],["approved","ALL APPROVED","trk"],["comments","COMMENTS RESOLVED"]] },
+  { n:5,  label:"Release / Order Long-Lead Gear", short:"RELEASE GEAR", owner:"precon", items:[["released","RELEASED + PO","trk"],["shipDates","SHIP DATES IN WRITING","trk"],["procLog","PROCUREMENT LOG","trk"],["shipMode","SHIP COMPLETE / SPLIT","trk"],["storage","DELIVERY / STORAGE"]] },
+  { n:6,  label:"Preconstruction / Site Coordination", short:"SITE COORD", owner:"site", items:[["kickoff","GC KICKOFF ATTENDED"],["schedOk","SCHEDULE CONFIRMED"],["manpower","MANPOWER PLAN"],["milestones","MILESTONES SET"],["laydown","LAYDOWN / STORAGE"],["tempNeeds","TEMP POWER NEEDS"],["trailer","TRAILER / CONTAINER"],["crane","CRANE / FORKLIFT"],["rentals","RENTALS + DATES"],["bim","BIM / CLASH"]] },
+  { n:7,  label:"Site Work Takeoff & Ordering", short:"SITE TAKEOFF", owner:"precon", items:[["takeoff","SITE TAKEOFF DONE"],["pvc","PVC / CONDUIT"],["sweeps","SWEEPS / ELBOWS"],["duct","DUCT BANK"],["boxes","PULL BOXES / HANDHOLES"],["ground","GROUNDING"],["siteLt","SITE LIGHTING"],["util","UTILITY / SERVICE CONDUIT"],["vaults","UTILITY VAULTS"],["lvPath","COMM / FA PATHWAYS"],["tape","TAPE / SPACERS / ENCASEMENT"],["ordered","SITE MATERIAL ORDERED"]] },
+  { n:8,  label:"Temporary Power", short:"TEMP POWER", owner:"precon", items:[["req","REQUIREMENTS"],["tempUtil","TEMP UTILITY SERVICE"],["svc","SERVICE / METER / MAIN"],["dist","DISTRIBUTION"],["spider","SPIDER BOXES / GFCI"],["lighting","TEMP LIGHTING"],["trailerPwr","TRAILER POWER"],["cranePwr","CRANE / HOIST POWER"],["energized","INSPECTED + ENERGIZED","date"],["maint","MAINTENANCE OWNER"]] },
+  { n:9,  label:"Ufer / Concrete-Encased Electrode", short:"UFER", owner:"precon", items:[["footing","FOOTING SCHEDULE REVIEWED"],["config","ELECTRODE CONFIG"],["rebar","CONCRETE / REBAR COORD"],["installed","UFER INSTALLED"],["photos","PHOTOS","photo"],["insp","INSPECTION","date"],["gec","GEC ACCESS CONFIRMED"]] },
+  { n:10, label:"Foundation Electrical / Blockouts", short:"FOUNDATION", owner:"precon", items:[["overlay","DRAWINGS OVERLAID"],["svcCond","SERVICE CONDUITS"],["feeders","FEEDER CONDUITS"],["sleeves","SLEEVES"],["genXfmr","GEN / XFMR CONDUITS"],["siteLt2","SITE LIGHTING"],["lv","LV PATHWAYS"],["ground2","GROUNDING"],["penetr","ROOM PENETRATIONS"],["pads","HOUSEKEEPING PADS"],["blockouts","BLOCKOUTS BEFORE POUR"]] },
+  { n:11, label:"Building Underground", short:"UNDERGROUND", owner:"precon", items:[["trades","TRADE OVERLAY"],["layout","LAYOUT DONE"],["banks","BANKS / CROSSINGS FIRST"],["clear","CLEARANCES"],["stubs","STUB-UPS SET + SECURED"],["capped","CAPPED / SEALED"],["strings","PULL STRINGS"],["photos","PHOTOS + DIMENSIONS","photo"],["check","CONDUIT CHECK"],["insp","INSPECTED BEFORE COVER","date"]] },
+  { n:12, label:"Slab-on-Grade Coordination", short:"SLAB", owner:"precon", items:[["floorBoxes","FLOOR BOXES"],["equip","EQUIPMENT FEEDS"],["kitchen","KITCHEN"],["islands","ISLANDS / CASEWORK"],["floorRec","FLOOR RECEPTS"],["mech","MECHANICAL"],["special","SPECIALTY"],["lvSleeves","LV SLEEVES"],["control","DIMS FROM CONTROL LINES"],["prepour","PRE-POUR CHECKLIST / INSP","date"]] },
+];
+const COMM_PHASE_BY_N = Object.fromEntries(COMM_START_STEPS.map(p => [p.n, p]));
+const COMM_OWNER_LABEL = { precon:"Commercial pre-con", site:"Site coordination" };
+// job.commercial.start = { items:{ "n.key":{done,by,at} }, na:{ "n.key":true }, notes:{ n:"" }, overrides:{ n:{by,at,note} }, photos:{ "n.key":[…] }, dates:{ "n.key":"M/D/YYYY" } }
+const commStartOf = (j) => ((j && j.commercial && j.commercial.start) || { items:{}, na:{}, notes:{}, overrides:{} });
+const commItemKey = (n, k) => `${n}.${k}`;
+// Tracker items derive from the logs (spec §6.3) — never stored as checks.
+const commTrackerDone = (j, n, k) => {
+  const c = (j && j.commercial) || {};
+  const rows = Array.isArray(c.submittals) ? c.submittals : [];
+  const approved = (r) => r.status === "approved" || r.status === "approvedAsNoted";
+  const K = commItemKey(n, k);
+  switch (K) {
+    case "2.folders":   return !!(j.driveFolderId && j.docPull && j.docPull.status === "done");
+    case "3.longLead":  return rows.length > 0 && rows.every(r => !!r.requestedAt);
+    case "3.leadTimes": return rows.length > 0 && rows.every(r => !!r.leadTimeWeeks && !!r.priceConfirmed);
+    case "4.rfis":      return Array.isArray(c.rfis) && c.rfis.length > 0;
+    case "4.toGc":      return rows.length > 0 && rows.every(r => r.status && r.status !== "requested");
+    case "4.approved":  return rows.length > 0 && rows.every(approved);
+    case "5.released":  return rows.length > 0 && rows.filter(approved).length > 0 && rows.filter(approved).every(r => !!r.poNo && !!r.releasedAt);
+    case "5.shipDates": return rows.length > 0 && rows.filter(r => r.releasedAt).length > 0 && rows.filter(r => r.releasedAt).every(r => !!r.promisedShip);
+    case "5.procLog":   return rows.length > 0 && rows.every(r => !!r.requiredOnSite);
+    case "5.shipMode":  return rows.length > 0 && rows.filter(r => r.releasedAt).every(r => !!r.shipMode);
+    default: return false;
+  }
+};
+const commItemState = (j, n, k) => {
+  const p = COMM_PHASE_BY_N[n]; if (!p) return "todo";
+  const it = p.items.find(x => x[0] === k); const st = commStartOf(j); const K = commItemKey(n, k);
+  if (st.na && st.na[K]) return "na";
+  if (it && it[2] === "trk") return commTrackerDone(j, n, k) ? "done" : "todo";
+  return (st.items && st.items[K] && st.items[K].done) ? "done" : "todo";
+};
+const commPhaseChecked = (j, n) => COMM_PHASE_BY_N[n].items.every(([k]) => commItemState(j, n, k) !== "todo");
+const commPhaseClosed  = (j, n) => commPhaseChecked(j, n) || !!(commStartOf(j).overrides && commStartOf(j).overrides[n]);
+const commPhaseDone    = (j, n) => COMM_PHASE_BY_N[n].items.filter(([k]) => commItemState(j, n, k) !== "todo").length;
+// The ONLY state: first phase not closed. null = all twelve closed (Ready to Start / on site). Residential → null.
+const commPhase = (j) => { if (!j || j.division !== "commercial") return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
+const commOwedItems = (j) => COMM_START_STEPS.flatMap(p => (commStartOf(j).overrides && commStartOf(j).overrides[p.n]) ? p.items.filter(([k]) => commItemState(j, p.n, k) === "todo").map(([k, l]) => ({ n: p.n, k, label: l })) : []);
 const allPrepChecked = (job) => {
   // v388: an item marked Not Needed (prepNA map) counts as handled — some jobs
   // legitimately skip cabinet plans/appliance specs (or all of prep). NOTE:
@@ -4393,6 +4451,10 @@ const PERMISSIONS = {
   "pipeline.manage": ["admin","manager"],
   "settings.view":   ["admin","manager"],
   "users.manage":    ["admin","manager"],
+  "commercial.view": ["admin","manager","standard","limited"],  // the Resi / Commercial switch — everyone internal (crews work both, Koy 2026-09-25); contractors never
+  "job.division":    ["admin","manager"],                       // move a job between divisions (Job Info → DIVISION)
+  "commstart.view":  ["admin","manager","standard"],           // see the Job Start board (foremen read-only)
+  "commstart.edit":  ["admin","manager"],                       // check items in any phase, move on, edit the logs (+ the comm.* hats, see canEditJobStart)
   "job.delete":      ["admin"],
   "quotes.view":     ["admin","manager","standard"],
   "quotes.convert":  ["admin"],
@@ -4437,6 +4499,9 @@ const PERMISSIONS = {
   // it follows the ROLE, never a hardcoded name; scanOwner(users) resolves the
   // holder. Owns the "Matterport scans" queue on My Day + the morning chase.
   "matterport.own":         [],
+  "comm.head":              [],   // Head of Commercial (Brady) — fallback owner for every commercial row
+  "comm.precon":            [],   // Commercial pre-con — Job Start phases 1–5, 7–12 (Brady · Justin), shared
+  "comm.site":              [],   // Commercial site coordination — Job Start phase 6 (Zane · Abe), shared
   // v427 hat registry (HAT_REGISTRY) — per-user grants only, never by tier.
   "invoice.own":            [],
   "co.own":                 [],
@@ -4828,6 +4893,17 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     {access==="standard" && "Can view all cards, add tasks, see schedule and pipeline (no manage)"}
                     {access==="limited"  && "Home screen and job editing only — no settings, pipeline, or tasks"}
                   </div>
+                  {(access==="admin"||access==="manager") && (
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>LANDS IN</div>
+                      <select value={u.defaultMode||""} onChange={e=>upd(u.id,{defaultMode:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        <option value="">Residential (default)</option>
+                        <option value="commercial">Commercial</option>
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which division they land in at login — for people who mostly work commercial</div>
+                    </div>
+                  )}
                   {/* Company hats — per-user grants for centralized duties (job
                       prep + redlines, job starts). These surface the Company
                       section of the Today worklist for THIS person only — not
@@ -4838,7 +4914,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["resi.head","Head of Residential"],["jobprep.own","Job prep"], ...HAT_REGISTRY.map(h => [h.cap, h.label + (h.shared ? " (shared)" : "")])].map(([cap,label])=>{
+                        {[["resi.head","Head of Residential"],["comm.head","Head of Commercial"],["jobprep.own","Job prep"], ...HAT_REGISTRY.map(h => [h.cap, h.label + (h.shared ? " (shared)" : "")])].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -4850,7 +4926,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential.</div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -6665,7 +6741,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -24710,6 +24786,22 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   );
 }
 
+// ── Commercial mode (2026-09-25): the Drive chain, callable without the UI ──
+// Exactly what the Drive section's buttons do — createJobDriveFolder, then
+// pullJobDocsToDrive — so a commercial job can run it on its own (spec §6.7):
+// at Simpro import (name + Simpro # arrive complete, so the half-typed-name
+// problem that removed auto-create can't happen) and when a hand-made
+// commercial job gets its Simpro #. Progress streams onto job.docPull as today.
+async function runDriveChain(jobId, by) {
+  const mk = httpsCallable(functions, "createJobDriveFolder");
+  const r1 = await mk({ jobId });
+  const folderId = r1?.data?.folderId || "";
+  if (!folderId) throw new Error("Could not create the Drive folder.");
+  const pull = httpsCallable(functions, "pullJobDocsToDrive", { timeout: 540000 });
+  const r2 = await pull({ jobId, provider: "simpro", by: by || "" }).catch(e => ({ data: { error: e.message || String(e) } }));
+  return { folderId, created: !r1?.data?.alreadyLinked, pull: r2?.data || {} };
+}
+
 function DriveFilesSection({ job, onUpdate }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -25656,6 +25748,16 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","QC"];
+// ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Gear & Submittals","RFIs","Change Orders","Open Items"];
+const tabsFor = (job) => isCommercial(job) ? COMM_TABS : TABS;
+const COMM_SYSTEMS = [["gear","Service / gear"],["distribution","Distribution"],["lighting","Lighting"],["lightingControls","Lighting controls"],["branchPower","Branch power"],["fireAlarm","Fire alarm"],["lowVoltage","Low voltage"],["siteElectrical","Site electrical"],["generatorAts","Generator / ATS"],["ev","EV"],["other","Other"]];
+const COMM_MILESTONES = [["tempPower","Temp power"],["footing","Footing"],["underground","Underground"],["slab","Slab"],["walls","Walls"],["ceilings","Ceilings"],["permPower","Permanent power"],["startup","Startup"],["final","Final"]];
+const COMM_STAGES = [["","Auto (Pre-Con / Ready to Start)"],["inprogress","In Progress"],["hold","On Hold"],["closeout","Closeout"],["complete","Complete"]];
+const COMM_FIELDS = [["projectNo","Project #"],["gcPm","GC PM"],["gcSuper","GC Super"],["gcSuperPhone","Super phone"],["contractValue","Contract value"],["permitNo","Permit #"],["permitBy","Permit by","Homestead / GC / other"],["planSetRev","Plan set / rev"],["siteHours","Site hours"],["badgeReq","Badge / orientation"],["parkingNote","Parking"],["laydownNote","Laydown"],["tempPowerOwner","Temp power owner"]];
+const commOf = (j) => (j && j.commercial) || {};
+// One patch helper: always spreads the current nested object so a second write never wipes the first.
+const commPatch = (job, fn) => ({ commercial: fn({ ...(commOf(job)) }) });
 
 // ── Job Sections (v439, Koy 2026-09-24) ──────────────────────────────────────
 // "get rid of sections of a job card if they're not relevant to that job at
@@ -25816,7 +25918,7 @@ const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight
 // the Plan Changes view opens "Panelized Lighting"), so the page never shows
 // content under a tab bar with nothing selected.
 const tabsForJob = (job, activeTab) =>
-  TABS.filter(t => !SECTION_TABS[t] || !isSectionHidden(job, SECTION_TABS[t]) || t === activeTab);
+  tabsFor(job).filter(t => !SECTION_TABS[t] || !isSectionHidden(job, SECTION_TABS[t]) || t === activeTab);
 
 // Link fields on Plans & Links owned by a section.
 const LINK_FIELD_SECTION = { lightingLink:"panelized", panelLink:"panelSchedules", matterportLink:"matterport" };
@@ -27214,6 +27316,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
   // name/address/gc/phone from Simpro. Never overwrites typed text.
   const { simproPulling, doPullSimpro } = useSimproAutoPull(jobRef, u);
+  // Commercial mode (spec §6.7): a hand-made commercial job runs the Drive chain
+  // once its Simpro # has settled (2 s after the last keystroke, ≥ 4 digits) and
+  // the name is real. One shot per job; the import path has its own trigger.
+  const driveChainFiredRef = useRef("");
+  useEffect(() => {
+    if (!isCommercial(job) || job.driveFolderId || driveChainFiredRef.current === job.id) return;
+    const sn = String(job.simproNo || "").trim();
+    if (!/^\d{4,}$/.test(sn) || String(job.name || "").trim().length < 3) return;
+    const t = setTimeout(() => {
+      driveChainFiredRef.current = job.id;
+      runDriveChain(job.id, getIdentity()?.name || "")
+        .then(r => { if (r.folderId) u({ driveFolderId: r.folderId }); toast.success(`Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`); })
+        .catch(e => { driveChainFiredRef.current = ""; toast.error(`Drive folder: ${e.message || e}`); });
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [job.id, job.simproNo, job.driveFolderId, job.name, job.division]);   // eslint-disable-line
 
   // ── QC Fail ↔ Return Trip check-off sync ────────────────────────────
   // When a QC walk fails, every open `fromQC` item in roughPunch/finishPunch
@@ -27554,7 +27672,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     u(updatePatch);
   };
 
-  const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
+  const [tab, setTab] = useState(()=>initialTab && tabsFor(rawJob).includes(initialTab) ? initialTab : "Job Info");
+  // Commercial mode: if the job's division moved while open, a tab it no longer has falls back to Job Info.
+  useEffect(() => { if (!tabsFor(job).includes(tab)) setTab("Job Info"); }, [job.division]);   // eslint-disable-line
   // v433 usage tracking: count each job-tab open (once per device/user/day).
   // No-op unless the internal app shell set _usageUser (never on share pages,
   // never for contractors).
@@ -30664,6 +30784,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           )}
 
 
+          {tab==="Job Start"&&(
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>JOB START</div><HelpDot section="jobstart"/></div>
+              <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
+            </div>
+          )}
+          {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
+          {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
+
           {tab==="Change Orders"&&(
 
             <div>
@@ -31466,6 +31595,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
               )}
 
+              {!isCommercial(job) && (<>
               <Section label="Pre-Job Prep" color={C.teal} defaultOpen={!allPrepChecked(job)}>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {PREP_CHECKLIST_ITEMS.map((item,i)=>{
@@ -31507,7 +31637,77 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
+              </>)}
 
+              {isCommercial(job) && (()=>{
+                const c = commOf(job); const cu = (fn) => u(commPatch(job, fn));
+                const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
+                const inp = {width:"100%",padding:"7px 9px",border:`1px solid ${C.border}`,borderRadius:7,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",boxSizing:"border-box"};
+                const sys = c.systems || {}; const ms = c.milestones || {};
+                return (<>
+                <Section label="Commercial" color={C.teal} defaultOpen>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:"10px 14px"}}>
+                    {COMM_FIELDS.map(([k,l,ph]) => (
+                      <div key={k}>{lbl(l)}<input value={c[k]||""} placeholder={ph||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x,[k]:v})); }} style={inp}/></div>
+                    ))}
+                  </div>
+                  <div style={{marginTop:14}}>
+                    {lbl("Stage")}
+                    <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap"}}>
+                      {COMM_STAGES.map(([k,l]) => { const on = (c.stage||"")===k; return (
+                        <button key={k||"auto"} onClick={()=>cu(x=>({...x, stage:k, stageDate: k ? new Date().toLocaleDateString("en-US") : ""}))}
+                          style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?C.teal:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
+                    </div>
+                    <div style={{fontSize:10,color:C.dim,marginTop:6}}>{commPhase(job)!==null ? `Auto: Phase ${commPhase(job)} · ${COMM_PHASE_BY_N[commPhase(job)].label} (pre-con, from the Job Start checklist)` : (c.stage ? `Set ${c.stageDate||""}` : "Auto: Ready to Start — all 12 pre-con phases closed. Set In Progress when the crew mobilizes.")}</div>
+                    {commPhase(job)!==null && (
+                      <button onClick={()=>setTab("Job Start")}
+                        style={{marginTop:10,display:"inline-flex",alignItems:"center",gap:8,padding:"9px 14px",borderRadius:8,border:"none",background:C.teal,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",letterSpacing:"0.03em"}}>
+                        Open the Job Start checklist — Phase {commPhase(job)} of 12 · {commPhaseDone(job, commPhase(job))}/{COMM_PHASE_BY_N[commPhase(job)].items.length} done
+                      </button>
+                    )}
+                  </div>
+                </Section>
+                <Section label="Scope by system" color={C.teal} defaultOpen={!Object.values(sys).some(Boolean)}>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {COMM_SYSTEMS.map(([k,l]) => { const on=!!sys[k]; return (
+                      <span key={k} onClick={()=>cu(x=>({...x, systems:{...(x.systems||{}), [k]:!on}}))}
+                        style={{display:"inline-flex",alignItems:"center",gap:6,borderRadius:99,fontSize:10,fontWeight:700,letterSpacing:"0.05em",cursor:"pointer",userSelect:"none",minHeight:30,padding:"0 11px",
+                          border:`1px ${on?"solid":"dashed"} ${on?"#46916A":C.muted}`,color:on?"#46916A":C.dim,background:on?"#46916A0F":C.surface}}>
+                        <span>{on?"✓":"—"}</span>{l.toUpperCase()}</span>); })}
+                  </div>
+                  <div style={{fontSize:10,color:C.dim,marginTop:8}}>What this job has (not a checklist). The gear log and the on-site phases group by system; an off system just doesn't appear. The pre-con checklist is on the Job Start tab.</div>
+                </Section>
+                <Section label="Milestones" color={C.teal} defaultOpen={false}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:"10px 14px"}}>
+                    {COMM_MILESTONES.map(([k,l]) => (
+                      <div key={k}>{lbl(l)}<DateInp value={ms[k]||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, milestones:{...(x.milestones||{}), [k]:v}})); }}/></div>
+                    ))}
+                  </div>
+                  <div style={{fontSize:10,color:C.dim,marginTop:8}}>The dates the Forecast shows for a commercial job and the Ufer / underground reminders key on (from the GC schedule — phases 2 and 6).</div>
+                </Section>
+                </>);
+              })()}
+              {can(identity,"job.division") && (
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",margin:"6px 0 12px"}}>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>DIVISION</span>
+                  <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                    {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => {
+                      const on = jobDivision(job) === k;
+                      return <button key={k} disabled={on} onClick={async()=>{
+                        const name = job.name || "this job";
+                        const msg = k==="commercial"
+                          ? `Move ${name} to Commercial? It leaves every residential board and its residential tabs are hidden. Nothing is deleted.`
+                          : `Move ${name} to Residential? It leaves the commercial boards. Nothing is deleted.`;
+                        if (!await showConfirm(msg)) return;
+                        u({ division: k==="commercial" ? "commercial" : "" });   // "" reads as resi; the key is never deleted (patch funnel)
+                        toast.success(k==="commercial" ? "Moved to Commercial" : "Moved to Residential");
+                      }} style={{border:"none",padding:"6px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.05em",cursor:on?"default":"pointer",fontFamily:"inherit",
+                           background: on ? (k==="commercial"?C.teal:C.accent) : "#fff", color: on ? "#fff" : C.dim}}>{l}</button>;
+                    })}
+                  </div>
+                  <span style={{fontSize:10,color:C.dim}}>Set from Simpro's Business Group at import. Moving a job writes only its division.</span>
+                </div>
+              )}
               <Section label="Admin" color={C.dim} defaultOpen={!(job.jobAccount && job.preLien)}>
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
@@ -33216,10 +33416,22 @@ const STAGE_SECTIONS = [
 
 ];
 
+// ── Commercial Job Board stages (spec §7). Pre-Con = the 12 Job Start phases; Ready to Start = all closed. ──
+const COMM_STAGE_SECTIONS = [
+  { key:"commPrecon",     label:"Pre-Con",        color:"#3E7D7A", test: j => !j.tempPed && !j.quickJob && commPhase(j) !== null },
+  { key:"commReady",      label:"Ready to Start", color:"#3E7D5A", test: j => !j.tempPed && !j.quickJob && commPhase(j) === null && !(commOf(j).stage) },
+  { key:"commInProgress", label:"In Progress",    color:"#3B5BA5", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "inprogress" },
+  { key:"commHold",       label:"On Hold",        color:"#B0892C", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "hold" },
+  { key:"commCloseout",   label:"Closeout",       color:"#6A5E97", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "closeout" },
+  { key:"completed",      label:"Complete",       color:"#3E7D5A", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "complete" },
+];
+// Quick jobs / temp peds keep their residential sections in front so an imported commercial temp ped still has a home.
+const COMM_BOARD_SECTIONS = [...STAGE_SECTIONS.filter(sec => sec.key.startsWith("quick") || sec.key.startsWith("tempPed")), ...COMM_STAGE_SECTIONS];
 
-function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true }) {
 
-  const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
+function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true, sections = STAGE_SECTIONS }) {
+
+  const initCollapsed = () => Object.fromEntries(sections.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
@@ -33229,7 +33441,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
     <div>
 
-      {STAGE_SECTIONS.map(sec => {
+      {sections.map(sec => {
 
         const sJobs = (() => {
           const filtered = jobs.filter(sec.test);
@@ -33836,10 +34048,39 @@ const matchesForeman = (job, name) => {
 // behavior-identical — just no hardcoded name anymore.
 let _taskOwnerFallback = "";
 function _setTaskOwnerFallback(name) { _taskOwnerFallback = name || ""; }
+// ── Commercial auto-task rules (spec §6.5). Rows carry category "commstart" + a
+// route: "commstart" (comm.precon), "commsite" (comm.site), "commhead" (no hat →
+// Head of Commercial). Residential rules never run for a commercial job.
+function commercialTasks(job, tasks) {
+  const c = job.commercial || {}; const p = commPhase(job);
+  const rows = Array.isArray(c.submittals) ? c.submittals : [];
+  const ms = c.milestones || {};
+  const within = (dateStr, days) => { const d = parseAnyDate(dateStr); if (!d) return false; const diff = (d.getTime() - Date.now()) / 864e5; return diff <= days; };
+  const base = { jobId: job.id, jobName: job.name, type: "auto", category: "commstart", foreman: job.foreman || "", color: C.teal, cleared: false };
+  if (p !== null) {
+    const ph = COMM_PHASE_BY_N[p]; const done = commPhaseDone(job, p); const nxt = ph.items.find(([k]) => commItemState(job, p, k) === "todo");
+    const due = p === 9 ? (ms.footing || "") : (p === 11 || p === 12) ? (ms.slab || "") : p === 8 ? (ms.tempPower || "") : "";
+    tasks.push({ ...base, id: job.id + "_comm_phase", route: ph.owner === "site" ? "commsite" : "commstart",
+      title: `Phase ${p} · ${ph.label}: ${job.name || "Untitled"}`, desc: `${done}/${ph.items.length} done${nxt ? ` — NEXT: ${nxt[1]}` : ""}`, dueDate: due });
+    commOwedItems(job).forEach(o => tasks.push({ ...base, id: `${job.id}_comm_owed_${o.n}_${o.k}`, route: COMM_PHASE_BY_N[o.n].owner === "site" ? "commsite" : "commstart", color: "#B0892C",
+      title: `Owed: ${o.label} (phase ${o.n}) on ${job.name || "Untitled"}`, desc: "Moved on with this item still open — check it when it's done", dueDate: "" }));
+    if (ms.footing && within(ms.footing, 7) && !commPhaseClosed(job, 9)) tasks.push({ ...base, id: job.id + "_comm_ufer", route: "commstart", color: C.red, title: `Ufer before pour: ${job.name || "Untitled"}`, desc: `Footing ${ms.footing} — phase 9 not closed`, dueDate: ms.footing });
+    if (ms.slab && within(ms.slab, 7) && !commPhaseClosed(job, 11)) tasks.push({ ...base, id: job.id + "_comm_underground", route: "commstart", color: C.red, title: `Underground before slab: ${job.name || "Untitled"}`, desc: `Slab ${ms.slab} — phase 11 not closed`, dueDate: ms.slab });
+  } else if (!c.stage && (!job.foreman || job.foreman === "Unassigned")) {
+    tasks.push({ ...base, id: job.id + "_comm_ready", route: "commhead", color: C.green, title: `Ready to start — assign a foreman: ${job.name || "Untitled"}`, desc: "All 12 pre-con phases closed", dueDate: "" });
+  }
+  const open = rows.filter(r => r.releasedAt && !r.deliveredAt);
+  if (open.length) {
+    const monday = (() => { const d = new Date(); const day = d.getDay(); const diff = (day === 0 ? 6 : day - 1); d.setDate(d.getDate() - diff); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; })();
+    tasks.push({ ...base, id: job.id + "_comm_gearcheck", route: "commstart", title: `Gear check: ${job.name || "Untitled"}`, desc: `${open.length} released, not delivered — call the vendor, confirm ship dates`, dueDate: monday });
+    open.forEach(r => { const ps = parseAnyDate(r.promisedShip); if (ps && ps.getTime() < Date.now()) tasks.push({ ...base, id: `${job.id}_comm_gearlate_${r.id || r.item}`, route: "commstart", color: C.red, title: `Gear late: ${r.item || "item"} on ${job.name || "Untitled"}`, desc: `Promised ${r.promisedShip}, not delivered`, dueDate: r.promisedShip }); });
+  }
+}
 function computeTasks(jobs, opts) {
   const unassignedOwner = (opts && opts.unassignedOwner !== undefined) ? opts.unassignedOwner : _taskOwnerFallback;
   const tasks = [];
   jobs.forEach(job => {
+    if (isCommercial(job)) { commercialTasks(job, tasks); return; }   // Commercial mode: its own rules, none of the residential ones
     const foreman = job.foreman || unassignedOwner;
     const rs = job.roughStatus || "";
     const fs = job.finishStatus || "";
@@ -35905,8 +36146,17 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
 
 // ── Simpro Crew Schedule ──────────────────────────────────────
 
-function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSelectJob }) {
-  const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro
+function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSelectJob, strictDivision = false }) {
+  const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro (every division)
+  // Commercial mode (strictDivision): only the Simpro entries of this division's
+  // jobs exist as far as the rest of the component is concerned — the staff list,
+  // the per-day blocks and the crew filter all read `scheduleV`. Without this,
+  // a residential entry still drew a block on the day (no name, just the crew)
+  // because its ProjectID matched no job on the commercial board (Koy, v456:
+  // "the commercial side is still showing resi side jobs just not the names").
+  // Residential passes false and reads the raw list, byte-identical to before.
+  const modeSnos = useMemo(() => strictDivision ? new Set((jobs || []).map(j => String(j.simproNo || "")).filter(Boolean)) : null, [jobs, strictDivision]);
+  const scheduleV = useMemo(() => (schedule && modeSnos) ? schedule.filter(s => modeSnos.has(String((s && s.Project && s.Project.ProjectID) || (s && s.Reference) || ""))) : schedule, [schedule, modeSnos]);
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState(null);
   const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
@@ -35959,12 +36209,12 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
   // All unique staff names across job-type entries
   const allStaff = useMemo(() => {
-    if (!schedule) return [];
+    if (!scheduleV) return [];
     const names = [...new Set(
-      schedule.filter(s => s.Type === "job").map(s => s.Staff?.Name).filter(Boolean)
+      scheduleV.filter(s => s.Type === "job").map(s => s.Staff?.Name).filter(Boolean)
     )].sort();
     return names;
-  }, [schedule]);
+  }, [scheduleV]);
 
   // Match a SimPro staff name to a user's full name. First-name-only matching
   // conflated people who share a first name (two Jacobs landed in each other's
@@ -36098,8 +36348,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
   // Group entries by date, filtered by person
   const byDate = useMemo(() => {
-    if (!schedule) return {};
-    const jobEntries = schedule.filter(s => s.Type === "job");
+    if (!scheduleV) return {};
+    const jobEntries = scheduleV.filter(s => s.Type === "job");
     const crewMatch  = personFilter.startsWith("crew_")  ? foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter) : null;
     const filtered = personFilter === "all" ? jobEntries
       : personFilter === "mycrew" ? jobEntries.filter(s => myCrewNames.includes(s.Staff?.Name))
@@ -36111,15 +36361,15 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       map[s.Date].push(s);
     });
     return map;
-  }, [schedule, personFilter, myCrewNames, foremanCrews]);
+  }, [scheduleV, personFilter, myCrewNames, foremanCrews]);
 
   // For each date, one block per job showing all crew with earliest start → latest end
   const crewByDateAndJob = useMemo(() => {
-    if (!schedule) return {};
+    if (!scheduleV) return {};
     const out = {};
     weekDates.forEach(d => {
       const ymd = toYMD(d);
-      const dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
+      const dayEntries = (scheduleV || []).filter(s => s.Type === "job" && s.Date === ymd);
 
       const byProject = {};
       dayEntries.forEach(s => {
@@ -36139,7 +36389,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       out[ymd] = blocks.sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
     });
     return out;
-  }, [schedule, weekDates]);
+  }, [scheduleV, weekDates]);
 
   const todayYMD = toYMD(new Date());
 
@@ -36301,8 +36551,65 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // ── QC Walk tracker (admin/manager) ──────────────────────────────────────
 // One place for every job's QC walk: status, stage (rough/finish), scheduled
 // date, and open failed items. Read-only aggregation over the jobs list.
-function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
+// ── QC walk tracker helpers (module level since v460 so My Day's "QC walks"
+// category header can show the need-action count without opening the tracker).
+const _localYmdToday = () => { const t=new Date(); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`; };
+const qcCountOpen = (punch, onlyFromQC=false) => {
+  // Route everything through normFloor so legacy ARRAY-shaped floors count too
+  // (they used to be skipped here while the job's QC tab showed the items).
+  const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
+  if(!punch) return 0;
+  if(Array.isArray(punch)) return punch.filter(ok).length; // legacy flat punch list (old qcPunch)
+  const fl = (v) => {
+    if(!v) return 0;
+    const f = normFloor(v); // handles both floor shapes: {general,rooms,hotcheck} and legacy []
+    return f.general.filter(ok).length + f.hotcheck.filter(ok).length +
+      f.rooms.reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
+  };
+  return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
+};
+// One row per phase per job that has any QC activity (a status or open QC items).
+function qcWalkRows(jobs, q="") {
+  const s = String(q||"").trim().toLowerCase();
+  const out = [];
+  (jobs||[]).forEach(j=>{
+    const label = jobLabel(j)||"Untitled";
+    if(s && !label.toLowerCase().includes(s)) return;
+    // Rough QC (legacy qcStatus is rough-driven). Date is manual only.
+    const rStatus=j.qcStatus||"", rFailed=qcCountOpen(j.roughPunch,true);
+    if(rStatus||rFailed>0){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||""), failed:rFailed, started:parseStage(j.roughStage)>0 }); }
+    // Finish QC
+    const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=qcCountOpen(j.finishPunch,true)+qcCountOpen(j.qcPunch);
+    if(fStatus||fFailed>0){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||""), failed:fFailed, started:parseStage(j.finishStage)>0 }); }
+  });
+  return out;
+}
+// Smart bucketing: a resulted status (pass/fail) goes to its bucket regardless
+// of date; a "scheduled" walk whose date has passed moves out of Scheduled into
+// "Past due — log result" so it can't be forgotten.
+function qcBucketOf(r, todayYmd) {
+  if(r.status==="fail") return "failed";
+  if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
+  if(r.status==="scheduled"){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
+  if(r.status==="needs") return "needs";
+  return "other";
+}
+// {walks, needAction, scheduled} for a header pill: need action = failed + past due + needs scheduling.
+function qcTrackerCounts(jobs) {
+  const today = _localYmdToday(); const rows = qcWalkRows(jobs);
+  let needAction = 0, scheduled = 0;
+  rows.forEach(r => { const b = qcBucketOf(r, today); if (b==="failed"||b==="overdue"||b==="needs") needAction++; else if (b==="scheduled") scheduled++; });
+  return { walks: rows.length, needAction, scheduled };
+}
+
+// v457: the QC tracker lives on My Day now (Koy: "My QC tab that I made to track
+// QCs, I want all that moved into my My Day section only, so I can track
+// everything that I need to track"). `embedded` renders it as a folded card in
+// My Day's side column instead of a page of its own; the buckets, the Schedule
+// date pick, the status select and the writes are the same code either way.
+function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
   const [q, setQ] = useState("");
+
   const [collapsed, setCollapsed] = useState(()=>new Set(["failed","overdue","needs","scheduled","other","done","unmatched"]));
   const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
   const [showDates, setShowDates] = useState(()=>{ try { return localStorage.getItem("qc.showDates")!=="0"; } catch { return true; } });
@@ -36339,50 +36646,9 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
     scheduleOnCal(r, dateStr);
     setSchedFor(null);
   };
-  const countOpen = (punch, onlyFromQC=false) => {
-    // BUG FIX: this used to skip legacy ARRAY-shaped floors entirely
-    // (`if(Array.isArray(f)) return 0`), so jobs whose punch floors are still
-    // in the old flat-array shape showed their QC items inside the job (the
-    // QC tab normalizes via normFloor) but counted 0 here and never got a
-    // tracker row. Route everything through normFloor so both surfaces agree.
-    const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
-    if(!punch) return 0;
-    if(Array.isArray(punch)) return punch.filter(ok).length; // legacy flat punch list (old qcPunch)
-    const fl = (v) => {
-      if(!v) return 0;
-      const f = normFloor(v); // handles both floor shapes: {general,rooms,hotcheck} and legacy []
-      return f.general.filter(ok).length + f.hotcheck.filter(ok).length +
-        f.rooms.reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
-    };
-    return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
-  };
-  const rows = useMemo(()=>{
-    const s = q.trim().toLowerCase();
-    const out = [];
-    (jobs||[]).forEach(j=>{
-      const label = jobLabel(j)||"Untitled";
-      if(s && !label.toLowerCase().includes(s)) return;
-      // Rough QC (legacy qcStatus is rough-driven). Date is manual only.
-      const rStatus=j.qcStatus||"", rFailed=countOpen(j.roughPunch,true);
-      if(rStatus||rFailed>0){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||""), failed:rFailed, started:parseStage(j.roughStage)>0 }); }
-      // Finish QC
-      const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=countOpen(j.finishPunch,true)+countOpen(j.qcPunch);
-      if(fStatus||fFailed>0){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||""), failed:fFailed, started:parseStage(j.finishStage)>0 }); }
-    });
-    return out;
-  }, [jobs, q]);
-
-  const _td=new Date(); const todayYmd=`${_td.getFullYear()}-${String(_td.getMonth()+1).padStart(2,"0")}-${String(_td.getDate()).padStart(2,"0")}`;
-  // Smart bucketing: a resulted status (pass/fail) goes to its bucket regardless
-  // of date; a "scheduled" walk whose date has passed moves out of Scheduled into
-  // "Past due — log result" so it can't be forgotten.
-  const bucketOf = (r) => {
-    if(r.status==="fail") return "failed";
-    if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
-    if(r.status==="scheduled"){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
-    if(r.status==="needs") return "needs";
-    return "other";
-  };
+  const rows = useMemo(()=>qcWalkRows(jobs, q), [jobs, q]);
+  const todayYmd = _localYmdToday();
+  const bucketOf = (r) => qcBucketOf(r, todayYmd);
   const BUCKETS = [
     {key:"failed",    label:"Failed — needs return", color:"#B23A3A"},
     {key:"overdue",   label:"Past due — log result", color:"#B0892C"},
@@ -36397,17 +36663,28 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   );
   const fmtD = (d) => { if(!d) return ""; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 
+  const openCount = rows.filter(r=>{ const b=bucketOf(r); return b==="failed"||b==="overdue"||b==="needs"; }).length;
+  const schedCount = rows.filter(r=>bucketOf(r)==="scheduled").length;
   return (
-    <div style={{padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4}}>
+    <div style={embedded ? {marginTop:4,paddingTop:10,borderTop:`1px dashed ${C.border}`} : {padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4,...(embedded?{gap:8,marginBottom:8}:{})}}>
+        {embedded ? (
+          <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim}}>All QC walks</span>
+            <span style={{fontSize:12,color:C.muted}}>{rows.length}</span>
+            {openCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#B23A3A",background:"#B23A3A18",borderRadius:5,padding:"1px 6px"}}>{openCount} need action</span>}
+            {schedCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#3B5BA5",background:"#3B5BA518",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
+          </span>
+        ) : (<>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
         <div style={{fontSize:12,color:C.dim}}>{rows.length} QC walks (rough + finish)</div>
+        </>)}
         <span style={{flex:1}}/>
         <button onClick={toggleDates} title="Show/hide scheduled dates" style={{padding:"7px 12px",fontSize:12,fontWeight:600,border:`1px solid ${showDates?C.accent:C.border}`,borderRadius:8,background:showDates?`${C.accent}15`:"transparent",color:showDates?C.accent:C.dim,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{showDates?"Dates: on":"Dates: off"}</button>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search jobs…"
-          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:narrow?"100%":200,boxSizing:"border-box"}}/>
+          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:(narrow||embedded)?"100%":200,boxSizing:"border-box"}}/>
       </div>
-      <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>
+      {!embedded && <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>}
 
       {BUCKETS.map(b=>{
         let list = rows.filter(r=>bucketOf(r)===b.key);
@@ -36455,7 +36732,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
           </div>
         );
       })}
-      {rows.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+      {rows.length===0 && <div style={{textAlign:"center",padding:embedded?"14px 0":"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
 }
@@ -36767,7 +37044,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
   );
 }
 
-function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, foremenList: _allForemen, identity, onUpdateJob, canEdit=false, users=[], upcoming=[] }) {
+function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJob, onSelectUpcoming, foremenList: _allForemen, identity, onUpdateJob, canEdit=false, users=[], upcoming=[] }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("crew"); // crew | kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
@@ -36836,6 +37113,12 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
 
   // Simpro schedule data — which jobs are actually scheduled this month?
   const [simproSchedule, setSimproSchedule] = useState([]);
+  // Commercial mode (strictDivision): every Simpro overlay — calendar pills, the
+  // planner's "also on <job> (Simpro)" chips, Simpro hours — is limited to the
+  // Simpro jobs of the division being shown. Residential is untouched (prop false).
+  const modeSnos = useMemo(() => strictDivision ? new Set((_allJobs || []).map(j => String(j.simproNo || "")).filter(Boolean)) : null, [_allJobs, strictDivision]);
+  const keepSimproEntry = useCallback((e) => !modeSnos || modeSnos.has(String((e && e.Project && e.Project.ProjectID) || "")), [modeSnos]);
+  const simproScheduleV = useMemo(() => modeSnos ? simproSchedule.filter(keepSimproEntry) : simproSchedule, [simproSchedule, modeSnos, keepSimproEntry]);
   useEffect(() => {
     const year  = calMonth.getFullYear();
     const month = String(calMonth.getMonth()+1).padStart(2,"0");
@@ -36882,7 +37165,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   // Map of date (YYYY-MM-DD) → Set of Simpro ProjectIDs scheduled that day
   const simproByDate = useMemo(() => {
     const map = new Map();
-    simproSchedule.forEach(entry => {
+    simproScheduleV.forEach(entry => {
       const pid = entry.Project?.ProjectID;
       const date = entry.Date; // "YYYY-MM-DD"
       if (!pid || !date) return;
@@ -36890,14 +37173,14 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
       map.get(date).add(String(pid));
     });
     return map;
-  }, [simproSchedule]);
+  }, [simproScheduleV]);
 
   // Set of all Simpro ProjectIDs scheduled on ANY date (for "is job on Simpro at all?" check)
   const simproAllSnos = useMemo(() => {
     const s = new Set();
-    simproSchedule.forEach(entry => { const pid = entry.Project?.ProjectID; if (pid) s.add(String(pid)); });
+    simproScheduleV.forEach(entry => { const pid = entry.Project?.ProjectID; if (pid) s.add(String(pid)); });
     return s;
-  }, [simproSchedule]);
+  }, [simproScheduleV]);
 
   // ── Crew Planner state ──────────────────────────────────────
   const [crewWeekOff, setCrewWeekOff] = useState(0);
@@ -37075,11 +37358,12 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   // ── Simpro schedule overlay for the planner ─────────────────────────────
   // Fetches just the displayed Mon-Fri window (5 days) so we can show
   // "Scheduled in Simpro" pills inside each planner cell. Separate from the
-  // calMonth-keyed simproSchedule fetch above — the two views drive different
+  // calMonth-keyed simproScheduleV fetch above — the two views drive different
   // date ranges and we don't want them stomping on each other. Re-fetches on
   // window focus so a Simpro change in another tab is reflected within ~1
   // round trip when Koy comes back to this tab.
   const [crewWeekSimpro, setCrewWeekSimpro] = useState([]);
+  const crewWeekSimproV = useMemo(() => modeSnos ? crewWeekSimpro.filter(keepSimproEntry) : crewWeekSimpro, [crewWeekSimpro, modeSnos, keepSimproEntry]);
   useEffect(() => {
     if(!crewDays || !crewDays[0] || !crewDays[4]) return;
     const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -37103,10 +37387,10 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   // when deduping against manual planner pills.
   const simproPeopleByJobDay = useMemo(() => {
     const map = new Map();
-    if(!crewWeekSimpro.length) return map;
+    if(!crewWeekSimproV.length) return map;
     const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const weekYMDs = (crewDays||[]).map(ymd);
-    crewWeekSimpro.forEach(entry => {
+    crewWeekSimproV.forEach(entry => {
       const pid = entry.Project?.ProjectID;
       const date = entry.Date;
       const staffName = entry.Staff?.Name;
@@ -37344,10 +37628,10 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   // confirmed in Simpro but not yet (or never) typed into the planner.
   const simproHoursByJobDay = useMemo(() => {
     const map = new Map();
-    if(!crewWeekSimpro.length) return map;
+    if(!crewWeekSimproV.length) return map;
     const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const weekYMDs = (crewDays||[]).map(ymd);
-    crewWeekSimpro.forEach(entry => {
+    crewWeekSimproV.forEach(entry => {
       const pid = entry.Project?.ProjectID;
       const date = entry.Date;
       if(!pid || !date) return;
@@ -37367,10 +37651,10 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, onSelectUpcoming, for
   // map spans them: earliest start, latest end.
   const simproTimeByPersonJobDay = useMemo(() => {
     const map = new Map();
-    if(!crewWeekSimpro.length) return map;
+    if(!crewWeekSimproV.length) return map;
     const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const weekYMDs = (crewDays||[]).map(ymd);
-    crewWeekSimpro.forEach(entry => {
+    crewWeekSimproV.forEach(entry => {
       const pid = entry.Project?.ProjectID;
       const date = entry.Date;
       const staff = entry.Staff?.Name;
@@ -42682,6 +42966,12 @@ function getCoordinatorDuties(job) {
 function getCompanyDuties(job) {
   if (!job || job.tempPed) return [];
   if ((job.prepStage || "") === "Job Prep Complete") return [];
+  // v460: PREP NOT NEEDED (every item N/A in prepNA) and an all-ticked checklist
+  // are prep-complete everywhere else (allPrepChecked) — this row only read the
+  // legacy prepStage field, so skipped jobs kept a "Job prep — not started" row
+  // on My Day (Koy: "i have marked them as job prep not needed, so they
+  // shouldn't show there anymore").
+  if (allPrepChecked(job)) return [];
   if (parseStage(job.roughStage) !== 0) return [];
   const prep = job.prepStage || "";
   return [{ jobId: job.id, jobName: job.name || job.id, foreman: job.foreman || "",
@@ -46818,7 +47108,7 @@ function GCPortalManager({ jobs, identity }) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity, onUpdateJob }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity, onUpdateJob, divisionMismatches = [], onScanDivisions }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -46986,6 +47276,34 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
         </button>
       </SettingsSection>
 
+      {/* Commercial division — compare every job's app division with Simpro's Business Group (admin) */}
+      {getAccess(identity)==="admin" && onScanDivisions && (() => {
+        const byId = new Map((jobs||[]).map(j => [j.id, j]));
+        const live = (divisionMismatches||[]).filter(m => { const j = byId.get(m.jobId); return j && ((jobDivision(j)==="commercial") !== (m.simproDivision==="commercial")); });
+        const apply = (m) => { const j = byId.get(m.jobId); if (!j) return; const v = m.simproDivision==="commercial" ? "commercial" : ""; onUpdateJob({ ...j, division: v }, { division: v }); };
+        return (
+          <SettingsSection title="COMMERCIAL DIVISION" accent={{bg:"#E8F1F0", border:"#BFD9D6", text:"#2E5F5C"}}>
+            <div style={{fontSize:11,color:"#2E5F5C",marginBottom:10,lineHeight:1.5}}>
+              Each job's division (Residential / Commercial) comes from Simpro's <b>Business Group</b> at import. This checks every job that has a Simpro # against Simpro right now and lists the ones that disagree, so today's commercial jobs get sorted without hand-editing. Read-only on Simpro; nothing changes until you tap Apply.
+            </div>
+            <button onClick={onScanDivisions} style={{padding:"8px 14px",borderRadius:8,border:"1px solid #BFD9D6",background:"#fff",color:"#2E5F5C",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Check divisions against Simpro</button>
+            {live.length > 0 ? (
+              <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>
+                {live.map(m => (
+                  <div key={m.jobId} style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",background:"#fff",border:"1px solid #E1E4E9",borderRadius:8,padding:"8px 12px"}}>
+                    <div style={{flex:1,minWidth:200}}><div style={{fontSize:13,fontWeight:700,color:C.text}}>{m.name||"(unnamed)"}</div><div style={{fontSize:11,color:C.dim}}>Simpro #{m.simproNo} · Business Group: <b>{m.businessGroup||"—"}</b> · app says {m.appDivision==="commercial"?"Commercial":"Residential"}</div></div>
+                    <button onClick={()=>apply(m)} style={{padding:"6px 12px",borderRadius:7,border:"none",background:m.simproDivision==="commercial"?C.teal:C.accent,color:"#fff",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Make {m.simproDivision==="commercial"?"Commercial":"Residential"}</button>
+                  </div>
+                ))}
+                <button onClick={()=>live.forEach(apply)} style={{alignSelf:"flex-start",padding:"6px 12px",borderRadius:7,border:"1px solid #BFD9D6",background:"#fff",color:"#2E5F5C",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Apply all ({live.length})</button>
+              </div>
+            ) : (
+              <div style={{fontSize:11,color:"#5E6670",marginTop:8}}>{(divisionMismatches||[]).length ? "Everything listed by the last scan has been applied." : "No scan yet, or the last scan found every job already in the right division."}</div>
+            )}
+          </SettingsSection>
+        );
+      })()}
+
       {/* My Preferences — personal defaults (scoped to the current user) */}
       {identity?.id && onSaveUsers && (
         <SettingsSection title="MY PREFERENCES" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
@@ -47024,6 +47342,19 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           <div style={{fontSize:10,color:"#5E6670",marginTop:6,lineHeight:1.4}}>
             Applied the next time the schedule loads. Saved to your user record — not shared with other people.
           </div>
+          {can(identity,"commercial.view") && (
+            <div style={{marginTop:16}}>
+              <label style={{display:"block",fontSize:10,color:"#2E477D",fontWeight:700,letterSpacing:"0.05em",textTransform:"uppercase",marginBottom:4}}>Land in</label>
+              <select value={identity.defaultMode||""}
+                onChange={async (e)=>{ const v=e.target.value; const updatedList=(users||[]).map(u => u.id===identity.id ? {...u, defaultMode:v} : u);
+                  try { await onSaveUsers(updatedList); toast.success(v ? "You'll land in Commercial" : "You'll land in Residential"); } catch (err) { toast.error("Couldn't save preference: " + (err.message||"unknown")); } }}
+                style={{width:"100%",maxWidth:360,padding:"9px 12px",borderRadius:8,border:"1px solid #CDD9EC",background:"#fff",fontSize:13,fontFamily:"inherit",color:"#1B1F24",cursor:"pointer"}}>
+                <option value="">Residential (default)</option>
+                <option value="commercial">Commercial</option>
+              </select>
+              <div style={{fontSize:10,color:"#5E6670",marginTop:6,lineHeight:1.4}}>Which division the app opens in when you log in. The RESI / COMMERCIAL switch in the header changes it any time.</div>
+            </div>
+          )}
         </SettingsSection>
       )}
 
@@ -49913,13 +50244,26 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-27 · App SW version: v452
+**Last manifest update:** 2026-09-27 · App SW version: v462
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
-- **My Day — rows read properly on a phone again** · 'shipped 2026-09-27' · 'SW v452' · Koy (screenshot): *"My day looks terrible on mobile."* The v446 row put the five action buttons (pin, done, snooze, photo, Reply) beside the text in one non-wrapping flex row, so on a phone the text column was crushed to a few characters per line. Now on narrow screens ('narrow', under 900 px) the row wraps: the text block takes the full width first and the buttons sit on their own line, right-aligned; wide screens are unchanged. **Why it won't lose data:** render-only, no data or handler change.
+- **My Day — rows read properly on a phone again** · 'shipped 2026-09-27' · 'SW v462' · Koy (screenshot): *"My day looks terrible on mobile."* The v446 row (and the v461 urgent button) put the five action buttons (pin, done, snooze, photo, Reply) beside the text in one non-wrapping flex row, so on a phone the text column was crushed to a few characters per line. Now on narrow screens ('narrow', under 900 px) the row wraps: the text block takes the full width first and the buttons sit on their own line, right-aligned; wide screens are unchanged. **Why it won't lose data:** render-only, no data or handler change.
+- **My Day — every row can be marked urgent** · 'shipped 2026-09-26' · 'SW v461' · Koy: *"Every task should be able to be marked as urgent."* Urgency existed only on need docs ('priority', set on the + sheet or in Edit); auto reminders, duty rows (QC walks, start POs, prep), punch items, redline walks and scan rows had no doc to carry it. New **!** button in every actionable row's action cluster (Mine, Focus, and rows the viewer may reassign) flips Urgent ↔ Normal: a need row writes the doc's own 'priority' through 'patchNeed' (thread note "changed: urgent", the same write Edit does); a derived row writes 'settings/mydayPriority.byKey[rowKey] = { prio, by, at }' (one shared doc, merge-on-one-key like the Focus pins, so the mark is company-wide and survives reloads; "" clears). 'rowPriority(row, map)' stamps derived rows in Mine, With others and the foreman's On-head list before the stale split, so the existing sort ('compareMyDayRows'), red edge, URGENT tag and category float all apply unchanged. Row keys are stable ('auto_<taskId>', 'duty_<jobId>_<dutyId>', 'punch_<jobId>_<itemId>', 'redline_<walkId>', 'scan_<taskId>'). Harness 'scripts/needs-dryrun.js' covers 'rowPriority'. Guide 'myday.html' updated. Not in this ship: Low from the ! button (Edit still does Low on docs), the tab badge (docs only, as before). **Why it won't lose data:** need docs get the existing dotted 'data.priority' patch; derived rows write one new key under a new 'settings/mydayPriority' doc with 'merge:true' (never the whole map; 'settings' is already open-write, no rules change); nothing on any job is written.
+- **My Day — jobs marked PREP NOT NEEDED leave the Job prep category** · 'shipped 2026-09-26' · 'SW v460' · Koy: *"there is also a bunch of job prep in that section where i have marked them as job prep not needed, so they shouldn't show there anymore."* Two things feed Mine → **Job prep**: the auto "Pre Job Prep" task (already gated on 'allPrepChecked', which counts N/A items as handled since v388) and the company duty row "Job prep — not started" / "Prep: <stage>" from 'getCompanyDuties', which only checked the legacy 'prepStage === "Job Prep Complete"'. A job skipped with PREP NOT NEEDED (every item in 'prepNA') — or with every item ticked but a stale stage field — kept that duty row. 'getCompanyDuties' now returns nothing when 'allPrepChecked(job)' is true, the same test every other prep gate uses. **Also in this ship** (Koy: *"put the 2 need action so its visible without clicking on the qc dropdown as well"*): the tracker's row / bucket logic is lifted to module level ('qcCountOpen', 'qcWalkRows', 'qcBucketOf', 'qcTrackerCounts') so Mine's **QC walks** category header carries the red *N need action* and blue *N scheduled* pills while folded; 'QCView' uses the same helpers. **Why it won't lose data:** read-only derivation; nothing written or changed on the job.
+- **My Day — one QC walks section: the tracker lives inside Mine → QC walks** · 'shipped 2026-09-26' · 'SW v459' · Koy, on v457's side card: *"why do i have two qc tabs. keep the one on the bottom left and make it have everything qc."* The bottom-left one is Mine's **QC walks** category (the auto rows — "Schedule QC Walk", QC duty rows); the right one was the tracker card. The tracker ('QCView embedded') now renders **inside** that category card, under its own rows, with a small "ALL QC WALKS · N" label (+ *need action* / *scheduled* pills), the Dates toggle, search and the same buckets. 'withQcCat' keeps a "QC walks" category in Mine even when no QC row is on the viewer today, so the tracker always has a home (0 rows shown on the header). The side-column card is gone; the tracker's own fold state ('qc.cardOpen') is retired — the category's fold is the only fold. Category view only (Job / Person views show Mine differently). Guide 'myday.html' updated. **Why it won't lose data:** render placement only; the same two QC status writes; no field, loader, rules or function change.
+- **My Day — Team pulse lists everyone** · 'shipped 2026-09-26' · 'SW v458' · Koy: *"why is keegan or brady [not] in my team pulse of myday… keegan and brady are not on it. they need to be."* 'teamPulse' only listed people with an open task doc, a routed derived row, or something finished in the last 7 days, so anyone idle that week vanished from the card. It now returns every active internal person (contractors and deactivated users still excluded), sorted overdue → open → A–Z, so idle people sit at the bottom with zeros (Oldest shows "–" when nothing is open). 'scripts/needs-dryrun.js' gains the idle-person case. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; no writes.
+- **My Day — the QC walks tracker moves onto My Day; the QC tab is gone** · 'shipped 2026-09-26' · 'SW v457' · Koy: *"My QC tab that I made to track QCs, I want all that moved into my My Day section only, so I can track everything that I need to track. I want it in there for sure."* 'QCView' (the bucketed rough + finish QC walk tracker: Failed / Past due / Needs scheduling / Scheduled / Has QC items / Passed, with Schedule-on-a-date → Google Calendar and the status select) gains 'embedded': My Day renders it as a folded **QC walks** card at the top of the side column (header pills: *N need action* · *N scheduled*; open state remembered per device in 'localStorage qc.cardOpen'), handed in by 'App()' as 'qcTracker' for admin / manager in Residential mode — the same gate the tab had. The 'qc' nav tab and its 'view==="qc"' route are removed; the drawer's QC tab and its 'qc.html' guide are untouched. Guide 'myday.html' gains a "QC walks" section. **Why it won't lose data:** same component, same two writes ('qcStatus'/'qcStatusDate' and 'finishQcStatus'/'finishQcStatusDate' through 'updateJob'), only mounted in a different place; no field, loader, rules or function change.
+- **Commercial mode — the Job Board's Crew Schedule is strictly commercial too** · 'shipped 2026-09-26' · 'SW v456' · Koy: *"the commercial side is still showing resi side jobs just not the names. i dont want anything residential on the commercial side, including that"* — *"im talking job board crew schedule right now."* The Job Board's **Crew Schedule** strip ('SimproCrewSchedule') fetches every Simpro schedule entry for the week and drew one block per Simpro project per day; a residential project matched no job on the commercial board, so its block still appeared with the crew and no name. The component now takes 'strictDivision' (true in Commercial mode, same pattern as the Forecast's v454 fix): 'modeSnos' = the Simpro #s of the division's jobs, 'scheduleV' = the raw Simpro list filtered to those, and the staff list, the crew filter and the per-day blocks all read 'scheduleV'. Residential passes 'false' and reads the raw list, byte-identical to before. Left as is, on purpose, for a separate decision: the Forecast / Crew Planner's app-assignment double-booking guard still says "also elsewhere" / "another job" (no name) when someone is on the other division's job that day. **Why it won't lose data:** display filter on a fetched list; the component has no write path.
+- **Commercial mode — merged with the Lutron Panel Builder ships; the division preview script gets '--apply'** · 'shipped 2026-09-25' · 'SW v455' · Koy: *"any way for you to auto pull the commercial jobs from that paste i ran into the app so i dont have to do it manually after the push"* + *"i just deployed something, so make sure this is good to go again."* This ship is the merge of the Commercial-mode branch (slices A–D, v449–v454 on that branch) with 'main''s Lutron Panel Builder / Incoming-from-FieldInk ships (v449–v451 on 'main' — the two lines of work reused the same three numbers, which is why this lands as v455). No code conflicted: the only collisions were the FEATURES.md header + entry list (both kept) and the SW version. 'scripts/commercial-division-preview.js --apply' now moves the jobs it lists under WOULD MOVE TO COMMERCIAL ('--resi-too' adds the residential moves): a Firestore REST PATCH with an updateMask on 'data.division' + 'updated_at' only, 'currentDocument.exists' so it never creates a doc, Simpro read-only. Without '--apply' the script is unchanged and read-only. **Why it won't lose data:** the merge adds no write; '--apply' writes the same single field the Settings → COMMERCIAL DIVISION → Apply button writes, on the same docs, and only when Koy runs it by hand with the flag.
+- **Commercial mode — strictly commercial: no residential on the Forecast, My Day or Needs** · 'shipped 2026-09-25' · 'SW v454' · Koy: *"when I'm on the commercial side, I don't want to be able to see any residential jobs scheduled. It needs to be strictly commercial only on the side of it. No residential."* The job rows were already mode-filtered, but three things still leaked: **(1)** the Forecast / Crew Planner's Simpro overlays (calendar pills, "also on <job> (Simpro)" chips, Simpro hours) came from every Simpro entry — 'SchedulingForecast' now takes 'strictDivision' (true in Commercial mode) and filters both Simpro fetches to the division's Simpro job #s ('modeSnos' / 'simproScheduleV' / 'crewWeekSimproV'; residential passes 'false' and is byte-identical); **(2)** Needs / My Day rows for a need whose job is in the other division — 'needsForMode' in 'App()' keeps a need only when its job is in the current mode, has no job, or the job no longer exists (the My Day badge counts the same list); **(3)** residential redline-walk rows on My Day — 'redlineWalksForMode' is empty in Commercial mode. The planner's app-assignment double-booking guard still says "also elsewhere" / "another job" without naming it, so nobody gets double-booked but no residential job is shown. **Why it won't lose data:** display filters only; no write path changes ('_saveCrewData' still merges the whole week's assignments; needs are never rewritten).
+- **Commercial mode — Job Info points at the Job Start checklist** · 'shipped 2026-09-25' · 'SW v453' · Koy, testing: *"I was inside of the job card, and they turned green"* — he was tapping the Scope-by-system chips on Job Info, not the pre-con checklist, and nothing on Job Info said where the checklist was. A teal **Open the Job Start checklist — Phase n of 12 · done/total** button now sits under the Stage line and switches the card to the Job Start tab; the Scope-by-system hint says it is not a checklist. Why it won't lose data: read-only UI, no writes.
+- **Commercial mode — slice D: Job Start (the 12 pre-con phases), Gear & Submittals, RFIs, commercial hats + My Day rows, guides, weekly plan re-pull** · 'shipped 2026-09-25' · 'SW v452' · Koy: *"we are thinking for each number is a phase of it. so it can come up with the phase and checklist under, when all are checked it goes to the next phase and checklist"* + *"none of this is foreman phase? its all done pre construction there is no on site work yet"* + *"brady is head of commercial."* **Job Start tab** ('jobstart', Commercial mode, 'commstart.view' admin/manager/standard; editing = 'commstart.edit' or any 'comm.*' hat via 'canEditJobStart'): jobs grouped by their current phase 1–12 (empty phases hidden, owner names on each section from the hats), one 'JobStartCard' per job — name / GC / foreman, footing · underground · slab milestone strip (orange inside 10 days), GEAR pill (approved · released · LATE), OWED pill, the 12-segment phase bar (teal done · blue current · amber owed · grey upcoming; tap a number to look back or peek ahead), the current phase's chips (tap ○ → ✓ → N/A; double-border tracker chips jump to the log they derive from; photo items get a 'PhotoAttacher' under 'commercial.start.photos', date items a 'DateInp' under '.dates'), progress + NEXT, a phase note, and **MOVE ON WITH ITEMS OWED** (lists what is owed, optional note, stamps 'commercial.start.overrides[n] = {by, at, note}', never auto-cleared, Undo). Checking the last item advances the job with a toast; un-checking an earlier item pulls it back; all twelve closed → "Ready to Start". Search, foreman filter, **Mine** (phases my hat owns), Show complete. The same card is the job's **Job Start** tab; **Gear & Submittals** (one row per long-lead item: vendor, system, status requested → submitted → revise → approved / approved as noted, requested, lead weeks, price confirmed, PO, released, promised ship (LATE past due), required on site, ship mode, delivered, storage, comments, Mark checked, "Add the usual long-lead list") and **RFIs** (no., question, sent to / sent, answered, answer, blocks purchasing / underground) are the logs the phase 3, 4 and 5 tracker chips derive from. **Hats:** 'comm.head' (Head of Commercial — Brady), 'comm.precon' (shared, phases 1–5 + 7–12 — Brady · Justin), 'comm.site' (shared, phase 6 — Zane · Abe) in 'HAT_REGISTRY' / Team Members → COMPANY HATS; 'ownersForRoute' falls commercial routes back to 'commHeadName()' (then the resi head). **My Day:** 'computeTasks' runs 'commercialTasks()' for a commercial job instead of any residential rule — one "Phase n · <name>: <job>" row routed to the phase's hat, an "Owed: <item>" row per move-on leftover, a Monday "Gear check" while released gear is undelivered, red "Gear late" past a promised ship, "Ufer before pour" / "Underground before slab" inside 7 days of the milestone, and "Ready to start — assign a foreman" on the Head of Commercial. **Functions (deploy):** 'pullJobDocsToDrive''s body lifted into '_pullJobDocs()' (callable unchanged) + 'weeklyCommercialDocPull' (Mondays 05:15 MT: every commercial job with a Drive folder and Simpro # and no manual stage re-pulls — dedupe makes it idempotent). **Guides:** new 'public/sops/jobstart.html' + 'commercialmode.html' (HelpDots on the board, the drawer tab and next to the mode switch); 'jobinfo.html' and 'myday.html' gain commercial sections. **Why it won't lose data:** everything the board and the two logs write lives under 'data.commercial.{start, submittals, rfis}' and is spread-merged from the freshest job through the existing patch funnel (a second person checking a different phase never wipes the first); photos use the app's photo shape and 'PhotoAttacher'; hats are 'caps' entries via the guarded 'saveUsers'; auto rows are derived (Done / Snooze use the existing 'clearedTasks' / 'taskDueDates' writes); the functions change is a body lift plus a new schedule that calls it — no write added or changed.
+- **Commercial mode — slice C: the commercial job card, the commercial Job Board, the commercial nav** · 'shipped 2026-09-25' · 'SW v451' · Koy: *"commercial jobs will have a completely different job prep process and process overall."* **Job card:** 'COMM_TABS' = Job Info · Activity · Photos · Plans & Links · Job Start · Gear & Submittals · RFIs · Change Orders · Open Items, served through the v439 per-job tab mechanism ('tabsFor(job)' → 'tabsForJob'), so Rough / Finish / Questions / Home Runs / Panelized / Tape Light / Return Trips / QC never render for a commercial job; a deep link into a tab the job doesn't have lands on Job Info; the three new tabs are placeholders until slice D. **Job Info** for a commercial job hides the residential Pre-Job Prep section and gains a **Commercial** section (project #, GC PM, GC super + phone, contract value, permit # + permit-by, plan set rev, site hours, badge / orientation, parking, laydown, temp-power owner, and a **Stage** pill: Auto / In Progress / On Hold / Closeout / Complete, date-stamped), **Scope by system** chips ('commercial.systems'), and **Milestones** dates ('commercial.milestones': temp power, footing, underground, slab, walls, ceilings, permanent power, startup, final — 'DateInp', M/D/YYYY). Every write is 'commPatch()' — the nested 'commercial' object spread-merged through the existing 'u()' → 'saveJob' funnel. **Job Board in Commercial mode:** 'COMM_STAGE_SECTIONS' (Pre-Con → Ready to Start → In Progress → On Hold → Closeout → Complete; quick jobs / temp peds keep their sections in front) via a new 'sections' prop on 'StageSectionList' (default = the residential list, so residential is untouched); the row pill reads 'PHASE n · <name> · done/total', or READY TO START / IN PROGRESS…; the pipeline tiles on the home and foreman pages follow the same buckets. **Pre-Con is derived, never stored:** 'COMM_START_STEPS' (Koy's 12-step Commercial Electrical Job Start Process — every step a phase, all pre-construction) + 'commPhase(job)' = the first phase with an item that is not done / N/A / covered by a move-on override; tracker items derive from the Gear & Submittals log and the Drive pull ('commTrackerDone'). Proven by 19 new cases in 'scripts/commercial-dryrun.js' (fresh → 1, last item advances, override → owed items, un-check pulls back, all closed → null, log truth table). **Nav:** tabs carry 'modes'; Commercial shows My Day · Job Board · Needs · COs · Contractors · Safety · Forecast · App Map (+ Nav, Time Off, Settings) and hides Today / Job Prep / Huddle / Scoreboard / QC / Upcoming / Quotes / Plan Changes / Tasks (residential engines); flipping the mode off a hidden tab lands on the Job Board. **Why it won't lose data:** additive nested writes only ('commercial.{fields, stage, stageDate, systems, milestones}' inside 'data', spread-merged from the freshest job); residential jobs never get the key; the 'sections' prop defaults to today's list; the tab list for residential jobs is byte-identical; no loader, rules, or functions changes.
+- **Commercial mode — slice B: Simpro Business Group sets the division, commercial imports build their Drive folder + pull plans on their own, residential chases skip commercial jobs** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"simpro does flag resi or commercial in the jobs settings → business group"* + *"i want the drive folder to be created and pull plans in from simpro automatically like it does in resi."* Three read-only probe runs against the tenant ('scripts/simpro-discover.js') found the Business Group is a **job custom field** ('/jobs/{id}/customFields/' → 'Business Group' = Residential / Commercial / Multi Family), not a job column, so the candidates poller ('_runSimproCandidateRefresh') now makes one 'customFields' call per **new** candidate (cached on the candidate afterwards), stores 'businessGroup' + 'divisionHint', and the Simpro Inbox row shows a COMMERCIAL / RESI pill (or "group unset — imports as <mode>"). **Import** writes 'division' from the hint ('resi' deletes the key; no hint → the current mode's stamp) and stamps 'simproBusinessGroup'. Mapping = 'config/app.commercialBusinessGroups', default Commercial + Multi Family (Koy: *"multifamily is probably commercial but unsure"* — a settings edit, never a deploy). **Existing jobs:** Settings → **COMMERCIAL DIVISION** (admin) → *Check divisions against Simpro* calls the new 'scanSimproDivisions' callable (every app job with a Simpro #, paced, read-only on Simpro, writes only 'settings/simproCandidates.divisionMismatches') and lists the jobs whose app division disagrees with Simpro, with per-row **Make Commercial / Residential** and **Apply all** — each Apply writes 'division' alone through 'updateJob'. **Drive:** new module helper 'runDriveChain(jobId, by)' = the Drive section's own two callables ('createJobDriveFolder' → 'pullJobDocsToDrive'); a commercial Simpro import fires it right after the create-only 'setDoc' (name + Simpro # arrive complete, so the half-typed-name problem that removed auto-create can't happen), and a hand-made commercial job fires it once its Simpro # settles (2 s, ≥ 4 digits, real name). Same Jobs parent folder, same '#<simpro> - <name>' naming (Koy: *"same parent folder is fine they are sorted there by job numbers anyway"*). Residential stays button-driven. **Functions (deploy needed):** 'isCommercialJob(data)' guard added to the per-job loops of 'dailyMorningChecks', 'dailyCoChase', 'dailyRtChase', 'dailyMatterportChase', 'dailyStaleJobChase', 'dailyUpdateMissing', 'techLightingWeeklyDigest', and the job lists of 'fridayPacket' / 'leadMeetingPrep'; 'onJobUpdate' skips the Job Prep Complete / QC ready / QC passed / Matterport pushes for commercial jobs; 'ensureJobDriveFolder''s "Drive Folder Linked" push goes to the 'comm.head' hat holder ('commHeadName()', falls back to 'resi.head' then Koy) for commercial jobs. Ledgers, backups, Drive matching, PO / CO syncs, needs, GC portal untouched. **Why it won't lose data:** the poller and the scan write only 'settings/simproCandidates'; Apply and import write 'division' (+ 'simproBusinessGroup') inside 'data' through the existing funnels; the Drive chain calls the same two callables the button calls and writes the same 'driveFolderId' / 'docPull' fields; every function change is a skip-guard or a push recipient — no write added or changed.
+- **Commercial mode — slice A, the foundation (invisible unless you flip the switch)** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"we need to start working on a commercial side of the app. i want it to be a completely separate mode that only shows our commercial jobs. so each job will need a way to assign resi or commercial."* Design: 'docs/superpowers/specs/2026-09-25-commercial-mode-design.md'; plan: 'docs/superpowers/plans/2026-09-25-commercial-mode-phase1.md'; mockup 'commercial-mockup.html'. **Division on the job:** 'division:"commercial"' inside 'job.data'; absent = residential, so every existing job is residential with zero writes ('jobDivision()' / 'isCommercial()'). **One filter at the top:** 'App()' now holds 'allJobs' and derives 'jobs' (the current mode's jobs) once with 'useMemo'; every view keeps its 'jobs' prop untouched, and everything that writes, merges, backs up, drains or restores reads 'allJobs' (the Task 2 audit: 'jobsRef', the daily safety backup, the Settings backup download, 'nextQuoteNumber', lookups-for-save, deep links). **The switch:** a RESI | COMMERCIAL pill in the header for everyone internal ('commercial.view', all four tiers; contractors never), device-local ('localStorage he_mode'); Commercial turns the header and active tab teal. **Landing:** 'defaultMode' on the user record (Settings → My Preferences "Land in", and Team Members "Lands in") picks the division once per session for people who mostly work commercial. The open drawer closes when the mode changes; a push or deep link to a job in the other division flips the mode and opens it. **Stamping:** every creation site (+ New Job / Temp Ped / Quick, foreman + subcontractor pages, quotes, both Upcoming promotes, Simpro import) writes 'division:"commercial"' only while in Commercial mode — residential mode writes no key. **Job Info → DIVISION** (admin/manager, 'job.division'): move a job either way after a confirm; the write is 'division' alone. New prebuild gate 'scripts/commercial-dryrun.js' (division helper truth table + a guard that 'jobsRef' can never track the filtered list). Nothing commercial is visible yet beyond the pill: the commercial job card, Job Board stages, nav, Simpro Business Group import, automatic Drive folder, Job Start phases, hats and My Day rows ship in slices B–D. **Why it won't lose data:** additive only — 'division' is a new key inside 'data' (unwraps through the existing loader spread, audited), 'defaultMode' rides the guarded 'saveUsers' whole-list write; no existing field renamed, retyped or removed; the 'allJobs' rename changes no write payload (every 'setJobs' updater was functional) and every offline / backup / restore path sees the full array exactly as before; no loader, 'firestore.rules', or functions changes.
 - **Lutron Panel Builder — the Loads tray from the canvas (search, Dimming / Switching, Needs a zone / Everything, Select)** · 'shipped 2026-09-25' · 'SW v451' · Koy, on Miller: *"I am not seeing the little bubble that says '22 needed zone' or something on the loads list. Why isn't it looking like the mockup you sent?"* v449 had reused the editing Loads list as the tray; the approved canvas has its own tray beside the panels. Now 'LutronPanelBuilder' renders that tray (left of the panels on desktop, above them on phones): **Loads** header with the **N need a zone** bubble (green "all on zones" when done), **Search loads or rooms**, **All / Dimming / Switching** and **Needs a zone / Everything** toggles, rows grouped floor → room → A–Z with a Dim / Switch chip (or the green zone / orange "no module yet" chip once placed) and watts, tap → the assign sheet, **Select** → tick rows → **Put on a panel / module…** or **Clear**. The editing Loads list above the section stays the place to rename, re-room and mark loads ran. **Why it won't lose data:** display-only plus the same two writes the builder already made (assign via the sheet, Clear = 'assign: null' on the ticked rows); no new field.
 - **Incoming from FieldInk — imported loads follow FieldInk (rename / re-room / re-floor)** · 'shipped 2026-09-25' · 'SW v450' · Koy: *"it seems like the list of loads isnt correct in cc, i have re roomed and labled some in field ink and feel like it hasnt changed on cc side."* Root cause: an imported row was a one-time copy — 'ccLoadImportRows' composed the name, room and floor once and nothing ever re-read the live field load (v436's Fill floor/room only filled blanks). Now every imported row ('origin:"fieldink"') is compared with its live 'ccloads' load by the pure 'ccLoadSyncPlan(rows, inbox, floorOptions)': the field-owned bits are the composed name, the room and the floor section ('ccLoadWantFromField', the same rule Import uses; a blank field floor never blanks a typed floor; 'office.floor' on the bridge still wins). Rows that still hold exactly what we last took from FieldInk ('fieldSnap', stamped on every import from now on and refreshed by every sync) are **auto-applied** by a JobDetail effect in ONE 'u()' patch with a toast; rows the office edited since import, or pre-v450 rows with no snap, are **manual**: an orange **Update N from FieldInk** button in the inbox header (confirm lists the changes) and a "changed in FieldInk: room Den → Study" note on the inbox row under the Imported chip. Watts, type, pulled and panel / module assignments are never touched. If the inbox itself still shows the old room, FieldInk didn't republish — that's the FieldInk side. Harness 'ccloads-suggest-test' covers snap stamping, auto vs manual, legacy rows, blank floors, office.floor, skips. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** only 'name', 'room', 'location' and the new 'fieldSnap' on rows that came from FieldInk change, only to values FieldInk holds right now; the auto path writes only rows the office never edited (proved by the snap), the manual path asks first and lists every change; every write spreads the current 'panelizedLighting' and maps the existing 'loads' array in place (no row added, removed or reordered), so Lutron 'assign', 'pulled', watts and type ride along untouched.
 - **Lutron Panel Builder — panels → modules → zones, loads assigned by reference, park-on-panel** · 'shipped 2026-09-25' · 'SW v449' · Koy: *"panelized lighting, specifically lutron needs a way better way to organize and assign modules and panels etc."* and *"can i have the option to put on a panel too? that way i can seperate panels without having to set modules yet."* Design approved on the /design canvas first (spec: 'docs/superpowers/specs/2026-09-25-lutron-panel-builder-design.md'). On a **Lutron** job the Panel Loads section is now 'LutronPanelBuilder': a summary strip (unassigned · on a panel with no module · zones used · panels/modules · zones over watts), one card per panel (name, where it hangs, slot meter, **+ Module**, Print / Download), one block per module with a row per zone (filled rows show room + watts and flag **over** the zone's watt cap in red; open rows say the cap), an orange **"On this panel, no module yet"** tray for parked loads, **+ Add panel** and **Suggest layout**. One interaction, no drag: tap a load (in the Loads list above — its badge is now the button — or on a zone) → bottom sheet with **Panel** chips → **Module** chips (first chip is **No module yet** = park it) → **Zone** chips (picking a filled zone parks that load) → **Assign / Move here / Put on LCP 1 only**; **Off module, keep panel** and **Clear** on placed loads; Loads-list **Select → Put on a panel / module…** fills the next open zones in order. Tap an open zone → pick a load, parked-on-this-panel first. **Suggest layout** walks loads with no module floor → room → biggest watts first, dimming onto dimmers and switching onto relays with headroom, adds a module of the right kind when none fits, keeps a parked load in its own panel, stops when a panel is full. **Model:** 'panelizedLighting.panels = [{ id, label, where, slots, modules:[{ id, num, type, bus, pdu }] }]' and 'loads[i].assign = { panelId, moduleId, zone } | null' (module + zone null = parked). Modules hold no copies of loads. **Module catalog** ('LUTRON_MODULES', verified against Lutron spec submittals): 4A5-120-D (zone 1 800 W, zones 2–4 500 W), 4S8-120-D (8 A/zone), 4T5-120-D (5 A), 4T20-120-D (20 A, receptacles OK), 4M-120-D (motors only), 2HDC-D and 1DAL2-D (bus, 64 loads), 4A1-D; legacy 4A-120-D (discontinued), 2ECO-D, 2DAL-D stay selectable only where a job already has them. The app's old 'LQSE-S8' (8 ch) and 'LQSE-T5' (5 ch) were wrong SKUs — both are 4-zone (8 / 5 are amps) — and are read as 4S8-120-D / 4T5-120-D. **Migration (read-side, 'lutronMigrate'):** a Lutron job with no 'panels' yet is shown from its old floor sections (upper → Panel A, main → Panel B, basement → Panel C, then extras; the panel id IS the old floor key) — module rows link to the master load by trimmed name, a row with no master match becomes a master load ('origin:"module"'), a channel past the real zone count takes the next open zone or parks, and a load whose free-text Panel column names a panel parks there. Nothing is written until the first change in the builder, which persists 'panels' + 'assign' in ONE 'u()' patch; the old 'cp4Loads' / extra-floor arrays are never touched. **Readers moved (option A):** Loads-list badges + batch action, keypad suggestions ('_assignedNames'), the per-panel **Print / Download** schedule ('lutronLegacyModules' feeds the unchanged 'printPanelSchedule'; parked loads print as a trailing "No module yet" block), the LV collab page '?lighting=' (same adapter; Tech Lighting's own rows stay keyed 'cp4_<old floor key>'), the loads share / **Set baseline** rows ('allSavantLoadsForJob' Lutron branch), Job Sections' has-data check. Control 4 / Crestron keep 'PanelModulesSection'; Savant untouched. Harness 'needs-dryrun' covers aliases, caps, type gating, migration (labels, zones, parking, created loads, S8 overflow), the cached read view, open zones, over-watt, labels, stats, suggest layout (zone 1 for the biggest dimmer, parked stays home, motor → 4M, full panel skips) and the print adapter. Guides 'panelizedlighting.html' + 'lightinglinks.html' updated. **Why it won't lose data:** purely additive — 'panels' is a new array and 'assign' a new key on existing load rows, both nested in 'panelizedLighting' (already in the loader spread; no loader, rules or function change); the builder never clears, rewrites or reads back the old floor arrays after the first write, every write spreads the current 'panelizedLighting' so keypads / lutronRooms / baseline / cp4Loads ride along, deleting a module or panel only nulls 'assign' (never deletes a load), and a wrong placement is one tap to fix and visible immediately as "unassigned" or "no module yet" — never as a lost load.
@@ -52556,6 +52900,301 @@ function JobPrepCompleteStrip({ open, onToggle, count, children, color = "#46916
   );
 }
 
+
+// ── COMMERCIAL JOB START (spec §6.6, mockup commercial-mockup.html) ────────────
+// One card per job; the CURRENT phase's checklist is open; checking the last
+// item rolls the job into the next phase (derived, never stored); MOVE ON WITH
+// ITEMS OWED closes a phase with an audit stamp and the owed items stay red.
+const canEditJobStart = (identity) => can(identity, "commstart.edit") || can(identity, "comm.precon") || can(identity, "comm.site") || can(identity, "comm.head");
+const commLocalDate = () => new Date().toLocaleDateString("en-US");
+const commSoon = (d, days = 10) => { const t = parseAnyDate(d); if (!t) return false; const diff = (t.getTime() - Date.now()) / 864e5; return diff >= 0 && diff <= days; };
+const commGearSummary = (job) => {
+  const rows = Array.isArray(commOf(job).submittals) ? commOf(job).submittals : [];
+  const appr = rows.filter(r => r.status === "approved" || r.status === "approvedAsNoted").length;
+  const rel = rows.filter(r => r.releasedAt).length;
+  const late = rows.filter(r => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now()).length;
+  return { n: rows.length, appr, rel, late };
+};
+function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenTab, ctx = "board" }) {
+  const [peek, setPeek] = useState(null);           // phase number expanded on the bar (look-back / preview)
+  const [ov, setOv] = useState(null);               // { n, note } while the move-on modal is open
+  const canEdit = canEditJobStart(identity);
+  const cur = commPhase(job); const st = commStartOf(job); const owed = commOwedItems(job); const g = commGearSummary(job);
+  const todayYmd = localYmd();
+  const ownerLabel = (n) => { const ph = COMM_PHASE_BY_N[n]; const rk = ph.owner === "site" ? "commsite" : "commstart"; const o = ownersForRoute(rk, users, todayYmd); return o.length ? o.map(x => String(x).split(" ")[0]).join(" · ") : COMM_OWNER_LABEL[ph.owner]; };
+  const patchStart = (fn) => onPatch(commPatch(job, c => ({ ...c, start: fn({ items:{}, na:{}, notes:{}, overrides:{}, photos:{}, dates:{}, ...(c.start || {}) }) })));
+  const tapChip = (n, k) => {
+    if (!canEdit) return;
+    const K = commItemKey(n, k); const state = commItemState(job, n, k);
+    const before = commPhase(job);
+    // Derive the after-state locally for the toast (the live snapshot re-groups the board).
+    const next = { ...job, commercial: { ...(job.commercial || {}), start: { ...st, items: { ...(st.items || {}) }, na: { ...(st.na || {}) } } } };
+    if (state === "todo") { next.commercial.start.items[K] = { done: true, by: (identity && identity.name) || "", at: commLocalDate() }; delete next.commercial.start.na[K]; }
+    else if (state === "done") { delete next.commercial.start.items[K]; next.commercial.start.na[K] = true; }
+    else { delete next.commercial.start.items[K]; delete next.commercial.start.na[K]; }
+    patchStart(x => ({ ...x, items: next.commercial.start.items, na: next.commercial.start.na }));
+    const after = commPhase(next);
+    if (after !== before) {
+      setPeek(null);
+      if (after === null) toast.success(`Phase 12 done — ${job.name || "job"} is Ready to Start: assign the foreman + crew`);
+      else if (before === null || after > before) toast.success(`Phase ${before} done — now in Phase ${after}: ${COMM_PHASE_BY_N[after].label}`);
+      else toast(`Unchecked — ${job.name || "job"} is back in Phase ${after}`);
+    }
+  };
+  const confirmMoveOn = () => {
+    const n = ov.n; const note = (ov.note || "").trim();
+    patchStart(x => ({ ...x, overrides: { ...(x.overrides || {}), [n]: { by: (identity && identity.name) || "", at: commLocalDate(), note } } }));
+    const next = { ...job, commercial: { ...(job.commercial || {}), start: { ...st, overrides: { ...(st.overrides || {}), [n]: { by: "x" } } } } };
+    const after = commPhase(next); setOv(null); setPeek(null);
+    toast.success(after === null ? `Moved on — ${job.name || "job"} is Ready to Start, items still owed` : `Moved on — now in Phase ${after}: ${COMM_PHASE_BY_N[after].label} · ${commOwedItems(next).length} item(s) owed`);
+  };
+  const undoMoveOn = (n) => { patchStart(x => { const o = { ...(x.overrides || {}) }; delete o[n]; return { ...x, overrides: o }; }); setPeek(null); toast(`Undo — back in Phase ${n}`); };
+  const chip = (n, k, label, kind) => {
+    const state = commItemState(job, n, k); const K = commItemKey(n, k);
+    const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
+    const locked = cur !== null && n > cur;
+    const col = locked ? C.muted : isOwed ? "#B0892C" : state === "done" ? "#46916A" : state === "na" ? C.dim : C.red;
+    const title = kind === "trk" ? "Derived from the Gear & Submittals / RFI logs — fill the log and this checks itself" : kind === "photo" ? "Photo item — tap to check, add photos below" : kind === "date" ? "Check + date" : (canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only");
+    return (
+      <span key={K} onClick={(e) => { e.stopPropagation(); if (locked) return; if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }} title={title}
+        style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em", cursor: locked || !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
+          border:`1px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${col}`, color: col, background: state === "done" ? "#46916A0F" : isOwed ? "#B0892C0F" : state === "na" ? C.surface : "#fff" }}>
+        <span>{state === "done" ? "✓" : state === "na" ? "—" : "○"}</span>{label}{state === "na" ? " · N/A" : ""}{isOwed ? " · OWED" : ""}{kind === "photo" ? " · PHOTO" : ""}
+      </span>
+    );
+  };
+  const phaseBlock = (n) => {
+    const ph = COMM_PHASE_BY_N[n]; const done = commPhaseDone(job, n); const o = st.overrides && st.overrides[n];
+    const kind = cur === null || n < cur ? "past" : n === cur ? "cur" : "future";
+    const owedHere = o ? ph.items.filter(([k]) => commItemState(job, n, k) === "todo") : [];
+    const nxt = ph.items.find(([k]) => commItemState(job, n, k) === "todo");
+    const photoItems = ph.items.filter(([k, , kd]) => kd === "photo"); const dateItems = ph.items.filter(([k, , kd]) => kd === "date");
+    return (
+      <div key={n} style={{ marginTop: 10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:"0.08em", color: kind === "cur" ? C.blue : kind === "past" ? C.teal : C.dim }}>PHASE {n} · {ph.label.toUpperCase()}</span>
+          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? "#B0892C" : C.green, background: owedHere.length ? "#B0892C15" : "#3E7D5A15", border:`1px solid ${owedHere.length ? "#B0892C40" : "#3E7D5A40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
+            : kind === "future" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
+            : <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#3B5BA515", border:"1px solid #3B5BA540" }}>CURRENT</span>}
+          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>{ph.items.map(([k, l, kd]) => chip(n, k, l, kd))}</div>
+        {kind !== "future" && (photoItems.length > 0 || dateItems.length > 0) && (
+          <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8 }}>
+            {dateItems.map(([k, l]) => (
+              <div key={k} style={{ minWidth:180 }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l} — DATE</div>
+                <DateInp value={(st.dates || {})[commItemKey(n, k)] || ""} onChange={e => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, dates: { ...(x.dates || {}), [commItemKey(n, k)]: v } })); }}/></div>
+            ))}
+            {photoItems.map(([k, l]) => (
+              <div key={k} style={{ flex:"1 1 240px" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l}</div>
+                <PhotoAttacher storagePath={`jobs/${job.id}/jobstart/${n}_${k}`} photos={(st.photos || {})[commItemKey(n, k)] || []} color={C.teal} label="Add photo"
+                  onChange={(next) => { if (canEdit) patchStart(x => ({ ...x, photos: { ...(x.photos || {}), [commItemKey(n, k)]: next } })); }}/></div>
+            ))}
+          </div>
+        )}
+        {kind === "cur" && (
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:10 }}>
+            <span style={{ fontSize:11, color:C.dim, fontWeight:600 }}><b style={{ color:C.text }}>{done}/{ph.items.length}</b></span>
+            {nxt && <span style={{ fontSize:11, color:C.orange, fontWeight:600 }}>NEXT: {nxt[1]}</span>}
+            <input value={(st.notes || {})[n] || ""} placeholder="Phase note…" onChange={e => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, notes: { ...(x.notes || {}), [n]: v } })); }} readOnly={!canEdit}
+              style={{ flex:"1 1 200px", padding:"6px 9px", border:`1px solid ${C.border}`, borderRadius:7, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff" }}/>
+            {canEdit && <button onClick={(e) => { e.stopPropagation(); setOv({ n, note:"" }); }} style={{ padding:"5px 10px", borderRadius:7, fontSize:10, fontWeight:700, letterSpacing:"0.04em", border:"1px solid #B0892C", background:"#fff", color:"#B0892C", cursor:"pointer", fontFamily:"inherit" }}>MOVE ON WITH ITEMS OWED</button>}
+          </div>
+        )}
+        {o && (
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:11, color:"#B0892C", fontWeight:600 }}>
+            Moved on {o.at} by {o.by}{o.note ? ` — ${o.note}` : ""}
+            {canEdit && <button onClick={(e) => { e.stopPropagation(); undoMoveOn(n); }} style={{ padding:"3px 8px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit" }}>↩ Undo</button>}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const show = []; if (peek && peek !== cur) show.push(peek); if (cur !== null) show.push(cur); show.sort((a, b) => a - b);
+  const ms = commOf(job).milestones || {};
+  return (
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${owed.length ? "#B0892C" : cur !== null ? C.blue : C.green}`, borderRadius:12, padding:"14px 16px", marginBottom:12, boxShadow:"0 4px 16px rgba(15,31,61,0.08)" }}>
+      <div style={{ display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
+        <div style={{ minWidth:200, flex:"1 1 200px" }}>
+          <div onClick={() => onSelectJob && onSelectJob(job)} style={{ fontWeight:700, fontSize:14, color:C.text, cursor: onSelectJob ? "pointer" : "default" }}>{job.name || "Untitled"}</div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:11, color:C.dim, flexWrap:"wrap" }}>
+            {job.foreman && job.foreman !== "Unassigned" && <span style={{ fontWeight:600 }}>{job.foreman}</span>}
+            {job.gc && <span style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px", fontSize:10, fontWeight:700 }}>{job.gc}</span>}
+            {job.simproNo && <span>Simpro #{job.simproNo}</span>}{commOf(job).projectNo && <span>Proj {commOf(job).projectNo}</span>}
+          </div>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
+            {[["footing","FOOTING"],["underground","UNDERGROUND"],["slab","SLAB"]].map(([k, l]) => ms[k] ? <span key={k} style={{ fontSize:10, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:6, padding:"2px 7px" }}>{l} <b style={{ color: commSoon(ms[k]) ? C.orange : C.text }}>{ms[k]}</b></span> : null)}
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"flex-start" }}>
+          <span onClick={() => onOpenTab && onOpenTab("Gear & Submittals")} title="Gear & Submittals log" style={{ fontSize:10, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", cursor: onOpenTab ? "pointer" : "default", color: g.late ? C.red : g.n ? C.teal : C.dim, background: g.late ? "#B23A3A15" : g.n ? "#3E7D7A15" : "#5E667015", border:`1px solid ${g.late ? "#B23A3A40" : g.n ? "#3E7D7A40" : "#5E667040"}` }}>GEAR · {g.appr} approved · {g.rel} released{g.late ? ` · ${g.late} LATE` : ""}</span>
+          {owed.length > 0 && <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", color:"#B0892C", background:"#B0892C15", border:"1px solid #B0892C40" }}>{owed.length} OWED IN EARLIER PHASES</span>}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:3, margin:"12px 0 4px" }}>
+        {COMM_START_STEPS.map(ph => { const n = ph.n; const cls = cur === null || n < cur ? ((st.overrides && st.overrides[n] && !commPhaseChecked(job, n)) ? "owed" : "done") : n === cur ? "cur" : "up";
+          const bg = cls === "done" ? C.teal : cls === "cur" ? C.blue : cls === "owed" ? "#B0892C" : C.muted;
+          return <div key={n} onClick={(e) => { e.stopPropagation(); setPeek(peek === n ? null : n); }} title={`Phase ${n}: ${ph.label}`}
+            style={{ flex:1, height:22, borderRadius:5, background:bg, color:"#fff", fontSize:10, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", opacity: cls === "up" ? .55 : 1, outline: peek === n ? `2px solid ${C.text}` : "none", boxShadow: cls === "cur" ? "0 0 0 2px #3B5BA540" : "none" }}>{n}</div>; })}
+      </div>
+      {cur === null && !peek && <div style={{ border:"1px dashed #46916A", borderRadius:10, padding:"10px 14px", fontSize:12, color:C.green, fontWeight:600, background:"#46916A08", marginTop:8 }}>✓ All 12 pre-con phases closed — Ready to Start. Assign the foreman + crew; set In Progress on Job Info when they mobilize.</div>}
+      {show.map(phaseBlock)}
+      {ov && (
+        <div style={{ marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08" }} onClick={e => e.stopPropagation()}>
+          <div style={{ fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5 }}>Move on from Phase {ov.n} — still owed, stays tracked</div>
+          {COMM_PHASE_BY_N[ov.n].items.filter(([k]) => commItemState(job, ov.n, k) === "todo").map(([k, l]) => <div key={k} style={{ fontSize:12, color:C.text, marginLeft:4 }}>· {l}</div>)}
+          <textarea value={ov.note} onChange={e => setOv({ ...ov, note: e.target.value })} placeholder="Note (optional) — e.g. gear submittal still with the engineer, GC needs us on underground Monday"
+            style={{ width:"100%", padding:"7px 9px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12.5, fontFamily:"inherit", color:C.text, outline:"none", marginTop:8, resize:"vertical", minHeight:44, boxSizing:"border-box" }}/>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
+            <button onClick={() => setOv(null)} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, fontWeight:600, fontSize:12, fontFamily:"inherit", cursor:"pointer" }}>Cancel</button>
+            <button onClick={confirmMoveOn} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #B0892C88", background:"#B0892C18", color:"#B0892C", fontWeight:700, fontSize:12, fontFamily:"inherit", cursor:"pointer" }}>Move on</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function JobStartBoard({ jobs = [], identity, users = [], onSelectJob, onUpdateJob }) {
+  const [q, setQ] = useState(""); const [fm, setFm] = useState(""); const [mine, setMine] = useState(false); const [showDone, setShowDone] = useState(false);
+  const [collapsed, setCollapsed] = useState({});
+  const me = identity && identity.name; const todayYmd = localYmd();
+  const included = (jobs || []).filter(j => j && isCommercial(j) && !j.tempPed && !j.quickJob && j.type !== "quote" && !isInactiveJob(j));
+  const live = included.filter(j => commPhase(j) !== null);
+  const past = included.filter(j => commPhase(j) === null);
+  const owedTotal = live.reduce((a, j) => a + commOwedItems(j).length, 0);
+  const foremen = [...new Set(included.map(j => j.foreman).filter(f => f && f !== "Unassigned"))].sort();
+  const matches = (j) => { const s = q.trim().toLowerCase(); if (s && !(`${j.name || ""} ${j.gc || ""} ${commOf(j).projectNo || ""} ${j.simproNo || ""}`.toLowerCase().includes(s))) return false; if (fm && j.foreman !== fm) return false; return true; };
+  const iOwn = (n) => { const ph = COMM_PHASE_BY_N[n]; return ownersForRoute(ph.owner === "site" ? "commsite" : "commstart", users, todayYmd).some(o => sameName(o, me)); };
+  const groups = COMM_START_STEPS.map(ph => [ph, live.filter(j => commPhase(j) === ph.n && matches(j))]).filter(([ph, rows]) => rows.length && (!mine || iOwn(ph.n)));
+  const sortRows = (rows) => rows.slice().sort((a, b) => { const da = parseAnyDate((commOf(a).milestones || {}).footing || "") ; const db = parseAnyDate((commOf(b).milestones || {}).footing || ""); return (da ? da.getTime() : 9e15) - (db ? db.getTime() : 9e15); });
+  const btn = (on) => ({ padding:"6px 12px", borderRadius:7, fontSize:12, border:`1px solid ${on ? C.teal : C.border}`, background: on ? C.teal : "#fff", color: on ? "#fff" : C.dim, cursor:"pointer", fontFamily:"inherit", fontWeight:600 });
+  return (
+    <div style={{ padding:"16px 18px 60px", maxWidth:1120, margin:"0 auto" }}>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:14 }}>
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, letterSpacing:"0.06em", color:C.text, lineHeight:1 }}>JOB START</div>
+            <HelpDot section="jobstart"/>
+          </div>
+          <div style={{ fontSize:12, color:C.dim, marginTop:4 }}><b>{live.length}</b> active · <b style={{ color:"#B0892C" }}>{owedTotal}</b> items owed in earlier phases · <b style={{ color:C.green }}>{past.length}</b> ready to start / on site</div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search jobs, GC, project #…" style={{ padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12, background:"#fff", color:C.text, fontFamily:"inherit", outline:"none", minWidth:200 }}/>
+          <select value={fm} onChange={e => setFm(e.target.value)} style={{ padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:12, background:"#fff", color:C.text, fontFamily:"inherit" }}><option value="">All foremen</option>{foremen.map(f => <option key={f} value={f}>{f}</option>)}</select>
+          <button style={btn(mine)} onClick={() => setMine(m => !m)} title="Only the phases my hat owns">Mine</button>
+          <button style={btn(showDone)} onClick={() => setShowDone(v => !v)}>Show complete</button>
+        </div>
+      </div>
+      <div style={{ background:"#fff", border:`1px dashed ${C.muted}`, borderRadius:10, padding:"10px 14px", fontSize:12, color:C.dim, marginBottom:14 }}>
+        Each of the 12 steps is a <b style={{ color:C.text }}>phase</b>, all pre-construction. A job is in one phase at a time and its checklist is open on the card. Check the last item and the card rolls into the next phase. Tap a number on the bar to look back (owed items stay tappable) or peek ahead. <b style={{ color:C.text }}>Move on with items owed</b> closes a phase early — the items stay red until checked.
+      </div>
+      {groups.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:18, textAlign:"center", border:`1px dashed ${C.muted}`, borderRadius:10 }}>{live.length ? "No jobs match the filter." : "No commercial jobs in pre-con. Import one from Simpro or make one with + New Job while in Commercial mode."}</div>}
+      {groups.map(([ph, rows]) => (
+        <div key={ph.n} style={{ marginBottom:18 }}>
+          <div onClick={() => setCollapsed(c => ({ ...c, [ph.n]: !c[ph.n] }))} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:`2px solid ${C.border}`, marginBottom:10, cursor:"pointer", flexWrap:"wrap" }}>
+            <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:17, letterSpacing:"0.08em", color: ph.owner === "site" ? C.purple : C.teal }}>PHASE {ph.n} · {ph.label.toUpperCase()}</span>
+            <span style={{ fontSize:11, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px" }}>{rows.length}</span>
+            <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", color:C.dim, textTransform:"uppercase" }}>{ownersForRoute(ph.owner === "site" ? "commsite" : "commstart", users, todayYmd).map(x => String(x).split(" ")[0]).join(" · ") || COMM_OWNER_LABEL[ph.owner]}</span>
+            <span style={{ marginLeft:"auto", color:C.dim, fontSize:11 }}>{collapsed[ph.n] ? "▸" : "▾"}</span>
+          </div>
+          {!collapsed[ph.n] && sortRows(rows).map(j => <JobStartCard key={j.id} job={j} identity={identity} users={users} onPatch={(patch) => onUpdateJob(j.id, patch)} onSelectJob={onSelectJob} onOpenTab={(t) => onSelectJob && onSelectJob(j, t)} ctx="board"/>)}
+        </div>
+      ))}
+      {past.length > 0 && (showDone
+        ? <div style={{ marginBottom:18 }}><div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:17, letterSpacing:"0.08em", color:C.green, padding:"8px 0", borderBottom:`2px solid ${C.border}`, marginBottom:10 }}>READY TO START / ON SITE</div>{past.filter(matches).map(j => <JobStartCard key={j.id} job={j} identity={identity} users={users} onPatch={(patch) => onUpdateJob(j.id, patch)} onSelectJob={onSelectJob} onOpenTab={(t) => onSelectJob && onSelectJob(j, t)} ctx="board"/>)}</div>
+        : <div style={{ border:"1px dashed #46916A", borderRadius:10, padding:"10px 14px", fontSize:12, color:C.green, fontWeight:600, background:"#46916A08" }}>✓ {past.length} job{past.length > 1 ? "s" : ""} past phase 12 — {past.map(j => j.name).join(", ")} (Show complete)</div>)}
+    </div>
+  );
+}
+// Gear & Submittals — one row per long-lead item, phases 3 → 5 (spec §6.3). Phase 3/5 tracker chips derive from these rows.
+const COMM_SUBMITTAL_STATUS = [["requested","REQUESTED"],["submitted","SUBMITTED"],["revise","REVISE / RESUBMIT"],["approved","APPROVED"],["approvedAsNoted","APPROVED AS NOTED"]];
+const COMM_USUAL_LONG_LEAD = ["Switchgear","Switchboards","Transformers","Panelboards","Generator / ATS","Meter equipment","Lighting package","Lighting controls","Fire alarm","Specialty"];
+function CommSubmittalsTab({ job, u, identity }) {
+  const canEdit = canEditJobStart(identity);
+  const rows = Array.isArray(commOf(job).submittals) ? commOf(job).submittals : [];
+  const write = (next) => u(commPatch(job, c => ({ ...c, submittals: next })));
+  const setRow = (id, patch) => write(rows.map(r => r.id === id ? { ...r, ...patch } : r));
+  const add = (items) => write([...rows, ...items.map(item => ({ id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, item, vendor: "CED", system: "", requestedAt: "", leadTimeWeeks: "", priceConfirmed: false, status: "requested", submittedToGcAt: "", approvedAt: "", comments: "", poNo: "", releasedAt: "", promisedShip: "", requiredOnSite: "", shipMode: "", deliveredAt: "", storage: "", lastCheckedAt: "", lastCheckedBy: "" }))]);
+  const del = async (r) => { if (!await showConfirm(`Remove ${r.item || "this item"} from the gear log?`)) return; write(rows.filter(x => x.id !== r.id)); };
+  const late = (r) => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now();
+  const inp = { padding:"5px 7px", border:`1px solid ${C.border}`, borderRadius:6, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff", width:"100%", boxSizing:"border-box" };
+  const F = (r, k, ph, w) => <input value={r[k] || ""} placeholder={ph || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { [k]: e.target.value })} style={{ ...inp, width: w || "100%" }}/>;
+  const D = (r, k) => <DateInp value={r[k] || ""} onChange={e => { if (canEdit) setRow(r.id, { [k]: e.target.value }); }}/>;
+  const systems = COMM_SYSTEMS.filter(([k]) => (commOf(job).systems || {})[k]);
+  return (
+    <div>
+      <Section label="Gear & Submittals" color={C.teal} defaultOpen>
+        <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>One row per long-lead item. Phase 3 chips (requested, lead times) and phase 5 chips (released + PO, ship dates, procurement log, ship mode) <b>check themselves from these rows</b>. A released row past its promised ship date with no delivery shows LATE and lands on the pre-con My Day.</div>
+        {rows.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:14, border:`1px dashed ${C.muted}`, borderRadius:10, marginBottom:10 }}>No items yet.</div>}
+        {rows.map(r => (
+          <div key={r.id} style={{ border:`1px solid ${late(r) ? "#B23A3A55" : C.border}`, background: late(r) ? "#B23A3A06" : C.card, borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:"8px 10px", alignItems:"end" }}>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ITEM</div>{F(r, "item", "Switchgear")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>VENDOR</div><select value={r.vendor || ""} disabled={!canEdit} onChange={e => setRow(r.id, { vendor: e.target.value })} style={inp}><option value="CED">CED</option><option value="FA Co.">FA Co.</option><option value="Other">Other</option></select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SYSTEM</div><select value={r.system || ""} disabled={!canEdit} onChange={e => setRow(r.id, { system: e.target.value })} style={inp}><option value="">—</option>{(systems.length ? systems : COMM_SYSTEMS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STATUS</div><select value={r.status || "requested"} disabled={!canEdit} onChange={e => setRow(r.id, { status: e.target.value, ...(e.target.value === "approved" || e.target.value === "approvedAsNoted" ? { approvedAt: r.approvedAt || commLocalDate() } : {}), ...(e.target.value === "submitted" ? { submittedToGcAt: r.submittedToGcAt || commLocalDate() } : {}) })} style={{ ...inp, fontWeight:700, color: r.status === "approved" || r.status === "approvedAsNoted" ? C.green : r.status === "revise" ? C.red : C.blue }}>{COMM_SUBMITTAL_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUESTED</div>{D(r, "requestedAt")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>LEAD (WEEKS)</div>{F(r, "leadTimeWeeks", "22")}</div>
+              <div><label style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:C.text, cursor:"pointer", paddingBottom:6 }}><input type="checkbox" checked={!!r.priceConfirmed} disabled={!canEdit} onChange={e => setRow(r.id, { priceConfirmed: e.target.checked })}/>Price confirmed</label></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PO #</div>{F(r, "poNo", "PO-…")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RELEASED</div>{D(r, "releasedAt")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PROMISED SHIP {late(r) && <span style={{ color:C.red }}>· LATE</span>}</div>{D(r, "promisedShip")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUIRED ON SITE</div>{D(r, "requiredOnSite")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SHIP</div><select value={r.shipMode || ""} disabled={!canEdit} onChange={e => setRow(r.id, { shipMode: e.target.value })} style={inp}><option value="">—</option><option value="complete">Complete</option><option value="split">Multiple releases</option></select></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>DELIVERED</div>{D(r, "deliveredAt")}</div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STORAGE</div>{F(r, "storage", "laydown / conex")}</div>
+              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>COMMENTS</div>{F(r, "comments", "engineer / GC comments to resolve before release")}</div>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:11, color:C.dim }}>
+              {r.lastCheckedAt ? <span>Checked {r.lastCheckedAt}{r.lastCheckedBy ? ` by ${r.lastCheckedBy}` : ""}</span> : <span>Not checked yet</span>}
+              {canEdit && r.releasedAt && !r.deliveredAt && <button onClick={() => setRow(r.id, { lastCheckedAt: commLocalDate(), lastCheckedBy: (identity && identity.name) || "" })} style={{ padding:"4px 10px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit" }}>Mark checked</button>}
+              {canEdit && <button onClick={() => del(r)} style={{ marginLeft:"auto", padding:"4px 10px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.red, cursor:"pointer", fontFamily:"inherit" }}>Remove</button>}
+            </div>
+          </div>
+        ))}
+        {canEdit && <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={() => add(["New item"])} style={{ padding:"7px 12px", borderRadius:8, fontSize:12, fontWeight:700, border:"none", background:C.teal, color:"#fff", cursor:"pointer", fontFamily:"inherit" }}>+ Add item</button>
+          {rows.length === 0 && <button onClick={() => add(COMM_USUAL_LONG_LEAD)} style={{ padding:"7px 12px", borderRadius:8, fontSize:12, fontWeight:700, border:`1px solid ${C.teal}`, background:"#fff", color:C.teal, cursor:"pointer", fontFamily:"inherit" }}>Add the usual long-lead list</button>}
+        </div>}
+      </Section>
+    </div>
+  );
+}
+function CommRfisTab({ job, u, identity }) {
+  const canEdit = canEditJobStart(identity);
+  const rows = Array.isArray(commOf(job).rfis) ? commOf(job).rfis : [];
+  const write = (next) => u(commPatch(job, c => ({ ...c, rfis: next })));
+  const setRow = (id, patch) => write(rows.map(r => r.id === id ? { ...r, ...patch } : r));
+  const add = () => write([...rows, { id: `rfi_${Date.now()}`, no: String(rows.length + 1).padStart(3, "0"), question: "", sentTo: "", sentAt: commLocalDate(), answeredAt: "", answer: "", blocks: "" }]);
+  const del = async (r) => { if (!await showConfirm(`Remove RFI ${r.no}?`)) return; write(rows.filter(x => x.id !== r.id)); };
+  const inp = { padding:"5px 7px", border:`1px solid ${C.border}`, borderRadius:6, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff", width:"100%", boxSizing:"border-box" };
+  return (
+    <div>
+      <Section label="RFIs" color={C.teal} defaultOpen>
+        <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>Anything that needs clarifying before purchasing or underground. Phase 4's RFI LIST chip checks itself once there is a row; an open RFI that blocks purchasing shows on the gear pill.</div>
+        {rows.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:14, border:`1px dashed ${C.muted}`, borderRadius:10, marginBottom:10 }}>No RFIs yet.</div>}
+        {rows.map(r => (
+          <div key={r.id} style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 12px", marginBottom:8, background: r.answeredAt ? C.card : "#B0892C06" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"70px 1fr", gap:"8px 10px", alignItems:"end" }}>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RFI #</div><input value={r.no || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { no: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>QUESTION</div><input value={r.question || ""} readOnly={!canEdit} placeholder="Electrical room 112 — gear clearance vs. duct at 9 ft 2 in" onChange={e => setRow(r.id, { question: e.target.value })} style={inp}/></div>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:"8px 10px", alignItems:"end", marginTop:8 }}>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT TO</div><input value={r.sentTo || ""} readOnly={!canEdit} placeholder="GC / EOR" onChange={e => setRow(r.id, { sentTo: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT</div><DateInp value={r.sentAt || ""} onChange={e => { if (canEdit) setRow(r.id, { sentAt: e.target.value }); }}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWERED</div><DateInp value={r.answeredAt || ""} onChange={e => { if (canEdit) setRow(r.id, { answeredAt: e.target.value }); }}/></div>
+              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>BLOCKS</div><select value={r.blocks || ""} disabled={!canEdit} onChange={e => setRow(r.id, { blocks: e.target.value })} style={inp}><option value="">—</option><option value="purchasing">Purchasing</option><option value="underground">Underground</option></select></div>
+              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWER</div><input value={r.answer || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { answer: e.target.value })} style={inp}/></div>
+            </div>
+            {canEdit && <div style={{ display:"flex", justifyContent:"flex-end", marginTop:6 }}><button onClick={() => del(r)} style={{ padding:"4px 10px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.red, cursor:"pointer", fontFamily:"inherit" }}>Remove</button></div>}
+          </div>
+        ))}
+        {canEdit && <button onClick={add} style={{ padding:"7px 12px", borderRadius:8, fontSize:12, fontWeight:700, border:"none", background:C.teal, color:"#fff", cursor:"pointer", fontFamily:"inherit" }}>+ Add RFI</button>}
+      </Section>
+    </div>
+  );
+}
+
 function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
   const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
@@ -53879,6 +54518,16 @@ function completedForMe(n, identity, nowMs = Date.now()) {
   return Number.isFinite(t) && (nowMs - t) <= 30 * 24 * 60 * 60 * 1000;
 }
 
+// ── Commercial division (spec docs/superpowers/specs/2026-09-25-commercial-mode-design.md) ──
+// `division` lives inside job.data. Absent / "" / anything unknown = residential,
+// so every job that exists today is residential without a single write. Never
+// read job.type or quickJob/tempPed for this — those are orthogonal.
+const jobDivision = (j) => (j && j.division === "commercial") ? "commercial" : "resi";
+const isCommercial = (j) => jobDivision(j) === "commercial";
+// Device-level mode (same idiom as myday.view / planner.mode). Never a job field.
+const MODE_KEY = "he_mode";
+const readMode = () => { try { return localStorage.getItem(MODE_KEY) === "commercial" ? "commercial" : "resi"; } catch { return "resi"; } };
+
 // ── MY DAY Ship 2 helpers (v429) ────────────────────────────────────────────
 // Inactive = the Job Board's own archive gate (see allJobs filter) + quotes.
 function isInactiveJob(j) { return !!(j && (j.archived || j.deleted || j.archivedAt || j.type === "quote")); }
@@ -53931,6 +54580,18 @@ function userKeyOf(identity) {
 // duty / punch / redline) have no priority and sort as normal.
 function needPriority(n) { const p = n && n.priority; return p === "urgent" || p === "low" ? p : "normal"; }
 function prioRank(p) { return p === "urgent" ? 0 : p === "low" ? 2 : 1; }
+// v461: urgency on EVERY row (Koy: "Every task should be able to be marked as
+// urgent."). A need doc keeps `priority` on the doc; a derived row (auto / duty /
+// punch / redline / scan) has no doc, so its mark lives in
+// settings/mydayPriority.byKey[rowKey] = { prio, by, at } — one shared doc, so
+// everyone sees the same urgency. Row keys are stable across sessions
+// ("auto_<taskId>", "duty_<jobId>_<dutyId>", "punch_<jobId>_<itemId>", …).
+function rowPriority(row, prioMap) {
+  if (!row) return "normal";
+  if (row.kind === "need") return needPriority(row.need);
+  const e = prioMap && prioMap[row.key]; const p = e && e.prio;
+  return p === "urgent" || p === "low" ? p : "normal";
+}
 // Row order everywhere on My Day (Koy 2026-09-24: "add an urgency status …
 // and have them sort by that"): urgency → lane → due date (undated rows last
 // inside a lane; pre-v446 sorted them A–Z, so the next thing due was buried)
@@ -54015,30 +54676,31 @@ function usageWithZeros(rows, knownKeys) {
 const NAV_MAIN_TABS = [
   { key: "myday", label: "My Day", perm: "myday.view" },
   { key: "home", label: "Job Board" },
-  { key: "today", label: "Today", perm: "today.view" },
+  { key: "today", modes: ["resi"], label: "Today", perm: "today.view" },
   { key: "needs", label: "Needs", perm: "board.view" },
   { key: "cos", label: "COs", perm: "cos.view" },
-  { key: "jobprep", label: "Job Prep", perm: "jobprep.view" },
+  { key: "jobstart", label: "Job Start", perm: "commstart.view", modes: ["commercial"] },
+  { key: "jobprep", modes: ["resi"], label: "Job Prep", perm: "jobprep.view" },
   { key: "contractors", label: "Contractors", perm: "users.manage" },
   { key: "safety", label: "Safety" },
   { key: "schedule", label: "Forecast" },
-  { key: "huddle", label: "Huddle", perm: "settings.view" },
-  { key: "scoreboard", label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
-  { key: "qc", label: "QC", tiers: ["admin", "manager"] },
+  { key: "huddle", modes: ["resi"], label: "Huddle", perm: "settings.view" },
+  { key: "scoreboard", modes: ["resi"], label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
   { key: "appmap", label: "App Map" },
 ];
 const NAV_MORE_TABS = [
   { key: "nav", label: "Nav", icon: "mapPin" },
-  { key: "upcoming", label: "Upcoming", icon: "calendar" },
-  { key: "quotes", label: "Quotes", icon: "fileText", perm: "quotes.view" },
-  { key: "lutron", label: "Plan Changes", icon: "mapPin", perm: "lutron.view" },
-  { key: "tasks", label: "Tasks", icon: "check" },
+  { key: "upcoming", modes: ["resi"], label: "Upcoming", icon: "calendar" },
+  { key: "quotes", modes: ["resi"], label: "Quotes", icon: "fileText", perm: "quotes.view" },
+  { key: "lutron", modes: ["resi"], label: "Plan Changes", icon: "mapPin", perm: "lutron.view" },
+  { key: "tasks", modes: ["resi"], label: "Tasks", icon: "check" },
   { key: "timeoff", label: "Time Off", icon: "calendar" },
 ];
 const NAV_SETTINGS_TAB = { key: "settings", label: "Settings" };
 const NAV_SUBS_TAB = { key: "subcontractors", label: "Subcontractors", icon: "hardHat" };
-const navTabVisible = (t, identity) =>
-  t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm));
+// Commercial mode: a tab with `modes` shows only in those modes (no `modes` = both).
+const navTabVisible = (t, identity, mode = "resi") =>
+  (!t.modes || t.modes.includes(mode)) && (t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm)));
 
 // Who usage is counted for: set from the internal app shell's render (never
 // from a share-link / GC-portal / homeowner page — those return before App's
@@ -54128,7 +54790,10 @@ function teamPulse(opts) {
     who.open++; if (r.bucket === "overdue") who.overdue++;
     who.oldestDays = Math.max(who.oldestDays, r.ageDays || 0);
   }));
-  return [...rowFor.values()].filter(p => p.open || p.doneWeek)
+  // v458: every active internal person, zeros included (Koy: "keegan and brady are
+  // not on it. they need to be."). Before, someone with no open task doc and
+  // nothing finished this week dropped off the card entirely.
+  return [...rowFor.values()]
     .sort((a, b) => (b.overdue - a.overdue) || (b.open - a.open) || a.name.localeCompare(b.name));
 }
 // The Head of Residential = whoever holds the resi.head hat (Settings → Team →
@@ -54139,6 +54804,12 @@ function resiHead(users) {
   return live.find(u => can(u, "resi.head")) || live.find(u => can(u, "jobprep.own")) || null;
 }
 function resiHeadName(users) { const h = resiHead(users); return (h && h.name) || ""; }
+// The Head of Commercial = the comm.head hat (Brady, 2026-09-25); falls back to the resi head.
+function commHead(users) {
+  const live = (users || []).filter(u => u && u.active !== false);
+  return live.find(u => can(u, "comm.head")) || resiHead(users);
+}
+function commHeadName(users) { const h = commHead(users); return (h && h.name) || ""; }
 
 // ── HAT REGISTRY (v427) ──────────────────────────────────────────────────────
 // Each company hat (a per-user `caps` grant, Settings → Team → COMPANY HATS)
@@ -54154,6 +54825,9 @@ const HAT_REGISTRY = [
   { cap:"qc.own",         label:"QC walks",            routes:["qc"],         shared:true, note:"Walked together: one Done clears it for everyone" },
   { cap:"redline.own",    label:"Redline walks",       routes:["redline"],    shared:true, note:"Scheduled redline walks, walked together" },
   { cap:"matterport.own", label:"Matterport scans",    routes:["matterport"], note:"Rough 85% → scan before drywall" },
+  // Commercial (2026-09-25): Job Start phases route to these; nobody wearing one → the Head of Commercial.
+  { cap:"comm.precon",    label:"Commercial pre-con",   routes:["commstart"],  shared:true, note:"Job Start phases 1–5 and 7–12 (Brady · Justin)" },
+  { cap:"comm.site",      label:"Commercial site coord", routes:["commsite"],  shared:true, note:"Job Start phase 6 — GC kickoff, laydown, temp power, rentals (Zane · Abe)" },
 ];
 function routeKeyOfAuto(t) {
   if (!t) return null;
@@ -54167,6 +54841,7 @@ function routeKeyOfAuto(t) {
   if (t.category === "rt") return null;
   if (t.category === "qc") return "qc";
   if (t.category === "matterport") return "matterport";
+  if (t.category === "commstart") return t.route || "commstart";   // Commercial: the row carries its phase's route (commstart / commsite / comm.head)
   return null;
 }
 function routeKeyOfDuty(d) { return d && d.dutyType === "qc" ? "qc" : null; }
@@ -54195,7 +54870,8 @@ function ownersForRoute(routeKey, users, todayYmd) {
   const hat = routeKey ? HAT_REGISTRY.find(h => h.routes.includes(routeKey)) : null;
   const holders = hat ? hatHolderNames(users, hat.cap, todayYmd) : [];
   if (holders.length) return holders;
-  const head = resiHeadName(users);
+  // Commercial routes fall back to the Head of Commercial (then the resi head inside commHeadName).
+  const head = (routeKey && /^comm/.test(routeKey)) ? commHeadName(users) : resiHeadName(users);
   return head ? [coverName(users, head, todayYmd)] : [];
 }
 function coveredFor(users, me, todayYmd) {
@@ -54455,7 +55131,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -54817,6 +55493,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   const staleOf = (r) => r.staleExempt ? "" : staleReason({ kind: r.kind, job: r.staleJob || null, dateYmd: r.staleDate || "", money: !!r.staleMoney }, todayYmd);
   const staleRows = [];
   const keepFresh = (rows) => rows.filter(r => { const why = staleOf(r); if (why) { staleRows.push({ ...r, sub: [...(r.sub || []), `hidden: ${why}`], actions: undefined, canDone: false, canSnooze: false, scan: undefined, pushOpen: false }); return false; } return true; });
+  // v461: derived rows read their urgency from the shared map (need rows already
+  // carry the doc's own priority).
+  const stampPrio = (rows) => rows.forEach(r => { if (r.kind !== "need") r.prio = rowPriority(r, prioMap); });
+  stampPrio(mineRows); stampPrio(othersRows);
   const freshMine = keepFresh(mineRows);
   const freshOthers = keepFresh(othersRows);
   // v431: Team pulse (head only) — ownedRows are the derived rows (auto / duty /
@@ -54824,6 +55504,12 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // others, each keyed to its owner(s). Mine rows default to [me] when no
   // `owners` was carried (single-owner); With-others rows already carry theirs
   // (Ship 2 routing). ageDays mirrors staleReason's own date math off staleDate.
+  const qcCounts = useMemo(() => qcTracker ? qcTrackerCounts(jobs) : null, [qcTracker, jobs]);
+  const withQcCat = (cats) => {
+    if (!qcTracker) return cats;
+    if (cats.some(c => c.key === "qc")) return cats;
+    return [...cats, { key: "qc", label: MYDAY_CAT_LABELS.qc, rows: [], top: MYDAY_ORDER.length, overdue: 0, urgent: 0 }];
+  };
   const ageDaysOf = (dateYmd) => {
     const d = dateYmd ? parseAnyDate(dateYmd) : null;
     if (!d) return 0;
@@ -54894,6 +55580,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
       rows.push({ key: "auto_" + t.id, kind: "auto", bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim,
         sub: [t.jobName, st.state === "with" ? `with ${first(st.who)}` : `${headFirst}'s`].filter(Boolean), jobId: t.jobId, section: null, canDone: false, canSnooze: false });
     });
+    stampPrio(rows);
     return rows;
   })();
   // One line per job (v408 head group; v429 also the Mine "Job" view).
@@ -54978,9 +55665,14 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   })();
   const groups = [
     ...(view === "person" ? personGroups : [
+      // v459: the QC walks tracker (was its own tab, then a side card — Koy: "why do
+      // i have two qc tabs. keep the one on the bottom left and make it have
+      // everything qc") rides INSIDE Mine's "QC walks" category, under that
+      // category's own rows. If no QC row is on me today the category still
+      // exists (with 0 rows) so the tracker has a home.
       view === "job"
         ? { key: "mine", title: "Mine", rows: mineQ, byJob: byJobOf(mineQ), main: true, empty: "All clear — nothing on you right now." }
-        : { key: "mine", title: "Mine", rows: mineQ, byCat: myDayCategories(mineQ), main: true, empty: "All clear — nothing on you right now." },
+        : { key: "mine", title: "Mine", rows: mineQ, byCat: withQcCat(myDayCategories(mineQ)), main: true, empty: "All clear — nothing on you right now." },
       // v427: rows the head's board used to own that now route to another hat
       // holder — read-only (no Done/Snooze/actions), folded by default.
       ...(iRunHead && freshOthers.length ? [{ key: "others", title: "With others", rows: othersQ, byCat: myDayCategories(othersQ), empty: "" }] : []),
@@ -55037,6 +55729,21 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   // hands back its undo; stage it in the single Undo slot.
   const rmPhoto = (n, p) => { if (!onRemoveNeedPhoto || !n) return; const undoFn = onRemoveNeedPhoto(n.id, p); if (undoFn) stage("Photo removed", undoFn); };
   const canRmPhoto = (p) => !!p && (sameName(p.by, me) || iRunHead);
+  // v461: one tap flips a row Urgent ↔ Normal. A need doc writes its own
+  // `priority` (same field Edit writes, logged in the thread); anything else
+  // writes the shared settings/mydayPriority map by row key.
+  const toggleUrgent = (r) => {
+    const next = r.prio === "urgent" ? "" : "urgent";
+    if (r.kind === "need") {
+      if (!r.need || !onPatchNeed) return;
+      onPatchNeed(r.need.id, { priority: next }, r.need, { kind: "edit", text: next ? "changed: urgent" : "changed: normal priority" });
+    } else {
+      if (!onSetPrio) return;
+      onSetPrio(r.key, next);
+    }
+    toast.success(next ? "Marked urgent" : "Urgent cleared");
+  };
+  const canMarkUrgent = (r) => !r.readOnly && (r.sel || r.canReassign) && (r.kind === "need" ? !!(r.need && onPatchNeed) : !!onSetPrio);
   const Row = (r) => {
     const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
     const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
@@ -55279,6 +55986,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
           )}
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: narrow ? "auto" : 0 }}>
+        {!selectMode && canMarkUrgent(r) && (
+          <button onClick={() => toggleUrgent(r)} title={r.prio === "urgent" ? "Urgent — tap to clear" : "Mark urgent"} aria-pressed={r.prio === "urgent"}
+            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.muted, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
+        )}
         {!selectMode && r.sel && onSaveFocus && (
           <button onClick={() => toggleFocus(r.key)} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} aria-pressed={pinned}
             style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.muted, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
@@ -55355,8 +56066,10 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
                       <span style={{ fontSize: 12, color: C.muted }}>{c.rows.length}</span>
                       {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
                       {c.overdue === 0 && c.top === 1 && <span style={{ fontSize: 10, fontWeight: 700, color: C.blue }}>today</span>}
+                      {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
+                      {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.scheduled > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#3B5BA5", background: "#3B5BA518", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.scheduled} scheduled</span>}
                     </div>
-                    {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}</div>}
+                    {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}{g.key === "mine" && c.key === "qc" && qcTracker}</div>}
                   </div>
                 );
               })}
@@ -55489,7 +56202,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
                       <td style={{ padding: "7px 10px", color: clickable ? C.text : C.dim, fontWeight: 600 }}>{p.name}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: C.text }}>{p.open}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: redOverdue ? C.red : C.text, fontWeight: redOverdue ? 700 : 400 }}>{p.overdue}</td>
-                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.oldestDays}d</td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.open > 0 ? `${p.oldestDays}d` : "–"}</td>
                       <td style={{ padding: "7px 10px", textAlign: "right", color: C.dim }}>{p.doneWeek}</td>
                     </tr>
                   );
@@ -55502,6 +56215,7 @@ function MyDay({ identity, users = [], jobs = [], needs = [], onPatchNeed, onSav
   ) : null;
   // Splices the pulse card in right before Sent (only when it exists — head only).
   const sideNodes = sideGroups.flatMap(g => (g.key === "sent" && pulseCard) ? [pulseCard, Group(g)] : [Group(g)]);
+
   const staleFooter = staleRows.length > 0 && (
     <div key="stale" style={{ marginBottom: 14 }}>
       <div onClick={() => setShowStale(s => !s)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px", fontSize: 12, color: C.dim }}>
@@ -57534,7 +58248,16 @@ function App() {
 
   // submitPin removed — replaced by UserPicker identity system
 
-  const [jobs,     setJobs]     = useState([]);
+  const [allJobs, setAllJobs] = useState([]);   // EVERY job, both divisions — the only source of truth (Commercial mode, 2026-09-25)
+  // `jobs` = the current mode's jobs, derived once. Every view keeps its `jobs`
+  // prop. Nothing that WRITES may use `jobs`: writes, merges, backups and
+  // lookups-for-save go through `allJobs` (audit table: plan Task 2).
+  // Device-level mode: which division every screen shows. localStorage only.
+  const [mode, _setMode] = useState(readMode);
+  const setMode = useCallback((m) => { const v = m === "commercial" ? "commercial" : "resi"; _setMode(v); try { localStorage.setItem(MODE_KEY, v); } catch {} }, []);
+  // A job made while in Commercial mode is commercial. Residential mode writes NO key (absent = resi).
+  const stampDivision = (j) => mode === "commercial" ? { ...j, division: "commercial" } : j;
+  const jobs = useMemo(() => allJobs.filter(j => jobDivision(j) === mode), [allJobs, mode]);
   const [upcoming, setUpcoming] = useState([]);
   // Which Upcoming entry to expand when the Upcoming tab mounts — set by tapping
   // a pipeline row in Forecast → Starts (Koy 2026-07-29). Cleared by UpcomingJobs
@@ -57546,6 +58269,7 @@ function App() {
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
   const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
+  const [mydayPrio, setMydayPrio] = useState({});     // v461: settings/mydayPriority.byKey — urgency on derived rows (shared)
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
   // the inbox UI; this one is intentionally duplicated rather than lifted to
@@ -57559,6 +58283,7 @@ function App() {
   // 4h) and the on-demand Sync button. Each entry: {simproId, name, address,
   // customer, dateIssued, stage, firstSeenAt, lastSeenAt, ignored, ignoredAt}.
   const [simproCandidates, setSimproCandidates] = useState([]);
+  const [divisionMismatches, setDivisionMismatches] = useState([]);   // Commercial mode: Settings → COMMERCIAL DIVISION scan result (settings/simproCandidates.divisionMismatches)
   const [simproInboxOpen, setSimproInboxOpen] = useState(false);
   const [simproSyncing, setSimproSyncing] = useState(false);
 
@@ -57582,7 +58307,7 @@ function App() {
   // pendingUpcomingDeletes / pendingUpcomingSaves no longer needed — upcoming uses one-time load
 
 
-  const jobsRef   = useRef(jobs);
+  const jobsRef   = useRef(allJobs);
 
   const isDirty   = useRef(false);
 
@@ -57599,7 +58324,7 @@ function App() {
   const upcomingPending = useRef(null);
   const upcomingSaveTimer = useRef(null);
 
-  useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+  useEffect(()=>{ jobsRef.current = allJobs; },[allJobs]);
 
   // ── Org membership join, once per SESSION (CC-SIDE SPEC, KC1 stage B) ───────
   // Every page load, not once ever: an anonymous field-ink uid isn't stable
@@ -57639,7 +58364,7 @@ function App() {
 
       const b = localStorage.getItem('hejobs_backup');
 
-      if(b) { const p=JSON.parse(b); if(p?.length) setJobs(migrate(p)); }
+      if(b) { const p=JSON.parse(b); if(p?.length) setAllJobs(migrate(p)); }
 
     } catch(e){}
 
@@ -57738,7 +58463,7 @@ function App() {
           // and a box being typed vanished mid-keystroke. Guard on BOTH.
           const _inFlight = (id) => !!saveTimers.current[id] ||
             !!(pendingPatches.current[id] && Object.keys(pendingPatches.current[id]).length > 0);
-          setJobs(prev => {
+          setAllJobs(prev => {
             if(!loaded.some(j => _inFlight(j.id))) return loaded;
             return loaded.map(sj => {
               if(_inFlight(sj.id)) {
@@ -57928,8 +58653,8 @@ function App() {
     // 4 hours; this listener picks up changes in real time so the header
     // badge count updates without a page reload.
     const unsubSimproCands = onSnapshot(doc(db,"settings","simproCandidates"), snap => {
-      if(snap.exists()) setSimproCandidates(snap.data().candidates || []);
-      else setSimproCandidates([]);
+      if(snap.exists()) { setSimproCandidates(snap.data().candidates || []); setDivisionMismatches(snap.data().divisionMismatches || []); }
+      else { setSimproCandidates([]); setDivisionMismatches([]); }
     }, err => console.error("Simpro candidates listener error:", err));
 
 
@@ -57957,6 +58682,10 @@ function App() {
     const unsubMydayFocus = onSnapshot(doc(db, "settings", "mydayFocus"),
       s => setMydayFocus((s.exists() && s.data() && s.data().byUser) || {}),
       e => console.warn("[HE] mydayFocus listener", e));
+    // v461: urgency marks on derived My Day rows — settings/mydayPriority.byKey.
+    const unsubMydayPrio = onSnapshot(doc(db, "settings", "mydayPriority"),
+      s => setMydayPrio((s.exists() && s.data() && s.data().byKey) || {}),
+      e => console.warn("[HE] mydayPriority listener", e));
 
     // Suggestions feed (for Today tab event stream) — read-only listener.
     // Docs are flat (no `data` envelope) since suggestions are written directly
@@ -57996,7 +58725,7 @@ function App() {
       window.removeEventListener('focus', onReturn);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('online', onNetUp);
-      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
+      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubMydayPrio(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
     }; // cleanup on unmount
 
   },[]);
@@ -58004,7 +58733,7 @@ function App() {
   // Automatic daily safety backup — separate from the normal rolling backup
   // Kept under a dated key so it can't be accidentally overwritten
   useEffect(() => {
-    if(!jobs.length) return;
+    if(!allJobs.length) return;
     const today = new Date().toISOString().split("T")[0];
     const key = `he_daily_backup_${today}`;
     if(!localStorage.getItem(key)) {
@@ -58028,7 +58757,7 @@ function App() {
         try { localStorage.removeItem('hejobs_backup'); } catch(e){}
       }
       // Save a minimal version: just id, name, type, quoteNumber, foreman, roughStatus, finishStatus
-      const compact = jobs.map(j => ({
+      const compact = allJobs.map(j => ({
         id:j.id, name:j.name, address:j.address, gc:j.gc, foreman:j.foreman,
         type:j.type, quoteNumber:j.quoteNumber, simproNo:j.simproNo,
         roughStatus:j.roughStatus, finishStatus:j.finishStatus,
@@ -58036,11 +58765,11 @@ function App() {
         prepStage:j.prepStage, updated_at:j.updated_at,
       }));
       try {
-        localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs: compact}));
-        console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+        localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: allJobs.length, jobs: compact}));
+        console.log(`[HE] Daily safety backup saved: ${allJobs.length} jobs (${today})`);
       } catch(e) { console.warn("[HE] Daily backup failed:", e); }
     }
-  }, [jobs.length]);
+  }, [allJobs.length]);
 
 
   // Save a single job — uses field-level merge when a patch is provided
@@ -58566,7 +59295,7 @@ function App() {
       const patch = { ...(pendingPatches.current[jid] || {}) };
       if (job && Object.keys(patch).length > 0) saveJob(job, patch);
     });
-  }, [syncHealth.synced, isOnline, jobs.length]); // eslint-disable-line
+  }, [syncHealth.synced, isOnline, allJobs.length]); // eslint-disable-line
 
   const wasOnlineRef = useRef(isOnline);
   useEffect(() => {
@@ -59111,7 +59840,7 @@ function App() {
   // ms after the user clicks out. Only patch `selected` when it's actually
   // pointing at this job (i.e. modal is open on this job).
   const updateJob = (updated, patch) => {
-    setJobs(js => js.map(j => j.id === updated.id ? updated : j));
+    setAllJobs(js => js.map(j => j.id === updated.id ? updated : j));
     setSelected(s => (s && s.id === updated.id) ? updated : s);
     saveJob(updated, patch);
   };
@@ -59153,6 +59882,16 @@ function App() {
     try { await setDoc(doc(db, "settings", "mydayFocus"), { byUser: { [key]: entry } }, { merge: true }); }
     catch (e) { console.warn("[HE] mydayFocus save failed", e); toast.error("Couldn't save focus pins"); }
   };
+  // v461: urgency on a derived My Day row — settings/mydayPriority.byKey[rowKey].
+  // Same merge-on-one-key write as the Focus pins: only this row's entry is
+  // touched, nobody else's marks are rewritten. "" clears (entry kept for audit).
+  const saveMyDayPrio = async (key, prio) => {
+    if (!key) return;
+    const entry = { prio: prio === "urgent" || prio === "low" ? prio : "", by: (identity && identity.name) || "", at: new Date().toISOString() };
+    setMydayPrio(m => ({ ...m, [key]: entry }));            // optimistic
+    try { await setDoc(doc(db, "settings", "mydayPriority"), { byKey: { [key]: entry } }, { merge: true }); }
+    catch (e) { console.warn("[HE] mydayPriority save failed", e); toast.error("Couldn't save urgency"); }
+  };
 
   // ── Simpro inbox handlers ──────────────────────────────────────────
   // Import a Simpro candidate as a real app job. Creates the job doc with a
@@ -59171,7 +59910,7 @@ function App() {
       toast.error("Importing Simpro jobs is admin-only.");
       return;
     }
-    const j = kind === "quick" ? blankQuickJob() : blankJob();
+    const j = stampDivision(kind === "quick" ? blankQuickJob() : blankJob());   // division from the current mode until the Business Group hint lands (plan Task 6)
     if (kind === "tempped") j.tempPed = true;
     j.name = cand.name || "";
     // v414: a candidate cached by the pre-fix refresh carries the SITE NAME as
@@ -59181,6 +59920,10 @@ function App() {
     j.address = (() => { const norm = (x) => String(x || "").replace(/\s+/g, " ").trim().toLowerCase(); const a = String(cand.address || "").trim(); return !a || norm(a) === norm(cand.name) ? "" : a; })();
     j.simproNo = String(cand.simproId || "");
     j.customer = cand.customer || "";
+    // Division from Simpro's Business Group (custom field, read by the poller). No hint → the current mode's stamp stands.
+    if (cand.divisionHint === "commercial") j.division = "commercial";
+    else if (cand.divisionHint === "resi") delete j.division;
+    if (cand.businessGroup) j.simproBusinessGroup = String(cand.businessGroup);
     j.foreman = "Unassigned";
     j._importedFromSimpro = true;
     j.imported_at = new Date().toISOString();
@@ -59189,7 +59932,7 @@ function App() {
         data: j,
         updated_at: new Date().toISOString(),
       });
-      setJobs(js => [j, ...js]);
+      setAllJobs(js => [j, ...js]);
       // Remove from candidates doc — pull the freshest list from state, drop
       // this one, write back. Real-time listener will pick up the change.
       const filtered = simproCandidates.filter(c => String(c.simproId) !== String(cand.simproId));
@@ -59199,6 +59942,13 @@ function App() {
       });
       setSelected(j);
       setSimproInboxOpen(false);
+      // Commercial: Drive folder + Simpro plans by themselves (spec §6.7). Fire-and-forget;
+      // the Drive section shows the progress off job.docPull like the button does.
+      if (isCommercial(j) && j.simproNo && String(j.name||"").trim().length >= 3) {
+        runDriveChain(j.id, identity?.name || "")
+          .then(r => toast.success(`Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`))
+          .catch(e => toast.error(`Drive folder: ${e.message || e}`));
+      }
       toast.success(kind === "tempped" ? `Imported "${j.name}" as a temp ped — set foreman/lead to make it live` : kind === "quick" ? `Imported "${j.name}" as a quick job — set foreman/lead to make it live` : `Imported "${j.name}" — set foreman/lead to make it live`);
     } catch (e) {
       console.error("[HE] importSimproCandidate failed", e);
@@ -59272,7 +60022,7 @@ function App() {
 
     if(!await showConfirm("Delete this job site?")) return;
 
-    setJobs(js=>js.filter(j=>j.id!==id));
+    setAllJobs(js=>js.filter(j=>j.id!==id));
 
     if(selected?.id===id) setSelected(null);
 
@@ -59328,7 +60078,15 @@ function App() {
   const [gcInboxOpen, setGcInboxOpen] = useState(0);
   useEffect(() => onSnapshot(doc(db,"settings","gcInbox"), s => setGcInboxOpen((s.exists() && Number(s.data().open)) || 0), () => {}), []);
   // v446: My Day tab badge — my open task docs that are overdue, due today or urgent.
-  const mydayBadge = useMemo(() => mydayBadgeCount(needs, identity, localYmd()), [needs, identity]);
+  // Commercial mode (Koy 2026-09-25: "strictly commercial only … no residential"): a need
+  // follows its job's division. A need with no job, or whose job no longer exists, shows in both.
+  const needsForMode = useMemo(() => {
+    const inMode = new Set((jobs || []).map(j => j.id)); const known = new Set((allJobs || []).map(j => j.id));
+    return (needs || []).filter(n => !n || !n.jobId || inMode.has(n.jobId) || !known.has(n.jobId));
+  }, [needs, jobs, allJobs]);
+  // Redline walks are a residential process — none on the commercial side.
+  const redlineWalksForMode = mode === "commercial" ? [] : redlineWalks;
+  const mydayBadge = useMemo(() => mydayBadgeCount(needsForMode, identity, localYmd()), [needsForMode, identity]);
   const [moreOpen, setMoreOpen] = useState(false);  // top-nav "More" dropdown
   const [morePos, setMorePos] = useState({top:0,right:8});  // fixed-pos anchor (nav has overflow:auto, can't use absolute)
   const [activeForeman, setActiveForeman] = useState(null);
@@ -59352,6 +60110,20 @@ function App() {
     if (getAccess(identity) !== "contractor" && can(identity, "myday.view")) setView("myday");
     setLandingApplied(true);
   }, [identity, users, landingApplied]);
+  // Commercial mode: land in the person's default division once per session
+  // (Settings → My Preferences / Team Members → LANDS IN). No commercial.view →
+  // always residential, whatever the device remembered.
+  const modeAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!identity?.id || modeAppliedRef.current) return;
+    modeAppliedRef.current = true;
+    if (!can(identity, "commercial.view")) { setMode("resi"); return; }
+    if (identity.defaultMode === "commercial") setMode("commercial");
+  }, [identity]);   // eslint-disable-line
+  // The open drawer follows the mode — never a residential drawer over a commercial board.
+  useEffect(() => { if (selected && jobDivision(selected) !== mode) setSelected(null); }, [mode]);   // eslint-disable-line
+  // …and so does the nav: a tab the new mode doesn't have falls back to the Job Board.
+  useEffect(() => { const t = [...NAV_MAIN_TABS, ...NAV_MORE_TABS].find(x => x.key === view); if (t && t.modes && !t.modes.includes(mode)) setView("home"); }, [mode]);   // eslint-disable-line
   // v433: count each screen open (once per device/user/day). Waits for the
   // landing redirect so a foreman's pre-redirect "home" flash isn't counted as
   // a Job Board visit.
@@ -59406,7 +60178,7 @@ function App() {
   // QC punches don't have RT linkages so they only update the punch tree.
   // Returns the new full job (or null if the item couldn't be found).
   const togglePunchItemDone = (jobId, phase, itemId) => {
-    const job = jobs.find(j => j.id === jobId);
+    const job = allJobs.find(j => j.id === jobId);
     if(!job) return null;
     const phaseKey = phase === "Rough" ? "roughPunch"
                    : phase === "Finish" ? "finishPunch"
@@ -59581,6 +60353,12 @@ function App() {
             <div style={{display:"flex",alignItems:"center",gap:7}}>
 
               {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
+              {isCommercial(job)&&(()=>{
+                const p=commPhase(job); const st=commOf(job).stage||"";
+                const lbl = p!==null ? `PHASE ${p} · ${COMM_PHASE_BY_N[p].short} · ${commPhaseDone(job,p)}/${COMM_PHASE_BY_N[p].items.length}` : st==="inprogress"?"IN PROGRESS":st==="hold"?"ON HOLD":st==="closeout"?"CLOSEOUT":st==="complete"?"COMPLETE":"READY TO START";
+                const col = p!==null?C.teal:st==="inprogress"?C.blue:st==="hold"?"#B0892C":st==="closeout"?C.purple:C.green;
+                return <span title={p!==null?COMM_PHASE_BY_N[p].label:"Commercial stage"} style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{lbl}</span>;
+              })()}
 
               <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.simproNo&&<span style={{color:C.dim,fontWeight:700,marginRight:5}}>#{job.simproNo}</span>}{job.name||"Untitled Job"}</span>
 
@@ -59791,12 +60569,14 @@ function App() {
   // ── Helper: open a job by ID and jump to a section ───────────────────────
   const openJobById = useCallback((jobId, section) => {
     if (!jobId) return;
-    const job = jobs.find(j => j.id === jobId);
+    const job = allJobs.find(j => j.id === jobId);   // both divisions — a push may name a job in the other mode
     if (job) {
+      const div = jobDivision(job);
+      if (div !== mode && (div === "resi" || can(identity, "commercial.view"))) { setMode(div); toast(`Switched to ${div === "commercial" ? "Commercial" : "Residential"}`); }
       setOpenTab(section || null);
       setSelected(job);
     }
-  }, [jobs]);
+  }, [allJobs, mode, identity, setMode]);
 
   // ── On mount: check URL params for deep-link (background notification tap) ─
   const [pendingNav, setPendingNav] = useState(() => {
@@ -59814,10 +60594,10 @@ function App() {
 
   // Once jobs are loaded, apply any pending navigation from URL params
   useEffect(() => {
-    if (!pendingNav || !jobs.length) return;
+    if (!pendingNav || !allJobs.length) return;
     openJobById(pendingNav.jobId, pendingNav.section);
     setPendingNav(null);
-  }, [jobs, pendingNav, openJobById]);
+  }, [allJobs, pendingNav, openJobById]);
 
   // Deep-link to a top-level view (e.g. ?view=huddle from the daily Huddle
   // push). Applied once identity loads + permission allows. The Huddle then
@@ -60063,6 +60843,9 @@ function App() {
                               <span style={{fontSize:10,fontWeight:600,color:C.muted,marginLeft:6}}>
                                 #{c.simproId}
                               </span>
+                              {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
+                              {c.divisionHint==="resi" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>RESI</span>}
+                              {!c.divisionHint && <span title="No Business Group on the Simpro job — imports into whichever mode you're in" style={{fontSize:9,fontWeight:700,color:C.amber,marginLeft:6,verticalAlign:"middle"}}>? group unset — imports as {mode==="commercial"?"Commercial":"Residential"}</span>}
                             </div>
                             {c.address && (
                               <div style={{fontSize:11,color:C.dim,marginTop:3}}>{c.address}</div>
@@ -60183,7 +60966,7 @@ function App() {
 
 
       {/* ── COMMAND NAV (dark console) ── */}
-      <div style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom:`1px solid ${D.hair}`}}>
+      <div style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
         {/* ROW 1 — flag wordmark + live status */}
         <div style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
           <div style={{width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
@@ -60197,6 +60980,18 @@ function App() {
             <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
           </div>
+          {can(identity,"commercial.view") && (
+            <div style={{display:"flex",alignItems:"center",gap:6}} title="Residential / Commercial — only changes what you see on this device">
+              <div style={{display:"flex",border:`1px solid ${D.chipLine}`,borderRadius:99,overflow:"hidden",background:D.chipBg}}>
+                {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => (
+                  <button key={k} onClick={()=>{ if (mode!==k) { setMode(k); toast.success(k==="commercial" ? "Commercial — only commercial jobs everywhere" : "Residential"); } }}
+                    style={{border:"none",background: mode===k ? (k==="commercial" ? C.teal : C.accent) : "transparent", color: mode===k ? "#fff" : D.text,
+                      fontSize:10,fontWeight:700,letterSpacing:"0.1em",padding:"5px 11px",cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+                ))}
+              </div>
+              <HelpDot section="commercialmode"/>
+            </div>
+          )}
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
             <HeaderDateWeather/>
           </div>
@@ -60205,7 +61000,7 @@ function App() {
         <div style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
-          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity))
+          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity,mode))
               .map(t=>t.key==="contractors"?{...t,badge:gcInboxOpen,badgeTitle:gcInboxOpen+" contractor request"+(gcInboxOpen===1?"":"s")+" waiting"}  // v433: list lives in NAV_MAIN_TABS (usage report reads it too)
                     :t.key==="myday"?{...t,badge:mydayBadge,badgeTitle:mydayBadge+" task"+(mydayBadge===1?"":"s")+" overdue, due today or urgent"}   // v446
                     :t)
@@ -60216,10 +61011,10 @@ function App() {
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
-                background: active ? C.accent : "transparent",
+                background: active ? (mode==="commercial" ? C.teal : C.accent) : "transparent",
                 color: active ? "#fff" : "#9AA3B2",
                 transition:"all 0.15s",letterSpacing:"0.02em",
-                boxShadow: active ? `0 6px 18px ${D.accentGlow}` : "none",
+                boxShadow: active ? `0 6px 18px ${mode==="commercial" ? "rgba(62,125,122,.5)" : D.accentGlow}` : "none",
                 display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
@@ -60232,7 +61027,7 @@ function App() {
             subcontractor) tucked here to keep the top bar short. Office only. */}
         {!isContractor && (()=>{
           const moreItems = [
-            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,identity)),
+            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,identity,mode)),
             ...(contractorUsers.length>0?[{...NAV_SUBS_TAB,label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:NAV_SUBS_TAB.label}]:[]),
           ];
           const moreActive = moreItems.some(i=>i.key===view);
@@ -60598,7 +61393,7 @@ function App() {
                           <button onClick={async()=>{
                               setShowUtilMenu(false);
                               try {
-                                const result = await syncDriveFoldersToJobs(jobs, updateJob);
+                                const result = await syncDriveFoldersToJobs(allJobs, updateJob);
                                 const msg = `Drive Sync Complete!\n\n` +
                                   `${result.matched.length} new match${result.matched.length===1?"":"es"} linked` +
                                   (result.matched.length > 0 ? ":\n" + result.matched.map(m=>`  ${m.folderName} → ${m.jobName}`).join("\n") : "") +
@@ -60638,19 +61433,19 @@ function App() {
                     </>
                   )}
                 </div>
-                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankQuickJob());j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.02em"}}>
                   + Quick
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankJob());j.foreman="Unassigned";j.tempPed=true;setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.02em"}}>
                   + Temp Ped
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankJob());j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
@@ -60688,9 +61483,9 @@ function App() {
                   </div>
                   {hits.slice(0,12).map(job=>(
                     job.quickJob
-                      ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                      ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                       : job.tempPed
-                      ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                      ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                       : <JobRow key={job.id} job={job} fc={_foremanColors[job.foreman]||"#6E7682"} showForeman={true}/>
                   ))}
                   {hits.length===0 && <div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
@@ -60702,6 +61497,7 @@ function App() {
           {/* ── SIMPRO CREW SCHEDULE ── */}
           <SimproCrewSchedule
             jobs={jobs}
+            strictDivision={mode==="commercial"}
             identity={identity}
             users={users}
             foremanColors={_allPersonColors}
@@ -60732,7 +61528,7 @@ function App() {
 
                 <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
 
-                  {[
+                  {(mode==="commercial" ? [[jobs.length,"Total",C.text,jobs], ...COMM_STAGE_SECTIONS.map(sec=>{ const f=jobs.filter(sec.test); return [f.length,sec.label,sec.color,f]; })] : [
 
                     [jobs.length,"Total",C.text,jobs],
 
@@ -60748,7 +61544,7 @@ function App() {
 
                     [donJobs.length,"Completed",C.green,donJobs],
 
-                  ].map(([v,l,c,filt])=>(
+                  ]).map(([v,l,c,filt])=>(
 
                     <div key={l} onClick={()=>filt&&filt.length>0&&setStageModal({label:l,color:c,jobs:filt})}
 
@@ -61021,9 +61817,9 @@ function App() {
                           {/* Jobs under this lead */}
                           {leadMap[lead].map(job=>(
                             job.quickJob
-                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                               : job.tempPed
-                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                               : <JobRow key={job.id} job={job} fc={fc2} showForeman={false}/>
                           ))}
                         </div>
@@ -61060,7 +61856,7 @@ function App() {
                   // screen search bar can find a job by its quote.
                   (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s))
                 ) : jobs);
-                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+                return <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
 
@@ -61103,7 +61899,7 @@ function App() {
 
                 <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
 
-                <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
                   style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
 
@@ -61136,7 +61932,7 @@ function App() {
 
                 const fNotStarted = fJobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0;}).length - fPrep;
 
-                return [[fJobs.length,"Total Jobs",C.blue],
+                return (mode==="commercial" ? [[fJobs.length,"Total Jobs",C.blue], ...COMM_STAGE_SECTIONS.map(sec=>[fJobs.filter(sec.test).length,sec.label,sec.color])] : [[fJobs.length,"Total Jobs",C.blue],
 
                   [fPrep,"Pre Job Prep",C.teal],
 
@@ -61148,7 +61944,7 @@ function App() {
 
                   [fFinish,"Finish",C.finish],
 
-                  [fDone,"Completed",C.green]].map(([v,l,c])=>(
+                  [fDone,"Completed",C.green]]).map(([v,l,c])=>(
 
                   <div key={l} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
 
@@ -61227,7 +62023,7 @@ function App() {
                 {filtered.length===0?(
                   <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
                     <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
-                    <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
+                    <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
                       style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
                         fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                       + Add First Job
@@ -61235,7 +62031,7 @@ function App() {
                   </div>
                 ):(
                   <>
-                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
+                  <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -61288,7 +62084,7 @@ function App() {
                     fTasks={fTasks}
                     prepTasks={prepTasks}
                     jobs={jobs}                    onSelectJob={(job)=>setSelected(job)}
-                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+                    onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
                     activeForeman={activeForeman}
                     foremenList={_foremen}
                   />
@@ -61406,7 +62202,7 @@ function App() {
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
-              setJobs(js=>js.map(j=>j.id===q.id?updated:j));
+              setAllJobs(js=>js.map(j=>j.id===q.id?updated:j));
               saveJob(updated,{type:"", simproNo:q.simproNo||""});
               setSelected(updated);
             }}
@@ -61435,7 +62231,7 @@ function App() {
                 return;
               }
               setUpcoming(next);
-              setJobs(js=>js.filter(j=>j.id!==job.id));
+              setAllJobs(js=>js.filter(j=>j.id!==job.id));
               if(selected?.id===job.id) setSelected(null);
               deleteJobRemote(job.id);
               setView("upcoming");
@@ -61476,7 +62272,7 @@ function App() {
               }
               setUpcoming(next);
               // Now it's safe to remove the quote job — upcoming already has the data.
-              setJobs(js=>js.filter(j=>j.id!==q.id));
+              setAllJobs(js=>js.filter(j=>j.id!==q.id));
               if(selected?.id===q.id) setSelected(null);
               deleteJobRemote(q.id);
               setView("upcoming");
@@ -61524,7 +62320,7 @@ function App() {
                       {!isContractor&&(
                         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
                           <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
-                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                          <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                             + New Job
@@ -61540,7 +62336,7 @@ function App() {
                       <div style={{textAlign:"center",padding:"40px 0",color:C.dim}}>
                         <div style={{fontSize:13,marginBottom:16}}>No jobs assigned to {firstName} yet</div>
                         {!isContractor&&(
-                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                          <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                             + Assign First Job
@@ -61548,12 +62344,12 @@ function App() {
                         )}
                       </div>
                     ) : (
-                      <StageSectionList
+                      <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS}
                         jobs={cJobs}
                         JobRow={JobRow}
                         TempPedCard={TempPedCard}
                         onSelectJob={(j)=>setSelected(j)}
-                        onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+                        onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
                         onDeleteJob={isContractor?null:(id)=>deleteJob(id)}
                         fc={cColor}
                         startCollapsed={true}
@@ -61568,7 +62364,7 @@ function App() {
       })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
-        <SchedulingForecast jobs={jobs} users={users} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)}
+        <SchedulingForecast jobs={jobs} users={users} strictDivision={mode==="commercial"} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)}
           onSelectUpcoming={can(identity,"pipeline.view")?((u)=>{ setUpcomingOpenId(u.id); openUpcoming(); }):undefined}
           foremenList={_foremen} identity={identity} onUpdateJob={updateJob} upcoming={upcoming}/>
       )}
@@ -61580,7 +62376,7 @@ function App() {
       {view==="tasks"&&can(identity,"tasks.view")&&(
         <Tasks
           jobs={jobs}          onSelectJob={(job)=>setSelected(job)}
-          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+          onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           foremenList={_foremen}
         />
       )}
@@ -61592,11 +62388,11 @@ function App() {
             <div style={{fontSize:11,color:C.dim}}>{jobs.filter(j=>j.type==="quote").length} quote{jobs.filter(j=>j.type==="quote").length!==1?"s":""}</div>
             {can(identity,"quotes.view")&&(
               <button onClick={()=>{
-                const j=blankJob();
+                const j=stampDivision(blankJob());
                 j.type="quote";
-                j.quoteNumber=nextQuoteNumber(jobs);
+                j.quoteNumber=nextQuoteNumber(allJobs);
                 j.foreman="Unassigned";
-                setJobs(js=>[j,...js]);
+                setAllJobs(js=>[j,...js]);
                 setSelected(j);
               }}
                 style={{marginLeft:"auto",background:C.accent,color:"#000",border:"none",borderRadius:8,
@@ -61609,7 +62405,7 @@ function App() {
             JobRow={JobRow}
             TempPedCard={TempPedCard}
             onSelectJob={(j)=>setSelected(j)}
-            onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+            onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
             onDeleteJob={(id)=>deleteJob(id)}
             startCollapsed={true}
           />
@@ -61618,7 +62414,6 @@ function App() {
 
       {view==="nav"&&<NavView jobs={jobs}/>}
 
-      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity} onPatchJob={(jobId,patch)=>{ const j=jobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/>}
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
@@ -61636,18 +62431,18 @@ function App() {
             saveAllUpcoming(next);
           }}
           onPromote={(u)=>{
-            const j=blankJob();
+            const j=stampDivision(blankJob());
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             const next=upcoming.filter(x=>x.id!==u.id);
-            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
+            setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("home"); saveJob(j); saveAllUpcoming(next);
           }}
           onPromoteToQuote={(u)=>{
-            const j=blankJob();
+            const j=stampDivision(blankJob());
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
-            j.type="quote"; j.quoteNumber=nextQuoteNumber(jobs);
+            j.type="quote"; j.quoteNumber=nextQuoteNumber(allJobs);
             const next=upcoming.filter(x=>x.id!==u.id);
-            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
+            setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("quotes"); saveJob(j); saveAllUpcoming(next);
           }}
         />
@@ -61674,13 +62469,15 @@ function App() {
       )}
 
       {view==="myday"&&can(identity,"myday.view")&&(
-        <MyDay identity={identity} users={users} jobs={jobs} needs={needs} onAddNeedUpdate={addNeedUpdate} onEditNeedUpdate={editNeedUpdate}
+        <MyDay identity={identity} users={users} jobs={jobs} needs={needsForMode} onAddNeedUpdate={addNeedUpdate} onEditNeedUpdate={editNeedUpdate}
+          qcTracker={mode!=="commercial"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager") ? <QCView embedded jobs={jobs} identity={identity} onSelectJob={(j)=>setSelected(j)} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/> : null}
           onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto} photoBusyIds={needPhotoBusy}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
-          redlineWalks={redlineWalks} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
+          redlineWalks={redlineWalksForMode} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
+          prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
           jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}/>
       )}
 
@@ -61689,7 +62486,7 @@ function App() {
       )}
 
       {view==="needs"&&can(identity,"board.view")&&(
-        <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onPatchNeed={patchNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected} onUpdateJob={updateJob} onQuickAdd={(preset)=>setQuickAdd(preset||{})}/>
+        <NeedsBoard needs={needsForMode} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onPatchNeed={patchNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected} onUpdateJob={updateJob} onQuickAdd={(preset)=>setQuickAdd(preset||{})}/>
       )}
 
       {view==="lutron"&&can(identity,"lutron.view")&&(
@@ -61710,13 +62507,13 @@ function App() {
             if (full) setSelected(full);
           }}
           onUpdateCO={(jobId, coId, patch) => {
-            const job = jobs.find(j => j.id === jobId);
+            const job = allJobs.find(j => j.id === jobId);
             if (!job) return;
             const nextCOs = (job.changeOrders || []).map(co =>
               co && co.id === coId ? { ...co, ...patch } : co
             );
             const updated = { ...job, changeOrders: nextCOs };
-            setJobs(prev => prev.map(j => j.id === jobId ? updated : j));
+            setAllJobs(prev => prev.map(j => j.id === jobId ? updated : j));
             saveJob(updated, { changeOrders: nextCOs });
           }}/>
       )}
@@ -61730,7 +62527,17 @@ function App() {
           onUpdateRedline={updateRedlineWalk}
           onDeleteRedline={deleteRedlineWalk}
           onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
-          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+          onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+        />
+      )}
+
+      {view==="jobstart"&&mode==="commercial"&&can(identity,"commstart.view")&&(
+        <JobStartBoard
+          jobs={jobs}
+          identity={identity}
+          users={users}
+          onSelectJob={(j, tab)=>{ const full = allJobs.find(x => x.id === j.id); if (full) { if (tab) setOpenTab(tab); setSelected(full); } }}
+          onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
         />
       )}
 
@@ -61789,7 +62596,9 @@ function App() {
             colorOverrides={_colorOverrides}
             onSave={saveSettings}
             onSaveUsers={saveUsers}
-            jobs={jobs}
+            divisionMismatches={divisionMismatches}
+            onScanDivisions={async()=>{ try { toast("Checking every job against Simpro — a minute or two…"); const r = await httpsCallable(functions, "scanSimproDivisions", { timeout: 540000 })({}); const d = r.data||{}; toast.success(`Checked ${d.checked||0} jobs — ${d.mismatches||0} to review${d.errors?` · ${d.errors} couldn't be read`:""}`); } catch(e) { toast.error(`Scan failed: ${e.message||e}`); } }}
+            jobs={allJobs}   /* backup download must hold every job, both divisions */
             identity={identity}
             upcoming={upcoming}
             onUpdateJob={updateJob}

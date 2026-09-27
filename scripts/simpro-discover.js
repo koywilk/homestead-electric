@@ -115,6 +115,78 @@ const firstId = (list) => Array.isArray(list) && list.length && list[0] && list[
   await probe("labor rates (alt path)", "GET", "/setup/laborRates/?pageSize=5");
   await probe("activities / non-job time (exists?)", "GET", "/setup/activities/?pageSize=5");
 
+  // ── Business groups (Commercial mode, 2026-09-25) ──
+  // Koy: Simpro flags resi vs commercial under Job settings → Business Group.
+  // The candidate poller wants to read it so an import can pre-set the job's
+  // division. Confirm the setup list + the field name on a job (BusinessGroup
+  // {ID, Name} per the public docs) + that the bulk /jobs/ list accepts it as
+  // a column (bulk `columns=` silently rejects unknown names on this tenant).
+  // Run 1 (2026-09-25): /setup/businessGroups/ → 404, bulk column → 422. So the
+  // name/path is something else on this tenant. Run 2: pull ONE pending job's
+  // full detail with no column filter and report every key that smells like a
+  // business group / division / tag, then try the likely alternative paths.
+  const pend = await probe("one pending job id", "GET", "/jobs/?Stage=Pending&pageSize=1");
+  const pendId = firstId(pend);
+  if (pendId) {
+    const full = await probe("that job — FULL detail (no columns filter)", "GET", `/jobs/${pendId}?display=detailed`);
+    if (full && typeof full === "object") {
+      const hits = [];
+      const walk = (v, p) => {
+        if (!v || typeof v !== "object") return;
+        for (const k of Object.keys(v)) {
+          const kp = p ? `${p}.${k}` : k;
+          if (/business|group|division|tag|custom|category|type/i.test(k)) hits.push(`${kp} = ${JSON.stringify(shape(v[k]))}`);
+          if (v[k] && typeof v[k] === "object" && !Array.isArray(v[k]) && kp.split(".").length < 3) walk(v[k], kp);
+        }
+      };
+      walk(full, "");
+      console.log(`    top-level keys: ${Object.keys(full).join(", ")}`);
+      console.log(hits.length ? `    business-group-ish keys:\n      ${hits.join("\n      ")}` : "    (no key on the job mentions business / group / division / tag / custom / category / type)");
+      out.probes.push({ label: "business-group-ish keys on a job", keys: Object.keys(full), hits });
+    }
+    await probe("that job — schema via OPTIONS", "OPTIONS", `/jobs/${pendId}`);
+    await probe("that job — custom fields (if Business Group is a custom field)", "GET", `/jobs/${pendId}/customFields/`);
+  }
+  // Run 3 RESULT (2026-09-25): Business Group is a JOB CUSTOM FIELD —
+  // /jobs/{id}/customFields/ → { CustomField:{Name:"Business Group"}, Value:"Residential"|"Commercial"|"Multi Family" }.
+  // Setup list: /setup/accounts/businessGroups/ (1 Residential, 2 Commercial, 3 Multi Family).
+  // Not on the job record, not a bulk column (422), not on cost center or customer.
+  // (Probes kept so a re-run still shows it.)
+  // Run 3: the job record has NO business-group key; the list lives
+  // at /setup/accounts/businessGroups/. Find WHERE a job links to its group —
+  // the second custom field, a cost center, or the customer — and print it all
+  // to the console so nothing has to be dug out of the JSON.
+  const bgs = await probe("business groups (setup/accounts)", "GET", "/setup/accounts/businessGroups/?pageSize=50");
+  if (Array.isArray(bgs)) console.log(`    groups: ${bgs.map(g => `${g.ID}:${g.Name}`).join(" | ")}`);
+  const findBusiness = (obj, label) => {
+    const hits = [];
+    const walk = (v, p, d) => { if (!v || typeof v !== "object" || d > 4) return; for (const k of Object.keys(v)) { const kp = p ? `${p}.${k}` : k; if (/business/i.test(k)) hits.push(`${kp} = ${JSON.stringify(v[k])}`); walk(v[k], kp, d + 1); } };
+    walk(obj, "", 0);
+    console.log(hits.length ? `    ${label}: ${hits.join(" | ")}` : `    ${label}: no key containing "business"`);
+  };
+  if (pendId) {
+    const cfs = await probe("that job — custom fields, ALL of them", "GET", `/jobs/${pendId}/customFields/`);
+    if (Array.isArray(cfs)) console.log(`    custom fields: ${cfs.map(c => `${c.CustomField && c.CustomField.Name} = ${JSON.stringify(c.Value)}`).join(" | ")}`);
+    const secs = await probe("that job — sections", "GET", `/jobs/${pendId}/sections/?pageSize=5`);
+    const secId = firstId(secs);
+    if (secId) {
+      const ccs = await probe("first section — cost centers", "GET", `/jobs/${pendId}/sections/${secId}/costCenters/?pageSize=5`);
+      const ccId = firstId(ccs);
+      if (ccId) { const cc = await probe("first cost center — full record", "GET", `/jobs/${pendId}/sections/${secId}/costCenters/${ccId}`); findBusiness(cc, "cost center"); }
+    }
+    const jobFull = await call("GET", `/jobs/${pendId}?display=detailed`);
+    const custId = jobFull.body && jobFull.body.Customer && jobFull.body.Customer.ID;
+    const custType = jobFull.body && jobFull.body.Customer && jobFull.body.Customer.Type;
+    if (custId) { const cust = await probe(`the job's customer (${custType})`, "GET", `/customers/${custType === "Individual" ? "individuals" : "companies"}/${custId}`); findBusiness(cust, "customer"); }
+    findBusiness(jobFull.body, "job (detailed)");
+    // The OPTIONS schema text: does it mention a business group anywhere?
+    const opt = await call("OPTIONS", `/jobs/${pendId}`);
+    const optText = JSON.stringify(opt.body || "");
+    const m = optText.match(/.{0,80}usiness.{0,80}/g);
+    console.log(m ? `    OPTIONS schema mentions: ${m.slice(0, 5).join(" || ")}` : "    OPTIONS schema: no mention of business");
+  }
+  await probe("cost-center setup list (do setup cost centers carry a business group?)", "GET", "/setup/accounts/costCenters/?pageSize=3");
+
   // ── One job's cost centers + timesheets (pass a Simpro job number) ──
   if (JOB) {
     await probe("job header", "GET", `/jobs/${JOB}`);

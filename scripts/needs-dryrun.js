@@ -66,7 +66,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
   "taskPhotoPath","needPhotos","teamPulse",
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
-  "bucketOfYmd","needBucket","needPriority","prioRank","compareMyDayRows","mydayBadgeCount",
+  "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "loadsListRows","loadsListCsv",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -483,7 +483,11 @@ const pNeeds = [
 ];
 const pRows = [{ owners:["Josh"], bucket:"overdue", ageDays:9 }, { owners:["Koy Wilkinson","Josh"], bucket:"today", ageDays:1 }];
 const pulse = H.teamPulse({ needs:pNeeds, users:pUsers, ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
-eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue desc, then open desc; inactive/contractor/idle excluded");
+eq(pulse.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson"], "sorted overdue desc, then open desc; inactive/contractor excluded");
+// v458: an idle person (no open doc, nothing done this week) still shows, with zeros, after everyone with work.
+const pulseIdle = H.teamPulse({ needs:pNeeds, users:[...pUsers, { name:"Keegan" }, { name:"Brady" }], ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
+eq(pulseIdle.map(p => p.name), ["Gage Lund","Josh","Koy Wilkinson","Brady","Keegan"], "idle people listed after everyone with work, A–Z");
+eq(pulseIdle.find(p => p.name === "Keegan"), { name:"Keegan", open:0, overdue:0, oldestDays:0, doneWeek:0 }, "idle person shows zeros");
 eq(pulse.find(p => p.name === "Gage Lund"), { name:"Gage Lund", open:2, overdue:2, oldestDays:13, doneWeek:0 }, "Gage: 2 open both overdue, oldest from createdAt");
 eq(pulse.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "Josh: 1 doc + 2 owned rows; done 9/21 counts, 9/10 doesn't");
 eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, overdue:0, oldestDays:1, doneWeek:0 }, "shared row counts for each owner");
@@ -491,6 +495,13 @@ eq(pulse.find(p => p.name === "Koy Wilkinson"), { name:"Koy Wilkinson", open:1, 
 const pulseV = H.teamPulse({ needs:[...pNeeds, { id:"g", status:"done", assignedTo:"Josh", doneBy:"Josh", doneAt:"2026-09-22T12:00:00", voided:true, voidedBy:"Josh" }], users:pUsers, ownedRows:pRows, todayYmd:"2026-09-23", nowMs:P_NOW });
 eq(pulseV.find(p => p.name === "Josh"), { name:"Josh", open:3, overdue:1, oldestDays:9, doneWeek:1 }, "voided doc doesn't count as done this week");
 
+// ── v461: urgency on every row ─────────────────────────────────────────────
+eq(H.rowPriority({ kind:"need", key:"need_1", need:{ priority:"urgent" } }, { need_1:{ prio:"low" } }), "urgent", "need row reads the doc, never the map");
+eq(H.rowPriority({ kind:"auto", key:"auto_j1_prep" }, { auto_j1_prep:{ prio:"urgent", by:"Koy" } }), "urgent", "derived row reads the shared map by key");
+eq(H.rowPriority({ kind:"duty", key:"duty_j1_coord_rough_qc" }, { duty_j1_coord_rough_qc:{ prio:"" } }), "normal", "cleared mark → normal");
+eq(H.rowPriority({ kind:"punch", key:"punch_j1_i9" }, {}), "normal", "no mark → normal");
+eq(H.rowPriority({ kind:"redline", key:"redline_w1" }, null), "normal", "no map → normal");
+eq(H.rowPriority({ kind:"auto", key:"auto_x" }, { auto_x:{ prio:"junk" } }), "normal", "junk value → normal");
 // ── usage tracking (v433) ───────────────────────────────────────────────────
 eq(H.usageSeenKey("koy", "views", "myday"), "koy|views|myday", "seen key shape");
 eq(H.shouldLogUsage([], "koy|views|myday"), true, "empty seen → log");
