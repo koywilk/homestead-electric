@@ -50244,12 +50244,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v461
+**Last manifest update:** 2026-09-25 · App SW version: v462
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Job Start — a note and attached docs on each item, not just the phase** · 'shipped 2026-09-28' · 'SW v462' · Justin (via Koy): *"Would it be possible to add the option to notes for each specific step of each phase? You can for the phase as a whole, but not each step… For example, I can say the 'award doc was Subcontract 009 sent by Mitch on 5/7/26 for X amount - signed by Josh'… Or attach the doc even."* Every Job Start chip (past and current phases; locked future phases excluded) ends with a small note mark: tap it and a panel opens under that phase's chips for that one item — a **note** textarea and **Attach doc** ('PhotoAttacher' with 'accept="*/*"', so PDFs and any file work; non-images render as a file tile that opens the download URL). The mark lights up on chips carrying a note or docs and shows the doc count. Stored under 'commercial.start': 'itemNotes[K]' (text), 'itemNotesBy[K]' ('{by, at}' stamped on each edit, shown in the panel header), 'docs[K]' (the same '{id,name,url,storagePath,type}' entries the photo items use, uploaded to 'jobs/<id>/jobstart/<n>_<key>/docs/'). The phase note stays as it was. Same card in the Job Start board and the drawer tab. Guide 'jobstart.html' gains "A note or a doc on one item". **Why it won't lose data:** three new additive maps inside 'commercial.start', written through the existing 'patchStart' spread-merge funnel (key-by-key, so two people on different items never clobber each other); Storage uploads under the existing job prefix; no loader, rules or function change.
 - **My Day — every row can be marked urgent** · 'shipped 2026-09-26' · 'SW v461' · Koy: *"Every task should be able to be marked as urgent."* Urgency existed only on need docs ('priority', set on the + sheet or in Edit); auto reminders, duty rows (QC walks, start POs, prep), punch items, redline walks and scan rows had no doc to carry it. New **!** button in every actionable row's action cluster (Mine, Focus, and rows the viewer may reassign) flips Urgent ↔ Normal: a need row writes the doc's own 'priority' through 'patchNeed' (thread note "changed: urgent", the same write Edit does); a derived row writes 'settings/mydayPriority.byKey[rowKey] = { prio, by, at }' (one shared doc, merge-on-one-key like the Focus pins, so the mark is company-wide and survives reloads; "" clears). 'rowPriority(row, map)' stamps derived rows in Mine, With others and the foreman's On-head list before the stale split, so the existing sort ('compareMyDayRows'), red edge, URGENT tag and category float all apply unchanged. Row keys are stable ('auto_<taskId>', 'duty_<jobId>_<dutyId>', 'punch_<jobId>_<itemId>', 'redline_<walkId>', 'scan_<taskId>'). Harness 'scripts/needs-dryrun.js' covers 'rowPriority'. Guide 'myday.html' updated. Not in this ship: Low from the ! button (Edit still does Low on docs), the tab badge (docs only, as before). **Why it won't lose data:** need docs get the existing dotted 'data.priority' patch; derived rows write one new key under a new 'settings/mydayPriority' doc with 'merge:true' (never the whole map; 'settings' is already open-write, no rules change); nothing on any job is written.
 - **My Day — jobs marked PREP NOT NEEDED leave the Job prep category** · 'shipped 2026-09-26' · 'SW v460' · Koy: *"there is also a bunch of job prep in that section where i have marked them as job prep not needed, so they shouldn't show there anymore."* Two things feed Mine → **Job prep**: the auto "Pre Job Prep" task (already gated on 'allPrepChecked', which counts N/A items as handled since v388) and the company duty row "Job prep — not started" / "Prep: <stage>" from 'getCompanyDuties', which only checked the legacy 'prepStage === "Job Prep Complete"'. A job skipped with PREP NOT NEEDED (every item in 'prepNA') — or with every item ticked but a stale stage field — kept that duty row. 'getCompanyDuties' now returns nothing when 'allPrepChecked(job)' is true, the same test every other prep gate uses. **Also in this ship** (Koy: *"put the 2 need action so its visible without clicking on the qc dropdown as well"*): the tracker's row / bucket logic is lifted to module level ('qcCountOpen', 'qcWalkRows', 'qcBucketOf', 'qcTrackerCounts') so Mine's **QC walks** category header carries the red *N need action* and blue *N scheduled* pills while folded; 'QCView' uses the same helpers. **Why it won't lose data:** read-only derivation; nothing written or changed on the job.
 - **My Day — one QC walks section: the tracker lives inside Mine → QC walks** · 'shipped 2026-09-26' · 'SW v459' · Koy, on v457's side card: *"why do i have two qc tabs. keep the one on the bottom left and make it have everything qc."* The bottom-left one is Mine's **QC walks** category (the auto rows — "Schedule QC Walk", QC duty rows); the right one was the tracker card. The tracker ('QCView embedded') now renders **inside** that category card, under its own rows, with a small "ALL QC WALKS · N" label (+ *need action* / *scheduled* pills), the Dates toggle, search and the same buckets. 'withQcCat' keeps a "QC walks" category in Mine even when no QC row is on the viewer today, so the tracker always has a home (0 rows shown on the header). The side-column card is gone; the tracker's own fold state ('qc.cardOpen') is retired — the category's fold is the only fold. Category view only (Job / Person views show Mine differently). Guide 'myday.html' updated. **Why it won't lose data:** render placement only; the same two QC status writes; no field, loader, rules or function change.
@@ -52917,11 +52918,17 @@ const commGearSummary = (job) => {
 function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenTab, ctx = "board" }) {
   const [peek, setPeek] = useState(null);           // phase number expanded on the bar (look-back / preview)
   const [ov, setOv] = useState(null);               // { n, note } while the move-on modal is open
+  const [openItem, setOpenItem] = useState(null);   // v462: item key ("n.key") whose note / docs panel is open
   const canEdit = canEditJobStart(identity);
   const cur = commPhase(job); const st = commStartOf(job); const owed = commOwedItems(job); const g = commGearSummary(job);
   const todayYmd = localYmd();
   const ownerLabel = (n) => { const ph = COMM_PHASE_BY_N[n]; const rk = ph.owner === "site" ? "commsite" : "commstart"; const o = ownersForRoute(rk, users, todayYmd); return o.length ? o.map(x => String(x).split(" ")[0]).join(" · ") : COMM_OWNER_LABEL[ph.owner]; };
-  const patchStart = (fn) => onPatch(commPatch(job, c => ({ ...c, start: fn({ items:{}, na:{}, notes:{}, overrides:{}, photos:{}, dates:{}, ...(c.start || {}) }) })));
+  const patchStart = (fn) => onPatch(commPatch(job, c => ({ ...c, start: fn({ items:{}, na:{}, notes:{}, overrides:{}, photos:{}, dates:{}, itemNotes:{}, itemNotesBy:{}, docs:{}, ...(c.start || {}) }) })));
+  // v462 (Justin): a note and attached docs on each specific item, not just the
+  // phase — commercial.start.itemNotes[K] (text), itemNotesBy[K] ({by, at}),
+  // docs[K] ([{id,name,url,storagePath,type}], same shape PhotoAttacher writes).
+  const itemNote = (K) => String((st.itemNotes || {})[K] || "");
+  const itemDocs = (K) => { const d = (st.docs || {})[K]; return Array.isArray(d) ? d : []; };
   const tapChip = (n, k) => {
     if (!canEdit) return;
     const K = commItemKey(n, k); const state = commItemState(job, n, k);
@@ -52959,7 +52966,37 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em", cursor: locked || !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
           border:`1px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${col}`, color: col, background: state === "done" ? "#46916A0F" : isOwed ? "#B0892C0F" : state === "na" ? C.surface : "#fff" }}>
         <span>{state === "done" ? "✓" : state === "na" ? "—" : "○"}</span>{label}{state === "na" ? " · N/A" : ""}{isOwed ? " · OWED" : ""}{kind === "photo" ? " · PHOTO" : ""}
+        {!locked && (() => { const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K; const lit = hasNote || nDocs > 0 || on;
+          return (
+            <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? `${hasNote ? "Has a note" : ""}${hasNote && nDocs ? " · " : ""}${nDocs ? `${nDocs} doc${nDocs === 1 ? "" : "s"}` : ""} — tap to open` : "Add a note or attach a doc to this item"}
+              style={{ display:"inline-flex", alignItems:"center", gap:2, marginLeft:2, paddingLeft:6, borderLeft:`1px solid ${col}55`, color: lit ? col : `${col}77`, cursor:"pointer" }}>
+              <Icon name="note" size={11} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:9 }}>{nDocs}</span>}
+            </span>
+          ); })()}
       </span>
+    );
+  };
+  // v462: the open item's panel — note + attached docs — rendered under its phase's chips.
+  const itemPanel = (n) => {
+    if (!openItem || !openItem.startsWith(n + ".")) return null;
+    const ph = COMM_PHASE_BY_N[n]; const k = openItem.slice(String(n).length + 1);
+    const it = ph.items.find(([kk]) => kk === k); if (!it) return null;
+    const K = openItem; const meta = (st.itemNotesBy || {})[K];
+    return (
+      <div onClick={(e) => e.stopPropagation()} style={{ marginTop:8, padding:"10px 12px", border:`1px solid ${C.border}`, borderLeft:`3px solid ${C.blue}`, borderRadius:8, background:C.surface }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+          <span style={{ fontSize:10, fontWeight:800, letterSpacing:"0.1em", color:C.dim, textTransform:"uppercase" }}>{it[1]} — note &amp; docs</span>
+          {meta && meta.by && <span style={{ fontSize:10, color:C.muted }}>note by {meta.by}{meta.at ? ` · ${meta.at}` : ""}</span>}
+          <button onClick={() => setOpenItem(null)} title="Close" style={{ marginLeft:"auto", border:"none", background:"transparent", color:C.dim, cursor:"pointer", fontSize:16, lineHeight:1, fontFamily:"inherit" }}>×</button>
+        </div>
+        <textarea value={itemNote(K)} readOnly={!canEdit} placeholder={`Note for ${it[1]}… e.g. "Subcontract 009 sent by Mitch 5/7/26 for $X — signed by Josh"`} rows={2}
+          onChange={(e) => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, itemNotes: { ...(x.itemNotes || {}), [K]: v }, itemNotesBy: { ...(x.itemNotesBy || {}), [K]: { by: (identity && identity.name) || "", at: commLocalDate() } } })); }}
+          style={{ width:"100%", boxSizing:"border-box", padding:"7px 9px", border:`1px solid ${C.border}`, borderRadius:7, fontSize:12, fontFamily:"inherit", color:C.text, background:"#fff", resize:"vertical" }}/>
+        <div style={{ marginTop:8 }}>
+          <PhotoAttacher storagePath={`jobs/${job.id}/jobstart/${n}_${k}/docs`} photos={itemDocs(K)} color={C.blue} label="Attach doc" accept="*/*" iconName="fileText"
+            onChange={(next) => { if (canEdit) patchStart(x => ({ ...x, docs: { ...(x.docs || {}), [K]: next } })); }}/>
+        </div>
+      </div>
     );
   };
   const phaseBlock = (n) => {
@@ -52978,6 +53015,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
           <span style={{ marginLeft:"auto", fontSize:10, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>{ph.items.map(([k, l, kd]) => chip(n, k, l, kd))}</div>
+        {itemPanel(n)}
         {kind !== "future" && (photoItems.length > 0 || dateItems.length > 0) && (
           <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8 }}>
             {dateItems.map(([k, l]) => (
