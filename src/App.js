@@ -50244,12 +50244,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-27 · App SW version: v462
+**Last manifest update:** 2026-09-29 · App SW version: v463
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — job questions assigned to you show up in Mine** · 'shipped 2026-09-29' · 'SW v463' · Koy: *"any questions assinged to me through a job on rough and finish tabs etc should show upt in my day also."* A question's recipient is the free-text **Assign to** on the Rough / Finish Questions section ('q.for'). New pure 'questionsAssignedTo(name, jobs)' walks every job's 'roughQuestions' / 'finishQuestions' floors and returns the OPEN questions (not 'done', no answer yet) whose recipient names the viewer ('sameName', so "Gage" and "Gage Lund" both match; "GC" never does); temp peds / quick jobs skipped. Each becomes a Mine row (new **Questions** category, teal **Question** tag, sub = job · phase · room or floor) — tap opens the job on that tab to answer; **Done** marks the question 'done' with the same whole-map 'roughQuestions' / 'finishQuestions' write the Questions section itself makes, 10 s Undo. Harness 'needs-dryrun' covers the walk (answered / done / GC / unassigned / tempPed skipped, first-name match, finish tab, malformed maps) and the category. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; the only write is Done, which maps the existing floor array in place flipping one question's 'done' (never adds, removes or reorders), the same patch shape the Questions section already writes; no new field, no loader or rules change.
 - **My Day — rows read properly on a phone again** · 'shipped 2026-09-27' · 'SW v462' · Koy (screenshot): *"My day looks terrible on mobile."* The v446 row (and the v461 urgent button) put the five action buttons (pin, done, snooze, photo, Reply) beside the text in one non-wrapping flex row, so on a phone the text column was crushed to a few characters per line. Now on narrow screens ('narrow', under 900 px) the row wraps: the text block takes the full width first and the buttons sit on their own line, right-aligned; wide screens are unchanged. **Why it won't lose data:** render-only, no data or handler change.
 - **My Day — every row can be marked urgent** · 'shipped 2026-09-26' · 'SW v461' · Koy: *"Every task should be able to be marked as urgent."* Urgency existed only on need docs ('priority', set on the + sheet or in Edit); auto reminders, duty rows (QC walks, start POs, prep), punch items, redline walks and scan rows had no doc to carry it. New **!** button in every actionable row's action cluster (Mine, Focus, and rows the viewer may reassign) flips Urgent ↔ Normal: a need row writes the doc's own 'priority' through 'patchNeed' (thread note "changed: urgent", the same write Edit does); a derived row writes 'settings/mydayPriority.byKey[rowKey] = { prio, by, at }' (one shared doc, merge-on-one-key like the Focus pins, so the mark is company-wide and survives reloads; "" clears). 'rowPriority(row, map)' stamps derived rows in Mine, With others and the foreman's On-head list before the stale split, so the existing sort ('compareMyDayRows'), red edge, URGENT tag and category float all apply unchanged. Row keys are stable ('auto_<taskId>', 'duty_<jobId>_<dutyId>', 'punch_<jobId>_<itemId>', 'redline_<walkId>', 'scan_<taskId>'). Harness 'scripts/needs-dryrun.js' covers 'rowPriority'. Guide 'myday.html' updated. Not in this ship: Low from the ! button (Edit still does Low on docs), the tab badge (docs only, as before). **Why it won't lose data:** need docs get the existing dotted 'data.priority' patch; derived rows write one new key under a new 'settings/mydayPriority' doc with 'merge:true' (never the whole map; 'settings' is already open-write, no rules change); nothing on any job is written.
 - **My Day — jobs marked PREP NOT NEEDED leave the Job prep category** · 'shipped 2026-09-26' · 'SW v460' · Koy: *"there is also a bunch of job prep in that section where i have marked them as job prep not needed, so they shouldn't show there anymore."* Two things feed Mine → **Job prep**: the auto "Pre Job Prep" task (already gated on 'allPrepChecked', which counts N/A items as handled since v388) and the company duty row "Job prep — not started" / "Prep: <stage>" from 'getCompanyDuties', which only checked the legacy 'prepStage === "Job Prep Complete"'. A job skipped with PREP NOT NEEDED (every item in 'prepNA') — or with every item ticked but a stale stage field — kept that duty row. 'getCompanyDuties' now returns nothing when 'allPrepChecked(job)' is true, the same test every other prep gate uses. **Also in this ship** (Koy: *"put the 2 need action so its visible without clicking on the qc dropdown as well"*): the tracker's row / bucket logic is lifted to module level ('qcCountOpen', 'qcWalkRows', 'qcBucketOf', 'qcTrackerCounts') so Mine's **QC walks** category header carries the red *N need action* and blue *N scheduled* pills while folded; 'QCView' uses the same helpers. **Why it won't lose data:** read-only derivation; nothing written or changed on the job.
@@ -54962,6 +54963,31 @@ function punchAssignedTo(name, jobs) {
   });
   return out;
 }
+// v463 (Koy 2026-09-29: "any questions assigned to me through a job on rough
+// and finish tabs etc should show up in my day also"): a job question's `for`
+// is its recipient — free text typed on the Questions section's "Assign to"
+// (a person's name, or "GC" / "Designer"…). When it names a person, every OPEN
+// question (not done, no answer yet) on them rides onto their My Day exactly
+// like an assigned punch item. Read-only walk; Done on the row sets `done`.
+// Pure — extracted verbatim by scripts/needs-dryrun.js.
+function questionsAssignedTo(name, jobs) {
+  if (!name) return [];
+  const out = [];
+  const floorLabel = { upper: "Upper", main: "Main", basement: "Basement" };
+  (jobs || []).forEach(j => {
+    if (!j || j.tempPed || j.quickJob) return;
+    [["Rough", j.roughQuestions], ["Finish", j.finishQuestions]].forEach(([phase, qs]) => {
+      if (!qs || typeof qs !== "object") return;
+      Object.keys(qs).forEach(k => (Array.isArray(qs[k]) ? qs[k] : []).forEach(q => {
+        if (!q || q.done) return;
+        if (String(q.answer || "").replace(/<[^>]+>/g, "").trim()) return;
+        if (!sameName(q.for, name)) return;
+        out.push({ ...q, floor: floorLabel[k] || k, floorKey: k, phase, jobId: j.id, jobName: j.name || "Untitled" });
+      }));
+    });
+  });
+  return out;
+}
 // Which jobs are "mine" for My Day: a foreman → their jobs; lead/crew → their
 // foreman's jobs (via foremanId); office → none (the My jobs strip hides).
 function myJobsFor(identity, users, jobs) {
@@ -55107,12 +55133,13 @@ const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 // folded, order themselves by their most urgent row (lane), then overdue
 // count, then label; rows inside keep the lane sort. Pure — extracted by
 // scripts/needs-dryrun.js.
-const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", redline: "Redline walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
+const MYDAY_CAT_LABELS = { tasks: "Tasks on me", needs: "Needs", bodies: "Bodies", punch: "Punch", questions: "Questions", invoicing: "Invoicing", po: "Start POs", co: "Change orders", rt: "Return trips", scheduling: "Scheduling", qc: "QC walks", redline: "Redline walks", matterport: "Matterport scans", prep: "Job prep", other: "Other" };
 function myDayCategoryOf(row) {
   if (!row) return "other";
   if (row.kind === "redline") return row.routeKey === "co_send" ? "co" : "redline";
   if (row.kind === "need") return row.needKind === "task" ? "tasks" : row.needKind === "bodies" ? "bodies" : "needs";
   if (row.kind === "punch") return "punch";
+  if (row.kind === "question") return "questions";
   if (row.kind === "duty") return row.dutyType === "qc" ? "qc" : row.dutyType === "po" ? "po" : "prep";
   if (row.kind === "auto") {
     const c = row.autoCategory;
@@ -55306,6 +55333,16 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
     tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
     onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
+  // v463: job questions whose recipient is me (Rough / Finish tab → Assign to).
+  // Tap opens the job on that tab to answer; Done marks the question done
+  // (same whole-map write the Questions section itself makes), 10 s Undo.
+  questionsAssignedTo(me, jobs).forEach(q => mineRows.push({ key: "question_" + q.jobId + "_" + q.id, kind: "question", bucket: "today", title: plainText(q.question) || "question",
+    tag: "Question", tagColor: C.teal, sub: [q.jobName, q.phase, q.room || q.floor].filter(Boolean), jobId: q.jobId, section: q.phase, canDone: true, canSnooze: false,
+    onDone: () => {
+      const field = q.phase === "Rough" ? "roughQuestions" : "finishQuestions";
+      const setDone = (v) => { const job = (jobs || []).find(j => j && j.id === q.jobId); if (!job) return; const cur = job[field] || {}; const next = { ...cur, [q.floorKey]: (Array.isArray(cur[q.floorKey]) ? cur[q.floorKey] : []).map(x => x && x.id === q.id ? { ...x, done: v } : x) }; onUpdateJob({ ...job, [field]: next }, { [field]: next }); };
+      setDone(true); stage("Question closed", () => setDone(false));
+    } }));
   // v408: auto-tasks are the HEAD's, all of them. Foremen see none (Koy: they
   // "don't really make sense for the foremans"). Each head row carries its
   // delegation state from the joined task doc (autoDelegation).

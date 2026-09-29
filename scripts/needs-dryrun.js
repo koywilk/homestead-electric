@@ -60,7 +60,7 @@ const extractArray = (name) => { const start = src.indexOf(`const ${name} = `); 
 
 const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
-  "punchAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
+  "punchAssignedTo","questionsAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
   "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
   "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor",
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
@@ -196,6 +196,23 @@ assert.strictEqual(mineP.find(i => i.id==="p7").phase, "QC", "phase carried");
 eq(H.punchAssignedTo("Keegan", [punchJob]).map(i => i.id), ["p2"], "other assignee sees only theirs");
 eq(H.punchAssignedTo("", [punchJob]), [], "empty name -> []");
 eq(H.punchAssignedTo("Gage Lund", null), [], "null jobs -> []");
+
+// v463 — job questions on me (Rough / Finish → Assign to = a person's name)
+const qJob = { id:"jq", name:"#1800 Quinn", roughQuestions:{ upper:[], main:[
+  { id:"q1", question:"<p>Where does the <b>island</b> feed land?</p>", answer:"", done:false, for:"Gage Lund", room:"Kitchen" },
+  { id:"q2", question:"Answered one", answer:"<p>Panel B</p>", done:false, for:"Gage" },
+  { id:"q3", question:"Closed one", answer:"", done:true, for:"Gage Lund" },
+  { id:"q4", question:"GC one", answer:"", done:false, for:"GC" },
+  { id:"q5", question:"Unassigned", answer:"", done:false, for:"" },
+  { id:"q6", question:"First-name match", answer:"", done:false, for:"Gage" },
+], basement:[] }, finishQuestions:{ main:[ { id:"q7", question:"Finish Q", answer:"", done:false, for:"Keegan", room:"" } ] } };
+const mineQ = H.questionsAssignedTo("Gage Lund", [qJob, tempPed, null]);
+eq(mineQ.map(q => q.id), ["q1","q6"], "open + unanswered + on me (full or first name); answered, done, GC, unassigned, tempPed skipped");
+eq([mineQ[0].phase, mineQ[0].floor, mineQ[0].floorKey, mineQ[0].jobName, mineQ[0].room], ["Rough","Main","main","#1800 Quinn","Kitchen"], "phase / floor / job carried");
+eq(H.questionsAssignedTo("Keegan", [qJob]).map(q => [q.id, q.phase]), [["q7","Finish"]], "finish tab walked; other person sees only theirs");
+eq(H.questionsAssignedTo("", [qJob]), [], "empty name -> []");
+eq(H.questionsAssignedTo("Gage Lund", [{ id:"x", roughQuestions:null, finishQuestions:"bad" }]), [], "malformed question maps are skipped");
+assert.strictEqual(H.myDayCategoryOf({ kind:"question" }), "questions", "question row -> Questions category");
 
 // ── 6. my jobs ──────────────────────────────────────────────────────────────
 eq(H.myJobsFor(gage, users, jobs).map(j => j.id), ["j1770"], "foreman -> own jobs (fuzzy 'Gage' vs 'Gage Lund')");
