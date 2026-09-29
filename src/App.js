@@ -50244,12 +50244,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v464
+**Last manifest update:** 2026-09-25 · App SW version: v465
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — the QC tracker gate reads the viewer's live team record, not the login snapshot** · 'shipped 2026-09-29' · 'SW v465' · Koy, right after v464: *"now no qc anything shows up for me in my day."* v463 gated the tracker on 'can(identity, "resi.head" | "qc.own")', and 'identity' is the record saved to the device at login — a snapshot that can be the built-in 'DEFAULT_USERS' copy (no 'caps') when the PIN goes in before 'settings/users' arrives on a cold start, and that is only rewritten when the team list is saved from that device. My Day's own routing reads the live 'users' list (which is why hat rows still routed correctly); the gate did not. New 'myLiveRec' in 'App()' = the viewer's record from the live list (by id, then name), falling back to 'identity'; the tracker gate reads it. Nothing else changed: hat holders (today Koy and Josh) see the tracker, foremen do not. **Why it won't lose data:** render gate only; no writes.
 - **Merge: the mobile row-wrap ship (main, SW v462) with the Commercial / My Day branch (v462–v463)** · 'shipped 2026-09-29' · 'SW v464' · Two lines of work used v462 at the same time: 'main''s "My Day rows wrap on phones" and this branch's "Job Start per-item notes + docs". No code conflicted (the row-wrap change and the v461 urgency button touch different parts of the My Day row); only the FEATURES.md header + entry list (both kept) and the SW line collided, so the merged result lands as v464. **Why it won't lose data:** merge only, no new write.
 - **My Day — the QC walks tracker shows only for the QC hats, not every manager** · 'shipped 2026-09-29' · 'SW v463' · Koy: *"keegan and daegan both said they see tasks that are mine, when they click their own mine drop down."* Live team records: both are foremen on the **manager** access tier, and the v457 QC tracker was handed to My Day on 'admin || manager' — the gate the old QC tab had — so their Mine → QC walks category carried Koy's entire tracker (every walk in the company). The gate is now 'can(identity,"resi.head") || can(identity,"qc.own")': the Head of Residential and the QC walks hat holders (today Koy and Josh), nobody by tier. A foreman's QC walks category now holds only the QC rows that are actually on them. Guide 'myday.html' updated. **Why it won't lose data:** render gate only; no writes.
 - **Job Start — a note and attached docs on each item, not just the phase** · 'shipped 2026-09-28' · 'SW v462' · Justin (via Koy): *"Would it be possible to add the option to notes for each specific step of each phase? You can for the phase as a whole, but not each step… For example, I can say the 'award doc was Subcontract 009 sent by Mitch on 5/7/26 for X amount - signed by Josh'… Or attach the doc even."* Every Job Start chip (past and current phases; locked future phases excluded) ends with a small note mark: tap it and a panel opens under that phase's chips for that one item — a **note** textarea and **Attach doc** ('PhotoAttacher' with 'accept="*/*"', so PDFs and any file work; non-images render as a file tile that opens the download URL). The mark lights up on chips carrying a note or docs and shows the doc count. Stored under 'commercial.start': 'itemNotes[K]' (text), 'itemNotesBy[K]' ('{by, at}' stamped on each edit, shown in the panel header), 'docs[K]' (the same '{id,name,url,storagePath,type}' entries the photo items use, uploaded to 'jobs/<id>/jobstart/<n>_<key>/docs/'). The phase note stays as it was. Same card in the Job Start board and the drawer tab. Guide 'jobstart.html' gains "A note or a doc on one item". **Why it won't lose data:** three new additive maps inside 'commercial.start', written through the existing 'patchStart' spread-merge funnel (key-by-key, so two people on different items never clobber each other); Storage uploads under the existing job prefix; no loader, rules or function change.
@@ -58310,6 +58311,13 @@ function App() {
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
   const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
   const [mydayPrio, setMydayPrio] = useState({});     // v461: settings/mydayPriority.byKey — urgency on derived rows (shared)
+  // v465: the viewer's LIVE team record. The identity saved on the device at
+  // login is a snapshot — on a cold start it can be the built-in default copy
+  // (no caps) if the PIN went in before settings/users arrived — and it is only
+  // rewritten when the team list is saved on that device. Hat gates in App()
+  // must read this, never `identity.caps` (Koy 2026-09-29: the QC tracker
+  // vanished from his own My Day because his stored identity had no hats).
+  const myLiveRec = (identity && (users || []).find(u => u && (u.id === identity.id || sameName(u.name, identity.name)))) || identity;
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
   // the inbox UI; this one is intentionally duplicated rather than lifted to
@@ -62510,7 +62518,7 @@ function App() {
 
       {view==="myday"&&can(identity,"myday.view")&&(
         <MyDay identity={identity} users={users} jobs={jobs} needs={needsForMode} onAddNeedUpdate={addNeedUpdate} onEditNeedUpdate={editNeedUpdate}
-          qcTracker={mode!=="commercial"&&(can(identity,"resi.head")||can(identity,"qc.own")) ? <QCView embedded jobs={jobs} identity={identity} onSelectJob={(j)=>setSelected(j)} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/> : null}
+          qcTracker={mode!=="commercial"&&(can(myLiveRec,"resi.head")||can(myLiveRec,"qc.own")) ? <QCView embedded jobs={jobs} identity={identity} onSelectJob={(j)=>setSelected(j)} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/> : null}
           onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto} photoBusyIds={needPhotoBusy}
           onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
