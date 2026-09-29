@@ -4532,6 +4532,7 @@ const PERMISSIONS = {
   // head for my jobs). All tiers incl. lead/crew so they finally see their own
   // punch items. Creating needs/tasks stays gated to board.add (foreman+).
   "myday.view":             ["admin","manager","standard","limited"],
+  "tools.view":             ["admin","manager","standard","limited"],  // Tools tab (v468): field calculators — everyone internal, contractors never
   // Creating a need / task / bodies-request from My Day (the + sheet). Everyone
   // internal (Koy, 2026-09-09): the punch assignee picker has never been tier
   // gated, and a crew member's "need material at X" is the highest-value capture
@@ -6762,7 +6763,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -50299,12 +50300,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-29 · App SW version: v467
+**Last manifest update:** 2026-09-29 · App SW version: v468
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Tools tab — Generator Sizing (Josh's Generac calculator) inside the app** · 'shipped 2026-09-29' · 'SW v468' · Josh handed over a finished standalone generator-sizing tool ("built with Claude and wants it folded into the Homestead app"); Koy: *"i think we should make a tool tab that lives at the top we can add more tools too later on."* New top-nav **Tools** tab (permission 'tools.view', all four internal tiers, contractors never) with a tool picker strip, an **Open full screen** link (use it to print / Save-as-PDF the job sheet on a phone — 'window.print()' from inside an iframe is unreliable there) and a "?" guide; each tool renders in an iframe from 'public/tools/<key>/index.html', so its inline vanilla JS can never collide with the app's, and the 'TOOLS' registry in App.js is the one place to add the next one. First tool: **Generator Sizing** ('public/tools/generator-sizing/') — sizes a Generac air-cooled / liquid-cooled standby unit from a NEC 220.82 load calc with a motor-start surge check, then the NFPA 54 gas demand + pipe size (or LP tank), the concrete pad + clearance plan, the ATS + feeder + voltage-drop + bonding call, and a one-page printable job sheet. Josh's data tables ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS') and his 'calc' / 'renderFuel' / 'renderPad' / 'renderConnections' / 'render' logic are byte-for-byte his (a region diff at integration confirmed it); only the theme (Homestead slate + steel blue in place of Generac charcoal + orange, no amber anywhere), the diagram colors, and the removed PWA manifest / 'sw.js' registration changed, and the "planning figures — verify against the model spec sheet, install drawing and the AHJ" disclaimer stays in the footer and on the job sheet. **This is not the July wattage feature Koy removed (v280):** the Generator Load Selection section on Home Runs and the homeowner Generator Link are untouched and still carry no watts; sizing lives only under Tools. Service worker: '/tools/' joins '/sops/' in the "real document, not an app route" guard, so an offline miss fails honestly instead of returning the app shell, while a tool opened once online is cached for offline use. Guide 'public/sops/tools.html'. **Why it won't lose data:** the tool has no backend, no Firestore, no storage — it recomputes in the browser on every keystroke and writes nothing anywhere (the only persistence is a per-device localStorage note of which tool was open last); the app side adds one permission row, one nav row, one view and one static folder; no job field, loader, function or rules change.
 - **My Day — job questions assigned to you show up in Mine** · 'shipped 2026-09-29' · 'SW v467' · Koy: *"any questions assinged to me through a job on rough and finish tabs etc should show upt in my day also."* A question's recipient is the free-text **Assign to** on the Rough / Finish Questions section ('q.for'). New pure 'questionsAssignedTo(name, jobs)' walks every job's 'roughQuestions' / 'finishQuestions' floors and returns the OPEN questions (not 'done', no answer yet) whose recipient names the viewer ('sameName', so "Gage" and "Gage Lund" both match; "GC" never does); temp peds / quick jobs skipped. Each becomes a Mine row (new **Questions** category, teal **Question** tag, sub = job · phase · room or floor) — tap opens the job on that tab to answer; **Done** marks the question 'done' with the same whole-map 'roughQuestions' / 'finishQuestions' write the Questions section itself makes, 10 s Undo. Harness 'needs-dryrun' covers the walk (answered / done / GC / unassigned / tempPed skipped, first-name match, finish tab, malformed maps) and the category. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; the only write is Done, which maps the existing floor array in place flipping one question's 'done' (never adds, removes or reorders), the same patch shape the Questions section already writes; no new field, no loader or rules change.
 - **Questions ⇄ FieldInk — the discussion rides with the pin, and field replies come back** · 'shipped 2026-09-29' · 'SW v466' · Koy: *"when theres a reply or discussion on a question and then i pin it on field ink it doesnt show the discussion part. can we add that?"* + *"and field ink needs option to reply back to the discussion."* **Out (CC → FieldInk):** every entry the office publishes to 'ccquestions/<jobId>' now carries 'thread' — the question's discussion (legacy 'q.thread[]' on the job doc + the side-doc messages in 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]'), oldest → newest, last 40, as '{id, by, role, text, at(ms), photos:[https urls], fiId?}'; '_publishCcQuestionsNow' reads the side doc itself (one 'getDoc') so every caller publishes the same thing, and JobDetail's 'homeowner_requests' listener republishes when the discussion changes (hash-gated, so an unchanged list never writes). **Back (FieldInk → CC):** FieldInk appends '{id, by, text, at(ms)}' to 'fieldink.replies' on its copy of the question; the office's 'ccquestions' listener adopts each one into the discussion side doc as a 'role:"field"' message carrying 'fiId' = the field id — 'postQuestionThreadMessage' now refuses a duplicate 'fiId' inside its transaction, so two office devices watching the same job adopt it once — and the thread renders it as *"<name> · from FieldInk"*. The adopted message then rides the next republish, so the pin shows it too. Contract for the FieldInk side: 'docs/fieldink-question-discussion-contract.md' (FieldInk work is in its own repo). Guide 'questions.html' updated. **Why it won't lose data:** the mirror gains one additive array per question ('thread') under the same read-merge that has always preserved the field-owned 'fieldink' block; adopted replies are appended to the discussion side doc through the existing transaction (never the job doc, never an overwrite) and deduped by field id; no rules change on either project ('ccquestions' stays office-written / field-block-merged as before, and the side doc is the same 'questionThreads' key the office and share page already append to).
 - **My Day — the QC tracker gate reads the viewer's live team record, not the login snapshot** · 'shipped 2026-09-29' · 'SW v465' · Koy, right after v464: *"now no qc anything shows up for me in my day."* v463 gated the tracker on 'can(identity, "resi.head" | "qc.own")', and 'identity' is the record saved to the device at login — a snapshot that can be the built-in 'DEFAULT_USERS' copy (no 'caps') when the PIN goes in before 'settings/users' arrives on a cold start, and that is only rewritten when the team list is saved from that device. My Day's own routing reads the live 'users' list (which is why hat rows still routed correctly); the gate did not. New 'myLiveRec' in 'App()' = the viewer's record from the live list (by id, then name), falling back to 'identity'; the tracker gate reads it. Nothing else changed: hat holders (today Koy and Josh) see the tracker, foremen do not. **Why it won't lose data:** render gate only; no writes.
@@ -54781,6 +54783,7 @@ const NAV_MAIN_TABS = [
   { key: "jobprep", modes: ["resi"], label: "Job Prep", perm: "jobprep.view" },
   { key: "contractors", label: "Contractors", perm: "users.manage" },
   { key: "safety", label: "Safety" },
+  { key: "tools", label: "Tools", perm: "tools.view" },
   { key: "schedule", label: "Forecast" },
   { key: "huddle", modes: ["resi"], label: "Huddle", perm: "settings.view" },
   { key: "scoreboard", modes: ["resi"], label: "Scoreboard", perm: "scoreboard.editWeights" },  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
@@ -54799,6 +54802,58 @@ const NAV_SUBS_TAB = { key: "subcontractors", label: "Subcontractors", icon: "ha
 // Commercial mode: a tab with `modes` shows only in those modes (no `modes` = both).
 const navTabVisible = (t, identity, mode = "resi") =>
   (!t.modes || t.modes.includes(mode)) && (t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm)));
+
+// ── Tools tab (SW v468) ──────────────────────────────────────────────────────
+// Standalone field calculators inside the app's shell. Each tool is a
+// self-contained static page under public/tools/<key>/ (vanilla JS, no
+// Firestore, no login of its own) rendered in an iframe, so its inline script
+// can never collide with the app's. The service worker caches /tools/ like any
+// other fetch (and refuses to hand back the app shell for it — see the /sops/
+// guard there), so a tool opened once online works offline afterwards.
+// To add a tool: drop its folder in public/tools/ and add ONE row here — the
+// picker, the tab and the usage report (NAV_MAIN_TABS) pick it up.
+// First tool: Josh's Generac standby sizing calculator (2026-09-29). Its
+// tables + calc are his, untouched; it is a planning aid, not a stamped calc,
+// and its own disclaimer stays visible in the page footer and job sheet.
+const TOOLS = [
+  { key: "generator-sizing", label: "Generator Sizing", icon: "zap",
+    blurb: "Generac standby size from a NEC 220.82 load calc, plus gas supply, pad, transfer switch & feeder, and a printable job sheet.",
+    src: "/tools/generator-sizing/index.html" },
+];
+const TOOLS_LAST_KEY = "he_tools_last";   // per-device convenience only: the tool last opened
+function ToolsView() {
+  const [toolKey, setToolKey] = useState(() => {
+    try { return localStorage.getItem(TOOLS_LAST_KEY) || TOOLS[0].key; } catch { return TOOLS[0].key; }
+  });
+  const tool = TOOLS.find(t => t.key === toolKey) || TOOLS[0];
+  const pick = (key) => { setToolKey(key); try { localStorage.setItem(TOOLS_LAST_KEY, key); } catch {} };
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 56px)",background:C.bg}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface,overflowX:"auto",scrollbarWidth:"none",flex:"none"}}>
+        {TOOLS.map(t => {
+          const on = t.key === tool.key;
+          return (
+            <button key={t.key} onClick={() => pick(t.key)} title={t.blurb}
+              style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:on?700:500,fontFamily:"inherit",
+                cursor:"pointer",whiteSpace:"nowrap",border:`1px solid ${on?C.accent:C.border}`,background:on?C.accent:C.card,color:on?"#fff":C.text}}>
+              <Icon name={t.icon} size={12} stroke={2.25}/>{t.label}
+            </button>
+          );
+        })}
+        <span style={{flex:1}}/>
+        {/* Own-tab link: window.print() from inside an iframe is unreliable on
+            phones, so the job sheet's Print / Save as PDF goes through here. */}
+        <a href={tool.src} target="_blank" rel="noopener noreferrer"
+          title="Open this tool in its own tab — use this to print or save the job sheet on a phone"
+          style={{fontSize:12,fontWeight:600,color:C.accent,textDecoration:"none",whiteSpace:"nowrap"}}>Open full screen</a>
+        <HelpDot section="tools"/>
+      </div>
+      <iframe key={tool.key} src={tool.src} title={tool.label}
+        style={{flex:1,width:"100%",border:"none",display:"block",background:"#141821"}}
+        allow="clipboard-read; clipboard-write"/>
+    </div>
+  );
+}
 
 // Who usage is counted for: set from the internal app shell's render (never
 // from a share-link / GC-portal / homeowner page — those return before App's
@@ -60297,7 +60352,7 @@ function App() {
     if(key==="nav") return openNav();
     if(key==="settings") return openSettings();
     if(key==="subcontractors") return openSubcontractor();
-    return setView(key);  // today, needs, cos, safety, quotes, walks, huddle, scoreboard, appmap
+    return setView(key);  // today, needs, cos, safety, tools, quotes, walks, huddle, scoreboard, appmap
   };
 
   // ── Contractor users + access helpers ─────────────────────────
@@ -62607,6 +62662,11 @@ function App() {
           style={{width:"100%",height:"calc(100vh - 56px)",border:"none",display:"block",background:"#fff"}}
           allow="camera; microphone; geolocation; clipboard-read; clipboard-write"
         />
+      )}
+
+      {/* Tools tab (v468) — standalone field calculators in an iframe; see TOOLS. */}
+      {view==="tools"&&can(identity,"tools.view")&&(
+        <ToolsView/>
       )}
 
       {view==="myday"&&can(identity,"myday.view")&&(
