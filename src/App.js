@@ -542,6 +542,26 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
   try {
     if (jobId == null) return;
     const jid = String(jobId);
+    // v466 (Koy: "when theres a reply or discussion on a question and then i
+    // pin it on field ink it doesnt show the discussion part"): each question
+    // carries its DISCUSSION — the legacy q.thread[] frozen on the job doc plus
+    // the side-doc messages (homeowner_requests/<jobId>.questionThreads, keyed
+    // "<phase>_<floor>_<qid>"), oldest → newest, last 40, text-only + photo
+    // URLs. Read here (one getDoc) so every caller publishes the same thing.
+    let sideThreads = {};
+    try { const hs = await getDoc(doc(db, "homeowner_requests", jid)); sideThreads = (hs.exists() && hs.data() && hs.data().questionThreads) || {}; } catch {}
+    const slimThread = (q, phase, floor) => {
+      const msgs = [...(Array.isArray(q.thread) ? q.thread : []), ...((sideThreads[`${phase}_${floor}_${q.id}`]) || [])];
+      return msgs.filter(m => m && (String(m.text||"").trim() || (m.photos||[]).length)).slice(-40).map(m => ({
+        id: String(m.id || "").slice(0, 40),
+        by: String(m.by || "").slice(0, 60),
+        role: String(m.role || "").slice(0, 20),
+        text: stripHtml(String(m.text || "")).slice(0, 1000),
+        at: m.at ? (new Date(m.at).getTime() || 0) : 0,
+        photos: (Array.isArray(m.photos) ? m.photos : []).map(ph => ph && ph.url).filter(u => typeof u === "string" && /^https:\/\//.test(u)).slice(0, 6),
+        ...(m.fiId ? { fiId: String(m.fiId).slice(0, 40) } : {}),
+      }));
+    };
     // Flatten Rough then Finish, floors upper → main → basement — the same
     // reading order as the tabs. `at` uses createdAt when present, else 0
     // (NOT Date.now() — a moving timestamp would defeat the hash gate).
@@ -569,6 +589,7 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
             status: (q.done || answer) ? "answered" : "sent",
             at: (q.createdAt || q.addedAt) ? (new Date(q.createdAt || q.addedAt).getTime() || 0) : 0,
             source: "office",
+            thread: slimThread(q, phase.toLowerCase(), floor),
           });
         }
       }
@@ -19067,15 +19088,21 @@ async function saveHomeownerRequest(jobId, mutator, sourceTag) {
 // arrays on the job doc stay frozen/read-only and are concatenated at render
 // time — see the threadOf helpers in QAList/QASection/QuestionsSharePage.
 async function postQuestionThreadMessage(jobId, key, msg, sourceTag) {
-  let prevDoc = null;
+  let prevDoc = null, skipped = false;
   await runTransaction(db, async (tx) => {
     const ref = doc(db,'homeowner_requests',jobId);
     const snap = await tx.get(ref);
     prevDoc = snap.exists() ? snap.data() : null;
-    const nextMsgs = [...(((prevDoc||{}).questionThreads||{})[key]||[]), msg];
+    const cur = ((prevDoc||{}).questionThreads||{})[key]||[];
+    // v466: a reply adopted from FieldInk carries its field id (fiId). Two
+    // office devices can both see it land; the transaction re-reads, so the
+    // second one finds the first's copy and writes nothing.
+    if (msg && msg.fiId && cur.some(m => m && m.fiId === msg.fiId)) { skipped = true; return; }
+    const nextMsgs = [...cur, msg];
     if (!prevDoc) tx.set(ref, { jobId, questionThreads: { [key]: nextMsgs } });
     else tx.update(ref, { ['questionThreads.'+key]: nextMsgs });
   });
+  if (skipped) return;
   snapshotHomeownerRequestVersion(jobId, prevDoc, sourceTag);
 }
 
@@ -27691,6 +27718,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [planChangeAcks, setPlanChangeAcks] = useState(null); // Tech Lighting "incorporated" acks from ?lutronshare=
   const [planChangeThreads, setPlanChangeThreads] = useState(null); // per-item discussion threads (Tech Lighting ↔ Homestead)
   const [questionThreads, setQuestionThreads] = useState(null); // Q&A discussion replies (side-doc, Kweller hardening Layer 2)
+  const questionThreadsRef = useRef(null); questionThreadsRef.current = questionThreads;   // v466: read by the ccquestions listener (stale-closure-safe)
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -27866,6 +27894,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       else setPlanChangeThreads(null);
       if(snap.exists() && snap.data().questionThreads) setQuestionThreads(snap.data().questionThreads);
       else setQuestionThreads(null);
+      // v466: a new discussion message (office, share page, or an adopted
+      // FieldInk reply) republishes the ccquestions mirror so the pin in
+      // FieldInk shows it. Hash-gated inside, so an unchanged list never writes.
+      try { const jr = jobRef.current; if (jr && snap.exists() && snap.data().questionThreads) publishCcQuestions(job.id, jr.roughQuestions, jr.finishQuestions); } catch {}
     }, ()=>{});
     return ()=>unsub();
   }, [job.id]);
@@ -27941,6 +27973,29 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               const f1 = applyPhase(jr?.finishQuestions);
               if (r1.changed) u({roughQuestions: r1.updated});
               if (f1.changed) u({finishQuestions: f1.updated});
+            }
+          } catch {}
+          // v466: adopt FIELD REPLIES (Koy: "field ink needs option to reply
+          // back to the discussion"). FieldInk appends {id, by, text, at(ms)}
+          // to fieldink.replies on its copy of the question; each one lands in
+          // the discussion side doc (never the job doc) as a role:"field"
+          // message carrying fiId = the field id, so it is adopted once — the
+          // writer's transaction refuses a duplicate fiId — and then rides the
+          // republish back to the pin like any other message.
+          try {
+            const jr = jobRef.current;
+            const locate = (id) => { for (const [ph, k] of [["rough","roughQuestions"],["finish","finishQuestions"]]) for (const fl of ["upper","main","basement"]) if ((jr?.[k]?.[fl]||[]).some(q => q && q.id === id)) return `${ph}_${fl}_${id}`; return null; };
+            for (const q of (d?.questions || [])) {
+              const reps = q && q.id && q.fieldink && Array.isArray(q.fieldink.replies) ? q.fieldink.replies : [];
+              if (!reps.length) continue;
+              const key = locate(q.id); if (!key) continue;
+              const have = new Set([...(((questionThreadsRef.current||{})[key])||[]).map(m => m && m.fiId).filter(Boolean)]);
+              for (const r of reps) {
+                if (!r || !r.id || have.has(String(r.id))) continue;
+                const text = String(r.text || "").trim(); if (!text) continue;
+                have.add(String(r.id));
+                postQuestionThreadMessage(job.id, key, { id: uid(), fiId: String(r.id).slice(0, 40), by: String(r.by || "FieldInk").slice(0, 60), role: "field", text: text.slice(0, 2000), photos: [], at: new Date(Number(r.at) || Date.now()).toISOString() }, "fieldink-reply").catch(() => {});
+              }
             }
           } catch {}
         }, (err) => {
@@ -31975,7 +32030,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
     return (
       <div key={m.id} style={{alignSelf: crew?'flex-end':'flex-start', maxWidth:'88%'}}>
         <div style={{fontSize:9, fontWeight:700, color: crew?color:'#5E6670', marginBottom:2, textAlign: crew?'right':'left'}}>
-          {crew ? (m.by||'Homestead Electric') : (m.by||'Client')}{m.at ? ` · ${timeAgo(m.at)}` : ''}
+          {crew ? (m.by||'Homestead Electric') : (m.by||'Client')}{m.role === 'field' ? ' · from FieldInk' : ''}{m.at ? ` · ${timeAgo(m.at)}` : ''}
         </div>
         <div style={{background: crew?`${color}14`:'#EEF0F3', border:`1px solid ${crew?color+'33':'#E1E4E9'}`, borderRadius:10, padding:'7px 10px'}}>
           {m.text && <div style={{fontSize:12, color:'#1B1F24', lineHeight:1.45, whiteSpace:'pre-wrap', wordBreak:'break-word'}}>{m.text}</div>}
@@ -50244,12 +50299,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v465
+**Last manifest update:** 2026-09-25 · App SW version: v466
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Questions ⇄ FieldInk — the discussion rides with the pin, and field replies come back** · 'shipped 2026-09-29' · 'SW v466' · Koy: *"when theres a reply or discussion on a question and then i pin it on field ink it doesnt show the discussion part. can we add that?"* + *"and field ink needs option to reply back to the discussion."* **Out (CC → FieldInk):** every entry the office publishes to 'ccquestions/<jobId>' now carries 'thread' — the question's discussion (legacy 'q.thread[]' on the job doc + the side-doc messages in 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]'), oldest → newest, last 40, as '{id, by, role, text, at(ms), photos:[https urls], fiId?}'; '_publishCcQuestionsNow' reads the side doc itself (one 'getDoc') so every caller publishes the same thing, and JobDetail's 'homeowner_requests' listener republishes when the discussion changes (hash-gated, so an unchanged list never writes). **Back (FieldInk → CC):** FieldInk appends '{id, by, text, at(ms)}' to 'fieldink.replies' on its copy of the question; the office's 'ccquestions' listener adopts each one into the discussion side doc as a 'role:"field"' message carrying 'fiId' = the field id — 'postQuestionThreadMessage' now refuses a duplicate 'fiId' inside its transaction, so two office devices watching the same job adopt it once — and the thread renders it as *"<name> · from FieldInk"*. The adopted message then rides the next republish, so the pin shows it too. Contract for the FieldInk side: 'docs/fieldink-question-discussion-contract.md' (FieldInk work is in its own repo). Guide 'questions.html' updated. **Why it won't lose data:** the mirror gains one additive array per question ('thread') under the same read-merge that has always preserved the field-owned 'fieldink' block; adopted replies are appended to the discussion side doc through the existing transaction (never the job doc, never an overwrite) and deduped by field id; no rules change on either project ('ccquestions' stays office-written / field-block-merged as before, and the side doc is the same 'questionThreads' key the office and share page already append to).
 - **My Day — the QC tracker gate reads the viewer's live team record, not the login snapshot** · 'shipped 2026-09-29' · 'SW v465' · Koy, right after v464: *"now no qc anything shows up for me in my day."* v463 gated the tracker on 'can(identity, "resi.head" | "qc.own")', and 'identity' is the record saved to the device at login — a snapshot that can be the built-in 'DEFAULT_USERS' copy (no 'caps') when the PIN goes in before 'settings/users' arrives on a cold start, and that is only rewritten when the team list is saved from that device. My Day's own routing reads the live 'users' list (which is why hat rows still routed correctly); the gate did not. New 'myLiveRec' in 'App()' = the viewer's record from the live list (by id, then name), falling back to 'identity'; the tracker gate reads it. Nothing else changed: hat holders (today Koy and Josh) see the tracker, foremen do not. **Why it won't lose data:** render gate only; no writes.
 - **Merge: the mobile row-wrap ship (main, SW v462) with the Commercial / My Day branch (v462–v463)** · 'shipped 2026-09-29' · 'SW v464' · Two lines of work used v462 at the same time: 'main''s "My Day rows wrap on phones" and this branch's "Job Start per-item notes + docs". No code conflicted (the row-wrap change and the v461 urgency button touch different parts of the My Day row); only the FEATURES.md header + entry list (both kept) and the SW line collided, so the merged result lands as v464. **Why it won't lose data:** merge only, no new write.
 - **My Day — the QC walks tracker shows only for the QC hats, not every manager** · 'shipped 2026-09-29' · 'SW v463' · Koy: *"keegan and daegan both said they see tasks that are mine, when they click their own mine drop down."* Live team records: both are foremen on the **manager** access tier, and the v457 QC tracker was handed to My Day on 'admin || manager' — the gate the old QC tab had — so their Mine → QC walks category carried Koy's entire tracker (every walk in the company). The gate is now 'can(identity,"resi.head") || can(identity,"qc.own")': the Head of Residential and the QC walks hat holders (today Koy and Josh), nobody by tier. A foreman's QC walks category now holds only the QC rows that are actually on them. Guide 'myday.html' updated. **Why it won't lose data:** render gate only; no writes.
