@@ -23450,6 +23450,9 @@ function LutronPanelBuilder({ job, u }) {
   // Select → batch). The editing Loads list above the section stays the place
   // to rename, re-room and mark loads ran.
   const [tray, setTray] = useState({ q: "", kind: "all", mode: "needs", select: false, selected: [] });
+  // Zone picker (the "fill" sheet, v469): its search text + which floors are folded. Reset on every open.
+  const [fill, setFill] = useState({ q: "", fold: {} });
+  const openFill = (panelId, moduleId, zone) => { setFill({ q: "", fold: {} }); setSheet({ kind: "fill", panelId, moduleId, zone }); };
   const accent = C.blue;
   const mob = ON_MOBILE;
   const floorOrder = ["Main Level", "Basement", "Upper Level", ...(pl.extraFloors || []).map(ef => ef && ef.label).filter(Boolean)];
@@ -23619,16 +23622,50 @@ function LutronPanelBuilder({ job, u }) {
     if (sheet.kind === "fill") {
       const p = panelOf(sheet.panelId), m = modOf(sheet.panelId, sheet.moduleId); if (!p || !m) return null;
       const t = lutronModType(m.type); const cap = lutronZoneCap(m.type, sheet.zone);
-      const cands = loads.filter(l => named(l) && !onModule(l))
-        .sort((a, b) => ((a.assign && a.assign.panelId === p.id) ? 0 : 1) - ((b.assign && b.assign.panelId === p.id) ? 0 : 1) || (lutronKindFits(m.type, a.loadType) ? 0 : 1) - (lutronKindFits(m.type, b.loadType) ? 0 : 1) || String(a.location || "").localeCompare(String(b.location || "")) || String(a.name || "").localeCompare(String(b.name || "")));
+      // v469 (Koy: "a search bar and separate the loads cleanly in rooms and
+      // floors"): every unplaced load, grouped floor → room in the tray's floor
+      // order, with a search box. Inside a room the old flat order still holds —
+      // parked on this panel first, then loads whose type fits the module, then
+      // A–Z. A floor header folds that floor; typing a search unfolds everything.
+      const q = fill.q.trim().toLowerCase();
+      const parkedHere = (l) => !!(l.assign && l.assign.panelId === p.id);
+      const pool = loads.filter(l => named(l) && !onModule(l));
+      const cands = pool.filter(l => !q || [l.name, l.room, l.location].some(v => String(v || "").toLowerCase().includes(q)));
+      const ord = (fl) => { const i = floorOrder.findIndex(f => String(f).toLowerCase() === String(fl || "").toLowerCase()); return i < 0 ? 99 : i; };
+      const floorOf = (l) => String(l.location || "").trim() || "No floor";
+      const roomOf = (l) => String(l.room || "").trim() || "No room";
+      const floors = [...new Set(cands.map(floorOf))].sort((a, b) => ord(a) - ord(b) || a.localeCompare(b));
+      const inRoom = (a, b) => (parkedHere(a) ? 0 : 1) - (parkedHere(b) ? 0 : 1) || (lutronKindFits(m.type, a.loadType) ? 0 : 1) - (lutronKindFits(m.type, b.loadType) ? 0 : 1) || String(a.name || "").localeCompare(String(b.name || ""));
+      const chipFor = (l) => { const fits = lutronKindFits(m.type, l.loadType); const w = parseFloat(l.watts) || 0; const over = cap && w > cap; const here = parkedHere(l);
+        return <button key={l.id} onClick={() => fillZoneWith(l.id)} style={chip(false, false, { borderColor: over ? C.red : here ? accent : C.border })}>{l.name}<span style={small(false)}>{[l.watts ? `${l.watts}W` : "", !fits ? `${l.loadType} on a ${t.kind} module` : "", over ? "over the zone limit" : "", here ? `parked on ${p.label}` : ""].filter(Boolean).join(" · ") || (l.loadType || "")}</span></button>; };
+      const foldFloor = (fl) => setFill(f => ({ ...f, fold: { ...f.fold, [fl]: !f.fold[fl] } }));
       return (
         <SavantSheet onClose={closeSheet}>
           <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.05em" }}>{p.label} · Mod {m.num} · Zone {sheet.zone}</div>
-          <div style={{ fontSize: 12, color: C.dim }}>{t.label}{cap ? ` · up to ${cap} W on this zone` : ""}. Pick a load — the ones parked on {p.label} come first.</div>
-          <div style={{ ...chips, marginTop: 10, maxHeight: "48vh", overflowY: "auto" }}>
-            {cands.slice(0, 80).map(l => { const fits = lutronKindFits(m.type, l.loadType); const w = parseFloat(l.watts) || 0; const over = cap && w > cap;
-              return <button key={l.id} onClick={() => fillZoneWith(l.id)} style={chip(false, false, { borderColor: over ? C.red : C.border })}>{l.name}<span style={small(false)}>{[l.room, l.location].filter(Boolean).join(" · ")}{l.watts ? ` · ${l.watts}W` : ""}{!fits ? ` · ${l.loadType} on a ${t.kind} module` : ""}{over ? " · over the zone limit" : ""}{l.assign && l.assign.panelId === p.id ? " · parked here" : ""}</span></button>; })}
-            {!cands.length && <span style={{ fontSize: 12, color: C.dim }}>Nothing left without a zone.</span>}
+          <div style={{ fontSize: 12, color: C.dim }}>{t.label}{cap ? ` · up to ${cap} W on this zone` : ""}. Pick a load — by floor and room; loads already parked on {p.label} lead each room.</div>
+          <input value={fill.q} onChange={e => setFill(f => ({ ...f, q: e.target.value }))} placeholder="Search loads, rooms or floors…" aria-label="Search loads, rooms or floors"
+            autoFocus={!!(window.matchMedia && window.matchMedia("(pointer: fine)").matches)}
+            style={{ width: "100%", marginTop: 10, fontFamily: "inherit", fontSize: 14, padding: "9px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, outline: "none", boxSizing: "border-box" }}/>
+          <div style={{ marginTop: 6, maxHeight: "48vh", overflowY: "auto" }}>
+            {floors.map(fl => { const fLoads = cands.filter(l => floorOf(l) === fl); const folded = !q && !!fill.fold[fl]; const rooms = [...new Set(fLoads.map(roomOf))].sort((a, b) => a.localeCompare(b));
+              return (
+                <div key={fl}>
+                  <button onClick={() => foldFloor(fl)} aria-expanded={!folded}
+                    style={{ position: "sticky", top: 0, zIndex: 1, width: "100%", display: "flex", alignItems: "center", gap: 8, background: "#fff", border: "none", borderBottom: `1px solid ${C.border}`, padding: "9px 2px 6px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                    <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.06em", color: accent }}>{fl}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: C.dim, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 999, padding: "1px 7px" }}>{fLoads.length}</span>
+                    <span style={{ flex: 1 }}/>
+                    <Icon name={folded ? "chevronRight" : "chevronDown"} size={13} color={C.dim}/>
+                  </button>
+                  {!folded && rooms.map(rm => (
+                    <div key={rm}>
+                      <div style={{ ...lbl, margin: "10px 0 5px" }}>{rm}</div>
+                      <div style={chips}>{fLoads.filter(l => roomOf(l) === rm).sort(inRoom).map(chipFor)}</div>
+                    </div>
+                  ))}
+                </div>
+              ); })}
+            {!cands.length && <div style={{ fontSize: 12, color: C.dim, padding: "12px 2px" }}>{pool.length ? "No load matches that search." : "Nothing left without a zone."}</div>}
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}><button onClick={closeSheet} style={btn(false, { color: C.dim, borderColor: C.border })}>Cancel</button></div>
         </SavantSheet>
@@ -23800,12 +23837,12 @@ function LutronPanelBuilder({ job, u }) {
                 if (t.bus) {
                   on.slice().sort((a, b) => (Number(a.assign.zone) || 0) - (Number(b.assign.zone) || 0)).forEach(l => rows.push(
                     <button key={l.id} onClick={() => openAssign(l.id)} style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18, color: C.muted }}>{l.assign.zone}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}</span></button>));
-                  if (on.length < t.zones) rows.push(<button key="open" onClick={() => setSheet({ kind: "fill", panelId: p.id, moduleId: m.id, zone: (on.reduce((mx, l) => Math.max(mx, Number(l.assign.zone) || 0), 0) + 1) })} style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18 }}>{on.length + 1}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open address</span><span style={{ fontSize: 10.5 }}>tap to fill</span></button>);
+                  if (on.length < t.zones) rows.push(<button key="open" onClick={() => openFill(p.id, m.id, (on.reduce((mx, l) => Math.max(mx, Number(l.assign.zone) || 0), 0) + 1))} style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18 }}>{on.length + 1}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open address</span><span style={{ fontSize: 10.5 }}>tap to fill</span></button>);
                 } else {
                   for (let z = 1; z <= t.zones; z++) { const l = zoneLoad(p.id, m.id, z); const over = l && lutronOverWatt(l, panels); const cap = lutronZoneCap(m.type, z);
                     rows.push(l
                       ? <button key={z} onClick={() => openAssign(l.id)} title="Move or clear" style={zoneRow(false, over)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>{z}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: over ? C.red : C.dim, whiteSpace: "nowrap", fontWeight: over ? 700 : 400 }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}{over ? ` · over ${cap}W` : ""}</span></button>
-                      : <button key={z} onClick={() => setSheet({ kind: "fill", panelId: p.id, moduleId: m.id, zone: z })} title="Put a load here" style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16 }}>{z}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open zone</span><span style={{ fontSize: 10.5 }}>{cap ? `≤${cap}W` : "tap to fill"}</span></button>); }
+                      : <button key={z} onClick={() => openFill(p.id, m.id, z)} title="Put a load here" style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16 }}>{z}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open zone</span><span style={{ fontSize: 10.5 }}>{cap ? `≤${cap}W` : "tap to fill"}</span></button>); }
                 }
                 return (
                   <div key={m.id} style={{ border: `1px solid ${full ? accent + "66" : C.border}`, borderRadius: 10, background: C.surface, padding: "8px 9px" }}>
@@ -50300,12 +50337,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-29 · App SW version: v468
+**Last manifest update:** 2026-09-29 · App SW version: v469
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Panelized Lighting — the zone picker gets a search bar and floor → room groups** · 'shipped 2026-09-29' · 'SW v469' · Koy (screenshot of the LCP 1 · Mod 1 · Zone 3 sheet): *"it would be nice if when you click a module load number to assign a load, if this menu had a search bar and seperated the loads cleanly in rooms and floors isntead of this."* The "fill" sheet (tap an open zone or open bus address in the Panel Builder) was one flat wrap of up to 80 chips sorted parked-first, so Basement and Main Level loads interleaved. Now: a **search box** at the top (matches load name, room or floor; autofocused on a mouse/trackpad device, not on touch so the keyboard doesn't jump), and every unplaced load grouped **floor → room** in the tray's floor order ('floorOrder', then A–Z; loads with no floor / room land in "No floor" / "No room"). Floor headers are sticky inside the scroll, carry a count, and **fold on tap**; typing a search unfolds everything. Inside a room the old order still holds — parked on this panel first (chip outlined in the accent and labeled "parked on LCP n"), then loads whose type fits the module, then A–Z — and the type-mismatch / over-the-zone-limit warnings are unchanged. The 80-chip cap is gone (search covers it). Search text + folds live in one 'fill' state reset by 'openFill', the single opener both zone rows now use. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** render-only reorganization of the same candidate list; 'fillZoneWith' (the only write) is untouched and still assigns the tapped load to the same panel / module / zone; no field, loader, function or rules change.
 - **Tools tab — Generator Sizing (Josh's Generac calculator) inside the app** · 'shipped 2026-09-29' · 'SW v468' · Josh handed over a finished standalone generator-sizing tool ("built with Claude and wants it folded into the Homestead app"); Koy: *"i think we should make a tool tab that lives at the top we can add more tools too later on."* New top-nav **Tools** tab (permission 'tools.view', all four internal tiers, contractors never) with a tool picker strip, an **Open full screen** link (use it to print / Save-as-PDF the job sheet on a phone — 'window.print()' from inside an iframe is unreliable there) and a "?" guide; each tool renders in an iframe from 'public/tools/<key>/index.html', so its inline vanilla JS can never collide with the app's, and the 'TOOLS' registry in App.js is the one place to add the next one. First tool: **Generator Sizing** ('public/tools/generator-sizing/') — sizes a Generac air-cooled / liquid-cooled standby unit from a NEC 220.82 load calc with a motor-start surge check, then the NFPA 54 gas demand + pipe size (or LP tank), the concrete pad + clearance plan, the ATS + feeder + voltage-drop + bonding call, and a one-page printable job sheet. Josh's data tables ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS') and his 'calc' / 'renderFuel' / 'renderPad' / 'renderConnections' / 'render' logic are byte-for-byte his (a region diff at integration confirmed it); only the theme (Homestead slate + steel blue in place of Generac charcoal + orange, no amber anywhere), the diagram colors, and the removed PWA manifest / 'sw.js' registration changed, and the "planning figures — verify against the model spec sheet, install drawing and the AHJ" disclaimer stays in the footer and on the job sheet. **This is not the July wattage feature Koy removed (v280):** the Generator Load Selection section on Home Runs and the homeowner Generator Link are untouched and still carry no watts; sizing lives only under Tools. Service worker: '/tools/' joins '/sops/' in the "real document, not an app route" guard, so an offline miss fails honestly instead of returning the app shell, while a tool opened once online is cached for offline use. Guide 'public/sops/tools.html'. **Why it won't lose data:** the tool has no backend, no Firestore, no storage — it recomputes in the browser on every keystroke and writes nothing anywhere (the only persistence is a per-device localStorage note of which tool was open last); the app side adds one permission row, one nav row, one view and one static folder; no job field, loader, function or rules change.
 - **My Day — job questions assigned to you show up in Mine** · 'shipped 2026-09-29' · 'SW v467' · Koy: *"any questions assinged to me through a job on rough and finish tabs etc should show upt in my day also."* A question's recipient is the free-text **Assign to** on the Rough / Finish Questions section ('q.for'). New pure 'questionsAssignedTo(name, jobs)' walks every job's 'roughQuestions' / 'finishQuestions' floors and returns the OPEN questions (not 'done', no answer yet) whose recipient names the viewer ('sameName', so "Gage" and "Gage Lund" both match; "GC" never does); temp peds / quick jobs skipped. Each becomes a Mine row (new **Questions** category, teal **Question** tag, sub = job · phase · room or floor) — tap opens the job on that tab to answer; **Done** marks the question 'done' with the same whole-map 'roughQuestions' / 'finishQuestions' write the Questions section itself makes, 10 s Undo. Harness 'needs-dryrun' covers the walk (answered / done / GC / unassigned / tempPed skipped, first-name match, finish tab, malformed maps) and the category. Guide 'myday.html' updated. **Why it won't lose data:** read-only derivation; the only write is Done, which maps the existing floor array in place flipping one question's 'done' (never adds, removes or reorders), the same patch shape the Questions section already writes; no new field, no loader or rules change.
 - **Questions ⇄ FieldInk — the discussion rides with the pin, and field replies come back** · 'shipped 2026-09-29' · 'SW v466' · Koy: *"when theres a reply or discussion on a question and then i pin it on field ink it doesnt show the discussion part. can we add that?"* + *"and field ink needs option to reply back to the discussion."* **Out (CC → FieldInk):** every entry the office publishes to 'ccquestions/<jobId>' now carries 'thread' — the question's discussion (legacy 'q.thread[]' on the job doc + the side-doc messages in 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]'), oldest → newest, last 40, as '{id, by, role, text, at(ms), photos:[https urls], fiId?}'; '_publishCcQuestionsNow' reads the side doc itself (one 'getDoc') so every caller publishes the same thing, and JobDetail's 'homeowner_requests' listener republishes when the discussion changes (hash-gated, so an unchanged list never writes). **Back (FieldInk → CC):** FieldInk appends '{id, by, text, at(ms)}' to 'fieldink.replies' on its copy of the question; the office's 'ccquestions' listener adopts each one into the discussion side doc as a 'role:"field"' message carrying 'fiId' = the field id — 'postQuestionThreadMessage' now refuses a duplicate 'fiId' inside its transaction, so two office devices watching the same job adopt it once — and the thread renders it as *"<name> · from FieldInk"*. The adopted message then rides the next republish, so the pin shows it too. Contract for the FieldInk side: 'docs/fieldink-question-discussion-contract.md' (FieldInk work is in its own repo). Guide 'questions.html' updated. **Why it won't lose data:** the mirror gains one additive array per question ('thread') under the same read-merge that has always preserved the field-owned 'fieldink' block; adopted replies are appended to the discussion side doc through the existing transaction (never the job doc, never an overwrite) and deduped by field id; no rules change on either project ('ccquestions' stays office-written / field-block-merged as before, and the side doc is the same 'questionThreads' key the office and share page already append to).
