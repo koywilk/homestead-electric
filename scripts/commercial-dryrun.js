@@ -102,6 +102,7 @@ const fullLog = [{ item:"Switchgear", requestedAt:"9/1/2026", leadTimeWeeks:22, 
 const cj = (start, extra = {}) => ({ division:"commercial", driveFolderId:"f1", docPull:{ status:"done" }, commercial:{ start:{ items:{}, na:{}, notes:{}, overrides:{}, ...start }, submittals: fullLog, rfis:[{ no:"001" }] }, ...extra });
 check(H.commPhase({ name:"resi job" }), null, "residential → null");
 check(H.commPhase({ division:"commercial" }), 1, "fresh commercial job → phase 1");
+check(H.commPhase({ division:"commercial", hiddenSections:{ jobstart:true } }), null, "v467: Job Start hidden as a section → no phase (Ready to Start / no pre-con rows)");
 check(H.commPhase(cj({ items: doneThrough(1) })), 2, "phase 1 checked → phase 2");
 check(H.commPhase(cj({ items: doneThrough(2) })), 3, "phase 2 checked (folders via Drive) → phase 3");
 check(H.commPhase(cj({ items: doneThrough(2) }, { driveFolderId:"" })), 2, "no Drive folder → 2.folders open → still phase 2");

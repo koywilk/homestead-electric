@@ -38,6 +38,14 @@ one-paste. This is the deliberate standing **exception** to the Hard boundary be
 — logging-after-ship IS expected vault-touching. FieldInk gets the same treatment in
 its own `~/Desktop/Command Center/Logs/YYYY-MM-DD - FieldInk.md`.
 
+## Crew brief after every ship (standing rule, Koy 2026-09-30)
+
+After every deploy, write the plain-language note Koy forwards to the crew: what went
+in, what was fixed, what was removed, what to try. The `crew-brief` skill in
+`.claude/skills/crew-brief/` holds the format; the last one shipped is the newest file
+in `docs/crew-briefs/`. Do it as the closing step of shipping, with the one-paste and
+the vault log, without being asked. FieldInk has its own copy of the skill in its repo.
+
 ## Vault commands (/obsidian-*, /research, /youtube, etc.)
 
 The 44 `obsidian-second-brain` slash commands and their supporting skills live in

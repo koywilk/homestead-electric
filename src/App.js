@@ -2236,7 +2236,7 @@ const commPhaseChecked = (j, n) => COMM_PHASE_BY_N[n].items.every(([k]) => commI
 const commPhaseClosed  = (j, n) => commPhaseChecked(j, n) || !!(commStartOf(j).overrides && commStartOf(j).overrides[n]);
 const commPhaseDone    = (j, n) => COMM_PHASE_BY_N[n].items.filter(([k]) => commItemState(j, n, k) !== "todo").length;
 // The ONLY state: first phase not closed. null = all twelve closed (Ready to Start / on site). Residential → null.
-const commPhase = (j) => { if (!j || j.division !== "commercial") return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
+const commPhase = (j) => { if (!j || j.division !== "commercial") return null; if (j.hiddenSections && j.hiddenSections.jobstart) return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
 const commOwedItems = (j) => COMM_START_STEPS.flatMap(p => (commStartOf(j).overrides && commStartOf(j).overrides[p.n]) ? p.items.filter(([k]) => commItemState(j, p.n, k) === "todo").map(([k, l]) => ({ n: p.n, k, label: l })) : []);
 const allPrepChecked = (job) => {
   // v388: an item marked Not Needed (prepNA map) counts as handled — some jobs
@@ -3491,7 +3491,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .header .sys { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; color: #444; text-transform: uppercase; margin-top: 1px; }
     .header .meta { font-size: 8px; color: #444; margin-top: 2px; }
     .header .totals { font-size: 8px; color: #555; text-align:right; line-height: 1.2; }
-    /* PAGINATION (v471) — the schedule flows onto as many letter pages as it
+    /* PAGINATION (v475) — the schedule flows onto as many letter pages as it
        needs (10 modules is ~1.5 pages). Each module block stays whole: a
        module that won't fit at the bottom of a page starts the next one, so
        no table is ever cut mid-row. A .tall module (more rows than a page)
@@ -3573,7 +3573,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
 }
 
 // One-shot PDF download for the lighting panel schedule. Same capture-then-
-// render-to-PDF strategy as downloadElectricalPanel, but PAGED (v471): a
+// render-to-PDF strategy as downloadElectricalPanel, but PAGED (v475): a
 // 10-module Lutron panel is ~1.5 letter pages, and the single-page saver
 // clipped everything past page 1 (Miller LCP 1 / LCP 3 lost Module 1's last
 // rows, 2026-09-29). The page cuts land between modules, never through a
@@ -3680,7 +3680,7 @@ function loadsListHtml({ jobName, jobAddress, system, rows, dateStr }) {
 // Multi-page cousin of _saveHtmlAsPdf: captures the whole document height and
 // slices it into letter pages. It's a picture of the page, not reflowed text,
 // so by default a row can land on a page edge (the loads list; its CSV is the
-// editable copy). Two optional knobs (v471, for the panel schedule):
+// editable copy). Two optional knobs (v475, for the panel schedule):
 //   opts.avoid — CSS selector for blocks that must not straddle a page edge.
 //                A cut that would land inside one moves UP to that block's
 //                top, so the block starts the next page whole (the canvas
@@ -6808,7 +6808,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -16451,6 +16451,29 @@ const applyHomeownerChoices = (genLoads, items) => {
       status: c.status || l.status, priority: (c.priority != null ? c.priority : l.priority) };
   });
 };
+// v473: the overlay above is a one-time carry, not a standing rule — it applies
+// only while the homeowner's submission is NEWER than the office's last save
+// (`genLoadsAt`, stamped by HomeRunsTab on every office edit). Re-applying it on
+// every open of the Home Runs tab unchecked whatever the office selected after
+// the homeowner signed (Keegan, Miller 2026-09-30: "keeps unselecting things
+// that I am selecting"). A legacy doc with no genLoadsAt behaves as before (the
+// submission shows) until the next office save stamps one; a doc with a stamp
+// but an undated submission lets the office copy stand. Pure.
+// v474: the homeowner's SUBMIT maps their choices onto the SERVER's genLoads
+// (the funnel's locked prev), never the copy the page loaded when the link was
+// opened. A link can sit open for days; the office's edits in between (renames,
+// added loads, checks) used to be overwritten wholesale at signature. A load the
+// office added since the open has no item → left exactly as the office set it;
+// a load the office removed since the open is not brought back. Pure.
+const applyHomeownerSubmitToGenLoads = (serverGenLoads, outItems) => {
+  const choiceById = {};
+  (outItems||[]).forEach(it => { if (it && it.id != null) choiceById[it.id] = it; });
+  return (serverGenLoads||[]).map(l => {
+    const c = choiceById[l.id];
+    return c ? { ...l, included: !!c.included, confirmed: !!c.confirmed, status: c.status, priority: c.priority, notes: c.notes } : l;
+  });
+};
+const homeownerOverlayApplies = (d) => !!(d && d.submitted && Array.isArray(d.items) && d.items.length && (!d.genLoadsAt || (!!d.submittedAt && d.genLoadsAt < d.submittedAt)));
 
 // Stamp the chosen loads' Home Run rows with panel "Dedicated Loads" (item 4),
 // REVERSIBLY. A row whose gen load is included -> panel:"Dedicated Loads",
@@ -16497,7 +16520,7 @@ const dedicatedPending = (homeRuns, genLoads) => {
 };
 
 // ── Generator Load Section ────────────────────────────────────
-function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
+function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=true, onAutoSync }) {
   // KEY FIX: local state so ★ toggle and checkboxes update instantly
   const [loads, setLoads] = useState(genLoads || []);
   const [dragIdx, setDragIdx] = useState(null);
@@ -16519,10 +16542,21 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // (genLoadsSig guard avoids a redundant Firestore write / render loop).
   const hrSig = genHomeRunsSig(homeRuns);
   useEffect(() => {
+    // v473: never auto-sync before the saved list has arrived. On a slow field
+    // connection the section could be opened while the read was still out;
+    // reconciling against the empty placeholder built a fresh all-off list
+    // (new ids) and saved it over the real selection 800 ms later.
+    if (!ready) return;
     const next = reconcileGenLoads(homeRuns, genLoads);
-    if (genLoadsSig(next) !== genLoadsSig(genLoads)) onSave(next);
-  }, [hrSig]); // eslint-disable-line
-  const reSync = () => commit(reconcileGenLoads(homeRuns, genLoads));
+    if (genLoadsSig(next) === genLoadsSig(genLoads)) return;
+    // v473: the write reconciles against the SERVER copy under the funnel lock
+    // (onAutoSync), never this tab's copy. A tab that loaded the list before
+    // another device's checks used to write that stale list back the moment
+    // any home-run row changed (a pull marked in the field is in hrSig) and
+    // uncheck the other device's picks (Keegan, Miller 2026-09-30).
+    if (onAutoSync) onAutoSync(homeRuns); else onSave(next);
+  }, [hrSig, ready]); // eslint-disable-line
+  const reSync = () => onAutoSync ? onAutoSync(homeRuns) : commit(reconcileGenLoads(homeRuns, genLoads));
 
   const toggle  = (id, key) => commit(loads.map(l=>l.id===id?{...l,[key]:!l[key]}:l));
   const updName = (id, name) => commit(loads.map(l=>l.id===id?{...l,name}:l));
@@ -16548,6 +16582,15 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // so the same control undoes itself — no separate "none" button to hunt for.
   const allIncluded = loads.length>0 && included.length===loads.length;
   const toggleAll = () => commit(loads.map(l=>({...l, included:!allIncluded})));
+
+  // v473: nothing to tap until the saved list is here — otherwise a check made
+  // against the placeholder is wiped when the real list lands a moment later.
+  if (!ready) return (
+    <div style={{textAlign:'center',padding:'18px',color:C.dim,fontSize:12,fontStyle:'italic',
+      border:`1px dashed ${C.border}`,borderRadius:10,marginBottom:12}}>
+      Loading the saved selection…
+    </div>
+  );
 
   return (
     <div>
@@ -16767,6 +16810,13 @@ const placeBreakers = (breakers, slotCount) => {
   if (formed < tandemsNeeded) {
     const leftovers = [];
     for (const amps of ampsSorted) leftovers.push(...(ampGroups.get(amps) || []));
+    // v468 (Miller, Koy: "59 spots filled and a duplicate Water heater 1"): the
+    // leftovers were COPIED out of the amp groups but the groups were never
+    // emptied, so a breaker paired into a split tandem was placed again as a
+    // single, every unpaired leftover was re-added twice, and a real circuit
+    // fell off the end as "unplaced". Drain the groups here; the loop below
+    // puts back only what stayed unpaired, once.
+    for (const amps of ampsSorted) ampGroups.set(amps, []);
     while (formed < tandemsNeeded && leftovers.length >= 2) {
       const a = leftovers.shift(), b = leftovers.shift();
       tandemUnits.push({ type: "tandem", sameAmp: false, brA: a, brB: b });
@@ -17499,6 +17549,9 @@ function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
 function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
+  const [genReady,        setGenReady]        = useState(false); // v473: the saved list has arrived (or the read failed)
+  const genDirtyRef = useRef(false); // v473: a local tap is still landing — snapshots wait
+  const genSeqRef   = useRef(0);     // v473: which local save is the latest (clears dirty only for that one)
   const [hoResponse,      setHoResponse]      = useState(null);
   const [showModal,       setShowModal]       = useState(false);
   const [sending,         setSending]         = useState(false);
@@ -17512,29 +17565,63 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
   useEffect(()=>{
-    getDoc(doc(db,'homeowner_requests',jobId)).then(snap=>{
-      if(snap.exists()){
-        const d = snap.data();
-        // If the homeowner has submitted, overlay their choices onto genLoads
-        // so the office list auto-reflects what they picked (checked = chosen)
-        // — even for jobs submitted before the submit-writes-back change.
-        const gl = (d.submitted && Array.isArray(d.items))
-          ? applyHomeownerChoices(d.genLoads||[], d.items)
-          : (d.genLoads||[]);
-        if(gl.length) setGenLoads(gl);
-        if(d.submitted) setHoResponse(d);
-      }
-    }).catch(()=>{});
+    // v473: LIVE subscription (was a one-shot getDoc). Every open tab now holds
+    // the current list — a phone's checks show on the office tab without a
+    // reload, and no tab keeps a copy that is minutes old. Fix for Keegan's
+    // "keeps unselecting things that I am selecting" (Miller, 2026-09-30).
+    const unsub = onSnapshot(doc(db,'homeowner_requests',jobId), snap => {
+      if (genDirtyRef.current) return; // a local tap is still landing — never let a snapshot roll it back on screen
+      const d = snap.exists() ? snap.data() : null;
+      const base = (d && Array.isArray(d.genLoads)) ? d.genLoads : [];
+      // Overlay the homeowner's submitted picks only while their submission is
+      // NEWER than the office's last save (homeownerOverlayApplies). Re-applying
+      // it on every open used to uncheck whatever the office selected after
+      // the homeowner signed.
+      const gl = homeownerOverlayApplies(d) ? applyHomeownerChoices(base, d.items) : base;
+      setGenLoads(gl);
+      setHoResponse(d && d.submitted ? d : null);
+      setGenReady(true);
+    }, () => setGenReady(true));
+    return unsub;
   },[jobId]);
 
   // Debounced Firestore save — rides the saveHomeownerRequest funnel so a
   // version snapshot is stashed before each write (Kweller hardening Layer 4).
+  // v473: stamps genLoadsAt (gates the homeowner overlay above) and holds the
+  // snapshot listener off while this save is pending / in flight, so an echo
+  // of an OLDER write can't uncheck the tap on screen before this one lands.
+  // A failed save now says so instead of silently leaving the screen wrong.
   const saveGenLoads = (next) => {
     setGenLoads(next);
+    const seq = ++genSeqRef.current; genDirtyRef.current = true;
     clearTimeout(window._genSave);
-    window._genSave = setTimeout(()=>{
-      saveHomeownerRequest(jobId, () => ({ genLoads: next }), 'HomeRunsTab-genLoads').catch(()=>{});
+    window._genSave = setTimeout(async ()=>{
+      try {
+        await saveHomeownerRequest(jobId, () => ({ genLoads: next, genLoadsAt: new Date().toISOString() }), 'HomeRunsTab-genLoads');
+      } catch(e) {
+        toast.error("Generator selection didn't save — check the connection and tap it again.");
+      } finally {
+        if (genSeqRef.current === seq) genDirtyRef.current = false;
+      }
     },800);
+  };
+
+  // v473: the Home Runs → gen list auto-sync (and "Re-sync now") reconciles
+  // against the SERVER copy under the funnel's transaction lock — never this
+  // tab's copy. A tab that had loaded the list before another device's checks
+  // used to write that stale list back whenever a home-run row changed (a pull
+  // marked in the field), unchecking the other device's picks. The mutator
+  // returns null when the locked copy already matches, so a no-change sync is
+  // not a write (and stashes no version snapshot).
+  const syncGenLoads = async (hr) => {
+    try {
+      const patch = await saveHomeownerRequest(jobId, (prev) => {
+        const cur = (prev && Array.isArray(prev.genLoads)) ? prev.genLoads : [];
+        const next = reconcileGenLoads(hr, cur);
+        return genLoadsSig(next) === genLoadsSig(cur) ? null : { genLoads: next };
+      }, 'HomeRunsTab-genSync');
+      if (patch && !genDirtyRef.current) setGenLoads(patch.genLoads);
+    } catch(e) { /* offline: the listener re-syncs when the rows next change */ }
   };
 
   const send = async () => {
@@ -18247,7 +18334,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           </div>
         )}
 
-        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}/>
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}
+          ready={genReady} onAutoSync={syncGenLoads}/>
 
         <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {!hoResponse?.submitted?(
@@ -19115,7 +19203,7 @@ function snapshotHomeownerRequestVersion(jobId, prevData, sourceTag) {
 // jobId is always included so the firestore rule (jobId is string) passes.
 async function saveHomeownerRequest(jobId, mutator, sourceTag) {
   const ref = doc(db,'homeowner_requests',jobId);
-  let prevData = null, patch = null;
+  let prevData = null, patch = null, skipped = false;
   // Transactional funnel (M1 hardening 2026-07-13): re-read the doc UNDER LOCK
   // and write ONLY the patched keys. Two things fall out for free:
   //  1. mutator runs against the LOCKED prev, so every per-key merge caller
@@ -19130,9 +19218,14 @@ async function saveHomeownerRequest(jobId, mutator, sourceTag) {
     const ex = await tx.get(ref);
     prevData = ex.exists() ? ex.data() : null;
     patch = mutator(prevData);
+    // v473: a mutator may return null = "nothing to write" (the generator
+    // auto-sync when the locked server copy already matches). No update, no
+    // version snapshot, no listener echo — a no-change sync is not a write.
+    if (patch == null) { skipped = true; return; }
     if (!prevData) tx.set(ref, { ...patch, jobId });
     else tx.update(ref, { ...patch, jobId });
   });
+  if (skipped) return null;
   snapshotHomeownerRequestVersion(jobId, prevData, sourceTag);
   return patch;
 }
@@ -19637,7 +19730,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
 
   const setExcluded = (job, excluded) => {
     if (!onUpdateJob) return;
-    const updated = { ...job, panelizedLighting: { ...job.panelizedLighting, excludeFromLutronHub: excluded } };
+    const updated = { ...job, panelizedLighting: plBumpRev({ ...job.panelizedLighting, excludeFromLutronHub: excluded }) };   // plRev: see plWriteIsStale
     onUpdateJob(updated, { panelizedLighting: updated.panelizedLighting });
     toast.success(excluded ? `${job.name||"Job"} removed from Tech Lighting's link` : `${job.name||"Job"} back on Tech Lighting's link`);
   };
@@ -25870,11 +25963,37 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 // lighting tabs constantly.
 const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
-              "Change Orders","Return Trips","Open Items","QC"];
+              "Change Orders","Return Trips","Open Items","Completed","QC"];
 // ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Gear & Submittals","RFIs","Change Orders","Open Items"];
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
+// v467: the on-site commercial phase tabs (Koy: "power, lighting, gear, underground;
+// tabs inside of underground: utility work, building site work, building
+// underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
+// (status · start / complete dates · notes · checklist · photos); Underground
+// keeps one record per sub-tab ("underground.utility" …).
+const COMM_PHASE_TABS = {
+  "Power":       { key:"power",       color:"#3B5BA5" },
+  "Lighting":    { key:"lighting",    color:"#B0892C" },
+  "Gear":        { key:"gear",        color:"#6A5E97" },
+  "Underground": { key:"underground", color:"#3E7D7A", subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
+};
+const COMM_JOB_TYPES = [["groundup","Ground-up"],["ti","TI"],["service","Commercial service"]];
+// Blue Stakes (811) tickets are good for 14 calendar days in Utah. `called` is
+// the day the ticket was called in; an explicit `expires` overrides the math.
+const commBlueStakes = (c) => {
+  const called = parseAnyDate((c && c.blueStakesCalled) || "");
+  let exp = parseAnyDate((c && c.blueStakesExpires) || "");
+  if (!exp && called) { exp = new Date(called); exp.setDate(exp.getDate() + 14); }
+  if (!exp) return { state:"none", expires:"", label:"" };
+  const t0 = new Date(); t0.setHours(0,0,0,0); const e0 = new Date(exp); e0.setHours(0,0,0,0);
+  const days = Math.round((e0 - t0) / 864e5);
+  const md = exp.toLocaleDateString("en-US", { month:"short", day:"numeric" });
+  if (days < 0) return { state:"expired", expires: exp.toLocaleDateString("en-US"), label:`EXPIRED ${md} — call in a new ticket` };
+  if (days <= 3) return { state:"soon", expires: exp.toLocaleDateString("en-US"), label:`Active · expires ${md}${days===0?" (today)":""}` };
+  return { state:"active", expires: exp.toLocaleDateString("en-US"), label:`Active · expires ${md}` };
+};
 const tabsFor = (job) => isCommercial(job) ? COMM_TABS : TABS;
-const COMM_SYSTEMS = [["gear","Service / gear"],["distribution","Distribution"],["lighting","Lighting"],["lightingControls","Lighting controls"],["branchPower","Branch power"],["fireAlarm","Fire alarm"],["lowVoltage","Low voltage"],["siteElectrical","Site electrical"],["generatorAts","Generator / ATS"],["ev","EV"],["other","Other"]];
+const COMM_SYSTEMS = [["gear","Service / gear"],["distribution","Distribution"],["lighting","Lighting"],["lightingControls","Lighting controls"],["branchPower","Branch power"],["fireAlarm","Fire alarm"],["lowVoltage","Low voltage"],["siteElectrical","Site electrical"],["generatorAts","Generator / ATS"],["ev","EV"],["lightingPackage","Lighting package"],["vaults","Vaults"],["lightPoles","Light poles"],["other","Other"]];
 const COMM_MILESTONES = [["tempPower","Temp power"],["footing","Footing"],["underground","Underground"],["slab","Slab"],["walls","Walls"],["ceilings","Ceilings"],["permPower","Permanent power"],["startup","Startup"],["final","Final"]];
 const COMM_STAGES = [["","Auto (Pre-Con / Ready to Start)"],["inprogress","In Progress"],["hold","On Hold"],["closeout","Closeout"],["complete","Complete"]];
 const COMM_FIELDS = [["projectNo","Project #"],["gcPm","GC PM"],["gcSuper","GC Super"],["gcSuperPhone","Super phone"],["contractValue","Contract value"],["permitNo","Permit #"],["permitBy","Permit by","Homestead / GC / other"],["planSetRev","Plan set / rev"],["siteHours","Site hours"],["badgeReq","Badge / orientation"],["parkingNote","Parking"],["laydownNote","Laydown"],["tempPowerOwner","Temp power owner"]];
@@ -25943,6 +26062,13 @@ const hrDocHasData = async (jobId, test) => {
   return test(snap.exists() ? snap.data() : {});
 };
 const JOB_SECTIONS = [
+  // v467 (commercial): the pre-con checklist is a section a TI / service job can
+  // turn off — the Job Start tab, the Job Start board, the pre-con My Day rows
+  // and the Job Board's Pre-Con grouping all follow commPhase(), which reads
+  // hiddenSections.jobstart directly.
+  { key:"jobstart", label:"Job Start (pre-con checklist)", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Job Start tab · Job Start board · pre-con rows on My Day · the Job Board's Pre-Con groups",
+    hasData:(j)=>{ const st=commStartOf(j); return Object.keys(st.items||{}).length>0 || Object.keys(st.na||{}).length>0 || Object.keys(st.overrides||{}).length>0; } },
   { key:"panelized", label:"Panelized Lighting", legacy:topFlag("noPanelizedLighting"),
     where:"Panelized Lighting tab · Lighting Schedules link · Tech Lighting's link · Plan Changes · LV / loads share links",
     hasData:(j)=>{ const pl=j.panelizedLighting||{};
@@ -26021,7 +26147,7 @@ const offTechLightingLink = (job) => isSectionHidden(job, "techLighting");
 // turned off themselves — a child riding a hidden parent isn't a separate
 // decision — and only ones that apply to this job.
 const jobSectionsHiddenCount = (job) => JOB_SECTIONS.filter(s =>
-  (!s.appliesTo || s.appliesTo(job)) && isSectionOwnHidden(job, s.key) &&
+  (isCommercial(job) ? !!s.commercial : !s.commercial) && (!s.appliesTo || s.appliesTo(job)) && isSectionOwnHidden(job, s.key) &&
   !(s.parent && isSectionHidden(job, s.parent))).length;
 
 // Patch for one toggle. Always spreads the current map so a second switch
@@ -26034,7 +26160,7 @@ const jobSectionPatch = (job, key, hidden) => {
 };
 
 // Tabs owned by a section — hidden from the bar entirely when it's off.
-const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight" };
+const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight", "Job Start":"jobstart" };
 
 // Per-job tab list. A hidden section's tab drops out of the bar. `activeTab`
 // keeps a hidden tab visible if something deep-linked straight into it (e.g.
@@ -26082,7 +26208,8 @@ function JobSectionsPanel({ job, u, identity }) {
   const boxRef = useRef(null);
   const canEdit = can(identity, "job.sections");
   // Only switches that apply to this job (Tech Lighting = Lutron jobs).
-  const visible = JOB_SECTIONS.filter(s => !s.appliesTo || s.appliesTo(job));
+  // v467: a commercial job lists only its own sections; residential never sees the commercial ones.
+  const visible = JOB_SECTIONS.filter(s => (isCommercial(job) ? !!s.commercial : !s.commercial) && (!s.appliesTo || s.appliesTo(job)));
   // Count only switches turned off themselves — a child riding a hidden
   // parent isn't a separate decision.
   const hiddenCount = jobSectionsHiddenCount(job);
@@ -26310,6 +26437,64 @@ const _threeWayMerge = (base, client, server) => {
   }
   return client; // primitives / mixed types → client wins
 };
+
+// ── Stale-copy guards (Miller panel-loads rollback, 2026-09-30) ─────────────
+// The three-way merge above is only safe while the v312 invariant holds: the
+// merge BASELINE is never fresher than the copy on screen. Its fast path
+// ("server still equals my baseline → write my copy verbatim") turns a stale
+// on-screen copy into a wholesale rollback the moment the baseline gets ahead
+// of it — and every Panelized Lighting write ships the ENTIRE panelizedLighting
+// object, so on Miller (#1438, twice) one such write undid 26 renames, brought
+// a removed load back, dropped a load imported elsewhere and moved a zone. Two
+// paths let the baseline get ahead: JobDetail skipped its own "clean" echo even
+// when that echo carried ANOTHER device's work that landed during the in-flight
+// window, and the jobs listener advanced the whole baseline on any own echo
+// while a second save was already pending. These helpers keep the two in step
+// (pure; run by scripts/panel-loads-merge-test.js on every build).
+const JOB_META_KEYS = new Set(["updated_at", "_saved_by", "_device", "_tab", "_merged", "lastActivityAt"]);
+// True when two copies of a job hold the same DATA (meta stamps ignored). An
+// echo that is NOT content-equal to the local copy carries something the local
+// copy lacks and must be adopted, even when this tab wrote it.
+function jobContentEquals(a, b) {
+  if (!a || !b) return !a && !b;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter(k => !JOB_META_KEYS.has(k)));
+  for (const k of keys) if (!_jeq(a[k], b[k])) return false;
+  return true;
+}
+// Baseline advance while a save is in flight: take the echo's value ONLY for
+// keys the local copy already holds (compared through `norm`, the same
+// normalizer the merge uses); every other key keeps its previous baseline, so
+// the baseline can never describe content the on-screen copy doesn't have.
+function baselineAdvanceKeys(prev, echo, local, norm) {
+  const next = { ...(prev || {}) };
+  if (!echo) return next;
+  const nEcho = norm ? norm(echo) : echo, nLocal = norm ? norm(local || {}) : (local || {});
+  Object.keys(echo).forEach(k => {
+    if (JOB_META_KEYS.has(k)) return;
+    if (_jeq(nEcho[k], nLocal[k])) next[k] = echo[k];
+  });
+  if (echo.updated_at) next.updated_at = echo.updated_at;
+  return next;
+}
+// panelizedLighting.plRev — a per-copy revision the CLIENT bumps on every
+// panelizedLighting write (JobDetail's u(), the Lutron hub toggle). A copy that
+// derives from the baseline always writes base.plRev + 1 or more (bursts bump
+// more than once); a copy OLDER than the baseline can only write base.plRev or
+// less. That is the tripwire: such a write is refused (server copy kept, toast,
+// console.error) instead of rolling the list back. No baseline → the server's
+// rev stands in (catches a patch replayed from an old session). Legacy docs
+// with no rev never trip.
+function plBumpRev(pl) { return { ...(pl || {}), plRev: (Number(pl && pl.plRev) || 0) + 1 }; }
+function plWriteIsStale(clientPl, basePl, serverPl) {
+  const c = Number(clientPl && clientPl.plRev);
+  if (!Number.isFinite(c)) return false;
+  const ref = basePl !== undefined && basePl !== null ? basePl : serverPl;
+  const r = Number(ref && ref.plRev);
+  if (!Number.isFinite(r) || r <= 0) return false;
+  return c <= r;
+}
+let _plStaleToastAt = 0;
+// ── end Stale-copy guards ────────────────────────────────────────────────────
 
 // v338 scalar-conflict telemetry support (read-only observability; see
 // _mergePatchAgainstServer). _noBaselineWarned: once-per-session-per-job warn
@@ -27351,7 +27536,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -27363,6 +27548,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   //   • Different job opened → always load it.
   //   • Same job, change from ANOTHER device → load it (live cross-device sync).
   //   • Same job, OUR OWN device's echo → skip (our local copy is the freshest).
+  const jobRef = useRef(job);
+  useEffect(()=>{ jobRef.current = job; }, [job]);
   const _lastJobIdRef = useRef(rawJob?.id);
   useEffect(()=>{
     const idChanged = rawJob?.id !== _lastJobIdRef.current;
@@ -27381,12 +27568,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     const ownEcho = rawJob && rawJob._tab
       ? rawJob._tab === TAB_ID
       : !!(rawJob && rawJob._device && myDev && rawJob._device === myDev);
-    if (ownEcho && !rawJob?._merged) return; // clean own echo — local copy is already the freshest
+    // A clean own echo is skippable ONLY when it holds exactly what this copy
+    // already has. An echo can carry ANOTHER device's work that landed while this
+    // tab's save was in flight (the jobs listener holds the selected job still
+    // during that window, and the write's own echo is the first snapshot that
+    // gets through) — skipping it made the on-screen copy older than the merge
+    // baseline, and the next Panelized Lighting write rolled the whole loads
+    // list back (Miller #1438, 2026-09-30). Content compare, not stamp compare:
+    // meta stamps always differ on an echo. Nothing is pending when an echo
+    // reaches here (the listener's in-flight gate), so there is no local edit
+    // to lose.
+    if (ownEcho && !rawJob?._merged && jobContentEquals(jobRef.current, normalizeJob(rawJob))) return;
     setJob(normalizeJob(rawJob));
   }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
-
-  const jobRef = useRef(job);
-  useEffect(()=>{ jobRef.current = job; }, [job]);
 
   // Presence ping (light) — write once per job open so Today's Live Activity
   // can show "Koy opened Forth at 2:14pm". Writes to job.presence[name] as
@@ -27429,6 +27623,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       !patch.jobNotesMigratedAt
     ) {
       finalPatch = { ...patch, jobNotesMigratedAt: new Date().toISOString() };
+    }
+    // Stale-copy tripwire (Miller rollback, 2026-09-30): every panelizedLighting
+    // write carries the LOCAL copy's revision + 1, so the merge can tell a copy
+    // that derives from its baseline from one that is older than it (see
+    // plWriteIsStale). The bump lands on the local copy too, so a burst of taps
+    // keeps counting up.
+    if (finalPatch && finalPatch.panelizedLighting && typeof finalPatch.panelizedLighting === "object") {
+      finalPatch = { ...finalPatch, panelizedLighting: plBumpRev({ ...finalPatch.panelizedLighting, plRev: jobRef.current?.panelizedLighting?.plRev }) };
     }
     const updated = {...jobRef.current, ...finalPatch};
     jobRef.current = updated;
@@ -28006,6 +28208,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // (questions written before this shipped), publish once so TraceVault sees
   // them without waiting for the next edit. Read-only against job data.
   const [fiQLinks, setFiQLinks] = useState({});
+  const [suHist, setSuHist] = useState(false);   // v467: status update history open/closed
   useEffect(() => {
     let dead = false, unsub = null, retryTimer = null;
     setFiQLinks({});
@@ -30941,6 +31144,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
+          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab}/>)}
+          {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
           {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
           {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
 
@@ -31666,9 +31871,36 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <StatusUpdateTextarea
                     job={job}
                     identity={identity}
-                    onCommit={patch => u(patch)}
+                    onCommit={patch => {
+                      // v467: every committed status update is also appended to
+                      // statusUpdateHistory (text · by · at, last 50) so the
+                      // History button below can show who wrote what, and when.
+                      const hist = Array.isArray(job.statusUpdateHistory) ? job.statusUpdateHistory : [];
+                      const txt = String(patch.statusUpdate || "").trim();
+                      const last = hist[hist.length - 1];
+                      const add = txt && !(last && String(last.text || "").trim() === txt);
+                      u(add ? { ...patch, statusUpdateHistory: [...hist.slice(-49), { text: txt, by: patch.statusUpdateBy || "", at: patch.statusUpdateAt || new Date().toISOString() }] } : patch);
+                    }}
                     styleVars={C}/>
                 </div>
+                {Array.isArray(job.statusUpdateHistory) && job.statusUpdateHistory.length > 0 && (
+                  <div style={{marginTop:6}}>
+                    <button onClick={()=>setSuHist(v=>!v)} aria-expanded={suHist}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:10,fontWeight:700,padding:"3px 9px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em",textTransform:"uppercase"}}>
+                      {suHist ? "Hide history" : `History (${job.statusUpdateHistory.length})`}
+                    </button>
+                    {suHist && (
+                      <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:5,maxHeight:260,overflowY:"auto"}}>
+                        {[...job.statusUpdateHistory].reverse().map((h, i) => (
+                          <div key={i} style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,borderLeft:"3px solid #B0892C",background:C.card}}>
+                            <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
+                            <div style={{fontSize:12,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{h.text}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {job.statusUpdate && job.statusUpdateBy && (
                   <div style={{fontSize:10,color:C.dim,marginTop:4}}>
                     Set by {job.statusUpdateBy}{job.statusUpdateAt ? ` · ${timeAgo(job.statusUpdateAt)}` : ""}
@@ -31801,6 +32033,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {COMM_FIELDS.map(([k,l,ph]) => (
                       <div key={k}>{lbl(l)}<input value={c[k]||""} placeholder={ph||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x,[k]:v})); }} style={inp}/></div>
                     ))}
+                  </div>
+                  <div style={{marginTop:14}}>
+                    {lbl("Job type")}
+                    <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap"}}>
+                      {COMM_JOB_TYPES.map(([k,l]) => { const on = (c.jobType||"groundup")===k; return (
+                        <button key={k} onClick={()=>cu(x=>({...x, jobType:k}))}
+                          style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?C.teal:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
+                    </div>
+                    {(c.jobType==="ti"||c.jobType==="service") && !isSectionHidden(job,"jobstart") && (
+                      <div style={{fontSize:10,color:C.dim,marginTop:6}}>A {c.jobType==="ti"?"TI":"service"} job usually skips the pre-con checklist — <span onClick={openJobSectionsPanel} style={{color:C.teal,fontWeight:700,cursor:"pointer"}}>hide Job Start under Job Sections</span> at the bottom of this tab.</div>
+                    )}
+                  </div>
+                  <div style={{marginTop:14}}>
+                    {lbl("Blue Stakes (811)")}
+                    {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?"#B0892C":bs.state==="active"?C.green:C.dim; return (
+                      <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
+                        {bs.state!=="none" && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.04em",borderRadius:99,padding:"6px 12px",color:"#fff",background:colr}}>{bs.label}</span>}
+                        {bs.state==="none" && <span style={{fontSize:10,color:C.muted}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
+                      </div>); })()}
                   </div>
                   <div style={{marginTop:14}}>
                     {lbl("Stage")}
@@ -37618,6 +37872,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   }, []);
   const crewDisplayName = (name) => crewUserMap[name] || name;
   useEffect(() => onSnapshot(doc(db,"settings","crewRoster"), s => {
+    _settingsBaselines["crewRoster"] = s.exists() ? (s.data()||{}) : {}; // v474: baseline for the merge-save
     if(s.exists()) setCrewRoster(s.data().names||[]);
     else _crewLoadAllUsers().then(names => setCrewRoster(names));
   }), []);
@@ -37642,7 +37897,10 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   // schedule docs. Simpro is the authoritative source — see simproLastByJob
   // above.)
 
-  const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
+  // v474: through mergeSaveSettingsFields like every other settings/* doc (was a
+  // raw whole-doc setDoc — a tab with an older roster could drop a name someone
+  // else had just added).
+  const _saveRoster = n => { setCrewRoster(n); mergeSaveSettingsFields("crewRoster",{names:n}).catch(e=>{console.error("[HE] crewRoster save:",e?.message);toast.error("Roster save failed — check connection and retry.");}); };
 
   // Teams
   useEffect(() => onSnapshot(doc(db,"settings","crewTeams"), s => {
@@ -47759,24 +48017,23 @@ function HomeownerPage({ jobId }) {
       });
       // Write the homeowner's choices BACK onto genLoads (by id) so the OFFICE
       // gen list auto-reflects exactly what they picked — checked = chosen,
-      // unchecked = not. No manual re-checking on our side. Loads the office
-      // added after the homeowner opened (no matching item) are left as-is.
-      const choiceById = {};
-      outItems.forEach(it => { choiceById[it.id] = it; });
-      const outGenLoads = (genLoads||[]).map(l => {
-        const c = choiceById[l.id];
-        return c ? { ...l, included: !!c.included, confirmed: !!c.confirmed, status: c.status, priority: c.priority, notes: c.notes } : l;
-      });
+      // unchecked = not. v474: mapped onto the SERVER's list (the funnel's locked
+      // prev), not this page's copy from when the link was opened — see
+      // applyHomeownerSubmitToGenLoads. Falls back to the page copy only if the
+      // server has no list at all (never happens after a Send).
       // Merge onto the shared homeowner_requests doc so lighting-collab / Q&A
       // data written by other share links isn't wiped. Funnel write = version
       // snapshot stashed first (Kweller hardening Layer 4).
-      await saveHomeownerRequest(jobId, () => ({
-        jobName:job?.name||'', submitted:true,
-        submittedAt:new Date().toISOString(),
-        signature:sigName.trim(), signedDate:sigDate,
-        items: outItems,
-        genLoads: outGenLoads,
-      }), 'HomeownerPage-submit');
+      await saveHomeownerRequest(jobId, (prev) => {
+        const srv = prev && Array.isArray(prev.genLoads) && prev.genLoads.length ? prev.genLoads : (genLoads||[]);
+        return {
+          jobName:job?.name||'', submitted:true,
+          submittedAt:new Date().toISOString(),
+          signature:sigName.trim(), signedDate:sigDate,
+          items: outItems,
+          genLoads: applyHomeownerSubmitToGenLoads(srv, outItems),
+        };
+      }, 'HomeownerPage-submit');
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
@@ -50395,13 +50652,20 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-29 · App SW version: v471
+**Last manifest update:** 2026-09-30 · App SW version: v475
 
 ---
 
+- **Stale-copy audit — five more writers that could roll a shared doc back, closed** · 'shipped 2026-09-30' · 'SW v474' · Koy, after v473: *"are there any other spots in the app that need this fixed too? I feel like this is happening quite a bit, and I need it to not happen."* Swept every one-shot read that feeds a write, every direct 'setDoc' / 'updateDoc' outside the job merge, every 'saveHomeownerRequest' mutator and every effect that writes. Verified already safe: jobs (v312 / v471 merge), every settings/* doc on 'mergeSaveSettingsFields', settings/users (stale guard), needs (field-surgical + arrayUnion), question threads, plan-change acks, lighting collab, scoreboard weights and My Day pins ('merge:true'), the v450 FieldInk loads adopt effect. Five still had the Miller shape: **(1) Homeowner generator link, on submit** ('HomeownerPage') — wrote 'genLoads' wholesale from the copy loaded when the homeowner OPENED the link; a link sits open for days, so every office edit in between (renames, added loads, checks) was overwritten at signature and a load the office had removed came back. Now 'applyHomeownerSubmitToGenLoads' maps the homeowner's choices by id onto the SERVER list (the funnel's locked 'prev'): a load they never saw keeps what the office set, a removed load stays removed. **(2) Redline walks** ('saveRedlineWalk') — whole-object 'setDoc', no merge, no guard; an edit now writes only the keys it changed as dotted 'data.<k>' paths off a live baseline ('redlineWalksRef', fed by the listener and the tab's own edits), dropped keys via 'deleteField', a missing doc falls back to create, and a failed save toasts. New walks are still created whole. **(3) Crew roster** ('_saveRoster') — raw whole-doc 'setDoc'; now 'mergeSaveSettingsFields("crewRoster")' with the listener feeding '_settingsBaselines'. **(4) Time-off delete path** — raw 'setDoc' on 'settings/crewPTO' three lines from a sibling that used the funnel; now the funnel. **(5) Foreman colors** ('saveSettings') — replaced the whole 'settings/main' doc; now 'merge:true'. Gate: 'scripts/gen-selection-test.js' grows to 39 checks (the submit merge against a Monday-open / Wednesday-sign fixture — old path drops the added load and resurrects the removed one, new path keeps both right — plus wiring checks that no raw setDoc is left on crewRoster / crewPTO and that redline writes are dotted-path). Guides 'generatorlink.html' ("Keep editing while the link is out") and 'jobprep.html' (walk edits save field by field) updated. **Why it won't lose data:** every one of the five writes LESS than before — the homeowner submit writes the same 'genLoads' shape but built from the server copy (nothing the office has is dropped; the homeowner's signed picks still land by id); a redline edit writes only changed keys and never an undefined; roster, PTO and colors ride merges that preserve every other field. No field shape, loader, function or rules change.
+- **Home Runs — Generator Load Selection no longer unchecks what you just checked** · 'shipped 2026-09-30' · 'SW v473' · Keegan, on Miller: *"Generator load selection keeps unselecting things that I am selecting. Some examples are office + hallway, pantry fridge, and laundry counter outlets."* (The v468 note had already logged "Pantry fridge/ freezer" as a row wearing the Dedicated Loads label but not checked on the generator — that was this, not a hand edit.) The section's saved list ('homeowner_requests/{jobId}.genLoads') was a one-shot 'getDoc' at mount with no live subscription, and three paths could roll a check back: **(1) a stale tab re-syncs over the server.** The Home Runs → generator auto-sync fires on any home-run change (a pull marked in the field is in the signature) and used to write the tab's OWN copy of the list back wholesale — so an office tab opened on Miller that morning, holding the list from before Keegan's checks, unchecked them the next time a row changed. Now the auto-sync (and Re-sync now) reconciles against the SERVER copy inside the 'saveHomeownerRequest' transaction, and the mutator returns null (funnel now skips the write and the version snapshot) when nothing changed. **(2) a slow read lets the section save before the list arrives.** Open the section before the read resolved and it reconciled against the empty placeholder, built a fresh all-off list with new ids and saved it 800 ms later; any tap made meanwhile vanished when the real list landed. The section now shows *Loading the saved selection…* and runs no sync until the saved list is here ('ready'). **(3) a signed homeowner response was re-applied on every open.** 'applyHomeownerChoices' overlaid the homeowner's picks onto the office list at every mount (meant as a one-time carry for jobs signed before submit wrote back), so anything the office checked after the homeowner signed showed unchecked again, and the next tap saved that. Every office save now stamps 'genLoadsAt', and the overlay applies only while the submission is newer than that stamp ('homeownerOverlayApplies'; legacy docs with no stamp behave as before until their next save). Also: the tab now subscribes live ('onSnapshot') so a phone's checks appear on the office tab without a reload, a snapshot is held off while a local tap is still saving so an older echo can't uncheck it on screen, and a failed save now toasts instead of failing silently. New prebuild gate 'scripts/gen-selection-test.js' (21 checks: the stale-tab mechanism and its fix against the real 'reconcileGenLoads', the overlay gate cases, the funnel's null-patch skip, the wiring). Guide 'homeruns.html' updated. **Why it won't lose data:** 'genLoads' keeps its shape and ids; 'genLoadsAt' is one additive ISO string on the shared doc (open rules already allow any field; nothing reads it but the overlay gate); the auto-sync now writes LESS (only when the locked server copy differs, preserving every server-side check) and user taps write exactly what they wrote before through the same funnel with its version snapshot; the listener only moves local state; no job field, loader, function or rules change.
+- **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
+
 ## Top-Level Views (Nav Tabs)
 
-- **Panelized Lighting — the panel schedule PDF runs onto more pages instead of clipping; a module is never cut in half** · 'shipped 2026-09-29' · 'SW v471' · Koy exported "LCP 1 — Miller Residence - Alpine.pdf" and "LCP 3 — …" (10 modules each) and both came out as ONE 8.5×11 page with Module 1, the last table on the sheet, sliced mid-table (LCP 1 lost its 4th row, LCP 3 rows 3 and 4) — and the on-screen **Print** button sitting in the picture. Root cause: **Download** on a panel card ('downloadPanelSchedule' — the Lutron builder cards and the Control 4 / Crestron module sections all use it) handed the schedule HTML to '_saveHtmlAsPdf', which html2canvas-captures a fixed 816×1056 iframe: exactly one page, everything below it gone, and no '@media print' rules applied (html2canvas renders screen media, so 'page-break-inside: avoid' and the hidden toolbar never reached the PDF). **Print** (the popup + Cmd/Ctrl+P) was already right — '.module { page-break-inside: avoid }' was there and Chrome puts a 10-module panel on 2 pages with the cut between modules. Now the download goes through '_saveHtmlAsPdfPaged' (the v448 loads-list saver), which grew two knobs: 'avoid' — a CSS selector for blocks that must not straddle a page edge; the cut moves UP to the block's top so it starts the next page whole (the canvas twin of 'break-inside: avoid', outermost block first) — and 'hide' for screen-only chrome dropped before capture. The schedule passes 'avoid: ".module:not(.tall), .module tr"' and 'hide: ".toolbar"'. The print stylesheet adds 'break-inside: avoid' beside the old 'page-break-inside', 'tr { break-inside: avoid }' and 'thead { display: table-header-group }' so column headers repeat when a table does span pages. A module with more than 40 rows (a 64-load 2HDC / DALI bus module) gets class 'tall': it can't stay whole, so instead of being shoved onto a fresh page and leaving page 1 header-only it flows row by row. The header (logo, panel, job, totals) stays on page 1. **Verified** on real builder output (harness ran 'printPanelSchedule' straight out of App.js): headless-Chrome print-to-PDF of a Miller-shaped 10-module panel = 2 pages, Module 4 closes page 1 and Module 3 opens page 2; a 14-module panel = 2 pages cut between Module 8 and Module 7; the 64-row bus fixture = 2 pages with headers repeated (was 3 with a header-only first page). The real '_saveHtmlAsPdfPaged' run in a browser harness with 'jsPDF.save' stubbed produced the same multi-page output with every cut on a module or row edge. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — Print and Download only read the panel / loads and write nothing to Firestore; no new field, no loader, function or rules change; the loads-list PDF (the other '_saveHtmlAsPdfPaged' caller) passes no options and behaves exactly as before; the electrical-panel and Savant downloads still use the untouched '_saveHtmlAsPdf'.
+- **Panelized Lighting — the panel schedule PDF runs onto more pages instead of clipping; a module is never cut in half** · 'shipped 2026-09-30' · 'SW v475' · Koy exported "LCP 1 — Miller Residence - Alpine.pdf" and "LCP 3 — …" (10 modules each) and both came out as ONE 8.5×11 page with Module 1, the last table on the sheet, sliced mid-table (LCP 1 lost its 4th row, LCP 3 rows 3 and 4) — and the on-screen **Print** button sitting in the picture. Root cause: **Download** on a panel card ('downloadPanelSchedule' — the Lutron builder cards and the Control 4 / Crestron module sections all use it) handed the schedule HTML to '_saveHtmlAsPdf', which html2canvas-captures a fixed 816×1056 iframe: exactly one page, everything below it gone, and no '@media print' rules applied (html2canvas renders screen media, so 'page-break-inside: avoid' and the hidden toolbar never reached the PDF). **Print** (the popup + Cmd/Ctrl+P) was already right — '.module { page-break-inside: avoid }' was there and Chrome puts a 10-module panel on 2 pages with the cut between modules. Now the download goes through '_saveHtmlAsPdfPaged' (the v448 loads-list saver), which grew two knobs: 'avoid' — a CSS selector for blocks that must not straddle a page edge; the cut moves UP to the block's top so it starts the next page whole (the canvas twin of 'break-inside: avoid', outermost block first) — and 'hide' for screen-only chrome dropped before capture. The schedule passes 'avoid: ".module:not(.tall), .module tr"' and 'hide: ".toolbar"'. The print stylesheet adds 'break-inside: avoid' beside the old 'page-break-inside', 'tr { break-inside: avoid }' and 'thead { display: table-header-group }' so column headers repeat when a table does span pages. A module with more than 40 rows (a 64-load 2HDC / DALI bus module) gets class 'tall': it can't stay whole, so instead of being shoved onto a fresh page and leaving page 1 header-only it flows row by row. The header (logo, panel, job, totals) stays on page 1. **Verified** on real builder output (harness ran 'printPanelSchedule' straight out of App.js): headless-Chrome print-to-PDF of a Miller-shaped 10-module panel = 2 pages, Module 4 closes page 1 and Module 3 opens page 2; a 14-module panel = 2 pages cut between Module 8 and Module 7; the 64-row bus fixture = 2 pages with headers repeated (was 3 with a header-only first page). The real '_saveHtmlAsPdfPaged' run in a browser harness with 'jsPDF.save' stubbed produced the same multi-page output with every cut on a module or row edge. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — Print and Download only read the panel / loads and write nothing to Firestore; no new field, no loader, function or rules change; the loads-list PDF (the other '_saveHtmlAsPdfPaged' caller) passes no options and behaves exactly as before; the electrical-panel and Savant downloads still use the untouched '_saveHtmlAsPdf'.
+- **Merge: main's v467–v471 (job questions on My Day, Tools tab generator sizing, zone picker search, generator link sizing, hours-vs-bid, panelized stale-copy guard) with this branch's v467–v468** · 'shipped 2026-09-30' · 'SW v472' · The two lines of work reused v467 and v468. No code conflicted: only the FEATURES.md header + entry list (both kept), the generated 'SOP_FILES_INLINE' block (regenerated by prebuild), the SW line, and the prebuild chain in 'package.json' (union: main's 'panel-loads-merge-test.js' and this branch's 'panel-fill-test.js' both run). **Why it won't lose data:** merge only, no new write.
+- **Home Runs — panel FILL no longer duplicates a breaker (or drops one) when the panel is too small** · 'shipped 2026-09-30' · 'SW v468' · Koy, on Miller: *"the generator says 52 circuits 56 panel slots, but pre filling the 30/60 panel it says 59 spots filled and i see a duplicate water heater 1 on the schedule."* Reproduced with the shipped code against Miller's live rows: a 30-slot fill of the 54 "Dedicated Loads" breakers produced 59 rows, "Water heater 1" at 21A and 22A, and "Wellness outlets + bath hall" unplaced. Root cause in 'placeBreakers'' tandem step: when same-amp pairs weren't enough, the leftovers were copied out of the amp groups but the groups were never emptied, so a breaker paired into a split tandem was placed again as a single, every unpaired leftover was re-added twice, and a real circuit fell off the end. The groups are now drained before the leftovers are re-added once. New prebuild gate 'scripts/panel-fill-test.js' (the Miller shape at 20 / 30 / 40 / 60 slots, mixed-amp odd counts, 200 random sets: every breaker lands exactly once, never twice, never lost). **Separately, not a bug:** the generator's 52 / 56 vs the Dedicated Loads panel's 54 / 58 is two home-run rows labeled "Dedicated Loads" by hand that are not checked on the generator ("Horn and strobe (old Lighting control 8)" and "Pantry fridge/ freezer") — the panel schedule counts every row carrying the label, the generator counts only what is checked. **Why it won't lose data:** pure placement function; a FILL / RE-FILL writes the same 'circuits' map shape as before, now without the duplicate and the dropped row; nothing auto-rewrites a hand-edited schedule (the existing RE-FILL rule stands).
+- **Commercial batch 2 + two both-division adds: Completed tab, status update history, on-site phase tabs, Blue Stakes, job types, more gear systems, hideable Job Start** · 'shipped 2026-09-30' · 'SW v467' · Koy's list. **Both divisions:** **(1) Completed tab** ('JobCompletedTab', last tab on the card): every need / task doc on this job with status done, newest first — kind, who finished it and when, who it was on and who asked, reply count, photos; voided docs crossed out with the reason; search. Read-only; 'App()' now hands the drawer 'needs'. **(2) Status update history**: 'StatusUpdateTextarea''s commit in Job Info also appends '{text, by, at}' to 'statusUpdateHistory' (last 50, no duplicate of the last entry); a **History (N)** button under the box lists them newest first with date · time · who. Clear keeps the history. **Commercial:** **(3) Phase tabs** Power · Lighting · Gear · Underground ('COMM_PHASE_TABS', 'CommPhaseTab'), Underground with sub-tabs Utility work · Building site work · Building underground; each record = status (stamped), start / complete dates, notes, a checklist (add / tap done with who + when / remove) and photos, stored under 'commercial.phases[key]' ('underground.utility' …) through 'commPatch'. **(4) Blue Stakes (811)** on Job Info → Commercial: ticket #, called-in date, expiry (auto = called + 14 days, editable); pill green / amber inside 3 days / red EXPIRED — call in a new ticket ('commBlueStakes'). **(5) Job type** Ground-up · TI · Commercial service ('commercial.jobType'); a TI / service job gets a hint to hide Job Start. **(6) Gear & Submittals system list** gains Lighting package · Vaults · Light poles ('COMM_SYSTEMS'). **(7) Job Start is a hideable section**: 'JOB_SECTIONS' gains 'jobstart' (commercial only; the panel lists commercial sections for commercial jobs and residential ones for residential), 'SECTION_TABS["Job Start"]', and 'commPhase()' returns null when 'hiddenSections.jobstart' is set — so the tab, the Job Start board, the Job Board's Pre-Con groups and the pre-con My Day rows all drop that job. Guides: new 'completed.html', 'power.html', 'lighting.html', 'gear.html', 'underground.html'; 'jobinfo.html' + 'commercialmode.html' updated. Dry-run gains the hidden-section case (33 checks). **Why it won't lose data:** every new field is additive and inside 'data' ('statusUpdateHistory' array; 'commercial.phases', 'commercial.jobType', 'commercial.blueStakes*'; 'hiddenSections.jobstart' through the existing 'jobSectionPatch' spread), all through the existing patch funnel; the Completed tab writes nothing; no loader, rules or function change.
 - **Home Runs — "Size the generator" link on the Generator Load Selection header** · 'shipped 2026-09-29' · 'SW v470' · Koy, right after pushing v469: *"maybe we add a quick link of something when a job has a geneerator loads section somewhere inside of that."* The Generator Load Selection section on Home Runs (only present when the job's Generator section is on) now carries a small **Size the generator** action on its header — the 'Section' 'action' slot, so it shows while the section is folded and doesn't toggle it — that opens the Tools tab's Generator Sizing calculator ('/tools/generator-sizing/index.html') in its own tab, the same "Open full screen" form the Tools tab uses, so the job stays open underneath and Print / Save as PDF works on a phone. No data flows either way: the calculator still reads and writes no job, and the load picker still carries no watts. Guide 'homeruns.html' updated. **Why it won't lose data:** one static link; no write, no field, no loader, function or rules change.
 - **Panelized Lighting — the zone picker gets a search bar and floor → room groups** · 'shipped 2026-09-29' · 'SW v469' · Koy (screenshot of the LCP 1 · Mod 1 · Zone 3 sheet): *"it would be nice if when you click a module load number to assign a load, if this menu had a search bar and seperated the loads cleanly in rooms and floors isntead of this."* The "fill" sheet (tap an open zone or open bus address in the Panel Builder) was one flat wrap of up to 80 chips sorted parked-first, so Basement and Main Level loads interleaved. Now: a **search box** at the top (matches load name, room or floor; autofocused on a mouse/trackpad device, not on touch so the keyboard doesn't jump), and every unplaced load grouped **floor → room** in the tray's floor order ('floorOrder', then A–Z; loads with no floor / room land in "No floor" / "No room"). Floor headers are sticky inside the scroll, carry a count, and **fold on tap**; typing a search unfolds everything. Inside a room the old order still holds — parked on this panel first (chip outlined in the accent and labeled "parked on LCP n"), then loads whose type fits the module, then A–Z — and the type-mismatch / over-the-zone-limit warnings are unchanged. The 80-chip cap is gone (search covers it). Search text + folds live in one 'fill' state reset by 'openFill', the single opener both zone rows now use. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** render-only reorganization of the same candidate list; 'fillZoneWith' (the only write) is untouched and still assigns the tapped load to the same panel / module / zone; no field, loader, function or rules change.
 - **Tools tab — Generator Sizing (Josh's Generac calculator) inside the app** · 'shipped 2026-09-29' · 'SW v468' · Josh handed over a finished standalone generator-sizing tool ("built with Claude and wants it folded into the Homestead app"); Koy: *"i think we should make a tool tab that lives at the top we can add more tools too later on."* New top-nav **Tools** tab (permission 'tools.view', all four internal tiers, contractors never) with a tool picker strip, an **Open full screen** link (use it to print / Save-as-PDF the job sheet on a phone — 'window.print()' from inside an iframe is unreliable there) and a "?" guide; each tool renders in an iframe from 'public/tools/<key>/index.html', so its inline vanilla JS can never collide with the app's, and the 'TOOLS' registry in App.js is the one place to add the next one. First tool: **Generator Sizing** ('public/tools/generator-sizing/') — sizes a Generac air-cooled / liquid-cooled standby unit from a NEC 220.82 load calc with a motor-start surge check, then the NFPA 54 gas demand + pipe size (or LP tank), the concrete pad + clearance plan, the ATS + feeder + voltage-drop + bonding call, and a one-page printable job sheet. Josh's data tables ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS') and his 'calc' / 'renderFuel' / 'renderPad' / 'renderConnections' / 'render' logic are byte-for-byte his (a region diff at integration confirmed it); only the theme (Homestead slate + steel blue in place of Generac charcoal + orange, no amber anywhere), the diagram colors, and the removed PWA manifest / 'sw.js' registration changed, and the "planning figures — verify against the model spec sheet, install drawing and the AHJ" disclaimer stays in the footer and on the job sheet. **This is not the July wattage feature Koy removed (v280):** the Generator Load Selection section on Home Runs and the homeowner Generator Link are untouched and still carry no watts; sizing lives only under Tools. Service worker: '/tools/' joins '/sops/' in the "real document, not an app route" guard, so an offline miss fails honestly instead of returning the app shell, while a tool opened once online is cached for offline use. Guide 'public/sops/tools.html'. **Why it won't lose data:** the tool has no backend, no Firestore, no storage — it recomputes in the browser on every keystroke and writes nothing anywhere (the only persistence is a per-device localStorage note of which tool was open last); the app side adds one permission row, one nav row, one view and one static folder; no job field, loader, function or rules change.
@@ -51063,7 +51327,7 @@ function TimeOffPage({ identity = null, users = [] }) {
       // missing doc (older request) just no-ops.
       try { await deleteDoc(doc(db,"needs","toneed_"+r.id)); } catch(_) {}
       const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
-      if (filtered.length !== (ptoList||[]).length) await setDoc(doc(db,"settings","crewPTO"), { list:filtered, updatedAt:new Date().toISOString() });
+      if (filtered.length !== (ptoList||[]).length) await mergeSaveSettingsFields("crewPTO", { list:filtered }); // v474: funnel, like the approve path
     } catch(e) { toast.error("Delete failed: "+(e?.message||"")); }
   };
 
@@ -53076,6 +53340,130 @@ const commGearSummary = (job) => {
   const late = rows.filter(r => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now()).length;
   return { n: rows.length, appr, rel, late };
 };
+// v467: one on-site commercial phase (Power / Lighting / Gear / Underground sub).
+// Stored under commercial.phases[key] = { status, start, end, notes, items:[{id,
+// text, done, by, at}], photos:[] } — written through commPatch's spread-merge
+// so two people on different phases never clobber each other.
+function CommPhaseTab({ job, u, identity, tabLabel }) {
+  const def = COMM_PHASE_TABS[tabLabel] || { key: String(tabLabel||"").toLowerCase(), color: C.teal };
+  const subs = def.subs || null;
+  const [sub, setSub] = useState(subs ? subs[0][0] : null);
+  const [newItem, setNewItem] = useState("");
+  const key = subs ? `${def.key}.${sub}` : def.key;
+  const phases = commOf(job).phases || {};
+  const ph = { status:"", start:"", end:"", notes:"", items:[], photos:[], ...(phases[key] || {}) };
+  const me = (identity && identity.name) || "";
+  const patch = (fn) => u(commPatch(job, c => ({ ...c, phases: { ...(c.phases || {}), [key]: fn({ status:"", start:"", end:"", notes:"", items:[], photos:[], ...(((c.phases || {})[key]) || {}) }) } })));
+  const items = Array.isArray(ph.items) ? ph.items : [];
+  const openCount = (k) => { const p = phases[k]; return Array.isArray(p && p.items) ? p.items.filter(i => i && !i.done).length : 0; };
+  const STATUS = [["","Not started"],["inprogress","In progress"],["complete","Complete"]];
+  const col = def.color;
+  const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
+  const addItem = () => { const t = newItem.trim(); if (!t) return; patch(x => ({ ...x, items: [...(x.items || []), { id: uid(), text: t.slice(0, 300), done: false, by: me, at: commLocalDate() }] })); setNewItem(""); };
+  const toggleItem = (id) => patch(x => ({ ...x, items: (x.items || []).map(i => i.id === id ? (i.done ? { ...i, done: false, doneBy: "", doneAt: "" } : { ...i, done: true, doneBy: me, doneAt: commLocalDate() }) : i) }));
+  const removeItem = (id) => patch(x => ({ ...x, items: (x.items || []).filter(i => i.id !== id) }));
+  const statusLabel = (p) => { const st = (p && p.status) || ""; return st === "complete" ? "Complete" : st === "inprogress" ? "In progress" : "Not started"; };
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:col}}>{String(tabLabel).toUpperCase()}</div>
+        <HelpDot section={sopKeyForTab(tabLabel)}/>
+        {!subs && <span style={{fontSize:10,fontWeight:700,color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"2px 9px"}}>{statusLabel(ph)}</span>}
+      </div>
+      {subs && (
+        <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap",marginBottom:12}}>
+          {subs.map(([k,l]) => { const on = sub === k; const n = openCount(`${def.key}.${k}`); const st = (phases[`${def.key}.${k}`] || {}).status || "";
+            return <button key={k} onClick={()=>setSub(k)} style={{border:"none",padding:"8px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim,display:"inline-flex",alignItems:"center",gap:6}}>
+              {l}{st==="complete" ? <span style={{fontSize:10}}>✓</span> : n>0 ? <span style={{fontSize:9,fontWeight:800,borderRadius:99,padding:"0 6px",background:on?"#ffffff30":`${col}18`,color:on?"#fff":col}}>{n}</span> : null}
+            </button>; })}
+        </div>
+      )}
+      <div style={{display:"flex",gap:14,flexWrap:"wrap",alignItems:"flex-end",marginBottom:12}}>
+        <div>{lbl("Status")}
+          <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+            {STATUS.map(([k,l]) => { const on = (ph.status||"")===k; return (
+              <button key={k||"none"} onClick={()=>patch(x=>({...x, status:k, statusAt: commLocalDate(), statusBy: me }))}
+                style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
+          </div>
+          {ph.statusAt && <div style={{fontSize:10,color:C.muted,marginTop:3}}>set {ph.statusAt}{ph.statusBy?` by ${ph.statusBy}`:""}</div>}
+        </div>
+        <div style={{minWidth:150}}>{lbl("Start")}<DateInp value={ph.start||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, start:v})); }}/></div>
+        <div style={{minWidth:150}}>{lbl("Complete")}<DateInp value={ph.end||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, end:v})); }}/></div>
+      </div>
+      <div style={{marginBottom:12}}>{lbl("Notes")}
+        <textarea value={ph.notes||""} rows={3} placeholder={`Notes for ${subs ? (subs.find(([k])=>k===sub)||[])[1] : tabLabel}…`} onChange={e=>{ const v=e.target.value; patch(x=>({...x, notes:v})); }}
+          style={{width:"100%",boxSizing:"border-box",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",resize:"vertical"}}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        {lbl(`Checklist · ${items.filter(i=>!i.done).length} open`)}
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {items.map(i => (
+            <div key={i.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:8,border:`1px solid ${C.border}`,background:i.done?"#3E7D5A0A":"#fff"}}>
+              <button onClick={()=>toggleItem(i.id)} title={i.done?"Mark open":"Mark done"} style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${i.done?"#3E7D5A":col}`,background:i.done?"#3E7D5A":"#fff",color:"#fff",fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>{i.done?"✓":""}</button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:i.done?C.dim:C.text,textDecoration:i.done?"line-through":"none",wordBreak:"break-word"}}>{i.text}</div>
+                <div style={{fontSize:10,color:C.muted}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
+              </div>
+              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.muted,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
+            </div>
+          ))}
+          <div style={{display:"flex",gap:8}}>
+            <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addItem(); } }} placeholder="Add an item… (Enter)"
+              style={{flex:1,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff"}}/>
+            <button onClick={addItem} disabled={!newItem.trim()} style={{padding:"8px 14px",borderRadius:8,border:"none",background:newItem.trim()?col:C.surface,color:newItem.trim()?"#fff":C.muted,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:newItem.trim()?"pointer":"default"}}>Add</button>
+          </div>
+        </div>
+      </div>
+      <div>{lbl("Photos")}
+        <PhotoAttacher storagePath={`jobs/${job.id}/commphase/${key.replace(".","_")}`} photos={Array.isArray(ph.photos)?ph.photos:[]} color={col} label="Add photo"
+          onChange={(next)=>patch(x=>({...x, photos: next}))}/>
+      </div>
+    </div>
+  );
+}
+
+// v467 (both divisions): everything finished on THIS job — every need / task doc
+// with status done (voided ones tagged), newest first, with who finished it and
+// when, who asked, and the reply count. Read-only; the docs are never touched.
+function JobCompletedTab({ job, needs = [] }) {
+  const [q, setQ] = useState("");
+  const rows = (needs || []).filter(n => n && n.jobId === job.id && n.status === "done")
+    .filter(n => { const s = q.trim().toLowerCase(); return !s || String(n.text||"").toLowerCase().includes(s) || String(n.doneBy||"").toLowerCase().includes(s) || String(n.assignedTo||"").toLowerCase().includes(s); })
+    .sort((a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || "")));
+  const fmt = (iso) => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }) : ""; };
+  const first = (n) => String(n || "").split(" ")[0];
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.green}}>COMPLETED</div>
+        <HelpDot section="completed"/>
+        <span style={{fontSize:12,color:C.dim}}>{rows.length} finished on this job</span>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…" style={{marginLeft:"auto",padding:"6px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",width:180}}/>
+      </div>
+      {rows.length === 0 && <div style={{padding:"24px 0",textAlign:"center",color:C.muted,fontSize:13}}>Nothing finished on this job yet. Needs and tasks land here when they are marked Done.</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:7}}>
+        {rows.map(n => { const k = needKind(n); const voided = !!n.voided; const reps = needUpdates(n).length; const photos = needPhotos(n);
+          return (
+            <div key={n.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 12px",borderRadius:9,border:`1px solid ${C.border}`,borderLeft:`4px solid ${voided?C.red:C.green}`,background:C.card}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.text,textDecoration:voided?"line-through":"none",wordBreak:"break-word"}}>{n.text || "(no text)"}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",fontSize:11,color:C.dim,marginTop:3}}>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",color:k==="task"?C.teal:C.orange,border:`1px solid ${k==="task"?C.teal:C.orange}66`}}>{k==="bodies"?"Bodies":k==="task"?"Task":"Need"}</span>
+                  {voided && <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",borderRadius:4,padding:"1px 6px",color:C.red,border:`1px solid ${C.red}66`}}>VOIDED</span>}
+                  <span>{voided ? "voided" : "done"} by <b style={{color:C.text}}>{n.doneBy || n.voidedBy || "?"}</b>{n.doneAt ? ` · ${fmt(n.doneAt)}` : ""}</span>
+                  {(n.assignedTo || n.createdBy) && <span>· was on {first(n.assignedTo || n.createdBy)}{n.assignedBy && !sameName(n.assignedBy, n.assignedTo) ? ` from ${first(n.assignedBy)}` : n.createdBy && !sameName(n.createdBy, n.assignedTo) ? ` from ${first(n.createdBy)}` : ""}</span>}
+                  {reps > 0 && <span>· {reps} {reps===1?"reply":"replies"}</span>}
+                  {n.voidReason && <span>· {n.voidReason}</span>}
+                </div>
+                {photos.length > 0 && <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>{photos.slice(0,8).map(p => <img key={p.id||p.url} src={safeImageSrc(p.url)} alt="" onClick={()=>openPhoto(p.url, p.name)} style={{width:44,height:44,objectFit:"cover",borderRadius:5,border:`1px solid ${C.border}`,cursor:"pointer"}}/>)}</div>}
+              </div>
+            </div>
+          ); })}
+      </div>
+    </div>
+  );
+}
+
 function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenTab, ctx = "board" }) {
   const [peek, setPeek] = useState(null);           // phase number expanded on the bar (look-back / preview)
   const [ov, setOv] = useState(null);               // { n, note } while the move-on modal is open
@@ -58529,7 +58917,7 @@ function App() {
 
   const saveSettings = async(colorOverrides) => {
     set_colorOverrides(colorOverrides);
-    await setDoc(doc(db,"settings","main"),{colorOverrides}).catch(()=>{});
+    await setDoc(doc(db,"settings","main"),{colorOverrides},{merge:true}).catch(()=>{}); // v474: never replace the whole doc
   };
 
 
@@ -58555,6 +58943,7 @@ function App() {
   const [needPhotoBusy, setNeedPhotoBusy] = useState({});   // v431: { needId: in-flight upload count } — hides that row's 📷 while uploading
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
+  const redlineWalksRef = useRef([]);                     // v474: latest walks (listener + local edits) — saveRedlineWalk's diff baseline
   const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
   const [mydayPrio, setMydayPrio] = useState({});     // v461: settings/mydayPriority.byKey — urgency on derived rows (shared)
   // v465: the viewer's LIVE team record. The identity saved on the device at
@@ -58712,33 +59101,44 @@ function App() {
           loaded.forEach(j => {
             const hasTimer = !!saveTimers.current[j.id];
             const hasPending = !!(pendingPatches.current[j.id] && Object.keys(pendingPatches.current[j.id]).length > 0);
-            // OWN-ECHO EXCEPTION (2026-08-09, Kweller "Refresh from home runs"
-            // revert loop): a copy stamped with THIS tab's id is a state this
-            // tab itself wrote — the local copy can never be OLDER than it, so
-            // advancing the baseline is always safe (the forward-only
-            // updated_at guard below still applies). Without this, a
-            // transaction's watch echo that arrived BEFORE the commit promise
-            // cleared pendingPatches was skipped by the pending gate — and
-            // after a RESCUED save (whose baseline is deliberately pinned at
-            // the SENT value per the Kweller rule in _advanceMergeBaseline)
-            // no later snapshot may come on a quiet evening, so base ≠ server
-            // stuck permanently and every delete-shaped write re-resurrected
-            // inside its own transaction (merged:true on every save, verified
-            // live on Kweller via PITR reads). The echo is the convergence
-            // point the Kweller rule DEPENDS on — it must never be skipped.
-            const ownEcho = !!(j._tab && j._tab === TAB_ID);
-            if(ownEcho || (!hasTimer && !hasPending)) {
-              // ONLY move the baseline FORWARD. This is a whole-COLLECTION
-              // listener, so an unrelated job's change fires it carrying a
-              // cached/older copy of THIS job. Resetting the baseline backward to
-              // that stale copy defeats the three-way merge: the user's own
-              // just-saved edit then looks like a "server change", and deleting
-              // that item afterward RESURRECTS it (verified via _threeWayMerge).
-              // Guard on updated_at so a stale snapshot can't roll us back.
-              const prev = serverBaselines.current[j.id];
-              if(!prev || !prev.updated_at || !j.updated_at || String(j.updated_at) >= String(prev.updated_at)) {
-                serverBaselines.current[j.id] = j;
-              }
+            // HISTORY: the 2026-08-09 own-echo exception (Kweller "Refresh from
+            // home runs" revert loop) advanced the WHOLE baseline from a copy
+            // stamped with this tab's id even while a save was pending, on the
+            // theory that the local copy can never be older than its own write.
+            // It can — the echo also carries whatever OTHER devices wrote during
+            // the in-flight window, and the selected job never adopts that (see
+            // the IN FLIGHT note below). Replaced 2026-09-30 by the per-key
+            // advance; the quiet-evening convergence the exception was for now
+            // happens in saveJob itself (CONVERGENCE) right after a rescued
+            // write commits.
+            // ONLY move the baseline FORWARD. This is a whole-COLLECTION
+            // listener, so an unrelated job's change fires it carrying a
+            // cached/older copy of THIS job. Resetting the baseline backward to
+            // that stale copy defeats the three-way merge: the user's own
+            // just-saved edit then looks like a "server change", and deleting
+            // that item afterward RESURRECTS it (verified via _threeWayMerge).
+            // Guard on updated_at so a stale snapshot can't roll us back.
+            const prev = serverBaselines.current[j.id];
+            const forward = !prev || !prev.updated_at || !j.updated_at || String(j.updated_at) >= String(prev.updated_at);
+            if(!forward) return;
+            if(!hasTimer && !hasPending) { serverBaselines.current[j.id] = j; return; }
+            // IN FLIGHT (2026-09-30, Miller panel-loads rollback): the selected
+            // job is NOT re-seeded from this snapshot (see _inFlight below), so
+            // the baseline may take from it only the keys the local copy already
+            // holds — own echo or not. The 2026-08-09 own-echo exception advanced
+            // the WHOLE baseline here, which is how a foreign change that landed
+            // during the in-flight window (or content a merged write rescued)
+            // ended up in the baseline but not on screen — and the next whole-
+            // object save fast-pathed over it (the v312 invariant: the baseline
+            // is never fresher than the local copy). Keys that differ keep the
+            // baseline _advanceMergeBaseline set from the write itself (written
+            // value, or the SENT value for a rescued key — the Kweller rule), so
+            // the next save of that key structural-merges. Convergence no longer
+            // rides on this echo: saveJob re-seeds the local copy from a rescued
+            // write itself as soon as nothing is pending.
+            if (prev) {
+              const local = (jobsRef.current || []).find(x => x && x.id === j.id);
+              serverBaselines.current[j.id] = baselineAdvanceKeys(prev, j, local || prev, normalizeJob);
             }
           });
 
@@ -58967,6 +59367,7 @@ function App() {
         const loaded = snap.docs
           .map(d => { const raw = d.data(); return raw?.data ? { ...raw.data, updated_at: raw.updated_at || "" } : null; })
           .filter(Boolean);
+        redlineWalksRef.current = loaded; // v474: diff baseline for saveRedlineWalk
         setRedlineWalks(loaded);
       },
       (err) => { console.error("Redline walks snapshot error:", err); }
@@ -59243,6 +59644,22 @@ function App() {
     Object.entries(cleanPatch).forEach(([k, v]) => {
       let out = v;
       const sv = nServer[k];
+      // Stale-copy tripwire for the whole-object panelizedLighting write (see
+      // plWriteIsStale). A copy older than the baseline is REFUSED: the key is
+      // left untouched on the server, it counts as rescued so the echo is
+      // adopted and the screen refreshes, and the user is told to redo the one
+      // change. Never a rollback. Loud on purpose — if this ever fires, the
+      // invariant broke somewhere new and we want to hear about it.
+      if (k === "panelizedLighting" && plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) {
+        const refPl = rawBase ? base[k] : sv;
+        console.error(`[HE] STALE panel-loads write REFUSED on ${jobName || jobId}: this copy's rev ${v && v.plRev} vs ${rawBase ? "baseline" : "server"} rev ${refPl && refPl.plRev} — the server's copy stands`);
+        if (Date.now() - _plStaleToastAt > 5000) {
+          _plStaleToastAt = Date.now();
+          try { toast.error("This device had an older copy of the panel loads, so that last change was not saved. The list has been refreshed — please make the change again.", { duration: 9000 }); } catch {}
+        }
+        if (rescuedKeys) rescuedKeys.push(k);
+        return;
+      }
       if (v && typeof v === "object" && sv !== undefined && sv !== null) {
         out = _threeWayMerge(base[k], v, sv);
         if (!_jeq(out, v)) {
@@ -59434,6 +59851,26 @@ function App() {
             }
           }
           persistPending();   // confirmed by the server -> drop from durable queue
+          // CONVERGENCE (2026-09-30, Miller panel-loads rollback): a write that
+          // RESCUED another device's changes left the server holding content
+          // this tab's copy does not have. That used to wait for the watch echo
+          // — which the listener's in-flight gate drops when it lands before
+          // this ack — leaving the on-screen copy behind the server. Re-seed the
+          // local copy from what we actually wrote, right here, once nothing
+          // else is pending for this job: JobDetail adopts it as a merged echo
+          // and the baseline moves up WITH it (never ahead of it). Still
+          // pending → the next save structural-merges against the SENT
+          // baseline (Kweller rule) and converges the same way after.
+          if (_rescued.length && _writtenPatch && !saveTimers.current[job.id] &&
+              !(pendingPatches.current[job.id] && Object.keys(pendingPatches.current[job.id]).length > 0)) {
+            const fields = {};
+            Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") === 0) fields[pk.slice(5)] = _writtenPatch[pk]; });
+            const stamp = { updated_at: _writtenPatch.updated_at, _tab: TAB_ID, _merged: true, _saved_by: meta.saved_by, _device: meta.device };
+            const apply = (x) => ({ ...x, ...fields, ...stamp });
+            setAllJobs(js => js.map(x => x.id === job.id ? apply(x) : x));
+            setSelected(s => (s && s.id === job.id) ? apply(s) : s);
+            _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, []);   // local now holds the merged content, so the baseline may too
+          }
         } else {
           // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
           // so we never wipe Firestore fields another user added that aren't in our local snapshot.
@@ -60141,16 +60578,40 @@ function App() {
 
 
   // ── Redline walks save / update / delete / add (mirror quoteWalks) ──────────
-  const saveRedlineWalk = async (walk) => {
+  // v474: an EDIT writes only the fields it changed (dotted data.<k> paths off
+  // the latest copy this tab holds — listener + its own edits), so two people
+  // on one walk, or a tab holding an older copy, can no longer overwrite each
+  // other's work with a whole-object setDoc. Same recipe as patchNeed. A NEW
+  // walk (no baseline) is still created whole; a failed save now says so.
+  const saveRedlineWalk = async (walk, before) => {
     if (!walk?.id) return;
     const next = { ...walk, updatedAt: new Date().toISOString() };
     try {
+      if (before) {
+        const upd = { updated_at: next.updatedAt, "data.updatedAt": next.updatedAt };
+        let n = 0;
+        new Set([...Object.keys(next), ...Object.keys(before)]).forEach(k => {
+          if (k === "updatedAt" || k === "updated_at") return;
+          if (_jeq(next[k], before[k])) return;
+          upd["data." + k] = next[k] === undefined ? deleteField() : next[k];
+          n++;
+        });
+        if (!n) return;
+        try { await updateDoc(doc(db, "redlineWalks", walk.id), upd); return; }
+        catch (e) { if (e?.code !== "not-found") throw e; /* doc gone → create it whole below */ }
+      }
       await setDoc(doc(db, "redlineWalks", walk.id), { data: next, updated_at: next.updatedAt });
-    } catch (e) { console.error("[HE] saveRedlineWalk failed:", e?.message); }
+    } catch (e) {
+      console.error("[HE] saveRedlineWalk failed:", e?.message);
+      try { toast.error("Redline walk didn't save — check the connection and try again."); } catch {}
+    }
   };
   const updateRedlineWalk = (next) => {
+    const cur = redlineWalksRef.current || [];
+    const before = cur.find(w => w.id === next.id) || null;
+    redlineWalksRef.current = before ? cur.map(w => w.id === next.id ? next : w) : [...cur, next];
     setRedlineWalks(ws => ws.map(w => w.id === next.id ? next : w));
-    saveRedlineWalk(next);
+    saveRedlineWalk(next, before);
   };
   const deleteRedlineWalk = async (id) => {
     if (!id) return;
@@ -62490,7 +62951,7 @@ function App() {
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
-            initialTab={openTab} users={users} identity={identity}
+            initialTab={openTab} users={users} identity={identity} needs={needs}
             jobs={jobs}
             onQuickAdd={(preset)=>setQuickAdd(preset||{})}
             onConvertQuote={(q)=>{
