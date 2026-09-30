@@ -3445,8 +3445,12 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                 <td class="pulled">${l.pulled ? "&#10003;" : "&#9633;"}</td>
               </tr>
             `).join("");
+        // A module with more rows than fit on one page (bus modules hold 64)
+        // is "tall": it may flow across pages row by row instead of being
+        // pushed whole onto a fresh page and leaving page 1 header-only.
+        const tall = namedLoads.length > 40;
         return `
-          <div class="module">
+          <div class="module${tall ? " tall" : ""}">
             <div class="module-header">
               <span class="modnum">${esc(devLabel)} ${esc(m.modNum || "?")}</span>
               ${renderModuleHeaderMeta(m) ? `<span class="meta">${renderModuleHeaderMeta(m)}</span>` : ""}
@@ -3487,7 +3491,16 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .header .sys { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; color: #444; text-transform: uppercase; margin-top: 1px; }
     .header .meta { font-size: 8px; color: #444; margin-top: 2px; }
     .header .totals { font-size: 8px; color: #555; text-align:right; line-height: 1.2; }
-    .module { border: 0.75px solid #000; margin-bottom: 6px; page-break-inside: avoid; }
+    /* PAGINATION (v471) — the schedule flows onto as many letter pages as it
+       needs (10 modules is ~1.5 pages). Each module block stays whole: a
+       module that won't fit at the bottom of a page starts the next one, so
+       no table is ever cut mid-row. A .tall module (more rows than a page)
+       can't stay whole, so it flows — but never splits a row, and the column
+       headers repeat at the top of each page. Header stays on page 1. */
+    .module { border: 0.75px solid #000; margin-bottom: 6px; page-break-inside: avoid; break-inside: avoid; }
+    .module.tall { page-break-inside: auto; break-inside: auto; }
+    tr { page-break-inside: avoid; break-inside: avoid; }
+    thead { display: table-header-group; }
     .module-header { background: #f0f0f0; padding: 2px 6px; font-size: 9px; display: flex; gap: 6px; align-items: center; border-bottom: 0.75px solid #000; flex-wrap: wrap; }
     .module-header .modnum { font-weight: 700; }
     .module-header .meta { font-size: 8px; color: #333; }
@@ -3560,7 +3573,11 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
 }
 
 // One-shot PDF download for the lighting panel schedule. Same capture-then-
-// render-to-PDF strategy as downloadElectricalPanel.
+// render-to-PDF strategy as downloadElectricalPanel, but PAGED (v471): a
+// 10-module Lutron panel is ~1.5 letter pages, and the single-page saver
+// clipped everything past page 1 (Miller LCP 1 / LCP 3 lost Module 1's last
+// rows, 2026-09-29). The page cuts land between modules, never through a
+// table — the same rule the print stylesheet gives Cmd/Ctrl+P.
 async function downloadPanelSchedule(args) {
   const origOpen = window.open;
   let captured = null;
@@ -3577,7 +3594,9 @@ async function downloadPanelSchedule(args) {
   const filename = `${safe(args?.panelLabel||"Lighting panel")} — ${safe(args?.jobName||"schedule")}.pdf`;
   try {
     if (typeof toast !== "undefined" && toast.info) toast.info("Building PDF…");
-    await _saveHtmlAsPdf(captured, filename);
+    // Keep every module (and every row of a .tall one) whole across page
+    // cuts; drop the on-screen Print button the way the print stylesheet does.
+    await _saveHtmlAsPdfPaged(captured, filename, { avoid: ".module:not(.tall), .module tr", hide: ".toolbar" });
     if (typeof toast !== "undefined" && toast.success) toast.success(`Saved ${filename}`);
     return true;
   } catch (e) {
@@ -3659,9 +3678,19 @@ function loadsListHtml({ jobName, jobAddress, system, rows, dateStr }) {
   </body></html>`;
 }
 // Multi-page cousin of _saveHtmlAsPdf: captures the whole document height and
-// slices it into letter pages. (Rows can split across a page edge — it's a
-// picture of the page, not reflowed text; the CSV is the editable copy.)
-async function _saveHtmlAsPdfPaged(html, filename) {
+// slices it into letter pages. It's a picture of the page, not reflowed text,
+// so by default a row can land on a page edge (the loads list; its CSV is the
+// editable copy). Two optional knobs (v471, for the panel schedule):
+//   opts.avoid — CSS selector for blocks that must not straddle a page edge.
+//                A cut that would land inside one moves UP to that block's
+//                top, so the block starts the next page whole (the canvas
+//                equivalent of `break-inside: avoid`). Nested selectors work
+//                outermost-first: ".module:not(.tall), .module tr" keeps a
+//                module whole, and only a page-plus .tall module falls back to
+//                keeping each row whole. A block taller than a page splits.
+//   opts.hide  — CSS selector for screen-only chrome (the Print button) to
+//                hide before capture, like the print stylesheet would.
+async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
   await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
   await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
   if (typeof window.html2canvas !== "function" || !window.jspdf?.jsPDF) {
@@ -3675,7 +3704,8 @@ async function _saveHtmlAsPdfPaged(html, filename) {
     iframe.contentDocument.write(html);
     iframe.contentDocument.close();
     await new Promise(r => setTimeout(r, 350));
-    const bodyEl = iframe.contentDocument.body;
+    const doc = iframe.contentDocument, bodyEl = doc.body;
+    if (opts.hide) { const st = doc.createElement("style"); st.textContent = `${opts.hide}{display:none !important}`; doc.head.appendChild(st); }
     const fullH = Math.max(bodyEl.scrollHeight, 1056);
     iframe.style.height = fullH + "px";
     const canvas = await window.html2canvas(bodyEl, {
@@ -3687,14 +3717,29 @@ async function _saveHtmlAsPdfPaged(html, filename) {
     const pdfW = pdf.internal.pageSize.getWidth(), pdfH = pdf.internal.pageSize.getHeight();
     const margin = 12, imgW = pdfW - margin * 2, ptPerPx = imgW / canvas.width;
     const pagePx = Math.floor((pdfH - margin * 2) / ptPerPx);
+    // Keep-whole blocks, as [top, bottom] in canvas pixels. The canvas is
+    // `scale`× the 816px CSS grid with its origin at the document's top-left
+    // (html2canvas captures the body from 0,0), so a rect + scroll offset maps
+    // straight onto it.
+    const scale = canvas.width / 816, scrollY = iframe.contentWindow.pageYOffset || 0;
+    const blocks = opts.avoid
+      ? Array.from(bodyEl.querySelectorAll(opts.avoid)).map(el => { const r = el.getBoundingClientRect(); return { top: Math.floor((r.top + scrollY) * scale), bottom: Math.ceil((r.bottom + scrollY) * scale) }; })
+      : [];
     let y = 0, page = 0;
     while (y < canvas.height) {
-      const h = Math.min(pagePx, canvas.height - y);
+      let end = Math.min(y + pagePx, canvas.height);
+      if (end < canvas.height) {
+        // Earliest block that starts on this page (below its top row, so a
+        // block taller than a page still gets split rather than looping) and
+        // runs past the page edge: cut just above it.
+        for (const b of blocks) if (b.top > y + 1 && b.top < end && b.bottom > end) end = b.top;
+      }
+      const h = end - y;
       const slice = document.createElement("canvas"); slice.width = canvas.width; slice.height = h;
       slice.getContext("2d").drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
       if (page > 0) pdf.addPage();
       pdf.addImage(slice.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, h * ptPerPx);
-      y += h; page += 1;
+      y = end; page += 1;
     }
     pdf.save(filename);
   } finally {
@@ -50350,12 +50395,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-29 · App SW version: v470
+**Last manifest update:** 2026-09-29 · App SW version: v471
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Panelized Lighting — the panel schedule PDF runs onto more pages instead of clipping; a module is never cut in half** · 'shipped 2026-09-29' · 'SW v471' · Koy exported "LCP 1 — Miller Residence - Alpine.pdf" and "LCP 3 — …" (10 modules each) and both came out as ONE 8.5×11 page with Module 1, the last table on the sheet, sliced mid-table (LCP 1 lost its 4th row, LCP 3 rows 3 and 4) — and the on-screen **Print** button sitting in the picture. Root cause: **Download** on a panel card ('downloadPanelSchedule' — the Lutron builder cards and the Control 4 / Crestron module sections all use it) handed the schedule HTML to '_saveHtmlAsPdf', which html2canvas-captures a fixed 816×1056 iframe: exactly one page, everything below it gone, and no '@media print' rules applied (html2canvas renders screen media, so 'page-break-inside: avoid' and the hidden toolbar never reached the PDF). **Print** (the popup + Cmd/Ctrl+P) was already right — '.module { page-break-inside: avoid }' was there and Chrome puts a 10-module panel on 2 pages with the cut between modules. Now the download goes through '_saveHtmlAsPdfPaged' (the v448 loads-list saver), which grew two knobs: 'avoid' — a CSS selector for blocks that must not straddle a page edge; the cut moves UP to the block's top so it starts the next page whole (the canvas twin of 'break-inside: avoid', outermost block first) — and 'hide' for screen-only chrome dropped before capture. The schedule passes 'avoid: ".module:not(.tall), .module tr"' and 'hide: ".toolbar"'. The print stylesheet adds 'break-inside: avoid' beside the old 'page-break-inside', 'tr { break-inside: avoid }' and 'thead { display: table-header-group }' so column headers repeat when a table does span pages. A module with more than 40 rows (a 64-load 2HDC / DALI bus module) gets class 'tall': it can't stay whole, so instead of being shoved onto a fresh page and leaving page 1 header-only it flows row by row. The header (logo, panel, job, totals) stays on page 1. **Verified** on real builder output (harness ran 'printPanelSchedule' straight out of App.js): headless-Chrome print-to-PDF of a Miller-shaped 10-module panel = 2 pages, Module 4 closes page 1 and Module 3 opens page 2; a 14-module panel = 2 pages cut between Module 8 and Module 7; the 64-row bus fixture = 2 pages with headers repeated (was 3 with a header-only first page). The real '_saveHtmlAsPdfPaged' run in a browser harness with 'jsPDF.save' stubbed produced the same multi-page output with every cut on a module or row edge. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — Print and Download only read the panel / loads and write nothing to Firestore; no new field, no loader, function or rules change; the loads-list PDF (the other '_saveHtmlAsPdfPaged' caller) passes no options and behaves exactly as before; the electrical-panel and Savant downloads still use the untouched '_saveHtmlAsPdf'.
 - **Home Runs — "Size the generator" link on the Generator Load Selection header** · 'shipped 2026-09-29' · 'SW v470' · Koy, right after pushing v469: *"maybe we add a quick link of something when a job has a geneerator loads section somewhere inside of that."* The Generator Load Selection section on Home Runs (only present when the job's Generator section is on) now carries a small **Size the generator** action on its header — the 'Section' 'action' slot, so it shows while the section is folded and doesn't toggle it — that opens the Tools tab's Generator Sizing calculator ('/tools/generator-sizing/index.html') in its own tab, the same "Open full screen" form the Tools tab uses, so the job stays open underneath and Print / Save as PDF works on a phone. No data flows either way: the calculator still reads and writes no job, and the load picker still carries no watts. Guide 'homeruns.html' updated. **Why it won't lose data:** one static link; no write, no field, no loader, function or rules change.
 - **Panelized Lighting — the zone picker gets a search bar and floor → room groups** · 'shipped 2026-09-29' · 'SW v469' · Koy (screenshot of the LCP 1 · Mod 1 · Zone 3 sheet): *"it would be nice if when you click a module load number to assign a load, if this menu had a search bar and seperated the loads cleanly in rooms and floors isntead of this."* The "fill" sheet (tap an open zone or open bus address in the Panel Builder) was one flat wrap of up to 80 chips sorted parked-first, so Basement and Main Level loads interleaved. Now: a **search box** at the top (matches load name, room or floor; autofocused on a mouse/trackpad device, not on touch so the keyboard doesn't jump), and every unplaced load grouped **floor → room** in the tray's floor order ('floorOrder', then A–Z; loads with no floor / room land in "No floor" / "No room"). Floor headers are sticky inside the scroll, carry a count, and **fold on tap**; typing a search unfolds everything. Inside a room the old order still holds — parked on this panel first (chip outlined in the accent and labeled "parked on LCP n"), then loads whose type fits the module, then A–Z — and the type-mismatch / over-the-zone-limit warnings are unchanged. The 80-chip cap is gone (search covers it). Search text + folds live in one 'fill' state reset by 'openFill', the single opener both zone rows now use. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** render-only reorganization of the same candidate list; 'fillZoneWith' (the only write) is untouched and still assigns the tapped load to the same panel / module / zone; no field, loader, function or rules change.
 - **Tools tab — Generator Sizing (Josh's Generac calculator) inside the app** · 'shipped 2026-09-29' · 'SW v468' · Josh handed over a finished standalone generator-sizing tool ("built with Claude and wants it folded into the Homestead app"); Koy: *"i think we should make a tool tab that lives at the top we can add more tools too later on."* New top-nav **Tools** tab (permission 'tools.view', all four internal tiers, contractors never) with a tool picker strip, an **Open full screen** link (use it to print / Save-as-PDF the job sheet on a phone — 'window.print()' from inside an iframe is unreliable there) and a "?" guide; each tool renders in an iframe from 'public/tools/<key>/index.html', so its inline vanilla JS can never collide with the app's, and the 'TOOLS' registry in App.js is the one place to add the next one. First tool: **Generator Sizing** ('public/tools/generator-sizing/') — sizes a Generac air-cooled / liquid-cooled standby unit from a NEC 220.82 load calc with a motor-start surge check, then the NFPA 54 gas demand + pipe size (or LP tank), the concrete pad + clearance plan, the ATS + feeder + voltage-drop + bonding call, and a one-page printable job sheet. Josh's data tables ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS') and his 'calc' / 'renderFuel' / 'renderPad' / 'renderConnections' / 'render' logic are byte-for-byte his (a region diff at integration confirmed it); only the theme (Homestead slate + steel blue in place of Generac charcoal + orange, no amber anywhere), the diagram colors, and the removed PWA manifest / 'sw.js' registration changed, and the "planning figures — verify against the model spec sheet, install drawing and the AHJ" disclaimer stays in the footer and on the job sheet. **This is not the July wattage feature Koy removed (v280):** the Generator Load Selection section on Home Runs and the homeowner Generator Link are untouched and still carry no watts; sizing lives only under Tools. Service worker: '/tools/' joins '/sops/' in the "real document, not an app route" guard, so an offline miss fails honestly instead of returning the app shell, while a tool opened once online is cached for offline use. Guide 'public/sops/tools.html'. **Why it won't lose data:** the tool has no backend, no Firestore, no storage — it recomputes in the browser on every keystroke and writes nothing anywhere (the only persistence is a per-device localStorage note of which tool was open last); the app side adds one permission row, one nav row, one view and one static folder; no job field, loader, function or rules change.
