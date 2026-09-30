@@ -2236,7 +2236,7 @@ const commPhaseChecked = (j, n) => COMM_PHASE_BY_N[n].items.every(([k]) => commI
 const commPhaseClosed  = (j, n) => commPhaseChecked(j, n) || !!(commStartOf(j).overrides && commStartOf(j).overrides[n]);
 const commPhaseDone    = (j, n) => COMM_PHASE_BY_N[n].items.filter(([k]) => commItemState(j, n, k) !== "todo").length;
 // The ONLY state: first phase not closed. null = all twelve closed (Ready to Start / on site). Residential → null.
-const commPhase = (j) => { if (!j || j.division !== "commercial") return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
+const commPhase = (j) => { if (!j || j.division !== "commercial") return null; if (j.hiddenSections && j.hiddenSections.jobstart) return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
 const commOwedItems = (j) => COMM_START_STEPS.flatMap(p => (commStartOf(j).overrides && commStartOf(j).overrides[p.n]) ? p.items.filter(([k]) => commItemState(j, p.n, k) === "todo").map(([k, l]) => ({ n: p.n, k, label: l })) : []);
 const allPrepChecked = (job) => {
   // v388: an item marked Not Needed (prepNA map) counts as handled — some jobs
@@ -6762,7 +6762,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -25774,11 +25774,37 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 // lighting tabs constantly.
 const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
-              "Change Orders","Return Trips","Open Items","QC"];
+              "Change Orders","Return Trips","Open Items","Completed","QC"];
 // ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Gear & Submittals","RFIs","Change Orders","Open Items"];
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
+// v467: the on-site commercial phase tabs (Koy: "power, lighting, gear, underground;
+// tabs inside of underground: utility work, building site work, building
+// underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
+// (status · start / complete dates · notes · checklist · photos); Underground
+// keeps one record per sub-tab ("underground.utility" …).
+const COMM_PHASE_TABS = {
+  "Power":       { key:"power",       color:"#3B5BA5" },
+  "Lighting":    { key:"lighting",    color:"#B0892C" },
+  "Gear":        { key:"gear",        color:"#6A5E97" },
+  "Underground": { key:"underground", color:"#3E7D7A", subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
+};
+const COMM_JOB_TYPES = [["groundup","Ground-up"],["ti","TI"],["service","Commercial service"]];
+// Blue Stakes (811) tickets are good for 14 calendar days in Utah. `called` is
+// the day the ticket was called in; an explicit `expires` overrides the math.
+const commBlueStakes = (c) => {
+  const called = parseAnyDate((c && c.blueStakesCalled) || "");
+  let exp = parseAnyDate((c && c.blueStakesExpires) || "");
+  if (!exp && called) { exp = new Date(called); exp.setDate(exp.getDate() + 14); }
+  if (!exp) return { state:"none", expires:"", label:"" };
+  const t0 = new Date(); t0.setHours(0,0,0,0); const e0 = new Date(exp); e0.setHours(0,0,0,0);
+  const days = Math.round((e0 - t0) / 864e5);
+  const md = exp.toLocaleDateString("en-US", { month:"short", day:"numeric" });
+  if (days < 0) return { state:"expired", expires: exp.toLocaleDateString("en-US"), label:`EXPIRED ${md} — call in a new ticket` };
+  if (days <= 3) return { state:"soon", expires: exp.toLocaleDateString("en-US"), label:`Active · expires ${md}${days===0?" (today)":""}` };
+  return { state:"active", expires: exp.toLocaleDateString("en-US"), label:`Active · expires ${md}` };
+};
 const tabsFor = (job) => isCommercial(job) ? COMM_TABS : TABS;
-const COMM_SYSTEMS = [["gear","Service / gear"],["distribution","Distribution"],["lighting","Lighting"],["lightingControls","Lighting controls"],["branchPower","Branch power"],["fireAlarm","Fire alarm"],["lowVoltage","Low voltage"],["siteElectrical","Site electrical"],["generatorAts","Generator / ATS"],["ev","EV"],["other","Other"]];
+const COMM_SYSTEMS = [["gear","Service / gear"],["distribution","Distribution"],["lighting","Lighting"],["lightingControls","Lighting controls"],["branchPower","Branch power"],["fireAlarm","Fire alarm"],["lowVoltage","Low voltage"],["siteElectrical","Site electrical"],["generatorAts","Generator / ATS"],["ev","EV"],["lightingPackage","Lighting package"],["vaults","Vaults"],["lightPoles","Light poles"],["other","Other"]];
 const COMM_MILESTONES = [["tempPower","Temp power"],["footing","Footing"],["underground","Underground"],["slab","Slab"],["walls","Walls"],["ceilings","Ceilings"],["permPower","Permanent power"],["startup","Startup"],["final","Final"]];
 const COMM_STAGES = [["","Auto (Pre-Con / Ready to Start)"],["inprogress","In Progress"],["hold","On Hold"],["closeout","Closeout"],["complete","Complete"]];
 const COMM_FIELDS = [["projectNo","Project #"],["gcPm","GC PM"],["gcSuper","GC Super"],["gcSuperPhone","Super phone"],["contractValue","Contract value"],["permitNo","Permit #"],["permitBy","Permit by","Homestead / GC / other"],["planSetRev","Plan set / rev"],["siteHours","Site hours"],["badgeReq","Badge / orientation"],["parkingNote","Parking"],["laydownNote","Laydown"],["tempPowerOwner","Temp power owner"]];
@@ -25847,6 +25873,13 @@ const hrDocHasData = async (jobId, test) => {
   return test(snap.exists() ? snap.data() : {});
 };
 const JOB_SECTIONS = [
+  // v467 (commercial): the pre-con checklist is a section a TI / service job can
+  // turn off — the Job Start tab, the Job Start board, the pre-con My Day rows
+  // and the Job Board's Pre-Con grouping all follow commPhase(), which reads
+  // hiddenSections.jobstart directly.
+  { key:"jobstart", label:"Job Start (pre-con checklist)", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Job Start tab · Job Start board · pre-con rows on My Day · the Job Board's Pre-Con groups",
+    hasData:(j)=>{ const st=commStartOf(j); return Object.keys(st.items||{}).length>0 || Object.keys(st.na||{}).length>0 || Object.keys(st.overrides||{}).length>0; } },
   { key:"panelized", label:"Panelized Lighting", legacy:topFlag("noPanelizedLighting"),
     where:"Panelized Lighting tab · Lighting Schedules link · Tech Lighting's link · Plan Changes · LV / loads share links",
     hasData:(j)=>{ const pl=j.panelizedLighting||{};
@@ -25925,7 +25958,7 @@ const offTechLightingLink = (job) => isSectionHidden(job, "techLighting");
 // turned off themselves — a child riding a hidden parent isn't a separate
 // decision — and only ones that apply to this job.
 const jobSectionsHiddenCount = (job) => JOB_SECTIONS.filter(s =>
-  (!s.appliesTo || s.appliesTo(job)) && isSectionOwnHidden(job, s.key) &&
+  (isCommercial(job) ? !!s.commercial : !s.commercial) && (!s.appliesTo || s.appliesTo(job)) && isSectionOwnHidden(job, s.key) &&
   !(s.parent && isSectionHidden(job, s.parent))).length;
 
 // Patch for one toggle. Always spreads the current map so a second switch
@@ -25938,7 +25971,7 @@ const jobSectionPatch = (job, key, hidden) => {
 };
 
 // Tabs owned by a section — hidden from the bar entirely when it's off.
-const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight" };
+const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight", "Job Start":"jobstart" };
 
 // Per-job tab list. A hidden section's tab drops out of the bar. `activeTab`
 // keeps a hidden tab visible if something deep-linked straight into it (e.g.
@@ -25986,7 +26019,8 @@ function JobSectionsPanel({ job, u, identity }) {
   const boxRef = useRef(null);
   const canEdit = can(identity, "job.sections");
   // Only switches that apply to this job (Tech Lighting = Lutron jobs).
-  const visible = JOB_SECTIONS.filter(s => !s.appliesTo || s.appliesTo(job));
+  // v467: a commercial job lists only its own sections; residential never sees the commercial ones.
+  const visible = JOB_SECTIONS.filter(s => (isCommercial(job) ? !!s.commercial : !s.commercial) && (!s.appliesTo || s.appliesTo(job)));
   // Count only switches turned off themselves — a child riding a hidden
   // parent isn't a separate decision.
   const hiddenCount = jobSectionsHiddenCount(job);
@@ -27255,7 +27289,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -27910,6 +27944,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // (questions written before this shipped), publish once so TraceVault sees
   // them without waiting for the next edit. Read-only against job data.
   const [fiQLinks, setFiQLinks] = useState({});
+  const [suHist, setSuHist] = useState(false);   // v467: status update history open/closed
   useEffect(() => {
     let dead = false, unsub = null, retryTimer = null;
     setFiQLinks({});
@@ -30845,6 +30880,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
+          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab}/>)}
+          {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
           {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
           {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
 
@@ -31570,9 +31607,36 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <StatusUpdateTextarea
                     job={job}
                     identity={identity}
-                    onCommit={patch => u(patch)}
+                    onCommit={patch => {
+                      // v467: every committed status update is also appended to
+                      // statusUpdateHistory (text · by · at, last 50) so the
+                      // History button below can show who wrote what, and when.
+                      const hist = Array.isArray(job.statusUpdateHistory) ? job.statusUpdateHistory : [];
+                      const txt = String(patch.statusUpdate || "").trim();
+                      const last = hist[hist.length - 1];
+                      const add = txt && !(last && String(last.text || "").trim() === txt);
+                      u(add ? { ...patch, statusUpdateHistory: [...hist.slice(-49), { text: txt, by: patch.statusUpdateBy || "", at: patch.statusUpdateAt || new Date().toISOString() }] } : patch);
+                    }}
                     styleVars={C}/>
                 </div>
+                {Array.isArray(job.statusUpdateHistory) && job.statusUpdateHistory.length > 0 && (
+                  <div style={{marginTop:6}}>
+                    <button onClick={()=>setSuHist(v=>!v)} aria-expanded={suHist}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:10,fontWeight:700,padding:"3px 9px",cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em",textTransform:"uppercase"}}>
+                      {suHist ? "Hide history" : `History (${job.statusUpdateHistory.length})`}
+                    </button>
+                    {suHist && (
+                      <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:5,maxHeight:260,overflowY:"auto"}}>
+                        {[...job.statusUpdateHistory].reverse().map((h, i) => (
+                          <div key={i} style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,borderLeft:"3px solid #B0892C",background:C.card}}>
+                            <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
+                            <div style={{fontSize:12,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{h.text}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {job.statusUpdate && job.statusUpdateBy && (
                   <div style={{fontSize:10,color:C.dim,marginTop:4}}>
                     Set by {job.statusUpdateBy}{job.statusUpdateAt ? ` · ${timeAgo(job.statusUpdateAt)}` : ""}
@@ -31705,6 +31769,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {COMM_FIELDS.map(([k,l,ph]) => (
                       <div key={k}>{lbl(l)}<input value={c[k]||""} placeholder={ph||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x,[k]:v})); }} style={inp}/></div>
                     ))}
+                  </div>
+                  <div style={{marginTop:14}}>
+                    {lbl("Job type")}
+                    <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap"}}>
+                      {COMM_JOB_TYPES.map(([k,l]) => { const on = (c.jobType||"groundup")===k; return (
+                        <button key={k} onClick={()=>cu(x=>({...x, jobType:k}))}
+                          style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?C.teal:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
+                    </div>
+                    {(c.jobType==="ti"||c.jobType==="service") && !isSectionHidden(job,"jobstart") && (
+                      <div style={{fontSize:10,color:C.dim,marginTop:6}}>A {c.jobType==="ti"?"TI":"service"} job usually skips the pre-con checklist — <span onClick={openJobSectionsPanel} style={{color:C.teal,fontWeight:700,cursor:"pointer"}}>hide Job Start under Job Sections</span> at the bottom of this tab.</div>
+                    )}
+                  </div>
+                  <div style={{marginTop:14}}>
+                    {lbl("Blue Stakes (811)")}
+                    {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?"#B0892C":bs.state==="active"?C.green:C.dim; return (
+                      <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
+                        {bs.state!=="none" && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.04em",borderRadius:99,padding:"6px 12px",color:"#fff",background:colr}}>{bs.label}</span>}
+                        {bs.state==="none" && <span style={{fontSize:10,color:C.muted}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
+                      </div>); })()}
                   </div>
                   <div style={{marginTop:14}}>
                     {lbl("Stage")}
@@ -50299,12 +50385,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v466
+**Last manifest update:** 2026-09-25 · App SW version: v467
 
 ---
 
 ## Top-Level Views (Nav Tabs)
 
+- **Commercial batch 2 + two both-division adds: Completed tab, status update history, on-site phase tabs, Blue Stakes, job types, more gear systems, hideable Job Start** · 'shipped 2026-09-30' · 'SW v467' · Koy's list. **Both divisions:** **(1) Completed tab** ('JobCompletedTab', last tab on the card): every need / task doc on this job with status done, newest first — kind, who finished it and when, who it was on and who asked, reply count, photos; voided docs crossed out with the reason; search. Read-only; 'App()' now hands the drawer 'needs'. **(2) Status update history**: 'StatusUpdateTextarea''s commit in Job Info also appends '{text, by, at}' to 'statusUpdateHistory' (last 50, no duplicate of the last entry); a **History (N)** button under the box lists them newest first with date · time · who. Clear keeps the history. **Commercial:** **(3) Phase tabs** Power · Lighting · Gear · Underground ('COMM_PHASE_TABS', 'CommPhaseTab'), Underground with sub-tabs Utility work · Building site work · Building underground; each record = status (stamped), start / complete dates, notes, a checklist (add / tap done with who + when / remove) and photos, stored under 'commercial.phases[key]' ('underground.utility' …) through 'commPatch'. **(4) Blue Stakes (811)** on Job Info → Commercial: ticket #, called-in date, expiry (auto = called + 14 days, editable); pill green / amber inside 3 days / red EXPIRED — call in a new ticket ('commBlueStakes'). **(5) Job type** Ground-up · TI · Commercial service ('commercial.jobType'); a TI / service job gets a hint to hide Job Start. **(6) Gear & Submittals system list** gains Lighting package · Vaults · Light poles ('COMM_SYSTEMS'). **(7) Job Start is a hideable section**: 'JOB_SECTIONS' gains 'jobstart' (commercial only; the panel lists commercial sections for commercial jobs and residential ones for residential), 'SECTION_TABS["Job Start"]', and 'commPhase()' returns null when 'hiddenSections.jobstart' is set — so the tab, the Job Start board, the Job Board's Pre-Con groups and the pre-con My Day rows all drop that job. Guides: new 'completed.html', 'power.html', 'lighting.html', 'gear.html', 'underground.html'; 'jobinfo.html' + 'commercialmode.html' updated. Dry-run gains the hidden-section case (33 checks). **Why it won't lose data:** every new field is additive and inside 'data' ('statusUpdateHistory' array; 'commercial.phases', 'commercial.jobType', 'commercial.blueStakes*'; 'hiddenSections.jobstart' through the existing 'jobSectionPatch' spread), all through the existing patch funnel; the Completed tab writes nothing; no loader, rules or function change.
 - **Questions ⇄ FieldInk — the discussion rides with the pin, and field replies come back** · 'shipped 2026-09-29' · 'SW v466' · Koy: *"when theres a reply or discussion on a question and then i pin it on field ink it doesnt show the discussion part. can we add that?"* + *"and field ink needs option to reply back to the discussion."* **Out (CC → FieldInk):** every entry the office publishes to 'ccquestions/<jobId>' now carries 'thread' — the question's discussion (legacy 'q.thread[]' on the job doc + the side-doc messages in 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]'), oldest → newest, last 40, as '{id, by, role, text, at(ms), photos:[https urls], fiId?}'; '_publishCcQuestionsNow' reads the side doc itself (one 'getDoc') so every caller publishes the same thing, and JobDetail's 'homeowner_requests' listener republishes when the discussion changes (hash-gated, so an unchanged list never writes). **Back (FieldInk → CC):** FieldInk appends '{id, by, text, at(ms)}' to 'fieldink.replies' on its copy of the question; the office's 'ccquestions' listener adopts each one into the discussion side doc as a 'role:"field"' message carrying 'fiId' = the field id — 'postQuestionThreadMessage' now refuses a duplicate 'fiId' inside its transaction, so two office devices watching the same job adopt it once — and the thread renders it as *"<name> · from FieldInk"*. The adopted message then rides the next republish, so the pin shows it too. Contract for the FieldInk side: 'docs/fieldink-question-discussion-contract.md' (FieldInk work is in its own repo). Guide 'questions.html' updated. **Why it won't lose data:** the mirror gains one additive array per question ('thread') under the same read-merge that has always preserved the field-owned 'fieldink' block; adopted replies are appended to the discussion side doc through the existing transaction (never the job doc, never an overwrite) and deduped by field id; no rules change on either project ('ccquestions' stays office-written / field-block-merged as before, and the side doc is the same 'questionThreads' key the office and share page already append to).
 - **My Day — the QC tracker gate reads the viewer's live team record, not the login snapshot** · 'shipped 2026-09-29' · 'SW v465' · Koy, right after v464: *"now no qc anything shows up for me in my day."* v463 gated the tracker on 'can(identity, "resi.head" | "qc.own")', and 'identity' is the record saved to the device at login — a snapshot that can be the built-in 'DEFAULT_USERS' copy (no 'caps') when the PIN goes in before 'settings/users' arrives on a cold start, and that is only rewritten when the team list is saved from that device. My Day's own routing reads the live 'users' list (which is why hat rows still routed correctly); the gate did not. New 'myLiveRec' in 'App()' = the viewer's record from the live list (by id, then name), falling back to 'identity'; the tracker gate reads it. Nothing else changed: hat holders (today Koy and Josh) see the tracker, foremen do not. **Why it won't lose data:** render gate only; no writes.
 - **Merge: the mobile row-wrap ship (main, SW v462) with the Commercial / My Day branch (v462–v463)** · 'shipped 2026-09-29' · 'SW v464' · Two lines of work used v462 at the same time: 'main''s "My Day rows wrap on phones" and this branch's "Job Start per-item notes + docs". No code conflicted (the row-wrap change and the v461 urgency button touch different parts of the My Day row); only the FEATURES.md header + entry list (both kept) and the SW line collided, so the merged result lands as v464. **Why it won't lose data:** merge only, no new write.
@@ -52975,6 +53062,130 @@ const commGearSummary = (job) => {
   const late = rows.filter(r => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now()).length;
   return { n: rows.length, appr, rel, late };
 };
+// v467: one on-site commercial phase (Power / Lighting / Gear / Underground sub).
+// Stored under commercial.phases[key] = { status, start, end, notes, items:[{id,
+// text, done, by, at}], photos:[] } — written through commPatch's spread-merge
+// so two people on different phases never clobber each other.
+function CommPhaseTab({ job, u, identity, tabLabel }) {
+  const def = COMM_PHASE_TABS[tabLabel] || { key: String(tabLabel||"").toLowerCase(), color: C.teal };
+  const subs = def.subs || null;
+  const [sub, setSub] = useState(subs ? subs[0][0] : null);
+  const [newItem, setNewItem] = useState("");
+  const key = subs ? `${def.key}.${sub}` : def.key;
+  const phases = commOf(job).phases || {};
+  const ph = { status:"", start:"", end:"", notes:"", items:[], photos:[], ...(phases[key] || {}) };
+  const me = (identity && identity.name) || "";
+  const patch = (fn) => u(commPatch(job, c => ({ ...c, phases: { ...(c.phases || {}), [key]: fn({ status:"", start:"", end:"", notes:"", items:[], photos:[], ...(((c.phases || {})[key]) || {}) }) } })));
+  const items = Array.isArray(ph.items) ? ph.items : [];
+  const openCount = (k) => { const p = phases[k]; return Array.isArray(p && p.items) ? p.items.filter(i => i && !i.done).length : 0; };
+  const STATUS = [["","Not started"],["inprogress","In progress"],["complete","Complete"]];
+  const col = def.color;
+  const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
+  const addItem = () => { const t = newItem.trim(); if (!t) return; patch(x => ({ ...x, items: [...(x.items || []), { id: uid(), text: t.slice(0, 300), done: false, by: me, at: commLocalDate() }] })); setNewItem(""); };
+  const toggleItem = (id) => patch(x => ({ ...x, items: (x.items || []).map(i => i.id === id ? (i.done ? { ...i, done: false, doneBy: "", doneAt: "" } : { ...i, done: true, doneBy: me, doneAt: commLocalDate() }) : i) }));
+  const removeItem = (id) => patch(x => ({ ...x, items: (x.items || []).filter(i => i.id !== id) }));
+  const statusLabel = (p) => { const st = (p && p.status) || ""; return st === "complete" ? "Complete" : st === "inprogress" ? "In progress" : "Not started"; };
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:col}}>{String(tabLabel).toUpperCase()}</div>
+        <HelpDot section={sopKeyForTab(tabLabel)}/>
+        {!subs && <span style={{fontSize:10,fontWeight:700,color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"2px 9px"}}>{statusLabel(ph)}</span>}
+      </div>
+      {subs && (
+        <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap",marginBottom:12}}>
+          {subs.map(([k,l]) => { const on = sub === k; const n = openCount(`${def.key}.${k}`); const st = (phases[`${def.key}.${k}`] || {}).status || "";
+            return <button key={k} onClick={()=>setSub(k)} style={{border:"none",padding:"8px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim,display:"inline-flex",alignItems:"center",gap:6}}>
+              {l}{st==="complete" ? <span style={{fontSize:10}}>✓</span> : n>0 ? <span style={{fontSize:9,fontWeight:800,borderRadius:99,padding:"0 6px",background:on?"#ffffff30":`${col}18`,color:on?"#fff":col}}>{n}</span> : null}
+            </button>; })}
+        </div>
+      )}
+      <div style={{display:"flex",gap:14,flexWrap:"wrap",alignItems:"flex-end",marginBottom:12}}>
+        <div>{lbl("Status")}
+          <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+            {STATUS.map(([k,l]) => { const on = (ph.status||"")===k; return (
+              <button key={k||"none"} onClick={()=>patch(x=>({...x, status:k, statusAt: commLocalDate(), statusBy: me }))}
+                style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
+          </div>
+          {ph.statusAt && <div style={{fontSize:10,color:C.muted,marginTop:3}}>set {ph.statusAt}{ph.statusBy?` by ${ph.statusBy}`:""}</div>}
+        </div>
+        <div style={{minWidth:150}}>{lbl("Start")}<DateInp value={ph.start||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, start:v})); }}/></div>
+        <div style={{minWidth:150}}>{lbl("Complete")}<DateInp value={ph.end||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, end:v})); }}/></div>
+      </div>
+      <div style={{marginBottom:12}}>{lbl("Notes")}
+        <textarea value={ph.notes||""} rows={3} placeholder={`Notes for ${subs ? (subs.find(([k])=>k===sub)||[])[1] : tabLabel}…`} onChange={e=>{ const v=e.target.value; patch(x=>({...x, notes:v})); }}
+          style={{width:"100%",boxSizing:"border-box",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",resize:"vertical"}}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        {lbl(`Checklist · ${items.filter(i=>!i.done).length} open`)}
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {items.map(i => (
+            <div key={i.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderRadius:8,border:`1px solid ${C.border}`,background:i.done?"#3E7D5A0A":"#fff"}}>
+              <button onClick={()=>toggleItem(i.id)} title={i.done?"Mark open":"Mark done"} style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${i.done?"#3E7D5A":col}`,background:i.done?"#3E7D5A":"#fff",color:"#fff",fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>{i.done?"✓":""}</button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:i.done?C.dim:C.text,textDecoration:i.done?"line-through":"none",wordBreak:"break-word"}}>{i.text}</div>
+                <div style={{fontSize:10,color:C.muted}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
+              </div>
+              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.muted,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
+            </div>
+          ))}
+          <div style={{display:"flex",gap:8}}>
+            <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addItem(); } }} placeholder="Add an item… (Enter)"
+              style={{flex:1,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff"}}/>
+            <button onClick={addItem} disabled={!newItem.trim()} style={{padding:"8px 14px",borderRadius:8,border:"none",background:newItem.trim()?col:C.surface,color:newItem.trim()?"#fff":C.muted,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:newItem.trim()?"pointer":"default"}}>Add</button>
+          </div>
+        </div>
+      </div>
+      <div>{lbl("Photos")}
+        <PhotoAttacher storagePath={`jobs/${job.id}/commphase/${key.replace(".","_")}`} photos={Array.isArray(ph.photos)?ph.photos:[]} color={col} label="Add photo"
+          onChange={(next)=>patch(x=>({...x, photos: next}))}/>
+      </div>
+    </div>
+  );
+}
+
+// v467 (both divisions): everything finished on THIS job — every need / task doc
+// with status done (voided ones tagged), newest first, with who finished it and
+// when, who asked, and the reply count. Read-only; the docs are never touched.
+function JobCompletedTab({ job, needs = [] }) {
+  const [q, setQ] = useState("");
+  const rows = (needs || []).filter(n => n && n.jobId === job.id && n.status === "done")
+    .filter(n => { const s = q.trim().toLowerCase(); return !s || String(n.text||"").toLowerCase().includes(s) || String(n.doneBy||"").toLowerCase().includes(s) || String(n.assignedTo||"").toLowerCase().includes(s); })
+    .sort((a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || "")));
+  const fmt = (iso) => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }) : ""; };
+  const first = (n) => String(n || "").split(" ")[0];
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.green}}>COMPLETED</div>
+        <HelpDot section="completed"/>
+        <span style={{fontSize:12,color:C.dim}}>{rows.length} finished on this job</span>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…" style={{marginLeft:"auto",padding:"6px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",width:180}}/>
+      </div>
+      {rows.length === 0 && <div style={{padding:"24px 0",textAlign:"center",color:C.muted,fontSize:13}}>Nothing finished on this job yet. Needs and tasks land here when they are marked Done.</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:7}}>
+        {rows.map(n => { const k = needKind(n); const voided = !!n.voided; const reps = needUpdates(n).length; const photos = needPhotos(n);
+          return (
+            <div key={n.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 12px",borderRadius:9,border:`1px solid ${C.border}`,borderLeft:`4px solid ${voided?C.red:C.green}`,background:C.card}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.text,textDecoration:voided?"line-through":"none",wordBreak:"break-word"}}>{n.text || "(no text)"}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",fontSize:11,color:C.dim,marginTop:3}}>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",color:k==="task"?C.teal:C.orange,border:`1px solid ${k==="task"?C.teal:C.orange}66`}}>{k==="bodies"?"Bodies":k==="task"?"Task":"Need"}</span>
+                  {voided && <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",borderRadius:4,padding:"1px 6px",color:C.red,border:`1px solid ${C.red}66`}}>VOIDED</span>}
+                  <span>{voided ? "voided" : "done"} by <b style={{color:C.text}}>{n.doneBy || n.voidedBy || "?"}</b>{n.doneAt ? ` · ${fmt(n.doneAt)}` : ""}</span>
+                  {(n.assignedTo || n.createdBy) && <span>· was on {first(n.assignedTo || n.createdBy)}{n.assignedBy && !sameName(n.assignedBy, n.assignedTo) ? ` from ${first(n.assignedBy)}` : n.createdBy && !sameName(n.createdBy, n.assignedTo) ? ` from ${first(n.createdBy)}` : ""}</span>}
+                  {reps > 0 && <span>· {reps} {reps===1?"reply":"replies"}</span>}
+                  {n.voidReason && <span>· {n.voidReason}</span>}
+                </div>
+                {photos.length > 0 && <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>{photos.slice(0,8).map(p => <img key={p.id||p.url} src={safeImageSrc(p.url)} alt="" onClick={()=>openPhoto(p.url, p.name)} style={{width:44,height:44,objectFit:"cover",borderRadius:5,border:`1px solid ${C.border}`,cursor:"pointer"}}/>)}</div>}
+              </div>
+            </div>
+          ); })}
+      </div>
+    </div>
+  );
+}
+
 function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenTab, ctx = "board" }) {
   const [peek, setPeek] = useState(null);           // phase number expanded on the bar (look-back / preview)
   const [ov, setOv] = useState(null);               // { n, note } while the move-on modal is open
@@ -62300,7 +62511,7 @@ function App() {
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
-            initialTab={openTab} users={users} identity={identity}
+            initialTab={openTab} users={users} identity={identity} needs={needs}
             jobs={jobs}
             onQuickAdd={(preset)=>setQuickAdd(preset||{})}
             onConvertQuote={(q)=>{

@@ -139,8 +139,12 @@ const sopsDir = path.join(root, 'public', 'sops');
 // below only cushions a future TABS refactor that breaks the regex.
 const appSrcForSops = fs.readFileSync(appPath, 'utf8');
 const tabsSrcMatch = appSrcForSops.match(/const TABS = \[([\s\S]*?)\]/);
+// v467: the commercial card has its own tab list (COMM_TABS) — its guides are
+// named the same way, so they are valid keys too.
+const commTabsSrcMatch = appSrcForSops.match(/const COMM_TABS = \[([\s\S]*?)\]/);
+const keysOf = (m) => m ? (m[1].match(/"([^"]*)"/g) || []).map(s => s.slice(1, -1).toLowerCase().replace(/[^a-z0-9]/g, '')) : [];
 let TAB_KEYS = tabsSrcMatch
-  ? (tabsSrcMatch[1].match(/"([^"]*)"/g) || []).map(s => s.slice(1, -1).toLowerCase().replace(/[^a-z0-9]/g, ''))
+  ? [...new Set([...keysOf(tabsSrcMatch), ...keysOf(commTabsSrcMatch)])]
   : null;
 if (!TAB_KEYS || TAB_KEYS.length < 5) {
   console.warn('version-from-sw: could not extract TABS from src/App.js — SOP filename warnings are using a baked fallback list that may be stale.');
