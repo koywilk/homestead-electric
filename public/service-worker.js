@@ -1,4 +1,4 @@
-const CACHE = "homestead-v468";
+const CACHE = "homestead-v472";
 
 // Install — skip waiting immediately
 self.addEventListener("install", e => {
@@ -37,13 +37,18 @@ self.addEventListener("fetch", e => {
       .catch(() => {
         return caches.match(e.request).then(cached => {
           if (cached) return cached;
-          // SOP guides (/sops/*.html, the in-app "?" help) are real documents,
+          // SOP guides (/sops/*.html, the in-app "?" help) and the Tools pages
+          // (/tools/*, the Tools tab's calculators, v468) are real documents,
           // not app routes. Handing back index.html for one — which the line
-          // below would do, since opening a guide in its own tab IS a navigate
-          // — renders the whole app where the guide should be. Fail honestly
-          // instead so the caller can say "not downloaded yet".
-          if (new URL(e.request.url).pathname.startsWith("/sops/")) {
-            return new Response("Guide not cached on this device yet.", {
+          // below would do, since opening a guide or a tool in its own tab (or
+          // an iframe) IS a navigate — renders the whole app where the document
+          // should be. Fail honestly instead so the caller can say "not
+          // downloaded yet". Both are cached above on their first online load.
+          const pathname = new URL(e.request.url).pathname;
+          if (pathname.startsWith("/sops/") || pathname.startsWith("/tools/")) {
+            return new Response(pathname.startsWith("/tools/")
+              ? "Tool not cached on this device yet — open it once while online."
+              : "Guide not cached on this device yet.", {
               status: 504, headers: { "Content-Type": "text/plain" }
             });
           }

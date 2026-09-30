@@ -4677,18 +4677,28 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
         if (!foremanPrepLib.isResJob(j, RES_CREW)) return;
         const done = j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
         if (done ? !foremanPrepLib.recentlyCompleted(j, today) : (j.archived || j.archivedAt)) return;
-        const sn = j.simproNo ? String(j.simproNo) : "";
-        if (sn && !seen.has(sn) && wanted.length < 90) { seen.add(sn); wanted.push(sn); }
+        const sn = j.simproNo ? String(j.simproNo).trim() : "";   // "1182 " (trailing space) 404'd every week
+        if (sn && !seen.has(sn)) { seen.add(sn); wanted.push(sn); }
       });
+      // No cap on the list (2026-09-29): the old `wanted.length < 90` guard
+      // silently left the 10 newest jobs (Namjoshi, Oak Hill 5, Cox floor boxes…)
+      // out of Hours vs bid once the board passed 90 Simpro jobs. The collector
+      // now needs ~2 calls per section instead of one per cost center, so the
+      // whole board is well inside the 540s budget.
       // simproReqWithRetry backs off on 429/5xx — the function hits Simpro far
       // faster than a laptop and tripped the rate limit with a plain fetch
-      // (2026-09-21: 4 of 35 jobs came back). Two jobs in flight at a time.
+      // (2026-09-21: 4 of 35 jobs came back). Three jobs in flight at a time.
       const getJson = async (path) => {
         const r = await simproReqWithRetry("GET", path);
         if (!r.ok) { functions.logger.warn("foremanMeetingPrep simpro miss", { path, status: r.status }); return null; }
         return r.data;
       };
-      return await foremanPrepLib.collectSimproHours(wanted, getJson, { concurrency: 3 });
+      const totals = await foremanPrepLib.collectSimproHours(wanted, getJson, {
+        concurrency: 3,
+        onError: (sn, e) => functions.logger.warn("foremanMeetingPrep simpro job dropped", { simproNo: sn, error: e && e.message }),
+      });
+      functions.logger.info("foremanMeetingPrep simpro hours", { wanted: wanted.length, fetched: Object.keys(totals).length });
+      return totals;
     } catch (e) { functions.logger.warn("foremanMeetingPrep simpro hours fetch error", { error: e.message }); return {}; }
   })();
 

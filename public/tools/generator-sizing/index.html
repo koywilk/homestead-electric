@@ -1,0 +1,787 @@
+<!doctype html>
+<!-- Homestead Electric · Tools · Generator Sizing
+     Built by Josh (with Claude) Sept 2026; folded into the Homestead app on
+     2026-09-29 (SW v468) as the first tool under the Tools tab.
+     The data tables (PRESETS, AIR, LIQ, PIPE, COND, CM, ATS_WHOLE, ATS_ESS) and
+     the calc / renderFuel / renderPad / renderConnections logic are Josh's,
+     byte-for-byte untouched. Air-cooled fuel figures come from Generac spec
+     sheets; liquid-cooled fuel, surge, footprints and pressures are
+     conservative planning estimates to confirm per model (tables dated 2026-09).
+     Only the :root theme + diagram colors (Homestead slate / steel blue in
+     place of Generac charcoal / orange), the removed manifest + icon links, and
+     the removed sw.js registration differ from Josh's original — the app's own
+     service worker caches /tools/ for offline use.
+     PLANNING AID, NOT A STAMPED CALC — the disclaimer in the footer and on the
+     job sheet stays. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Standby Generator Sizing — Homestead Electric</title>
+<meta name="theme-color" content="#141821">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gen Sizing">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#141821; --surface:#1B2030; --surface-2:#222732; --charcoal:#0F1218;
+    --line:#2E3440; --line-soft:#2A2F3A;
+    --txt:#E6EAF1; --muted:#9AA3B2; --muted-2:#6B7484;
+    --orange:#66A8FF; --orange-2:#8FC0FF; --orange-dim:#2B4A78;
+    --green:#34D17F; --red:#E5544B; --steel:#B8A6FF;
+    --disp:"Barlow Condensed","Arial Narrow",sans-serif;
+    --sans:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --mono:ui-monospace,"JetBrains Mono","SFMono-Regular",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--txt);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;padding:0 0 72px}
+  .wrap{max-width:960px;margin:0 auto;padding:0 18px}
+
+  /* header */
+  header{background:linear-gradient(180deg,var(--charcoal),#141821);border-bottom:3px solid var(--orange);padding:calc(24px + env(safe-area-inset-top)) 0 20px}
+  .brandrow{display:flex;align-items:center;gap:11px;margin-bottom:12px}
+  .logomark{width:30px;height:30px;border-radius:7px;flex:none;background:var(--bg);display:flex;align-items:center;justify-content:center}
+  .logomark svg{width:22px;height:22px}
+  .brandname{font-family:var(--disp);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:14px;color:#fff}
+  .brandname b{color:var(--orange);font-weight:700}
+  h1{font-family:var(--disp);font-weight:700;letter-spacing:.005em;text-transform:uppercase;font-size:34px;line-height:.98;margin:0 0 8px}
+  .sub{color:var(--muted);font-size:13.5px;max-width:66ch;margin:0}
+  .method-tag{font-family:var(--mono);font-size:11px;color:var(--muted-2);border:1px solid var(--line);border-radius:5px;padding:3px 9px;margin-top:12px;display:inline-block}
+
+  .familybar{display:flex;gap:9px;align-items:center;margin:20px 0 16px;flex-wrap:wrap}
+  .familybar .lab{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-2)}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface)}
+  .seg button{font-family:var(--mono);font-size:12.5px;background:transparent;color:var(--muted);border:none;padding:9px 15px;cursor:pointer;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--orange);color:#0B1220;font-weight:700}
+
+  /* result card */
+  .gauge{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px 22px 24px;margin-bottom:22px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .gauge-top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;margin-bottom:22px}
+  .verdict{display:flex;align-items:baseline;gap:14px}
+  .verdict .num{font-family:var(--disp);font-weight:700;font-size:76px;line-height:.82;color:var(--orange)}
+  .verdict .unit{font-family:var(--disp);font-size:22px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+  .verdict .model{font-size:13px;color:var(--muted);font-family:var(--mono);max-width:26ch;margin-top:6px}
+  .verdict .fam{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;margin-top:6px;display:inline-flex;align-items:center;gap:6px}
+  .verdict .fam::before{content:"";width:8px;height:8px;border-radius:50%}
+  .verdict .fam.air::before{background:var(--steel)} .verdict .fam.air{color:var(--steel)}
+  .verdict .fam.liquid::before{background:var(--orange-2)} .verdict .fam.liquid{color:var(--orange-2)}
+  .readouts{display:flex;gap:22px;flex-wrap:wrap}
+  .readout .k{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted-2)}
+  .readout .v{font-family:var(--mono);font-size:22px;font-weight:500;margin-top:3px;color:var(--txt)}
+  .readout .v small{font-size:12px;color:var(--muted);font-weight:400}
+
+  .ladder-track{position:relative;height:42px;border-radius:8px;background:#0F1218;border:1px solid var(--line);overflow:hidden}
+  .ladder-fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,rgba(102,168,255,.18),rgba(102,168,255,.5));border-right:2px solid var(--orange);transition:width .35s ease}
+  .ladder-marks{position:absolute;inset:0;pointer-events:none}
+  .mark{position:absolute;top:0;bottom:0;border-left:1px dashed var(--line)}
+  .mark .lab{position:absolute;top:4px;left:3px;font-family:var(--mono);font-size:9.5px;color:var(--muted-2)}
+  .mark.rec{border-left:1px solid var(--green)}
+  .mark.rec .lab{color:var(--green);font-weight:700}
+  .surge-tick{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--steel)}
+  .surge-tick .lab{position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);white-space:nowrap;font-family:var(--mono);font-size:10px;color:var(--steel)}
+  .ladder-legend{display:flex;gap:16px;margin-top:24px;flex-wrap:wrap;font-size:11.5px;color:var(--muted)}
+  .ladder-legend span{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono)}
+  .swatch{width:11px;height:11px;border-radius:2px;display:inline-block}
+
+  .note{margin-top:16px;border-top:1px solid var(--line-soft);padding-top:15px;font-size:13px;color:var(--muted);line-height:1.55}
+  .note strong{color:var(--txt);font-weight:600}
+  .note.warn{color:#EFA9A2}
+
+  section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:18px}
+  .sec-head{display:flex;align-items:center;gap:11px;margin-bottom:5px}
+  .sec-head .idx{font-family:var(--mono);font-size:12px;color:var(--orange);font-weight:700}
+  .sec-head h2{font-family:var(--disp);font-weight:600;text-transform:uppercase;letter-spacing:.04em;font-size:20px;margin:0}
+  .sec-sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;line-height:1.5}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+  label.field{display:flex;flex-direction:column;gap:5px}
+  label.field .lab{font-size:12px;color:var(--muted);font-family:var(--mono)}
+  input,select{font-family:var(--mono);font-size:15px;color:var(--txt);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;width:100%}
+  input:focus,select:focus{outline:2px solid var(--orange);outline-offset:-1px;border-color:var(--orange)}
+  input[type=number]{appearance:textfield}
+
+  .rows{margin-top:4px}
+  .row{display:grid;grid-template-columns:2.4fr 1fr .7fr 1.4fr 32px;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line-soft)}
+  .row.head{border-top:none;padding-bottom:4px}
+  .row.head .h{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted-2)}
+  .row .motor-cell{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;color:var(--muted);flex-wrap:wrap}
+  .row .motor-cell input[type=checkbox]{width:auto;accent-color:var(--orange)}
+  .del{background:transparent;border:1px solid var(--line);color:var(--muted-2);border-radius:7px;cursor:pointer;font-size:16px;line-height:1;padding:7px 0;width:32px}
+  .del:hover{border-color:var(--red);color:var(--red)}
+  .row.flagged{background:rgba(102,168,255,.06);margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:7px}
+  .flag-pill{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#0B1220;background:var(--orange);border-radius:3px;padding:1px 5px;margin-left:7px;vertical-align:middle;font-weight:700}
+
+  .addbar{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .addbar select{max-width:280px}
+  button.add{font-family:var(--mono);font-size:13px;font-weight:500;background:var(--surface-2);color:var(--orange);border:1px solid var(--orange-dim);border-radius:8px;padding:9px 16px;cursor:pointer}
+  button.add:hover{background:rgba(102,168,255,.12)}
+
+  .bd-row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:13px;padding:8px 0;border-top:1px solid var(--line-soft);color:var(--muted)}
+  .bd-row .v{color:var(--txt)}
+  .bd-row.total{border-top:1px solid var(--line);margin-top:2px;padding-top:12px;font-size:15px}
+  .bd-row.total .lab{color:var(--txt);font-weight:600}
+  .bd-row.total .v{color:var(--orange);font-weight:700}
+
+  .cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:13px;margin:4px 0 16px}
+  .fcard{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 15px}
+  .fcard .k{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-2)}
+  .fcard .v{font-family:var(--disp);font-size:30px;font-weight:600;margin-top:5px;line-height:1;color:var(--txt)}
+  .fcard .v small{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:400}
+  .fcard .sub{font-size:11.5px;color:var(--muted);margin-top:5px;font-family:var(--mono)}
+  .fcard.flag{border-color:var(--orange)}
+  .fcard.flag .v{color:var(--orange)}
+
+  .paddiagram{display:flex;justify-content:center;padding:6px 0 2px}
+  .paddiagram svg{max-width:100%;height:auto}
+  .diagcap{text-align:center;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2);margin:2px 0 12px}
+  .diagtabs{display:flex;justify-content:center;gap:0;margin:8px 0 2px}
+
+  footer{color:var(--muted-2);font-size:12px;line-height:1.6;margin-top:10px;padding:0 2px}
+  footer code{font-family:var(--mono);color:var(--muted)}
+
+  /* print job sheet */
+  #printsheet{display:none}
+  .ps{color:#14202E;font-family:var(--sans)}
+  .ps-head{border-bottom:3px solid #3B5BA5;padding-bottom:9px;margin-bottom:14px}
+  .ps-brand{font-family:var(--disp);font-weight:700;letter-spacing:.1em;font-size:19px;color:#111}
+  .ps-title{font-size:13px;color:#333;margin-top:2px}
+  .ps-meta{font-family:var(--mono);font-size:10px;color:#555;margin-top:7px}
+  .ps-hero{display:flex;align-items:baseline;gap:14px;margin:8px 0 16px}
+  .ps-kw{font-family:var(--disp);font-weight:700;font-size:48px;color:#3B5BA5;line-height:1}
+  .ps-kw span{font-size:18px;color:#555}
+  .ps-herometa{font-family:var(--mono);font-size:11px;color:#333}
+  .ps-cols{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .ps h4{font-family:var(--disp);text-transform:uppercase;letter-spacing:.05em;font-size:13px;margin:12px 0 5px;border-bottom:1px solid #ccc;padding-bottom:3px;color:#111}
+  .ps-row{display:flex;justify-content:space-between;font-size:11.5px;padding:3px 0;border-bottom:1px solid #eee;font-family:var(--mono)}
+  .ps-row span{color:#666}
+  .ps-row b{color:#111;font-weight:600;text-align:right;margin-left:12px}
+  .ps-note{margin-top:16px;font-size:10px;color:#666;border-top:1px solid #ccc;padding-top:8px}
+  @media print{
+    header, body>.wrap{display:none !important}
+    #printsheet{display:block !important}
+    body{background:#fff;padding:0}
+    @page{margin:12mm}
+  }
+
+  @media (max-width:560px){
+    h1{font-size:28px}
+    .verdict .num{font-size:60px}
+    .row{grid-template-columns:1.8fr 1fr .9fr 28px;gap:8px}
+    .row .motor-cell{grid-column:1 / -1;order:5}
+    .row.head .motor-h{display:none}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="brandrow">
+      <span class="logomark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.2 2 5 13.3h5.1L8.6 22l8.4-11.6h-5.2z" fill="#66A8FF"/></svg></span>
+      <span class="brandname">Homestead <b>Electric</b></span>
+    </div>
+    <h1>Standby Generator Sizing</h1>
+    <p class="sub">Sizes a Generac air-cooled or liquid-cooled home standby unit from a calculated load — not breaker totals — then returns the gas supply and the concrete pad the install needs. NEC 220.82, motor-starting surge, NFPA 54 fuel demand, and manufacturer pad offsets.</p>
+    <span class="method-tag">NEC 220.82 · 702.4 · NFPA 54 · 1Ø 120/240V</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="familybar">
+    <span class="lab">Generator family</span>
+    <div class="seg" id="famSeg">
+      <button data-mode="auto" class="on">Auto</button>
+      <button data-mode="air">Air-cooled</button>
+      <button data-mode="liquid">Liquid-cooled</button>
+    </div>
+  </div>
+
+  <div class="gauge" id="gauge">
+    <div class="gauge-top">
+      <div class="verdict">
+        <div class="num" id="recSize">—</div>
+        <div>
+          <div class="unit">kW</div>
+          <div class="model" id="recModel">enter loads</div>
+          <div class="fam" id="recFam"></div>
+        </div>
+      </div>
+      <div class="readouts">
+        <div class="readout"><div class="k">Running demand</div><div class="v" id="roRun">— <small>kW</small></div></div>
+        <div class="readout"><div class="k">Peak surge</div><div class="v" id="roSurge">— <small>kVA</small></div></div>
+        <div class="readout"><div class="k">Unit output</div><div class="v" id="roAmps">— <small>A @240V</small></div></div>
+        <div class="readout"><div class="k">Sets the size</div><div class="v" id="roDriver" style="font-size:15px">—</div></div>
+      </div>
+    </div>
+
+    <div class="ladder-track">
+      <div class="ladder-fill" id="fill" style="width:0%"></div>
+      <div class="ladder-marks" id="marks"></div>
+    </div>
+    <div class="ladder-legend">
+      <span><i class="swatch" style="background:var(--orange)"></i>Running demand</span>
+      <span><i class="swatch" style="background:var(--steel)"></i>Surge required</span>
+      <span><i class="swatch" style="background:var(--green)"></i>Recommended</span>
+      <span style="color:var(--muted-2)" id="ladderScaleNote">ladder = available kW sizes</span>
+    </div>
+    <div class="note" id="recNote">Fill in the panel below.</div>
+  </div>
+
+  <section>
+    <div class="sec-head"><span class="idx">01</span><h2>General load of the served panel</h2></div>
+    <p class="sec-sub">NEC 220.82(A): 3&nbsp;VA/ft² of conditioned area, plus 1,500&nbsp;VA per small-appliance and laundry circuit. Use only the area and circuits the generator backs up.</p>
+    <div class="grid">
+      <label class="field"><span class="lab">Conditioned ft² (served)</span><input type="number" id="sqft" value="6000" min="0" step="50"></label>
+      <label class="field"><span class="lab">Small-appliance circuits</span><input type="number" id="saCkt" value="3" min="0" step="1"></label>
+      <label class="field"><span class="lab">Laundry circuits</span><input type="number" id="lndCkt" value="2" min="0" step="1"></label>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="idx">02</span><h2>Fixed appliances &amp; 240V loads</h2></div>
+    <p class="sec-sub">Nameplate VA for everything fastened in place. Use <strong>Qty</strong> for identical units — the surge check assumes only the largest single motor starts at a time (staggered start). Lights, receptacles and the fridge are already covered above.</p>
+    <div class="rows" id="rows">
+      <div class="row head"><div class="h">Load</div><div class="h">Nameplate VA</div><div class="h">Qty</div><div class="h motor-h">Type / surge</div><div class="h"></div></div>
+    </div>
+    <div class="addbar">
+      <select id="addPick">
+        <option value="">+ add a load…</option>
+        <optgroup label="Space conditioning">
+          <option value="ac">A/C condenser (2–3 ton)</option>
+          <option value="ac_large">A/C condenser (4–5 ton)</option>
+          <option value="heatpump">Heat pump</option>
+          <option value="minisplit">Mini-split zone</option>
+          <option value="airhandler">Air handler / furnace blower</option>
+          <option value="electricheat">Electric resistance heat</option>
+          <option value="snowmelt">Snowmelt / heat trace</option>
+        </optgroup>
+        <optgroup label="Resistive">
+          <option value="wh">Electric water heater</option>
+          <option value="tankless">Electric tankless water heater</option>
+          <option value="dryer">Electric dryer</option>
+          <option value="range">Range / oven</option>
+          <option value="cooktop">Cooktop</option>
+          <option value="walloven">Wall oven</option>
+          <option value="dishwasher">Dishwasher</option>
+          <option value="evse">EV charger (48A)</option>
+        </optgroup>
+        <optgroup label="Motors">
+          <option value="wellpump">Well pump</option>
+          <option value="booster">Booster / circ pump</option>
+          <option value="sump">Sump / sewage pump</option>
+          <option value="pool">Pool / spa pump</option>
+          <option value="elevator">Residential elevator</option>
+          <option value="garage">Garage door opener</option>
+          <option value="generic_motor">Other motor</option>
+        </optgroup>
+        <optgroup label="Other"><option value="generic">Other resistive load</option></optgroup>
+      </select>
+      <button class="add" id="addBtn">Add</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="idx">03</span><h2>Calculated demand</h2></div>
+    <p class="sec-sub">220.82(B) takes 100% of the first 10&nbsp;kVA of general + appliance load and 40% of the remainder. 220.82(C) adds the larger of heating or cooling at 100%.</p>
+    <div id="breakdown"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="idx">04</span><h2>Fuel &amp; gas supply</h2></div>
+    <p class="sec-sub">The size number is only half the install. This checks the fuel the recommended unit draws at full load, the inlet pressure it needs, and — for natural gas — the minimum pipe to feed it.</p>
+    <div class="familybar" style="margin:0 0 14px">
+      <span class="lab">Fuel</span>
+      <div class="seg" id="fuelSeg"><button data-fuel="ng" class="on">Natural gas</button><button data-fuel="lp">Liquid propane</button></div>
+    </div>
+    <div class="grid" id="ngInputs">
+      <label class="field"><span class="lab">Longest pipe run (ft)</span><input type="number" id="runLen" value="60" min="1" step="5"></label>
+      <label class="field"><span class="lab">Other gas appliances (BTU/hr)</span><input type="number" id="otherBtu" value="0" min="0" step="10000"></label>
+      <label class="field"><span class="lab">NG heating value (BTU/ft³)</span><input type="number" id="hhv" value="1000" min="800" step="10"></label>
+    </div>
+    <div class="cardgrid" id="fuelOut"></div>
+    <div class="note" id="fuelNote"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="idx">05</span><h2>Concrete pad &amp; siting</h2></div>
+    <p class="sec-sub">Minimum pad from the unit footprint plus reveal. Generac's install drawings call for a <strong>3&nbsp;in offset per side (air-cooled)</strong> and <strong>6&nbsp;in per side (liquid-cooled)</strong>; both defaults are set for you and adjustable.</p>
+    <div class="grid" style="margin-bottom:16px">
+      <label class="field"><span class="lab">Pad reveal per side (in)</span><input type="number" id="reveal" value="3" min="0" step="1"></label>
+      <label class="field"><span class="lab">Pad thickness (in)</span><input type="number" id="thick" value="4" min="3" step="1"></label>
+    </div>
+    <div class="cardgrid" id="padOut"></div>
+    <div class="paddiagram" id="padDiagram"></div>
+    <div class="diagcap">Pad — footprint + reveal (plan view)</div>
+    <div class="paddiagram" id="clearDiagram"></div>
+    <div class="diagcap">Clearance plan — minimum keep-clear envelope</div>
+    <div class="note" id="padNote"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="idx">06</span><h2>Transfer switch &amp; connections</h2></div>
+    <p class="sec-sub">Picks the Generac ATS for the service and configuration, sizes the genset-to-ATS feeder with a voltage-drop check, and calls the neutral/bonding condition. The single-line is for planning and permit — not a point-to-point wiring diagram.</p>
+    <div class="grid" style="margin-bottom:16px">
+      <label class="field"><span class="lab">Service size (A)</span>
+        <select id="svcA"><option value="100">100 A</option><option value="150">150 A</option><option value="200" selected>200 A</option><option value="400">400 A</option></select></label>
+      <label class="field"><span class="lab">Backup scope</span>
+        <select id="scope"><option value="whole" selected>Whole-home</option><option value="essential">Essential circuits</option></select></label>
+      <label class="field"><span class="lab">Feeder run to ATS (ft, one-way)</span><input type="number" id="feedLen" value="25" min="1" step="5"></label>
+      <label class="field"><span class="lab">Feeder conductor</span>
+        <select id="cond"><option value="cu" selected>Copper</option><option value="al">Aluminum</option></select></label>
+    </div>
+    <div class="cardgrid" id="connOut"></div>
+    <div class="paddiagram" id="slDiagram"></div>
+    <div class="diagcap">Single-line — planning / permit schematic</div>
+    <div class="note" id="connNote"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="idx">07</span><h2>Job sheet</h2></div>
+    <p class="sec-sub">Add the job info and export a one-page summary — size, load, fuel, pad, clearances, switch &amp; feeder — for the permit packet or the customer. Prints clean on white; on a phone, choose "Save as PDF" in the share sheet.</p>
+    <div class="grid" style="margin-bottom:15px">
+      <label class="field"><span class="lab">Customer</span><input type="text" id="jobCust" placeholder="Name"></label>
+      <label class="field"><span class="lab">Site address</span><input type="text" id="jobAddr" placeholder="Address"></label>
+      <label class="field"><span class="lab">Prepared by</span><input type="text" id="jobBy" placeholder="Your name"></label>
+    </div>
+    <button class="add" id="printBtn" style="font-size:14px;padding:11px 22px">Print / Save as PDF</button>
+  </section>
+
+  <footer>
+    <p><strong>Air-cooled</strong> (Guardian / Next Gen): 10·14·18·22·24·26·28 kW, one 48×25 in footprint. <strong>Liquid-cooled</strong> (Protector, 1Ø 120/240V): 22·25·27·30·32·36·38·40·45·48·60·80 kW. Above 80 kW single-phase → parallel units or 3-phase.</p>
+    <p>Surge est. <code>2.12×</code> (air) / <code>2.2×</code> (liquid) continuous; motor inrush <code>3×</code> running, <code>1.6×</code> soft-start; multiple large motors assume staggered start. Fuel figures are full-load draws from Generac spec sheets (air-cooled published; liquid-cooled estimated). NG pipe uses the NFPA 54 / IFGC low-pressure schedule-40 table (0.60 SG, 0.5&nbsp;in W.C. drop) plus any other gas load entered. Footprints and weights are representative by kW class. <strong>Confirm final size, fuel, pad and clearances against the specific model's install drawing and your AHJ's adopted code.</strong></p>
+  </footer>
+</div>
+
+<div id="printsheet"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  const PRESETS = {
+    ac:{name:"A/C condenser (2–3 ton)",va:6000,motor:true,surge:3,category:"cooling"},
+    ac_large:{name:"A/C condenser (4–5 ton)",va:9600,motor:true,surge:3,category:"cooling"},
+    heatpump:{name:"Heat pump",va:7200,motor:true,surge:3,category:"heating"},
+    minisplit:{name:"Mini-split zone",va:3600,motor:true,surge:2.5,category:"cooling"},
+    airhandler:{name:"Air handler / blower",va:1200,motor:true,surge:3,category:"cooling"},
+    electricheat:{name:"Electric resistance heat",va:10000,motor:false,surge:1,category:"heating"},
+    snowmelt:{name:"Snowmelt / heat trace",va:12000,motor:false,surge:1,category:"heating"},
+    wh:{name:"Electric water heater",va:4500,motor:false,surge:1,category:"general"},
+    tankless:{name:"Electric tankless WH",va:27000,motor:false,surge:1,category:"general"},
+    dryer:{name:"Electric dryer",va:5500,motor:true,surge:1.2,category:"general"},
+    range:{name:"Range / oven",va:8000,motor:false,surge:1,category:"general"},
+    cooktop:{name:"Cooktop",va:6000,motor:false,surge:1,category:"general"},
+    walloven:{name:"Wall oven",va:4000,motor:false,surge:1,category:"general"},
+    dishwasher:{name:"Dishwasher",va:1200,motor:true,surge:1.5,category:"general"},
+    evse:{name:"EV charger (48A)",va:11520,motor:false,surge:1,category:"general"},
+    wellpump:{name:"Well pump",va:2400,motor:true,surge:3,category:"general"},
+    booster:{name:"Booster / circ pump",va:1500,motor:true,surge:3,category:"general"},
+    sump:{name:"Sump / sewage pump",va:1000,motor:true,surge:3,category:"general"},
+    pool:{name:"Pool / spa pump",va:2000,motor:true,surge:3,category:"general"},
+    elevator:{name:"Residential elevator",va:7000,motor:true,surge:3,category:"general"},
+    garage:{name:"Garage door opener",va:600,motor:true,surge:2.5,category:"general"},
+    generic_motor:{name:"Other motor",va:1500,motor:true,surge:3,category:"general"},
+    generic:{name:"Other resistive load",va:1500,motor:false,surge:1,category:"general"}
+  };
+
+  const AIR = {key:"air", label:"Air-cooled · Guardian / Next Gen",
+    sizes:[10,14,18,22,24,26,28], surgeX:2.12, ceiling:28, reveal:3, thick:4,
+    hints:{18:"Guardian / Next Gen 18 kW",22:"Guardian 7043 (200A switch)",24:"Guardian / Next Gen 24 kW",26:"Guardian 7291",28:"Next Gen 28 kW"},
+    ngBtu:{10:127000,14:256000,18:247000,22:327000,24:306000,26:333000,28:360000},
+    lpGph:{10:1.48,14:3.07,18:3.02,22:3.90,24:3.90,26:3.63,28:4.05},
+    wt:{10:360,14:400,18:450,22:466,24:455,26:507,28:500},
+    ngPsi:'3.5–7 in. W.C.', lpPsi:'10–12 in. W.C.',
+    foot:function(){return {L:48,W:25};}};
+  const LIQ = {key:"liquid", label:"Liquid-cooled · Protector",
+    sizes:[22,25,27,30,32,36,38,40,45,48,60,80], surgeX:2.2, ceiling:80, reveal:6, thick:6,
+    hints:{22:"Protector QS RG02224",25:"Protector RG025",27:"Protector QS RG02724",30:"Protector RG030",32:"Protector QS RG03224 / XG032",36:"Protector RG036",38:"Protector QS RG03824",40:"Protector XG040",45:"Protector RG04524",48:"Protector RG048 / XG048",60:"Protector RG060",80:"Protector RG080"},
+    ngBtu:{22:300000,25:340000,27:365000,30:405000,32:432000,36:470000,38:494000,40:520000,45:560000,48:604000,60:760000,80:1010000},
+    lpGph:{22:3.3,25:3.7,27:4.0,30:4.4,32:4.7,36:5.1,38:5.4,40:5.7,45:6.1,48:6.6,60:8.3,80:11.0},
+    wt:{22:900,25:950,27:1000,30:1050,32:1235,36:1235,38:1235,40:1500,45:1650,48:1780,60:2000,80:2100},
+    ngPsi:'5–14 in. W.C. (larger units often need a 2 psi system)', lpPsi:'11–14 in. W.C.',
+    foot:function(kw){ if(kw<=27)return{L:62,W:31}; if(kw<=38)return{L:77,W:35}; return{L:83,W:35}; }};
+
+  const PIPE_LEN=[10,20,30,40,50,60,70,80,90,100,125,150,175,200];
+  const PIPE={
+    '1/2':[131,90,72,62,55,50,46,43,40,38,34,31,28,26],
+    '3/4':[273,188,151,129,114,104,95,89,83,79,70,63,58,54],
+    '1':[514,353,284,243,215,195,179,167,157,148,131,118,109,101],
+    '1-1/4':[1060,726,583,499,442,400,368,343,322,304,269,244,224,209],
+    '1-1/2':[1580,1090,873,747,662,600,552,514,482,455,403,366,336,313],
+    '2':[3050,2090,1680,1440,1280,1160,1070,989,928,877,777,704,648,602],
+    '2-1/2':[4860,3340,2680,2290,2030,1840,1690,1580,1480,1400,1240,1120,1030,960],
+    '3':[8580,5900,4740,4050,3590,3260,3000,2790,2610,2470,2190,1980,1820,1700]
+  };
+  const PIPE_ORDER=['1/2','3/4','1','1-1/4','1-1/2','2','2-1/2','3'];
+  function pipeFor(cfh,len){let col=PIPE_LEN.length-1;for(let i=0;i<PIPE_LEN.length;i++){if(len<=PIPE_LEN[i]){col=i;break;}}for(const sz of PIPE_ORDER){if(PIPE[sz][col]>=cfh)return sz;}return null;}
+
+  let mode="auto", fuel="ng", revealTouched=false, thickTouched=false;
+  const S={};
+
+  let rows=[
+    Object.assign({}, PRESETS.ac,    {name:"A/C condenser (zones)", va:6000, qty:3, soft:false}),
+    Object.assign({}, PRESETS.wh,    {qty:2, soft:false}),
+    Object.assign({}, PRESETS.range, {qty:1}),
+    Object.assign({}, PRESETS.dryer, {qty:1, soft:false}),
+    Object.assign({}, PRESETS.pool,  {qty:1, soft:false}),
+    Object.assign({}, PRESETS.evse,  {qty:1})
+  ];
+  rows.forEach((r,i)=>r._id="r"+i);
+  let nextId=rows.length;
+
+  const $=s=>document.querySelector(s);
+  const rowsEl=$("#rows");
+  const num=v=>{v=parseFloat(v);return isFinite(v)?v:0;};
+
+  function renderRows(){
+    [...rowsEl.querySelectorAll(".row:not(.head)")].forEach(n=>n.remove());
+    rows.forEach(r=>{
+      const div=document.createElement("div");
+      div.className="row"+(r.flag?" flagged":"");
+      const isMotor=!!r.motor;
+      div.innerHTML=
+        '<div><input type="text" value="'+r.name.replace(/"/g,'&quot;')+'" data-id="'+r._id+'" data-k="name">'+(r.flag?'<span class="flag-pill">'+r.flag+'</span>':'')+'</div>'+
+        '<div><input type="number" min="0" step="50" value="'+r.va+'" data-id="'+r._id+'" data-k="va"></div>'+
+        '<div><input type="number" min="1" step="1" value="'+r.qty+'" data-id="'+r._id+'" data-k="qty"></div>'+
+        '<div class="motor-cell"><label class="motor-cell" style="gap:6px"><input type="checkbox" '+(isMotor?"checked":"")+' data-id="'+r._id+'" data-k="motor"> motor</label>'+
+        (isMotor?'<label class="motor-cell" style="gap:6px;color:var(--steel)"><input type="checkbox" '+(r.soft?"checked":"")+' data-id="'+r._id+'" data-k="soft"> soft-start</label>':'')+'</div>'+
+        '<button class="del" data-id="'+r._id+'" title="Remove">×</button>';
+      rowsEl.appendChild(div);
+    });
+  }
+
+  function calc(){
+    const sqft=num($("#sqft").value),sa=num($("#saCkt").value),lnd=num($("#lndCkt").value);
+    const generalBase=3*sqft+1500*sa+1500*lnd;
+    let applianceGeneral=0,cooling=0,heating=0,largestMotor=null;
+    rows.forEach(r=>{
+      const va=num(r.va),qty=Math.max(1,num(r.qty)),total=va*qty;
+      if(r.category==="cooling")cooling+=total; else if(r.category==="heating")heating+=total; else applianceGeneral+=total;
+      if(r.motor){const sx=r.soft?1.6:(r.surge||3);const start=va*sx;if(!largestMotor||start>largestMotor.start)largestMotor={name:r.name,run:va,start:start};}
+    });
+    const generalConnected=generalBase+applianceGeneral;
+    const generalDemand=generalConnected<=10000?generalConnected:10000+(generalConnected-10000)*0.40;
+    const spaceVA=Math.max(cooling,heating);
+    const spaceLabel=(heating>cooling)?"heating":"cooling";
+    const runningVA=generalDemand+spaceVA;
+    let surgeVA=runningVA,surgeDriver="—";
+    if(largestMotor){surgeVA=runningVA+Math.max(0,largestMotor.start-largestMotor.run);surgeDriver=largestMotor.name;}
+    const runKW=runningVA/1000,surgeKVA=surgeVA/1000;
+    const pick=fam=>{for(const s of fam.sizes){if(s>=runKW&&s*fam.surgeX>=surgeKVA)return{size:s,over:false};}return{size:fam.sizes[fam.sizes.length-1],over:true};};
+    let fam,res;
+    if(mode==="air"){fam=AIR;res=pick(AIR);}
+    else if(mode==="liquid"){fam=LIQ;res=pick(LIQ);}
+    else{const a=pick(AIR);if(!a.over){fam=AIR;res=a;}else{fam=LIQ;res=pick(LIQ);}}
+    const rec=res.size,overMax=res.over;
+    const driver=overMax?"over capacity":((surgeKVA/fam.surgeX>runKW)?"surge":"continuous");
+    const margin=rec>0?(rec-runKW)/rec:0;
+    const amps=Math.round(rec*1000/240);
+    return {runKW,surgeKVA,rec,overMax,driver,margin,surgeDriver,spaceLabel,amps,fam,generalBase,applianceGeneral,generalConnected,generalDemand,spaceVA,largestMotor};
+  }
+
+  function fc(k,v,unit,sub,flag){return '<div class="fcard'+(flag?" flag":"")+'"><div class="k">'+k+'</div><div class="v">'+v+(unit?' <small>'+unit+'</small>':'')+'</div>'+(sub?'<div class="sub">'+sub+'</div>':'')+'</div>';}
+
+  function renderFuel(c){
+    const out=$("#fuelOut"),note=$("#fuelNote");
+    $("#ngInputs").style.display=fuel==="ng"?"":"none";
+    if(c.overMax){out.innerHTML="";note.className="note warn";note.textContent="Bring the load within single-unit capacity to see fuel demand.";S.fuel=null;return;}
+    if(fuel==="ng"){
+      const hhv=Math.max(800,num($("#hhv").value));
+      const btu=c.fam.ngBtu[c.rec]||0, genCfh=btu/hhv, otherBtu=num($("#otherBtu").value), totalCfh=(btu+otherBtu)/hhv;
+      const len=Math.max(1,num($("#runLen").value)), pipe=pipeFor(totalCfh,len);
+      out.innerHTML=
+        fc("Full-load NG demand",Math.round(genCfh),"ft³/hr",(btu/1000).toFixed(0)+"k BTU/hr")+
+        fc("Total incl. other loads",Math.round(totalCfh),"ft³/hr",otherBtu>0?"+"+(otherBtu/1000).toFixed(0)+"k BTU/hr":"generator only")+
+        fc("Min pipe @ "+len+" ft",pipe?pipe+'"':"2 psi",pipe?"Sch-40":"",pipe?"low-pressure steel":"exceeds low-pressure table",!pipe)+
+        fc("Inlet pressure","","",c.fam.ngPsi);
+      S.fuel={type:"Natural gas",demand:Math.round(totalCfh)+" ft³/hr ("+(btu/1000).toFixed(0)+"k BTU/hr)",pressure:c.fam.ngPsi,supply:(pipe?pipe+'" Sch-40 @ '+len+" ft":"2 psi system @ "+len+" ft")};
+      let msg='<strong>'+(pipe?pipe+'" schedule-40 steel</strong> is the minimum for '+Math.round(totalCfh)+' ft³/hr over a '+len+' ft longest run':'a 2 psi system with a regulator at the unit</strong> — the low-pressure table tops out before this flow')+'.';
+      msg+= c.fam.key==="liquid" ? ' Protector units frequently want a 2 psi feed regardless — confirm the meter/regulator delivers full flow at pressure <em>under load</em>.' : ' Confirm the meter and service regulator hold pressure at the unit under full load.';
+      note.className="note";note.innerHTML=msg;
+    } else {
+      const gph=c.fam.lpGph[c.rec]||0, btu=gph*91500; let tank,tanksub;
+      if(gph<=4){tank="500";tanksub="gal min — 1000 gal for cold climate / long runtime";}
+      else if(gph<=6){tank="1000";tanksub="gal — dual tanks in cold climates for vaporization";}
+      else if(gph<=8){tank="1000–1500";tanksub="gal — often dual 1000 gal, confirm vaporization";}
+      else{tank="dual 1000+";tanksub="gal — size with LP engineer for vaporization";}
+      out.innerHTML=
+        fc("Full-load LP demand",gph.toFixed(1),"gal/hr",(btu/1000).toFixed(0)+"k BTU/hr")+
+        fc("Half-load (planning)",(gph*0.62).toFixed(1),"gal/hr","outages run 30–50%")+
+        fc("Min tank",tank,"",tanksub,gph>6)+
+        fc("Inlet pressure","","",c.fam.lpPsi);
+      S.fuel={type:"Liquid propane",demand:gph.toFixed(1)+" gal/hr ("+(btu/1000).toFixed(0)+"k BTU/hr)",pressure:c.fam.lpPsi,supply:tank+" gal tank (vaporization-limited)"};
+      note.className="note";note.innerHTML='LP vaporization — not volume — is the cold-weather constraint: a tank may hold the fuel yet fail to boil off '+gph.toFixed(1)+' gal/hr when low and cold. Confirm tank size and count with your propane supplier for the local design temperature.';
+    }
+  }
+
+  function padDiagramSVG(footL,footW,padL,padW){
+    const maxW=300, s=maxW/padL, pw=padL*s, ph=padW*s;
+    const gx=(padL-footL)/2*s, gy=(padW-footW)/2*s, gw=footL*s, gh=footW*s;
+    const ox=44, oy=14, MF='ui-monospace,JetBrains Mono,Menlo,monospace';
+    return '<svg viewBox="0 0 '+(pw+ox+18)+' '+(ph+oy+34)+'" xmlns="http://www.w3.org/2000/svg">'+
+      '<rect x="'+ox+'" y="'+oy+'" width="'+pw+'" height="'+ph+'" rx="4" fill="#0F1218" stroke="#66A8FF" stroke-width="1.5"/>'+
+      '<rect x="'+(ox+gx)+'" y="'+(oy+gy)+'" width="'+gw+'" height="'+gh+'" rx="3" fill="#222732" stroke="#B8A6FF" stroke-width="1.5"/>'+
+      '<text x="'+(ox+gx+gw/2)+'" y="'+(oy+gy+gh/2+3)+'" text-anchor="middle" font-family="'+MF+'" font-size="9" fill="#9AA3B2">'+footL+'×'+footW+'"</text>'+
+      '<text x="'+(ox+pw/2)+'" y="'+(oy+ph+22)+'" text-anchor="middle" font-family="'+MF+'" font-size="11" fill="#E6EAF1">'+padL+'" long</text>'+
+      '<text x="14" y="'+(oy+ph/2)+'" text-anchor="middle" font-family="'+MF+'" font-size="11" fill="#E6EAF1" transform="rotate(-90 14 '+(oy+ph/2)+')">'+padW+'" wide</text>'+
+      '</svg>';
+  }
+
+  function clearanceSVG(footL,footW,fam){
+    // governing residential clearances (in): front/service, rear-to-structure, opening side, plain side
+    const front=36, rear=18, sideOpen=60, side=18;
+    const totW=sideOpen+footL+side, totH=rear+footW+front;
+    const s=Math.min(340/totW, 250/totH);
+    const pw=totW*s, ph=totH*s;
+    const gx=sideOpen*s, gy=rear*s, gw=footL*s, gh=footW*s;
+    const MF='ui-monospace,JetBrains Mono,Menlo,monospace';
+    const t=(x,y,txt,fs,col,rot)=>'<text x="'+x+'" y="'+y+'" text-anchor="middle" font-family="'+MF+'" font-size="'+(fs||10)+'" fill="'+(col||'#9AA3B2')+'"'+(rot?' transform="rotate('+rot+' '+x+' '+y+')"':'')+'>'+txt+'</text>';
+    let svg='<svg viewBox="-2 -2 '+(pw+4)+' '+(ph+4)+'" xmlns="http://www.w3.org/2000/svg">';
+    // clearance envelope
+    svg+='<rect x="0" y="0" width="'+pw+'" height="'+ph+'" rx="4" fill="rgba(184,166,255,.05)" stroke="#B8A6FF" stroke-width="1.4" stroke-dasharray="5 4"/>';
+    // structure wall along top edge (hatched band)
+    svg+='<rect x="0" y="0" width="'+pw+'" height="6" fill="#2A2F3A"/>';
+    for(let x=0;x<pw;x+=8){svg+='<line x1="'+x+'" y1="0" x2="'+(x+6)+'" y2="6" stroke="#4A5262" stroke-width="1"/>';}
+    // opening (window) glyph on left edge, vertically centered
+    const wy=gy+gh/2;
+    svg+='<rect x="-1" y="'+(wy-9)+'" width="6" height="18" fill="#222732" stroke="#B8A6FF" stroke-width="1"/>';
+    svg+='<line x1="2" y1="'+(wy-9)+'" x2="2" y2="'+(wy+9)+'" stroke="#B8A6FF" stroke-width="1"/>';
+    // generator (the unit) — orange
+    svg+='<rect x="'+gx+'" y="'+gy+'" width="'+gw+'" height="'+gh+'" rx="3" fill="#222732" stroke="#66A8FF" stroke-width="1.6"/>';
+    svg+=t(gx+gw/2, gy+gh/2+3, 'UNIT', 9, '#8FC0FF');
+    // labels in each clearance band
+    svg+=t(gx+gw/2, gy/2+3, '18\u2033 to structure', 10, '#9AA3B2');
+    svg+=t(gx+gw/2, gy+gh+(ph-(gy+gh))/2+3, '36\u2033 service access', 10, '#9AA3B2');
+    svg+=t(gx/2, ph/2, '60\u2033 openings', 10, '#B8A6FF', -90);
+    svg+=t((gx+gw)+(pw-(gx+gw))/2, ph/2, '18\u2033', 10, '#9AA3B2', -90);
+    svg+='</svg>';
+    return svg;
+  }
+
+  function renderPad(c){
+    const out=$("#padOut"), note=$("#padNote"), diag=$("#padDiagram");
+    const foot=c.fam.foot(c.rec), reveal=Math.max(0,num($("#reveal").value)), thick=Math.max(3,num($("#thick").value));
+    const padL=foot.L+2*reveal, padW=foot.W+2*reveal;
+    const areaSf=(padL*padW)/144;
+    const cuyd=(padL*padW*thick)/1728/27;
+    const wt=c.fam.wt[c.rec]||0;
+    out.innerHTML=
+      fc("Unit footprint",foot.L+"×"+foot.W,'in',c.fam.key==="air"?"shared air-cooled enclosure":"by kW class")+
+      fc("Minimum pad",padL+"×"+padW,'in',reveal+'" reveal per side')+
+      fc("Pad area",areaSf.toFixed(1),'ft²',"~"+cuyd.toFixed(2)+" yd³ @ "+thick+'" thick')+
+      fc("Unit weight","~"+wt.toLocaleString(),'lb',wt>1500?"verify soil bearing":"two-person set + equip");
+    diag.innerHTML=padDiagramSVG(foot.L,foot.W,padL,padW);
+    $("#clearDiagram").innerHTML=clearanceSVG(foot.L,foot.W,c.fam);
+    S.pad={foot:foot.L+"×"+foot.W+'"',pad:padL+"×"+padW+'"',area:areaSf.toFixed(1)+" ft²",yd:cuyd.toFixed(2)+" yd³ @ "+thick+'"',wt:"~"+wt.toLocaleString()+" lb"};
+    let msg='Pour at least <strong>'+padL+'" × '+padW+'"</strong> ('+areaSf.toFixed(1)+' ft², about '+cuyd.toFixed(2)+' yd³ at '+thick+'" — order a little extra).';
+    if(c.fam.key==="air") msg+=' A Generac composite mounting pad sized to the unit is also acceptable for air-cooled.';
+    if(wt>1500) msg+=' At ~'+wt.toLocaleString()+' lb, verify soil bearing and pad reinforcement with a structural engineer — heavy Protectors may need a thicker engineered pad.';
+    msg+='<br><br><strong>Clearances (SwRI-listed):</strong> 18" min to the structure, 60" from any operable opening (window, door, fresh-air intake) and from the exhaust discharge, 36"+ service access at the control side, and 60" overhead with no overhangs.';
+    if(c.fam.key==="liquid") msg+=' Larger Protectors have additional exhaust and service clearances — the plan above shows the residential minimums; confirm the exact envelope on the model install drawing.';
+    else msg+=' Confirm the exact envelope on the model install drawing and with your AHJ.';
+    note.className="note";note.innerHTML=msg;
+  }
+
+  // ---- Transfer switch, feeder, bonding ----
+  const OCPD=[60,70,80,90,100,110,125,150,175,200,225,250,300,350,400];
+  const COND={
+    60:{cu:'6',al:'4',egc:'10'},70:{cu:'4',al:'3',egc:'8'},80:{cu:'4',al:'2',egc:'8'},
+    90:{cu:'3',al:'1',egc:'8'},100:{cu:'3',al:'1',egc:'8'},110:{cu:'2',al:'1/0',egc:'8'},
+    125:{cu:'1',al:'2/0',egc:'6'},150:{cu:'1/0',al:'3/0',egc:'6'},175:{cu:'2/0',al:'4/0',egc:'6'},
+    200:{cu:'3/0',al:'250',egc:'6'},225:{cu:'4/0',al:'300',egc:'4'},250:{cu:'250',al:'350',egc:'4'},
+    300:{cu:'350',al:'500',egc:'4'},350:{cu:'500',al:'700',egc:'3'},400:{cu:'600',al:'750',egc:'3'}
+  };
+  const CM={'6':26240,'4':41740,'3':52620,'2':66360,'1':83690,'1/0':105600,'2/0':133100,'3/0':167800,'4/0':211600,'250':250000,'300':300000,'350':350000,'500':500000,'600':600000,'700':700000,'750':750000};
+  const ATS_WHOLE={100:'RXSW100A3',150:'RXSW150A3',200:'RXSW200A3',400:'RTSW400A3'};
+  const ATS_ESS={100:'RXG24SHA1 (load-center)',200:'RXG42SHA1 (load-center)'};
+
+  function renderConnections(c){
+    const out=$("#connOut"), note=$("#connNote");
+    if(c.overMax){out.innerHTML="";note.className="note warn";note.textContent="Resolve the generator size first.";$("#slDiagram").innerHTML="";S.conn=null;return;}
+    const svcA=num($("#svcA").value), scope=$("#scope").value, len=Math.max(1,num($("#feedLen").value)), mat=$("#cond").value;
+    const over60=c.rec>60;
+
+    // ATS
+    let ats, atsA=svcA, atsNote;
+    if(scope==="whole"){ ats=ATS_WHOLE[svcA]||("service-rated "+svcA+"A"); atsNote="service-entrance rated, NEMA 3R"; }
+    else { atsA = svcA>=200?200:100; ats=ATS_ESS[atsA]||("managed "+atsA+"A"); atsNote="managed load center, essential circuits"; }
+
+    // feeder OCPD from genset amps
+    let ocpd=OCPD[OCPD.length-1];
+    for(const s of OCPD){ if(s>=c.amps){ocpd=s;break;} }
+    const cd=COND[ocpd], size=mat==="cu"?cd.cu:cd.al;
+    const K=mat==="cu"?12.9:21.2, cm=CM[size]||1;
+    const vd=(2*K*c.amps*len)/(cm*240)*100;
+
+    out.innerHTML=
+      fc("Transfer switch",atsA+"A",'',ats+' · '+atsNote, false)+
+      fc("Feeder OCPD",ocpd,'A',"genset main / feeder breaker")+
+      fc("Feeder conductor",size,mat==="cu"?'Cu':'Al',"+ #"+cd.egc+" "+ (mat==="cu"?'Cu':'Al') +" EGC · 75°C")+
+      fc("Voltage drop",vd.toFixed(1),'%',len+" ft @ "+c.amps+"A"+(vd>3?" — upsize":""), vd>3);
+
+    // bonding
+    let msg='<strong>Neutral &amp; bonding:</strong> a Generac service-entrance-rated ATS uses a <em>solid (unswitched) neutral</em>, so the standby is <strong>not</strong> a separately derived system — do not bond neutral-to-ground at the generator and do not drive a separate grounding electrode there; the main bonding jumper and grounding-electrode system stay at the service. Run the EGC (#'+cd.egc+') with the feeder.';
+    msg+=' If instead you use a switched-neutral (3-pole) ATS, the generator <em>is</em> separately derived — bond N-G at the unit and add a grounding electrode + GEC.';
+    if(scope==="whole" && (ats.indexOf('RXSW')===0)) msg+=' The '+ats+' is service-rated, so it becomes the service disconnect — no separate main needed ahead of it.';
+    if(over60) msg+=' <strong>Note:</strong> Generac residential ATS are rated for single-phase gensets 60 kW and below — the '+c.rec+' kW unit needs a commercial-rated switch; confirm ratings.';
+    if(vd>3) msg+=' Voltage drop is '+vd.toFixed(1)+'% over '+len+' ft — bump the feeder one size (or larger) to hold under ~2%.';
+    note.className="note";note.innerHTML=msg;
+
+    S.conn={ats:atsA+"A "+ats,ocpd:ocpd+" A",cond:size+" "+(mat==="cu"?"Cu":"Al")+" + #"+cd.egc+" EGC",vd:vd.toFixed(1)+"%"+(vd>3?" (upsize)":""),bond:over60?"exceeds 60 kW residential ATS — commercial switch":"solid neutral · not separately derived"};
+    $("#slDiagram").innerHTML=singleLineSVG(scope,svcA,atsA,ats,c.rec);
+  }
+
+  function singleLineSVG(scope,svcA,atsA,ats,genKW){
+    const MF='ui-monospace,JetBrains Mono,Menlo,monospace';
+    const W=330;
+    const box=(x,y,w,h,label,sub,stroke)=>{
+      let s='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="5" fill="#222732" stroke="'+(stroke||'#B8A6FF')+'" stroke-width="1.4"/>';
+      s+='<text x="'+(x+w/2)+'" y="'+(y+(sub?h/2-2:h/2+4))+'" text-anchor="middle" font-family="'+MF+'" font-size="11" fill="#E6EAF1">'+label+'</text>';
+      if(sub)s+='<text x="'+(x+w/2)+'" y="'+(y+h/2+11)+'" text-anchor="middle" font-family="'+MF+'" font-size="9" fill="#9AA3B2">'+sub+'</text>';
+      return s;
+    };
+    const line=(x1,y1,x2,y2,col)=>'<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+(col||'#6B7484')+'" stroke-width="1.6"/>';
+    const bw=150, bh=38, cx=(W-bw)/2, gx=W-120, gw=112;
+    let y=6, svg='<svg viewBox="0 0 '+W+' '+(scope==="whole"?238:262)+'" xmlns="http://www.w3.org/2000/svg">';
+    if(scope==="whole"){
+      svg+=box(cx,y,bw,bh,'UTILITY'); const y1=y+bh;
+      svg+=line(W/2,y1,W/2,y1+18); y=y1+18;
+      svg+=box(cx,y,bw,bh,'METER'); const y2=y+bh;
+      svg+=line(W/2,y2,W/2,y2+18); y=y2+18;
+      svg+=box(cx,y,bw,bh,'ATS '+atsA+'A',ats,'#66A8FF'); const yA=y+bh/2;
+      // generator feed into ATS
+      svg+=box(gx,y-4,gw,bh+8,'GEN '+genKW+'kW',null,'#66A8FF');
+      svg+=line(cx+bw,yA,gx,yA,'#66A8FF');
+      const y3=y+bh; svg+=line(W/2,y3,W/2,y3+18); y=y3+18;
+      svg+=box(cx,y,bw,bh,'MAIN PANEL',svcA+'A');
+    } else {
+      svg+=box(cx,y,bw,bh,'UTILITY'); let y1=y+bh; svg+=line(W/2,y1,W/2,y1+16); y=y1+16;
+      svg+=box(cx,y,bw,bh,'METER'); let y2=y+bh; svg+=line(W/2,y2,W/2,y2+16); y=y2+16;
+      svg+=box(cx,y,bw,bh,'MAIN PANEL',svcA+'A'); let y3=y+bh; svg+=line(W/2,y3,W/2,y3+16); y=y3+16;
+      svg+=box(cx,y,bw,bh,'MANAGED ATS '+atsA+'A',ats,'#66A8FF'); const yA=y+bh/2;
+      svg+=box(gx,y-4,gw,bh+8,'GEN '+genKW+'kW',null,'#66A8FF');
+      svg+=line(cx+bw,yA,gx,yA,'#66A8FF');
+      let y4=y+bh; svg+=line(W/2,y4,W/2,y4+16); y=y4+16;
+      svg+=box(cx,y,bw,bh,'ESSENTIAL LOADS');
+    }
+    return svg+'</svg>';
+  }
+
+  function render(){
+    const c=calc();
+    $("#recSize").textContent=c.overMax?c.rec+"+":c.rec;
+    $("#recModel").textContent=c.overMax?"over single-unit capacity":(c.fam.hints[c.rec]||c.fam.label);
+    const famEl=$("#recFam");famEl.textContent=c.fam.label;famEl.className="fam "+c.fam.key;
+    $("#roRun").innerHTML=c.runKW.toFixed(1)+' <small>kW</small>';
+    $("#roSurge").innerHTML=c.surgeKVA.toFixed(1)+' <small>kVA</small>';
+    $("#roAmps").innerHTML=(c.overMax?'—':c.amps)+' <small>A @240V</small>';
+    $("#roDriver").textContent=c.driver;
+
+    const topSize=c.fam.sizes[c.fam.sizes.length-1];
+    const scaleMax=Math.max(topSize,Math.ceil(c.surgeKVA/2)*2,Math.ceil(c.runKW/2)*2);
+    const pct=v=>Math.min(100,(v/scaleMax)*100);
+    $("#fill").style.width=pct(c.runKW)+"%";
+    const marks=$("#marks");marks.innerHTML="";
+    c.fam.sizes.forEach(s=>{const m=document.createElement("div");m.className="mark"+(s===c.rec&&!c.overMax?" rec":"");m.style.left=pct(s)+"%";m.innerHTML='<span class="lab">'+s+'</span>';marks.appendChild(m);});
+    const tick=document.createElement("div");tick.className="surge-tick";tick.style.left=pct(c.surgeKVA)+"%";tick.innerHTML='<span class="lab">surge '+c.surgeKVA.toFixed(0)+'</span>';marks.appendChild(tick);
+    $("#ladderScaleNote").textContent="ladder = "+c.fam.label.split(" · ")[0].toLowerCase()+" sizes (kW)";
+
+    const noteEl=$("#recNote");
+    if(c.overMax&&c.fam.key==="liquid"){noteEl.className="note warn";noteEl.innerHTML='Running demand of <strong>'+c.runKW.toFixed(1)+' kW</strong> exceeds the 80 kW single-phase ceiling — parallel two Protectors, move to 3-phase service, or shed large 240V loads with load management.';}
+    else if(c.overMax&&c.fam.key==="air"){noteEl.className="note warn";noteEl.innerHTML='Running demand of <strong>'+c.runKW.toFixed(1)+' kW</strong> is past the 28 kW air-cooled ceiling. Switch the toggle to <strong>Liquid-cooled</strong>.';}
+    else{
+      const oneUp=c.fam.sizes[c.fam.sizes.indexOf(c.rec)+1];
+      let msg='<strong>'+c.rec+' kW '+(c.fam.key==="air"?"air-cooled":"liquid-cooled")+'</strong> covers <strong>'+c.runKW.toFixed(1)+' kW</strong> running ('+(c.margin*100).toFixed(0)+'% headroom, ~'+c.amps+'A) and clears the <strong>'+c.surgeKVA.toFixed(0)+' kVA</strong> surge'+(c.surgeDriver!=="—"?' from the '+c.surgeDriver+'.':'.');
+      if(c.margin<0.15&&oneUp)msg+=' Headroom is tight — step to <strong>'+oneUp+' kW</strong>, or soft-start the '+c.surgeDriver+'.';
+      noteEl.className="note";noteEl.innerHTML=msg;
+    }
+
+    const bd=$("#breakdown");
+    const line=(k,v,extra="")=>'<div class="bd-row '+extra+'"><span class="lab">'+k+'</span><span class="v">'+v+'</span></div>';
+    const kva=v=>(v/1000).toFixed(2)+" kVA";
+    bd.innerHTML=
+      line("General base — 220.82(A)",kva(c.generalBase))+
+      line("Fixed appliances (in general)",kva(c.applianceGeneral))+
+      line("General connected",kva(c.generalConnected))+
+      line("After 220.82(B) demand",kva(c.generalDemand))+
+      line("Space conditioning — 220.82(C), "+c.spaceLabel+" @100%",kva(c.spaceVA))+
+      line("Running demand",c.runKW.toFixed(1)+" kW","total")+
+      line("Largest motor surge driver",c.surgeDriver==="—"?"none":c.surgeDriver+" → "+(c.largestMotor?c.largestMotor.start.toFixed(0):0)+" VA inrush")+
+      line("Peak surge required",c.surgeKVA.toFixed(1)+" kVA");
+
+    S.core={rec:c.rec,over:c.overMax,fam:c.fam.label,model:c.overMax?"over single-unit capacity":(c.fam.hints[c.rec]||c.fam.label),amps:c.amps,run:c.runKW.toFixed(1),surge:c.surgeKVA.toFixed(1),driver:c.driver,general:(c.generalDemand/1000).toFixed(1),space:(c.spaceVA/1000).toFixed(1),spaceLabel:c.spaceLabel};
+
+    renderFuel(c);
+    renderPad(c);
+    renderConnections(c);
+    buildPrintSheet();
+  }
+
+  function buildPrintSheet(){
+    const cust=($("#jobCust").value||"—"), addr=($("#jobAddr").value||"—"), by=($("#jobBy").value||"—");
+    const date=new Date().toLocaleDateString();
+    const co=S.core||{};
+    const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const row=(k,v)=>'<div class="ps-row"><span>'+k+'</span><b>'+(v||"—")+'</b></div>';
+    let left='<h4>Load — NEC 220.82</h4>'+
+      row("General demand (B)",co.general?co.general+" kVA":null)+
+      row("Space cond. (C · "+(co.spaceLabel||"")+")",co.space?co.space+" kVA":null)+
+      row("Running demand",co.run?co.run+" kW":null)+
+      row("Peak surge",co.surge?co.surge+" kVA":null)+
+      row("Sets the size",co.driver);
+    if(S.pad){left+='<h4>Pad &amp; siting</h4>'+row("Footprint",S.pad.foot)+row("Minimum pad",S.pad.pad)+row("Pad area",S.pad.area)+row("Concrete",S.pad.yd)+row("Unit weight",S.pad.wt)+row("Clearances",'18" struct · 60" openings · 36" service · 60" over');}
+    let right='<h4>Fuel — NFPA 54</h4>';
+    right+= S.fuel ? (row("Fuel",S.fuel.type)+row("Full-load draw",S.fuel.demand)+row("Inlet pressure",S.fuel.pressure)+row("Gas supply",S.fuel.supply)) : row("Fuel","size within capacity first");
+    right+='<h4>Transfer switch &amp; feeder</h4>';
+    right+= S.conn ? (row("Transfer switch",S.conn.ats)+row("Feeder OCPD",S.conn.ocpd)+row("Conductor",S.conn.cond)+row("Voltage drop",S.conn.vd)+row("Neutral / bond",S.conn.bond)) : row("Switch","size within capacity first");
+    $("#printsheet").innerHTML=
+      '<div class="ps"><div class="ps-head"><div class="ps-brand">HOMESTEAD ELECTRIC</div>'+
+      '<div class="ps-title">Standby Generator — Load &amp; Install Summary</div>'+
+      '<div class="ps-meta">'+esc(cust)+' &nbsp;·&nbsp; '+esc(addr)+' &nbsp;·&nbsp; Prepared by '+esc(by)+' &nbsp;·&nbsp; '+date+'</div></div>'+
+      '<div class="ps-hero"><div class="ps-kw">'+(co.over?esc(co.rec)+"+":esc(co.rec||"—"))+' <span>kW</span></div>'+
+      '<div class="ps-herometa">'+esc(co.model||"")+' &nbsp;·&nbsp; ~'+esc(co.amps||"—")+' A @240V &nbsp;·&nbsp; '+esc(co.fam||"")+'</div></div>'+
+      '<div class="ps-cols"><div>'+left+'</div><div>'+right+'</div></div>'+
+      '<div class="ps-note">Planning figures — verify final size, fuel, pad, clearances, transfer switch and feeder against the specific model\u2019s spec sheet and install drawing and the AHJ\u2019s adopted code before quoting or installing.</div></div>';
+  }
+
+  rowsEl.addEventListener("input",e=>{
+    const t=e.target,id=t.dataset.id,k=t.dataset.k;if(!id)return;
+    const r=rows.find(x=>x._id===id);if(!r)return;
+    if(k==="motor"){r.motor=t.checked;if(!r.motor)r.soft=false;renderRows();render();return;}
+    if(k==="soft"){r.soft=t.checked;render();return;}
+    if(k==="name")r.name=t.value;else if(k==="va")r.va=num(t.value);else if(k==="qty")r.qty=num(t.value);
+    render();
+  });
+  rowsEl.addEventListener("click",e=>{if(e.target.classList.contains("del")){rows=rows.filter(x=>x._id!==e.target.dataset.id);renderRows();render();}});
+  $("#addBtn").addEventListener("click",()=>{const v=$("#addPick").value;if(!v||!PRESETS[v])return;rows.push(Object.assign({},PRESETS[v],{qty:1,soft:false,_id:"r"+(nextId++)}));$("#addPick").value="";renderRows();render();});
+  ["#sqft","#saCkt","#lndCkt","#runLen","#otherBtu","#hhv"].forEach(s=>$(s).addEventListener("input",render));
+  ["#svcA","#scope","#feedLen","#cond"].forEach(s=>$(s).addEventListener("input",render));
+  ["#jobCust","#jobAddr","#jobBy"].forEach(s=>$(s).addEventListener("input",buildPrintSheet));
+  $("#printBtn").addEventListener("click",()=>{buildPrintSheet();window.print();});
+  $("#reveal").addEventListener("input",()=>{revealTouched=true;render();});
+  $("#thick").addEventListener("input",()=>{thickTouched=true;render();});
+
+  function applyFamilyDefaults(){
+    const fam = mode==="liquid" ? LIQ : (mode==="air" ? AIR : (calc().fam));
+    if(!revealTouched) $("#reveal").value=fam.reveal;
+    if(!thickTouched) $("#thick").value=fam.thick;
+  }
+  $("#famSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;mode=b.dataset.mode;[...$("#famSeg").children].forEach(x=>x.classList.toggle("on",x===b));applyFamilyDefaults();render();});
+  $("#fuelSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;fuel=b.dataset.fuel;[...$("#fuelSeg").children].forEach(x=>x.classList.toggle("on",x===b));render();});
+
+  renderRows();
+  applyFamilyDefaults();
+  render();
+
+  // PWA service-worker registration removed on purpose: this page lives inside
+  // the Homestead app, whose own service worker already caches /tools/.
+})();
+</script>
+</body>
+</html>
