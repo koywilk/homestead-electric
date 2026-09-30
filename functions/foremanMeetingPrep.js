@@ -51,6 +51,10 @@ const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0
 const fmtShort = (d) => d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 const arr = (v) => (Array.isArray(v) ? v : []);
 const first = (n) => String(n || "").trim().split(/\s+/)[0] || "";
+// A job's Simpro number as the collector keys it — trimmed. Four app jobs carry a
+// trailing space ("1182 "), and an untrimmed lookup here left Johnson Residence
+// off Hours vs bid even after the collector learned to trim (2026-09-29).
+const snOf = (j) => String((j && j.simproNo) || "").trim();
 function stripHtml(s) {
   return String(s || "")
     .replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
@@ -136,15 +140,22 @@ function parseLastActions(doc) {
 // For each Simpro job: /jobs/{id} Totals (net margin) and every cost center's
 // LaborHours {Actual, Estimate}, bucketed by name: "rough" (/rough/i), "finish"
 // (/finish|trim/i), everything else "extras" (change orders, feeds, add-ons).
-// Cost-center list rows carry Totals on this tenant; a row without them falls
-// back to the cost-center detail call. 5 jobs in flight at a time.
+// The cost-center list is asked for Totals (columns=ID,Name,Totals) so hours
+// arrive in ONE call per section; a row that still lacks them falls back to the
+// cost-center detail call. Before 2026-09-29 the list was fetched without
+// Totals, so every cost center cost an extra request — ~2,500 calls a run —
+// and Simpro started answering the tail of the run with unusable bodies, which
+// silently dropped Koplin / Miller / Lot 44 from the doc. Now a job whose
+// sections or cost centers don't come back as arrays is reported through
+// onError (and left off) instead of quietly rendering as "no hours".
+// Simpro numbers are trimmed: "1182 " (trailing space) 404'd every week.
 function bucketOf(name) {
   const n = String(name || "").toLowerCase();
   if (/rough/.test(n)) return "rough";
   if (/finish|trim/.test(n)) return "finish";
   return "extras";
 }
-async function collectSimproHours(simproNos, getJson, { concurrency = 5 } = {}) {
+async function collectSimproHours(simproNos, getJson, { concurrency = 5, onError = null } = {}) {
   const out = {};
   const one = async (sn) => {
     const rec = { margin: null, isEstimate: true, rough: null, finish: null, extras: null };
@@ -157,9 +168,11 @@ async function collectSimproHours(simproNos, getJson, { concurrency = 5 } = {}) 
       rec.isEstimate = !hasReal;
     }
     const sections = await getJson(`/jobs/${encodeURIComponent(sn)}/sections/?columns=ID,Name&pageSize=100`);
-    for (const sec of arr(sections)) {
-      const ccs = await getJson(`/jobs/${encodeURIComponent(sn)}/sections/${sec.ID}/costCenters/?pageSize=250`);
-      for (const cc of arr(ccs)) {
+    if (!Array.isArray(sections)) throw new Error(`sections not a list (${sections == null ? "no response" : typeof sections})`);
+    for (const sec of sections) {
+      const ccs = await getJson(`/jobs/${encodeURIComponent(sn)}/sections/${sec.ID}/costCenters/?columns=ID,Name,Totals&pageSize=250`);
+      if (!Array.isArray(ccs)) throw new Error(`cost centers not a list for section ${sec.ID} (${ccs == null ? "no response" : typeof ccs})`);
+      for (const cc of ccs) {
         let lh = cc && cc.Totals && cc.Totals.ResourcesCost && cc.Totals.ResourcesCost.LaborHours;
         if (!lh && cc && cc.ID != null) {
           const d = await getJson(`/jobs/${encodeURIComponent(sn)}/sections/${sec.ID}/costCenters/${cc.ID}`);
@@ -175,9 +188,12 @@ async function collectSimproHours(simproNos, getJson, { concurrency = 5 } = {}) 
     }
     out[sn] = rec;
   };
-  const list = [...new Set(arr(simproNos).map(String).filter(Boolean))];
+  const list = [...new Set(arr(simproNos).map(s => String(s).trim()).filter(Boolean))];
   for (let i = 0; i < list.length; i += concurrency) {
-    await Promise.all(list.slice(i, i + concurrency).map(sn => one(sn).catch(() => { /* one job failing just leaves it off the list */ })));
+    await Promise.all(list.slice(i, i + concurrency).map(sn => one(sn).catch((e) => {
+      // One job failing leaves it off the list — but never silently.
+      if (typeof onError === "function") { try { onError(sn, e); } catch (_) { /* logging must not kill the run */ } }
+    })));
   }
   return out;
 }
@@ -215,8 +231,8 @@ function buildModel(inputs) {
   const live = arr(jobs).filter(isActive);
   const res = live.filter(j => isResJob(j, crew));
   const byId = new Map(res.map(j => [j.id, j]));
-  const bySimpro = new Map(res.filter(j => j.simproNo).map(j => [String(j.simproNo), j]));
-  const byAnySimpro = new Map(live.filter(j => j.simproNo).map(j => [String(j.simproNo), j]));   // any active job, for schedule labels
+  const bySimpro = new Map(res.filter(j => j.simproNo).map(j => [snOf(j), j]));
+  const byAnySimpro = new Map(live.filter(j => j.simproNo).map(j => [snOf(j), j]));   // any active job, for schedule labels
 
   // Carried action items
   try {
@@ -285,7 +301,7 @@ function buildModel(inputs) {
   try {
     const ph = (p) => (p && p.est != null && p.used != null && p.est > 0) ? { used: Math.round(p.used), est: Math.round(p.est), ratio: p.used / p.est } : null;
     res.forEach(j => {
-      const t = j.simproNo ? simproTotalsById[String(j.simproNo)] : null;
+      const t = j.simproNo ? simproTotalsById[snOf(j)] : null;
       if (!t) return;
       const rough = ph(t.rough), finish = ph(t.finish), extras = ph(t.extras);
       const inFinish = effStatus(j, "rough") === "complete" || (finish && finish.used > 0 && !(rough && rough.used > 0));
@@ -311,7 +327,7 @@ function buildModel(inputs) {
     // Rough completed in the last 30 days — rough hours + margin as it stands (rough bands).
     res.forEach(j => {
       if (!roughRecentlyDone(j, today)) return;
-      const t = j.simproNo ? simproTotalsById[String(j.simproNo)] : null;
+      const t = j.simproNo ? simproTotalsById[snOf(j)] : null;
       if (!t) return;
       const cur = ph(t.rough);
       m.hours.roughDone.push({ name: j.name, phase: "roughDone", cur, rough: null, finish: null, extras: null,
@@ -320,7 +336,7 @@ function buildModel(inputs) {
     m.hours.roughDone.sort((a, b) => b.done - a.done);
     // Completed in the last 30 days — whole-job hours + final margin (finish bands).
     arr(jobs).filter(j => recentlyCompleted(j, today) && isResJob(j, crew)).forEach(j => {
-      const t = j.simproNo ? simproTotalsById[String(j.simproNo)] : null;
+      const t = j.simproNo ? simproTotalsById[snOf(j)] : null;
       if (!t) return;
       const parts = [t.rough, t.finish, t.extras].filter(Boolean);
       const tot = parts.length ? { used: parts.reduce((n, p) => n + (p.used || 0), 0), est: parts.reduce((n, p) => n + (p.est || 0), 0) } : null;
