@@ -16406,6 +16406,29 @@ const applyHomeownerChoices = (genLoads, items) => {
       status: c.status || l.status, priority: (c.priority != null ? c.priority : l.priority) };
   });
 };
+// v473: the overlay above is a one-time carry, not a standing rule — it applies
+// only while the homeowner's submission is NEWER than the office's last save
+// (`genLoadsAt`, stamped by HomeRunsTab on every office edit). Re-applying it on
+// every open of the Home Runs tab unchecked whatever the office selected after
+// the homeowner signed (Keegan, Miller 2026-09-30: "keeps unselecting things
+// that I am selecting"). A legacy doc with no genLoadsAt behaves as before (the
+// submission shows) until the next office save stamps one; a doc with a stamp
+// but an undated submission lets the office copy stand. Pure.
+// v474: the homeowner's SUBMIT maps their choices onto the SERVER's genLoads
+// (the funnel's locked prev), never the copy the page loaded when the link was
+// opened. A link can sit open for days; the office's edits in between (renames,
+// added loads, checks) used to be overwritten wholesale at signature. A load the
+// office added since the open has no item → left exactly as the office set it;
+// a load the office removed since the open is not brought back. Pure.
+const applyHomeownerSubmitToGenLoads = (serverGenLoads, outItems) => {
+  const choiceById = {};
+  (outItems||[]).forEach(it => { if (it && it.id != null) choiceById[it.id] = it; });
+  return (serverGenLoads||[]).map(l => {
+    const c = choiceById[l.id];
+    return c ? { ...l, included: !!c.included, confirmed: !!c.confirmed, status: c.status, priority: c.priority, notes: c.notes } : l;
+  });
+};
+const homeownerOverlayApplies = (d) => !!(d && d.submitted && Array.isArray(d.items) && d.items.length && (!d.genLoadsAt || (!!d.submittedAt && d.genLoadsAt < d.submittedAt)));
 
 // Stamp the chosen loads' Home Run rows with panel "Dedicated Loads" (item 4),
 // REVERSIBLY. A row whose gen load is included -> panel:"Dedicated Loads",
@@ -16452,7 +16475,7 @@ const dedicatedPending = (homeRuns, genLoads) => {
 };
 
 // ── Generator Load Section ────────────────────────────────────
-function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
+function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=true, onAutoSync }) {
   // KEY FIX: local state so ★ toggle and checkboxes update instantly
   const [loads, setLoads] = useState(genLoads || []);
   const [dragIdx, setDragIdx] = useState(null);
@@ -16474,10 +16497,21 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // (genLoadsSig guard avoids a redundant Firestore write / render loop).
   const hrSig = genHomeRunsSig(homeRuns);
   useEffect(() => {
+    // v473: never auto-sync before the saved list has arrived. On a slow field
+    // connection the section could be opened while the read was still out;
+    // reconciling against the empty placeholder built a fresh all-off list
+    // (new ids) and saved it over the real selection 800 ms later.
+    if (!ready) return;
     const next = reconcileGenLoads(homeRuns, genLoads);
-    if (genLoadsSig(next) !== genLoadsSig(genLoads)) onSave(next);
-  }, [hrSig]); // eslint-disable-line
-  const reSync = () => commit(reconcileGenLoads(homeRuns, genLoads));
+    if (genLoadsSig(next) === genLoadsSig(genLoads)) return;
+    // v473: the write reconciles against the SERVER copy under the funnel lock
+    // (onAutoSync), never this tab's copy. A tab that loaded the list before
+    // another device's checks used to write that stale list back the moment
+    // any home-run row changed (a pull marked in the field is in hrSig) and
+    // uncheck the other device's picks (Keegan, Miller 2026-09-30).
+    if (onAutoSync) onAutoSync(homeRuns); else onSave(next);
+  }, [hrSig, ready]); // eslint-disable-line
+  const reSync = () => onAutoSync ? onAutoSync(homeRuns) : commit(reconcileGenLoads(homeRuns, genLoads));
 
   const toggle  = (id, key) => commit(loads.map(l=>l.id===id?{...l,[key]:!l[key]}:l));
   const updName = (id, name) => commit(loads.map(l=>l.id===id?{...l,name}:l));
@@ -16503,6 +16537,15 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // so the same control undoes itself — no separate "none" button to hunt for.
   const allIncluded = loads.length>0 && included.length===loads.length;
   const toggleAll = () => commit(loads.map(l=>({...l, included:!allIncluded})));
+
+  // v473: nothing to tap until the saved list is here — otherwise a check made
+  // against the placeholder is wiped when the real list lands a moment later.
+  if (!ready) return (
+    <div style={{textAlign:'center',padding:'18px',color:C.dim,fontSize:12,fontStyle:'italic',
+      border:`1px dashed ${C.border}`,borderRadius:10,marginBottom:12}}>
+      Loading the saved selection…
+    </div>
+  );
 
   return (
     <div>
@@ -17461,6 +17504,9 @@ function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
 function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
+  const [genReady,        setGenReady]        = useState(false); // v473: the saved list has arrived (or the read failed)
+  const genDirtyRef = useRef(false); // v473: a local tap is still landing — snapshots wait
+  const genSeqRef   = useRef(0);     // v473: which local save is the latest (clears dirty only for that one)
   const [hoResponse,      setHoResponse]      = useState(null);
   const [showModal,       setShowModal]       = useState(false);
   const [sending,         setSending]         = useState(false);
@@ -17474,29 +17520,63 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
   useEffect(()=>{
-    getDoc(doc(db,'homeowner_requests',jobId)).then(snap=>{
-      if(snap.exists()){
-        const d = snap.data();
-        // If the homeowner has submitted, overlay their choices onto genLoads
-        // so the office list auto-reflects what they picked (checked = chosen)
-        // — even for jobs submitted before the submit-writes-back change.
-        const gl = (d.submitted && Array.isArray(d.items))
-          ? applyHomeownerChoices(d.genLoads||[], d.items)
-          : (d.genLoads||[]);
-        if(gl.length) setGenLoads(gl);
-        if(d.submitted) setHoResponse(d);
-      }
-    }).catch(()=>{});
+    // v473: LIVE subscription (was a one-shot getDoc). Every open tab now holds
+    // the current list — a phone's checks show on the office tab without a
+    // reload, and no tab keeps a copy that is minutes old. Fix for Keegan's
+    // "keeps unselecting things that I am selecting" (Miller, 2026-09-30).
+    const unsub = onSnapshot(doc(db,'homeowner_requests',jobId), snap => {
+      if (genDirtyRef.current) return; // a local tap is still landing — never let a snapshot roll it back on screen
+      const d = snap.exists() ? snap.data() : null;
+      const base = (d && Array.isArray(d.genLoads)) ? d.genLoads : [];
+      // Overlay the homeowner's submitted picks only while their submission is
+      // NEWER than the office's last save (homeownerOverlayApplies). Re-applying
+      // it on every open used to uncheck whatever the office selected after
+      // the homeowner signed.
+      const gl = homeownerOverlayApplies(d) ? applyHomeownerChoices(base, d.items) : base;
+      setGenLoads(gl);
+      setHoResponse(d && d.submitted ? d : null);
+      setGenReady(true);
+    }, () => setGenReady(true));
+    return unsub;
   },[jobId]);
 
   // Debounced Firestore save — rides the saveHomeownerRequest funnel so a
   // version snapshot is stashed before each write (Kweller hardening Layer 4).
+  // v473: stamps genLoadsAt (gates the homeowner overlay above) and holds the
+  // snapshot listener off while this save is pending / in flight, so an echo
+  // of an OLDER write can't uncheck the tap on screen before this one lands.
+  // A failed save now says so instead of silently leaving the screen wrong.
   const saveGenLoads = (next) => {
     setGenLoads(next);
+    const seq = ++genSeqRef.current; genDirtyRef.current = true;
     clearTimeout(window._genSave);
-    window._genSave = setTimeout(()=>{
-      saveHomeownerRequest(jobId, () => ({ genLoads: next }), 'HomeRunsTab-genLoads').catch(()=>{});
+    window._genSave = setTimeout(async ()=>{
+      try {
+        await saveHomeownerRequest(jobId, () => ({ genLoads: next, genLoadsAt: new Date().toISOString() }), 'HomeRunsTab-genLoads');
+      } catch(e) {
+        toast.error("Generator selection didn't save — check the connection and tap it again.");
+      } finally {
+        if (genSeqRef.current === seq) genDirtyRef.current = false;
+      }
     },800);
+  };
+
+  // v473: the Home Runs → gen list auto-sync (and "Re-sync now") reconciles
+  // against the SERVER copy under the funnel's transaction lock — never this
+  // tab's copy. A tab that had loaded the list before another device's checks
+  // used to write that stale list back whenever a home-run row changed (a pull
+  // marked in the field), unchecking the other device's picks. The mutator
+  // returns null when the locked copy already matches, so a no-change sync is
+  // not a write (and stashes no version snapshot).
+  const syncGenLoads = async (hr) => {
+    try {
+      const patch = await saveHomeownerRequest(jobId, (prev) => {
+        const cur = (prev && Array.isArray(prev.genLoads)) ? prev.genLoads : [];
+        const next = reconcileGenLoads(hr, cur);
+        return genLoadsSig(next) === genLoadsSig(cur) ? null : { genLoads: next };
+      }, 'HomeRunsTab-genSync');
+      if (patch && !genDirtyRef.current) setGenLoads(patch.genLoads);
+    } catch(e) { /* offline: the listener re-syncs when the rows next change */ }
   };
 
   const send = async () => {
@@ -18209,7 +18289,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           </div>
         )}
 
-        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}/>
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}
+          ready={genReady} onAutoSync={syncGenLoads}/>
 
         <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {!hoResponse?.submitted?(
@@ -19077,7 +19158,7 @@ function snapshotHomeownerRequestVersion(jobId, prevData, sourceTag) {
 // jobId is always included so the firestore rule (jobId is string) passes.
 async function saveHomeownerRequest(jobId, mutator, sourceTag) {
   const ref = doc(db,'homeowner_requests',jobId);
-  let prevData = null, patch = null;
+  let prevData = null, patch = null, skipped = false;
   // Transactional funnel (M1 hardening 2026-07-13): re-read the doc UNDER LOCK
   // and write ONLY the patched keys. Two things fall out for free:
   //  1. mutator runs against the LOCKED prev, so every per-key merge caller
@@ -19092,9 +19173,14 @@ async function saveHomeownerRequest(jobId, mutator, sourceTag) {
     const ex = await tx.get(ref);
     prevData = ex.exists() ? ex.data() : null;
     patch = mutator(prevData);
+    // v473: a mutator may return null = "nothing to write" (the generator
+    // auto-sync when the locked server copy already matches). No update, no
+    // version snapshot, no listener echo — a no-change sync is not a write.
+    if (patch == null) { skipped = true; return; }
     if (!prevData) tx.set(ref, { ...patch, jobId });
     else tx.update(ref, { ...patch, jobId });
   });
+  if (skipped) return null;
   snapshotHomeownerRequestVersion(jobId, prevData, sourceTag);
   return patch;
 }
@@ -37741,6 +37827,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   }, []);
   const crewDisplayName = (name) => crewUserMap[name] || name;
   useEffect(() => onSnapshot(doc(db,"settings","crewRoster"), s => {
+    _settingsBaselines["crewRoster"] = s.exists() ? (s.data()||{}) : {}; // v474: baseline for the merge-save
     if(s.exists()) setCrewRoster(s.data().names||[]);
     else _crewLoadAllUsers().then(names => setCrewRoster(names));
   }), []);
@@ -37765,7 +37852,10 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   // schedule docs. Simpro is the authoritative source — see simproLastByJob
   // above.)
 
-  const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
+  // v474: through mergeSaveSettingsFields like every other settings/* doc (was a
+  // raw whole-doc setDoc — a tab with an older roster could drop a name someone
+  // else had just added).
+  const _saveRoster = n => { setCrewRoster(n); mergeSaveSettingsFields("crewRoster",{names:n}).catch(e=>{console.error("[HE] crewRoster save:",e?.message);toast.error("Roster save failed — check connection and retry.");}); };
 
   // Teams
   useEffect(() => onSnapshot(doc(db,"settings","crewTeams"), s => {
@@ -47882,24 +47972,23 @@ function HomeownerPage({ jobId }) {
       });
       // Write the homeowner's choices BACK onto genLoads (by id) so the OFFICE
       // gen list auto-reflects exactly what they picked — checked = chosen,
-      // unchecked = not. No manual re-checking on our side. Loads the office
-      // added after the homeowner opened (no matching item) are left as-is.
-      const choiceById = {};
-      outItems.forEach(it => { choiceById[it.id] = it; });
-      const outGenLoads = (genLoads||[]).map(l => {
-        const c = choiceById[l.id];
-        return c ? { ...l, included: !!c.included, confirmed: !!c.confirmed, status: c.status, priority: c.priority, notes: c.notes } : l;
-      });
+      // unchecked = not. v474: mapped onto the SERVER's list (the funnel's locked
+      // prev), not this page's copy from when the link was opened — see
+      // applyHomeownerSubmitToGenLoads. Falls back to the page copy only if the
+      // server has no list at all (never happens after a Send).
       // Merge onto the shared homeowner_requests doc so lighting-collab / Q&A
       // data written by other share links isn't wiped. Funnel write = version
       // snapshot stashed first (Kweller hardening Layer 4).
-      await saveHomeownerRequest(jobId, () => ({
-        jobName:job?.name||'', submitted:true,
-        submittedAt:new Date().toISOString(),
-        signature:sigName.trim(), signedDate:sigDate,
-        items: outItems,
-        genLoads: outGenLoads,
-      }), 'HomeownerPage-submit');
+      await saveHomeownerRequest(jobId, (prev) => {
+        const srv = prev && Array.isArray(prev.genLoads) && prev.genLoads.length ? prev.genLoads : (genLoads||[]);
+        return {
+          jobName:job?.name||'', submitted:true,
+          submittedAt:new Date().toISOString(),
+          signature:sigName.trim(), signedDate:sigDate,
+          items: outItems,
+          genLoads: applyHomeownerSubmitToGenLoads(srv, outItems),
+        };
+      }, 'HomeownerPage-submit');
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
@@ -50518,10 +50607,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-25 · App SW version: v472
+**Last manifest update:** 2026-09-30 · App SW version: v474
 
 ---
 
+- **Stale-copy audit — five more writers that could roll a shared doc back, closed** · 'shipped 2026-09-30' · 'SW v474' · Koy, after v473: *"are there any other spots in the app that need this fixed too? I feel like this is happening quite a bit, and I need it to not happen."* Swept every one-shot read that feeds a write, every direct 'setDoc' / 'updateDoc' outside the job merge, every 'saveHomeownerRequest' mutator and every effect that writes. Verified already safe: jobs (v312 / v471 merge), every settings/* doc on 'mergeSaveSettingsFields', settings/users (stale guard), needs (field-surgical + arrayUnion), question threads, plan-change acks, lighting collab, scoreboard weights and My Day pins ('merge:true'), the v450 FieldInk loads adopt effect. Five still had the Miller shape: **(1) Homeowner generator link, on submit** ('HomeownerPage') — wrote 'genLoads' wholesale from the copy loaded when the homeowner OPENED the link; a link sits open for days, so every office edit in between (renames, added loads, checks) was overwritten at signature and a load the office had removed came back. Now 'applyHomeownerSubmitToGenLoads' maps the homeowner's choices by id onto the SERVER list (the funnel's locked 'prev'): a load they never saw keeps what the office set, a removed load stays removed. **(2) Redline walks** ('saveRedlineWalk') — whole-object 'setDoc', no merge, no guard; an edit now writes only the keys it changed as dotted 'data.<k>' paths off a live baseline ('redlineWalksRef', fed by the listener and the tab's own edits), dropped keys via 'deleteField', a missing doc falls back to create, and a failed save toasts. New walks are still created whole. **(3) Crew roster** ('_saveRoster') — raw whole-doc 'setDoc'; now 'mergeSaveSettingsFields("crewRoster")' with the listener feeding '_settingsBaselines'. **(4) Time-off delete path** — raw 'setDoc' on 'settings/crewPTO' three lines from a sibling that used the funnel; now the funnel. **(5) Foreman colors** ('saveSettings') — replaced the whole 'settings/main' doc; now 'merge:true'. Gate: 'scripts/gen-selection-test.js' grows to 39 checks (the submit merge against a Monday-open / Wednesday-sign fixture — old path drops the added load and resurrects the removed one, new path keeps both right — plus wiring checks that no raw setDoc is left on crewRoster / crewPTO and that redline writes are dotted-path). Guides 'generatorlink.html' ("Keep editing while the link is out") and 'jobprep.html' (walk edits save field by field) updated. **Why it won't lose data:** every one of the five writes LESS than before — the homeowner submit writes the same 'genLoads' shape but built from the server copy (nothing the office has is dropped; the homeowner's signed picks still land by id); a redline edit writes only changed keys and never an undefined; roster, PTO and colors ride merges that preserve every other field. No field shape, loader, function or rules change.
+- **Home Runs — Generator Load Selection no longer unchecks what you just checked** · 'shipped 2026-09-30' · 'SW v473' · Keegan, on Miller: *"Generator load selection keeps unselecting things that I am selecting. Some examples are office + hallway, pantry fridge, and laundry counter outlets."* (The v468 note had already logged "Pantry fridge/ freezer" as a row wearing the Dedicated Loads label but not checked on the generator — that was this, not a hand edit.) The section's saved list ('homeowner_requests/{jobId}.genLoads') was a one-shot 'getDoc' at mount with no live subscription, and three paths could roll a check back: **(1) a stale tab re-syncs over the server.** The Home Runs → generator auto-sync fires on any home-run change (a pull marked in the field is in the signature) and used to write the tab's OWN copy of the list back wholesale — so an office tab opened on Miller that morning, holding the list from before Keegan's checks, unchecked them the next time a row changed. Now the auto-sync (and Re-sync now) reconciles against the SERVER copy inside the 'saveHomeownerRequest' transaction, and the mutator returns null (funnel now skips the write and the version snapshot) when nothing changed. **(2) a slow read lets the section save before the list arrives.** Open the section before the read resolved and it reconciled against the empty placeholder, built a fresh all-off list with new ids and saved it 800 ms later; any tap made meanwhile vanished when the real list landed. The section now shows *Loading the saved selection…* and runs no sync until the saved list is here ('ready'). **(3) a signed homeowner response was re-applied on every open.** 'applyHomeownerChoices' overlaid the homeowner's picks onto the office list at every mount (meant as a one-time carry for jobs signed before submit wrote back), so anything the office checked after the homeowner signed showed unchecked again, and the next tap saved that. Every office save now stamps 'genLoadsAt', and the overlay applies only while the submission is newer than that stamp ('homeownerOverlayApplies'; legacy docs with no stamp behave as before until their next save). Also: the tab now subscribes live ('onSnapshot') so a phone's checks appear on the office tab without a reload, a snapshot is held off while a local tap is still saving so an older echo can't uncheck it on screen, and a failed save now toasts instead of failing silently. New prebuild gate 'scripts/gen-selection-test.js' (21 checks: the stale-tab mechanism and its fix against the real 'reconcileGenLoads', the overlay gate cases, the funnel's null-patch skip, the wiring). Guide 'homeruns.html' updated. **Why it won't lose data:** 'genLoads' keeps its shape and ids; 'genLoadsAt' is one additive ISO string on the shared doc (open rules already allow any field; nothing reads it but the overlay gate); the auto-sync now writes LESS (only when the locked server copy differs, preserving every server-side check) and user taps write exactly what they wrote before through the same funnel with its version snapshot; the listener only moves local state; no job field, loader, function or rules change.
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
@@ -51190,7 +51281,7 @@ function TimeOffPage({ identity = null, users = [] }) {
       // missing doc (older request) just no-ops.
       try { await deleteDoc(doc(db,"needs","toneed_"+r.id)); } catch(_) {}
       const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
-      if (filtered.length !== (ptoList||[]).length) await setDoc(doc(db,"settings","crewPTO"), { list:filtered, updatedAt:new Date().toISOString() });
+      if (filtered.length !== (ptoList||[]).length) await mergeSaveSettingsFields("crewPTO", { list:filtered }); // v474: funnel, like the approve path
     } catch(e) { toast.error("Delete failed: "+(e?.message||"")); }
   };
 
@@ -58780,7 +58871,7 @@ function App() {
 
   const saveSettings = async(colorOverrides) => {
     set_colorOverrides(colorOverrides);
-    await setDoc(doc(db,"settings","main"),{colorOverrides}).catch(()=>{});
+    await setDoc(doc(db,"settings","main"),{colorOverrides},{merge:true}).catch(()=>{}); // v474: never replace the whole doc
   };
 
 
@@ -58806,6 +58897,7 @@ function App() {
   const [needPhotoBusy, setNeedPhotoBusy] = useState({});   // v431: { needId: in-flight upload count } — hides that row's 📷 while uploading
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
+  const redlineWalksRef = useRef([]);                     // v474: latest walks (listener + local edits) — saveRedlineWalk's diff baseline
   const [mydayFocus, setMydayFocus] = useState({});   // v429: settings/mydayFocus.byUser — Focus today pins per user
   const [mydayPrio, setMydayPrio] = useState({});     // v461: settings/mydayPriority.byKey — urgency on derived rows (shared)
   // v465: the viewer's LIVE team record. The identity saved on the device at
@@ -59229,6 +59321,7 @@ function App() {
         const loaded = snap.docs
           .map(d => { const raw = d.data(); return raw?.data ? { ...raw.data, updated_at: raw.updated_at || "" } : null; })
           .filter(Boolean);
+        redlineWalksRef.current = loaded; // v474: diff baseline for saveRedlineWalk
         setRedlineWalks(loaded);
       },
       (err) => { console.error("Redline walks snapshot error:", err); }
@@ -60439,16 +60532,40 @@ function App() {
 
 
   // ── Redline walks save / update / delete / add (mirror quoteWalks) ──────────
-  const saveRedlineWalk = async (walk) => {
+  // v474: an EDIT writes only the fields it changed (dotted data.<k> paths off
+  // the latest copy this tab holds — listener + its own edits), so two people
+  // on one walk, or a tab holding an older copy, can no longer overwrite each
+  // other's work with a whole-object setDoc. Same recipe as patchNeed. A NEW
+  // walk (no baseline) is still created whole; a failed save now says so.
+  const saveRedlineWalk = async (walk, before) => {
     if (!walk?.id) return;
     const next = { ...walk, updatedAt: new Date().toISOString() };
     try {
+      if (before) {
+        const upd = { updated_at: next.updatedAt, "data.updatedAt": next.updatedAt };
+        let n = 0;
+        new Set([...Object.keys(next), ...Object.keys(before)]).forEach(k => {
+          if (k === "updatedAt" || k === "updated_at") return;
+          if (_jeq(next[k], before[k])) return;
+          upd["data." + k] = next[k] === undefined ? deleteField() : next[k];
+          n++;
+        });
+        if (!n) return;
+        try { await updateDoc(doc(db, "redlineWalks", walk.id), upd); return; }
+        catch (e) { if (e?.code !== "not-found") throw e; /* doc gone → create it whole below */ }
+      }
       await setDoc(doc(db, "redlineWalks", walk.id), { data: next, updated_at: next.updatedAt });
-    } catch (e) { console.error("[HE] saveRedlineWalk failed:", e?.message); }
+    } catch (e) {
+      console.error("[HE] saveRedlineWalk failed:", e?.message);
+      try { toast.error("Redline walk didn't save — check the connection and try again."); } catch {}
+    }
   };
   const updateRedlineWalk = (next) => {
+    const cur = redlineWalksRef.current || [];
+    const before = cur.find(w => w.id === next.id) || null;
+    redlineWalksRef.current = before ? cur.map(w => w.id === next.id ? next : w) : [...cur, next];
     setRedlineWalks(ws => ws.map(w => w.id === next.id ? next : w));
-    saveRedlineWalk(next);
+    saveRedlineWalk(next, before);
   };
   const deleteRedlineWalk = async (id) => {
     if (!id) return;
