@@ -19592,7 +19592,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
 
   const setExcluded = (job, excluded) => {
     if (!onUpdateJob) return;
-    const updated = { ...job, panelizedLighting: { ...job.panelizedLighting, excludeFromLutronHub: excluded } };
+    const updated = { ...job, panelizedLighting: plBumpRev({ ...job.panelizedLighting, excludeFromLutronHub: excluded }) };   // plRev: see plWriteIsStale
     onUpdateJob(updated, { panelizedLighting: updated.panelizedLighting });
     toast.success(excluded ? `${job.name||"Job"} removed from Tech Lighting's link` : `${job.name||"Job"} back on Tech Lighting's link`);
   };
@@ -26266,6 +26266,64 @@ const _threeWayMerge = (base, client, server) => {
   return client; // primitives / mixed types → client wins
 };
 
+// ── Stale-copy guards (Miller panel-loads rollback, 2026-09-30) ─────────────
+// The three-way merge above is only safe while the v312 invariant holds: the
+// merge BASELINE is never fresher than the copy on screen. Its fast path
+// ("server still equals my baseline → write my copy verbatim") turns a stale
+// on-screen copy into a wholesale rollback the moment the baseline gets ahead
+// of it — and every Panelized Lighting write ships the ENTIRE panelizedLighting
+// object, so on Miller (#1438, twice) one such write undid 26 renames, brought
+// a removed load back, dropped a load imported elsewhere and moved a zone. Two
+// paths let the baseline get ahead: JobDetail skipped its own "clean" echo even
+// when that echo carried ANOTHER device's work that landed during the in-flight
+// window, and the jobs listener advanced the whole baseline on any own echo
+// while a second save was already pending. These helpers keep the two in step
+// (pure; run by scripts/panel-loads-merge-test.js on every build).
+const JOB_META_KEYS = new Set(["updated_at", "_saved_by", "_device", "_tab", "_merged", "lastActivityAt"]);
+// True when two copies of a job hold the same DATA (meta stamps ignored). An
+// echo that is NOT content-equal to the local copy carries something the local
+// copy lacks and must be adopted, even when this tab wrote it.
+function jobContentEquals(a, b) {
+  if (!a || !b) return !a && !b;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter(k => !JOB_META_KEYS.has(k)));
+  for (const k of keys) if (!_jeq(a[k], b[k])) return false;
+  return true;
+}
+// Baseline advance while a save is in flight: take the echo's value ONLY for
+// keys the local copy already holds (compared through `norm`, the same
+// normalizer the merge uses); every other key keeps its previous baseline, so
+// the baseline can never describe content the on-screen copy doesn't have.
+function baselineAdvanceKeys(prev, echo, local, norm) {
+  const next = { ...(prev || {}) };
+  if (!echo) return next;
+  const nEcho = norm ? norm(echo) : echo, nLocal = norm ? norm(local || {}) : (local || {});
+  Object.keys(echo).forEach(k => {
+    if (JOB_META_KEYS.has(k)) return;
+    if (_jeq(nEcho[k], nLocal[k])) next[k] = echo[k];
+  });
+  if (echo.updated_at) next.updated_at = echo.updated_at;
+  return next;
+}
+// panelizedLighting.plRev — a per-copy revision the CLIENT bumps on every
+// panelizedLighting write (JobDetail's u(), the Lutron hub toggle). A copy that
+// derives from the baseline always writes base.plRev + 1 or more (bursts bump
+// more than once); a copy OLDER than the baseline can only write base.plRev or
+// less. That is the tripwire: such a write is refused (server copy kept, toast,
+// console.error) instead of rolling the list back. No baseline → the server's
+// rev stands in (catches a patch replayed from an old session). Legacy docs
+// with no rev never trip.
+function plBumpRev(pl) { return { ...(pl || {}), plRev: (Number(pl && pl.plRev) || 0) + 1 }; }
+function plWriteIsStale(clientPl, basePl, serverPl) {
+  const c = Number(clientPl && clientPl.plRev);
+  if (!Number.isFinite(c)) return false;
+  const ref = basePl !== undefined && basePl !== null ? basePl : serverPl;
+  const r = Number(ref && ref.plRev);
+  if (!Number.isFinite(r) || r <= 0) return false;
+  return c <= r;
+}
+let _plStaleToastAt = 0;
+// ── end Stale-copy guards ────────────────────────────────────────────────────
+
 // v338 scalar-conflict telemetry support (read-only observability; see
 // _mergePatchAgainstServer). _noBaselineWarned: once-per-session-per-job warn
 // when a merge runs with no baseline (union semantics). _scalarTelemetrySkip:
@@ -27318,6 +27376,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   //   • Different job opened → always load it.
   //   • Same job, change from ANOTHER device → load it (live cross-device sync).
   //   • Same job, OUR OWN device's echo → skip (our local copy is the freshest).
+  const jobRef = useRef(job);
+  useEffect(()=>{ jobRef.current = job; }, [job]);
   const _lastJobIdRef = useRef(rawJob?.id);
   useEffect(()=>{
     const idChanged = rawJob?.id !== _lastJobIdRef.current;
@@ -27336,12 +27396,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     const ownEcho = rawJob && rawJob._tab
       ? rawJob._tab === TAB_ID
       : !!(rawJob && rawJob._device && myDev && rawJob._device === myDev);
-    if (ownEcho && !rawJob?._merged) return; // clean own echo — local copy is already the freshest
+    // A clean own echo is skippable ONLY when it holds exactly what this copy
+    // already has. An echo can carry ANOTHER device's work that landed while this
+    // tab's save was in flight (the jobs listener holds the selected job still
+    // during that window, and the write's own echo is the first snapshot that
+    // gets through) — skipping it made the on-screen copy older than the merge
+    // baseline, and the next Panelized Lighting write rolled the whole loads
+    // list back (Miller #1438, 2026-09-30). Content compare, not stamp compare:
+    // meta stamps always differ on an echo. Nothing is pending when an echo
+    // reaches here (the listener's in-flight gate), so there is no local edit
+    // to lose.
+    if (ownEcho && !rawJob?._merged && jobContentEquals(jobRef.current, normalizeJob(rawJob))) return;
     setJob(normalizeJob(rawJob));
   }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
-
-  const jobRef = useRef(job);
-  useEffect(()=>{ jobRef.current = job; }, [job]);
 
   // Presence ping (light) — write once per job open so Today's Live Activity
   // can show "Koy opened Forth at 2:14pm". Writes to job.presence[name] as
@@ -27384,6 +27451,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       !patch.jobNotesMigratedAt
     ) {
       finalPatch = { ...patch, jobNotesMigratedAt: new Date().toISOString() };
+    }
+    // Stale-copy tripwire (Miller rollback, 2026-09-30): every panelizedLighting
+    // write carries the LOCAL copy's revision + 1, so the merge can tell a copy
+    // that derives from its baseline from one that is older than it (see
+    // plWriteIsStale). The bump lands on the local copy too, so a burst of taps
+    // keeps counting up.
+    if (finalPatch && finalPatch.panelizedLighting && typeof finalPatch.panelizedLighting === "object") {
+      finalPatch = { ...finalPatch, panelizedLighting: plBumpRev({ ...finalPatch.panelizedLighting, plRev: jobRef.current?.panelizedLighting?.plRev }) };
     }
     const updated = {...jobRef.current, ...finalPatch};
     jobRef.current = updated;
@@ -50350,9 +50425,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-29 · App SW version: v470
+**Last manifest update:** 2026-09-30 · App SW version: v471
 
 ---
+
+- **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
 
@@ -58666,33 +58743,44 @@ function App() {
           loaded.forEach(j => {
             const hasTimer = !!saveTimers.current[j.id];
             const hasPending = !!(pendingPatches.current[j.id] && Object.keys(pendingPatches.current[j.id]).length > 0);
-            // OWN-ECHO EXCEPTION (2026-08-09, Kweller "Refresh from home runs"
-            // revert loop): a copy stamped with THIS tab's id is a state this
-            // tab itself wrote — the local copy can never be OLDER than it, so
-            // advancing the baseline is always safe (the forward-only
-            // updated_at guard below still applies). Without this, a
-            // transaction's watch echo that arrived BEFORE the commit promise
-            // cleared pendingPatches was skipped by the pending gate — and
-            // after a RESCUED save (whose baseline is deliberately pinned at
-            // the SENT value per the Kweller rule in _advanceMergeBaseline)
-            // no later snapshot may come on a quiet evening, so base ≠ server
-            // stuck permanently and every delete-shaped write re-resurrected
-            // inside its own transaction (merged:true on every save, verified
-            // live on Kweller via PITR reads). The echo is the convergence
-            // point the Kweller rule DEPENDS on — it must never be skipped.
-            const ownEcho = !!(j._tab && j._tab === TAB_ID);
-            if(ownEcho || (!hasTimer && !hasPending)) {
-              // ONLY move the baseline FORWARD. This is a whole-COLLECTION
-              // listener, so an unrelated job's change fires it carrying a
-              // cached/older copy of THIS job. Resetting the baseline backward to
-              // that stale copy defeats the three-way merge: the user's own
-              // just-saved edit then looks like a "server change", and deleting
-              // that item afterward RESURRECTS it (verified via _threeWayMerge).
-              // Guard on updated_at so a stale snapshot can't roll us back.
-              const prev = serverBaselines.current[j.id];
-              if(!prev || !prev.updated_at || !j.updated_at || String(j.updated_at) >= String(prev.updated_at)) {
-                serverBaselines.current[j.id] = j;
-              }
+            // HISTORY: the 2026-08-09 own-echo exception (Kweller "Refresh from
+            // home runs" revert loop) advanced the WHOLE baseline from a copy
+            // stamped with this tab's id even while a save was pending, on the
+            // theory that the local copy can never be older than its own write.
+            // It can — the echo also carries whatever OTHER devices wrote during
+            // the in-flight window, and the selected job never adopts that (see
+            // the IN FLIGHT note below). Replaced 2026-09-30 by the per-key
+            // advance; the quiet-evening convergence the exception was for now
+            // happens in saveJob itself (CONVERGENCE) right after a rescued
+            // write commits.
+            // ONLY move the baseline FORWARD. This is a whole-COLLECTION
+            // listener, so an unrelated job's change fires it carrying a
+            // cached/older copy of THIS job. Resetting the baseline backward to
+            // that stale copy defeats the three-way merge: the user's own
+            // just-saved edit then looks like a "server change", and deleting
+            // that item afterward RESURRECTS it (verified via _threeWayMerge).
+            // Guard on updated_at so a stale snapshot can't roll us back.
+            const prev = serverBaselines.current[j.id];
+            const forward = !prev || !prev.updated_at || !j.updated_at || String(j.updated_at) >= String(prev.updated_at);
+            if(!forward) return;
+            if(!hasTimer && !hasPending) { serverBaselines.current[j.id] = j; return; }
+            // IN FLIGHT (2026-09-30, Miller panel-loads rollback): the selected
+            // job is NOT re-seeded from this snapshot (see _inFlight below), so
+            // the baseline may take from it only the keys the local copy already
+            // holds — own echo or not. The 2026-08-09 own-echo exception advanced
+            // the WHOLE baseline here, which is how a foreign change that landed
+            // during the in-flight window (or content a merged write rescued)
+            // ended up in the baseline but not on screen — and the next whole-
+            // object save fast-pathed over it (the v312 invariant: the baseline
+            // is never fresher than the local copy). Keys that differ keep the
+            // baseline _advanceMergeBaseline set from the write itself (written
+            // value, or the SENT value for a rescued key — the Kweller rule), so
+            // the next save of that key structural-merges. Convergence no longer
+            // rides on this echo: saveJob re-seeds the local copy from a rescued
+            // write itself as soon as nothing is pending.
+            if (prev) {
+              const local = (jobsRef.current || []).find(x => x && x.id === j.id);
+              serverBaselines.current[j.id] = baselineAdvanceKeys(prev, j, local || prev, normalizeJob);
             }
           });
 
@@ -59197,6 +59285,22 @@ function App() {
     Object.entries(cleanPatch).forEach(([k, v]) => {
       let out = v;
       const sv = nServer[k];
+      // Stale-copy tripwire for the whole-object panelizedLighting write (see
+      // plWriteIsStale). A copy older than the baseline is REFUSED: the key is
+      // left untouched on the server, it counts as rescued so the echo is
+      // adopted and the screen refreshes, and the user is told to redo the one
+      // change. Never a rollback. Loud on purpose — if this ever fires, the
+      // invariant broke somewhere new and we want to hear about it.
+      if (k === "panelizedLighting" && plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) {
+        const refPl = rawBase ? base[k] : sv;
+        console.error(`[HE] STALE panel-loads write REFUSED on ${jobName || jobId}: this copy's rev ${v && v.plRev} vs ${rawBase ? "baseline" : "server"} rev ${refPl && refPl.plRev} — the server's copy stands`);
+        if (Date.now() - _plStaleToastAt > 5000) {
+          _plStaleToastAt = Date.now();
+          try { toast.error("This device had an older copy of the panel loads, so that last change was not saved. The list has been refreshed — please make the change again.", { duration: 9000 }); } catch {}
+        }
+        if (rescuedKeys) rescuedKeys.push(k);
+        return;
+      }
       if (v && typeof v === "object" && sv !== undefined && sv !== null) {
         out = _threeWayMerge(base[k], v, sv);
         if (!_jeq(out, v)) {
@@ -59388,6 +59492,26 @@ function App() {
             }
           }
           persistPending();   // confirmed by the server -> drop from durable queue
+          // CONVERGENCE (2026-09-30, Miller panel-loads rollback): a write that
+          // RESCUED another device's changes left the server holding content
+          // this tab's copy does not have. That used to wait for the watch echo
+          // — which the listener's in-flight gate drops when it lands before
+          // this ack — leaving the on-screen copy behind the server. Re-seed the
+          // local copy from what we actually wrote, right here, once nothing
+          // else is pending for this job: JobDetail adopts it as a merged echo
+          // and the baseline moves up WITH it (never ahead of it). Still
+          // pending → the next save structural-merges against the SENT
+          // baseline (Kweller rule) and converges the same way after.
+          if (_rescued.length && _writtenPatch && !saveTimers.current[job.id] &&
+              !(pendingPatches.current[job.id] && Object.keys(pendingPatches.current[job.id]).length > 0)) {
+            const fields = {};
+            Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") === 0) fields[pk.slice(5)] = _writtenPatch[pk]; });
+            const stamp = { updated_at: _writtenPatch.updated_at, _tab: TAB_ID, _merged: true, _saved_by: meta.saved_by, _device: meta.device };
+            const apply = (x) => ({ ...x, ...fields, ...stamp });
+            setAllJobs(js => js.map(x => x.id === job.id ? apply(x) : x));
+            setSelected(s => (s && s.id === job.id) ? apply(s) : s);
+            _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, []);   // local now holds the merged content, so the baseline may too
+          }
         } else {
           // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
           // so we never wipe Firestore fields another user added that aren't in our local snapshot.
