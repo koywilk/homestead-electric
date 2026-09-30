@@ -3429,12 +3429,14 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     `;
   })();
 
+  // Lutron sheets carry no Pulled column (Koy, 2026-09-30: "the pulled
+  // column isn't necessary on this"); Control 4 / Crestron keep it.
   const moduleHtml = visibleMods.length === 0
     ? `<div style="padding:24px;text-align:center;color:#666;font-style:italic">No modules on this panel yet.</div>`
     : visibleMods.map(m => {
         const namedLoads = (m.loads || []).filter(l => l && (l.name||"").trim());
         const rows = namedLoads.length === 0
-          ? `<tr><td colspan="6" style="text-align:center;color:#888;font-style:italic;padding:8px">No channels named on this module yet</td></tr>`
+          ? `<tr><td colspan="${isLut ? 5 : 6}" style="text-align:center;color:#888;font-style:italic;padding:8px">No channels named on this module yet</td></tr>`
           : namedLoads.map(l => `
               <tr>
                 <td class="ch">${esc(l.num || "")}</td>
@@ -3442,7 +3444,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                 <td>${esc(l.loadType || "")}</td>
                 <td>${esc(l.watts || "")}${l.watts ? "W" : ""}</td>
                 <td>${esc(l.keypad || "")}</td>
-                <td class="pulled">${l.pulled ? "&#10003;" : "&#9633;"}</td>
+                ${isLut ? "" : `<td class="pulled">${l.pulled ? "&#10003;" : "&#9633;"}</td>`}
               </tr>
             `).join("");
         // A module with more rows than fit on one page (bus modules hold 64)
@@ -3464,7 +3466,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                   <th>Type</th>
                   <th>Watts</th>
                   <th>Keypad / Notes</th>
-                  <th class="pulled">Pulled</th>
+                  ${isLut ? "" : `<th class="pulled">Pulled</th>`}
                 </tr>
               </thead>
               <tbody>${rows}</tbody>
@@ -3536,12 +3538,22 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .toolbar button:hover { background: #f0f0f0; }
     @media print {
       .toolbar { display:none; }
-      body { padding: 0.4in; max-width: 5.25in; }
+      /* FIT ONE SHEET (v476) — Koy: "I'd really like these to fit on one
+         sheet if possible." The @page margin is the only margin (the old
+         extra 0.4in body padding cost 15% of the page), and the sheet is
+         zoomed by --fit, which the script at the bottom sets from a clone
+         measured at the print width: 1 when it already fits, down to 0.7
+         to squeeze onto one page, and back to 1 (paginate) when it would
+         have to go smaller than that. zoom reflows, so the module
+         keep-together rules above still hold when it does paginate. */
+      body { padding: 0; max-width: 5.25in; }
       @page { size: letter portrait; margin: 0.4in; }
+      .sheet { zoom: var(--fit, 1); }
     }
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
+  <div class="sheet">
   <div class="header">
     <div class="logo-block">
       <img src="/icon-192.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
@@ -3558,6 +3570,24 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     </div>
   </div>
   ${savUseSchedule ? savScheduleHtml : moduleHtml}
+  </div>
+  <script>
+    // Fit-to-one-sheet scale for print (see the @media print note above).
+    // Measures a clone of the sheet at the print strip width, so a phone's
+    // narrower screen layout doesn't skew the number. Screen is untouched.
+    (function () {
+      var PAGE_H = (11 - 0.8) * 96, STRIP_W = 5.25 * 96, FLOOR = 0.7;
+      var sheet = document.querySelector(".sheet"); if (!sheet) return;
+      var probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;left:-99999px;top:0;width:" + STRIP_W + "px;";
+      probe.appendChild(sheet.cloneNode(true));
+      document.body.appendChild(probe);
+      var h = probe.scrollHeight; probe.remove();
+      var fit = h > PAGE_H ? PAGE_H / h : 1;
+      if (fit < FLOOR) fit = 1;
+      document.documentElement.style.setProperty("--fit", String(Math.floor(fit * 1000) / 1000));
+    })();
+  </script>
 </body></html>`;
 
   const win = window.open("", "_blank");
@@ -3594,9 +3624,11 @@ async function downloadPanelSchedule(args) {
   const filename = `${safe(args?.panelLabel||"Lighting panel")} — ${safe(args?.jobName||"schedule")}.pdf`;
   try {
     if (typeof toast !== "undefined" && toast.info) toast.info("Building PDF…");
-    // Keep every module (and every row of a .tall one) whole across page
-    // cuts; drop the on-screen Print button the way the print stylesheet does.
-    await _saveHtmlAsPdfPaged(captured, filename, { avoid: ".module:not(.tall), .module tr", hide: ".toolbar" });
+    // One sheet when it can be (shrunk down to 70%, matching the print
+    // stylesheet's --fit); otherwise pages with every module (and every row
+    // of a .tall one) kept whole across the cuts. The on-screen Print button
+    // is dropped the way the print stylesheet does.
+    await _saveHtmlAsPdfPaged(captured, filename, { fitOne: 0.7, avoid: ".module:not(.tall), .module tr", hide: ".toolbar" });
     if (typeof toast !== "undefined" && toast.success) toast.success(`Saved ${filename}`);
     return true;
   } catch (e) {
@@ -3690,6 +3722,10 @@ function loadsListHtml({ jobName, jobAddress, system, rows, dateStr }) {
 //                keeping each row whole. A block taller than a page splits.
 //   opts.hide  — CSS selector for screen-only chrome (the Print button) to
 //                hide before capture, like the print stylesheet would.
+//   opts.fitOne — (v476) a minimum scale, e.g. 0.7: when the whole capture
+//                fits one page at that scale or larger it is drawn on ONE
+//                page, shrunk to fit (never enlarged). Smaller than that and
+//                it paginates as above instead.
 async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
   await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
   await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
@@ -3717,6 +3753,16 @@ async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
     const pdfW = pdf.internal.pageSize.getWidth(), pdfH = pdf.internal.pageSize.getHeight();
     const margin = 12, imgW = pdfW - margin * 2, ptPerPx = imgW / canvas.width;
     const pagePx = Math.floor((pdfH - margin * 2) / ptPerPx);
+    // Whole sheet on one page, shrunk to fit, when opts.fitOne allows it.
+    // (fullH is at least one page tall, so an already-fitting sheet lands
+    // here at scale 1 with nothing shrunk.)
+    const fitScale = Math.min(1, pagePx / canvas.height);
+    if (opts.fitOne && fitScale >= opts.fitOne) {
+      const w = imgW * fitScale, h = canvas.height * ptPerPx * fitScale;
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", margin + (imgW - w) / 2, margin, w, h);
+      pdf.save(filename);
+      return;
+    }
     // Keep-whole blocks, as [top, bottom] in canvas pixels. The canvas is
     // `scale`× the 816px CSS grid with its origin at the document's top-left
     // (html2canvas captures the body from 0,0), so a rect + scroll offset maps
@@ -50652,10 +50698,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-30 · App SW version: v475
+**Last manifest update:** 2026-09-30 · App SW version: v476
 
 ---
 
+- **Panelized Lighting — the panel schedule fits on one sheet when it can; Lutron sheets drop the Pulled column** · 'shipped 2026-09-30' · 'SW v476' · Koy, right after v475: *"I'd really like these to fit on one sheet if possible"* + *"also the pulled column isn't necessary on this."* Chose shrink-to-fit over a two-column sheet (keeps the 5.25-inch panel-cover strip). **Print** (popup, Cmd/Ctrl+P): the print stylesheet's extra 0.4in body padding is gone (the '@page' margin was already 0.4in, so the old sheet wore 0.8in of white on every side and lost 15% of the page height); the sheet is wrapped in '.sheet' and zoomed by a '--fit' custom property that an inline script sets after measuring a clone at the print strip width (so a phone's narrower screen layout can't skew it): 1 when it already fits, down to a **0.7 floor** to squeeze onto one page, and back to 1 (paginate with the v475 keep-together rules, which 'zoom' preserves because it reflows) when it would have to go smaller. **Download**: '_saveHtmlAsPdfPaged' gains 'opts.fitOne' (a minimum scale); the capture is drawn on ONE page shrunk to fit when that's ≥ 0.7, else the v475 pagination runs. The schedule passes 'fitOne: 0.7'. **Pulled column**: gone on Lutron sheets only ('isLut') — header, cells and the empty-module colspan; Control 4 / Crestron keep it since crews mark pulls there. Verified on real builder output: the Miller-shaped 10-module panel prints on 1 page (was 2) and downloads on 1 page; a 14-module panel fits one page at ~78% and is still clean; the 64-row bus fixture fits at ~78% too. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only, print/PDF rendering only — nothing is written; no field, loader, function or rules change; the loads-list PDF passes no 'fitOne' and is unchanged.
 - **Stale-copy audit — five more writers that could roll a shared doc back, closed** · 'shipped 2026-09-30' · 'SW v474' · Koy, after v473: *"are there any other spots in the app that need this fixed too? I feel like this is happening quite a bit, and I need it to not happen."* Swept every one-shot read that feeds a write, every direct 'setDoc' / 'updateDoc' outside the job merge, every 'saveHomeownerRequest' mutator and every effect that writes. Verified already safe: jobs (v312 / v471 merge), every settings/* doc on 'mergeSaveSettingsFields', settings/users (stale guard), needs (field-surgical + arrayUnion), question threads, plan-change acks, lighting collab, scoreboard weights and My Day pins ('merge:true'), the v450 FieldInk loads adopt effect. Five still had the Miller shape: **(1) Homeowner generator link, on submit** ('HomeownerPage') — wrote 'genLoads' wholesale from the copy loaded when the homeowner OPENED the link; a link sits open for days, so every office edit in between (renames, added loads, checks) was overwritten at signature and a load the office had removed came back. Now 'applyHomeownerSubmitToGenLoads' maps the homeowner's choices by id onto the SERVER list (the funnel's locked 'prev'): a load they never saw keeps what the office set, a removed load stays removed. **(2) Redline walks** ('saveRedlineWalk') — whole-object 'setDoc', no merge, no guard; an edit now writes only the keys it changed as dotted 'data.<k>' paths off a live baseline ('redlineWalksRef', fed by the listener and the tab's own edits), dropped keys via 'deleteField', a missing doc falls back to create, and a failed save toasts. New walks are still created whole. **(3) Crew roster** ('_saveRoster') — raw whole-doc 'setDoc'; now 'mergeSaveSettingsFields("crewRoster")' with the listener feeding '_settingsBaselines'. **(4) Time-off delete path** — raw 'setDoc' on 'settings/crewPTO' three lines from a sibling that used the funnel; now the funnel. **(5) Foreman colors** ('saveSettings') — replaced the whole 'settings/main' doc; now 'merge:true'. Gate: 'scripts/gen-selection-test.js' grows to 39 checks (the submit merge against a Monday-open / Wednesday-sign fixture — old path drops the added load and resurrects the removed one, new path keeps both right — plus wiring checks that no raw setDoc is left on crewRoster / crewPTO and that redline writes are dotted-path). Guides 'generatorlink.html' ("Keep editing while the link is out") and 'jobprep.html' (walk edits save field by field) updated. **Why it won't lose data:** every one of the five writes LESS than before — the homeowner submit writes the same 'genLoads' shape but built from the server copy (nothing the office has is dropped; the homeowner's signed picks still land by id); a redline edit writes only changed keys and never an undefined; roster, PTO and colors ride merges that preserve every other field. No field shape, loader, function or rules change.
 - **Home Runs — Generator Load Selection no longer unchecks what you just checked** · 'shipped 2026-09-30' · 'SW v473' · Keegan, on Miller: *"Generator load selection keeps unselecting things that I am selecting. Some examples are office + hallway, pantry fridge, and laundry counter outlets."* (The v468 note had already logged "Pantry fridge/ freezer" as a row wearing the Dedicated Loads label but not checked on the generator — that was this, not a hand edit.) The section's saved list ('homeowner_requests/{jobId}.genLoads') was a one-shot 'getDoc' at mount with no live subscription, and three paths could roll a check back: **(1) a stale tab re-syncs over the server.** The Home Runs → generator auto-sync fires on any home-run change (a pull marked in the field is in the signature) and used to write the tab's OWN copy of the list back wholesale — so an office tab opened on Miller that morning, holding the list from before Keegan's checks, unchecked them the next time a row changed. Now the auto-sync (and Re-sync now) reconciles against the SERVER copy inside the 'saveHomeownerRequest' transaction, and the mutator returns null (funnel now skips the write and the version snapshot) when nothing changed. **(2) a slow read lets the section save before the list arrives.** Open the section before the read resolved and it reconciled against the empty placeholder, built a fresh all-off list with new ids and saved it 800 ms later; any tap made meanwhile vanished when the real list landed. The section now shows *Loading the saved selection…* and runs no sync until the saved list is here ('ready'). **(3) a signed homeowner response was re-applied on every open.** 'applyHomeownerChoices' overlaid the homeowner's picks onto the office list at every mount (meant as a one-time carry for jobs signed before submit wrote back), so anything the office checked after the homeowner signed showed unchecked again, and the next tap saved that. Every office save now stamps 'genLoadsAt', and the overlay applies only while the submission is newer than that stamp ('homeownerOverlayApplies'; legacy docs with no stamp behave as before until their next save). Also: the tab now subscribes live ('onSnapshot') so a phone's checks appear on the office tab without a reload, a snapshot is held off while a local tap is still saving so an older echo can't uncheck it on screen, and a failed save now toasts instead of failing silently. New prebuild gate 'scripts/gen-selection-test.js' (21 checks: the stale-tab mechanism and its fix against the real 'reconcileGenLoads', the overlay gate cases, the funnel's null-patch skip, the wiring). Guide 'homeruns.html' updated. **Why it won't lose data:** 'genLoads' keeps its shape and ids; 'genLoadsAt' is one additive ISO string on the shared doc (open rules already allow any field; nothing reads it but the overlay gate); the auto-sync now writes LESS (only when the locked server copy differs, preserving every server-side check) and user taps write exactly what they wrote before through the same funnel with its version snapshot; the listener only moves local state; no job field, loader, function or rules change.
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
