@@ -1,0 +1,18 @@
+{
+  "name": "homestead-service-size-tool",
+  "private": true,
+  "type": "module",
+  "description": "Source for public/tools/service-size (Service Size Calculator). Build output is committed; the app's deploy does not run this build.",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/calc.test.mjs"
+  },
+  "dependencies": {
+    "pdfjs-dist": "4.10.38",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

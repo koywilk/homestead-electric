@@ -1,0 +1,50 @@
+// What the plan reader returned for the Miller Residence set (Carrick, sheets A2.1–A2.3, E1.1–E1.3).
+// Same JSON shape as /api/read-plans. Handy for demos and tests: applyPlan(defaultState(), MILLER_EXAMPLE, "Miller example").
+export const MILLER_EXAMPLE = {
+  job: "Miller Residence", tier: 2, living_sqft: 11894, small_appliance_circuits: 4, laundry_circuits: 2,
+  heat: "gas", cool: "ac", tons: null, range: "range", dryer: "elec", dryer_qty: 2, wh: "undecided", wh_qty: 2,
+  areas: [
+    { label: "Main floor", sqft: 4967 }, { label: "Second floor", sqft: 2327 },
+    { label: "Basement, finished rooms", sqft: 4600, estimated: true },
+    { label: "Basement storage under garage", sqft: 1600, estimated: true, counted: false },
+    { label: "4-car garage", sqft: 1733, counted: false },
+  ],
+  items: {
+    ev: { status: "yes", qty: 1, note: "EV outlet shown in garage, E1.2" },
+    ev2: { status: "maybe", note: "4-car garage; only one EV outlet drawn" },
+    sauna: { status: "yes", note: "Sauna in basement, A2.1" },
+    plunge: { status: "yes", note: "Cold plunge next to sauna, A2.1" },
+    kitchenette: { status: "yes", va: 6200, note: "Basement kitchenette, A2.1. No range drawn: 2 SA circuits, DW, microwave" },
+    dw2: { status: "maybe", note: "Butler's pantry could take a second DW" },
+    warm: { status: "maybe" }, speed: { status: "maybe" },
+    floor: { status: "maybe", qty: 3, note: "Not shown; common at this finish level" },
+    steam: { status: "maybe", note: "Not shown; primary bath could take one" },
+    hottub: { status: "maybe", note: "Not shown; covered patio and deck could take one" },
+    snowmelt: { status: "maybe", qty: 600, note: "Not shown; common on luxury Utah driveways" },
+    garageheat: { status: "maybe" },
+    swimspa: { status: "no" }, pool: { status: "no" }, elevator: { status: "no", note: "No elevator shaft on plans" }, shop: { status: "no" }, minisplit: { status: "no" },
+  },
+  findings: [
+    { what: "Floor areas labeled: main 4,967 sq ft, second 2,327 sq ft, garage 1,733 sq ft", where: "A2.2, A2.3", confidence: "shown" },
+    { what: "Basement area not labeled. Estimated from the footprint", where: "A2.1", confidence: "assumed" },
+    { what: "Furnace on second floor and gas fireplaces; gas service to the house", where: "A2.3, A2.2", confidence: "shown" },
+    { what: "AC condensers referenced on the sports court electrical sheets", where: "E1.1", confidence: "shown" },
+    { what: "240 V range outlet at the kitchen range", where: "E1.2", confidence: "shown" },
+    { what: "240 V dryer outlet in main laundry; stacked W/D in basement suite", where: "E1.2, A2.1", confidence: "shown" },
+    { what: "EV outlet in the garage", where: "E1.2", confidence: "shown" },
+    { what: "Sauna, cold plunge, and kitchenette in the basement", where: "A2.1", confidence: "shown" },
+    { what: "Water heater in basement mech room; fuel not noted", where: "E1.1", confidence: "implied" },
+  ],
+  questions: [
+    "Basement finished square footage (not labeled on A2.1)",
+    "HVAC tonnage and number of systems from the mechanical sub",
+    "Water heaters: gas or electric, and how many",
+    'Range: 48" dual-fuel or all-electric? Nameplate kW',
+    "Snowmelt, hot tub, steam shower, heated floors: yes or no",
+    "Second EV charger for the 4-car garage",
+  ],
+  not_in_calc: [
+    "Sports court: electrical is on separate sheets not in this set",
+    "Basement storage under the garage: left out; add it if it could be finished",
+  ],
+};

@@ -4625,6 +4625,10 @@ const PERMISSIONS = {
   // punch items. Creating needs/tasks stays gated to board.add (foreman+).
   "myday.view":             ["admin","manager","standard","limited"],
   "tools.view":             ["admin","manager","standard","limited"],  // Tools tab (v468): field calculators — everyone internal, contractors never
+  // Service Size tool (v484): per-user grant only (Settings → Team → TOOL ACCESS).
+  // It reads plan sets with Claude on a paid API key, so it stays with the few
+  // people who bid services. Empty tier list = nobody gets it by tier.
+  "tools.serviceSize":      [],
   // Creating a need / task / bodies-request from My Day (the + sheet). Everyone
   // internal (Koy, 2026-09-09): the punch assignee picker has never been tier
   // gated, and a crew member's "need material at X" is the highest-value capture
@@ -5041,6 +5045,28 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         })}
                       </div>
                       <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
+                    </div>
+                  )}
+                  {/* Tool access (v484) — per-user grants for Tools tab calculators that
+                      cost money to run (Service Size reads plans with Claude). Same caps
+                      write as the hats above, but not a hat: it routes nothing. */}
+                  {(access==="admin"||access==="manager") && (
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>TOOL ACCESS</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {TOOLS.filter(t=>t.perm).map(t=>{
+                          const on = Array.isArray(u.caps) && u.caps.includes(t.perm);
+                          return (
+                            <label key={t.perm} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                              <input type="checkbox" checked={on}
+                                onChange={e=>{ const cur=Array.isArray(u.caps)?u.caps:[]; const next=e.target.checked?[...new Set([...cur,t.perm])]:cur.filter(c=>c!==t.perm); upd(u.id,{caps:next}); }}
+                                style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
+                              <span style={{fontSize:12,color:on?C.text:C.muted}}>{t.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Shows that tool in their Tools tab. Everything else in Tools is open to everyone.</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -55586,18 +55612,25 @@ const TOOLS = [
   { key: "appliance-loads", label: "Appliance Loads", icon: "clipboard",
     blurb: "Master list of every job's appliance and equipment loads with volts and amps, looked up from each model's spec. Updated nightly from Drive.",
     src: "/tools/appliance-loads/index.html" },
+  // perm: only people holding that cap see the tool (checked against the live
+  // team record). Josh's NEC 220.82 service sizing with plan reading (2026-10-01);
+  // built from tools-src/service-size, plans read by api/read-plans.js (Vercel).
+  { key: "service-size", label: "Service Size", icon: "fileText", perm: "tools.serviceSize",
+    blurb: "Service size for a new home from a NEC 220.82 calc, with Yes / Maybe / No allowances and a bid note. Drop a plan set and Claude fills it in.",
+    src: "/tools/service-size/index.html" },
 ];
 const TOOLS_LAST_KEY = "he_tools_last";   // per-device convenience only: the tool last opened
-function ToolsView() {
+function ToolsView({ who }) {
+  const tools = TOOLS.filter(t => !t.perm || can(who, t.perm));   // per-user tools (perm) read the LIVE team record
   const [toolKey, setToolKey] = useState(() => {
-    try { return localStorage.getItem(TOOLS_LAST_KEY) || TOOLS[0].key; } catch { return TOOLS[0].key; }
+    try { return localStorage.getItem(TOOLS_LAST_KEY) || tools[0].key; } catch { return tools[0].key; }
   });
-  const tool = TOOLS.find(t => t.key === toolKey) || TOOLS[0];
+  const tool = tools.find(t => t.key === toolKey) || tools[0];
   const pick = (key) => { setToolKey(key); try { localStorage.setItem(TOOLS_LAST_KEY, key); } catch {} };
   return (
     <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 56px)",background:C.bg}}>
       <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface,overflowX:"auto",scrollbarWidth:"none",flex:"none"}}>
-        {TOOLS.map(t => {
+        {tools.map(t => {
           const on = t.key === tool.key;
           return (
             <button key={t.key} onClick={() => pick(t.key)} title={t.blurb}
@@ -63564,7 +63597,7 @@ function App() {
 
       {/* Tools tab (v468) — standalone field calculators in an iframe; see TOOLS. */}
       {view==="tools"&&can(identity,"tools.view")&&(
-        <ToolsView/>
+        <ToolsView who={myLiveRec}/>
       )}
 
       {view==="myday"&&can(identity,"myday.view")&&(

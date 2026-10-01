@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service Size Calculator</title>
+<script>
+  // ===== CONFIG: set by Koy. Edit here; no rebuild needed. =====
+  // PLANS_KEY must match PLANS_ACCESS_KEY in Vercel. It is visible in page source;
+  // the spend limit on the Anthropic account is the real cap.
+  window.SSC_CONFIG = {
+    PLANS_KEY: "f8fc52cb9af2741148bc6fedd4ce04a55db1659808826cbb",
+    API_PATH: "/api/read-plans",
+  };
+</script>
+<link rel="stylesheet" href="./app.css">
+<style>
+  html, body { margin: 0; background: #edeff1; }
+  @media (prefers-color-scheme: dark) { html, body { background: #11161b; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<noscript>This calculator needs JavaScript.</noscript>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

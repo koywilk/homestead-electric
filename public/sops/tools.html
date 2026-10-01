@@ -47,7 +47,7 @@
 
   <div class="kicker">Homestead Electric · Tab Guide</div>
   <h1>Tools</h1>
-  <p class="sub">Field calculators that live inside the app — first up, Generator Sizing</p>
+  <p class="sub">Field calculators that live inside the app: Generator Sizing, Appliance Loads, and Service Size</p>
 
   <div class="tldr">
     <h2>The 30-second version</h2>
@@ -136,8 +136,54 @@
     <p>Air-cooled fuel figures are from Generac spec sheets. Liquid-cooled fuel, surge,
     footprints and pressures are conservative planning estimates — confirm them per model.</p></div>
 
+  <h2 class="sec">Service Size — sizing the service at bid</h2>
+  <p class="sub" style="margin:6px 0 0">Only shows for the people Koy has given it to (Settings → Team → Tool access). It reads plans with Claude, and every read costs money.</p>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <h3>Start from plans (optional)</h3>
+    <p>Drop a plan set PDF, or photos of the sheets, on <b>Drop a plan set here</b> (or tap it
+    to pick a file). Claude reads up to 8 sheets, floor plans and electrical first, and fills in
+    the calculator. That takes 30 seconds to 2 minutes and needs signal. Tap <b>Stop</b> to cancel.</p>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body">
+    <h3>Check what it read</h3>
+    <p><b>What the plans show</b> lists the floor areas (estimates are marked <b>est.</b>),
+    what it found and on which sheet, questions to ask the owner, and loads it saw that the calc
+    doesn't cover. Every field it filled has a <b>plans</b> tag. Fix anything that's wrong.</p>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="body">
+    <h3>Mark the extras Yes / Maybe / No</h3>
+    <p><b>Yes</b> = known or on the plans. <b>Maybe</b> = could happen. <b>No</b> = not planned.
+    You get two numbers: <b>confirmed only</b> and <b>with maybes</b>. Undecided fuels count as gas
+    in the first and electric in the second. <b>Adds</b> shows how many amps each item adds.</p>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="body">
+    <h3>Read the recommendation</h3>
+    <p>The big number is the recommended service (NEC 220.82 optional method, 120/240 V
+    single-family). <b>Owner changes that bump the size</b> and <b>Check before you bid</b> list
+    what would push it up and what to confirm with the utility.</p>
+  </div></div>
+
+  <div class="step"><div class="num">5</div><div class="body">
+    <h3>Copy the bid note</h3>
+    <p><b>Copy bid note</b> puts the size and its assumptions on the clipboard so you can paste
+    them into the proposal. Nothing is saved to a job. Copy the note if you want to keep it.</p>
+  </div></div>
+
+  <div class="call warn"><span class="lbl">Bid-stage only</span>
+    <p>Utility requirements (meter class, transformer, lead time) and local amendments still
+    need checking. Use the mechanical sub's tonnage when you have it.</p></div>
+
   <h2 class="sec">Questions</h2>
   <div class="qa">
+    <div class="row"><p class="q">"Reading plans needs an internet connection."</p><p class="a">The
+    Service Size calculator works offline, but reading plans goes out to Claude. Fill it in by
+    hand, or drop the plans again once you have signal.</p></div>
+    <div class="row"><p class="q">I don't see Service Size.</p><p class="a">It's limited to the
+    people Koy has turned it on for. Ask Koy.</p></div>
     <div class="row"><p class="q">Does anything I enter get saved?</p><p class="a">No. The tool
     recomputes in the browser and writes nothing to the app or to any job. Refresh and it resets
     to the example loads. Print or save the job sheet if you want to keep a result.</p></div>
