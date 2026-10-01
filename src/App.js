@@ -15721,6 +15721,12 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
                   <div key={p.id} style={{position:"relative"}}>
 
+                    {/* v495 (Koy 2026-10-01: "the inspection report … on the return trip,
+                        it won't load anything"): the report copied from a failed
+                        inspection is usually a PDF, and a PDF inside <img> draws
+                        nothing. Same image-vs-file split PhotoAttacher uses on the
+                        Finish tab — a file tile that opens the PDF in a new tab. */}
+                    {((p.type&&String(p.type).startsWith("image/"))||/\.(png|jpe?g|gif|webp|heic|heif|bmp|svg)$/i.test(p.name||"")||(!p.type&&!/\.pdf$/i.test(p.name||""))) ? (
                     <img src={p.url||p.dataUrl} alt={p.name}
 
                       onClick={()=>setViewPhoto(p.url||p.dataUrl)}
@@ -15728,6 +15734,18 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                       style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:8,
 
                         border:`1px solid ${C.border}`,cursor:"pointer"}}/>
+                    ) : (
+                    <div onClick={()=>openUrl(p.url||p.dataUrl)} title={p.name||"file"}
+                      style={{width:"100%",aspectRatio:"1",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",
+                        display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,
+                        background:C.surface,color:C.dim,padding:6,textAlign:"center",boxSizing:"border-box"}}>
+                      <Icon name="fileText" size={24} stroke={1.75}/>
+                      <span style={{fontSize:9,fontWeight:700,lineHeight:1.15,wordBreak:"break-all",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical"}}>
+                        {p.fromInspection ? `${p.fromInspection==="rough"?"4-way":"Final"} inspection report` : (p.name||"file")}
+                      </span>
+                      <span style={{fontSize:9,color:C.accent,fontWeight:700}}>Open PDF</span>
+                    </div>
+                    )}
 
                     <button onClick={()=>deletePhoto(t.id,p)}
 
@@ -51063,6 +51081,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
+
+- **Return trip card: the inspection report PDF now shows as a file tile that opens** · 'on branch 2026-10-01, awaiting Koy's go-ahead' · 'SW v495' · Koy: *"the inspection report … loads underneath the final inspection in the finish section, but on the return trip, it won't load anything."* The Return Trips card drew every attachment through an image tag and the image lightbox; a PDF report copied from a failed 4-way or final inspection rendered blank and tapped to a blank viewer. Non-image attachments now get the same file tile the Finish tab's uploader uses, labelled "4-way / Final inspection report", and tapping opens the PDF in a new tab. Photos unchanged. **Why it won't lose data:** render-only; the attachment records on the trip are untouched.
 
 - **Failed inspection → Create Return Trip now confirms, and refuses a duplicate** · 'on branch 2026-10-01, awaiting Koy's go-ahead' · 'SW v495' · Koy: *"I just clicked it like five times trying to create it, but I didn't think it was working until I checked because nothing tells you it does work."* Both the Rough (4-way) and Finish (final) failed-items cards: tapping **→ Create Return Trip** now toasts "Return trip created with N items — needs a date. See the Return Trips tab", and while an open trip made from that inspection exists the button is replaced by a green **✓ On a return trip · N items** chip; a repeat tap toasts "Already on a return trip" instead of making another. Final-inspection trips now carry 'fromFailedFinal: true' (rough already had 'fromFailedRough'); the existing-trip check also matches by scope string so trips made before this ship count. **Why it won't lose data:** adds one boolean to NEW trips only; no existing trip, item or report is changed, and nothing is auto-deleted — duplicates Koy already made stay until he removes them on the Return Trips tab.
 
