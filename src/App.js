@@ -50920,10 +50920,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v482
+**Last manifest update:** 2026-10-01 · App SW version: v485
 
 ---
 
+- **Tools tab — Service Size calculator (NEC 220.82) with plan reading, limited by Tool access** · 'shipped 2026-10-01' · 'SW v484' · Josh built it (Claude artifact, then ported for the app per Koy's handoff): *"It runs the NEC 220.82 optional calc, lets you mark appliances Yes / Maybe / No when we don't know what's going in yet, and shows what size service we'd need either way. It also writes a bid note … drop in a plan set PDF and it reads the sheets and fills in the calculator."* Koy + Josh: limit it to Josh, Brady, Koy and Jeromy so it doesn't run up usage. **What it is:** a third Tools chip, **Service Size** — a standalone page in 'public/tools/service-size/' (React + pdf.js 4.10.38 legacy build bundled by esbuild from 'tools-src/service-size/'; build output committed, checksums matched Josh's tested build byte-for-byte, his 6 tests pass incl. Miller 332 / 442 / 600 A). Single-family 120/240 V service size with confirmed-only and with-maybes numbers, undecided fuels counted gas in the first and electric in the second, per-item amps added, what-ifs that bump the size, utility/solar/snowmelt flags, the 220.82(B)+(C) table and a copyable **bid note**. **Plan reading:** drop a PDF or sheet photos; pdf.js renders up to 8 sheets (floor plans and electrical first) in the browser and POSTs them to the new Vercel function 'api/read-plans.js' (CommonJS, zero deps), which calls the Claude API ('ANTHROPIC_MODEL', default claude-sonnet-5-5) and returns the calculator inputs; filled fields get a **plans** tag, plus floor areas, findings by sheet, owner questions and loads not in the calc. The function refuses everything without the 'PLANS_ACCESS_KEY' env var and 401s a missing/wrong 'x-plans-key' header (the page sends it from 'window.SSC_CONFIG' in its index.html — visible in page source, so the Anthropic spend limit is the real cap). **Access:** new 'tools.serviceSize' permission with no tier (per-user grant only); 'TOOLS' rows can carry 'perm', 'ToolsView' shows a row only when 'can(who, perm)' against the viewer's LIVE team record ('myLiveRec', the v465 lesson — the login snapshot can lack 'caps'); Settings → Team gets a **TOOL ACCESS** section (admins/managers) that writes the same 'caps' array as the hats. Hiding the chip does not lock the page URL; the key + spend limit do. Guide 'tools.html' gains a Service Size section. **Flip-day:** Vercel env 'ANTHROPIC_API_KEY' (Josh's key) + 'PLANS_ACCESS_KEY' set 2026-10-01; tick Service Size for Josh, Brady, Koy, Jeromy in Settings → Team; drop one real plan set. **Why it won't lose data:** nothing in the tool reads or writes Firestore (Save to job is left out of this version); the only new write is the 'caps' checkbox, through the existing guarded 'upd' → 'saveUsers' path the hats already use; the Vercel function stores nothing; no loader, rules or Cloud Function change.
 - **Motion polish — the app feels alive (save chip, remote-change flash, check-offs, tabs, sheets)** · 'shipped 2026-09-30' · 'SW v481' · Koy asked for the app to feel more responsive and alive without changing what it does. **Save chip:** the "Saving… / Saved / Save failed" text in the three headers is now a small chip with a spinner, a check that draws itself, and an X that shakes on failure; tap the failed chip to retry the save. **Remote-change flash:** when another device edits a job, its Job Board row glows briefly and shows who changed it ("Daegan · just now"); your own edits, reconnects and server-side writes never flash. **Punch check-off:** ticking a punch item rings the row green, pops the checkbox and is meant to draw the strike-through across each line of the text, left to right (a thin overlay on the page, not part of the punch list) - that last part is unconfirmed: it did not show on Koy's iPhone in testing, so treat it as not working until re-checked; the normal strike-through still appears and nothing is lost; the "N open" count pops. **Job Detail tabs:** the active-tab highlight slides to the next tab and the tab body eases in from the direction of travel. **Today pulse counters** count up on load. **Stage pills** ring once when their label or color changes. **Job progress bars** fill in from zero the first time a job is seen. **Bottom sheets** spring up with a fading backdrop and can be dragged down to dismiss (grab the top bar; Cancel/Done still work); the Savant sheet drags by its handle. **First load** shows shimmering placeholder rows on the Job Board instead of a blank screen, and rows rise in with a short stagger (first 10, once per job per session). Everything honors the phone's "reduce motion" setting (near-instant, spinner and shimmer static). **Why it won't lose data:** presentational only. The new 'src/motion.js' imports nothing from Firebase and makes no writes; its only reads are the snapshot's change list and the device id inside a try/catch, called after the existing early-return in the jobs snapshot handler. Every 'App.js' edit adds a className, a style value, a ref, or a call to a pure helper on an existing element. The one new state ('doneFx' in the punch list) is local UI state and the punch-save call is unchanged. Tab highlight, pane ease and sheet drag only change transform/opacity on elements that already exist, so no tab state remounts. No fields, loader, rules, function or save-path changes. No SOP guide changes (behavior is unchanged).
 - **Home Runs — Import appliances window readable (white card)** · 'shipped 2026-09-30' · 'SW v480' · Koy: *"pop up when clicking import appliances is see through and unreadable."* The 'ApplianceImportModal' card used a CSS variable ('--card') that is not defined anywhere, so it rendered transparent over the page; it now uses the app's own white card and dark text colors ('C.card', 'C.text'). **Why it won't lose data:** two style values on one window; no data, save path, field or Firestore change.
 - **Home Runs — Appliance import marks confidence: ready / confirm / need specs** · 'shipped 2026-09-30' · 'SW v479' · Koy: *"if its red it should auto label needs specs, yellow needs to show somehow it needs to be confirmed, and green can just import with wire size."* The 'ApplianceImportModal' preview now tags each row by the sheet's Confidence: green READY imports with a suggested wire size ('applWire', from the breaker, or the load when no breaker is listed; 3-wire for range/oven/dryer/cooktop) and no status; yellow CONFIRM (Series, Typical, Voltage only, circuit only, conflicting, partial) imports with the wire and a note starting "CONFIRM:"; red (no spec found) imports with status "Need Specs", no wire, and a "specs not found" note. Rows are never marked Pulled. **Why it won't lose data:** same append-only import path as v478 — only the fields on the new rows change (wire, status, note), existing rows are never touched, no new fields, no loader or Firestore change.
@@ -50936,6 +50937,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — "New" since you last looked; Reply in a question's discussion** · 'shipped 2026-10-01' · 'SW v485' · Koy: *"it would be nice to easily see new items added that are new from the last time i opened the my day tab, or reply to questions in discussion instead of answering etc."* **New:** per device, per user ('localStorage' key 'he_myday_seen_<userKey>'), My Day remembers the Mine row keys it showed and when; on the next open every row not in that set wears a blue **New** tag, a task doc whose latest update is newer than that time (and not mine) wears **New reply**, and each category header shows **N new**. The stored set is read once per visit and frozen (rows stay New until you leave) and rewritten after every render; a first-ever visit marks nothing. **Reply:** question rows get **Reply** beside Answer — the inline box in reply mode posts '{id, by, role:"crew", text, photos:[], at}' to 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]' through the same transactional 'postQuestionThreadMessage' the Questions section and question links use, then calls 'publishCcQuestions' so the pin's thread in FieldInk follows; the question stays open. Guide 'myday.html' updated. **Why it won't lose data:** the New marker is browser storage only (never Firestore); Reply appends one message through the existing transaction (key-scoped, never touches jobs/*), and never changes the question's answer / done.
 - **My Day — do the real thing from the row: Answer a question, Approve / Deny time off** · 'shipped 2026-10-01' · 'SW v482' · Koy: *"i need to be able to answer questions and check off time off requests etc and have it answer and check the question in the job, or approve the time off all from my day. Im checking things off but having to go find them throughout the app to actually get them done."* **Questions** (the v467 rows): a blue **Answer** button opens an inline box on the row; **Save answer** writes 'answer' (literal text, 'escapeHtml', like the GC / FieldInk answer paths), 'answeredBy' / 'answeredAt' / 'answeredVia:"myday"' and 'done:true' onto that question inside the job's 'roughQuestions' / 'finishQuestions' (one in-place map of the floor array through 'onUpdateJob', so 'saveJob' mirrors it to FieldInk exactly as the Questions section's edits do), 10 s Undo restores the previous answer / done / stamps. **Time off** (the v420 head-board docs, 'timeoffId'): the row now reads **Time off** and, for the head / admin / manager, carries **Approve** and **Deny** — new 'decideTimeOffFromBoard(timeoffId, status, me)' reads 'settings/timeOffRequests' + 'settings/crewPTO' fresh (seeding the three-way-merge baselines the Time Off page keeps live), then makes the SAME writes 'TimeOffPage.decide' makes (request status + 'decidedBy' / 'decidedAt' via 'mergeSaveSettingsFields'; the PTO mirror added on approve, pulled on deny) and closes the board doc with 'timeoffDecision' stamped. A request that was already removed on the Time Off page just closes the task with a note. Guide 'myday.html' updated. **Why it won't lose data:** both paths write only the fields their source screens already write, through the same funnels (settings three-way merge; 'saveJob' for the job patch; 'patchNeed' for the doc) and never add, remove or reorder a row; Undo on an answer restores the exact prior fields; no new collection, no loader or rules change.
 - **Panelized Lighting — the panel schedule PDF runs onto more pages instead of clipping; a module is never cut in half** · 'shipped 2026-09-30' · 'SW v475' · Koy exported "LCP 1 — Miller Residence - Alpine.pdf" and "LCP 3 — …" (10 modules each) and both came out as ONE 8.5×11 page with Module 1, the last table on the sheet, sliced mid-table (LCP 1 lost its 4th row, LCP 3 rows 3 and 4) — and the on-screen **Print** button sitting in the picture. Root cause: **Download** on a panel card ('downloadPanelSchedule' — the Lutron builder cards and the Control 4 / Crestron module sections all use it) handed the schedule HTML to '_saveHtmlAsPdf', which html2canvas-captures a fixed 816×1056 iframe: exactly one page, everything below it gone, and no '@media print' rules applied (html2canvas renders screen media, so 'page-break-inside: avoid' and the hidden toolbar never reached the PDF). **Print** (the popup + Cmd/Ctrl+P) was already right — '.module { page-break-inside: avoid }' was there and Chrome puts a 10-module panel on 2 pages with the cut between modules. Now the download goes through '_saveHtmlAsPdfPaged' (the v448 loads-list saver), which grew two knobs: 'avoid' — a CSS selector for blocks that must not straddle a page edge; the cut moves UP to the block's top so it starts the next page whole (the canvas twin of 'break-inside: avoid', outermost block first) — and 'hide' for screen-only chrome dropped before capture. The schedule passes 'avoid: ".module:not(.tall), .module tr"' and 'hide: ".toolbar"'. The print stylesheet adds 'break-inside: avoid' beside the old 'page-break-inside', 'tr { break-inside: avoid }' and 'thead { display: table-header-group }' so column headers repeat when a table does span pages. A module with more than 40 rows (a 64-load 2HDC / DALI bus module) gets class 'tall': it can't stay whole, so instead of being shoved onto a fresh page and leaving page 1 header-only it flows row by row. The header (logo, panel, job, totals) stays on page 1. **Verified** on real builder output (harness ran 'printPanelSchedule' straight out of App.js): headless-Chrome print-to-PDF of a Miller-shaped 10-module panel = 2 pages, Module 4 closes page 1 and Module 3 opens page 2; a 14-module panel = 2 pages cut between Module 8 and Module 7; the 64-row bus fixture = 2 pages with headers repeated (was 3 with a header-only first page). The real '_saveHtmlAsPdfPaged' run in a browser harness with 'jsPDF.save' stubbed produced the same multi-page output with every cut on a module or row edge. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — Print and Download only read the panel / loads and write nothing to Firestore; no new field, no loader, function or rules change; the loads-list PDF (the other '_saveHtmlAsPdfPaged' caller) passes no options and behaves exactly as before; the electrical-panel and Savant downloads still use the untouched '_saveHtmlAsPdf'.
 - **Merge: main's v467–v471 (job questions on My Day, Tools tab generator sizing, zone picker search, generator link sizing, hours-vs-bid, panelized stale-copy guard) with this branch's v467–v468** · 'shipped 2026-09-30' · 'SW v472' · The two lines of work reused v467 and v468. No code conflicted: only the FEATURES.md header + entry list (both kept), the generated 'SOP_FILES_INLINE' block (regenerated by prebuild), the SW line, and the prebuild chain in 'package.json' (union: main's 'panel-loads-merge-test.js' and this branch's 'panel-fill-test.js' both run). **Why it won't lose data:** merge only, no new write.
@@ -56320,8 +56322,25 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
       // the job … all from my day"): Answer opens an inline box; Save writes the
       // answer (literal text, HTML-escaped like the GC / FieldInk answer paths),
       // stamps answeredBy / answeredAt and marks it done, 10 s Undo.
-      actions: [{ label: "Answer", title: "Type the answer here — it lands on the question in the job and marks it answered", tone: "primary",
-        onClick: () => { setAnsText(""); setAnsFor(k => k === qKey ? null : qKey); } }],
+      actions: [
+        { label: "Answer", title: "Type the answer here — it lands on the question in the job and marks it answered", tone: "primary",
+          onClick: () => { setAnsText(""); setAnsMode("answer"); setAnsFor(k => k === qKey && ansMode === "answer" ? null : qKey); } },
+        // v485 (Koy: "reply to questions in discussion instead of answering"): the
+        // same discussion thread the Questions section / question links use.
+        { label: "Reply", title: "Post in the discussion on this question (asks back, adds context) — the question stays open", tone: "ghost",
+          onClick: () => { setAnsText(""); setAnsMode("reply"); setAnsFor(k => k === qKey && ansMode === "reply" ? null : qKey); } },
+      ],
+      onReply: async (text) => {
+        const t = String(text || "").trim(); if (!t) return;
+        const job = (jobs || []).find(j => j && j.id === q.jobId);
+        try {
+          await postQuestionThreadMessage(q.jobId, `${String(q.phase).toLowerCase()}_${q.floorKey}_${q.id}`, { id: uid(), by: me, role: "crew", text: t.slice(0, 2000), photos: [], at: new Date().toISOString() }, "MyDay");
+          // The pin's thread in FieldInk follows (same mirror JobDetail runs when the job is open).
+          if (job) { try { publishCcQuestions(job.id, job.roughQuestions, job.finishQuestions); } catch {} }
+          toast.success("Posted to the discussion");
+          setAnsFor(null); setAnsText("");
+        } catch (e) { toast.error("Couldn't post: " + (e?.message || "")); }
+      },
       onAnswer: (text) => {
         const t = String(text || "").trim(); if (!t) return;
         const before = { answer: q.answer || "", done: !!q.done, answeredBy: q.answeredBy || "", answeredAt: q.answeredAt || "", answeredVia: q.answeredVia || "" };
@@ -56738,6 +56757,20 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   // v482: inline Answer box on a job-question row (writes the answer into the job).
   const [ansFor, setAnsFor] = useState(null);
   const [ansText, setAnsText] = useState("");
+  const [ansMode, setAnsMode] = useState("answer");   // v485: "answer" writes the answer; "reply" posts to the discussion
+  // v485 (Koy 2026-10-01: "easily see new items added that are new from the last
+  // time i opened the my day tab"): what THIS device showed on this user's Mine
+  // list last time (row keys + when). Read once per visit, frozen for the visit,
+  // so a row stays marked New until you leave; rewritten after every render so
+  // the next visit compares against the latest view. Per device, per user.
+  const seenStoreKey = "he_myday_seen_" + (userKeyOf(identity) || "anon");
+  const prevSeenRef = useRef(undefined);
+  if (prevSeenRef.current === undefined) {
+    try { const raw = localStorage.getItem(seenStoreKey); const p = raw ? JSON.parse(raw) : null; prevSeenRef.current = p && Array.isArray(p.keys) ? { at: String(p.at || ""), keys: new Set(p.keys) } : null; }
+    catch { prevSeenRef.current = null; }
+  }
+  const mineKeysRef = useRef("");
+  useEffect(() => { const sig = mineKeysRef.current; if (!sig) return; try { localStorage.setItem(seenStoreKey, JSON.stringify({ at: new Date().toISOString(), keys: sig.split("\n") })); } catch {} });
   const [updKind, setUpdKind] = useState("note");
   const [updText, setUpdText] = useState("");
   const [updUntil, setUpdUntil] = useState("");
@@ -56796,6 +56829,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
         <div onClick={() => { if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: narrow ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
+            {(r.isNew || r.newReply) && <span title={r.isNew ? "Wasn't on your list the last time you opened My Day on this device" : "A reply came in since you last opened My Day on this device"} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: "#2F6FDE" }}>{r.isNew ? "New" : "New reply"}</span>}
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
             {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
             {r.prio === "urgent" && <span title="Marked urgent" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: C.red }}><Icon name="flag" size={9} stroke={2.5} />Urgent</span>}
@@ -56944,19 +56978,23 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
               {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
             </div>
           )}
-          {ansFor === r.key && r.onAnswer && !selectMode && (
-            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
-              <input type="text" value={ansText} autoFocus onChange={e => setAnsText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") r.onAnswer(ansText); if (e.key === "Escape") { setAnsFor(null); setAnsText(""); } }}
-                placeholder="Type the answer…"
+          {ansFor === r.key && (r.onAnswer || r.onReply) && !selectMode && (() => {
+            const replying = ansMode === "reply" && !!r.onReply;
+            const go = () => (replying ? r.onReply : r.onAnswer)(ansText);
+            return (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${replying ? C.border : C.accent + "66"}`, borderRadius: 8, padding: 8 }}>
+              <input type="text" value={ansText} autoFocus onChange={e => setAnsText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") { setAnsFor(null); setAnsText(""); } }}
+                placeholder={replying ? "Reply in the discussion…" : "Type the answer…"}
                 style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                <span style={{ fontSize: 11, color: C.dim }}>Lands on the question in the job and marks it answered.</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: C.dim }}>{replying ? "Goes in the question's discussion thread — the question stays open." : "Lands on the question in the job and marks it answered."}</span>
                 <button onClick={() => { setAnsFor(null); setAnsText(""); }} style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
-                <button onClick={() => r.onAnswer(ansText)} disabled={!ansText.trim()}
-                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>Save answer</button>
+                <button onClick={go} disabled={!ansText.trim()}
+                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>{replying ? "Post reply" : "Save answer"}</button>
               </div>
             </div>
-          )}
+            );
+          })()}
           {editFor === r.key && editDraft && r.need && !selectMode && (() => {
             // v434 Edit panel: wording, due date, person, job. Same look as the reply panel.
             const n = r.need; const lab = { fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.dim, display: "flex", flexDirection: "column", gap: 4, flex: "1 1 140px", minWidth: 0 };
@@ -57079,6 +57117,17 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
       </div>
     );
   };
+  // v485: New / New reply flags against what this device showed last visit.
+  // A first-ever visit (nothing stored) marks nothing — no wall of "New".
+  {
+    const prev = prevSeenRef.current;
+    mineRows.forEach(r => {
+      if (!r) return;
+      r.isNew = !!(prev && !prev.keys.has(r.key));
+      r.newReply = !!(prev && r.latest && String(r.latest.at || "") > prev.at && !sameName(r.latest.by, me));
+    });
+    mineKeysRef.current = mineRows.map(r => r && r.key).filter(Boolean).sort().join("\n");
+  }
   const Group = (g) => {
     const isOpen = openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
     const overdue = g.rows.filter(r => r.bucket === "overdue").length;
@@ -57089,6 +57138,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
           <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
+          {(() => { const nn = g.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span title="New since you last opened My Day on this device" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
           {g.badge && <span style={{ fontSize: 10, fontWeight: 700, color: C.orange, background: "#B06A2C1A", borderRadius: 5, padding: "1px 6px" }}>{g.badge}</span>}
           <span style={{ flex: 1, height: 1, background: C.border }} />
         </div>
