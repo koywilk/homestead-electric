@@ -17797,7 +17797,7 @@ function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
 }
 
 
-function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false, applLinks, onApplLinks}) {
+function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false, applLinks, applSpecOk, onApplSpecOk, onApplLinks}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [genReady,        setGenReady]        = useState(false); // v473: the saved list has arrived (or the read failed)
@@ -18519,8 +18519,8 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                       style={{padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Close</button>
                   </div>
                   <ApplianceLoadsView onlyNo={jobNumber}
-                    jobs={[{simproNo:jobNumber,name:jobName,homeRuns,applLinks}]}
-                    onUpdateJob={(upd,patch)=>{ if(patch&&patch.homeRuns) onHRChange(patch.homeRuns); if(patch&&patch.applLinks&&onApplLinks) onApplLinks(patch.applLinks); }}/>
+                    jobs={[{simproNo:jobNumber,name:jobName,homeRuns,applLinks,applSpecOk}]}
+                    onUpdateJob={(upd,patch)=>{ if(patch&&patch.homeRuns) onHRChange(patch.homeRuns); if(patch&&patch.applLinks&&onApplLinks) onApplLinks(patch.applLinks); if(patch&&patch.applSpecOk&&onApplSpecOk) onApplSpecOk(patch.applSpecOk); }}/>
                 </div>
               </div>
             )}
@@ -30172,7 +30172,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               electricalPanels={job.electricalPanels||[]}
               onElectricalPanelsChange={v=>u({electricalPanels:v})}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
-              applLinks={job.applLinks} onApplLinks={v=>u({applLinks:v})}
+              applLinks={job.applLinks} onApplLinks={v=>u({applLinks:v})} applSpecOk={job.applSpecOk} onApplSpecOk={v=>u({applSpecOk:v})}
               finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}
               hideGenerator={isSectionHidden(job,"generator")}
@@ -51017,6 +51017,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ---
 
+- **Appliance Loads: a "Likely in CC" appliance now shows its likely Home Run first, and yellow reads CONFIRM SPECS** · 'shipped 2026-10-01' · 'SW v489' · Koy: *"if it is marked likely in cc can it show the load it likely is first so i dont have to search through all the loads listed?"* and *"it should say confirm specs, so that isnt confused with confirm the load is in cc"*. In the Appliance Loads drawer, a row the sheet marks Likely now leads with the Home Run it named (with Yes, same), and the pick list opens on that one with same-kind Home Runs next, then the rest A to Z; Not-in-CC rows get the same ordering around the suggestion. The yellow status now reads CONFIRM SPECS (green SPECS CONFIRMED). A yellow appliance also gets a Confirm specs button in its drawer (with Undo) that turns it green, stored per job in a new applSpecOk field; red rows are never overridden. **Why it won't lose data:** display ordering and labels only. Linking still writes the same applLinks field through the same call as before. The one new field, applSpecOk on the job, is additive and written by the same patch-save call as applLinks (the loader already unwraps every field, so nothing is dropped, and jobs without it behave exactly as before); no rules or save-path changes, and Home Runs are never edited by this change.
 - **Panelized Lighting Loads list — the Panel column shows the Builder's LCP, and a ran load shows who ran it** · 'shipped 2026-10-01' · 'SW v488' · Koy (Miller Loads list screenshot, Panel dropdown offering Panel A / B / C while every row already wore an "LCP 4 · Mod 1 · Z3" chip): *"they are assigned to panels and modules already, so why is the panel they are assigned to not an option, and why are they not sorted into them automatically from the module panel placer?"* and *"when a load is checked off as ran, please add who pulled it here as well — the loads ran drop down at the top blends in and nobody notices it."* **Why it was wrong:** the Panel column is the pre-v449 free-text 'panel' field, and its suggestions were the old floor-section labels ('plSectionLabels', default Panel A / B / C); nothing read the Builder's 'load.assign' into it. **Now:** on a Lutron job a load the Panel Builder has placed (zoned OR parked) shows that panel's name in the Panel column, read live from the assignment (new pure 'lutronPanelOf') — tap it to open the same move / park / clear sheet the badge opens. A load with no assignment keeps the text box, whose suggestions are now the Builder's panels (LCP 1 / LCP 2 …) once 'panels' is persisted, and typing or picking one of those names **parks the load on that panel** ('assign' with no module — exactly "Put on LCP n only"); on a job still on the migrated read-view the text is saved as before and the migration's existing "Panel column naming a panel parks there" rule applies. The Loads Ran card's meta line shows the same panel. **Who ran it:** a ran load's row now shows **✓ <who> · <date>** beside its name (desktop) / in its second line (phone) — the stamp v443 already stored and only the checkbox tooltip showed. Harness 'needs-dryrun' pins 'lutronPanelOf' (zoned, parked, unassigned, unknown panel, no load). Guide 'panelizedlighting.html' updated. Built and shipped from a clean worktree off origin/main (the shared folder held two other sessions' work). **Why it won't lose data:** the derived Panel cell writes nothing; the only new write is the park-on-type path, which sets 'assign:{panelId, moduleId:null, zone:null}' on one load through the same 'u({panelizedLighting:{...pl, loads}})' patch the list already uses, and only when the Builder's 'panels' already exist on the doc (never against migrated ids); the ran stamp is read-only; no field shape, loader, function or rules change.
 - **Punch check-off: the strike-through now draws across the text (job punch list, QC walk, foreman Assigned tab)** · 'shipped 2026-10-01' · 'SW v487' · Koy: *"i wanted it to animate striking through the punch item on that line"* and *"on any punch check."* The v481 animation was drawn in the done-text colour, which is a very pale gray, so on a phone it was invisible. It is now a dark 2px line that draws left to right across each line of the item text (wrapped text goes line by line, 0.38 s in total), then fades out as the item's own pale strike-through takes over. 'HeStrikeSpan' (src/motion.js) wraps the text of a punch item and plays the wipe when 'done' goes false to true. It plays on the job punch list ('PunchItems', which also serves Return Trip punches), the QC walk list ('QCWalkSection') and the foreman Assigned tab, where a ticked row used to vanish at once and now stays about a second ('punchLinger', display only) so the line can play. Rows that are clipped, collapsed or covered are skipped, Reduce Motion turns it off, and My Day's Done button is unchanged. The line is a temporary element on the page body and the real strike-through is held transparent for 0.4 s with an inline style. **Why it won't lose data:** presentational only. The check still saves the instant it is ticked (the 'togglePunchItemDone' call and the 'PunchItems' / QC 'onChange' saves are untouched); the one new state ('punchLinger') only keeps a display copy of a ticked row for one second on the Assigned tab and writes nothing; the line is added to and removed from document.body, outside React's tree, so no punch row remounts; no fields, loader, rules, function or save-path changes.
 - **Tools tab — Appliance Loads becomes a native dashboard: job summary table, click-in job pages, Import button** · 'shipped 2026-10-01' · 'SW v486' · Koy: *"i want this displayed in the app as the tool … easy to see all the jobs like the job summary table … job cards should pull up the specific job page of appliances only, and have an import button."* The Appliance Loads tool no longer embeds the Sheet; 'ApplianceLoadsView' reads the master Sheet's Master tab as CSV (same link-viewing read the Home Runs import uses) and shows a KPI strip (jobs, line items, connected amps, Not in CC yet, to confirm, need specs) over a job summary table with a totals row. Tapping a job opens ITS appliances only (qty, volts, load amps, breaker, total amps, Home Runs status, green / yellow / red edge from the sheet's Confidence) with All / Not in CC / To confirm / Need specs filters (a row already entered in that job's Home Runs counts as Confirmed even when its spec was only typical or series; a row with no amps found stays Need specs), an All-jobs back button, and **Import appliances to Home Runs**, which opens the existing 'ApplianceImportModal' for that job number only (preview + confirm, Not-in-CC rows only, duplicates skipped). The button is disabled when no Command Center job carries that job number (matched on 'simproNo', never by name). The job page now has bold CONFIRMED / CONFIRM / NEED SPECS tiles and chips with tinted rows, and each row opens to show the file and page it was found in (new Master columns Source file link / Source page / Spec file). **Likely CC match:** for a row marked Not in CC yet, the view suggests the Home Runs row it probably is (appliance type plus room words) with a 'Yes, same' button, and a picker lists the job's Home Runs so a person can link it by hand when the names differ; a linked row counts as In CC (green) and the import skips it. The link is stored as one new field 'applLinks' on that job (a map of row key to Home Run id and name), written through the same 'updateJob' funnel, and can be removed. **From the job card:** the job's Home Runs tab has a new **Appliance loads** button (next to Import appliances) that opens this same sheet locked to that one job in a window, with the likely-match / link-to-a-Home-Run controls and Import, so a crew member can fix a load the sheet did not recognize without leaving the job; its link and import writes go through that job's own 'onHRChange' / 'applLinks' patch. The old iframe page stays in 'public/tools/appliance-loads/' unused. **Why it won't lose data:** the view only reads the Sheet; its single write is the import's append to ONE job's 'homeRuns' through 'updateJob' with a 'homeRuns' patch — the same field and the same funnel the Home Runs tab's own Import button already uses — and it appends rows without touching or removing existing ones; the only other write is the optional 'applLinks' map, additive on one job and never read by any other screen; no loader, rules or function changes.
@@ -55739,6 +55740,12 @@ const applSuggest = (row, list, taken) => {
   });
   return best;
 };
+// Order Home Runs for one appliance: the likely one first, then same-kind ones, then the rest A-Z.
+const applRank = (row, list, first) => {
+  const cls = applClassesOf(row.item + " " + row.model), toks = applToks(row.loc + " " + row.item);
+  const score = (h) => { let s = cls.filter(c => applClassesOf(h.name).includes(c)).length * 3; applToks(h.name).forEach(w => { if (toks.has(w)) s += 1; }); return s; };
+  return list.slice().sort((a, b) => (first && a.id === first.id ? -1 : 0) - (first && b.id === first.id ? -1 : 0) || score(b) - score(a) || a.name.localeCompare(b.name));
+};
 const applRowKey = (r) => [r.no, r.loc, r.item, r.model].map(x => String(x||"").trim().toLowerCase()).join("|");
 
 function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
@@ -55790,7 +55797,11 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
   const rowsEff = useMemo(() => st.rows.map(r => {
     const cc = ccFor(r.no), link = cc && cc.applLinks && cc.applLinks[applRowKey(r)];
     const inCC = link ? "yes" : r.inCC;
-    return { ...r, inCC, linked: link || null, level: applLevelOf(r.conf, r.load, inCC) };
+    // A hand-confirmed spec (yellow only) counts as confirmed. Red (no specs found) is never overridden.
+    const specOk = !!(cc && cc.applSpecOk && cc.applSpecOk[applRowKey(r)]);
+    const base = applLevelOf(r.conf, r.load, inCC);
+    const level = specOk && base === "yellow" ? "green" : base;
+    return { ...r, inCC, linked: link || null, specOk: specOk && base === "yellow", level };
   // eslint-disable-next-line
   }), [st.rows, jobs]);
 
@@ -55819,9 +55830,10 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
   const chip = (txt, color, solid) => <span style={{display:"inline-block",padding:"3px 8px",borderRadius:6,fontSize:10,fontWeight:800,letterSpacing:"0.05em",whiteSpace:"nowrap",
     background:solid?color:color+"22",color:solid?"#fff":color,border:`1px solid ${color}`}}>{txt}</span>;
   const lvColor = (l) => l === "green" ? GREEN : l === "red" ? RED : APPL_YELLOW;
-  const lvLabel = (l) => l === "green" ? "CONFIRMED" : l === "red" ? "NEED SPECS" : "CONFIRM";
+  const lvLabel = (l) => l === "green" ? "SPECS CONFIRMED" : l === "red" ? "NEED SPECS" : "CONFIRM SPECS";
 
   const saveLinks = (cc, next) => onUpdateJob({ ...cc, applLinks: next }, { applLinks: next });
+  const saveSpecOk = (cc, next) => onUpdateJob({ ...cc, applSpecOk: next }, { applSpecOk: next });
 
   const topBar = (
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
@@ -55867,8 +55879,8 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(118px,1fr))",gap:8,marginBottom:14}}>
         {tile("JOBS", summary.length)}
         {tile("LINE ITEMS", st.rows.length)}
-        {tile("CONFIRMED", sum("green"), GREEN)}
-        {tile("TO CONFIRM", sum("yellow"), APPL_YELLOW)}
+        {tile("SPECS CONFIRMED", sum("green"), GREEN)}
+        {tile("CONFIRM SPECS", sum("yellow"), APPL_YELLOW)}
         {tile("NEED SPECS", sum("red"), RED)}
         {tile("NOT IN CC", sum("notIn"), C.orange)}
       </div>
@@ -55876,7 +55888,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
         <div style={{minWidth:640,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
           <div style={{display:"grid",gridTemplateColumns:cols,gap:8,padding:"8px 14px",borderBottom:`1px solid ${C.border}`,background:C.surface}}>
             <span style={hdr}>JOB</span><span style={hdr}>ITEMS</span><span style={hdr}>AMPS</span><span style={hdr}>STATUS</span>
-            <span style={hdr}>NOT IN CC</span><span style={hdr}>CONFIRM</span><span style={hdr}>NEED SPECS</span><span/>
+            <span style={hdr}>NOT IN CC</span><span style={hdr}>CONFIRM SPECS</span><span style={hdr}>NEED SPECS</span><span/>
           </div>
           {summary.map(j => (
             <button key={j.no} onClick={()=>{ setOpenNo(j.no); setFilter("all"); setMsg(""); setOpenRow(null); }}
@@ -55907,6 +55919,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
     const cc = ccFor(cur.no);
     const hrList = applHRList(cc);
     const links = (cc && cc.applLinks) || {};
+    const specOkMap = (cc && cc.applSpecOk) || {};
     // A Home Run already matched to another appliance (by the nightly run or by hand) is never offered again.
     const taken = new Set(Object.values(links).map(l => l && l.id));
     const claimed = new Set(cur.rows.filter(r => r.inCC === "yes" && !r.linked && r.cc).map(r => r.cc.toLowerCase()));
@@ -55919,8 +55932,8 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
     body = (<>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8,marginBottom:12}}>
         {tile("ALL", cur.rows.length, null, filter==="all", ()=>setFilter("all"))}
-        {tile("CONFIRMED", cur.green, GREEN, filter==="green", ()=>setFilter("green"))}
-        {tile("TO CONFIRM", cur.yellow, APPL_YELLOW, filter==="yellow", ()=>setFilter("yellow"))}
+        {tile("SPECS CONFIRMED", cur.green, GREEN, filter==="green", ()=>setFilter("green"))}
+        {tile("CONFIRM SPECS", cur.yellow, APPL_YELLOW, filter==="yellow", ()=>setFilter("yellow"))}
         {tile("NEED SPECS", cur.red, RED, filter==="red", ()=>setFilter("red"))}
         {tile("NOT IN CC", cur.notIn, C.orange, filter==="notin", ()=>setFilter("notin"))}
       </div>
@@ -55945,7 +55958,11 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
             const key = applRowKey(r), open = openRow === key;
             const lc = lvColor(r.level);
             const notIn = r.inCC === "not in cc yet";
-            const sug = cc && notIn && !r.linked ? applSuggest(r, freeHR, taken) : null;
+            const isLikely = r.inCC === "likely";
+            // "Likely" rows: the sheet already named the Home Run it thinks this is (r.cc) - lead with it.
+            const likelyHit = isLikely && r.cc ? freeHR.find(h => h.name.toLowerCase() === String(r.cc).trim().toLowerCase()) : null;
+            const sug = cc && (notIn || isLikely) && !r.linked ? (likelyHit || applSuggest(r, freeHR, taken)) : null;
+            const hrOrdered = open && cc && !r.linked ? applRank(r, freeHR, sug) : freeHR;
             return (
               <div key={key} style={{borderBottom:`1px solid ${C.border}`,borderLeft:`5px solid ${lc}`,background:lc+"14"}}>
                 <div onClick={()=>{ setOpenRow(open?null:key); setPick(""); }}
@@ -55980,6 +55997,14 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
                     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
                       <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",color:C.dim,marginBottom:4}}>SPEC (VOLTS / AMPS) FROM</div>
                       <div style={{fontWeight:600}}>{r.conf || "—"}</div>
+                      {r.specOk ? (<>
+                        <div style={{marginTop:4,fontWeight:700,color:GREEN}}>Specs confirmed by hand</div>
+                        <button onClick={()=>{ const n={...specOkMap}; delete n[key]; saveSpecOk(cc, n); setMsg("Spec confirmation removed."); }}
+                          style={{marginTop:6,padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Undo</button>
+                      </>) : (r.level === "yellow" && cc) ? (
+                        <button onClick={()=>{ saveSpecOk(cc, { ...specOkMap, [key]: { at: new Date().toISOString() } }); setMsg(`Specs confirmed for "${r.item}".`); }}
+                          style={{marginTop:6,padding:"6px 10px",borderRadius:7,border:"none",background:C.accent,color:"#fff",fontSize:11,fontWeight:800,fontFamily:"inherit",cursor:"pointer"}}>Confirm specs</button>
+                      ) : null}
                       {r.spec
                         ? (/^https?:/i.test(r.spec)
                             ? <a href={r.spec} target="_blank" rel="noopener noreferrer" style={{display:"inline-block",marginTop:6,fontSize:11,fontWeight:700,color:C.accent,textDecoration:"none"}}>Open spec file</a>
@@ -56000,14 +56025,14 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
                         {sug && <div style={{marginBottom:6}}>Likely: <strong>{sug.name}</strong>
                           <button onClick={()=>{ saveLinks(cc, { ...links, [key]:{ id:sug.id, name:sug.name } }); setMsg(`Marked "${r.item}" as already in CC (${sug.name}).`); }}
                             style={{marginLeft:8,padding:"4px 9px",borderRadius:7,border:"none",background:C.accent,color:"#fff",fontSize:11,fontWeight:800,fontFamily:"inherit",cursor:"pointer"}}>Yes, same</button></div>}
-                        <div style={{fontSize:11,color:C.dim,marginBottom:4}}>Already in CC under a different name? Pick it:</div>
+                        <div style={{fontSize:11,color:C.dim,marginBottom:4}}>{sug ? "Not that one? Pick another:" : "Already in CC under a different name? Pick it:"}</div>
                         <div style={{display:"flex",gap:6}}>
-                          <select value={pick} onChange={e=>setPick(e.target.value)} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontFamily:"inherit"}}>
-                            <option value="">Choose a Home Run…</option>
-                            {freeHR.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                          <select value={pick || (sug ? sug.id : "")} onChange={e=>setPick(e.target.value)} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontFamily:"inherit"}}>
+                            {!sug && <option value="">Choose a Home Run…</option>}
+                            {hrOrdered.map(h => <option key={h.id} value={h.id}>{sug && h.id === sug.id ? "Likely: " + h.name : h.name}</option>)}
                           </select>
-                          <button disabled={!pick} onClick={()=>{ const h = freeHR.find(x => x.id === pick); if (!h) return; saveLinks(cc, { ...links, [key]:{ id:h.id, name:h.name } }); setMsg(`Marked "${r.item}" as already in CC (${h.name}).`); setPick(""); }}
-                            style={{padding:"6px 10px",borderRadius:7,border:"none",background:pick?C.accent:C.muted,color:"#fff",fontSize:11,fontWeight:800,fontFamily:"inherit",cursor:pick?"pointer":"default"}}>Mark in CC</button>
+                          <button disabled={!(pick || sug)} onClick={()=>{ const h = freeHR.find(x => x.id === (pick || (sug && sug.id))); if (!h) return; saveLinks(cc, { ...links, [key]:{ id:h.id, name:h.name } }); setMsg(`Marked "${r.item}" as already in CC (${h.name}).`); setPick(""); }}
+                            style={{padding:"6px 10px",borderRadius:7,border:"none",background:(pick||sug)?C.accent:C.muted,color:"#fff",fontSize:11,fontWeight:800,fontFamily:"inherit",cursor:(pick||sug)?"pointer":"default"}}>Mark in CC</button>
                         </div>
                       </>)}
                     </div>
@@ -56019,7 +56044,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
         </div>
       </div>
       <div style={{fontSize:11,color:C.dim,marginTop:10,lineHeight:1.5}}>
-        Green = confirmed, yellow = check before pulling, red = specs not found. Tap a row to see where it was found. If an appliance is already in Home Runs under another name, link it there and the import will skip it.
+        Green = specs confirmed, yellow = confirm specs before pulling, red = specs not found. Tap a row to see where it was found. If an appliance is already in Home Runs under another name, link it there and the import will skip it.
       </div>
       {importOpen && cc && (
         <ApplianceImportModal jobNumber={cur.no} jobName={cc.name || cur.label} homeRuns={cc.homeRuns || {}} skipKeys={skipKeys}
