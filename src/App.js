@@ -9,6 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
+import { HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, heStrikeRef } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
 // Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
@@ -5625,6 +5626,7 @@ function EmailModal({ subject, body, onClose }) {
 // board). Interactive pills stop click propagation so they don't also trigger
 // the row/card they sit inside.
 const Pill = ({label, color, onClick, onHold, title}) => {
+  const popRef = useHePop(label + "|" + color);
   const holdRef = useRef(null);
   const heldRef = useRef(false);
   const interactive = !!(onClick || onHold);
@@ -5632,6 +5634,7 @@ const Pill = ({label, color, onClick, onHold, title}) => {
   const clearHold = () => { if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null; } };
   return (
     <span
+      ref={popRef}
       onClick={interactive ? (e) => { e.stopPropagation(); if (heldRef.current) { heldRef.current = false; return; } onClick && onClick(); } : undefined}
       onPointerDown={onHold ? startHold : undefined}
       onPointerUp={onHold ? clearHold : undefined}
@@ -5851,16 +5854,19 @@ const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 // the exact same shell instead of a second look-alike.
 function SheetShell({ title, onCancel, onDone, doneLabel = "Done", doneDisabled = false, children }) {
   const centered = !ON_MOBILE;
+  const { sheetRef, dragEvents } = useHeSheetDrag(onCancel);
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
+    <div className="he-scrim" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
       display:"flex",flexDirection:"column",justifyContent:centered?"center":"flex-end",
       alignItems:centered?"center":"stretch",WebkitTapHighlightColor:"transparent"}}
       onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
-      <div style={{background:C.surface,borderRadius:centered?16:"18px 18px 0 0",
+      <div ref={sheetRef} className={centered?"he-dialog":"he-sheet"} style={{background:C.surface,borderRadius:centered?16:"18px 18px 0 0",
         width:centered?"min(480px, calc(100vw - 32px))":"100%",maxHeight:"92vh",overflowY:"auto",
         boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-          padding:"13px 16px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.surface,zIndex:1}}>
+        <div {...(!centered?dragEvents:{})} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"13px 16px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.surface,zIndex:1,
+          ...(!centered?{touchAction:"none"}:null)}}>
+          {!centered && <span className="he-grab-hint"/>}
           <button onClick={onCancel}
             style={{background:"none",border:"none",color:C.dim,fontSize:15,
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
@@ -6377,6 +6383,7 @@ const statusStripe = (variant) => {
 };
 
 const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = false, dashed = false, style }) => {
+  const popRef = useHePop(variant + "|" + (typeof children === "string" ? children : ""));
   const v = PILL_VARIANTS[variant] || PILL_VARIANTS.neutral;
   const sizing = size === "xs"
     ? { fontSize: 9,  padding: "1px 6px" }
@@ -6390,7 +6397,7 @@ const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = fal
     ? `1px dashed ${v.border}`
     : (bordered ? `1px solid ${v.border}` : "none");
   return (
-    <span style={{
+    <span ref={popRef} style={{
       display: "inline-flex", alignItems: "center", gap: 4,
       fontWeight: 700, letterSpacing: "0.06em",
       borderRadius: 99,
@@ -11235,7 +11242,9 @@ function JobNotesSection({
   );
 }
 
-const StageBar = ({stages,current,color}) => {
+const StageBar = ({stages,current,color,animKey}) => {
+
+  const _en = animKey ? heEnter("bar:" + animKey, { cls: "he-grow", dur: 700, delay: 120 }) : null;
 
   const isScheduled = current === "Scheduled";
 
@@ -11257,7 +11266,7 @@ const StageBar = ({stages,current,color}) => {
 
       <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
 
-        <div style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s"}}/>
+        <div className={_en?_en.className:undefined} style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s",...(_en?{animationDelay:`${_en.delay}ms`}:null)}}/>
 
       </div>
 
@@ -11408,6 +11417,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
   // doesn't bleed into another. Done items aren't selectable (would mean
   // retroactively tagging closed work, which doesn't make sense).
   const [selectMode, setSelectMode] = useState(false);
+  const [doneFx, setDoneFx] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const toggleSelected = (id) => setSelectedIds(prev => {
     const nx = new Set(prev);
@@ -11588,6 +11598,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
         const isSelected = selectMode && selectedIds.has(item.id);
         return (
         <div key={item.id}
+          className={doneFx === item.id ? "he-row-done" : undefined}
           onClick={selectMode && !item.done && !item.voided ? (e)=>{
             // Whole-row click toggles selection in select mode (saves having
             // to hit the small checkbox). Clicks on inner controls bubble up;
@@ -11597,6 +11608,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
             toggleSelected(item.id);
           } : undefined}
           style={{ marginBottom: 10,
+          transition:'opacity .3s, background-color .3s, border-color .3s',
           border:`1px solid ${isSelected ? '#B06A2C' : mine ? '#3B5BA555' : (item.done ? C.border+'88' : C.border)}`,
           borderLeft: isSelected ? '4px solid #B06A2C' : (mine ? '4px solid #3B5BA5' : undefined),
           borderRadius:8, padding:'8px 10px',
@@ -11620,8 +11632,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
             )}
 
             <input type="checkbox" checked={!!item.done}
+              className={doneFx === item.id ? "he-check-pop" : undefined}
               onChange={() => {
                 const nowDone = !item.done;
+                if (nowDone) { setDoneFx(item.id); setTimeout(() => setDoneFx(n => n === item.id ? null : n), 900); }
                 const who = getIdentity();
                 onChange(safeItems.map(i => i.id === item.id ? {
                   ...i, done: nowDone,
@@ -11655,7 +11669,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               </div>
             ) : (
               <div style={{flex:1,display:"flex",flexDirection:"column",gap:1}}>
-                <span onClick={() => {
+                <span className="he-ptext" ref={doneFx === item.id ? heStrikeRef : undefined} onClick={() => {
                   if (item.done) return;
                   if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text, material: item.materialNeeded||'' }); }
                   else           { setEditingId(item.id); setEditHtml(item.text); setEditMaterial(item.materialNeeded||''); }
@@ -23372,6 +23386,7 @@ function SavantSlotFirstTab({ job, u }) {
 // Generic bottom-sheet shell used by the slot-first tab. Centers on
 // desktop, snaps to bottom on narrow screens. Backdrop click closes.
 function SavantSheet({ onClose, children }) {
+  const { sheetRef, handleProps } = useHeSheetDrag(onClose);
   // Lock body scroll while sheet open so the page underneath doesn't
   // jump when the user scrolls inside the sheet.
   useEffect(() => {
@@ -23380,15 +23395,16 @@ function SavantSheet({ onClose, children }) {
     return () => { document.body.style.overflow = prev; };
   }, []);
   return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,
+    <div className="he-scrim" onClick={onClose} style={{position:"fixed",inset:0,
       background:"rgba(15,23,42,0.5)",zIndex:9999,display:"flex",
       alignItems:"flex-end",justifyContent:"center",backdropFilter:"blur(2px)"}}>
-      <div onClick={e=>e.stopPropagation()}
+      <div ref={sheetRef} className="he-sheet" onClick={e=>e.stopPropagation()}
         style={{background:"#fff",borderRadius:"18px 18px 0 0",padding:"16px 16px 24px",
           width:"100%",maxWidth:560,maxHeight:"85vh",overflowY:"auto",
           boxShadow:"0 -8px 24px rgba(0,0,0,0.12)"}}>
-        <div style={{width:42,height:5,background:C.border,borderRadius:99,
-          margin:"-4px auto 14px"}}/>
+        <div {...handleProps} style={{...handleProps.style,padding:"10px 0",margin:"-10px 0 4px"}}>
+          <div style={{width:42,height:5,background:C.border,borderRadius:99,margin:"0 auto"}}/>
+        </div>
         {children}
       </div>
     </div>
@@ -28218,6 +28234,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   };
 
   const [tab, setTab] = useState(()=>initialTab && tabsFor(rawJob).includes(initialTab) ? initialTab : "Job Info");
+  const _tabsRef = useRef(null), _bodyRef = useRef(null);
+  const _tabOrder = tabsForJob(job, tab);
+  const _ink = useHeTabInk(_tabsRef, tab, _tabOrder.join("|"));
+  useHePaneEase(_bodyRef, tab, _tabOrder);
   // Commercial mode: if the job's division moved while open, a tab it no longer has falls back to Job Info.
   useEffect(() => { if (!tabsFor(job).includes(tab)) setTab("Job Info"); }, [job.division]);   // eslint-disable-line
   // v433 usage tracking: count each job-tab open (once per device/user/day).
@@ -29295,21 +29315,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         {/* Tabs */}
 
-        <div style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
+        <div ref={_tabsRef} style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
 
-          flexShrink:0,overflowX:"auto",scrollbarWidth:"none"}}>
+          flexShrink:0,overflowX:"auto",scrollbarWidth:"none",position:"relative"}}>
+
+          <HeTabInk ink={_ink} color={C.accent}/>
 
           {tabsForJob(job, tab).map(t=>(
 
-            <button key={t} onClick={()=>setTab(t)}
+            <button key={t} data-hetab={t} onClick={()=>setTab(t)}
 
-              style={{background:tab===t?C.accent:"none",color:tab===t?"#000":C.dim,
+              style={{background:tab===t&&!_ink?C.accent:"none",color:tab===t?"#000":C.dim,
 
                 border:"none",borderRadius:"8px 8px 0 0",padding:"6px 13px",fontSize:11,
 
                 fontWeight:tab===t?700:400,cursor:"pointer",fontFamily:"inherit",
 
-                whiteSpace:"nowrap",transition:"all 0.15s"}}>
+                whiteSpace:"nowrap",transition:"all 0.15s",position:"relative",zIndex:1}}>
 
               {t}
               {t==="Questions"&&qNewCount>0&&(
@@ -29325,7 +29347,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         {/* Body */}
 
-        <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+        <div ref={_bodyRef} style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
 
           {/* Up Next panel — moved inside the body 2026-05-25 so it
               scrolls with content instead of being pinned above the
@@ -44171,29 +44193,29 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Active jobs</div>
           <div style={{fontSize:22,fontWeight:600,color:C.text}}>
-            {activeJobs.length} <span style={{fontSize:11,color:C.muted,fontWeight:400}}>of {allJobs.length}</span>
+            <HeCount value={activeJobs.length}/> <span style={{fontSize:11,color:C.muted,fontWeight:400}}>of {allJobs.length}</span>
           </div>
         </div>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Foremen on app today</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{foremenOnAppToday.length}</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}><HeCount value={foremenOnAppToday.length}/></div>
         </div>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Punches closed</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{punchesClosedToday}</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}><HeCount value={punchesClosedToday}/></div>
         </div>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>COs added</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{cosAddedToday}</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}><HeCount value={cosAddedToday}/></div>
         </div>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Photos today</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{photosToday.length}</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}><HeCount value={photosToday.length}/></div>
         </div>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Failed inspections</div>
           <div style={{fontSize:22,fontWeight:600,color: jobsWithFailedInspection.length > 0 ? C.red : C.text}}>
-            {jobsWithFailedInspection.length}
+            <HeCount value={jobsWithFailedInspection.length}/>
           </div>
         </div>
       </div>
@@ -50872,10 +50894,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-30 · App SW version: v478
+**Last manifest update:** 2026-09-30 · App SW version: v481
 
 ---
 
+- **Motion polish — the app feels alive (save chip, remote-change flash, check-offs, tabs, sheets)** · 'shipped 2026-09-30' · 'SW v481' · Koy asked for the app to feel more responsive and alive without changing what it does. **Save chip:** the "Saving… / Saved / Save failed" text in the three headers is now a small chip with a spinner, a check that draws itself, and an X that shakes on failure; tap the failed chip to retry the save. **Remote-change flash:** when another device edits a job, its Job Board row glows briefly and shows who changed it ("Daegan · just now"); your own edits, reconnects and server-side writes never flash. **Punch check-off:** ticking a punch item rings the row green, pops the checkbox and is meant to draw the strike-through across each line of the text, left to right (a thin overlay on the page, not part of the punch list) - that last part is unconfirmed: it did not show on Koy's iPhone in testing, so treat it as not working until re-checked; the normal strike-through still appears and nothing is lost; the "N open" count pops. **Job Detail tabs:** the active-tab highlight slides to the next tab and the tab body eases in from the direction of travel. **Today pulse counters** count up on load. **Stage pills** ring once when their label or color changes. **Job progress bars** fill in from zero the first time a job is seen. **Bottom sheets** spring up with a fading backdrop and can be dragged down to dismiss (grab the top bar; Cancel/Done still work); the Savant sheet drags by its handle. **First load** shows shimmering placeholder rows on the Job Board instead of a blank screen, and rows rise in with a short stagger (first 10, once per job per session). Everything honors the phone's "reduce motion" setting (near-instant, spinner and shimmer static). **Why it won't lose data:** presentational only. The new 'src/motion.js' imports nothing from Firebase and makes no writes; its only reads are the snapshot's change list and the device id inside a try/catch, called after the existing early-return in the jobs snapshot handler. Every 'App.js' edit adds a className, a style value, a ref, or a call to a pure helper on an existing element. The one new state ('doneFx' in the punch list) is local UI state and the punch-save call is unchanged. Tab highlight, pane ease and sheet drag only change transform/opacity on elements that already exist, so no tab state remounts. No fields, loader, rules, function or save-path changes. No SOP guide changes (behavior is unchanged).
+- **Home Runs — Import appliances window readable (white card)** · 'shipped 2026-09-30' · 'SW v480' · Koy: *"pop up when clicking import appliances is see through and unreadable."* The 'ApplianceImportModal' card used a CSS variable ('--card') that is not defined anywhere, so it rendered transparent over the page; it now uses the app's own white card and dark text colors ('C.card', 'C.text'). **Why it won't lose data:** two style values on one window; no data, save path, field or Firestore change.
+- **Home Runs — Appliance import marks confidence: ready / confirm / need specs** · 'shipped 2026-09-30' · 'SW v479' · Koy: *"if its red it should auto label needs specs, yellow needs to show somehow it needs to be confirmed, and green can just import with wire size."* The 'ApplianceImportModal' preview now tags each row by the sheet's Confidence: green READY imports with a suggested wire size ('applWire', from the breaker, or the load when no breaker is listed; 3-wire for range/oven/dryer/cooktop) and no status; yellow CONFIRM (Series, Typical, Voltage only, circuit only, conflicting, partial) imports with the wire and a note starting "CONFIRM:"; red (no spec found) imports with status "Need Specs", no wire, and a "specs not found" note. Rows are never marked Pulled. **Why it won't lose data:** same append-only import path as v478 — only the fields on the new rows change (wire, status, note), existing rows are never touched, no new fields, no loader or Firestore change.
 - **Home Runs — Import appliances from the master sheet (one job only)** · 'shipped 2026-09-30' · 'SW v478' · Koy: *"an import to this job home runs ... press a button and it copy-pasted it to that job number only. Don't let it go into any other job numbers."* New "Import appliances" button on the job's Home Runs tab ('HomeRunsTab', next to the By Panel / By Floor toggle; 'ApplianceImportModal'). It reads the Master tab of the "Appliance Loads - Master" Google Sheet as CSV and keeps ONLY rows whose Job label starts with that job's number ('simproNo', exact match; a job with no number refuses) AND are marked "Not in CC yet", then shows a preview; nothing is written until Confirm. Rows land on the job's own floor arrays (Main / Basement / Upper from the sheet's Floor or Location) as name = location + item, note = model, voltage, load amps and breaker; qty 2+ becomes one row per unit. Case-insensitive name de-dupe against everything already on the job makes the import safe to press twice. Needs the Sheet set to "Anyone with the link can view"; if it is not, the modal says so and changes nothing. **Why it won't lose data:** append-only — it builds the new rows and passes them through the same 'onHRChange' path as Bulk paste, existing rows are never edited or deleted; the job-number check runs when the list is built and again at Confirm; no new fields, no loader change, no Firestore or rules change.
 - **Tools tab — Appliance Loads (master sheet of every job's appliance and equipment loads with volts and amps)** · 'shipped 2026-09-30' · 'SW v477' · Koy: *"make this one of the tools in the new tools tab of the command center."* Second tool in the Tools tab ('TOOLS' registry): a window onto the "Appliance Loads - Master" Google Sheet — one tab per job (looked up by job number), each appliance with voltage, nameplate amps and breaker pulled from a model library by model number, plus an "In CC Home Runs?" column marking what is and is not in that job's Home Runs yet. A nightly cloud run adds new jobs and appliance packages from Drive and refreshes the Home Runs check by reading Command Center read-only. Page 'public/tools/appliance-loads/' embeds the Sheet and links to it; share the Sheet with whoever should see it. **Why it won't lose data:** the page has no backend, no Firestore, no storage and writes nothing; the app side adds one row to the 'TOOLS' list and one static folder; no job field, loader, function or rules change.
 - **Panelized Lighting — the panel schedule fits on one sheet when it can; Lutron sheets drop the Pulled column** · 'shipped 2026-09-30' · 'SW v476' · Koy, right after v475: *"I'd really like these to fit on one sheet if possible"* + *"also the pulled column isn't necessary on this."* Chose shrink-to-fit over a two-column sheet (keeps the 5.25-inch panel-cover strip). **Print** (popup, Cmd/Ctrl+P): the print stylesheet's extra 0.4in body padding is gone (the '@page' margin was already 0.4in, so the old sheet wore 0.8in of white on every side and lost 15% of the page height); the sheet is wrapped in '.sheet' and zoomed by a '--fit' custom property that an inline script sets after measuring a clone at the print strip width (so a phone's narrower screen layout can't skew it): 1 when it already fits, down to a **0.7 floor** to squeeze onto one page, and back to 1 (paginate with the v475 keep-together rules, which 'zoom' preserves because it reflows) when it would have to go smaller. **Download**: '_saveHtmlAsPdfPaged' gains 'opts.fitOne' (a minimum scale); the capture is drawn on ONE page shrunk to fit when that's ≥ 0.7, else the v475 pagination runs. The schedule passes 'fitOne: 0.7'. **Pulled column**: gone on Lutron sheets only ('isLut') — header, cells and the empty-module colspan; Control 4 / Crestron keep it since crews mark pulls there. Verified on real builder output: the Miller-shaped 10-module panel prints on 1 page (was 2) and downloads on 1 page; a 14-module panel fits one page at ~78% and is still clean; the 64-row bus fixture fits at ~78% too. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only, print/PDF rendering only — nothing is written; no field, loader, function or rules change; the loads-list PDF passes no 'fitOne' and is unchanged.
@@ -59306,6 +59331,7 @@ function App() {
         // Skip the heavy reprocess on metadata-only fires (cache<->server
         // transition, pending-write settle) — the doc DATA didn't change.
         if (!initialLoad.current && snap.docChanges().length === 0) return;
+        heNoteRemoteJobChanges(snap);   // presentation only; try/catch inside, never throws
 
         if(!snap.empty) {
 
@@ -61047,7 +61073,7 @@ function App() {
 
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
 
-  const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"✓ Saved",error:"Save failed"}[syncStatus];
+  const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"Saved",error:"Save failed"}[syncStatus];
 
 
   // view: "home" = main page, "foreman" = foreman-specific page
@@ -61321,11 +61347,15 @@ function App() {
     const rowBg    = isQuote ? `rgba(232,144,26,0.07)` : BG[priority];
     const rowLbord = isQuote ? C.accent : LBORD[priority];
     const rowBord  = isQuote ? `1px dashed ${C.accent}` : BORD[priority];
+    const _fl  = heFlashFor(job.id);
+    const _en  = (_fl && _fl.active) ? null : heEnter("row:" + job.id);
+    const _mfx = (_fl && _fl.active) ? _fl : _en;
 
     return (
 
-      <div className="job-row" onClick={()=>setSelected(job)}
-        style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:10,borderLeft:`3px solid ${rowLbord}`}}>
+      <div className={"job-row"+(_mfx?" "+_mfx.className:"")} onClick={()=>setSelected(job)}
+        style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:10,borderLeft:`3px solid ${rowLbord}`,
+          ...(_mfx?{animationDelay:`${_mfx.delay}ms`}:null)}}>
 
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
 
@@ -61356,6 +61386,7 @@ function App() {
               })()}
 
             </div>
+            {_fl && _fl.by && <span className="he-flash-by" style={{animationDelay:`${_fl.delay}ms`}}>{_fl.by} · just now</span>}
 
             <div style={{fontSize:11,color:C.dim,marginTop:1}}>
 
@@ -61438,7 +61469,7 @@ function App() {
 
           <div style={{flex:"1 1 150px",minWidth:130}}>
             <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
-            <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
+            <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough} animKey={job.id+":r"}/>
             {job.roughProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.roughStartConfirmed?"#3E7D5A":"#B23A3A"}}>
@@ -61449,7 +61480,7 @@ function App() {
 
           <div style={{flex:"1 1 190px",minWidth:150}}>
             <div style={{fontSize:9,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
-            <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
+            <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish} animKey={job.id+":f"}/>
             {job.finishProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.finishStartConfirmed?"#3E7D5A":"#B23A3A"}}>
@@ -62321,7 +62352,7 @@ function App() {
                 <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
                   <span style={{fontSize:11,color:C.dim}}>{jobs.length} job sites</span>
                   <span style={{width:3,height:3,borderRadius:"50%",background:C.border,display:"inline-block"}}/>
-                  <span style={{fontSize:11,color:syncColor,fontWeight:500}}>{syncLabel}</span>
+                  <HeSyncChip status={syncStatus} label={syncLabel} color={syncColor} onRetry={flushSaves} style={{fontSize:11,fontWeight:500}}/>
                 </div>
               </div>
 
@@ -62825,6 +62856,7 @@ function App() {
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                     padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Clear</button>}
               </div>
+              {!syncHealth.synced && jobs.length === 0 && <HeSkeleton n={5}/>}
               {(()=>{
                 const s = search.toLowerCase();
                 const homeFiltered = (s ? jobs.filter(j=>
@@ -62878,7 +62910,7 @@ function App() {
 
               <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
 
-                <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
+                <HeSyncChip status={syncStatus} label={syncLabel} color={syncColor} onRetry={flushSaves} style={{fontSize:11,fontWeight:500}}/>
 
                 <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
@@ -63300,7 +63332,7 @@ function App() {
                       <div style={{fontSize:11,color:C.dim}}>{cJobs.length} job{cJobs.length!==1?"s":""}</div>
                       {!isContractor&&(
                         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-                          <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
+                          <HeSyncChip status={syncStatus} label={syncLabel} color={syncColor} onRetry={flushSaves} style={{fontSize:11,fontWeight:500}}/>
                           <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
