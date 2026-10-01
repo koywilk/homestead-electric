@@ -29697,8 +29697,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           </div>
                           <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                             <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
-                            {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                            {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(()=>{
+                              // v495 — same feedback + no-duplicate treatment as the final
+                              // inspection button below (Koy: "nothing tells you it does work").
+                              const existingRT=(job.returnTrips||[]).find(r=>r&&!r.signedOff&&(r.fromFailedRough===true||r.scope==="Failed 4-way inspection items"));
+                              if (existingRT) return (
+                                <span style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#46916A18",border:"1px solid #46916A33",color:"#46916A",fontWeight:700}}
+                                  title="Already on a return trip — see the Return Trips tab">✓ On a return trip · {(existingRT.punch||[]).length} item{(existingRT.punch||[]).length===1?"":"s"}</span>
+                              );
+                              return (
                               <button onClick={()=>{
+                                if ((job.returnTrips||[]).some(r=>r&&!r.signedOff&&(r.fromFailedRough===true||r.scope==="Failed 4-way inspection items"))) { toast.info("Already on a return trip — see the Return Trips tab"); return; }
                                 // Carry EVERY 4-way item to the RT (done and
                                 // open), preserving done state so the RT
                                 // reflects the same checklist state the
@@ -29726,9 +29735,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                                   needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
                                 u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                                toast.success(`Return trip created with ${allItems.length} item${allItems.length===1?"":"s"} — needs a date. See the Return Trips tab.`);
                               }}
                                 style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#B23A3A18",border:"1px solid #B23A3A33",color:"#B23A3A",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
-                            )}
+                              );
+                            })()}
                           </div>
                         </div>
                       )}
@@ -30019,8 +30030,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           </div>
                           <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                             <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
-                            {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                            {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(()=>{
+                              // v495 (Koy 2026-10-01: "I just clicked it like five times … nothing
+                              // tells you it does work"): the button said nothing on success and
+                              // happily made a second trip on a second tap. Now: an open trip
+                              // already made from this inspection shows a ✓ chip in the button's
+                              // place, a tap toasts what it made, and a repeat tap is refused.
+                              const existingRT=(job.returnTrips||[]).find(r=>r&&!r.signedOff&&(r.fromFailedFinal===true||r.scope==="Failed final inspection items"));
+                              if (existingRT) return (
+                                <span style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#46916A18",border:"1px solid #46916A33",color:"#46916A",fontWeight:700}}
+                                  title="Already on a return trip — see the Return Trips tab">✓ On a return trip · {(existingRT.punch||[]).length} item{(existingRT.punch||[]).length===1?"":"s"}</span>
+                              );
+                              return (
                               <button onClick={()=>{
+                                if ((job.returnTrips||[]).some(r=>r&&!r.signedOff&&(r.fromFailedFinal===true||r.scope==="Failed final inspection items"))) { toast.info("Already on a return trip — see the Return Trips tab"); return; }
                                 const open=(job.finalInspectionItems||[]).filter(x=>!x.done);
                                 const reports = (job.finalInspectionReports||[]).map(r=>({
                                   ...r, fromInspection: "final",
@@ -30028,12 +30051,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                 const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",
                                   punch:open.map(x=>({id:uid(),text:x.text,done:false,...punchStamp()})),
                                   photos:reports,
+                                  fromFailedFinal:true,
                                   assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                                   needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
                                 u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                                toast.success(`Return trip created with ${open.length} item${open.length===1?"":"s"} — needs a date. See the Return Trips tab.`);
                               }}
                                 style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#B23A3A18",border:"1px solid #B23A3A33",color:"#B23A3A",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
-                            )}
+                              );
+                            })()}
                           </div>
                         </div>
                       )}
@@ -51016,7 +51042,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v494
+**Last manifest update:** 2026-10-01 · App SW version: v495
 
 ---
 
@@ -51037,6 +51063,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
+
+- **Failed inspection → Create Return Trip now confirms, and refuses a duplicate** · 'on branch 2026-10-01, awaiting Koy's go-ahead' · 'SW v495' · Koy: *"I just clicked it like five times trying to create it, but I didn't think it was working until I checked because nothing tells you it does work."* Both the Rough (4-way) and Finish (final) failed-items cards: tapping **→ Create Return Trip** now toasts "Return trip created with N items — needs a date. See the Return Trips tab", and while an open trip made from that inspection exists the button is replaced by a green **✓ On a return trip · N items** chip; a repeat tap toasts "Already on a return trip" instead of making another. Final-inspection trips now carry 'fromFailedFinal: true' (rough already had 'fromFailedRough'); the existing-trip check also matches by scope string so trips made before this ship count. **Why it won't lose data:** adds one boolean to NEW trips only; no existing trip, item or report is changed, and nothing is auto-deleted — duplicates Koy already made stay until he removes them on the Return Trips tab.
 
 - **Build guard: read-before-declare scan ('scripts/tdz-scan.js')** · 'shipped 2026-10-01' · 'SW v493' · Koy, after v490: *"gotta be more careful than that."* Every 'npm run build' now parses 'src/App.js' with Babel and FAILS if any function reads a 'const'/'let' before its declaration in code that runs during render (plain body, 'forEach'/'map' callbacks, IIFEs, 'useMemo'/'useState' initializers); handlers, effects, shadows and loop-carried lets are ignored. Proven on history: v488 clean, v490 flags all three bugs, v491 the remaining two, v492 clean; a '--selftest' guards the guard. Incident write-up in 'docs/incidents/2026-10-01-v490-black-screen.md'. **Why it won't lose data:** build-time script only; no app code or Firestore change.
 
