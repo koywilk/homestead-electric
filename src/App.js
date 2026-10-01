@@ -50894,7 +50894,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-30 · App SW version: v481
+**Last manifest update:** 2026-10-01 · App SW version: v482
 
 ---
 
@@ -50910,6 +50910,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — do the real thing from the row: Answer a question, Approve / Deny time off** · 'shipped 2026-10-01' · 'SW v482' · Koy: *"i need to be able to answer questions and check off time off requests etc and have it answer and check the question in the job, or approve the time off all from my day. Im checking things off but having to go find them throughout the app to actually get them done."* **Questions** (the v467 rows): a blue **Answer** button opens an inline box on the row; **Save answer** writes 'answer' (literal text, 'escapeHtml', like the GC / FieldInk answer paths), 'answeredBy' / 'answeredAt' / 'answeredVia:"myday"' and 'done:true' onto that question inside the job's 'roughQuestions' / 'finishQuestions' (one in-place map of the floor array through 'onUpdateJob', so 'saveJob' mirrors it to FieldInk exactly as the Questions section's edits do), 10 s Undo restores the previous answer / done / stamps. **Time off** (the v420 head-board docs, 'timeoffId'): the row now reads **Time off** and, for the head / admin / manager, carries **Approve** and **Deny** — new 'decideTimeOffFromBoard(timeoffId, status, me)' reads 'settings/timeOffRequests' + 'settings/crewPTO' fresh (seeding the three-way-merge baselines the Time Off page keeps live), then makes the SAME writes 'TimeOffPage.decide' makes (request status + 'decidedBy' / 'decidedAt' via 'mergeSaveSettingsFields'; the PTO mirror added on approve, pulled on deny) and closes the board doc with 'timeoffDecision' stamped. A request that was already removed on the Time Off page just closes the task with a note. Guide 'myday.html' updated. **Why it won't lose data:** both paths write only the fields their source screens already write, through the same funnels (settings three-way merge; 'saveJob' for the job patch; 'patchNeed' for the doc) and never add, remove or reorder a row; Undo on an answer restores the exact prior fields; no new collection, no loader or rules change.
 - **Panelized Lighting — the panel schedule PDF runs onto more pages instead of clipping; a module is never cut in half** · 'shipped 2026-09-30' · 'SW v475' · Koy exported "LCP 1 — Miller Residence - Alpine.pdf" and "LCP 3 — …" (10 modules each) and both came out as ONE 8.5×11 page with Module 1, the last table on the sheet, sliced mid-table (LCP 1 lost its 4th row, LCP 3 rows 3 and 4) — and the on-screen **Print** button sitting in the picture. Root cause: **Download** on a panel card ('downloadPanelSchedule' — the Lutron builder cards and the Control 4 / Crestron module sections all use it) handed the schedule HTML to '_saveHtmlAsPdf', which html2canvas-captures a fixed 816×1056 iframe: exactly one page, everything below it gone, and no '@media print' rules applied (html2canvas renders screen media, so 'page-break-inside: avoid' and the hidden toolbar never reached the PDF). **Print** (the popup + Cmd/Ctrl+P) was already right — '.module { page-break-inside: avoid }' was there and Chrome puts a 10-module panel on 2 pages with the cut between modules. Now the download goes through '_saveHtmlAsPdfPaged' (the v448 loads-list saver), which grew two knobs: 'avoid' — a CSS selector for blocks that must not straddle a page edge; the cut moves UP to the block's top so it starts the next page whole (the canvas twin of 'break-inside: avoid', outermost block first) — and 'hide' for screen-only chrome dropped before capture. The schedule passes 'avoid: ".module:not(.tall), .module tr"' and 'hide: ".toolbar"'. The print stylesheet adds 'break-inside: avoid' beside the old 'page-break-inside', 'tr { break-inside: avoid }' and 'thead { display: table-header-group }' so column headers repeat when a table does span pages. A module with more than 40 rows (a 64-load 2HDC / DALI bus module) gets class 'tall': it can't stay whole, so instead of being shoved onto a fresh page and leaving page 1 header-only it flows row by row. The header (logo, panel, job, totals) stays on page 1. **Verified** on real builder output (harness ran 'printPanelSchedule' straight out of App.js): headless-Chrome print-to-PDF of a Miller-shaped 10-module panel = 2 pages, Module 4 closes page 1 and Module 3 opens page 2; a 14-module panel = 2 pages cut between Module 8 and Module 7; the 64-row bus fixture = 2 pages with headers repeated (was 3 with a header-only first page). The real '_saveHtmlAsPdfPaged' run in a browser harness with 'jsPDF.save' stubbed produced the same multi-page output with every cut on a module or row edge. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only — Print and Download only read the panel / loads and write nothing to Firestore; no new field, no loader, function or rules change; the loads-list PDF (the other '_saveHtmlAsPdfPaged' caller) passes no options and behaves exactly as before; the electrical-panel and Savant downloads still use the untouched '_saveHtmlAsPdf'.
 - **Merge: main's v467–v471 (job questions on My Day, Tools tab generator sizing, zone picker search, generator link sizing, hours-vs-bid, panelized stale-copy guard) with this branch's v467–v468** · 'shipped 2026-09-30' · 'SW v472' · The two lines of work reused v467 and v468. No code conflicted: only the FEATURES.md header + entry list (both kept), the generated 'SOP_FILES_INLINE' block (regenerated by prebuild), the SW line, and the prebuild chain in 'package.json' (union: main's 'panel-loads-merge-test.js' and this branch's 'panel-fill-test.js' both run). **Why it won't lose data:** merge only, no new write.
 - **Home Runs — panel FILL no longer duplicates a breaker (or drops one) when the panel is too small** · 'shipped 2026-09-30' · 'SW v468' · Koy, on Miller: *"the generator says 52 circuits 56 panel slots, but pre filling the 30/60 panel it says 59 spots filled and i see a duplicate water heater 1 on the schedule."* Reproduced with the shipped code against Miller's live rows: a 30-slot fill of the 54 "Dedicated Loads" breakers produced 59 rows, "Water heater 1" at 21A and 22A, and "Wellness outlets + bath hall" unplaced. Root cause in 'placeBreakers'' tandem step: when same-amp pairs weren't enough, the leftovers were copied out of the amp groups but the groups were never emptied, so a breaker paired into a split tandem was placed again as a single, every unpaired leftover was re-added twice, and a real circuit fell off the end. The groups are now drained before the leftovers are re-added once. New prebuild gate 'scripts/panel-fill-test.js' (the Miller shape at 20 / 30 / 40 / 60 slots, mixed-amp odd counts, 200 random sets: every breaker lands exactly once, never twice, never lost). **Separately, not a bug:** the generator's 52 / 56 vs the Dedicated Loads panel's 54 / 58 is two home-run rows labeled "Dedicated Loads" by hand that are not checked on the generator ("Horn and strobe (old Lighting control 8)" and "Pantry fridge/ freezer") — the panel schedule counts every row carrying the label, the generator counts only what is checked. **Why it won't lose data:** pure placement function; a FILL / RE-FILL writes the same 'circuits' map shape as before, now without the duplicate and the dropped row; nothing auto-rewrites a hand-edited schedule (the existing RE-FILL rule stands).
@@ -51469,6 +51470,35 @@ function parseAppMapManifest(md) {
 // Stored in settings/timeOffRequests (settings is open read/write, so NO rules
 // change needed). Approving mirrors the entry into settings/crewPTO so it shows
 // on the existing Crew Planner calendar — same list the planner already reads.
+// v482 (Koy 2026-10-01: "check off time off requests … and approve the time off
+// all from my day"): the SAME writes TimeOffPage.decide makes — request status
+// (+ decidedBy/At) through the settings merge funnel, the PTO mirror added on
+// approve / pulled on anything else — callable from a My Day row. Reads both
+// settings docs first so the three-way-merge baselines are the server's
+// current copy (TimeOffPage keeps them live; the board has no listener).
+// The caller marks the head's board doc done through its own patch funnel.
+async function decideTimeOffFromBoard(timeoffId, status, me) {
+  const [reqSnap, ptoSnap] = await Promise.all([getDoc(doc(db, "settings", "timeOffRequests")), getDoc(doc(db, "settings", "crewPTO"))]);
+  const reqDoc = reqSnap.exists() ? (reqSnap.data() || {}) : {};
+  const ptoDoc = ptoSnap.exists() ? (ptoSnap.data() || {}) : {};
+  _settingsBaselines["timeOffRequests"] = reqDoc;
+  _settingsBaselines["crewPTO"] = ptoDoc;
+  const requests = Array.isArray(reqDoc.list) ? reqDoc.list : [];
+  const r = requests.find(x => x && x.id === timeoffId);
+  if (!r) return { ok: false, reason: "missing" };
+  const nowIso = new Date().toISOString();
+  await mergeSaveSettingsFields("timeOffRequests", { list: requests.map(x => x && x.id === timeoffId ? { ...x, status, decidedBy: me, decidedAt: nowIso } : x) });
+  const ptoList = Array.isArray(ptoDoc.list) ? ptoDoc.list : [];
+  if (status === "approved" && !ptoList.some(p => p && p.timeoffId === timeoffId)) {
+    const entry = { id: "pto_" + r.id, timeoffId: r.id, name: r.name, start: r.start, end: r.end || r.start, note: r.note || "Time off", usePaid: r.usePaid !== false };
+    await mergeSaveSettingsFields("crewPTO", { list: [...ptoList, entry] });
+  }
+  if (status !== "approved") {
+    const filtered = ptoList.filter(p => p && p.timeoffId !== timeoffId);
+    if (filtered.length !== ptoList.length) await mergeSaveSettingsFields("crewPTO", { list: filtered });
+  }
+  return { ok: true, request: r };
+}
 function TimeOffPage({ identity = null, users = [] }) {
   const me = identity?.name || "";
   const access = getAccess(identity);
@@ -56165,9 +56195,22 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     // (reNudge / renudge pref), deep-linked to this task on their My Day.
     const nudge = readOnly && assignee && !sameName(assignee, me) && sentByMe(n, identity)
       ? { to: assignee, title: `${first(me)} is asking about a task`, body: `${n.text || "a task"}${n.jobName ? ` · ${n.jobName}` : ""}`, needId: n.id } : null;
+    // v482: a time-off request routed onto the board (TimeOffPage writes the
+    // doc with timeoffId) is decided RIGHT HERE — Approve / Deny make the same
+    // writes the Time Off page does, then close this doc. Approvers only.
+    const isTimeOff = !!n.timeoffId;
+    const canDecideTimeOff = isTimeOff && !readOnly && (iAmHead || ["admin", "manager"].includes(getAccess(identity)));
+    const decideTimeOff = async (status) => {
+      try {
+        const res = await decideTimeOffFromBoard(n.timeoffId, status, me);
+        if (!res.ok) { toast.error("That request is no longer on the Time Off page — closing the task."); }
+        else toast.success(status === "approved" ? `Approved — ${first(res.request.name || n.requestedBy || "")} is on the calendar.` : `Denied ${first(res.request.name || n.requestedBy || "")}'s request.`);
+        onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me, timeoffDecision: status }, n);
+      } catch (e) { toast.error("Couldn't decide: " + (e?.message || "")); }
+    };
     return { key, kind: "need", needKind: k, bucket: needBucket(n, todayYmd), title: n.text || "(no text)",
       prio: needPriority(n), dueYmd: n.dueDate || "",
-      tag: k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need", tagColor: k === "task" ? C.teal : C.orange,
+      tag: isTimeOff ? "Time off" : k === "bodies" ? "Bodies" : k === "task" ? "Task" : "Need", tagColor: isTimeOff ? C.purple : k === "task" ? C.teal : C.orange,
       sub: [n.jobName, from ? `from ${first(from)}` : ""].filter(Boolean),
       assignee, canReassign, nudge,
       ...(canReassign ? {
@@ -56185,11 +56228,17 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
       onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); },
       // v434: Edit + Void — the sender (assignedBy/createdBy me) or whoever
       // runs the head board. The assignee alone never gets Void (Done/Snooze).
-      actions: canManageNeed(n) ? [
+      actions: (canDecideTimeOff || canManageNeed(n)) ? [
+        ...(canDecideTimeOff ? [
+          { label: "Approve", title: "Approve this time off — same as Approve on the Time Off page; adds it to the calendar and closes this task", onClick: () => decideTimeOff("approved"), tone: "primary" },
+          { label: "Deny", title: "Deny this time off — same as Deny on the Time Off page; closes this task", onClick: () => decideTimeOff("denied"), tone: "ghost" },
+        ] : []),
+        ...(canManageNeed(n) ? [
         { label: "Edit", title: "Change wording, due date, person or job", onClick: () => openEdit("need_" + n.id, n), tone: "ghost" },
         // Auto-task delegates: Void wouldn't cancel anything (the auto row just
         // comes back on the head's board) — Take back is the tool there.
         ...(n.autoTaskId ? [] : [{ label: "Void", title: "Cancel this task (keeps a record)", onClick: () => openVoid("need_" + n.id), tone: "ghost" }]),
+        ] : []),
       ] : undefined };
   };
   const dutyRow = (d, readOnly) => {
@@ -56225,13 +56274,29 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   // v463: job questions whose recipient is me (Rough / Finish tab → Assign to).
   // Tap opens the job on that tab to answer; Done marks the question done
   // (same whole-map write the Questions section itself makes), 10 s Undo.
-  questionsAssignedTo(me, jobs).forEach(q => mineRows.push({ key: "question_" + q.jobId + "_" + q.id, kind: "question", bucket: "today", title: plainText(q.question) || "question",
-    tag: "Question", tagColor: C.teal, sub: [q.jobName, q.phase, q.room || q.floor].filter(Boolean), jobId: q.jobId, section: q.phase, canDone: true, canSnooze: false,
-    onDone: () => {
-      const field = q.phase === "Rough" ? "roughQuestions" : "finishQuestions";
-      const setDone = (v) => { const job = (jobs || []).find(j => j && j.id === q.jobId); if (!job) return; const cur = job[field] || {}; const next = { ...cur, [q.floorKey]: (Array.isArray(cur[q.floorKey]) ? cur[q.floorKey] : []).map(x => x && x.id === q.id ? { ...x, done: v } : x) }; onUpdateJob({ ...job, [field]: next }, { [field]: next }); };
-      setDone(true); stage("Question closed", () => setDone(false));
-    } }));
+  questionsAssignedTo(me, jobs).forEach(q => {
+    const qKey = "question_" + q.jobId + "_" + q.id;
+    const field = q.phase === "Rough" ? "roughQuestions" : "finishQuestions";
+    // One in-place write of the question's own fields; saveJob mirrors the
+    // patched list to FieldInk exactly as the Questions section's edits do.
+    const patchQ = (fields) => { const job = (jobs || []).find(j => j && j.id === q.jobId); if (!job) return; const cur = job[field] || {}; const next = { ...cur, [q.floorKey]: (Array.isArray(cur[q.floorKey]) ? cur[q.floorKey] : []).map(x => x && x.id === q.id ? { ...x, ...fields } : x) }; onUpdateJob({ ...job, [field]: next }, { [field]: next }); };
+    mineRows.push({ key: qKey, kind: "question", bucket: "today", title: plainText(q.question) || "question",
+      tag: "Question", tagColor: C.teal, sub: [q.jobName, q.phase, q.room || q.floor].filter(Boolean), jobId: q.jobId, section: q.phase, canDone: true, canSnooze: false,
+      onDone: () => { patchQ({ done: true }); stage("Question closed", () => patchQ({ done: false })); },
+      // v482 (Koy: "answer questions … and have it answer and check the question in
+      // the job … all from my day"): Answer opens an inline box; Save writes the
+      // answer (literal text, HTML-escaped like the GC / FieldInk answer paths),
+      // stamps answeredBy / answeredAt and marks it done, 10 s Undo.
+      actions: [{ label: "Answer", title: "Type the answer here — it lands on the question in the job and marks it answered", tone: "primary",
+        onClick: () => { setAnsText(""); setAnsFor(k => k === qKey ? null : qKey); } }],
+      onAnswer: (text) => {
+        const t = String(text || "").trim(); if (!t) return;
+        const before = { answer: q.answer || "", done: !!q.done, answeredBy: q.answeredBy || "", answeredAt: q.answeredAt || "", answeredVia: q.answeredVia || "" };
+        patchQ({ answer: escapeHtml(t), done: true, answeredBy: me, answeredAt: new Date().toISOString(), answeredVia: "myday" });
+        setAnsFor(null); setAnsText("");
+        stage("Answered", () => patchQ(before));
+      } });
+  });
   // v408: auto-tasks are the HEAD's, all of them. Foremen see none (Koy: they
   // "don't really make sense for the foremans"). Each head row carries its
   // delegation state from the joined task doc (autoDelegation).
@@ -56637,6 +56702,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   }, [jumpNeedId, needs]); // eslint-disable-line
   // v421 update panel state (Row is a plain render fn, so state lives here).
   const [updFor, setUpdFor] = useState(null);
+  // v482: inline Answer box on a job-question row (writes the answer into the job).
+  const [ansFor, setAnsFor] = useState(null);
+  const [ansText, setAnsText] = useState("");
   const [updKind, setUpdKind] = useState("note");
   const [updText, setUpdText] = useState("");
   const [updUntil, setUpdUntil] = useState("");
@@ -56841,6 +56909,19 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
               ))}
               {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
               {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
+            </div>
+          )}
+          {ansFor === r.key && r.onAnswer && !selectMode && (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
+              <input type="text" value={ansText} autoFocus onChange={e => setAnsText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") r.onAnswer(ansText); if (e.key === "Escape") { setAnsFor(null); setAnsText(""); } }}
+                placeholder="Type the answer…"
+                style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: C.dim }}>Lands on the question in the job and marks it answered.</span>
+                <button onClick={() => { setAnsFor(null); setAnsText(""); }} style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
+                <button onClick={() => r.onAnswer(ansText)} disabled={!ansText.trim()}
+                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>Save answer</button>
+              </div>
             </div>
           )}
           {editFor === r.key && editDraft && r.need && !selectMode && (() => {
