@@ -51013,7 +51013,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v490
+**Last manifest update:** 2026-10-01 · App SW version: v491
 
 ---
 
@@ -51033,6 +51033,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
+
+- **HOTFIX — My Day black screen on v490** · 'shipped 2026-10-01' · 'SW v491' · Koy: *"the app is black screen wont load sos."* v490 declared the question-discussion listener state ('qThreads') BELOW the question-row builder that reads it, so React threw "cannot access 'qThreads' before initialization" on every My Day render for anyone with a question assigned to them — and My Day is the landing page. The listener block now sits above the row builder. No data or behaviour change. **Why it won't lose data:** render-order fix only; no Firestore reads or writes changed.
 
 - **My Day — the question row shows its discussion** · 'shipped 2026-10-01' · 'SW v490' · Koy: *"should be able to also see the discussion there."* My Day now listens to 'homeowner_requests/<jobId>.questionThreads' for every job that has a question on the viewer (one 'onSnapshot' per job, attached / detached as the set changes) and each question row carries its thread (legacy 'q.thread' + the side-doc messages, oldest → newest): the latest line shows under the row ("Gage (field): …  · 2h") with an **N in discussion ▾** button that unfolds the whole thread (client messages in orange, photo links), the same look as a task's replies; a reply posted from the row, FieldInk or the question link appears live. The row's sub line also names who asked. The **New reply** marker now reads the thread's last message too. **Also in v490 — the New group** (Koy: *"the thing that shows anything new added so its easily visible"*): on top of the per-row tags, every new row and every row with a new reply is listed again in a **New since <when you last looked>** group at the very top of the page, open by default with an 'N new' badge; same row objects, so Done / Answer / Approve / Deny work from there. It disappears when nothing is new (first open after the update included, since that open seeds the memory). And the **N new** badge sits on every dropdown header — the Mine / Sent group headers, each category inside Mine (Tasks on me, Punch, Questions…) and each job header in the Job view (Koy: *"want it to appear on each drop downs header so i can see it easy"*). Guide 'myday.html' updated. **Why it won't lose data:** read-only listener; no write path changed.
 - **My Day — "New" since you last looked; Reply in a question's discussion** · 'shipped 2026-10-01' · 'SW v485' · Koy: *"it would be nice to easily see new items added that are new from the last time i opened the my day tab, or reply to questions in discussion instead of answering etc."* **New:** per device, per user ('localStorage' key 'he_myday_seen_<userKey>'), My Day remembers the Mine row keys it showed and when; on the next open every row not in that set wears a blue **New** tag, a task doc whose latest update is newer than that time (and not mine) wears **New reply**, and each category header shows **N new**. The stored set is read once per visit and frozen (rows stay New until you leave) and rewritten after every render; a first-ever visit marks nothing. **Reply:** question rows get **Reply** beside Answer — the inline box in reply mode posts '{id, by, role:"crew", text, photos:[], at}' to 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]' through the same transactional 'postQuestionThreadMessage' the Questions section and question links use, then calls 'publishCcQuestions' so the pin's thread in FieldInk follows; the question stays open. Guide 'myday.html' updated. **Why it won't lose data:** the New marker is browser storage only (never Firestore); Reply appends one message through the existing transaction (key-scoped, never touches jobs/*), and never changes the question's answer / done.
@@ -56787,6 +56789,29 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
     tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
     onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
+  // v491 hotfix: this block must sit ABOVE the question-row builder below, which
+  // reads qThreads — declaring it later threw "cannot access before initialization"
+  // and black-screened My Day for anyone with a question on them (v490).
+  // v487 (Koy 2026-10-01: "should be able to also see the discussion there"): the
+  // question rows' discussion threads live on homeowner_requests/<jobId>
+  // .questionThreads (never on the job doc). Listen to that doc for every job
+  // that has a question on me, so the row shows the thread live and a reply
+  // posted here (or from FieldInk / the question link) appears without a reload.
+  const [qThreads, setQThreads] = useState({});
+  const qJobIdsKey = questionsAssignedTo(identity && identity.name, jobs).map(q => q.jobId).filter((v, i, a) => a.indexOf(v) === i).sort().join("\n");
+  useEffect(() => {
+    const ids = qJobIdsKey ? qJobIdsKey.split("\n") : [];
+    if (!ids.length) { setQThreads({}); return; }
+    const unsubs = ids.map(jid => {
+      try {
+        return onSnapshot(doc(db, "homeowner_requests", jid), snap => {
+          const t = snap.exists() ? ((snap.data() || {}).questionThreads || {}) : {};
+          setQThreads(prev => ({ ...prev, [jid]: t }));
+        }, () => {});
+      } catch { return null; }
+    });
+    return () => { unsubs.forEach(u => { try { u && u(); } catch {} }); };
+  }, [qJobIdsKey]);
   // v463: job questions whose recipient is me (Rough / Finish tab → Assign to).
   // Tap opens the job on that tab to answer; Done marks the question done
   // (same whole-map write the Questions section itself makes), 10 s Undo.
@@ -57262,26 +57287,6 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const [ansFor, setAnsFor] = useState(null);
   const [ansText, setAnsText] = useState("");
   const [ansMode, setAnsMode] = useState("answer");   // v485: "answer" writes the answer; "reply" posts to the discussion
-  // v487 (Koy 2026-10-01: "should be able to also see the discussion there"): the
-  // question rows' discussion threads live on homeowner_requests/<jobId>
-  // .questionThreads (never on the job doc). Listen to that doc for every job
-  // that has a question on me, so the row shows the thread live and a reply
-  // posted here (or from FieldInk / the question link) appears without a reload.
-  const [qThreads, setQThreads] = useState({});
-  const qJobIdsKey = questionsAssignedTo(identity && identity.name, jobs).map(q => q.jobId).filter((v, i, a) => a.indexOf(v) === i).sort().join("\n");
-  useEffect(() => {
-    const ids = qJobIdsKey ? qJobIdsKey.split("\n") : [];
-    if (!ids.length) { setQThreads({}); return; }
-    const unsubs = ids.map(jid => {
-      try {
-        return onSnapshot(doc(db, "homeowner_requests", jid), snap => {
-          const t = snap.exists() ? ((snap.data() || {}).questionThreads || {}) : {};
-          setQThreads(prev => ({ ...prev, [jid]: t }));
-        }, () => {});
-      } catch { return null; }
-    });
-    return () => { unsubs.forEach(u => { try { u && u(); } catch {} }); };
-  }, [qJobIdsKey]);
   // v485 (Koy 2026-10-01: "easily see new items added that are new from the last
   // time i opened the my day tab"): what THIS device showed on this user's Mine
   // list last time (row keys + when). Read once per visit, frozen for the visit,
