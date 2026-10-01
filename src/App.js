@@ -16412,7 +16412,7 @@ const applWire = (item, volts, brk, load) => {
   return "";
 };
 
-function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport }) {
+function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, onCancel, onImport }) {
   const [state, setState] = useState({ loading:true, err:"", items:[], skippedDup:0, inCC:0, totalForJob:0 });
   useEffect(()=>{
     let dead=false;
@@ -16440,6 +16440,8 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport
           if (!(qty>0)) return;
           totalForJob++;
           if (String(c[iIn]||"").trim().toLowerCase()!=="not in cc yet") { inCC++; return; }
+          // Linked by hand in the Appliance Loads view (already in Home Runs under another name): skip.
+          if (skipKeys && skipKeys.has([m[1],c[iLoc],c[iItem],iModel>=0?c[iModel]:""].map(x=>String(x||"").trim().toLowerCase()).join("|"))) { inCC++; return; }
           const loc=String(c[iLoc]||"").trim(), item=String(c[iItem]||"").trim();
           const base=`${loc} ${item}`.trim(); if(!base) return;
           const bits=[String(c[iModel]||"").trim(), c[iV]?`${String(c[iV]).trim()}V`:"", c[iLoad]?`${String(c[iLoad]).trim()}A load`:"", c[iBrk]?`${String(c[iBrk]).trim()}A breaker`:""].filter(Boolean);
@@ -17786,7 +17788,7 @@ function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
 }
 
 
-function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false}) {
+function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false, applLinks, onApplLinks}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [genReady,        setGenReady]        = useState(false); // v473: the saved list has arrived (or the read failed)
@@ -17799,6 +17801,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
   const [editingBreakers, setEditingBreakers] = useState(null); // panel name currently in edit mode
   const [hrView,          setHrView]          = useState(null); // null = auto: panel view once any panel is labeled, floor view before that
   const [applImportOpen, setApplImportOpen] = useState(false); // v478: import from appliance master sheet
+  const [applViewOpen, setApplViewOpen] = useState(false);     // v483: this job's appliance loads sheet (view + link to a Home Run)
   const [addingPO,        setAddingPO]        = useState({});  // { [panelName]: selectedSource }
   const [poConfirm,       setPoConfirm]       = useState({});  // { [panelName]: confirmMessage }
   const showPOConfirm = (p, msg) => { setPoConfirm(v=>({...v,[p]:msg})); setTimeout(()=>setPoConfirm(v=>({...v,[p]:null})),3000); };
@@ -18487,7 +18490,31 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>
                 Import appliances
               </button>
+              <button type="button" onClick={()=>setApplViewOpen(true)} disabled={!jobNumber}
+                title={jobNumber ? "See this job's appliance loads from the master sheet and link any it did not recognize" : "This job has no job number"}
+                style={{fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:99,cursor:jobNumber?"pointer":"default",fontFamily:"inherit",
+                  border:`1px solid ${C.accent}`,background:`${C.accent}18`,color:C.accent}}>
+                Appliance loads
+              </button>
             </div>
+
+            {applViewOpen && (
+              <div onClick={()=>setApplViewOpen(false)}
+                style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9998,display:"flex",alignItems:"center",justifyContent:"center",padding:12}}>
+                <div onClick={e=>e.stopPropagation()}
+                  style={{background:C.bg,borderRadius:14,width:1040,maxWidth:"100%",height:"92vh",display:"flex",flexDirection:"column",border:`1px solid ${C.border}`,overflow:"hidden"}}>
+                  <div style={{display:"flex",alignItems:"center",padding:"8px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface}}>
+                    <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:C.dim}}>APPLIANCE LOADS · JOB #{jobNumber}</span>
+                    <span style={{flex:1}}/>
+                    <button type="button" onClick={()=>setApplViewOpen(false)}
+                      style={{padding:"6px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Close</button>
+                  </div>
+                  <ApplianceLoadsView onlyNo={jobNumber}
+                    jobs={[{simproNo:jobNumber,name:jobName,homeRuns,applLinks}]}
+                    onUpdateJob={(upd,patch)=>{ if(patch&&patch.homeRuns) onHRChange(patch.homeRuns); if(patch&&patch.applLinks&&onApplLinks) onApplLinks(patch.applLinks); }}/>
+                </div>
+              </div>
+            )}
 
             {applImportOpen && (
               <ApplianceImportModal jobNumber={jobNumber} jobName={jobName} homeRuns={homeRuns}
@@ -30090,6 +30117,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               electricalPanels={job.electricalPanels||[]}
               onElectricalPanelsChange={v=>u({electricalPanels:v})}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
+              applLinks={job.applLinks} onApplLinks={v=>u({applLinks:v})}
               finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}
               hideGenerator={isSectionHidden(job,"generator")}
@@ -50920,10 +50948,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v485
+**Last manifest update:** 2026-10-01 · App SW version: v486
 
 ---
 
+- **Tools tab — Appliance Loads becomes a native dashboard: job summary table, click-in job pages, Import button** · 'shipped 2026-10-01' · 'SW v486' · Koy: *"i want this displayed in the app as the tool … easy to see all the jobs like the job summary table … job cards should pull up the specific job page of appliances only, and have an import button."* The Appliance Loads tool no longer embeds the Sheet; 'ApplianceLoadsView' reads the master Sheet's Master tab as CSV (same link-viewing read the Home Runs import uses) and shows a KPI strip (jobs, line items, connected amps, Not in CC yet, to confirm, need specs) over a job summary table with a totals row. Tapping a job opens ITS appliances only (qty, volts, load amps, breaker, total amps, Home Runs status, green / yellow / red edge from the sheet's Confidence) with All / Not in CC / To confirm / Need specs filters (a row already entered in that job's Home Runs counts as Confirmed even when its spec was only typical or series; a row with no amps found stays Need specs), an All-jobs back button, and **Import appliances to Home Runs**, which opens the existing 'ApplianceImportModal' for that job number only (preview + confirm, Not-in-CC rows only, duplicates skipped). The button is disabled when no Command Center job carries that job number (matched on 'simproNo', never by name). The job page now has bold CONFIRMED / CONFIRM / NEED SPECS tiles and chips with tinted rows, and each row opens to show the file and page it was found in (new Master columns Source file link / Source page / Spec file). **Likely CC match:** for a row marked Not in CC yet, the view suggests the Home Runs row it probably is (appliance type plus room words) with a 'Yes, same' button, and a picker lists the job's Home Runs so a person can link it by hand when the names differ; a linked row counts as In CC (green) and the import skips it. The link is stored as one new field 'applLinks' on that job (a map of row key to Home Run id and name), written through the same 'updateJob' funnel, and can be removed. The old iframe page stays in 'public/tools/appliance-loads/' unused. **Why it won't lose data:** the view only reads the Sheet; its single write is the import's append to ONE job's 'homeRuns' through 'updateJob' with a 'homeRuns' patch — the same field and the same funnel the Home Runs tab's own Import button already uses — and it appends rows without touching or removing existing ones; the only other write is the optional 'applLinks' map, additive on one job and never read by any other screen; no loader, rules or function changes.
 - **Tools tab — Service Size calculator (NEC 220.82) with plan reading, limited by Tool access** · 'shipped 2026-10-01' · 'SW v484' · Josh built it (Claude artifact, then ported for the app per Koy's handoff): *"It runs the NEC 220.82 optional calc, lets you mark appliances Yes / Maybe / No when we don't know what's going in yet, and shows what size service we'd need either way. It also writes a bid note … drop in a plan set PDF and it reads the sheets and fills in the calculator."* Koy + Josh: limit it to Josh, Brady, Koy and Jeromy so it doesn't run up usage. **What it is:** a third Tools chip, **Service Size** — a standalone page in 'public/tools/service-size/' (React + pdf.js 4.10.38 legacy build bundled by esbuild from 'tools-src/service-size/'; build output committed, checksums matched Josh's tested build byte-for-byte, his 6 tests pass incl. Miller 332 / 442 / 600 A). Single-family 120/240 V service size with confirmed-only and with-maybes numbers, undecided fuels counted gas in the first and electric in the second, per-item amps added, what-ifs that bump the size, utility/solar/snowmelt flags, the 220.82(B)+(C) table and a copyable **bid note**. **Plan reading:** drop a PDF or sheet photos; pdf.js renders up to 8 sheets (floor plans and electrical first) in the browser and POSTs them to the new Vercel function 'api/read-plans.js' (CommonJS, zero deps), which calls the Claude API ('ANTHROPIC_MODEL', default claude-sonnet-5-5) and returns the calculator inputs; filled fields get a **plans** tag, plus floor areas, findings by sheet, owner questions and loads not in the calc. The function refuses everything without the 'PLANS_ACCESS_KEY' env var and 401s a missing/wrong 'x-plans-key' header (the page sends it from 'window.SSC_CONFIG' in its index.html — visible in page source, so the Anthropic spend limit is the real cap). **Access:** new 'tools.serviceSize' permission with no tier (per-user grant only); 'TOOLS' rows can carry 'perm', 'ToolsView' shows a row only when 'can(who, perm)' against the viewer's LIVE team record ('myLiveRec', the v465 lesson — the login snapshot can lack 'caps'); Settings → Team gets a **TOOL ACCESS** section (admins/managers) that writes the same 'caps' array as the hats. Hiding the chip does not lock the page URL; the key + spend limit do. Guide 'tools.html' gains a Service Size section. **Flip-day:** Vercel env 'ANTHROPIC_API_KEY' (Josh's key) + 'PLANS_ACCESS_KEY' set 2026-10-01; tick Service Size for Josh, Brady, Koy, Jeromy in Settings → Team; drop one real plan set. **Why it won't lose data:** nothing in the tool reads or writes Firestore (Save to job is left out of this version); the only new write is the 'caps' checkbox, through the existing guarded 'upd' → 'saveUsers' path the hats already use; the Vercel function stores nothing; no loader, rules or Cloud Function change.
 - **Motion polish — the app feels alive (save chip, remote-change flash, check-offs, tabs, sheets)** · 'shipped 2026-09-30' · 'SW v481' · Koy asked for the app to feel more responsive and alive without changing what it does. **Save chip:** the "Saving… / Saved / Save failed" text in the three headers is now a small chip with a spinner, a check that draws itself, and an X that shakes on failure; tap the failed chip to retry the save. **Remote-change flash:** when another device edits a job, its Job Board row glows briefly and shows who changed it ("Daegan · just now"); your own edits, reconnects and server-side writes never flash. **Punch check-off:** ticking a punch item rings the row green, pops the checkbox and is meant to draw the strike-through across each line of the text, left to right (a thin overlay on the page, not part of the punch list) - that last part is unconfirmed: it did not show on Koy's iPhone in testing, so treat it as not working until re-checked; the normal strike-through still appears and nothing is lost; the "N open" count pops. **Job Detail tabs:** the active-tab highlight slides to the next tab and the tab body eases in from the direction of travel. **Today pulse counters** count up on load. **Stage pills** ring once when their label or color changes. **Job progress bars** fill in from zero the first time a job is seen. **Bottom sheets** spring up with a fading backdrop and can be dragged down to dismiss (grab the top bar; Cancel/Done still work); the Savant sheet drags by its handle. **First load** shows shimmering placeholder rows on the Job Board instead of a blank screen, and rows rise in with a short stagger (first 10, once per job per session). Everything honors the phone's "reduce motion" setting (near-instant, spinner and shimmer static). **Why it won't lose data:** presentational only. The new 'src/motion.js' imports nothing from Firebase and makes no writes; its only reads are the snapshot's change list and the device id inside a try/catch, called after the existing early-return in the jobs snapshot handler. Every 'App.js' edit adds a className, a style value, a ref, or a call to a pure helper on an existing element. The one new state ('doneFx' in the punch list) is local UI state and the punch-save call is unchanged. Tab highlight, pane ease and sheet drag only change transform/opacity on elements that already exist, so no tab state remounts. No fields, loader, rules, function or save-path changes. No SOP guide changes (behavior is unchanged).
 - **Home Runs — Import appliances window readable (white card)** · 'shipped 2026-09-30' · 'SW v480' · Koy: *"pop up when clicking import appliances is see through and unreadable."* The 'ApplianceImportModal' card used a CSS variable ('--card') that is not defined anywhere, so it rendered transparent over the page; it now uses the app's own white card and dark text colors ('C.card', 'C.text'). **Why it won't lose data:** two style values on one window; no data, save path, field or Firestore change.
@@ -55595,6 +55624,363 @@ const NAV_SUBS_TAB = { key: "subcontractors", label: "Subcontractors", icon: "ha
 const navTabVisible = (t, identity, mode = "resi") =>
   (!t.modes || t.modes.includes(mode)) && (t.tiers ? t.tiers.includes(getAccess(identity)) : (!t.perm || can(identity, t.perm)));
 
+// ── Appliance Loads dashboard (v483) ────────────────────────────────────
+// Native Tools-tab view (replaces the Sheet iframe): a job summary table, a
+// click-in page of ONE job's appliances, and an Import button that reuses the
+// v478 ApplianceImportModal. Read-only against the "Appliance Loads - Master"
+// Sheet (same CSV the import reads; needs link-viewing). The only write is the
+// import's append to that one job's homeRuns, through updateJob — the same
+// field and the same funnel the Home Runs tab's own import button uses.
+const applNum = (v) => { const n = parseFloat(String(v==null?"":v).replace(/[^0-9.-]/g,"")); return isFinite(n) ? n : 0; };
+const applJobNo = (label) => { const m = String(label||"").trim().match(/^#?(\d+)/); return m ? m[1] : ""; };
+const applLevelOf = (conf, load, inCC) => {
+  const c = String(conf||"").trim().toLowerCase(), l = String(load||"").trim().toLowerCase();
+  if (/^(none|tbd|not found)/.test(c) || l==="" || l==="tbd") return "red";
+  // Already entered in this job's Home Runs ("Yes") = matches Command Center = confirmed.
+  if (String(inCC||"").trim().toLowerCase() === "yes") return "green";
+  if (c==="" || /series|typical|voltage only|circuit only|conflicting|not confirmed|partial|not found/.test(c)) return "yellow";
+  return "green";
+};
+const APPL_YELLOW = "#B7791F";
+const applFmt = (n) => (Math.round(n*10)/10).toLocaleString();
+
+// Likely-match helper: which Home Runs row in the CC job is this appliance probably entered as?
+const APPL_CLASSES = [
+  ["range", /range|cooktop|stove/], ["oven", /oven/], ["dryer", /dryer/], ["washer", /washer|laundry|washtower/], ["dw", /dishwasher|\bdw\b/],
+  ["fridge", /fridge|refrig|freezer|freeze|wine|beverage|bev center|ice maker|undercounter/], ["hood", /hood|blower|liner/],
+  ["micro", /micro/], ["disp", /dispos/], ["hvac", /furnace|\bac\b|condens|air handler|hvac|heat pump/], ["boiler", /boiler/],
+  ["wh", /water heater|\bwh\b|w\.h/], ["sauna", /sauna/], ["spa", /\bspa\b|hot tub/], ["ev", /\bev\b|charger/], ["hrv", /hrv|erv/],
+  ["humid", /humidif/], ["garage", /garage|opener|car lift/], ["pump", /pump/], ["steam", /steam/], ["fire", /fireplace/],
+];
+const applClassesOf = (s) => { const t = String(s||"").toLowerCase(); return APPL_CLASSES.filter(([,re]) => re.test(t)).map(([k]) => k); };
+const applToks = (s) => new Set(String(s||"").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length>2 && !/^(the|and|main|level|floor|lvl|upper|lower|unit|typ|model|not|stated)$/.test(w)));
+const applHRList = (cc) => {
+  const hr = (cc && cc.homeRuns) || {}, out = [];
+  Object.keys(hr).forEach(k => { if (Array.isArray(hr[k])) hr[k].forEach(r => { if (r && String(r.name||"").trim()) out.push({ id:r.id, name:String(r.name).trim(), fk:k }); }); });
+  return out;
+};
+const applSuggest = (row, list, taken) => {
+  const cls = applClassesOf(row.item + " " + row.model), toks = applToks(row.loc + " " + row.item);
+  let best = null, bs = 0;
+  list.forEach(h => {
+    if (taken.has(h.id)) return;
+    const hc = applClassesOf(h.name); const shared = cls.filter(c => hc.includes(c)).length;
+    if (!shared) return;
+    let s = shared * 3; applToks(h.name).forEach(w => { if (toks.has(w)) s += 1; });
+    if (s > bs) { bs = s; best = h; }
+  });
+  return best;
+};
+const applRowKey = (r) => [r.no, r.loc, r.item, r.model].map(x => String(x||"").trim().toLowerCase()).join("|");
+
+function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
+  const [st, setSt] = useState({ loading:true, err:"", rows:[] });
+  const [tick, setTick] = useState(0);
+  const [openNo, setOpenNo] = useState(onlyNo || null);   // onlyNo: opened from one job's card, locked to that job
+  const [filter, setFilter] = useState("all");
+  const [importOpen, setImportOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [openRow, setOpenRow] = useState(null);
+  const [pick, setPick] = useState("");
+
+  useEffect(() => {
+    let dead = false;
+    setSt(s => ({ ...s, loading:true, err:"" }));
+    (async () => {
+      try {
+        const res = await fetch(APPL_SHEET_URL, { cache:"no-store" });
+        if (!res.ok) throw new Error("The master sheet could not be read (HTTP " + res.status + ").");
+        const txt = await res.text();
+        if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The master sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\", then press Refresh.");
+        const grid = parseCSVText(txt);
+        const H = (grid[0]||[]).map(h => String(h||"").trim().toLowerCase());
+        const ix = (...names) => { for (const n of names) { const i = H.findIndex(h => h===n || h.startsWith(n)); if (i>=0) return i; } return -1; };
+        const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
+              iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iTot=ix("total amps"), iConf=ix("confidence"), iIn=ix("in cc"), iCc=ix("cc home run"),
+              iDoc=ix("source doc"), iLink=ix("source file link"), iPage=ix("source page"), iSpec=ix("spec file");
+        if ([iJob,iItem,iQty].some(i => i<0)) throw new Error("The master sheet columns were not what this view expects.");
+        const g = (c, i) => i>=0 ? String(c[i]||"").trim() : "";
+        const rows = [];
+        grid.slice(1).forEach(c => {
+          const label = g(c, iJob), item = g(c, iItem), no = applJobNo(label);
+          if (!no || !item) return;
+          rows.push({ no, label, loc:g(c,iLoc), floor:g(c,iFloor), item, model:g(c,iModel), qty:g(c,iQty), volts:g(c,iV), brk:g(c,iBrk),
+            load:g(c,iLoad), total:applNum(g(c,iTot)), conf:g(c,iConf), inCC:g(c,iIn).toLowerCase(), cc:g(c,iCc),
+            doc:g(c,iDoc), link:g(c,iLink), page:g(c,iPage), spec:g(c,iSpec) });
+        });
+        if (!dead) setSt({ loading:false, err:"", rows });
+      } catch (e) {
+        if (!dead) setSt(s => ({ ...s, loading:false, err:String(e.message||e) }));
+      }
+    })();
+    return () => { dead = true; };
+  }, [tick]);
+
+  const ccFor = (no) => (jobs||[]).find(j => String(j.simproNo||"").trim() === String(no));
+
+  // Rows with the CC link a person set by hand count as "in CC" (green) even when the names differ.
+  const rowsEff = useMemo(() => st.rows.map(r => {
+    const cc = ccFor(r.no), link = cc && cc.applLinks && cc.applLinks[applRowKey(r)];
+    const inCC = link ? "yes" : r.inCC;
+    return { ...r, inCC, linked: link || null, level: applLevelOf(r.conf, r.load, inCC) };
+  // eslint-disable-next-line
+  }), [st.rows, jobs]);
+
+  const summary = useMemo(() => {
+    const map = new Map();
+    rowsEff.forEach(r => {
+      if (!map.has(r.no)) map.set(r.no, { no:r.no, label:r.label, rows:[] });
+      map.get(r.no).rows.push(r);
+    });
+    return [...map.values()].map(j => ({
+      ...j,
+      amps: j.rows.reduce((a,r) => a + r.total, 0),
+      notIn: j.rows.filter(r => r.inCC === "not in cc yet").length,
+      red: j.rows.filter(r => r.level === "red").length,
+      yellow: j.rows.filter(r => r.level === "yellow").length,
+      green: j.rows.filter(r => r.level === "green").length,
+    }));
+  }, [rowsEff]);
+
+  const sum = (k) => summary.reduce((a,j) => a + j[k], 0);
+  const cur = openNo ? summary.find(j => j.no === openNo) : null;
+
+  const font = "'Bebas Neue',sans-serif";
+  const GREEN = C.green, RED = C.red;
+  const num = (n, color) => <span style={{fontWeight:n>0?800:400, color:n>0?color:C.muted}}>{n}</span>;
+  const chip = (txt, color, solid) => <span style={{display:"inline-block",padding:"3px 8px",borderRadius:6,fontSize:10,fontWeight:800,letterSpacing:"0.05em",whiteSpace:"nowrap",
+    background:solid?color:color+"22",color:solid?"#fff":color,border:`1px solid ${color}`}}>{txt}</span>;
+  const lvColor = (l) => l === "green" ? GREEN : l === "red" ? RED : APPL_YELLOW;
+  const lvLabel = (l) => l === "green" ? "CONFIRMED" : l === "red" ? "NEED SPECS" : "CONFIRM";
+
+  const saveLinks = (cc, next) => onUpdateJob({ ...cc, applLinks: next }, { applLinks: next });
+
+  const topBar = (
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+      {cur && !onlyNo ? (
+        <button onClick={()=>{ setOpenNo(null); setFilter("all"); setMsg(""); setOpenRow(null); }}
+          style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 11px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:600,fontFamily:"inherit",cursor:"pointer"}}>
+          <Icon name="arrowLeft" size={12} stroke={2}/> All jobs
+        </button>
+      ) : null}
+      <div style={{fontFamily:font,fontSize:22,letterSpacing:"0.06em",color:C.text}}>
+        {cur ? cur.label.toUpperCase() : "APPLIANCE LOADS"}
+      </div>
+      <span style={{flex:1}}/>
+      <button onClick={()=>setTick(t=>t+1)} disabled={st.loading}
+        style={{padding:"6px 11px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.dim,fontSize:12,fontWeight:600,fontFamily:"inherit",cursor:st.loading?"default":"pointer"}}>
+        {st.loading ? "Reading…" : "Refresh"}
+      </button>
+      <a href={`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`} target="_blank" rel="noopener noreferrer"
+        style={{fontSize:12,fontWeight:600,color:C.accent,textDecoration:"none",whiteSpace:"nowrap"}}>Open sheet</a>
+    </div>
+  );
+
+  const tile = (label, val, color, on, onClick) => (
+    <button onClick={onClick} disabled={!onClick}
+      style={{textAlign:"left",background:color?color+"1F":C.card,border:`2px solid ${on?color||C.accent:(color?color+"88":C.border)}`,borderRadius:10,padding:"10px 12px",cursor:onClick?"pointer":"default",fontFamily:"inherit",color:C.text}}>
+      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",color:color||C.dim}}>{label}</div>
+      <div style={{fontFamily:font,fontSize:28,letterSpacing:"0.04em",color:color||C.text,lineHeight:1.1}}>{val}</div>
+    </button>
+  );
+
+  let body;
+  if (st.err) {
+    body = <div style={{fontSize:12,color:C.red,padding:"12px 14px",border:`1px solid ${C.red}55`,borderRadius:8,background:C.card,lineHeight:1.5}}>{st.err}</div>;
+  } else if (st.loading && !st.rows.length) {
+    body = <div style={{fontSize:12,color:C.dim,padding:"18px 0"}}>Reading the master sheet…</div>;
+  } else if (!cur && onlyNo) {
+    body = <div style={{fontSize:12,color:C.dim,padding:"18px 0",lineHeight:1.5}}>No appliances for job #{onlyNo} are in the master sheet yet. The nightly run adds a job once its appliance paperwork is in Drive, or ask Claude to pull it now.</div>;
+  } else if (!cur) {
+    const cols = "minmax(150px,2fr) 54px 70px minmax(110px,1.6fr) repeat(3,64px) 22px";
+    const hdr = { fontSize:10, fontWeight:700, letterSpacing:"0.06em", color:C.dim };
+    const totAmps = summary.reduce((a,j)=>a+j.amps,0);
+    body = (<>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(118px,1fr))",gap:8,marginBottom:14}}>
+        {tile("JOBS", summary.length)}
+        {tile("LINE ITEMS", st.rows.length)}
+        {tile("CONFIRMED", sum("green"), GREEN)}
+        {tile("TO CONFIRM", sum("yellow"), APPL_YELLOW)}
+        {tile("NEED SPECS", sum("red"), RED)}
+        {tile("NOT IN CC", sum("notIn"), C.orange)}
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <div style={{minWidth:640,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{display:"grid",gridTemplateColumns:cols,gap:8,padding:"8px 14px",borderBottom:`1px solid ${C.border}`,background:C.surface}}>
+            <span style={hdr}>JOB</span><span style={hdr}>ITEMS</span><span style={hdr}>AMPS</span><span style={hdr}>STATUS</span>
+            <span style={hdr}>NOT IN CC</span><span style={hdr}>CONFIRM</span><span style={hdr}>NEED SPECS</span><span/>
+          </div>
+          {summary.map(j => (
+            <button key={j.no} onClick={()=>{ setOpenNo(j.no); setFilter("all"); setMsg(""); setOpenRow(null); }}
+              style={{display:"grid",gridTemplateColumns:cols,gap:8,alignItems:"center",width:"100%",textAlign:"left",padding:"11px 14px",border:"none",borderBottom:`1px solid ${C.border}`,background:C.card,color:C.text,fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
+              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:9,fontWeight:700,color:C.muted,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
+              <span>{j.rows.length}</span>
+              <span>{applFmt(j.amps)}</span>
+              <span style={{display:"flex",height:10,borderRadius:5,overflow:"hidden",background:C.border}}>
+                <span style={{flex:j.green,background:GREEN}}/><span style={{flex:j.yellow,background:APPL_YELLOW}}/><span style={{flex:j.red,background:RED}}/>
+              </span>
+              <span>{num(j.notIn, C.orange)}</span>
+              <span>{num(j.yellow, APPL_YELLOW)}</span>
+              <span>{num(j.red, RED)}</span>
+              <Icon name="chevronRight" size={13} stroke={2}/>
+            </button>
+          ))}
+          <div style={{display:"grid",gridTemplateColumns:cols,gap:8,padding:"10px 14px",background:C.surface,fontSize:12,fontWeight:700}}>
+            <span>TOTAL</span><span>{st.rows.length}</span><span>{applFmt(totAmps)}</span><span/>
+            <span>{sum("notIn")}</span><span>{sum("yellow")}</span><span>{sum("red")}</span><span/>
+          </div>
+        </div>
+      </div>
+      <div style={{fontSize:11,color:C.dim,marginTop:10,lineHeight:1.5}}>
+        Read live from the master sheet. Confirmed = spec found, or already entered in that job's Home Runs. Tap a job to see its appliances, where each was found, and import them into its Home Runs.
+      </div>
+    </>);
+  } else {
+    const cc = ccFor(cur.no);
+    const hrList = applHRList(cc);
+    const links = (cc && cc.applLinks) || {};
+    // A Home Run already matched to another appliance (by the nightly run or by hand) is never offered again.
+    const taken = new Set(Object.values(links).map(l => l && l.id));
+    const claimed = new Set(cur.rows.filter(r => r.inCC === "yes" && !r.linked && r.cc).map(r => r.cc.toLowerCase()));
+    const freeHR = hrList.filter(h => !taken.has(h.id) && !claimed.has(h.name.toLowerCase()));
+    const shown = cur.rows.filter(r =>
+      filter === "all" ? true : filter === "notin" ? r.inCC === "not in cc yet" : filter === "green" ? r.level === "green" : filter === "yellow" ? r.level === "yellow" : r.level === "red");
+    const cols = "minmax(170px,3fr) 40px 52px 56px 62px 56px 104px 20px";
+    const hdr = { fontSize:10, fontWeight:700, letterSpacing:"0.06em", color:C.dim };
+    const skipKeys = new Set(cur.rows.filter(r => r.linked).map(applRowKey));
+    body = (<>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8,marginBottom:12}}>
+        {tile("ALL", cur.rows.length, null, filter==="all", ()=>setFilter("all"))}
+        {tile("CONFIRMED", cur.green, GREEN, filter==="green", ()=>setFilter("green"))}
+        {tile("TO CONFIRM", cur.yellow, APPL_YELLOW, filter==="yellow", ()=>setFilter("yellow"))}
+        {tile("NEED SPECS", cur.red, RED, filter==="red", ()=>setFilter("red"))}
+        {tile("NOT IN CC", cur.notIn, C.orange, filter==="notin", ()=>setFilter("notin"))}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
+        <span style={{fontSize:12,color:C.dim}}>{cur.rows.length} items · {applFmt(cur.amps)} A connected</span>
+        <span style={{flex:1}}/>
+        <button onClick={()=>setImportOpen(true)} disabled={!cc}
+          title={cc ? "Add this job's missing appliances to its Home Runs" : "No Command Center job has this job number"}
+          style={{padding:"8px 16px",borderRadius:8,border:"none",background:cc?C.accent:C.muted,color:"#fff",fontSize:12,fontWeight:800,letterSpacing:"0.04em",fontFamily:"inherit",cursor:cc?"pointer":"not-allowed"}}>
+          Import appliances to Home Runs
+        </button>
+      </div>
+      {!cc && <div style={{fontSize:11,color:C.dim,marginBottom:10}}>No Command Center job has job number #{cur.no}, so there is nowhere to import to yet.</div>}
+      {msg && <div style={{fontSize:12,color:C.green,fontWeight:600,marginBottom:10}}>{msg}</div>}
+      <div style={{overflowX:"auto"}}>
+        <div style={{minWidth:700,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{display:"grid",gridTemplateColumns:cols,gap:8,padding:"8px 14px",borderBottom:`1px solid ${C.border}`,background:C.surface}}>
+            <span style={hdr}>ITEM</span><span style={hdr}>QTY</span><span style={hdr}>VOLTS</span><span style={hdr}>LOAD A</span><span style={hdr}>BREAKER</span><span style={hdr}>TOTAL A</span><span style={hdr}>STATUS</span><span/>
+          </div>
+          {shown.length === 0 && <div style={{padding:"16px 14px",fontSize:12,color:C.dim}}>Nothing matches this filter.</div>}
+          {shown.map((r) => {
+            const key = applRowKey(r), open = openRow === key;
+            const lc = lvColor(r.level);
+            const notIn = r.inCC === "not in cc yet";
+            const sug = cc && notIn && !r.linked ? applSuggest(r, freeHR, taken) : null;
+            return (
+              <div key={key} style={{borderBottom:`1px solid ${C.border}`,borderLeft:`5px solid ${lc}`,background:lc+"14"}}>
+                <div onClick={()=>{ setOpenRow(open?null:key); setPick(""); }}
+                  style={{display:"grid",gridTemplateColumns:cols,gap:8,alignItems:"center",padding:"9px 14px 9px 10px",fontSize:12,color:C.text,cursor:"pointer"}}>
+                  <span>
+                    <span style={{fontWeight:700}}>{[r.loc, r.item].filter(Boolean).join(" · ")}</span>
+                    <span style={{display:"block",fontSize:10,color:C.dim}}>
+                      {[r.floor, r.model].filter(Boolean).join(" · ")}
+                      {r.linked && <span style={{color:GREEN,fontWeight:700}}>{(r.floor||r.model?" · ":"")}= CC: {r.linked.name}</span>}
+                      {sug && <span style={{color:C.orange,fontWeight:700}}>{(r.floor||r.model?" · ":"")}likely CC: {sug.name}</span>}
+                    </span>
+                  </span>
+                  <span>{r.qty}</span>
+                  <span>{r.volts || "—"}</span>
+                  <span>{r.load || "—"}</span>
+                  <span>{r.brk || "—"}</span>
+                  <span>{r.total ? applFmt(r.total) : "—"}</span>
+                  <span style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-start"}}>
+                    {chip(lvLabel(r.level), lc, true)}
+                    {notIn ? chip("NOT IN CC", C.orange) : r.inCC==="yes" ? chip(r.linked?"IN CC (LINKED)":"IN CC", GREEN) : r.inCC==="likely" ? chip("LIKELY IN CC", C.orange) : null}
+                  </span>
+                  <Icon name={open?"chevronDown":"chevronRight"} size={12} stroke={2}/>
+                </div>
+                {open && (
+                  <div style={{padding:"4px 14px 14px 14px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:10,fontSize:12,color:C.text}}>
+                    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",color:C.dim,marginBottom:4}}>APPLIANCE FOUND IN</div>
+                      <div style={{fontWeight:600}}>{r.doc || "—"}</div>
+                      <div style={{color:C.dim,marginTop:2}}>{r.page ? r.page : "Page not recorded"}</div>
+                      {r.link && <a href={r.link} target="_blank" rel="noopener noreferrer" style={{display:"inline-block",marginTop:6,fontSize:11,fontWeight:700,color:C.accent,textDecoration:"none"}}>Open file</a>}
+                    </div>
+                    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",color:C.dim,marginBottom:4}}>SPEC (VOLTS / AMPS) FROM</div>
+                      <div style={{fontWeight:600}}>{r.conf || "—"}</div>
+                      {r.spec
+                        ? (/^https?:/i.test(r.spec)
+                            ? <a href={r.spec} target="_blank" rel="noopener noreferrer" style={{display:"inline-block",marginTop:6,fontSize:11,fontWeight:700,color:C.accent,textDecoration:"none"}}>Open spec file</a>
+                            : <div style={{color:C.dim,marginTop:2}}>{r.spec}</div>)
+                        : <div style={{color:C.dim,marginTop:2}}>No spec file on record</div>}
+                    </div>
+                    <div style={{background:C.card,border:`1px solid ${r.linked?GREEN:C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",color:C.dim,marginBottom:4}}>HOME RUN IN CC</div>
+                      {r.linked ? (<>
+                        <div style={{fontWeight:700,color:GREEN}}>Linked to: {r.linked.name}</div>
+                        <button onClick={()=>{ const n={...links}; delete n[key]; saveLinks(cc, n); setMsg("Link removed."); }}
+                          style={{marginTop:8,padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Remove link</button>
+                      </>) : r.inCC==="yes" ? (
+                        <div style={{fontWeight:600}}>Matched automatically{r.cc ? `: ${r.cc}` : ""}</div>
+                      ) : !cc ? (
+                        <div style={{color:C.dim}}>No Command Center job has this number.</div>
+                      ) : (<>
+                        {sug && <div style={{marginBottom:6}}>Likely: <strong>{sug.name}</strong>
+                          <button onClick={()=>{ saveLinks(cc, { ...links, [key]:{ id:sug.id, name:sug.name } }); setMsg(`Marked "${r.item}" as already in CC (${sug.name}).`); }}
+                            style={{marginLeft:8,padding:"4px 9px",borderRadius:7,border:"none",background:C.accent,color:"#fff",fontSize:11,fontWeight:800,fontFamily:"inherit",cursor:"pointer"}}>Yes, same</button></div>}
+                        <div style={{fontSize:11,color:C.dim,marginBottom:4}}>Already in CC under a different name? Pick it:</div>
+                        <div style={{display:"flex",gap:6}}>
+                          <select value={pick} onChange={e=>setPick(e.target.value)} style={{flex:1,minWidth:0,padding:"6px 8px",borderRadius:7,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontFamily:"inherit"}}>
+                            <option value="">Choose a Home Run…</option>
+                            {freeHR.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                          </select>
+                          <button disabled={!pick} onClick={()=>{ const h = freeHR.find(x => x.id === pick); if (!h) return; saveLinks(cc, { ...links, [key]:{ id:h.id, name:h.name } }); setMsg(`Marked "${r.item}" as already in CC (${h.name}).`); setPick(""); }}
+                            style={{padding:"6px 10px",borderRadius:7,border:"none",background:pick?C.accent:C.muted,color:"#fff",fontSize:11,fontWeight:800,fontFamily:"inherit",cursor:pick?"pointer":"default"}}>Mark in CC</button>
+                        </div>
+                      </>)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{fontSize:11,color:C.dim,marginTop:10,lineHeight:1.5}}>
+        Green = confirmed, yellow = check before pulling, red = specs not found. Tap a row to see where it was found. If an appliance is already in Home Runs under another name, link it there and the import will skip it.
+      </div>
+      {importOpen && cc && (
+        <ApplianceImportModal jobNumber={cur.no} jobName={cc.name || cur.label} homeRuns={cc.homeRuns || {}} skipKeys={skipKeys}
+          onCancel={()=>setImportOpen(false)}
+          onImport={(items)=>{
+            const hr = cc.homeRuns || {};
+            const next = { ...hr };
+            ["main","basement","upper"].forEach(k => {
+              const add = items.filter(p => p.fk === k).map(p => ({ ...newHRRow(0), name:p.name, note:p.note, wire:p.wire||"", status:p.status||"" }));
+              if (add.length) next[k] = sortHRRows([...(hr[k]||[]), ...add]);
+            });
+            onUpdateJob({ ...cc, homeRuns: next }, { homeRuns: next });
+            setImportOpen(false);
+            setMsg(`Added ${items.length} to job #${cur.no} Home Runs.`);
+          }}/>
+      )}
+    </>);
+  }
+
+  return (
+    <div style={{flex:1,minHeight:0,overflow:"auto",background:C.bg,padding:"14px 14px 28px"}}>
+      <div style={{maxWidth:1000,margin:"0 auto"}}>
+        {topBar}
+        {body}
+      </div>
+    </div>
+  );
+}
+
 // ── Tools tab (SW v468) ──────────────────────────────────────────────────────
 // Standalone field calculators inside the app's shell. Each tool is a
 // self-contained static page under public/tools/<key>/ (vanilla JS, no
@@ -55613,7 +55999,7 @@ const TOOLS = [
     src: "/tools/generator-sizing/index.html" },
   { key: "appliance-loads", label: "Appliance Loads", icon: "clipboard",
     blurb: "Master list of every job's appliance and equipment loads with volts and amps, looked up from each model's spec. Updated nightly from Drive.",
-    src: "/tools/appliance-loads/index.html" },
+    src: "/tools/appliance-loads/index.html", native: true },
   // perm: only people holding that cap see the tool (checked against the live
   // team record). Josh's NEC 220.82 service sizing with plan reading (2026-10-01);
   // built from tools-src/service-size, plans read by api/read-plans.js (Vercel).
@@ -55622,7 +56008,7 @@ const TOOLS = [
     src: "/tools/service-size/index.html" },
 ];
 const TOOLS_LAST_KEY = "he_tools_last";   // per-device convenience only: the tool last opened
-function ToolsView({ who }) {
+function ToolsView({ jobs, onUpdateJob, who }) {
   const tools = TOOLS.filter(t => !t.perm || can(who, t.perm));   // per-user tools (perm) read the LIVE team record
   const [toolKey, setToolKey] = useState(() => {
     try { return localStorage.getItem(TOOLS_LAST_KEY) || tools[0].key; } catch { return tools[0].key; }
@@ -55645,14 +56031,16 @@ function ToolsView({ who }) {
         <span style={{flex:1}}/>
         {/* Own-tab link: window.print() from inside an iframe is unreliable on
             phones, so the job sheet's Print / Save as PDF goes through here. */}
-        <a href={tool.src} target="_blank" rel="noopener noreferrer"
+        {!tool.native && <a href={tool.src} target="_blank" rel="noopener noreferrer"
           title="Open this tool in its own tab — use this to print or save the job sheet on a phone"
-          style={{fontSize:12,fontWeight:600,color:C.accent,textDecoration:"none",whiteSpace:"nowrap"}}>Open full screen</a>
+          style={{fontSize:12,fontWeight:600,color:C.accent,textDecoration:"none",whiteSpace:"nowrap"}}>Open full screen</a>}
         <HelpDot section="tools"/>
       </div>
-      <iframe key={tool.key} src={tool.src} title={tool.label}
-        style={{flex:1,width:"100%",border:"none",display:"block",background:"#141821"}}
-        allow="clipboard-read; clipboard-write"/>
+      {tool.native
+        ? <ApplianceLoadsView key={tool.key} jobs={jobs} onUpdateJob={onUpdateJob}/>
+        : <iframe key={tool.key} src={tool.src} title={tool.label}
+            style={{flex:1,width:"100%",border:"none",display:"block",background:"#141821"}}
+            allow="clipboard-read; clipboard-write"/>}
     </div>
   );
 }
@@ -63647,7 +64035,7 @@ function App() {
 
       {/* Tools tab (v468) — standalone field calculators in an iframe; see TOOLS. */}
       {view==="tools"&&can(identity,"tools.view")&&(
-        <ToolsView who={myLiveRec}/>
+        <ToolsView jobs={allJobs} onUpdateJob={updateJob} who={myLiveRec}/>
       )}
 
       {view==="myday"&&can(identity,"myday.view")&&(
