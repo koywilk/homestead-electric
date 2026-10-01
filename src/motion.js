@@ -43,11 +43,9 @@ const CSS = `
 /* punch check-off */
 .he-row-done{animation:he-m-rowdone calc(900ms*var(--he-t)) ease-out}
 @keyframes he-m-rowdone{from{box-shadow:0 0 0 3px rgba(21,128,61,.35)}to{box-shadow:0 0 0 0 rgba(21,128,61,0)}}
-.he-row-done .he-ptext{animation:he-m-strike calc(400ms*var(--he-t)) linear}
-@keyframes he-m-strike{0%,97%{text-decoration-color:transparent}100%{text-decoration-color:currentColor}}
-.he-strike-line{position:fixed;height:1px;transform-origin:left center;pointer-events:none;z-index:2147483000;
-  animation:he-m-wipe 380ms linear both}
+.he-strike-line{position:fixed;height:2px;margin-top:-1px;border-radius:1px;transform-origin:left center;pointer-events:none;z-index:2147483000}
 @keyframes he-m-wipe{from{transform:scaleX(0)}}
+@keyframes he-m-linefade{to{opacity:0}}
 .he-check-pop{animation:he-m-checkpop calc(380ms*var(--he-t)) var(--he-spring)}
 @keyframes he-m-checkpop{0%{transform:scale(1)}45%{transform:scale(1.4)}100%{transform:scale(1)}}
 
@@ -257,10 +255,11 @@ export function useHePaneEase(ref, tab, order) {
 }
 
 /* ─────────────────── Strike-through wipe (punch check-off) ─────────────────── */
-// Draws a thin line across each line of the item text, left to right, while the real
-// line-through is held transparent by CSS (.he-row-done .he-ptext). Lines are fixed-position
-// elements on document.body, so nothing inside React's tree is added, moved or removed.
-// Pass heStrikeRef as the ref of the item text span only while the row is animating.
+// Draws a dark line across each line of the item text, left to right, then fades it out as the
+// item's own pale strike-through takes over (done text is very light, so a same-colour line is
+// invisible). Lines are fixed-position elements on document.body, so nothing inside React's tree is
+// added, moved or removed. Rows that are clipped, collapsed or covered are skipped.
+const STRIKE_COLOR = "#374151";
 export function heStrikeWipe(el) {
   try {
     if (!el || heReduced()) return;
@@ -281,23 +280,40 @@ export function heStrikeWipe(el) {
       if (l) { l.left = Math.min(l.left, r.left); l.right = Math.max(l.right, r.right); }
       else lines.push({ mid, top: r.top, h: r.height, left: r.left, right: r.right });
     });
-    if (!lines.length) return;
-    const color = getComputedStyle(el).color;
-    const per = 380 / lines.length;
-    const made = lines.map((l, i) => {
+    const visible = lines.filter((l) => {
+      const hit = document.elementFromPoint(l.left + Math.min(6, (l.right - l.left) / 2), l.mid);
+      return !!hit && el.contains(hit);
+    });
+    if (!visible.length) return;
+    const WIPE = 380, FADE = 260, per = WIPE / visible.length;
+    el.style.textDecorationColor = "transparent";   // hold the real strike back until the wipe is done
+    const made = visible.map((l, i) => {
       const d = document.createElement("span");
       d.className = "he-strike-line";
       d.setAttribute("aria-hidden", "true");
       d.style.cssText = "left:" + l.left + "px;top:" + (l.top + l.h * 0.58) + "px;width:" + (l.right - l.left) +
-        "px;background:" + color + ";animation-delay:calc(" + Math.round(i * per) + "ms*var(--he-t));animation-duration:calc(" +
-        Math.round(per) + "ms*var(--he-t))";
+        "px;background:" + STRIKE_COLOR +
+        ";animation:he-m-wipe calc(" + Math.round(per) + "ms*var(--he-t)) linear calc(" + Math.round(i * per) + "ms*var(--he-t)) both," +
+        "he-m-linefade calc(" + FADE + "ms*var(--he-t)) ease-out calc(" + WIPE + "ms*var(--he-t)) forwards";
       document.body.appendChild(d);
       return d;
     });
-    setTimeout(() => made.forEach((d) => { if (d.parentNode) d.parentNode.removeChild(d); }), 420);
+    setTimeout(() => { el.style.textDecorationColor = ""; }, WIPE + 20);
+    setTimeout(() => made.forEach((d) => { if (d.parentNode) d.parentNode.removeChild(d); }), WIPE + FADE + 80);
   } catch (e) { /* presentation only */ }
 }
-export const heStrikeRef = (el) => { if (el) heStrikeWipe(el); };
+// Drop-in replacement for the span (or div, tag="div") that holds a punch item's text. When `done`
+// goes false -> true the wipe plays. `animateOnMount` plays it on first render too (rows that stay on
+// screen a moment after being ticked). Everything else is passed straight through to the element.
+export function HeStrikeSpan(props) {
+  const { done, animateOnMount, tag, children, ...rest } = props;
+  const ref = useRef(null), prev = useRef(animateOnMount ? false : !!done);
+  useLayoutEffect(() => {
+    if (done && !prev.current && ref.current) heStrikeWipe(ref.current);
+    prev.current = !!done;
+  }, [done]);
+  return h(tag || "span", Object.assign({ ref }, rest), children);
+}
 
 /* ─────────────────── 6. Bottom sheet drag-to-dismiss ─────────────────── */
 // sheetRef -> the panel element. Spread handleProps on the grab handle (or header).
