@@ -2571,6 +2571,15 @@ function lutronAssignLabel(load, panels) {
   if (!m) return `${p.label} · no module yet`;
   return `${p.label} · Mod ${m.num} · Z${a.zone}`;
 }
+// v475: just the PANEL a load sits on (parked or zoned), or "" — the Loads list's
+// Panel column reads this instead of the pre-builder free-text `panel` field, so
+// the column shows the LCP the Panel Builder put the load on. Pure.
+function lutronPanelOf(load, panels) {
+  const a = load && load.assign;
+  if (!a) return "";
+  const p = (panels || []).find(x => x && x.id === a.panelId);
+  return p ? String(p.label || "") : "";
+}
 function lutronStats(panels, loads) {
   let unassigned = 0, parked = 0, onZone = 0, overW = 0;
   (loads || []).forEach(l => {
@@ -18993,7 +19002,32 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
 }
 
 // ── Central Loads List ────────────────────────────────────────
-function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule,onAssignLoad=null,onBatchAssign=null,parkedIds=null,color=C.purple}) {
+function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule,onAssignLoad=null,onBatchAssign=null,parkedIds=null,builderPanels=[],canPark=false,color=C.purple}) {
+  // v475 (Koy: "they are assigned to panels and modules already, so why is the
+  // panel they are assigned to not an option, and why are they not sorted into
+  // them automatically?"): on a Lutron job the Panel column READS the Panel
+  // Builder's assignment (lutronPanelOf) — render-only, nothing is written. A
+  // load with no assignment keeps the free-text box; typing / picking a real
+  // builder panel name parks the load on that panel (assign with no module),
+  // the same thing the builder's "Put on LCP n only" does — only once the
+  // builder has persisted `panels` (canPark), never on the migrated read-view.
+  const panelCell = (l) => {
+    const onBuilder = builderPanels.length ? lutronPanelOf(l, builderPanels) : "";
+    if (onBuilder) return { label: onBuilder, derived: true };
+    return { label: l.panel || "", derived: false };
+  };
+  const onPanelText = (l, v) => {
+    const hit = canPark ? builderPanels.find(p => String(p.label||"").trim().toLowerCase() === String(v||"").trim().toLowerCase()) : null;
+    upd(l.id, hit ? { panel: v, assign: { panelId: hit.id, moduleId: null, zone: null } } : { panel: v });
+  };
+  // v475 (Koy: "when a load is checked off as ran, please add who pulled it here
+  // as well — the loads ran drop down at the top blends in"): the stamp the
+  // checkbox tooltip already carried, now visible on the row.
+  const ranStamp = (l, extra={}) => (l.pulled && (l.pulledBy || l.pulledAt)) ? (
+    <span title="Marked ran" style={{fontSize:9,fontWeight:700,color:C.green,whiteSpace:"nowrap",flexShrink:0,...extra}}>
+      ✓ {[l.pulledBy, l.pulledAt].filter(Boolean).join(" · ")}
+    </span>
+  ) : null;
   // Collapsed state per floor section. Set of floor labels that are
   // currently EXPANDED — anything not in the set is collapsed. Starts empty
   // so every section comes up collapsed by default; click the header to
@@ -19298,16 +19332,26 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               placeholder="Floor / area"
                               style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
                                 padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",flex:1,minWidth:80}}/>
-                            <input list="pl-panel-opts" value={l.panel||""} onChange={e=>upd(l.id,{panel:e.target.value})}
-                              placeholder="Panel"
-                              title="Which lighting panel powers this load"
-                              style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
-                                padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",flex:1,minWidth:80}}/>
+                            {(()=>{ const pc = panelCell(l); return pc.derived ? (
+                              <button type="button" onClick={()=>onAssignLoad&&onAssignLoad(l.id)}
+                                title="Set by the Panel Builder — tap to move, park or clear"
+                                style={{background:`${color}10`,border:`1px solid ${color}33`,borderRadius:6,color:color,fontWeight:700,
+                                  padding:"4px 8px",fontSize:11,fontFamily:"inherit",flex:1,minWidth:80,textAlign:"left",cursor:onAssignLoad?"pointer":"default"}}>
+                                {pc.label}
+                              </button>
+                            ) : (
+                              <input list="pl-panel-opts" value={pc.label} onChange={e=>onPanelText(l,e.target.value)}
+                                placeholder="Panel"
+                                title={canPark ? "Which lighting panel powers this load — type a panel's name to put the load on it" : "Which lighting panel powers this load"}
+                                style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
+                                  padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",flex:1,minWidth:80}}/>
+                            ); })()}
                             <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES}
                               style={{fontSize:11,flex:"0 0 auto"}}/>
                             <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W"
                               style={{textAlign:"center",fontSize:11,width:46,flexShrink:0}}/>
                             {assignChip(l, assignedLabels)}
+                            {ranStamp(l)}
                           </div>
                         </div>
                       );
@@ -19330,16 +19374,27 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                                 padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box",
                                 flex:1}}/>
                             {assignChip(l, assignedLabels, {padding:"2px 6px"})}
+                            {ranStamp(l)}
                           </div>
                           <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
                             placeholder="Floor / area"
                             style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                               padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
-                          <input list="pl-panel-opts" value={l.panel||""} onChange={e=>upd(l.id,{panel:e.target.value})}
-                            placeholder="Panel"
-                            title="Which lighting panel powers this load"
-                            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-                              padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+                          {(()=>{ const pc = panelCell(l); return pc.derived ? (
+                            <button type="button" onClick={()=>onAssignLoad&&onAssignLoad(l.id)}
+                              title="Set by the Panel Builder — tap to move, park or clear"
+                              style={{background:`${color}10`,border:`1px solid ${color}33`,borderRadius:7,color:color,fontWeight:700,
+                                padding:"6px 8px",fontSize:11,fontFamily:"inherit",width:"100%",boxSizing:"border-box",textAlign:"left",
+                                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",cursor:onAssignLoad?"pointer":"default"}}>
+                              {pc.label}
+                            </button>
+                          ) : (
+                            <input list="pl-panel-opts" value={pc.label} onChange={e=>onPanelText(l,e.target.value)}
+                              placeholder="Panel"
+                              title={canPark ? "Which lighting panel powers this load — type a panel's name to put the load on it" : "Which lighting panel powers this load"}
+                              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                                padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+                          ); })()}
                           <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
                           <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
                           <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
@@ -30319,9 +30374,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const plx = job.panelizedLighting || {};
                 const named = (plx.loads || []).filter(l => l && String(l.name || "").trim());
                 if (!named.length) return null;
+                // v475: on a Lutron job the panel shown is the Builder's (lutronPanelOf), else the free-text field.
+                const _ranPanels = (job.lightingSystem||"Control 4")==="Lutron" ? lutronView(job).panels : null;
                 const items = named.map(l => ({
                   id: l.id, name: l.name,
-                  meta: [String(l.room||"").trim(), String(l.location||"").trim(), String(l.panel||"").trim()].filter(Boolean).join(" · "),
+                  meta: [String(l.room||"").trim(), String(l.location||"").trim(), (_ranPanels && lutronPanelOf(l, _ranPanels)) || String(l.panel||"").trim()].filter(Boolean).join(" · "),
                   chip: l.loadType || "", done: !!l.pulled, by: l.pulledBy || "", at: l.pulledAt || "",
                 }));
                 return <PullChecklistSummary title="Loads Ran" items={items} doneWord="Ran" notWord="Not Ran"
@@ -30811,16 +30868,24 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     onChange={v=>u({panelizedLighting:{...pl,loads:v}})}
                     floorOptions={["Main Level","Basement","Upper Level",...(pl.extraFloors||[]).map(ef=>ef.label)]}
                     panelOptions={Array.from(new Set([
-                      _labelForStd("upper"),
-                      _labelForStd("main"),
-                      _labelForStd("basement"),
-                      ...(pl.extraFloors||[]).map(ef=>ef.label),
+                      // v475: once the Lutron Panel Builder has persisted its
+                      // panels, THEY are the options (LCP 1 / LCP 2 …) — not the
+                      // pre-builder "Panel A / B / C" floor-section labels, which
+                      // on such a job name nothing a load can be put on.
+                      ...((_lutV && !_lutV.migrated) ? _lutV.panels.map(p=>String(p.label||"").trim()) : [
+                        _labelForStd("upper"),
+                        _labelForStd("main"),
+                        _labelForStd("basement"),
+                        ...(pl.extraFloors||[]).map(ef=>ef.label),
+                      ]),
                       // Also include any panel name already set on a load —
                       // covers jobs like Robison where loads were imported
                       // with custom panel names ("LCP 1" / "LCP 2" / etc.)
                       // before plSectionLabels was customized.
                       ...((pl.loads||[]).map(l=>(l?.panel||"").trim()).filter(Boolean)),
                     ])).filter(Boolean).sort()}
+                    builderPanels={_lutV ? _lutV.panels.map(p=>({id:p.id,label:p.label})) : []}
+                    canPark={!!(_lutV && !_lutV.migrated)}
                     allModules={_isLutTab?[]:allModules}
                     assignedModMap={assignedModMap}
                     onAssignToModule={onAssignToModule}
@@ -50948,10 +51013,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v487
+**Last manifest update:** 2026-10-01 · App SW version: v488
 
 ---
 
+- **Panelized Lighting Loads list — the Panel column shows the Builder's LCP, and a ran load shows who ran it** · 'shipped 2026-10-01' · 'SW v488' · Koy (Miller Loads list screenshot, Panel dropdown offering Panel A / B / C while every row already wore an "LCP 4 · Mod 1 · Z3" chip): *"they are assigned to panels and modules already, so why is the panel they are assigned to not an option, and why are they not sorted into them automatically from the module panel placer?"* and *"when a load is checked off as ran, please add who pulled it here as well — the loads ran drop down at the top blends in and nobody notices it."* **Why it was wrong:** the Panel column is the pre-v449 free-text 'panel' field, and its suggestions were the old floor-section labels ('plSectionLabels', default Panel A / B / C); nothing read the Builder's 'load.assign' into it. **Now:** on a Lutron job a load the Panel Builder has placed (zoned OR parked) shows that panel's name in the Panel column, read live from the assignment (new pure 'lutronPanelOf') — tap it to open the same move / park / clear sheet the badge opens. A load with no assignment keeps the text box, whose suggestions are now the Builder's panels (LCP 1 / LCP 2 …) once 'panels' is persisted, and typing or picking one of those names **parks the load on that panel** ('assign' with no module — exactly "Put on LCP n only"); on a job still on the migrated read-view the text is saved as before and the migration's existing "Panel column naming a panel parks there" rule applies. The Loads Ran card's meta line shows the same panel. **Who ran it:** a ran load's row now shows **✓ <who> · <date>** beside its name (desktop) / in its second line (phone) — the stamp v443 already stored and only the checkbox tooltip showed. Harness 'needs-dryrun' pins 'lutronPanelOf' (zoned, parked, unassigned, unknown panel, no load). Guide 'panelizedlighting.html' updated. Built and shipped from a clean worktree off origin/main (the shared folder held two other sessions' work). **Why it won't lose data:** the derived Panel cell writes nothing; the only new write is the park-on-type path, which sets 'assign:{panelId, moduleId:null, zone:null}' on one load through the same 'u({panelizedLighting:{...pl, loads}})' patch the list already uses, and only when the Builder's 'panels' already exist on the doc (never against migrated ids); the ran stamp is read-only; no field shape, loader, function or rules change.
 - **Punch check-off: the strike-through now draws across the text (job punch list, QC walk, foreman Assigned tab)** · 'shipped 2026-10-01' · 'SW v487' · Koy: *"i wanted it to animate striking through the punch item on that line"* and *"on any punch check."* The v481 animation was drawn in the done-text colour, which is a very pale gray, so on a phone it was invisible. It is now a dark 2px line that draws left to right across each line of the item text (wrapped text goes line by line, 0.38 s in total), then fades out as the item's own pale strike-through takes over. 'HeStrikeSpan' (src/motion.js) wraps the text of a punch item and plays the wipe when 'done' goes false to true. It plays on the job punch list ('PunchItems', which also serves Return Trip punches), the QC walk list ('QCWalkSection') and the foreman Assigned tab, where a ticked row used to vanish at once and now stays about a second ('punchLinger', display only) so the line can play. Rows that are clipped, collapsed or covered are skipped, Reduce Motion turns it off, and My Day's Done button is unchanged. The line is a temporary element on the page body and the real strike-through is held transparent for 0.4 s with an inline style. **Why it won't lose data:** presentational only. The check still saves the instant it is ticked (the 'togglePunchItemDone' call and the 'PunchItems' / QC 'onChange' saves are untouched); the one new state ('punchLinger') only keeps a display copy of a ticked row for one second on the Assigned tab and writes nothing; the line is added to and removed from document.body, outside React's tree, so no punch row remounts; no fields, loader, rules, function or save-path changes.
 - **Tools tab — Appliance Loads becomes a native dashboard: job summary table, click-in job pages, Import button** · 'shipped 2026-10-01' · 'SW v486' · Koy: *"i want this displayed in the app as the tool … easy to see all the jobs like the job summary table … job cards should pull up the specific job page of appliances only, and have an import button."* The Appliance Loads tool no longer embeds the Sheet; 'ApplianceLoadsView' reads the master Sheet's Master tab as CSV (same link-viewing read the Home Runs import uses) and shows a KPI strip (jobs, line items, connected amps, Not in CC yet, to confirm, need specs) over a job summary table with a totals row. Tapping a job opens ITS appliances only (qty, volts, load amps, breaker, total amps, Home Runs status, green / yellow / red edge from the sheet's Confidence) with All / Not in CC / To confirm / Need specs filters (a row already entered in that job's Home Runs counts as Confirmed even when its spec was only typical or series; a row with no amps found stays Need specs), an All-jobs back button, and **Import appliances to Home Runs**, which opens the existing 'ApplianceImportModal' for that job number only (preview + confirm, Not-in-CC rows only, duplicates skipped). The button is disabled when no Command Center job carries that job number (matched on 'simproNo', never by name). The job page now has bold CONFIRMED / CONFIRM / NEED SPECS tiles and chips with tinted rows, and each row opens to show the file and page it was found in (new Master columns Source file link / Source page / Spec file). **Likely CC match:** for a row marked Not in CC yet, the view suggests the Home Runs row it probably is (appliance type plus room words) with a 'Yes, same' button, and a picker lists the job's Home Runs so a person can link it by hand when the names differ; a linked row counts as In CC (green) and the import skips it. The link is stored as one new field 'applLinks' on that job (a map of row key to Home Run id and name), written through the same 'updateJob' funnel, and can be removed. **From the job card:** the job's Home Runs tab has a new **Appliance loads** button (next to Import appliances) that opens this same sheet locked to that one job in a window, with the likely-match / link-to-a-Home-Run controls and Import, so a crew member can fix a load the sheet did not recognize without leaving the job; its link and import writes go through that job's own 'onHRChange' / 'applLinks' patch. The old iframe page stays in 'public/tools/appliance-loads/' unused. **Why it won't lose data:** the view only reads the Sheet; its single write is the import's append to ONE job's 'homeRuns' through 'updateJob' with a 'homeRuns' patch — the same field and the same funnel the Home Runs tab's own Import button already uses — and it appends rows without touching or removing existing ones; the only other write is the optional 'applLinks' map, additive on one job and never read by any other screen; no loader, rules or function changes.
 - **Tools tab — Service Size calculator (NEC 220.82) with plan reading, limited by Tool access** · 'shipped 2026-10-01' · 'SW v484' · Josh built it (Claude artifact, then ported for the app per Koy's handoff): *"It runs the NEC 220.82 optional calc, lets you mark appliances Yes / Maybe / No when we don't know what's going in yet, and shows what size service we'd need either way. It also writes a bid note … drop in a plan set PDF and it reads the sheets and fills in the calculator."* Koy + Josh: limit it to Josh, Brady, Koy and Jeromy so it doesn't run up usage. **What it is:** a third Tools chip, **Service Size** — a standalone page in 'public/tools/service-size/' (React + pdf.js 4.10.38 legacy build bundled by esbuild from 'tools-src/service-size/'; build output committed, checksums matched Josh's tested build byte-for-byte, his 6 tests pass incl. Miller 332 / 442 / 600 A). Single-family 120/240 V service size with confirmed-only and with-maybes numbers, undecided fuels counted gas in the first and electric in the second, per-item amps added, what-ifs that bump the size, utility/solar/snowmelt flags, the 220.82(B)+(C) table and a copyable **bid note**. **Plan reading:** drop a PDF or sheet photos; pdf.js renders up to 8 sheets (floor plans and electrical first) in the browser and POSTs them to the new Vercel function 'api/read-plans.js' (CommonJS, zero deps), which calls the Claude API ('ANTHROPIC_MODEL', default claude-sonnet-5-5) and returns the calculator inputs; filled fields get a **plans** tag, plus floor areas, findings by sheet, owner questions and loads not in the calc. The function refuses everything without the 'PLANS_ACCESS_KEY' env var and 401s a missing/wrong 'x-plans-key' header (the page sends it from 'window.SSC_CONFIG' in its index.html — visible in page source, so the Anthropic spend limit is the real cap). **Access:** new 'tools.serviceSize' permission with no tier (per-user grant only); 'TOOLS' rows can carry 'perm', 'ToolsView' shows a row only when 'can(who, perm)' against the viewer's LIVE team record ('myLiveRec', the v465 lesson — the login snapshot can lack 'caps'); Settings → Team gets a **TOOL ACCESS** section (admins/managers) that writes the same 'caps' array as the hats. Hiding the chip does not lock the page URL; the key + spend limit do. Guide 'tools.html' gains a Service Size section. **Flip-day:** Vercel env 'ANTHROPIC_API_KEY' (Josh's key) + 'PLANS_ACCESS_KEY' set 2026-10-01; tick Service Size for Josh, Brady, Koy, Jeromy in Settings → Team; drop one real plan set. **Why it won't lose data:** nothing in the tool reads or writes Firestore (Save to job is left out of this version); the only new write is the 'caps' checkbox, through the existing guarded 'upd' → 'saveUsers' path the hats already use; the Vercel function stores nothing; no loader, rules or Cloud Function change.

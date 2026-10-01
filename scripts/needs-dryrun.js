@@ -68,7 +68,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "loadsListRows","loadsListCsv",
-  "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
+  "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -687,6 +687,9 @@ eq(H.lutronOpenZones(panels, loads, "p1", "zz"), [], "unknown module → none");
 eq([H.lutronOverWatt(loads[0], panels), H.lutronOverWatt(loads[1], panels), H.lutronOverWatt(loads[2], panels)], [true, true, false], "900 W on zone 1 (≤800) and 600 W on zone 2 (≤500) are over; parked never is");
 eq([H.lutronAssignLabel(loads[0], panels), H.lutronAssignLabel(loads[2], panels), H.lutronAssignLabel(loads[3], panels), H.lutronAssignLabel({ assign:{ panelId:"p1", moduleId:"gone", zone:1 } }, panels)], ["LCP 1 · Mod 1 · Z1", "LCP 1 · no module yet", "", "LCP 1 · no module yet"], "labels; a vanished module reads as parked");
 eq(H.lutronStats(panels, loads), { unassigned:1, parked:1, onZone:2, overW:2, modules:2, zonesTotal:8, panels:2 }, "stats skip unnamed loads");
+// v475: the Loads list's Panel column reads the builder panel — zoned or parked, never the module.
+eq([H.lutronPanelOf(loads[0], panels), H.lutronPanelOf(loads[2], panels), H.lutronPanelOf(loads[3], panels), H.lutronPanelOf({ assign:{ panelId:"gone", moduleId:null, zone:null } }, panels), H.lutronPanelOf(null, panels)],
+   ["LCP 1", "LCP 1", "", "", ""], "panel label for zoned + parked loads; unassigned, unknown panel and no load → empty");
 
 // Suggest layout: parked stays on its own panel, dimming → dimmer, switching → relay, adds a module when none fits, biggest load first.
 const sug = H.lutronSuggestLayout(panels, [
