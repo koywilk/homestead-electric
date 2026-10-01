@@ -51013,7 +51013,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v491
+**Last manifest update:** 2026-10-01 · App SW version: v492
 
 ---
 
@@ -51034,7 +51034,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **HOTFIX — My Day black screen on v490** · 'shipped 2026-10-01' · 'SW v491' · Koy: *"the app is black screen wont load sos."* v490 declared the question-discussion listener state ('qThreads') BELOW the question-row builder that reads it, so React threw "cannot access 'qThreads' before initialization" on every My Day render for anyone with a question assigned to them — and My Day is the landing page. The listener block now sits above the row builder. No data or behaviour change. **Why it won't lose data:** render-order fix only; no Firestore reads or writes changed.
+- **HOTFIX — My Day black screen on v490 (two read-before-declare bugs)** · 'shipped 2026-10-01' · 'SW v491 + v492' · Koy: *"the app is black screen wont load sos."* v490 declared the question-discussion listener state ('qThreads') BELOW the question-row builder that reads it, so React threw "cannot access 'qThreads' before initialization" on every My Day render for anyone with a question assigned to them — and My Day is the landing page. v491 moved the listener block above the row builder; v492 (Koy's console: 'Cannot access 'Zt' before initialization at App.js:57221') moved the New-flag seen-store refs ('prevSeenRef' / 'mineKeysRef') above the flag pass that reads them — that one hit every user, not just those with questions. No data or behaviour change. **Why it won't lose data:** render-order fix only; no Firestore reads or writes changed.
 
 - **My Day — the question row shows its discussion** · 'shipped 2026-10-01' · 'SW v490' · Koy: *"should be able to also see the discussion there."* My Day now listens to 'homeowner_requests/<jobId>.questionThreads' for every job that has a question on the viewer (one 'onSnapshot' per job, attached / detached as the set changes) and each question row carries its thread (legacy 'q.thread' + the side-doc messages, oldest → newest): the latest line shows under the row ("Gage (field): …  · 2h") with an **N in discussion ▾** button that unfolds the whole thread (client messages in orange, photo links), the same look as a task's replies; a reply posted from the row, FieldInk or the question link appears live. The row's sub line also names who asked. The **New reply** marker now reads the thread's last message too. **Also in v490 — the New group** (Koy: *"the thing that shows anything new added so its easily visible"*): on top of the per-row tags, every new row and every row with a new reply is listed again in a **New since <when you last looked>** group at the very top of the page, open by default with an 'N new' badge; same row objects, so Done / Answer / Approve / Deny work from there. It disappears when nothing is new (first open after the update included, since that open seeds the memory). And the **N new** badge sits on every dropdown header — the Mine / Sent group headers, each category inside Mine (Tasks on me, Punch, Questions…) and each job header in the Job view (Koy: *"want it to appear on each drop downs header so i can see it easy"*). Guide 'myday.html' updated. **Why it won't lose data:** read-only listener; no write path changed.
 - **My Day — "New" since you last looked; Reply in a question's discussion** · 'shipped 2026-10-01' · 'SW v485' · Koy: *"it would be nice to easily see new items added that are new from the last time i opened the my day tab, or reply to questions in discussion instead of answering etc."* **New:** per device, per user ('localStorage' key 'he_myday_seen_<userKey>'), My Day remembers the Mine row keys it showed and when; on the next open every row not in that set wears a blue **New** tag, a task doc whose latest update is newer than that time (and not mine) wears **New reply**, and each category header shows **N new**. The stored set is read once per visit and frozen (rows stay New until you leave) and rewritten after every render; a first-ever visit marks nothing. **Reply:** question rows get **Reply** beside Answer — the inline box in reply mode posts '{id, by, role:"crew", text, photos:[], at}' to 'homeowner_requests/<jobId>.questionThreads["<phase>_<floor>_<qid>"]' through the same transactional 'postQuestionThreadMessage' the Questions section and question links use, then calls 'publishCcQuestions' so the pin's thread in FieldInk follows; the question stays open. Guide 'myday.html' updated. **Why it won't lose data:** the New marker is browser storage only (never Firestore); Reply appends one message through the existing transaction (key-scoped, never touches jobs/*), and never changes the question's answer / done.
@@ -57215,6 +57215,22 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
       .sort((a, b) => (a[0] === meKey ? -1 : b[0] === meKey ? 1 : a[1].name.localeCompare(b[1].name)))
       .map(([k, p]) => ({ key: "p:" + p.name, title: k === meKey ? `${p.name} (you)` : p.name, rows: sortRows(p.rows), main: true, empty: "All clear — nothing on you right now." }));
   })();
+  // v492 hotfix: the seen-store refs must be declared ABOVE the flag pass just
+  // below, which reads them synchronously — v490 put them after it and threw
+  // "cannot access before initialization" for every My Day render.
+  // v485 (Koy 2026-10-01: "easily see new items added that are new from the last
+  // time i opened the my day tab"): what THIS device showed on this user's Mine
+  // list last time (row keys + when). Read once per visit, frozen for the visit,
+  // so a row stays marked New until you leave; rewritten after every render so
+  // the next visit compares against the latest view. Per device, per user.
+  const seenStoreKey = "he_myday_seen_" + (userKeyOf(identity) || "anon");
+  const prevSeenRef = useRef(undefined);
+  if (prevSeenRef.current === undefined) {
+    try { const raw = localStorage.getItem(seenStoreKey); const p = raw ? JSON.parse(raw) : null; prevSeenRef.current = p && Array.isArray(p.keys) ? { at: String(p.at || ""), keys: new Set(p.keys) } : null; }
+    catch { prevSeenRef.current = null; }
+  }
+  const mineKeysRef = useRef("");
+  useEffect(() => { const sig = mineKeysRef.current; if (!sig) return; try { localStorage.setItem(seenStoreKey, JSON.stringify({ at: new Date().toISOString(), keys: sig.split("\n") })); } catch {} });
   // v485: New / New reply flags against what this device showed last visit.
   // A first-ever visit (nothing stored) marks nothing — no wall of "New".
   {
@@ -57287,19 +57303,6 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const [ansFor, setAnsFor] = useState(null);
   const [ansText, setAnsText] = useState("");
   const [ansMode, setAnsMode] = useState("answer");   // v485: "answer" writes the answer; "reply" posts to the discussion
-  // v485 (Koy 2026-10-01: "easily see new items added that are new from the last
-  // time i opened the my day tab"): what THIS device showed on this user's Mine
-  // list last time (row keys + when). Read once per visit, frozen for the visit,
-  // so a row stays marked New until you leave; rewritten after every render so
-  // the next visit compares against the latest view. Per device, per user.
-  const seenStoreKey = "he_myday_seen_" + (userKeyOf(identity) || "anon");
-  const prevSeenRef = useRef(undefined);
-  if (prevSeenRef.current === undefined) {
-    try { const raw = localStorage.getItem(seenStoreKey); const p = raw ? JSON.parse(raw) : null; prevSeenRef.current = p && Array.isArray(p.keys) ? { at: String(p.at || ""), keys: new Set(p.keys) } : null; }
-    catch { prevSeenRef.current = null; }
-  }
-  const mineKeysRef = useRef("");
-  useEffect(() => { const sig = mineKeysRef.current; if (!sig) return; try { localStorage.setItem(seenStoreKey, JSON.stringify({ at: new Date().toISOString(), keys: sig.split("\n") })); } catch {} });
   const [updKind, setUpdKind] = useState("note");
   const [updText, setUpdText] = useState("");
   const [updUntil, setUpdUntil] = useState("");
