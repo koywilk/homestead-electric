@@ -16357,6 +16357,21 @@ const applFloorKey = (floor, loc) => {
   return "main";
 };
 
+// Suggested wire from the breaker (or the load, when no breaker is listed).
+// Only a starting point — the row is never marked Pulled.
+const applWire = (item, volts, brk, load) => {
+  let a = parseFloat(brk);
+  if (!(a>0)) { const l=parseFloat(load); if (!(l>0)) return ""; a = l<=12?15 : l<=16?20 : l<=24?30 : l<=32?40 : l<=40?50 : 60; }
+  const three = /range|dryer|oven|cooktop|stove/i.test(item||"");
+  if (a<=15) return "14/2";
+  if (a<=20) return "12/2";
+  if (a<=30) return three ? "10/3" : "10/2";
+  if (a<=40) return three ? "8/3" : "8/2";
+  if (a<=50) return three ? "6/3" : "6/2";
+  if (a<=60) return "6/3";
+  return "";
+};
+
 function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport }) {
   const [state, setState] = useState({ loading:true, err:"", items:[], skippedDup:0, inCC:0, totalForJob:0 });
   useEffect(()=>{
@@ -16372,7 +16387,7 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport
         const H = (grid[0]||[]).map(h=>String(h||"").trim().toLowerCase());
         const ix = (...names) => { for (const n of names){ const i=H.findIndex(h=>h===n||h.startsWith(n)); if(i>=0) return i; } return -1; };
         const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
-              iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iIn=ix("in cc");
+              iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iIn=ix("in cc"), iConf=ix("confidence");
         if ([iJob,iLoc,iItem,iQty,iIn].some(i=>i<0)) throw new Error("The master sheet columns were not what this import expects.");
         const have = new Set();
         const allFloors = ["main","basement","upper",...(homeRuns?.extraFloors||[]).map(e=>e.key)];
@@ -16388,14 +16403,22 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport
           const loc=String(c[iLoc]||"").trim(), item=String(c[iItem]||"").trim();
           const base=`${loc} ${item}`.trim(); if(!base) return;
           const bits=[String(c[iModel]||"").trim(), c[iV]?`${String(c[iV]).trim()}V`:"", c[iLoad]?`${String(c[iLoad]).trim()}A load`:"", c[iBrk]?`${String(c[iBrk]).trim()}A breaker`:""].filter(Boolean);
-          const note=bits.join(" · ");
+          const conf=String(iConf>=0?c[iConf]:"").trim().toLowerCase();
+          const loadTxt=String(c[iLoad]||"").trim().toLowerCase();
+          const level = (/^(none|tbd|not found)/.test(conf) || loadTxt==="" || loadTxt==="tbd") ? "red"
+                      : (conf==="" || /series|typical|voltage only|circuit only|conflicting|not confirmed|partial|not found/.test(conf)) ? "yellow" : "green";
+          const wire = level==="red" ? "" : applWire(item, c[iV], c[iBrk], c[iLoad]);
+          const noteBase=bits.join(" · ");
+          const note = level==="red" ? (noteBase?noteBase+" · ":"")+"specs not found"
+                     : level==="yellow" ? "CONFIRM: "+noteBase+(conf?` (${String(c[iConf]).trim()})`:"")
+                     : noteBase;
           const n=Math.min(Math.round(qty),6);
           for (let u=1;u<=n;u++){
             const name = n>1 ? `${base} (${u} of ${n})` : base;
             const key=name.toLowerCase();
             if (have.has(key)) { skippedDup++; continue; }
             have.add(key);
-            items.push({ name, note, fk: applFloorKey(iFloor>=0?c[iFloor]:"", loc), job: m[1] });
+            items.push({ name, note, level, wire, status: level==="red"?"Need Specs":"", fk: applFloorKey(iFloor>=0?c[iFloor]:"", loc), job: m[1] });
           }
         });
         if(!dead) setState({ loading:false, err:"", items, skippedDup, inCC, totalForJob });
@@ -16413,9 +16436,9 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport
       style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
         display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
       <div onClick={e=>e.stopPropagation()}
-        style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:560,maxWidth:"95vw",
+        style={{background:C.card,borderRadius:14,padding:"22px 26px",width:560,maxWidth:"95vw",
           maxHeight:"90vh",overflow:"auto",border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)",marginBottom:6}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:C.text,marginBottom:6}}>
           IMPORT APPLIANCES · JOB #{jobNumber}
         </div>
         <div style={{fontSize:11,color:C.dim,marginBottom:12,lineHeight:1.5}}>
@@ -16426,6 +16449,7 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport
         {!loading && !err && (<>
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
             <strong style={{color:items.length>0?C.green:C.muted}}>{items.length} to add</strong>
+            {items.length>0 && ` (${items.filter(p=>p.level==="green").length} ready · ${items.filter(p=>p.level==="yellow").length} to confirm · ${items.filter(p=>p.level==="red").length} need specs)`}
             {` · ${inCC} already in Home Runs`}{skippedDup>0?` · ${skippedDup} skipped (same name already here)`:""}
             {totalForJob===0 && " · no rows for this job number in the sheet yet"}
           </div>
@@ -16434,6 +16458,8 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport
               {items.map((p,i)=>(
                 <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"4px 6px",borderBottom:i<items.length-1?`0.5px solid ${C.border}`:"none"}}>
                   <span style={{minWidth:54,color:C.muted,fontSize:10}}>{FL[p.fk]}</span>
+                  <span style={{minWidth:64,fontSize:9,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:"#B7791F"}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
+                  <span style={{minWidth:36,fontSize:10,color:C.dim,fontFamily:"monospace"}}>{p.wire||"—"}</span>
                   <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:10,color:C.muted}}>{p.note}</span></span>
                 </div>
               ))}
@@ -18429,7 +18455,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                 onImport={(items)=>{
                   const next={...homeRuns};
                   ["main","basement","upper"].forEach(k=>{
-                    const add=items.filter(p=>p.fk===k).map(p=>({...newHRRow(0),name:p.name,note:p.note}));
+                    const add=items.filter(p=>p.fk===k).map(p=>({...newHRRow(0),name:p.name,note:p.note,wire:p.wire||"",status:p.status||""}));
                     if(add.length) next[k]=sortHRRows([...(homeRuns[k]||[]),...add]);
                   });
                   onHRChange(next);
@@ -50846,10 +50872,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-30 · App SW version: v477
+**Last manifest update:** 2026-09-30 · App SW version: v478
 
 ---
 
+- **Home Runs — Import appliances from the master sheet (one job only)** · 'shipped 2026-09-30' · 'SW v478' · Koy: *"an import to this job home runs ... press a button and it copy-pasted it to that job number only. Don't let it go into any other job numbers."* New "Import appliances" button on the job's Home Runs tab ('HomeRunsTab', next to the By Panel / By Floor toggle; 'ApplianceImportModal'). It reads the Master tab of the "Appliance Loads - Master" Google Sheet as CSV and keeps ONLY rows whose Job label starts with that job's number ('simproNo', exact match; a job with no number refuses) AND are marked "Not in CC yet", then shows a preview; nothing is written until Confirm. Rows land on the job's own floor arrays (Main / Basement / Upper from the sheet's Floor or Location) as name = location + item, note = model, voltage, load amps and breaker; qty 2+ becomes one row per unit. Case-insensitive name de-dupe against everything already on the job makes the import safe to press twice. Needs the Sheet set to "Anyone with the link can view"; if it is not, the modal says so and changes nothing. **Why it won't lose data:** append-only — it builds the new rows and passes them through the same 'onHRChange' path as Bulk paste, existing rows are never edited or deleted; the job-number check runs when the list is built and again at Confirm; no new fields, no loader change, no Firestore or rules change.
 - **Tools tab — Appliance Loads (master sheet of every job's appliance and equipment loads with volts and amps)** · 'shipped 2026-09-30' · 'SW v477' · Koy: *"make this one of the tools in the new tools tab of the command center."* Second tool in the Tools tab ('TOOLS' registry): a window onto the "Appliance Loads - Master" Google Sheet — one tab per job (looked up by job number), each appliance with voltage, nameplate amps and breaker pulled from a model library by model number, plus an "In CC Home Runs?" column marking what is and is not in that job's Home Runs yet. A nightly cloud run adds new jobs and appliance packages from Drive and refreshes the Home Runs check by reading Command Center read-only. Page 'public/tools/appliance-loads/' embeds the Sheet and links to it; share the Sheet with whoever should see it. **Why it won't lose data:** the page has no backend, no Firestore, no storage and writes nothing; the app side adds one row to the 'TOOLS' list and one static folder; no job field, loader, function or rules change.
 - **Panelized Lighting — the panel schedule fits on one sheet when it can; Lutron sheets drop the Pulled column** · 'shipped 2026-09-30' · 'SW v476' · Koy, right after v475: *"I'd really like these to fit on one sheet if possible"* + *"also the pulled column isn't necessary on this."* Chose shrink-to-fit over a two-column sheet (keeps the 5.25-inch panel-cover strip). **Print** (popup, Cmd/Ctrl+P): the print stylesheet's extra 0.4in body padding is gone (the '@page' margin was already 0.4in, so the old sheet wore 0.8in of white on every side and lost 15% of the page height); the sheet is wrapped in '.sheet' and zoomed by a '--fit' custom property that an inline script sets after measuring a clone at the print strip width (so a phone's narrower screen layout can't skew it): 1 when it already fits, down to a **0.7 floor** to squeeze onto one page, and back to 1 (paginate with the v475 keep-together rules, which 'zoom' preserves because it reflows) when it would have to go smaller. **Download**: '_saveHtmlAsPdfPaged' gains 'opts.fitOne' (a minimum scale); the capture is drawn on ONE page shrunk to fit when that's ≥ 0.7, else the v475 pagination runs. The schedule passes 'fitOne: 0.7'. **Pulled column**: gone on Lutron sheets only ('isLut') — header, cells and the empty-module colspan; Control 4 / Crestron keep it since crews mark pulls there. Verified on real builder output: the Miller-shaped 10-module panel prints on 1 page (was 2) and downloads on 1 page; a 14-module panel fits one page at ~78% and is still clean; the 64-row bus fixture fits at ~78% too. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only, print/PDF rendering only — nothing is written; no field, loader, function or rules change; the loads-list PDF passes no 'fitOne' and is unchanged.
 - **Stale-copy audit — five more writers that could roll a shared doc back, closed** · 'shipped 2026-09-30' · 'SW v474' · Koy, after v473: *"are there any other spots in the app that need this fixed too? I feel like this is happening quite a bit, and I need it to not happen."* Swept every one-shot read that feeds a write, every direct 'setDoc' / 'updateDoc' outside the job merge, every 'saveHomeownerRequest' mutator and every effect that writes. Verified already safe: jobs (v312 / v471 merge), every settings/* doc on 'mergeSaveSettingsFields', settings/users (stale guard), needs (field-surgical + arrayUnion), question threads, plan-change acks, lighting collab, scoreboard weights and My Day pins ('merge:true'), the v450 FieldInk loads adopt effect. Five still had the Miller shape: **(1) Homeowner generator link, on submit** ('HomeownerPage') — wrote 'genLoads' wholesale from the copy loaded when the homeowner OPENED the link; a link sits open for days, so every office edit in between (renames, added loads, checks) was overwritten at signature and a load the office had removed came back. Now 'applyHomeownerSubmitToGenLoads' maps the homeowner's choices by id onto the SERVER list (the funnel's locked 'prev'): a load they never saw keeps what the office set, a removed load stays removed. **(2) Redline walks** ('saveRedlineWalk') — whole-object 'setDoc', no merge, no guard; an edit now writes only the keys it changed as dotted 'data.<k>' paths off a live baseline ('redlineWalksRef', fed by the listener and the tab's own edits), dropped keys via 'deleteField', a missing doc falls back to create, and a failed save toasts. New walks are still created whole. **(3) Crew roster** ('_saveRoster') — raw whole-doc 'setDoc'; now 'mergeSaveSettingsFields("crewRoster")' with the listener feeding '_settingsBaselines'. **(4) Time-off delete path** — raw 'setDoc' on 'settings/crewPTO' three lines from a sibling that used the funnel; now the funnel. **(5) Foreman colors** ('saveSettings') — replaced the whole 'settings/main' doc; now 'merge:true'. Gate: 'scripts/gen-selection-test.js' grows to 39 checks (the submit merge against a Monday-open / Wednesday-sign fixture — old path drops the added load and resurrects the removed one, new path keeps both right — plus wiring checks that no raw setDoc is left on crewRoster / crewPTO and that redline writes are dotted-path). Guides 'generatorlink.html' ("Keep editing while the link is out") and 'jobprep.html' (walk edits save field by field) updated. **Why it won't lose data:** every one of the five writes LESS than before — the homeowner submit writes the same 'genLoads' shape but built from the server copy (nothing the office has is dropped; the homeowner's signed picks still land by id); a redline edit writes only changed keys and never an undefined; roster, PTO and colors ride merges that preserve every other field. No field shape, loader, function or rules change.
