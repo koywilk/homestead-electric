@@ -55352,6 +55352,9 @@ const TOOLS = [
   { key: "generator-sizing", label: "Generator Sizing", icon: "zap",
     blurb: "Generac standby size from a NEC 220.82 load calc, plus gas supply, pad, transfer switch & feeder, and a printable job sheet.",
     src: "/tools/generator-sizing/index.html" },
+  { key: "appliance-loads", label: "Appliance Loads", icon: "clipboard",
+    blurb: "Master list of every job's appliance and equipment loads with volts and amps, looked up from each model's spec. Updated nightly from Drive.",
+    src: "/tools/appliance-loads/index.html" },
 ];
 const TOOLS_LAST_KEY = "he_tools_last";   // per-device convenience only: the tool last opened
 function ToolsView() {

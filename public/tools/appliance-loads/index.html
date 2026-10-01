@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- Homestead Electric · Tools · Appliance Loads (master sheet)
+     Added 2026-09-30. A window onto the "Appliance Loads - Master" Google Sheet:
+     every job's appliance / equipment loads with volts and amps, looked up from
+     a model library. A nightly cloud run appends new jobs and appliance
+     packages from Drive. This page stores nothing and writes nothing. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Appliance Loads - Homestead Electric</title>
+<meta name="theme-color" content="#141821">
+<style>
+  :root{--bg:#141821;--surface:#1B2030;--line:#2E3440;--txt:#E6EAF1;--muted:#9AA3B2;--accent:#66A8FF}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{display:flex;flex-direction:column;height:100%}
+  .bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .bar p{margin:0;font-size:13px;color:var(--muted);flex:1;min-width:220px}
+  .btn{display:inline-block;padding:8px 14px;border-radius:8px;background:var(--accent);color:#0F1218;font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap}
+  iframe{flex:1;width:100%;border:none;background:#fff}
+  .note{padding:8px 14px;font-size:12px;color:var(--muted);border-top:1px solid var(--line);background:var(--surface)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <p>Master list of appliance and equipment loads for every job, with volts and amps pulled from each model's spec. New jobs and appliance packages are added nightly from Drive. Yellow rows are typical values, not from a spec.</p>
+    <a class="btn" href="https://docs.google.com/spreadsheets/d/1oiefT8TN2oSUGzyNgwg2dFsmXVPL8DxwYGoIksxQKKI/edit" target="_blank" rel="noopener noreferrer">Open master sheet</a>
+  </div>
+  <iframe title="Appliance Loads master sheet" src="https://docs.google.com/spreadsheets/d/1oiefT8TN2oSUGzyNgwg2dFsmXVPL8DxwYGoIksxQKKI/edit?rm=minimal"></iframe>
+  <div class="note">If the sheet asks you to sign in or says you need access, use the Open master sheet button and ask Koy to share it with you. Amps are planning figures: confirm against the nameplate or install guide before sizing a breaker.</div>
+</div>
+</body>
+</html>
