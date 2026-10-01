@@ -16330,6 +16330,134 @@ function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
 }
 
 
+// ── Home Runs: import appliances from the master sheet (v478) ───────────
+// Reads the "Appliance Loads - Master" Google Sheet (Master tab, CSV) and
+// offers ONLY the rows whose Job label starts with THIS job's number
+// (simproNo) AND are flagged "Not in CC yet". Append-only: existing home
+// runs are never edited or removed, and nothing is written until Confirm.
+const APPL_SHEET_ID = "1oiefT8TN2oSUGzyNgwg2dFsmXVPL8DxwYGoIksxQKKI";
+const APPL_SHEET_URL = `https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Master`;
+const parseCSVText = (t) => {
+  const rows=[]; let row=[], f="", q=false;
+  for (let i=0;i<t.length;i++){
+    const c=t[i];
+    if (q){ if (c==='"'){ if (t[i+1]==='"'){ f+='"'; i++; } else q=false; } else f+=c; }
+    else if (c==='"') q=true;
+    else if (c===',') { row.push(f); f=""; }
+    else if (c==='\n' || c==='\r') { if (c==='\r' && t[i+1]==='\n') i++; row.push(f); f=""; rows.push(row); row=[]; }
+    else f+=c;
+  }
+  if (f!=="" || row.length) { row.push(f); rows.push(row); }
+  return rows;
+};
+const applFloorKey = (floor, loc) => {
+  const x = `${floor||""} ${loc||""}`.trim().toLowerCase();
+  if (/^(lower|basement|bsmt|walkout)/.test(x) || /^(lower|basement|bsmt)\b/.test(String(loc||"").toLowerCase())) return "basement";
+  if (/^(upper|2nd|second)/.test(x) || /^(upper|2nd|second)\b/.test(String(loc||"").toLowerCase())) return "upper";
+  return "main";
+};
+
+function ApplianceImportModal({ jobNumber, jobName, homeRuns, onCancel, onImport }) {
+  const [state, setState] = useState({ loading:true, err:"", items:[], skippedDup:0, inCC:0, totalForJob:0 });
+  useEffect(()=>{
+    let dead=false;
+    (async()=>{
+      try {
+        if (!jobNumber) throw new Error("This job has no job number, so there is nothing to match against.");
+        const res = await fetch(APPL_SHEET_URL, { cache:"no-store" });
+        if (!res.ok) throw new Error("The master sheet could not be read (HTTP "+res.status+").");
+        const txt = await res.text();
+        if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The master sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\" and try again.");
+        const grid = parseCSVText(txt);
+        const H = (grid[0]||[]).map(h=>String(h||"").trim().toLowerCase());
+        const ix = (...names) => { for (const n of names){ const i=H.findIndex(h=>h===n||h.startsWith(n)); if(i>=0) return i; } return -1; };
+        const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
+              iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iIn=ix("in cc");
+        if ([iJob,iLoc,iItem,iQty,iIn].some(i=>i<0)) throw new Error("The master sheet columns were not what this import expects.");
+        const have = new Set();
+        const allFloors = ["main","basement","upper",...(homeRuns?.extraFloors||[]).map(e=>e.key)];
+        allFloors.forEach(k=>(homeRuns?.[k]||[]).forEach(r=>{ const n=(r.name||"").trim().toLowerCase(); if(n) have.add(n); }));
+        let totalForJob=0, inCC=0, skippedDup=0; const items=[];
+        grid.slice(1).forEach(c=>{
+          const m = String(c[iJob]||"").trim().match(/^#?(\d+)/);
+          if (!m || m[1]!==String(jobNumber).trim()) return;          // other jobs never pass
+          const qty = parseFloat(c[iQty]);
+          if (!(qty>0)) return;
+          totalForJob++;
+          if (String(c[iIn]||"").trim().toLowerCase()!=="not in cc yet") { inCC++; return; }
+          const loc=String(c[iLoc]||"").trim(), item=String(c[iItem]||"").trim();
+          const base=`${loc} ${item}`.trim(); if(!base) return;
+          const bits=[String(c[iModel]||"").trim(), c[iV]?`${String(c[iV]).trim()}V`:"", c[iLoad]?`${String(c[iLoad]).trim()}A load`:"", c[iBrk]?`${String(c[iBrk]).trim()}A breaker`:""].filter(Boolean);
+          const note=bits.join(" · ");
+          const n=Math.min(Math.round(qty),6);
+          for (let u=1;u<=n;u++){
+            const name = n>1 ? `${base} (${u} of ${n})` : base;
+            const key=name.toLowerCase();
+            if (have.has(key)) { skippedDup++; continue; }
+            have.add(key);
+            items.push({ name, note, fk: applFloorKey(iFloor>=0?c[iFloor]:"", loc), job: m[1] });
+          }
+        });
+        if(!dead) setState({ loading:false, err:"", items, skippedDup, inCC, totalForJob });
+      } catch(e) {
+        if(!dead) setState(s=>({...s, loading:false, err:String(e.message||e)}));
+      }
+    })();
+    return ()=>{ dead=true; };
+  // eslint-disable-next-line
+  },[]);
+  const { loading, err, items, skippedDup, inCC, totalForJob } = state;
+  const FL = { main:"Main", basement:"Basement", upper:"Upper" };
+  return (
+    <div onClick={onCancel}
+      style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:560,maxWidth:"95vw",
+          maxHeight:"90vh",overflow:"auto",border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)",marginBottom:6}}>
+          IMPORT APPLIANCES · JOB #{jobNumber}
+        </div>
+        <div style={{fontSize:11,color:C.dim,marginBottom:12,lineHeight:1.5}}>
+          Only rows labeled job <strong>#{jobNumber}</strong> ({jobName}) that are marked "Not in CC yet" are shown. Nothing already on this job is changed or removed, and nothing is added until you confirm.
+        </div>
+        {loading && <div style={{fontSize:12,color:C.dim,padding:"18px 0"}}>Reading the master sheet…</div>}
+        {!loading && err && <div style={{fontSize:12,color:"#B23A3A",padding:"10px 12px",border:"1px solid #B23A3A55",borderRadius:8,marginBottom:12,lineHeight:1.5}}>{err}</div>}
+        {!loading && !err && (<>
+          <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
+            <strong style={{color:items.length>0?C.green:C.muted}}>{items.length} to add</strong>
+            {` · ${inCC} already in Home Runs`}{skippedDup>0?` · ${skippedDup} skipped (same name already here)`:""}
+            {totalForJob===0 && " · no rows for this job number in the sheet yet"}
+          </div>
+          {items.length>0 && (
+            <div style={{maxHeight:260,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:7,padding:6,marginBottom:14,background:C.surface}}>
+              {items.map((p,i)=>(
+                <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"4px 6px",borderBottom:i<items.length-1?`0.5px solid ${C.border}`:"none"}}>
+                  <span style={{minWidth:54,color:C.muted,fontSize:10}}>{FL[p.fk]}</span>
+                  <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:10,color:C.muted}}>{p.note}</span></span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>)}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onCancel}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,fontFamily:"inherit",flex:1}}>
+            {items.length>0?"Cancel":"Close"}
+          </button>
+          {items.length>0 && (
+            <button onClick={()=>onImport(items.filter(p=>p.job===String(jobNumber).trim()))}
+              style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,letterSpacing:"0.04em"}}>
+              Add {items.length} to job #{jobNumber}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function HRAddFloor({homeRuns, onHRChange}) {
   const [adding, setAdding] = useState(false);
   const [name,   setName]   = useState("");
@@ -17592,7 +17720,7 @@ function HomeRunsPullSummary({namedFlat, onTogglePulled}) {
 }
 
 
-function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false}) {
+function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange, hideGenerator=false, hidePanelSchedules=false, hideLiveView=false, hideMaterials=false}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [genReady,        setGenReady]        = useState(false); // v473: the saved list has arrived (or the read failed)
@@ -17604,6 +17732,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const [copied,          setCopied]          = useState(false);
   const [editingBreakers, setEditingBreakers] = useState(null); // panel name currently in edit mode
   const [hrView,          setHrView]          = useState(null); // null = auto: panel view once any panel is labeled, floor view before that
+  const [applImportOpen, setApplImportOpen] = useState(false); // v478: import from appliance master sheet
   const [addingPO,        setAddingPO]        = useState({});  // { [panelName]: selectedSource }
   const [poConfirm,       setPoConfirm]       = useState({});  // { [panelName]: confirmMessage }
   const showPOConfirm = (p, msg) => { setPoConfirm(v=>({...v,[p]:msg})); setTimeout(()=>setPoConfirm(v=>({...v,[p]:null})),3000); };
@@ -18287,7 +18416,26 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                 </button>
               ))}
               {hrViewEff==='panel'&&<span style={{fontSize:10,color:C.muted}}>panel → floor → A-Z · add rows in By Floor</span>}
+              <button type="button" onClick={()=>setApplImportOpen(true)}
+                style={{marginLeft:"auto",fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                  border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>
+                Import appliances
+              </button>
             </div>
+
+            {applImportOpen && (
+              <ApplianceImportModal jobNumber={jobNumber} jobName={jobName} homeRuns={homeRuns}
+                onCancel={()=>setApplImportOpen(false)}
+                onImport={(items)=>{
+                  const next={...homeRuns};
+                  ["main","basement","upper"].forEach(k=>{
+                    const add=items.filter(p=>p.fk===k).map(p=>({...newHRRow(0),name:p.name,note:p.note}));
+                    if(add.length) next[k]=sortHRRows([...(homeRuns[k]||[]),...add]);
+                  });
+                  onHRChange(next);
+                  setApplImportOpen(false);
+                }}/>
+            )}
 
             {hrViewEff==='panel' ? (
               <HomeRunsByPanel homeRuns={homeRuns} onHRChange={onHRChange} customPanels={cp}/>
@@ -29864,7 +30012,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tab==="Home Runs"&&(
 
-            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name} jobAddress={job.address}
+            <HomeRunsTab jobNumber={String(job.simproNo||"").trim()} homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name} jobAddress={job.address}
               electricalPanels={job.electricalPanels||[]}
               onElectricalPanelsChange={v=>u({electricalPanels:v})}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
@@ -50698,10 +50846,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-09-30 · App SW version: v476
+**Last manifest update:** 2026-09-30 · App SW version: v477
 
 ---
 
+- **Tools tab — Appliance Loads (master sheet of every job's appliance and equipment loads with volts and amps)** · 'shipped 2026-09-30' · 'SW v477' · Koy: *"make this one of the tools in the new tools tab of the command center."* Second tool in the Tools tab ('TOOLS' registry): a window onto the "Appliance Loads - Master" Google Sheet — one tab per job (looked up by job number), each appliance with voltage, nameplate amps and breaker pulled from a model library by model number, plus an "In CC Home Runs?" column marking what is and is not in that job's Home Runs yet. A nightly cloud run adds new jobs and appliance packages from Drive and refreshes the Home Runs check by reading Command Center read-only. Page 'public/tools/appliance-loads/' embeds the Sheet and links to it; share the Sheet with whoever should see it. **Why it won't lose data:** the page has no backend, no Firestore, no storage and writes nothing; the app side adds one row to the 'TOOLS' list and one static folder; no job field, loader, function or rules change.
 - **Panelized Lighting — the panel schedule fits on one sheet when it can; Lutron sheets drop the Pulled column** · 'shipped 2026-09-30' · 'SW v476' · Koy, right after v475: *"I'd really like these to fit on one sheet if possible"* + *"also the pulled column isn't necessary on this."* Chose shrink-to-fit over a two-column sheet (keeps the 5.25-inch panel-cover strip). **Print** (popup, Cmd/Ctrl+P): the print stylesheet's extra 0.4in body padding is gone (the '@page' margin was already 0.4in, so the old sheet wore 0.8in of white on every side and lost 15% of the page height); the sheet is wrapped in '.sheet' and zoomed by a '--fit' custom property that an inline script sets after measuring a clone at the print strip width (so a phone's narrower screen layout can't skew it): 1 when it already fits, down to a **0.7 floor** to squeeze onto one page, and back to 1 (paginate with the v475 keep-together rules, which 'zoom' preserves because it reflows) when it would have to go smaller. **Download**: '_saveHtmlAsPdfPaged' gains 'opts.fitOne' (a minimum scale); the capture is drawn on ONE page shrunk to fit when that's ≥ 0.7, else the v475 pagination runs. The schedule passes 'fitOne: 0.7'. **Pulled column**: gone on Lutron sheets only ('isLut') — header, cells and the empty-module colspan; Control 4 / Crestron keep it since crews mark pulls there. Verified on real builder output: the Miller-shaped 10-module panel prints on 1 page (was 2) and downloads on 1 page; a 14-module panel fits one page at ~78% and is still clean; the 64-row bus fixture fits at ~78% too. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** read-only, print/PDF rendering only — nothing is written; no field, loader, function or rules change; the loads-list PDF passes no 'fitOne' and is unchanged.
 - **Stale-copy audit — five more writers that could roll a shared doc back, closed** · 'shipped 2026-09-30' · 'SW v474' · Koy, after v473: *"are there any other spots in the app that need this fixed too? I feel like this is happening quite a bit, and I need it to not happen."* Swept every one-shot read that feeds a write, every direct 'setDoc' / 'updateDoc' outside the job merge, every 'saveHomeownerRequest' mutator and every effect that writes. Verified already safe: jobs (v312 / v471 merge), every settings/* doc on 'mergeSaveSettingsFields', settings/users (stale guard), needs (field-surgical + arrayUnion), question threads, plan-change acks, lighting collab, scoreboard weights and My Day pins ('merge:true'), the v450 FieldInk loads adopt effect. Five still had the Miller shape: **(1) Homeowner generator link, on submit** ('HomeownerPage') — wrote 'genLoads' wholesale from the copy loaded when the homeowner OPENED the link; a link sits open for days, so every office edit in between (renames, added loads, checks) was overwritten at signature and a load the office had removed came back. Now 'applyHomeownerSubmitToGenLoads' maps the homeowner's choices by id onto the SERVER list (the funnel's locked 'prev'): a load they never saw keeps what the office set, a removed load stays removed. **(2) Redline walks** ('saveRedlineWalk') — whole-object 'setDoc', no merge, no guard; an edit now writes only the keys it changed as dotted 'data.<k>' paths off a live baseline ('redlineWalksRef', fed by the listener and the tab's own edits), dropped keys via 'deleteField', a missing doc falls back to create, and a failed save toasts. New walks are still created whole. **(3) Crew roster** ('_saveRoster') — raw whole-doc 'setDoc'; now 'mergeSaveSettingsFields("crewRoster")' with the listener feeding '_settingsBaselines'. **(4) Time-off delete path** — raw 'setDoc' on 'settings/crewPTO' three lines from a sibling that used the funnel; now the funnel. **(5) Foreman colors** ('saveSettings') — replaced the whole 'settings/main' doc; now 'merge:true'. Gate: 'scripts/gen-selection-test.js' grows to 39 checks (the submit merge against a Monday-open / Wednesday-sign fixture — old path drops the added load and resurrects the removed one, new path keeps both right — plus wiring checks that no raw setDoc is left on crewRoster / crewPTO and that redline writes are dotted-path). Guides 'generatorlink.html' ("Keep editing while the link is out") and 'jobprep.html' (walk edits save field by field) updated. **Why it won't lose data:** every one of the five writes LESS than before — the homeowner submit writes the same 'genLoads' shape but built from the server copy (nothing the office has is dropped; the homeowner's signed picks still land by id); a redline edit writes only changed keys and never an undefined; roster, PTO and colors ride merges that preserve every other field. No field shape, loader, function or rules change.
 - **Home Runs — Generator Load Selection no longer unchecks what you just checked** · 'shipped 2026-09-30' · 'SW v473' · Keegan, on Miller: *"Generator load selection keeps unselecting things that I am selecting. Some examples are office + hallway, pantry fridge, and laundry counter outlets."* (The v468 note had already logged "Pantry fridge/ freezer" as a row wearing the Dedicated Loads label but not checked on the generator — that was this, not a hand edit.) The section's saved list ('homeowner_requests/{jobId}.genLoads') was a one-shot 'getDoc' at mount with no live subscription, and three paths could roll a check back: **(1) a stale tab re-syncs over the server.** The Home Runs → generator auto-sync fires on any home-run change (a pull marked in the field is in the signature) and used to write the tab's OWN copy of the list back wholesale — so an office tab opened on Miller that morning, holding the list from before Keegan's checks, unchecked them the next time a row changed. Now the auto-sync (and Re-sync now) reconciles against the SERVER copy inside the 'saveHomeownerRequest' transaction, and the mutator returns null (funnel now skips the write and the version snapshot) when nothing changed. **(2) a slow read lets the section save before the list arrives.** Open the section before the read resolved and it reconciled against the empty placeholder, built a fresh all-off list with new ids and saved it 800 ms later; any tap made meanwhile vanished when the real list landed. The section now shows *Loading the saved selection…* and runs no sync until the saved list is here ('ready'). **(3) a signed homeowner response was re-applied on every open.** 'applyHomeownerChoices' overlaid the homeowner's picks onto the office list at every mount (meant as a one-time carry for jobs signed before submit wrote back), so anything the office checked after the homeowner signed showed unchecked again, and the next tap saved that. Every office save now stamps 'genLoadsAt', and the overlay applies only while the submission is newer than that stamp ('homeownerOverlayApplies'; legacy docs with no stamp behave as before until their next save). Also: the tab now subscribes live ('onSnapshot') so a phone's checks appear on the office tab without a reload, a snapshot is held off while a local tap is still saving so an older echo can't uncheck it on screen, and a failed save now toasts instead of failing silently. New prebuild gate 'scripts/gen-selection-test.js' (21 checks: the stale-tab mechanism and its fix against the real 'reconcileGenLoads', the overlay gate cases, the funnel's null-patch skip, the wiring). Guide 'homeruns.html' updated. **Why it won't lose data:** 'genLoads' keeps its shape and ids; 'genLoadsAt' is one additive ISO string on the shared doc (open rules already allow any field; nothing reads it but the overlay gate); the auto-sync now writes LESS (only when the locked server copy differs, preserving every server-side check) and user taps write exactly what they wrote before through the same funnel with its version snapshot; the listener only moves local state; no job field, loader, function or rules change.
