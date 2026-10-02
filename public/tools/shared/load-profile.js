@@ -18,10 +18,11 @@
   // Canonical appliance kinds. Order matters: the FIRST regex that matches wins,
   // so the specific kinds sit above the general ones (speed oven before oven,
   // wash tower before washer, heat pump water heater before heat pump).
-  // gen = generator preset key (null = never sent to the generator).
+  // gen = generator preset key (null = never sent to the generator); typ = typical VA when the
+  // preset is only a stand-in (a sauna is not a 1,500 VA "other load").
   var KINDS = [
-    ["speed",        /speed oven|steam oven|microwave drawer|convection microwave|advantium/i, { gen: "generic" }],
-    ["warm",         /warming drawer|plate warmer/i, { gen: "generic" }],
+    ["speed",        /speed oven|steam oven|microwave drawer|convection microwave|advantium/i, { gen: "generic", typ: 3000 }],
+    ["warm",         /warming drawer|plate warmer/i, { gen: "generic", typ: 1000 }],
     ["dryer",        /wash ?tower|washer ?\/ ?dryer|washer[- ]dryer|laundry (center|tower)/i, { gen: "dryer" }],
     ["covered",      /gas dryer|refrigerat|fridge|freezer|side[- ]by[- ]side|french[- ]door|bottom[- ]freezer|column (fridge|freezer|refrig)|microwave|disposal|disposer|\bhood\b|wine|beverage|ice ?maker|\bwasher\b|washing machine|compactor|coffee|under ?counter|water softener|towel warmer|fountain/i, { gen: null }],
     ["dryer",        /dryer/i, { gen: "dryer" }],
@@ -35,24 +36,24 @@
     ["dishwasher",   /dish ?washer|\bdw\b|\bd\/d\b/i, { gen: "dishwasher" }],
     ["ev",           /\bev\b|evse|car charger|vehicle charg|tesla|wall connector|chargepoint|level ?2 charg/i, { gen: "evse" }],
     ["snowmelt",     /snow ?melt|heat ?trace|heat ?tape|de-?ic|ice melt/i, { gen: "snowmelt" }],
-    ["floorheat",    /floor (heat|warm)|radiant floor|heated floor|warm ?floor|in-?floor|nuheat|ditra/i, { gen: "electricheat" }],
+    ["floorheat",    /floor (heat|warm)|radiant floor|heated floor|warm ?floor|in-?floor|nuheat|ditra/i, { gen: "electricheat", typ: 800 }],
     ["minisplit",    /mini[- ]?split|ductless/i, { gen: "minisplit" }],
     ["heatpump",     /heat ?pump/i, { gen: "heatpump" }],
     ["electricheat", /electric furnace|baseboard|unit heater|wall heater|garage heater|resistance heat|space heater|cove heater|strip heat|electric heat|\bheaters?\b/i, { gen: "electricheat" }],
     ["ac",           /condenser|condensing unit|\ba\/c\b|\bac\b|air condition|\bhvac\b/i, { gen: "ac" }],
     ["airhandler",   /air handler|furnace|blower|\bfau\b|\bahu\b|boiler|humidifier/i, { gen: "airhandler" }],
-    ["sauna",        /sauna/i, { gen: "generic" }],
-    ["steam",        /steam (shower|gen|unit|bath)|steamer|steamist|mr\.? ?steam/i, { gen: "generic" }],
-    ["plunge",       /cold plunge|plunge|chiller/i, { gen: "generic_motor" }],
-    ["swimspa",      /swim ?spa/i, { gen: "pool" }],
-    ["hottub",       /hot ?tub|\bspa\b|jacuzzi/i, { gen: "pool" }],
+    ["sauna",        /sauna/i, { gen: "generic", typ: 8000 }],
+    ["steam",        /steam (shower|gen|unit|bath)|steamer|steamist|mr\.? ?steam/i, { gen: "generic", typ: 9000 }],
+    ["plunge",       /cold plunge|plunge|chiller/i, { gen: "generic_motor", typ: 1900 }],
+    ["swimspa",      /swim ?spa/i, { gen: "pool", typ: 12000 }],
+    ["hottub",       /hot ?tub|\bspa\b|jacuzzi/i, { gen: "pool", typ: 7500 }],
     ["pool",         /pool/i, { gen: "pool" }],
     ["wellpump",     /well pump|\bwell\b/i, { gen: "wellpump" }],
     ["sump",         /sump|sewage|ejector|grinder|lift station/i, { gen: "sump" }],
     ["booster",      /booster|circulat|recirc|\bcirc\b/i, { gen: "booster" }],
     ["elevator",     /elevator|\blift\b|dumbwaiter/i, { gen: "elevator" }],
     ["garage",       /garage door|door opener|\bopener\b/i, { gen: "garage" }],
-    ["shop",         /welder|compressor|shop recep|table saw|dust collect/i, { gen: "generic_motor" }],
+    ["shop",         /welder|compressor|shop recep|table saw|dust collect/i, { gen: "generic_motor", typ: 9600 }],
     ["general",      /\boutlets?\b|\blights?\b|lighting|recept|\bsa\s?\d|\blcp\b|\bmods?\b|\bshades?\b|low[- ]volt|\brack\b|security|processor|strobe|smoke|smokies|bedroom|\bbed\s?\d|\bhall(way)?\b|\bstairs?\b|\bsitting\b|\broom\b|closet|porch|\bentry\b|christmas|lounge|landing|\bbath\s?\d/i, { gen: null }],
     ["other",        /.^/, { gen: "generic", motorIf: /pump|motor|compressor|\bfan\b|blower|vacuum/i }]
   ];
@@ -169,7 +170,7 @@
       for (var k in pre) row[k] = pre[k];
       row.key = key; row.name = String(l.name || pre.name); row.qty = Math.max(1, Math.round(num(l.qty) || 1)); row.soft = false;
       if (typeof l.motor === "boolean" && kind === "other") row.motor = l.motor;
-      if (va) row.va = va; else { typical++; row.flag = "typical VA"; }
+      if (va) row.va = va; else { typical++; row.flag = "typical VA"; if (info.typ) row.va = info.typ; }
       if (l.status === "maybe") row.flag = "maybe";
       rows.push(row);
     }

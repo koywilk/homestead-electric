@@ -238,6 +238,14 @@ test("houseFromLoads: SA circuits plus dedicated fridge circuits, washer circuit
   assert.deepEqual(h, { sac: 7, laundry: 2, general: 2 });
 });
 
+test("toGeneratorRows: a kind with its own typical VA uses it instead of the stand-in preset's", () => {
+  const r = LP.toGeneratorRows({ sizeFor: "max", loads: [{ name: "Sauna", kind: "", qty: 1, status: "yes" }, { name: "Master bath floor heat", kind: "", qty: 1, status: "yes" }, { name: "Sauna", kind: "", qty: 1, volts: 240, amps: 40, va: 9600, status: "yes" }] },
+    { ...PRESETS, electricheat: { name: "Electric resistance heat", va: 10000, motor: false, surge: 1, category: "heating" } });
+  assert.equal(r.rows[0].va, 8000); assert.equal(r.rows[0].flag, "typical VA");
+  assert.equal(r.rows[1].va, 800); assert.equal(r.rows[1].key, "electricheat");
+  assert.equal(r.rows[2].va, 9600); assert.ok(!r.rows[2].flag, "a real nameplate is never replaced");
+});
+
 test("toGeneratorRows: general circuits are skipped like covered ones", () => {
   const r = LP.toGeneratorRows({ sizeFor: "max", loads: [{ name: "Great room + sitting", kind: "", qty: 1, status: "yes" }, { name: "Sauna", kind: "", qty: 1, volts: 240, amps: 40, va: 9600, status: "yes" }] }, PRESETS);
   assert.deepEqual(r.skipped, ["Great room + sitting"]);
