@@ -242,7 +242,7 @@
 
   <section id="fillCard">
     <div class="sec-head"><span class="idx">00</span><h2>Start from another tool</h2></div>
-    <p class="sec-sub">Pull the loads this job already has in <strong>Appliance Loads</strong> or <strong>Service Size</strong> (same device). Nothing changes until you tap Fill; Undo puts the old list back.</p>
+    <p class="sec-sub">Pull the loads this job already has in <strong>Appliance Loads</strong> or <strong>Service Size</strong>, or the loads marked on its generator (the bar above this tool). Same device. Nothing changes until you tap Fill; Undo puts the old list back.</p>
     <div class="fillrow" id="fillBtns"></div>
     <div class="note" id="fillNote" hidden></div>
   </section>
@@ -808,7 +808,7 @@
   function renderFillBar(all){
     const box=$("#fillBtns"); if(!box||!LP) return;
     box.replaceChildren();
-    const srcs=["appliance-loads","service-size"].filter(k=>all&&all[k]);
+    const srcs=["generator-selection","appliance-loads","service-size"].filter(k=>all&&all[k]);
     srcs.forEach(k=>{ const p=all[k]; const b=el("button","add","Fill from "+LP.SOURCES[k]+" · "+(p.label||"")+" · "+LP.ago(p.at)); b.dataset.fill=k; box.appendChild(b); });
     if(!srcs.length){ const s=el("span","sec-sub","Nothing to fill from yet. Open a job in Appliance Loads, or work in Service Size, then come back."); s.style.margin="0"; box.appendChild(s); }
     if(LP.isVisible("service-size")){ const b=el("button","add ghost","Open in Service Size"); b.dataset.open="service-size"; box.appendChild(b); }
@@ -835,12 +835,15 @@
     let svcNote=null;
     if(p.service&&p.service.amps){ const opts=[...$("#svcA").options].map(o=>+o.value); const pick=opts.find(a=>a>=p.service.amps); if(pick){ $("#svcA").value=String(pick); svcNote=(pick===p.service.amps?"service set to "+pick+" A":"service set to "+pick+" A, the next size up from "+p.service.amps+" A"); } }
     if(p.job){ if(p.job.name)$("#jobCust").value=p.job.name; if(p.job.address)$("#jobAddr").value=p.job.address; }
+    if(p.scope==="essential"||p.scope==="whole"){ $("#scope").value=p.scope; }
     renderRows(); render(); dirty=true; publish();
     const parts=[{pre:"Filled "+rows.length+" load"+(rows.length===1?"":"s")+" from ",strong:LP.SOURCES[src],post:" ("+(p.label||"")+")"}];
     if(r.typical) parts.push(r.typical+" had no amps on the sheet and use typical VA (flagged)");
     if(r.unconfirmed) parts.push(r.unconfirmed+" have a spec the sheet has not confirmed (flagged)");
     if(r.skipped.length){ const gen=r.skipped.filter(n=>LP.classify(n,{})==="general"), appl=r.skipped.filter(n=>LP.classify(n,{})!=="general"); if(appl.length) parts.push(appl.length+" covered by the general load above: "+appl.join(", ")); if(gen.length) parts.push(gen.length+" lighting and receptacle circuits counted in the general load"); }
     if(svcNote) parts.push(svcNote);
+    if(p.scope==="essential") parts.push("transfer switch set to Essential circuits (a subset of the house is on the generator)");
+    if(!(p.house&&p.house.sqft>0)) parts.push("square footage is not in the job: enter the area the generator serves");
     showFillNote(parts,true);
   }
   if(LP){

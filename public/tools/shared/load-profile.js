@@ -13,7 +13,7 @@
   "use strict";
   var KEY = "he_tools_profile_v1";
   var VISIBLE_KEY = "he_tools_visible_v1";
-  var SOURCES = { "appliance-loads": "Appliance Loads", "service-size": "Service Size", "generator-sizing": "Generator Sizing" };
+  var SOURCES = { "appliance-loads": "Appliance Loads", "service-size": "Service Size", "generator-sizing": "Generator Sizing", "generator-selection": "Generator Selection" };
 
   // Canonical appliance kinds. Order matters: the FIRST regex that matches wins,
   // so the specific kinds sit above the general ones (speed oven before oven,

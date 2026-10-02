@@ -51272,11 +51272,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-02 · App SW version: v498
+**Last manifest update:** 2026-10-02 · App SW version: v499
 
 ---
 
 - **Job Info: two GC contacts can run a job — an on-site super AND an office PM** · 'shipped 2026-10-02' · 'SW v498' · Justin, on a Design-Build job: *"it seems at least for these Design-Build jobs there's an onsite super and a office pm… can you make it possible for two? because our job setup says we have to establish both so it needs somewhere for that info to live."* In the GC Contacts list (after a Simpro pull), tap a name to mark who's running the job — now up to **two** can be marked. The first still drops into GC Contact / GC Phone exactly as before; the second lands in new **GC Contact 2 / GC Phone 2** boxes. A third tap is refused with a toast instead of silently swapping someone out, and clearing the first promotes the second so the boxes the crew calls from are never empty while somebody is still marked. Running contacts get one-tap **Onsite Super / Office PM** role chips (they just fill the existing label, which survives re-pulls). A collapsed **+ 2nd GC contact (e.g. office PM)** section under GC Phone lets you type the second contact by hand for jobs with no Simpro pull or a PM who isn't in Simpro's list; it opens by itself once it has anything in it and shows the name in its header. Both picks are keyed by the Simpro contact ID ('gcContactLead', new 'gcContactLead2'), live beside 'gcContacts', and survive every re-pull; the Pull button still only fills BLANKS and never touches the second contact. Purely additive — a job with one contact is unchanged. New fields 'gcContactLead2', 'gcContact2', 'phone2' ride the job's normal data payload (no loader whitelist). Guarded by 'scripts/gc-two-contacts-test.js' (wired into 'prebuild'). In-app guide 'public/sops/jobinfo.html' updated.
+- **Generator Sizing — pull a job's generator-selected loads (choose the job, pull only what's on the generator)** · 'shipped 2026-10-02' · 'SW v499' · Koy: *"i think id rather have a pull from generator selected loads and pull them from the jobs i want."* A new strip above the Generator Sizing tool, **PULL A JOB'S GENERATOR LOADS**: a job picker (active jobs; those whose Home Runs carry the Dedicated Loads stamp sort first and read *generator selected*) and a **Pull** button. Pull reads that job's Generator Load Selection (the same 'homeowner_requests/{jobId}' doc and homeowner-overlay rule the Home Runs panel uses) and drops a **Generator Selection** note in the handoff drawer with ONLY the loads marked on the generator, in the homeowner's priority order (office-added ones after): the appliance sheet's nameplate where a Home Run stands for a sheet row (hand link or the sheet's CC home run name, two-run cells and duplicate names handled), else the Home Run's name with its wire's volts and no amps, so the tool's classifier gives it a flagged typical value and lighting / receptacle circuits are counted, not sized. Never breaker × volts. The tool then shows 'Fill from Generator Selection · #1438 Miller Residence - Alpine · 54 on the generator'; Fill sets the transfer-switch scope to **Essential circuits** when the selection is a subset, counts SA and laundry circuits from the list, and says plainly that square footage is not in the job (enter the served area). Service Size deliberately does not list this source: a service carries the whole house. The Appliance Loads sheet read moved into a shared 'fetchApplSheetRows()' (the view still reloads it fresh; the pull reuses a loaded copy). Pure mapping 'genSelectionLoads' is tested by new 'scripts/gen-pull-test.js' (5 checks against a copied Miller #1438 fixture, wired into 'prebuild'). Miller: 54 of 134 loads → 11 sized rows at 17,000 sq ft served → 80 kW in the test harness. **Why it won't lose data:** the pull is read-only (one 'getDoc' of the job's 'homeowner_requests' doc plus the Sheet CSV); it writes only the device-local handoff key; no job field, loader, rules or function change; the Generator Load Selection section itself is untouched and still carries no wattage; Josh's generator tables and calc are byte-identical.
 - **Tools tab — the three tools fill each other (Appliance Loads → Service Size / Generator Sizing, and the two calculators both ways)** · 'shipped 2026-10-02' · 'SW v497' · Koy: *"so we have the three tools in the tools tab now, generator calc, appliance loads, and load calc. We want them to be able to all three work together to fill each one out if we want."* Opening a job in **Appliance Loads** makes its appliances available on that device, and the job page gets **Send to Generator Sizing** / **Send to Service Size** (the Service Size one only for people who hold that tool); both switch the Tools chip. Koy (Miller #1438 test): *"for the load calc it should use the entire homeruns list"* — so the handoff carries the job's **whole Home Runs list** too: every Home Run the sheet does not already describe (by hand link or the sheet's CC home run name, which may name two runs like "B. Washer / B. Dryer") rides along with its wire's volts and no amps. The tools classify the names: lighting, receptacle, SA, AV and lighting-control circuits are **counted** (small-appliance and laundry circuit counts come from the list) and never sized; furnaces, boilers and humidifiers sit inside the heating/cooling allowance; a 120 V "water heater" or "dryer" circuit is a gas unit's accessory; dedicated circuits with no sheet row (sauna, EV, heat tape, steamer, AC condensers) arrive at the item's typical value, flagged, until a nameplate replaces it. Never breaker × volts. **Generator Sizing** and **Service Size** each get a *Start from another tool* bar with 'Fill from Appliance Loads · #1438 Miller Residence · 14 loads · 2 min ago' style buttons and an Undo; nothing moves until you tap Fill. Service Size also gets **Send to Generator Sizing** next to Copy bid note, tags the fields it filled ('loads' / 'generator', like the 'plans' tag), and gains a **From another tool** group under Extras for appliances its fixed list has no row for (a kiln, a 240 V heater): counted as fixed appliances at nameplate under 220.82(B)(3), editable and removable, in the what-ifs and the bid note. Fridges, microwaves, hoods, disposals and the first dishwasher are listed as *covered by the standard allowances* and never counted twice. A load the sheet had no amps for arrives with the item's typical VA and a flag ('typical VA' in the generator, 'needs VA' on a Service Size extra). A sheet row with no voltage (Miller #1438: range, wall oven, dryer, both speed ovens) takes its volts from the Home Run it is linked to ('applLinks', or the sheet's CC home run name) through that wire's poles, so 42.5 A on a 6/3 run is 240 V × 42.5 A, not a typical value; amps always stay the sheet's nameplate. Service Size hands the generator its recommended service size for the transfer-switch pick and its HVAC as rows at the calc's own figures; the generator hands back square footage and circuit counts. Service Size "maybe" items reach the generator flagged 'maybe' only when Service Size is set to size for maybes. **Confirm spec flag (Koy 2026-10-02):** a sheet row whose amps rest on a series / typical / breaker-only / voltage-only basis (the sheet's Confidence text, not the row's color — a row already in Home Runs shows green even when its amps are a breaker size) arrives in the generator with a 'confirm spec' pill and in Service Size with a *Confirm spec* note; the number is still used. Hand-set amps and a hand-confirmed spec count as confirmed. **Access (Koy 2026-10-02): the whole Tools tab is limited to Koy, Josh, Brady and Jeromy for now.** 'tools.view' becomes a per-user grant like 'tools.serviceSize' (no tier; it was every internal tier through v496). Settings → Team → TOOL ACCESS gains a first checkbox, **Tools tab (all calculators)**; the nav tabs and the Tools view now check the live team record ('myLiveRec'), the v465 lesson, so a grant shows without re-login. **Flip-day: tick Tools tab for the four in Settings → Team**; until then nobody sees Tools. The job card's own *Appliance loads* window on the Home Runs tab is a Home Runs feature and is unchanged. Built on one shared classifier, 'public/tools/shared/load-profile.js' (keyword table, volts × amps, localStorage mailbox, generator-row mappers; UMD so the generator page loads it as a script, Service Size bundles it, and 'tools-src/service-size/test/profile.test.mjs' tests it alongside the Service Size mapping in 'src/profile.js'). Appliance Loads is a source only: its rows come from the nightly Drive run, so nothing fills the Sheet. Josh's generator tables and calc ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS', 'calc', 'renderFuel', 'renderPad', 'renderConnections', 'render') are byte-identical, verified by a region diff; the page only gains a 'key' on preset rows and the fill bar. Guide 'tools.html' gains a *Tools that fill each other* section. **Why it won't lose data:** nothing in this change reads or writes Firestore; the handoff is one device-local localStorage key ('he_tools_profile_v1', plus 'he_tools_visible_v1' for which chips a person has), the same kind of per-device convenience as the remembered last tool; Appliance Loads keeps its existing write paths (import, 'applLinks', 'applSpecOk', 'applAmps') untouched; Service Size's calc change is additive (old or plan-filled states normalize with 'extras: []') and covered by tests (20 passing); no loader, rules or Cloud Function change.
 - **Panelized Lighting — a phone with an old copy can no longer un-tick or rename what it didn't touch; "Update N from FieldInk" only offers what the field changed since you last looked** · 'shipped 2026-10-01' · 'SW v496' · Koy, on Miller #1438 tonight: *"the panelized lighting section is saying FieldInk has 18 updates, and I feel like it's trying to push back the old ones again… I just want it fixed and I don't want to mess it up."* Read-only PITR forensics (every copy of the job doc since the 9/30 restore, per-load diffs, device versions, the field-ink 'ccloads' doc at four moments) found THREE things. (1) The 18 were a NEW bad publish, not the old names: at 1:14–1:16 pm a nameless FieldInk device ('updatedBy ""') republished the bridge with 31 loads' rooms shifted one room over (Great Room → Primary Water Closet, Main Powder → Primary Closey, Basement Stair Landing → Kitchen Exterior Deck…); the v450 auto-follow applied it to the 10 rows whose 'fieldSnap' still matched (silently, Keegan's Mac, 1:14:46 pm) and parked the 16 pre-v450 rows behind the button. (2) Two rollbacks v471 did not stop, both from iPhones coming back after a gap, both 'merged:true', both with 'plRev' going BACKWARDS: Austin 9/30 3:57 pm (plRev 2050 → 39) reverted 5 of fix-names' renames; Noah 10/1 5:12 pm (2097 → 2094) un-ticked 6 Loads-Ran boxes Keegan / Braden / Austin had ticked. The tripwire stayed silent because '_threeWayMerge' treats 'plRev' as a primitive (client wins). Replaying Noah's write through the real merge with an honest baseline KEEPS every foreign tick — so the phone's live baseline was not what its screen derived from; the exact on-phone path is not pinned and this ship stops trusting the baseline for this field instead of guessing. (3) The 9/30 4:40–4:51 pm module / load count changes were Koy's own edits. **Fix A — intent merge for 'panelizedLighting':** JobDetail's 'u()' records WHAT this copy changed ('plDiffIntent': per-load fields, added / removed ids, other panelizedLighting keys) and the save funnel lays only that onto the SERVER's current copy ('plApplyIntent'); untouched loads always come from the server, so a stale phone cannot un-tick or rename what it never touched. The intent rides the pending patch under '_plIntent' (unioned across a burst by 'plMergeIntents'; a panel write with no intent drops it), is stripped before every write (saveJob / flushJob / flushSaves) and never lands on the job object. A copy older than its baseline is now applied this way with a 'console.warn' instead of being refused. **Fix B — 'plRev' never goes backwards:** 'plMergedRev' makes the merged rev 'max(client, server)' or 'server + 1' (restored 1042 vs a copy at 45 → 1043, never 46). **Fix C — the no-intent path (hub toggle, replayed queue, legacy) keeps the baseline merge plus 'plRepairUnticks':** a merged load that is 'pulled:false' while still carrying someone's 'pulledBy' was un-ticked by a merge, not a person (a real un-tick clears the stamp) → the server's tick is put back with a loud 'console.error'. **Fix D — 'ccLoadSyncPlan':** an office-edited row whose bridge value still equals its 'fieldSnap' is no longer offered (the office's edit stands); it is offered again only when FieldInk moves that load to a third value, and never auto-applied. Harness: 'scripts/panel-loads-merge-test.js' +18 checks (both Miller rollback shapes replayed through the real helpers, add / remove / edit-vs-delete, other keys, bursts, rev rules, the un-tick repair); 'scripts/ccloads-suggest-test.js' +4 (the Miller "office fixed, bridge still wrong" shape). Guide 'panelizedlighting.html' updated. Data repair for Miller is a separate admin script Koy runs (names, 5 ticks, 31 snaps). **Why it won't lose data:** no field shape, loader or rules change — 'panelizedLighting' is written in the same whole-object shape through the same transaction; the intent is in-memory / pending-queue only and is deleted from every write patch before 'tx.update'; the intent path starts from the server's copy and changes only loads / fields this device actually edited (a client delete is honored, a client edit of a server-deleted load is kept, server adds are kept — the same keep bias as the structural merge); every other job field still goes through the unchanged three-way merge; when no intent is available the old path runs exactly as before plus two guards that can only ADD a tick back or raise the rev; 'plRev' stays one additive integer.
 - **Appliance Loads: set amps by hand on any appliance** · 'shipped 2026-10-01' · 'SW v494' · Koy: *"i need to be able to put in amperage. the example im having is wash tower in oak hill, its saying 30a but there is both a washer and dryer on the sheet. washer is 20a and dryer is 30 but theres no way to change the washer ot a 20a"*. The appliance drawer has a Set amps by hand box (load A, breaker A; breaker defaults to the load). The row shows the typed amps in place of the sheet's, counts as confirmed (green), the job totals use it, and the Home Runs import writes the typed amps and the wire size that goes with them. Use sheet puts it back. The Google Sheet is not changed. **Why it won't lose data:** one new additive field on the job, applAmps, saved through the same patch-save call as applLinks and applSpecOk (the loader already unwraps every job field; jobs without it behave exactly as before). It is read-only against the Sheet and Home Runs, and only the import button (unchanged, user-triggered) ever writes Home Runs.
@@ -56019,6 +56020,118 @@ const applRank = (row, list, first) => {
 };
 const applRowKey = (r) => [r.no, r.loc, r.item, r.model].map(x => String(x||"").trim().toLowerCase()).join("|");
 
+// Read the Appliance Loads master Sheet (Master tab as CSV; needs link-viewing).
+// Shared by the Appliance Loads view (always fresh) and the generator pull below
+// (fresh unless a view already loaded it this session). Read-only.
+let _applSheetRows = null;
+async function fetchApplSheetRows(force) {
+  if (_applSheetRows && !force) return _applSheetRows;
+  const res = await fetch(APPL_SHEET_URL, { cache:"no-store" });
+  if (!res.ok) throw new Error("The master sheet could not be read (HTTP " + res.status + ").");
+  const txt = await res.text();
+  if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The master sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\", then press Refresh.");
+  const grid = parseCSVText(txt);
+  const H = (grid[0]||[]).map(h => String(h||"").trim().toLowerCase());
+  const ix = (...names) => { for (const n of names) { const i = H.findIndex(h => h===n || h.startsWith(n)); if (i>=0) return i; } return -1; };
+  const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
+        iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iTot=ix("total amps"), iConf=ix("confidence"), iBasis=ix("basis"), iIn=ix("in cc"), iCc=ix("cc home run"),
+        iDoc=ix("source doc"), iLink=ix("source file link"), iPage=ix("source page"), iSpec=ix("spec file");
+  if ([iJob,iItem,iQty].some(i => i<0)) throw new Error("The master sheet columns were not what this view expects.");
+  const g = (c, i) => i>=0 ? String(c[i]||"").trim() : "";
+  const rows = [];
+  grid.slice(1).forEach(c => {
+    const label = g(c, iJob), item = g(c, iItem), no = applJobNo(label);
+    if (!no || !item) return;
+    rows.push({ no, label, loc:g(c,iLoc), floor:g(c,iFloor), item, model:g(c,iModel), qty:g(c,iQty), volts:g(c,iV), brk:g(c,iBrk),
+      load:g(c,iLoad), total:applNum(g(c,iTot)), conf:g(c,iConf), basis:g(c,iBasis), inCC:g(c,iIn).toLowerCase(), cc:g(c,iCc),
+      doc:g(c,iDoc), link:g(c,iLink), page:g(c,iPage), spec:g(c,iSpec) });
+  });
+  _applSheetRows = rows;
+  return rows;
+}
+
+// ── Pull a job's generator selection into the Generator Sizing tool (v498) ──
+// Koy 2026-10-02: "pull from generator selected loads and pull them from the
+// jobs i want." Only the loads marked ON the generator, in the homeowner's
+// priority order: the sheet's nameplate where a Home Run stands for a sheet
+// row (hand link or the sheet's CC home run name), else the Home Run's name
+// with its wire's volts and no amps — the tool's classifier gives it a flagged
+// typical value, and lighting / receptacle circuits are counted, not sized.
+// Never breaker × volts (the v280 lesson). Pure; tested by scripts/gen-pull-test.js.
+const genSelectionLoads = (included, job, sheetRows) => {
+  const hrRows = flattenHomeRuns(job && job.homeRuns);
+  const hrById = {}, hrByName = {};
+  hrRows.forEach(h => { if (h.id) hrById[h.id] = h; const k = String(h.name || "").trim().toLowerCase(); if (k) (hrByName[k] = hrByName[k] || []).push(h); });
+  const links = (job && job.applLinks) || {}, ampsMap = (job && job.applAmps) || {}, okMap = (job && job.applSpecOk) || {};
+  const no = String((job && job.simproNo) || "").trim();
+  const rows = (sheetRows || []).filter(r => r && String(r.no) === no);
+  const hrsOf = (r) => {
+    const link = links[applRowKey(r)];
+    if (link && hrById[link.id]) return [hrById[link.id]];
+    const k = String(r.cc || "").trim().toLowerCase();
+    if (!k) return [];
+    if (hrByName[k]) return hrByName[k];
+    return k.split("/").map(x => x.trim()).filter(Boolean).flatMap(x => hrByName[x] || []);
+  };
+  const byHr = {};
+  rows.forEach(r => hrsOf(r).forEach(h => { (byHr[h.id] = byHr[h.id] || []).push(r); }));
+  const voltsOfWire = (wire, v240) => WIRE_BREAKER[wire] ? (effectivePoles(wire, v240) === 2 ? 240 : 120) : null;
+  const confidenceOf = (r) => {
+    const key = applRowKey(r);
+    if (ampsMap[key] || okMap[key]) return "ok";
+    const c = String(r.conf || "").trim().toLowerCase(), b = String(r.basis || "").trim().toLowerCase();
+    if (!applNum(r.load) || /^(none|tbd|not found)/.test(c)) return "none";
+    if (c === "" || /series|typical|voltage only|circuit only|breaker only|conflicting|not confirmed|partial|not found/.test(c + " " + b)) return "unconfirmed";
+    return "ok";
+  };
+  // Homeowner-ranked loads first (priority 1..n), then office-added ones (priority 0).
+  const rank = (l) => (l && l.priority > 0 ? l.priority : 1e6);
+  const sorted = (included || []).filter(Boolean).slice().sort((a, b) => rank(a) - rank(b));
+  const loads = [], seenRow = new Set();
+  sorted.forEach(l => {
+    const name = String(l.name || "").trim(), key = name.toLowerCase();
+    const hr = (l.hrId && hrById[l.hrId]) || (hrByName[key] || [])[0] || null;
+    const wire = (hr && hr.wire) || l.wire || "";
+    const v = voltsOfWire(wire, hr ? hr.v240 : l.v240);
+    const tag = `on generator${l.priority > 0 ? " (p" + l.priority + ")" : ""}`;
+    const matched = (hr && byHr[hr.id]) || [];
+    if (matched.length) {
+      matched.forEach(r => {
+        const rk = applRowKey(r); if (seenRow.has(rk)) return; seenRow.add(rk);
+        const ov = ampsMap[rk];
+        const a = applNum(ov ? ov.load : r.load) || null;
+        const volts = applNum(r.volts) || v || null;
+        loads.push({ name: [r.loc, r.item].filter(Boolean).join(" · "), model: r.model || "", kind: "", qty: applNum(r.qty) || 1, volts, amps: a,
+          va: volts && a ? Math.round(volts * a) : null, motor: false, status: "yes", confidence: confidenceOf(r),
+          note: `${tag} · Home Run "${name}"${wire ? " " + wire : ""}` });
+      });
+      return;
+    }
+    loads.push({ name, model: "", kind: "", qty: /\d\s*\+\s*\d/.test(name) ? 2 : 1, volts: v, amps: null, va: null, motor: false, status: "yes",
+      confidence: "none", note: `${tag} · Home Run${wire ? " " + wire : ", no wire yet"}` });
+  });
+  return loads;
+};
+// Reads the job's Generator Load Selection (same doc + overlay rule the Home Runs
+// panel uses) and builds the profile. Read-only; throws a plain sentence when
+// the job has nothing on the generator.
+async function pullGenSelectionProfile(job) {
+  const snap = await getDoc(doc(db, "homeowner_requests", job.id));
+  const d = snap.exists() ? snap.data() : null;
+  const base = (d && Array.isArray(d.genLoads)) ? d.genLoads : [];
+  const gl = homeownerOverlayApplies(d) ? applyHomeownerChoices(base, d.items) : base;
+  const included = gl.filter(l => l && l.included);
+  if (!included.length) throw new Error(gl.length ? "Nothing is marked on the generator for this job yet." : "This job has no Generator Load Selection yet.");
+  let rows = [], sheetOk = true;
+  try { rows = await fetchApplSheetRows(false); } catch (e) { sheetOk = false; }
+  const loads = genSelectionLoads(included, job, rows);
+  const profile = { v: 1, source: "generator-selection", at: new Date().toISOString(),
+    label: `#${job.simproNo || ""} ${job.name || ""}`.trim() + ` · ${included.length} on the generator`,
+    job: { no: String(job.simproNo || ""), name: job.name || "", address: job.address || "" },
+    house: null, hvac: null, service: null, sizeFor: "max", scope: included.length < gl.length ? "essential" : "whole", loads };
+  return { profile, included: included.length, total: gl.length, sheetOk };
+}
+
 // Tools handoff (2026-10-02): a job's appliances as a load profile the two
 // calculators can fill from. Same device-local key the iframe tools use
 // (public/tools/shared/load-profile.js). Nothing is written to the job.
@@ -56115,26 +56228,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
     setSt(s => ({ ...s, loading:true, err:"" }));
     (async () => {
       try {
-        const res = await fetch(APPL_SHEET_URL, { cache:"no-store" });
-        if (!res.ok) throw new Error("The master sheet could not be read (HTTP " + res.status + ").");
-        const txt = await res.text();
-        if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The master sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\", then press Refresh.");
-        const grid = parseCSVText(txt);
-        const H = (grid[0]||[]).map(h => String(h||"").trim().toLowerCase());
-        const ix = (...names) => { for (const n of names) { const i = H.findIndex(h => h===n || h.startsWith(n)); if (i>=0) return i; } return -1; };
-        const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
-              iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iTot=ix("total amps"), iConf=ix("confidence"), iBasis=ix("basis"), iIn=ix("in cc"), iCc=ix("cc home run"),
-              iDoc=ix("source doc"), iLink=ix("source file link"), iPage=ix("source page"), iSpec=ix("spec file");
-        if ([iJob,iItem,iQty].some(i => i<0)) throw new Error("The master sheet columns were not what this view expects.");
-        const g = (c, i) => i>=0 ? String(c[i]||"").trim() : "";
-        const rows = [];
-        grid.slice(1).forEach(c => {
-          const label = g(c, iJob), item = g(c, iItem), no = applJobNo(label);
-          if (!no || !item) return;
-          rows.push({ no, label, loc:g(c,iLoc), floor:g(c,iFloor), item, model:g(c,iModel), qty:g(c,iQty), volts:g(c,iV), brk:g(c,iBrk),
-            load:g(c,iLoad), total:applNum(g(c,iTot)), conf:g(c,iConf), basis:g(c,iBasis), inCC:g(c,iIn).toLowerCase(), cc:g(c,iCc),
-            doc:g(c,iDoc), link:g(c,iLink), page:g(c,iPage), spec:g(c,iSpec) });
-        });
+        const rows = await fetchApplSheetRows(true);
         if (!dead) setSt({ loading:false, err:"", rows });
       } catch (e) {
         if (!dead) setSt(s => ({ ...s, loading:false, err:String(e.message||e) }));
@@ -56501,6 +56595,45 @@ const TOOLS = [
     src: "/tools/service-size/index.html" },
 ];
 const TOOLS_LAST_KEY = "he_tools_last";   // per-device convenience only: the tool last opened
+// The strip above the Generator Sizing tool: choose a job, pull the loads marked
+// on its generator into the handoff drawer; the tool then shows "Fill from
+// Generator Selection". Jobs whose Home Runs carry the Dedicated Loads stamp
+// are listed first and marked, since that stamp means a selection was made.
+function GenPullBar({ jobs }) {
+  const list = useMemo(() => (jobs || []).filter(j => j && !isInactiveJob(j) && j.name)
+    .map(j => ({ j, gen: flattenHomeRuns(j.homeRuns).some(r => (r.panel || "") === DEDICATED_PANEL) }))
+    .sort((a, b) => (b.gen - a.gen) || String(a.j.name).localeCompare(String(b.j.name))), [jobs]);
+  const [sel, setSel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const pull = async () => {
+    const hit = list.find(x => x.j.id === sel); if (!hit) return;
+    setBusy(true); setMsg("");
+    try {
+      const r = await pullGenSelectionProfile(hit.j);
+      const ok = writeToolProfile(r.profile);
+      setMsg(ok
+        ? `Pulled ${r.included} of ${r.total} loads marked on the generator for #${hit.j.simproNo || ""} ${hit.j.name}${r.sheetOk ? "" : " (the appliance sheet could not be read, so every load is a typical value)"}. Tap Fill from Generator Selection in the tool below.`
+        : "This device would not let the app store the handoff. Try again, or use another browser.");
+    } catch (e) { setMsg((e && e.message) || "Could not read that job's generator selection."); }
+    setBusy(false);
+  };
+  const ctl = { padding:"6px 9px", borderRadius:7, border:`1px solid ${C.border}`, background:C.card, color:C.text, fontSize:12, fontFamily:"inherit" };
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface,flex:"none",flexWrap:"wrap"}}>
+      <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.dim,whiteSpace:"nowrap"}}>PULL A JOB'S GENERATOR LOADS</span>
+      <select value={sel} onChange={e=>{ setSel(e.target.value); setMsg(""); }} style={{...ctl, minWidth:200, maxWidth:"100%"}}>
+        <option value="">Choose a job…</option>
+        {list.map(x => <option key={x.j.id} value={x.j.id}>{`${x.j.simproNo ? "#" + x.j.simproNo + " " : ""}${x.j.name}${x.gen ? " · generator selected" : ""}`}</option>)}
+      </select>
+      <button disabled={!sel || busy} onClick={pull}
+        style={{...ctl, fontWeight:800, background:(!sel||busy)?C.muted:C.accent, color:"#fff", border:"none", cursor:(!sel||busy)?"default":"pointer"}}>
+        {busy ? "Reading…" : "Pull"}
+      </button>
+      {msg && <span style={{fontSize:12,color:C.dim,flexBasis:"100%",lineHeight:1.4}}>{msg}</span>}
+    </div>
+  );
+}
 function ToolsView({ jobs, onUpdateJob, who }) {
   const tools = TOOLS.filter(t => !t.perm || can(who, t.perm));   // per-user tools (perm) read the LIVE team record
   const [toolKey, setToolKey] = useState(() => {
@@ -56544,6 +56677,7 @@ function ToolsView({ jobs, onUpdateJob, who }) {
           style={{fontSize:12,fontWeight:600,color:C.accent,textDecoration:"none",whiteSpace:"nowrap"}}>Open full screen</a>}
         <HelpDot section="tools"/>
       </div>
+      {tool.key === "generator-sizing" && <GenPullBar jobs={jobs}/>}
       {tool.native
         ? <ApplianceLoadsView key={tool.key} jobs={jobs} onUpdateJob={onUpdateJob} onOpenTool={pick} tools={toolKeys.split(",")}/>
         : <iframe key={tool.key} src={tool.src} title={tool.label}
