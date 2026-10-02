@@ -8,17 +8,29 @@ const h = React.createElement;
 const EASE = "cubic-bezier(.2,.8,.2,1)";
 // One MediaQueryList for the whole session; .matches stays live. Callers hit this on every row render.
 let _mql = null;
-export const heReduced = () => {
+// Raw phone setting (Reduce Motion in iOS Accessibility / Android "Remove animations").
+export const heReducedRaw = () => {
   try {
     if (!_mql) _mql = window.matchMedia("(prefers-reduced-motion: reduce)");
     return _mql.matches;
   } catch (e) { return false; }
 };
+// v496: the in-app override. Koy's phone has Reduce Motion on, which silently turned every animation off
+// (the v487 strike "didn't show on my iPhone"). Settings menu → "Animations: always on" sets this.
+const FORCE_KEY = "he_motion_force";
+export const heMotionForced = () => { try { return localStorage.getItem(FORCE_KEY) === "1"; } catch (e) { return false; } };
+export const heSetMotionForced = (on) => {
+  try { if (on) localStorage.setItem(FORCE_KEY, "1"); else localStorage.removeItem(FORCE_KEY); } catch (e) { /* ignore */ }
+  try { document.documentElement.classList.toggle("he-force", !!on); } catch (e) { /* ignore */ }
+};
+export const heReduced = () => heReducedRaw() && !heMotionForced();
+if (typeof document !== "undefined" && heMotionForced()) { try { document.documentElement.classList.add("he-force"); } catch (e) { /* ignore */ } }
 
 /* ───────────────────────── CSS (injected once) ───────────────────────── */
 const CSS = `
 :root{--he-t:1;--he-ease:cubic-bezier(.2,.8,.2,1);--he-spring:cubic-bezier(.34,1.45,.5,1)}
 @media (prefers-reduced-motion: reduce){:root{--he-t:.01}}
+:root.he-force{--he-t:1}
 
 /* remote change flash + who-changed-it tag */
 .he-flash{animation:he-m-flash calc(1900ms*var(--he-t)) ease-out}
