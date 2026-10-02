@@ -9,7 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
-import { HeUnfold, useHeFlip, useHeViewSlide, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
+import { HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
 // Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
@@ -7780,7 +7780,7 @@ function NeedsAttention({jobs, onSelectJob}) {
         </div>
 
         {open&&(
-          <div style={{padding:'4px 16px 16px'}}>
+          <HeUnfold style={{padding:'4px 16px 16px'}}>
 
             {/* Starting Soon */}
             <SectionHeader label="Starting Soon — Prep Incomplete" count={startingSoon.length} accent/>
@@ -7830,7 +7830,7 @@ function NeedsAttention({jobs, onSelectJob}) {
                 detail={trips.slice(0,2).map(t=>t.scope||'No scope').filter(Boolean).join(' · ')}/>
             ))}
 
-          </div>
+          </HeUnfold>
         )}
       </div>
     </div>
@@ -34685,7 +34685,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             const fc=getFC(u.foreman)||"#6E7682";
             const isSigned=!!u.signed;
             return (
-              <div key={u.id} data-upid={u.id} style={{
+              <div data-hekey={"up_"+u.id} key={u.id} data-upid={u.id} style={{
                 background: isSigned ? `${C.green}08` : C.card,
                 border: `1px solid ${isSigned ? C.green+"55" : C.border}`,
                 borderLeft: `3px solid ${isSigned ? C.green : C.border}`,
@@ -34773,7 +34773,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             const isEditing=editingId===u.id;
             const isSigned=!!u.signed;
             return (
-              <div key={u.id} data-upid={u.id} style={{
+              <div data-hekey={"up_"+u.id} key={u.id} data-upid={u.id} style={{
                 display:"flex", alignItems:isEditing?"flex-start":"center", gap:0,
                 padding:"6px 12px", borderRadius:8, marginBottom:3,
                 background: isEditing ? C.surface : isSigned ? `${C.green}08` : "none",
@@ -35397,6 +35397,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
 
   return (
     <div
+      data-hekey={"task_"+task.id}
       className={isCritical||isOverdue?"task-pulse":isWarning?"task-warn":""}
       style={{
       display:"flex", alignItems:"flex-start", gap:12,
@@ -37330,7 +37331,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                             return jobFmColor || C.muted;
                           })();
                           return (
-                            <div key={g.projectId}
+                            <div key={g.projectId} data-hekey={"crew_"+g.projectId} data-heflash={"crew_"+g.projectId}
                               onClick={()=>{ if(appJob) onSelectJob(appJob); }}
                               style={{background:isToday?`${C.accent}0d`:C.surface,border:`1px solid ${C.border}`,
                                 borderLeft:`3px solid ${isToday?C.accent:C.text}`,borderRadius:7,
@@ -44568,7 +44569,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
               const key = (p.name||"").toLowerCase();
               const isActive = activePersonKey === key;
               return (
-                <div key={p.name}
+                <div data-hekey={"pulse_"+p.name} data-heflash={"pulse_"+p.name} key={p.name}
                   onClick={() => setActivePersonKey(isActive ? null : key)}
                   style={{
                     background: isActive ? C.card : C.bg,
@@ -47146,7 +47147,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob, onSelectJob }) {
       {err ? <div style={{color:"#8A2A2A",fontSize:12.5,marginBottom:8}}>{err}</div> : null}
       {reqs!==null && !openReqs.length ? <div style={{color:"#8A93A3",fontSize:12.5}}>Requests from contractor portals show up here.</div> : null}
       {openReqs.map(r => (
-        <div key={r.id} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:r.status==="new"?1:0.6}}>
+        <div data-hekey={"gc_"+r.id} key={r.id} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:r.status==="new"?1:0.6}}>
           <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
             <b style={{color:"#2E477D",fontSize:13}}>{r.gcLabel||"Contractor"}</b>
             <span style={{fontSize:12,color:"#1B1F24"}}>· {TYPE[r.type]||r.type}{anchorOf(r)?" · "+anchorOf(r):""}</span>
@@ -51099,7 +51100,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
+- **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **Batch B (Job Board → More menu):** one page-wide list engine in 'motion.js' slides any keyed row to its new place, drops in a row that arrives beside existing ones, and flashes a keyed element whose text changes; rows are tagged on the Needs board (open + done), the COs tracker cards (slide between status columns, flash on status change — C1, C3), Job Prep rows and the redline-walk block (P1, P2), Time Off requests (O1), contractor requests (S1), Upcoming and Tasks (O3), the Job Board crew strip cells (J1) and Today's per-person pulse cards (T1). The Job Board's needs-attention banner unfolds (J3) and the pipeline tiles bump on tap (J2). Not done: Safety (an outside site in a frame), Service Size (prebuilt tool, no source here), Forecast R1/R2, Huddle H1, Settings toggles O2, Needs N3 — listed for Koy. **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
 
 - **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Motion is now ON by default for everyone: the phone's Reduce Motion setting no longer silently wins (Koy's iPhone has it on, which had turned every animation off since v481 without anyone knowing). The Settings (⋯) menu has **Animations: on / off** to turn it off per device. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
 
@@ -51823,7 +51824,7 @@ function TimeOffPage({ identity = null, users = [] }) {
   };
   const statusPill = (st) => { const c = STATUS[st]||STATUS.pending; return <span style={{fontSize:11, fontWeight:600, color:c.color, background:c.bg, border:`1px solid ${c.border}`, borderRadius:99, padding:"1px 9px"}}>{c.label}</span>; };
   const card = (r, withActions) => (
-    <div key={r.id} style={{padding:"11px 0", borderBottom:`1px solid ${C.border}`}}>
+    <div data-hekey={"to_"+r.id} key={r.id} style={{padding:"11px 0", borderBottom:`1px solid ${C.border}`}}>
       <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
         <span style={{fontSize:13, fontWeight:600, color:C.text}}>{r.name}</span>
         <span style={{fontSize:12, color:C.dim, fontVariantNumeric:"tabular-nums"}}>{fmtRange(r)}</span>
@@ -53636,7 +53637,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
     const ovrOn = !!(job.prepOverride && job.prepOverride.on);
     const edge = done ? "#46916A" : (ovrOn ? "#B0892C" : C.red);
     return (
-      <div style={jobPrepRowStyle(edge)}>
+      <div data-hekey={"prep_"+job.id} style={jobPrepRowStyle(edge)}>
         <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
         <div style={{flex:"1 1 260px"}}>
           <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:4}}>
@@ -53769,7 +53770,7 @@ function JobPrepDrawerOverride({ job, identity, u }) {
   );
   const missing = prepMissingItems(job);   // N/A items are not outstanding
   return (
-    <div style={{marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08"}}>
+    <div data-hekey={"walk_"+(job&&job.id)} style={{marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08"}}>
       <div style={{fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5}}>
         Still outstanding — stays tracked</div>
       {missing.map(i=><div key={i.key} style={{fontSize:12, color:C.text, marginLeft:4}}>· {i.label}</div>)}
@@ -54957,7 +54958,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                   const pillColor  = pillDef.color || status.color;
                   const pillLabel  = pillDef.label || status.label;
                   return (
-                    <div key={`${co.jobId}_${co.coId}`} style={{
+                    <div data-hekey={`co_${co.jobId}_${co.coId}`} data-heflash={`co_${co.jobId}_${co.coId}`} key={`${co.jobId}_${co.coId}`} style={{
                       // Red line walks read differently at a glance: tinted
                       // ground + a spelled-out label. The left edge stays the
                       // FOREMAN colour on every card — it is the board's
@@ -58155,7 +58156,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   );
 
   const Card = (n) => (
-    <div key={n.id}
+    <div data-hekey={"need_"+n.id} key={n.id}
       style={{ background: C.card, border: `1px solid ${C.border}`,
         borderLeft: aged(n) ? `3px solid ${C.red}` : `1px solid ${C.border}`,
         borderRadius: 10, padding: "12px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -58276,7 +58277,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {doneToday.map(n => (
-            <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: C.dim }}>
+            <div data-hekey={"need_"+n.id} key={n.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: C.dim }}>
               {n.voided ? (
                 <span style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.red, border: `1px solid ${C.red}66`, background: `${C.red}14` }}>Voided</span>
@@ -63417,7 +63418,7 @@ function App() {
 
                   ]).map(([v,l,c,filt])=>(
 
-                    <div key={l} onClick={()=>filt&&filt.length>0&&setStageModal({label:l,color:c,jobs:filt})}
+                    <div key={l} onClick={(e)=>{const _t=e.currentTarget; _t.classList.remove("he-bump"); void _t.offsetWidth; _t.classList.add("he-bump"); if(filt&&filt.length>0) setStageModal({label:l,color:c,jobs:filt});}}
 
                       style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
 

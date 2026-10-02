@@ -638,31 +638,103 @@ export function HeUnfold(props) {
   return h(tag || "div", Object.assign({ ref }, rest), children);
 }
 
-/* ─────────────────── v497 A: FLIP — rows slide to their new place ─────────────────── */
-// Put data-hekey="<stable id>" on each row and call useHeFlip(scopeRef) in the component that owns the list.
-// Every commit it compares each row's position (relative to the scope, so page scroll doesn't count) with
-// the previous commit and animates the difference. Rows that appear or vanish are left to their own enter
-// animation. Cheap: one getBoundingClientRect per row per commit.
-export function useHeFlip(scopeRef) {
-  const prev = useRef(new Map());
-  useLayoutEffect(() => {
-    const scope = scopeRef.current;
-    if (!scope) return;
-    const base = scope.getBoundingClientRect();
-    const next = new Map(), reduced = heReduced();
-    Array.prototype.forEach.call(scope.querySelectorAll("[data-hekey]"), (el) => {
-      const k = el.getAttribute("data-hekey"), r = el.getBoundingClientRect();
-      const cur = { top: r.top - base.top, left: r.left - base.left };
-      next.set(k, cur);
-      const p = prev.current.get(k);
-      if (!p || reduced || !el.animate) return;
+/* ─────────────────── v497 A/B: the list engine — FLIP, drop-in, text-change flash ─────────────────── */
+// One MutationObserver on the whole page, flushed in a microtask (before paint). Any element with
+// data-hekey="<stable id>" slides to its new spot when a commit moves it (FLIP), and drops in when it
+// appears next to rows that were already there (a new need, a new reply, a new request). Any element with
+// data-heflash="<id>" flashes once when its text changes (a crew cell swapping names, a CO card changing
+// status). No hook per list: tag the row and the engine does the rest. useHeFlip() is kept as a no-op
+// so earlier call sites still compile.
+export function useHeFlip() { /* superseded by the global engine below */ }
+const eng = { prev: new Map(), text: new Map(), t0: 0, queued: false, started: false };
+const vrect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left }; };
+function heEngineFlush() {
+  eng.queued = false;
+  if (heReduced()) { eng.prev = new Map(); eng.text = new Map(); return; }
+  const next = new Map(), prev = eng.prev, warm = Date.now() - eng.t0 > 1500;
+  const rows = document.querySelectorAll("[data-hekey]");
+  for (let i = 0; i < rows.length; i++) {
+    const el = rows[i];
+    if (!el.animate) continue;
+    const k = el.getAttribute("data-hekey"), cur = vrect(el);
+    next.set(k, cur);
+    const p = prev.get(k);
+    if (p) {
       const dy = p.top - cur.top, dx = p.left - cur.left;
-      if (Math.abs(dy) < 2 && Math.abs(dx) < 2) return;
-      if (Math.abs(dy) > 2000) return;
-      el.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }], { duration: 420, easing: EASE });
-    });
-    prev.current = next;
+      if ((Math.abs(dy) >= 2 || Math.abs(dx) >= 2) && Math.abs(dy) < 1500 && Math.abs(dx) < 1500) {
+        el.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }], { duration: 420, easing: EASE });
+      }
+    } else if (warm && prev.size && !el.classList.contains("he-drop") && !el.classList.contains("he-rise")) {
+      // new row beside rows that were already on the page → drop in
+      const par = el.parentElement;
+      let sib = false;
+      if (par) { const q = par.querySelectorAll("[data-hekey]"); for (let j = 0; j < q.length; j++) { if (q[j] !== el && prev.has(q[j].getAttribute("data-hekey"))) { sib = true; break; } } }
+      if (sib) { el.classList.add("he-drop"); setTimeout(() => el.classList.remove("he-drop"), 600); }
+    }
+  }
+  eng.prev = next;
+  const fl = document.querySelectorAll("[data-heflash]"), tnext = new Map();
+  for (let i = 0; i < fl.length; i++) {
+    const el = fl[i], k = el.getAttribute("data-heflash"), t = el.textContent;
+    tnext.set(k, t);
+    const was = eng.text.get(k);
+    if (warm && was !== undefined && was !== t) { el.classList.remove("he-flash"); void el.offsetWidth; el.classList.add("he-flash"); setTimeout(() => el.classList.remove("he-flash"), 2000); }
+  }
+  eng.text = tnext;
+}
+function heEngineQueue() { if (eng.queued) return; eng.queued = true; Promise.resolve().then(heEngineFlush); }
+export function heStartEngine() {
+  if (eng.started || typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+  eng.started = true; eng.t0 = Date.now();
+  const mo = new MutationObserver((recs) => {
+    for (let i = 0; i < recs.length; i++) {
+      const r = recs[i], t = r.target;
+      // ignore our own fixed helpers (flyers, strike lines, ripples, zoom layers)
+      if (t && t.nodeType === 1 && t.className && typeof t.className === "string" && /^he-(flyer|strike|ripple|zoom|atoast)/.test(t.className)) continue;
+      heEngineQueue(); return;
+    }
   });
+  mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+  heEngineQueue();
+}
+if (typeof document !== "undefined") { if (document.body) heStartEngine(); else document.addEventListener("DOMContentLoaded", heStartEngine); }
+// Flash one keyed row from code (e.g. after an email goes out): heFlashKey("<data-hekey>", "Sent")
+export function heFlashKey(key, tag) {
+  try {
+    const el = document.querySelector('[data-hekey="' + String(key).replace(/"/g, '\\"') + '"]');
+    if (!el || heReduced()) return;
+    el.classList.remove("he-flash"); void el.offsetWidth; el.classList.add("he-flash");
+    setTimeout(() => el.classList.remove("he-flash"), 2000);
+    if (tag) {
+      const s = document.createElement("span"); s.className = "he-flash-by"; s.textContent = tag;
+      s.style.cssText = "position:absolute;right:8px;top:6px;background:#FFF3C4;border-radius:5px;padding:1px 6px";
+      const cs = getComputedStyle(el); if (cs.position === "static") el.style.position = "relative";
+      el.appendChild(s); setTimeout(() => { if (s.parentNode) s.parentNode.removeChild(s); }, 6000);
+    }
+  } catch (e) { /* presentation only */ }
+}
+// Fly a chip from the last tapped button to any element: heFlyTo('[data-hefly="needs-sent"]', "→ Brady")
+export function heFlyTo(selector, label, fromEl) {
+  try {
+    if (heReduced()) return;
+    const src = fromEl || (heLastTap().age < 2500 ? heLastTap().el : null);
+    const to = document.querySelector(selector);
+    if (!src || !to || !src.isConnected) return;
+    const a = src.getBoundingClientRect(), b = to.getBoundingClientRect();
+    if (!inView(a)) return;
+    const tx = Math.max(16, Math.min(window.innerWidth - 16, b.left + b.width / 2)), ty = Math.max(16, Math.min(window.innerHeight - 16, b.top + b.height / 2));
+    const f = document.createElement("span");
+    f.className = "he-flyer"; f.setAttribute("aria-hidden", "true"); f.textContent = label || "";
+    f.style.left = (a.left + a.width / 2) + "px"; f.style.top = (a.top + a.height / 2) + "px"; f.style.transform = "translate(-50%,-50%)";
+    document.body.appendChild(f);
+    const dx = tx - (a.left + a.width / 2), dy = ty - (a.top + a.height / 2);
+    const anim = f.animate([
+      { transform: "translate(-50%,-50%) translate(0,0) scale(1)", opacity: 1 },
+      { transform: "translate(-50%,-50%) translate(" + (dx * 0.45) + "px," + (dy * 0.55 - 36) + "px) scale(.85)", opacity: 1, offset: 0.55 },
+      { transform: "translate(-50%,-50%) translate(" + dx + "px," + dy + "px) scale(.25)", opacity: 0 },
+    ], { duration: 680, easing: "cubic-bezier(.3,.7,.3,1)", fill: "forwards" });
+    anim.onfinish = () => { if (f.parentNode) f.parentNode.removeChild(f); to.classList.remove("he-bump"); void to.offsetWidth; to.classList.add("he-bump"); heBuzz([14, 30, 14]); setTimeout(() => to.classList.remove("he-bump"), 500); };
+  } catch (e) { /* presentation only */ }
 }
 
 /* ─────────────────── v497 A: nav view slides in from the direction of travel ─────────────────── */
