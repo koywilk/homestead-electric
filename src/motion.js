@@ -136,6 +136,9 @@ const CSS = `
 .he-updbar{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:99996;background:#1B1F24;color:#EEF0F3;border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;font:700 13px/1.3 system-ui;box-shadow:0 10px 32px rgba(0,0,0,.35);cursor:pointer;animation:he-m-updbar calc(480ms*var(--he-t)) var(--he-spring) backwards}
 @keyframes he-m-updbar{from{transform:translateY(140%)}}
 .he-swipe-under{user-select:none}
+/* ── v497 batch C ── */
+.he-ring{display:inline-grid;place-items:center;border-radius:6px;background:#E3E7EC;border:1px solid #E1E4E9;flex:none}
+.he-ring i{width:26px;height:26px;border-radius:50%;border:3px solid #CDD3DB;border-top-color:#3B5BA5;animation:he-m-spin calc(900ms*var(--he-t)) linear infinite}
 `;
 
 if (typeof document !== "undefined" && !document.getElementById("he-motion-css")) {
@@ -835,6 +838,18 @@ export function useHeSwUpdate() {
     return () => navigator.serviceWorker.removeEventListener("controllerchange", onChange);
   }, []);
   return ready;
+}
+
+/* ─────────────────── v497 C: zoom a full-screen layer in from the last tapped thumbnail ─────────────────── */
+export function heZoomIn(el) {
+  try {
+    if (!el || heReduced() || !el.animate) return;
+    const t = heLastTap();
+    const r = t.el && t.age < 1500 && t.el.isConnected ? t.el.getBoundingClientRect() : null;
+    const ox = r ? (r.left + r.width / 2) + "px" : "50%", oy = r ? (r.top + r.height / 2) + "px" : "50%";
+    el.style.transformOrigin = ox + " " + oy;
+    el.animate([{ opacity: 0, transform: "scale(.12)" }, { opacity: 1, transform: "scale(1)" }], { duration: 300, easing: EASE });
+  } catch (e) { /* presentation only */ }
 }
 
 /* ─────────────────── 7. Skeleton rows for the first load ─────────────────── */

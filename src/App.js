@@ -9,7 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
-import { HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
+import { HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
 // Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
@@ -7206,11 +7206,13 @@ function RemindButton({ to = "", title, body, jobId, section, label = "Remind", 
 // "undo" expectation matches how punch photos work today.
 function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3B5BA5", label = "Add photo", accept = "image/*", iconName = "camera" }) {
   const [uploading, setUploading] = useState(false);
+  const [prog, setProg] = useState(null);   // v497 C (PH2): {i, n} while a batch uploads
   const handleFiles = async (files) => {
     if(!files || !files.length) return;
     setUploading(true);
     const newPhotos = [];
-    for(const file of Array.from(files)) {
+    const _arr = Array.from(files);
+    for(let _fi = 0; _fi < _arr.length; _fi++) { const file = _arr[_fi]; setProg({ i: _fi, n: _arr.length });
       try {
         const photoId = uid();
         const ext = (file.name && file.name.split('.').pop()) || 'bin';
@@ -7226,6 +7228,7 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3B5BA5", 
     }
     if(newPhotos.length) onChange([...(photos||[]), ...newPhotos]);
     setUploading(false);
+    setProg(null);
   };
   const removePhoto = (id) => onChange((photos||[]).filter(p => p.id !== id));
   const list = Array.isArray(photos) ? photos : [];
@@ -7236,13 +7239,16 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3B5BA5", 
   };
   return (
     <div>
-      {list.length > 0 && (
+      {(list.length > 0 || prog) && (
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
+          {prog && Array.from({ length: Math.max(0, prog.n - prog.i) }).map((_, k) => (
+            <span key={"ph" + k} className="he-ring" title="Uploading…" style={{ width: 62, height: 62, opacity: k === 0 ? 1 : .55 }}><i/></span>
+          ))}
           {list.map(p => (
-            <div key={p.id} style={{position:"relative"}}>
+            <div key={p.id} data-hekey={"ph_"+p.id} style={{position:"relative"}}>
               {isImage(p) ? (
                 <img src={safeImageSrc(p.url)} alt={p.name||"photo"}
-                  onClick={()=>openPhoto(p.url, p.name)}
+                  onClick={()=>openPhoto(p.url, p.name, list.filter(isImage).map(x=>({url:x.url,name:x.name})))}
                   style={{width:62,height:62,objectFit:"cover",borderRadius:6,
                     border:"1px solid #E1E4E9",cursor:"pointer",display:"block"}}/>
               ) : (
@@ -7495,8 +7501,8 @@ function ZoomableImage({ src, alt, onBackdropTap }) {
 }
 
 // Global opener — call from any component; the host below renders it.
-const openPhoto = (url, name) => {
-  window.dispatchEvent(new CustomEvent('he-photo', { detail: { url, name: name || "" } }));
+const openPhoto = (url, name, list) => {
+  window.dispatchEvent(new CustomEvent('he-photo', { detail: { url, name: name || "", list: Array.isArray(list) ? list : null } }));
 };
 
 function HEPhotoLightboxHost() {
@@ -7506,6 +7512,11 @@ function HEPhotoLightboxHost() {
     window.addEventListener('he-photo', handler);
     return () => window.removeEventListener('he-photo', handler);
   }, []);
+  const _lbRef = useRef(null);
+  useEffect(() => { if (photo && _lbRef.current) heZoomIn(_lbRef.current); }, [photo && photo.url]);   // v497 C (PH1)
+  const _lbList = photo && photo.list && photo.list.length > 1 ? photo.list : null;
+  const _lbIdx = _lbList ? _lbList.findIndex(x => x && x.url === photo.url) : -1;
+  const _lbGo = (d) => { if (!_lbList) return; const n = (_lbIdx + d + _lbList.length) % _lbList.length; setPhoto({ ...photo, url: _lbList[n].url, name: _lbList[n].name || "" }); };
   useEffect(() => {
     if (!photo) return;
     const onKey = (e) => { if (e.key === "Escape") setPhoto(null); };
@@ -7516,11 +7527,16 @@ function HEPhotoLightboxHost() {
   }, [photo]);
   if (!photo) return null;
   return (
-    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:99999,
+    <div ref={_lbRef} style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:99999,
       display:'flex', flexDirection:'column'}}>
       <div style={{display:'flex', alignItems:'center', gap:10, padding:'10px 14px', flexShrink:0}}>
         <span style={{color:'#fff', fontSize:13, fontWeight:600, flex:1, overflow:'hidden',
           textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{photo.name || ""}</span>
+        {_lbList && <span style={{display:'inline-flex',gap:4,flexShrink:0}}>
+          <button onClick={()=>_lbGo(-1)} aria-label="Previous photo" style={{background:'rgba(255,255,255,0.12)',border:'none',color:'#fff',borderRadius:8,width:40,height:36,fontSize:18,cursor:'pointer'}}>‹</button>
+          <span style={{color:'rgba(255,255,255,0.6)',fontSize:11,alignSelf:'center',minWidth:36,textAlign:'center'}}>{_lbIdx+1} / {_lbList.length}</span>
+          <button onClick={()=>_lbGo(1)} aria-label="Next photo" style={{background:'rgba(255,255,255,0.12)',border:'none',color:'#fff',borderRadius:8,width:40,height:36,fontSize:18,cursor:'pointer'}}>›</button>
+        </span>}
         <span style={{color:'rgba(255,255,255,0.5)', fontSize:11, flexShrink:0}}>
           pinch · scroll · double-tap to zoom
         </span>
@@ -11645,6 +11661,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
         return (
         <div key={item.id}
           className={doneFx === item.id ? "he-row-done" : undefined}
+          data-hekey={"punch_"+item.id}
           onClick={selectMode && !item.done && !item.voided ? (e)=>{
             // Whole-row click toggles selection in select mode (saves having
             // to hit the small checkbox). Clicks on inner controls bubble up;
@@ -14804,6 +14821,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
     const subject = `${jobName} — Change Order #${i+1}`;
     const body = `${buildCOShareText(o, i, { includeDate: true })}\n\nPlease review and confirm.\n\nThanks`;
     onEmail({subject, body});
+    setTimeout(() => heFlashKey("cotab_"+o.id, "Email sent"), 150);   // v497 C (C2)
   };
 
   // Convert CO → Return Trip
@@ -14867,7 +14885,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
         const isCollapsed  = isCompleted && !expandedCOs[o.id];
 
         return (
-          <div key={o.id} id={"jn-dest-" + o.id} style={{
+          <div key={o.id} id={"jn-dest-" + o.id} data-hekey={"cotab_"+o.id} style={{
             background: isCompleted ? "#3E7D5A0a" : isConverted ? "var(--surface)" : "var(--card)",
             border:`1px solid ${isCompleted?"#3E7D5A44":isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
             borderLeft:`3px solid ${isCompleted?"#3E7D5A":isConverted?"#6E7682":coDef.color||"var(--border)"}`,
@@ -15533,7 +15551,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
         // Signed-off trips collapse to a summary row unless manually expanded
         if (t.signedOff && !expandedRTs[t.id]) {
           return (
-            <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,
+            <div key={t.id} data-hekey={"rtrow_"+t.id} style={{display:"flex",alignItems:"center",gap:10,
               background:`${C.green}0a`,border:`1px solid ${C.green}33`,
               borderRadius:10,padding:"10px 14px",marginBottom:10}}>
               <span style={{fontSize:13,color:C.green}}>✓</span>
@@ -15570,7 +15588,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
         const tripStripe = statusStripe(tripVariant);
         return (
 
-        <div key={t.id} id={"jn-dest-" + t.id} style={{background:t.needsSchedule?"rgba(178,58,58,0.06)":t.rtScheduled?"rgba(106,94,151,0.06)":t.signedOff?`${C.green}0a`:C.surface,
+        <div key={t.id} id={"jn-dest-" + t.id} data-hekey={"rt_"+t.id} style={{background:t.needsSchedule?"rgba(178,58,58,0.06)":t.rtScheduled?"rgba(106,94,151,0.06)":t.signedOff?`${C.green}0a`:C.surface,
 
           ...tripStripe,
 
@@ -18573,7 +18591,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
             )}
 
             {hrViewEff==='panel' ? (
-              <HomeRunsByPanel homeRuns={homeRuns} onHRChange={onHRChange} customPanels={cp}/>
+              <div key="hr-panel" className="he-rise"><HomeRunsByPanel homeRuns={homeRuns} onHRChange={onHRChange} customPanels={cp}/></div>
             ) : (<>
             {[['main','Main Level Loads'],['basement','Basement Level Loads'],['upper','Upper Level Loads']].map(([k,l])=>(
               <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
@@ -19331,7 +19349,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                       const li=flatSorted.indexOf(l);
                       const assignedLabels=assignedModMap.has(l.id)?assignedModMap.get(l.id):assignedModMap.has(l.name?.trim())?assignedModMap.get(l.name.trim()):null;
                       if(mob) return (
-                        <div key={l.id} style={{marginBottom:6,borderRadius:8,padding:"8px 10px",
+                        <div key={l.id} data-hekey={"load_"+l.id} data-heflash={"load_"+l.id} style={{marginBottom:6,borderRadius:8,padding:"8px 10px",
                           background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${color}0d`:C.surface,
                           border:`1px solid ${l.pulled?"#46916A44":C.border}`}}>
                           {/* Row 1: select + pulled + number + name + delete */}
@@ -19389,7 +19407,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                         </div>
                       );
                       return (
-                        <div key={l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
+                        <div key={l.id} data-hekey={"load_"+l.id} data-heflash={"load_"+l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
                           borderRadius:6,padding:"2px 0",
                           background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${color}0d`:"transparent"}}>
                           {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
@@ -28133,16 +28151,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         nextRoughInspectionDoneById.set(p.fromRoughInspectionId, !!p.done);
       });
     });
-    let roughInspectionChanged = false;
+    let roughInspectionChanged = false; const _changedInsp = [];
     const updatedRoughInspection = (prev.roughInspectionItems||[]).map(it => {
       if (!it || !it.id) return it;
       if (!nextRoughInspectionDoneById.has(it.id)) return it;
       const desired = nextRoughInspectionDoneById.get(it.id);
       if (!!it.done === desired) return it;
-      roughInspectionChanged = true;
+      roughInspectionChanged = true; _changedInsp.push(it.id);
       return { ...it, done: desired };
     });
     if (roughInspectionChanged) patch.roughInspectionItems = updatedRoughInspection;
+    _changedInsp.forEach(id => setTimeout(() => heFlashKey("insp_"+id, "checked on the return trip"), 120));   // v497 C (RT2)
     u(patch);
   };
 
@@ -29667,7 +29686,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               }
                               u(patch);
                             }}
-                              style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
+                              style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",transition:"background .4s,color .4s",
                                 background:job.roughInspectionResult===r?(r==="pass"?"#3E7D5A":"#B23A3A"):(r==="pass"?"#3E7D5A18":"#B23A3A18"),
                                 color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#3E7D5A":"#B23A3A")}}>
                               {r==="pass"?"✓ Pass":"✗ Fail"}
@@ -29678,10 +29697,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       {/* Failed items */}
                       {job.roughInspectionResult==="fail"&&(
-                        <div style={{marginBottom:10,padding:"8px 10px",background:"#B23A3A08",border:"1px solid #B23A3A22",borderRadius:7}}>
+                        <HeUnfold style={{marginBottom:10,padding:"8px 10px",background:"#B23A3A08",border:"1px solid #B23A3A22",borderRadius:7}}>
                           <div style={{fontSize:10,color:"#B23A3A",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
                           {(job.roughInspectionItems||[]).map((item,i)=>(
-                            <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                            <div key={item.id} data-hekey={"insp_"+item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
                               <input type="checkbox" checked={!!item.done} onChange={()=>{
                                 const items=[...(job.roughInspectionItems||[])];
                                 items[i]={...items[i],done:!items[i].done};
@@ -29775,7 +29794,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               );
                             })()}
                           </div>
-                        </div>
+                        </HeUnfold>
                       )}
 
                     </div>
@@ -30025,7 +30044,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               }
                               u(patch);
                             }}
-                              style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
+                              style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",transition:"background .4s,color .4s",
                                 background:job.finalInspectionResult===r?(r==="pass"?"#3E7D5A":"#B23A3A"):(r==="pass"?"#3E7D5A18":"#B23A3A18"),
                                 color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#3E7D5A":"#B23A3A")}}>
                               {r==="pass"?"✓ Pass":"✗ Fail"}
@@ -30036,10 +30055,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       {/* Failed items */}
                       {job.finalInspectionResult==="fail"&&(
-                        <div style={{marginBottom:10,padding:"8px 10px",background:"#B23A3A08",border:"1px solid #B23A3A22",borderRadius:7}}>
+                        <HeUnfold style={{marginBottom:10,padding:"8px 10px",background:"#B23A3A08",border:"1px solid #B23A3A22",borderRadius:7}}>
                           <div style={{fontSize:10,color:"#B23A3A",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
                           {(job.finalInspectionItems||[]).map((item,i)=>(
-                            <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                            <div key={item.id} data-hekey={"insp_"+item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
                               <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
                               <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
                                 style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
@@ -30096,7 +30115,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               );
                             })()}
                           </div>
-                        </div>
+                        </HeUnfold>
                       )}
 
                     </div>
@@ -31758,6 +31777,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           fromQCFail:true,
                         };
                         patch.returnTrips=[...(job.returnTrips||[]), newRT];
+                        heFlyToTab("Return Trips", `${openQC.length} item${openQC.length===1?"":"s"} → Return Trips`);
                         toast.success(`${v==="fail"?"QC Fail":"QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
                       }
                     }
@@ -31862,6 +31882,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         });
                         const newRT={id:uid(),date:"",scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,...punchStamp(),photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
                         patch.returnTrips=[...(job.returnTrips||[]),newRT];
+                        heFlyToTab("Return Trips", `${openQC.length} item${openQC.length===1?"":"s"} → Return Trips`);
                         toast.success(`${v==="fail"?"Finish QC Fail":"Finish QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
                       }
                     }
@@ -51100,7 +51121,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **Batch B (Job Board → More menu):** one page-wide list engine in 'motion.js' slides any keyed row to its new place, drops in a row that arrives beside existing ones, and flashes a keyed element whose text changes; rows are tagged on the Needs board (open + done), the COs tracker cards (slide between status columns, flash on status change — C1, C3), Job Prep rows and the redline-walk block (P1, P2), Time Off requests (O1), contractor requests (S1), Upcoming and Tasks (O3), the Job Board crew strip cells (J1) and Today's per-person pulse cards (T1). The Job Board's needs-attention banner unfolds (J3) and the pipeline tiles bump on tap (J2). Not done: Safety (an outside site in a frame), Service Size (prebuilt tool, no source here), Forecast R1/R2, Huddle H1, Settings toggles O2, Needs N3 — listed for Koy. **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
+- **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **Batch B (Job Board → More menu):** one page-wide list engine in 'motion.js' slides any keyed row to its new place, drops in a row that arrives beside existing ones, and flashes a keyed element whose text changes; rows are tagged on the Needs board (open + done), the COs tracker cards (slide between status columns, flash on status change — C1, C3), Job Prep rows and the redline-walk block (P1, P2), Time Off requests (O1), contractor requests (S1), Upcoming and Tasks (O3), the Job Board crew strip cells (J1) and Today's per-person pulse cards (T1). The Job Board's needs-attention banner unfolds (J3) and the pipeline tiles bump on tap (J2). Not done: Safety (an outside site in a frame), Service Size (prebuilt tool, no source here), Forecast R1/R2, Huddle H1, Settings toggles O2, Needs N3 — listed for Koy. **Batch C (job tabs):** Photos — the viewer zooms in from the thumbnail you tapped and gets ‹ › with a count to step through that set (PH1), each uploading photo shows a ring tile and the thumbnail drops in when done (PH2); Rough / Finish — the failed-items box unfolds and the Pass / Fail buttons crossfade (RF1), punch rows are keyed so new ones drop in and lists reflow (RF2); Home Runs — By Panel eases in (HR2); Panelized Lighting — load rows are keyed and flash when FieldInk follow-sync changes their text (PZ3); Change Orders — cards keyed, Email flashes the card with "Email sent" (CO1, C2); Return Trips — cards keyed so they slide between sections (RT1), a check-off on the trip flashes the matching inspection item (RT2); QC — Create return trip from the prompt flies to the tab (QC1). Not done this round: JI1, AC1, PL1, RF3/RF4, Q1/Q2, HR1, PZ1/PZ2, OI1 — listed for Koy. **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
 
 - **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Motion is now ON by default for everyone: the phone's Reduce Motion setting no longer silently wins (Koy's iPhone has it on, which had turned every animation off since v481 without anyone knowing). The Settings (⋯) menu has **Animations: on / off** to turn it off per device. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
 
@@ -62865,7 +62886,7 @@ function App() {
         ).map(({key,label,icon,badge,badgeTitle})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={()=>navClick(key)}
+            <button key={key} data-he-navkey={key} onClick={()=>navClick(key)}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
