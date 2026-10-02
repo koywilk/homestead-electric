@@ -252,4 +252,28 @@ test("toGeneratorRows: general circuits are skipped like covered ones", () => {
   assert.equal(r.rows.length, 1); assert.equal(r.rows[0].key, "generic"); assert.equal(r.rows[0].va, 9600);
 });
 
+import { applyPlan } from "../src/calc.js";
+import { MILLER_EXAMPLE } from "../src/millerExample.js";
+
+test("plans after a fill: square footage and areas land, the fill's appliances survive, tags follow the last writer", () => {
+  const filled = applyProfile(defaultState(), appl([L("Basement · Sauna", 240, 40), L("Garage · EV charger", 240, 48), L("Laundry · Dryer", 240, 24, 2)]));
+  const both = applyPlan(filled, MILLER_EXAMPLE, "Miller plans");
+  assert.equal(both.sqft, 11894); assert.equal(both.plan.areas.length, 5);
+  assert.equal(both.items.sauna.status, "yes"); assert.ok(both.items.sauna.fromFill, "the sheet's sauna survives the plan read");
+  assert.equal(both.items.ev.va, 11520); assert.ok(both.items.ev.fromFill, "the sheet's EV wins over the plan's EV");
+  assert.equal(both.items.plunge.status, "yes"); assert.equal(both.items.plunge.fromPlans, true, "a plan-only item still lands");
+  assert.equal(both.dryer, "elec"); assert.equal(both.dryerQty, 2);
+  assert.ok(both.planFields.includes("dryerQty") && !both.fillFields.includes("dryerQty"), "plans set dryerQty last, so it carries the plans tag");
+  assert.ok(both.fillFields.includes("dryer") === false || both.planFields.includes("dryer"));
+});
+
+test("a fill after plans: plan square footage and areas stay, the fill's fields take over their tags", () => {
+  const planned = applyPlan(defaultState(), MILLER_EXAMPLE, "Miller plans");
+  const both = applyProfile(planned, appl([L("Laundry · Dryer", 240, 24, 2), L("Mech · Tankless water heater", 240, 112)]));
+  assert.equal(both.sqft, 11894); assert.equal(both.plan.source, "Miller plans"); assert.equal(both.plan.areas.length, 5);
+  assert.equal(both.wh, "tankless"); assert.ok(both.fillFields.includes("wh") && !both.planFields.includes("wh"));
+  assert.ok(both.planFields.includes("sqft"), "square footage still carries the plans tag");
+  assert.equal(both.items.sauna.fromPlans, true, "plan items untouched by the fill stay");
+});
+
 console.log(`\n${n} tests passed`);

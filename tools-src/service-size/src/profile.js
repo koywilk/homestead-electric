@@ -122,6 +122,7 @@ export function applyProfile(prev, p) {
   s.fill = { source: src, tag: TAG[src] || "tool", label: p.label || from, at: p.at || new Date().toISOString(), covered, notes, general,
     placed: loads.length - covered.length - extras.length - general, needVA: extras.filter((x) => !x.va).length };
   s.fillFields = fields;
+  s.planFields = (s.planFields || []).filter((k) => !fields.includes(k)); // the fill now owns these tags
   return s;
 }
 

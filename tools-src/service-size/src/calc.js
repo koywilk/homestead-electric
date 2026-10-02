@@ -322,7 +322,11 @@ export function bidNote(state, a) {
 // Merge what Claude read from the plans (see api/read-plans.js for the JSON shape) into a state.
 export function applyPlan(prev, p, source) {
   const tier = [0, 1, 2].includes(Number(p.tier)) ? Number(p.tier) : prev.tier;
-  const s = { ...prev, tier, sac: [2, 3, 4][tier], items: tierItems(tier) };
+  // Items a fill from another tool placed (the job's own sheet / Home Runs) survive a plan
+  // read: the plans are an inference, the sheet is the appliance. Everything else resets
+  // to the tier's defaults, as before.
+  const kept = Object.fromEntries(Object.entries(prev.items || {}).filter(([, v]) => v && v.fromFill));
+  const s = { ...prev, tier, sac: [2, 3, 4][tier], items: { ...tierItems(tier), ...kept } };
   const fields = [];
   const set = (k, v) => { s[k] = v; fields.push(k); };
   if (p.tier != null) fields.push("tier");
@@ -338,6 +342,7 @@ export function applyPlan(prev, p, source) {
   const items = p.items && typeof p.items === "object" ? p.items : {};
   for (const [id, v] of Object.entries(items)) {
     if (!ITEM_BY_ID[id] || !v || typeof v !== "object") continue;
+    if (kept[id]) continue; // the fill's real appliance wins over the plan's reading of it
     const cur = { ...s.items[id] };
     if (["yes", "maybe", "no"].includes(v.status)) cur.status = v.status;
     if (num(v.qty) > 0) cur.qty = num(v.qty);
@@ -355,6 +360,7 @@ export function applyPlan(prev, p, source) {
     notInCalc: arr(p.not_in_calc, 8).map(String),
   };
   s.planFields = fields;
+  s.fillFields = (prev.fillFields || []).filter((k) => !fields.includes(k)); // the plan now owns these tags
   return s;
 }
 
