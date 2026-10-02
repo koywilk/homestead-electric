@@ -9,7 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
-import { HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
+import { heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
 // Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
@@ -7591,7 +7591,11 @@ function HEToastHost() {
     const handler = e => {
       const id = e.detail.key ?? (Date.now() + Math.random());
       const duration = e.detail.duration ?? 4000;
-      setToasts(ts => [...ts.filter(t => t.id !== id), { ...e.detail, id }]);
+      // v496 (Koy: "toast from the button"): a success/info toast fired right after a tap rises
+      // out of the button that was pressed instead of the top-right corner. Errors, sticky and
+      // keyed toasts, and anything with no recent tap still go to the corner.
+      const anchor = heToastAnchor(e.detail);
+      setToasts(ts => [...ts.filter(t => t.id !== id), { ...e.detail, id, anchor }]);
       if (duration > 0) {
         setTimeout(() => setToasts(ts => ts.filter(t => t.id !== id)), duration);
       }
@@ -7604,10 +7608,15 @@ function HEToastHost() {
   if (toasts.length === 0) return null;
   const tint = t => t==='error'?C.red : t==='success'?C.green : t==='warn'?C.orange : C.blue;
   const iconName = t => t==='error'?'alertTriangle' : t==='success'?'check' : t==='warn'?'alertTriangle' : 'info';
-  return (
+  const anchored = toasts.filter(t => t.anchor), corner = toasts.filter(t => !t.anchor);
+  return (<>
+    {anchored.map(t => (
+      <span key={t.id} className="he-atoast" role="status" style={{left:t.anchor.x, top:t.anchor.y}}>{t.message}</span>
+    ))}
+    {corner.length > 0 && (
     <div style={{position:'fixed',top:16,right:16,zIndex:99997,display:'flex',
       flexDirection:'column',gap:8,maxWidth:380,pointerEvents:'none'}}>
-      {toasts.map(t => {
+      {corner.map(t => {
         const c = tint(t.type);
         return (
           <div key={t.id}
@@ -7628,7 +7637,8 @@ function HEToastHost() {
         );
       })}
     </div>
-  );
+    )}
+  </>);
 }
 
 
@@ -9150,6 +9160,7 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
       },
     }));
 
+    heFlyToTab("Return Trips", `${entries.length} line${entries.length===1?"":"s"} → Return Trips`);   // v496
     onPatch && onPatch({ returnTrips: nextTrips, jobNotes: nextJobNotes });
     onDone && onDone();
   };
@@ -11301,7 +11312,7 @@ const StageBar = ({stages,current,color,animKey}) => {
 
       <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
 
-        <div className={_en?_en.className:undefined} style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s",...(_en?{animationDelay:`${_en.delay}ms`}:null)}}/>
+        <div className={[_en?_en.className:"", (!isScheduled && pct > 0 && pct < 100) ? "he-sheen" : ""].filter(Boolean).join(" ") || undefined} style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s",...(_en?{animationDelay:`${_en.delay}ms`}:null)}}/>
 
       </div>
 
@@ -14826,6 +14837,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
       photos: Array.isArray(o.photos) ? o.photos.map(p=>({...p, id:uid()})) : [],
     };
     // We signal the parent to add the RT — pass via a special onChange shape
+    heFlyToTab("Return Trips", "Change order → Return Trip");   // v496
     onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted", convertUndoneAt:""} : co), newRT, true); // true = add to top
   };
 
@@ -28367,6 +28379,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const _tabOrder = tabsForJob(job, tab);
   const _ink = useHeTabInk(_tabsRef, tab, _tabOrder.join("|"));
   useHePaneEase(_bodyRef, tab, _tabOrder);
+  useHeTabSwipe(_bodyRef, tab, _tabOrder, setTab);   // v496: swipe the body sideways to change tab
   // Commercial mode: if the job's division moved while open, a tab it no longer has falls back to Job Info.
   useEffect(() => { if (!tabsFor(job).includes(tab)) setTab("Job Info"); }, [job.division]);   // eslint-disable-line
   // v433 usage tracking: count each job-tab open (once per device/user/day).
@@ -29312,6 +29325,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
 
+            {/* v496: who else has this job open right now (job.presence, read only). */}
+            <HePresence presence={job.presence} me={identity && identity.name}/>
             {/* QC FAIL — loud pill so the status can't be missed at a glance. */}
             {/* Stays red until qcStatus moves off "fail" (e.g. back to "fixed" */}
             {/* or "pass"). Return trip is now a confirm choice (Task 6), not  */}
@@ -29476,7 +29491,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         {/* Body */}
 
-        <div ref={_bodyRef} style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+        <div ref={_bodyRef} style={{flex:1,overflowY:"auto",padding:"20px 22px",touchAction:"pan-y"}}>
 
           {/* Up Next panel — moved inside the body 2026-05-25 so it
               scrolls with content instead of being pinned above the
@@ -29752,6 +29767,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   fromFailedRough:true,
                                   assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                                   needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                                heFlyToTab("Return Trips", `${allItems.length} item${allItems.length===1?"":"s"} → Return Trips`);
                                 u({returnTrips:[...(job.returnTrips||[]),newRT]});
                                 toast.success(`Return trip created with ${allItems.length} item${allItems.length===1?"":"s"} — needs a date. See the Return Trips tab.`);
                               }}
@@ -30072,6 +30088,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   fromFailedFinal:true,
                                   assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                                   needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                                heFlyToTab("Return Trips", `${open.length} item${open.length===1?"":"s"} → Return Trips`);
                                 u({returnTrips:[...(job.returnTrips||[]),newRT]});
                                 toast.success(`Return trip created with ${open.length} item${open.length===1?"":"s"} — needs a date. See the Return Trips tab.`);
                               }}
@@ -51060,7 +51077,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v495
+**Last manifest update:** 2026-10-01 · App SW version: v496
 
 ---
 
@@ -51081,6 +51098,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
+
+- **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Every piece honours the phone's Reduce Motion setting. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
 
 - **Return trip card: the inspection report PDF now shows as a file tile that opens** · 'shipped 2026-10-01' · 'SW v495' · Koy: *"the inspection report … loads underneath the final inspection in the finish section, but on the return trip, it won't load anything."* The Return Trips card drew every attachment through an image tag and the image lightbox; a PDF report copied from a failed 4-way or final inspection rendered blank and tapped to a blank viewer. Non-image attachments now get the same file tile the Finish tab's uploader uses, labelled "4-way / Final inspection report", and tapping opens the PDF in a new tab. Photos unchanged. **Why it won't lose data:** render-only; the attachment records on the trip are untouched.
 
@@ -57426,7 +57445,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     const pinned = pinnedSet.has(r.key);
     const flashing = flashKey === r.key;   // v446: row a push / inbox tap deep-linked to
     return (
-      <div key={r.key} id={"mdrow_" + r.key} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
+      <div key={r.key} id={"mdrow_" + r.key} ref={el => { if (!el || !r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
@@ -57771,7 +57790,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
           <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
-          {(() => { const nn = g.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span title="New since you last opened My Day on this device" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
+          {(() => { const nn = g.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
           {g.badge && <span style={{ fontSize: 10, fontWeight: 700, color: C.orange, background: "#B06A2C1A", borderRadius: 5, padding: "1px 6px" }}>{g.badge}</span>}
           <span style={{ flex: 1, height: 1, background: C.border }} />
         </div>
@@ -57786,9 +57805,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                     <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
                       <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
-                      <span style={{ fontSize: 12, color: C.muted }}>{c.rows.length}</span>
+                      <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
                       {/* v490 (Koy: "want it to appear on each drop downs header so i can see it easy") */}
-                      {(() => { const nn = c.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span title="New since you last opened My Day on this device" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
+                      {(() => { const nn = c.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
                       {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
                       {c.overdue === 0 && c.top === 1 && <span style={{ fontSize: 10, fontWeight: 700, color: C.blue }}>today</span>}
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
@@ -57817,8 +57836,8 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                           ? <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
                           : <>
                               <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{(job && job.name) || "No job"}</span>
-                              <span style={{ fontSize: 12, color: C.muted }}>{n}</span>
-                              {(() => { const nn = rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span title="New since you last opened My Day on this device" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
+                              <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={n} ms={500}/></span>
+                              {(() => { const nn = rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
                               {od > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{od} overdue</span>}
                             </>}
                       </div>
@@ -58032,6 +58051,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
         <div style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${ON_MOBILE ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8995, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 520, margin: "0 auto" }}>
           <span>{undo.label}</span>
           <button onClick={runUndo} style={{ fontFamily: "inherit", fontWeight: 700, color: "#66A8FF", background: "transparent", border: "none", cursor: "pointer", fontSize: 13 }}>Undo</button>
+          <HeUndoBar key={undo.timer} ms={10000}/>
         </div>
       )}
     </div>
@@ -60983,6 +61003,7 @@ function App() {
         isDirty.current = false;
 
         setSyncStatus("saved");
+        heSaveRipple();   // v496: green ring out of the field just edited
 
         setTimeout(()=>setSyncStatus("idle"),2000);
 
@@ -62154,7 +62175,7 @@ function App() {
 
     return (
 
-      <div className={"job-row"+(_mfx?" "+_mfx.className:"")} onClick={()=>setSelected(job)}
+      <div className={"job-row"+(_mfx?" "+_mfx.className:"")} onClick={(e)=>{heZoomFrom(e.currentTarget, job.name||"Untitled Job"); setSelected(job);}}
         style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:10,borderLeft:`3px solid ${rowLbord}`,
           ...(_mfx?{animationDelay:`${_mfx.delay}ms`}:null)}}>
 
@@ -62831,7 +62852,7 @@ function App() {
                 display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
-              {badge ? <span title={badgeTitle||""} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#B23A3A",color:"#fff",font:"700 10px/16px system-ui",textAlign:"center"}}>{badge}</span> : null}
+              {badge ? <span title={badgeTitle||""} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#B23A3A",color:"#fff",font:"700 10px/16px system-ui",textAlign:"center"}} key={badge} className="he-bump"><HeCount value={badge} ms={500}/></span> : null}
             </button>
           );
         })}

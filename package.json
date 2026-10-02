@@ -12,13 +12,15 @@
   },
   "//": "jsdom gives scripts/sanitize-test.js a DOM under plain node. It was previously resolving only as a transitive dep of react-scripts — so a react-scripts change would have broken `prebuild`, and therefore every build and every push, with a confusing error. Declared explicitly at the version already on disk. NOTE: this note lives at the TOP LEVEL on purpose — npm's `//` comment convention only works here. Inside `dependencies`/`devDependencies` every key is parsed as a package NAME, so a `//` entry there fails `npm install` with EINVALIDPACKAGENAME and takes every Vercel deploy down with it (2026-08-05).",
   "devDependencies": {
-    "jsdom": "16.7.0"
+    "jsdom": "16.7.0",
+    "playwright-core": "^1.63.0"
   },
   "scripts": {
     "start": "react-scripts start",
     "prebuild": "node scripts/version-from-sw.js && node scripts/tdz-scan.js --selftest && node scripts/tdz-scan.js && node scripts/gcportal-test.js && node scripts/gcnotify-test.js && node scripts/sanitize-test.js && node scripts/pending-queue-test.js && node scripts/leadprep-test.js && node scripts/ccloads-suggest-test.js && node scripts/panel-loads-merge-test.js && node scripts/docpull-test.js && node scripts/simpro-shape-test.js && node scripts/bidstock-test.js && node scripts/copunch-test.js && node scripts/mydaydigest-test.js && node scripts/namematch-test.js && node scripts/qacount-test.js && node scripts/needs-dryrun.js && node scripts/commercial-dryrun.js && node scripts/panel-fill-test.js && node scripts/gen-selection-test.js",
     "build": "react-scripts build",
-    "test": "react-scripts test"
+    "test": "react-scripts test",
+    "render-check": "node scripts/render-check.js"
   },
   "browserslist": {
     "production": [
