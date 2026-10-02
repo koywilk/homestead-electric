@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { defaultState, analyze, normalizeState } from "../src/calc.js";
 import { applyProfile } from "../src/profile.js";
-import { sheetData, estimates, sourceOf } from "../src/sheet.js";
+import { sheetData, estimates, sourceOf, contributors, gauge } from "../src/sheet.js";
 
 let n = 0;
 const test = (name, fn) => { fn(); n++; console.log("ok -", name); };
@@ -65,6 +65,25 @@ test("office rows carry a source for every counted item", () => {
 test("normalizeState keeps address; an old record without one gets an empty string", () => {
   assert.equal(normalizeState({}).address, "");
   assert.equal(normalizeState({ address: "1 Elm" }).address, "1 Elm");
+});
+
+test("contributors: items are listed one by one (never also as 'other'), sorted, top 8 + the rest; gauge marks the chosen size", () => {
+  const s = applyProfile(defaultState(1), appl([L("Kitchen · Range", 240, 42.5), L("Garage · EV charger", 240, 48), L("Basement · Sauna", 240, 40), L("Studio · Kiln", 240, 40)]));
+  const a = analyze(s);
+  const c = contributors(s, a);
+  assert.ok(c.top.length <= 8 && c.top.length > 0);
+  for (let i = 1; i < c.top.length; i++) assert.ok(c.top[i - 1].va >= c.top[i].va, "sorted by VA");
+  assert.ok(!c.top.some((x) => /other appliances/i.test(x.label)), "no 'other appliances' lump");
+  const labels = [...c.top, ...Array(0)].map((x) => x.label).join(" | ");
+  assert.ok(/Lighting & receptacles/.test(labels) && /tons/.test(labels), labels);
+  const sumItems = c.top.reduce((n, x) => n + x.va, 0) + c.restVA;
+  assert.equal(sumItems, c.total);
+  assert.ok(Math.abs(c.total - (a.basis.B + a.basis.hvac)) <= 1, `contributors ${c.total} should equal B + hvac ${a.basis.B + a.basis.hvac}`);
+  const g = gauge(a);
+  assert.ok(g.ticks.some((t) => t.sel && t.x === a.rec));
+  assert.ok(g.ml >= g.bl);
+  const d = sheetData(s, a);
+  assert.equal(d.contrib.total, c.total); assert.ok(d.gauge && d.gauge.ticks.length);
 });
 
 console.log(`\n${n} tests passed`);

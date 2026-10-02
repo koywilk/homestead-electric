@@ -1,7 +1,7 @@
 // Printable sheets for Service Size (v501): the customer copy (the size and why,
 // in plain words, no price) and the office copy (everything). Pure: state and
 // analysis in, rows and lines out. No DOM, so the tests can run it in Node.
-import { ITEMS, RANGE_LABEL, WH_LABEL, HEAT_LABEL, effective, sizeLabel, bidNote } from "./calc.js";
+import { ITEMS, SIZES, RANGE_LABEL, RANGE_SHORT, WH_LABEL, HEAT_LABEL, effective, sizeLabel, bidNote } from "./calc.js";
 
 const num = (v, d = 0) => { const x = parseFloat(v); return Number.isFinite(x) && x >= 0 ? x : d; };
 const lower = (s) => (/^[A-Z]{2}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1));
@@ -38,6 +38,44 @@ export function sourceOf(st, fill) {
     return `${tag} · nameplate`;
   }
   return "typed";
+}
+
+// Where the amps come from, in the scenario the size is based on, as a homeowner would name it.
+// Items are listed one by one (never also as "other appliances"), so nothing is counted twice.
+export function contributors(state, a, topN = 8) {
+  const r = a.basis;
+  const eff = effective(state);
+  const out = [];
+  const push = (label, va) => { if (va > 0) out.push({ label, va: Math.round(va) }); };
+  push("Lighting & receptacles, whole house", r.general);
+  push("Kitchen & laundry circuits", r.circuits);
+  push("Dishwasher, disposal, microwave", r.basics);
+  push(`Cooking (${RANGE_SHORT[r.range] || r.range})`, r.rangeVA);
+  push(r.dryerQty > 1 ? `${r.dryerQty} electric dryers` : "Electric dryer", r.dryerVA);
+  push(r.whQty > 1 ? `Water heating (${r.whQty})` : "Water heating", r.whVA);
+  push(`${r.hvacWhich === "heating" ? "Heating" : "Cooling"}, ${eff.tons} tons${r.hvac > 0 && (r.resFactor < 1) ? "" : ""}`, r.hvac);
+  const counted = (st) => st.status === "yes" || (state.sizeFor !== "base" && st.status === "maybe");
+  for (const it of ITEMS) {
+    const st = state.items?.[it.id];
+    if (!st || !counted(st)) continue;
+    if (it.g !== "appl") continue; // space heaters, floor heat and mini-splits live inside the heating / cooling bar
+    push(it.name + (st.status === "maybe" ? " (allowance)" : ""), num(st.va) * num(st.qty, 1));
+  }
+  for (const x of state.extras || []) if (counted(x)) push(x.name + (x.status === "maybe" ? " (allowance)" : ""), num(x.va) * num(x.qty, 1));
+  out.sort((p, q) => q.va - p.va);
+  const top = out.slice(0, topN), rest = out.slice(topN);
+  return { top, restCount: rest.length, restVA: rest.reduce((n, c) => n + c.va, 0), total: out.reduce((n, c) => n + c.va, 0), max: top.length ? top[0].va : 0 };
+}
+
+// The size ladder: standard sizes on one scale, with the confirmed and with-allowances loads marked.
+export function gauge(a) {
+  const D = a.max.amps > 420 || a.rec === 600 ? 640 : 440;
+  const pos = (x) => (Math.min(x, D) / D) * 100;
+  return {
+    D, bl: pos(a.base.amps), ml: pos(a.max.amps), rec: a.rec,
+    ticks: SIZES.filter((x) => x <= D).map((x) => ({ x, p: pos(x), sel: x === a.rec })),
+    baseAmps: Math.round(a.base.amps), maxAmps: Math.round(a.max.amps), over: a.max.amps > D,
+  };
 }
 
 export function sheetData(state, a) {
@@ -95,6 +133,9 @@ export function sheetData(state, a) {
 
   return {
     eff, drivers, allowances, changes, rows,
+    contrib: contributors(state, a),
+    gauge: gauge(a),
+    headroom: a.headroom,
     estimates: estimates(state),
     rec: sizeLabel(a.rec),
     basisAmps: Math.round(a.basis.amps), confirmedAmps: Math.round(a.base.amps), maxAmps: Math.round(a.max.amps),

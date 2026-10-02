@@ -163,39 +163,81 @@
 /* Tools handoff (2026-10-02): the small remove link under an extra from another tool */
 .ssc-link { font: inherit; font-size: 12.5px; color: var(--ssc-copper); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 
-/* Printable sheets (v501). Hidden on screen; when printing, only the sheet shows. */
+/* Printable sheets (v501): a one-page dashboard, Homestead header band, gauge, tiles, bars.
+   Hidden on screen; when printing, only the sheet shows. Backgrounds are forced to print. */
 .ssc-print { display: none; }
 .ssc-warnline { margin: 10px 0 0; font-size: 13px; color: var(--ssc-warn); background: var(--ssc-warn-soft); padding: 8px 10px; border-radius: 4px; }
 @media print {
-  @page { margin: 14mm; }
+  @page { margin: 10mm 11mm; }
   html, body { background: #fff !important; }
-  .ssc { padding: 0; background: #fff; color: #111; }
+  .ssc { padding: 0; background: #fff; color: #1B1F24; }
   .ssc > *:not(.ssc-print) { display: none !important; }
-  .ssc-print { display: block; color: #111; font-size: 12px; line-height: 1.45; }
-  .ssc-print h4 { font-family: var(--ssc-display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin: 16px 0 6px; padding-bottom: 3px; border-bottom: 1px solid #999; page-break-after: avoid; }
-  .ssc-print p { margin: 0 0 8px; }
-  .ssc-print ul { margin: 0 0 8px 18px; padding: 0; }
-  .ssc-print li { margin: 0 0 3px; }
-  .ps-head { border-bottom: 2px solid #3B5BA5; padding-bottom: 8px; margin-bottom: 12px; }
-  .ps-brand { font-family: var(--ssc-display); font-size: 12px; letter-spacing: .16em; color: #3B5BA5; }
-  .ps-title { font-family: var(--ssc-display); font-size: 22px; letter-spacing: .03em; text-transform: uppercase; margin: 2px 0; }
-  .ps-meta { font-size: 11px; color: #444; }
-  .ps-hero { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin: 6px 0 10px; }
-  .ps-big { font-family: var(--ssc-display); font-size: 52px; line-height: .9; font-weight: 700; }
-  .ps-big span { font-size: 22px; margin-left: 4px; }
-  .ps-herometa { font-size: 12.5px; max-width: 60ch; }
-  .ps-note { margin-top: 14px; padding-top: 8px; border-top: 1px solid #bbb; font-size: 10.5px; color: #444; }
-  .ps-small { font-size: 10.5px; color: #444; }
-  .ps-flag { font-size: 11.5px; padding: 6px 8px; border-left: 3px solid #9a6410; background: #f8ebcf; }
-  .ssc-print table { border-collapse: collapse; width: 100%; font-size: 11px; page-break-inside: auto; }
-  .ssc-print th, .ssc-print td { border: 1px solid #ccc; padding: 3px 6px; text-align: left; vertical-align: top; color: #111; }
-  .ssc-print th { background: #f0f2f4; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
-  .ssc-print td.n, .ssc-print th.n { text-align: right; font-family: var(--ssc-mono); white-space: nowrap; }
-  .ssc-print tr { page-break-inside: avoid; }
+  .ssc-print, .ssc-print * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .ssc-print { display: block; color: #1B1F24; font-family: "DM Sans", -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 11px; line-height: 1.4; }
+  .ssc-print .ps-label { font-family: "Barlow Condensed", "Arial Narrow", Arial, sans-serif; font-weight: 700; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #5E6670; margin-bottom: 5px; }
+  .ssc-print .ps-label--light { color: #9DB8DD; }
+  .ps-band { display: flex; align-items: center; gap: 18px; background: #141821; color: #fff; border-radius: 10px; padding: 12px 18px; margin-bottom: 12px; break-inside: avoid; }
+  .ps-logo { height: 46px; width: auto; flex: none; }
+  .ps-band-text { min-width: 0; }
+  .ps-eyebrow { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: #66A8FF; font-weight: 700; }
+  .ps-h1 { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 26px; font-weight: 700; line-height: 1.05; letter-spacing: .01em; color: #fff; }
+  .ps-sub { font-size: 11px; color: #B8C2D2; margin-top: 2px; }
+  .ps-hero { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px; margin-bottom: 10px; break-inside: avoid; }
+  .ps-hero-num { background: #1B2030; color: #fff; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; justify-content: center; }
+  .ps-amps { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 72px; font-weight: 800; line-height: .9; color: #66A8FF; letter-spacing: -.01em; }
+  .ps-amps span { font-size: 26px; margin-left: 5px; color: #fff; font-weight: 700; }
+  .ps-hero-sub { font-size: 11px; color: #B8C2D2; margin-top: 6px; }
+  .ps-hero-gauge { background: #F3F5F8; border: 1px solid #E1E5EB; border-radius: 10px; padding: 12px 16px 8px; min-width: 0; }
+  .ps-gauge { display: block; width: 100%; height: auto; }
+  .ps-caption { margin: 2px 0 0; font-size: 11.5px; color: #1B1F24; }
+  .ps-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; break-inside: avoid; }
+  .ps-tiles--6 { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; }
+  .ps-tiles--6 .ps-tile { padding: 7px 8px; }
+  .ps-tiles--6 .ps-tile-val { font-size: 16px; line-height: 1.05; }
+  .ps-tiles--6 .ps-label { font-size: 9.5px; letter-spacing: .08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ps-tile { background: #fff; border: 1px solid #E1E5EB; border-top: 3px solid #3B5BA5; border-radius: 8px; padding: 8px 10px; min-width: 0; }
+  .ps-tile--accent { background: #EAF2FF; border-color: #C9DCF7; border-top-color: #66A8FF; }
+  .ps-tile-val { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 24px; font-weight: 800; line-height: 1; color: #1B1F24; font-variant-numeric: tabular-nums; }
+  .ps-tile-sub { font-size: 10px; color: #5E6670; margin-top: 3px; }
+  .ps-section { margin-bottom: 12px; break-inside: avoid; }
+  .ps-drivers { display: flex; flex-direction: column; gap: 5px; }
+  .ps-bar-row { display: grid; grid-template-columns: 215px minmax(0, 1fr) 62px; gap: 10px; align-items: center; font-size: 11px; }
+  .ps-drivers--compact .ps-bar-row { grid-template-columns: 150px minmax(0, 1fr) 58px; font-size: 10px; gap: 8px; }
+  .ps-bar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ps-bar { display: block; height: 12px; background: #EEF1F5; border-radius: 3px; overflow: hidden; }
+  .ps-bar i { display: block; height: 100%; background: linear-gradient(90deg, #3B5BA5, #66A8FF); border-radius: 3px; }
+  .ps-bar-val { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-weight: 700; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+  .ps-bar-rest { font-size: 10px; color: #5E6670; margin-top: 2px; }
+  .ps-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; break-inside: avoid; }
+  .ps-flow { margin-bottom: 12px; }
+  .ps-flow .ps-label { break-after: avoid; }
+  .ssc-print thead { display: table-header-group; }
+  .ps-box { border: 1px solid #E1E5EB; border-radius: 8px; padding: 9px 11px; min-width: 0; }
+  .ps-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .ps-chip { display: inline-block; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #EAF2FF; color: #3B5BA5; border: 1px solid #C9DCF7; }
+  .ps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .ps-list li { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; border-bottom: 1px solid #EEF1F5; padding-bottom: 3px; }
+  .ps-list li b { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 12px; color: #3B5BA5; white-space: nowrap; }
+  .ps-muted { margin: 0; font-size: 10.5px; color: #5E6670; }
+  .ps-foot { margin-top: 6px; padding-top: 7px; border-top: 1px solid #E1E5EB; font-size: 9.5px; color: #5E6670; }
+  .ps-foot p { margin: 0 0 4px; }
+  .ps-flagband { background: #FBEFE6; border-left: 4px solid #B06A2C; color: #6B3E18; padding: 7px 10px; border-radius: 0 6px 6px 0; font-size: 10.5px; margin-bottom: 12px; break-inside: avoid; }
+  .ssc-print table { border-collapse: collapse; width: 100%; font-size: 10px; }
+  .ssc-print th, .ssc-print td { border-bottom: 1px solid #E1E5EB; padding: 3px 6px; text-align: left; vertical-align: top; color: #1B1F24; }
+  .ssc-print th { background: #1B2030; color: #fff; font-family: "Barlow Condensed", "Arial Narrow", sans-serif; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; border: none; }
+  .ssc-print td.n, .ssc-print th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ssc-print tr { break-inside: avoid; }
   .ssc-print .ssc-calc { min-width: 0; }
-  .ssc-print tr.sum td { font-weight: 600; } .ssc-print tr.total td { font-weight: 700; background: #f0f2f4; }
-  .ps-kv td:nth-child(odd) { color: #555; width: 18%; }
-  .ps-pre { white-space: pre-wrap; font-family: var(--ssc-mono); font-size: 10.5px; border: 1px solid #ccc; padding: 8px; margin: 0; }
-  .ssc-print--customer { font-size: 13px; }
-  .ssc-print--customer ul { margin-left: 20px; }
+  .ssc-print .ssc-calc td small { color: #5E6670; font-size: 9px; }
+  .ssc-print tr.sum td { font-weight: 700; border-bottom: 2px solid #1B2030; }
+  .ssc-print tr.total td { font-weight: 800; background: #EAF2FF; }
+  .ps-pill { display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+  .ps-pill--yes { background: #1B2030; color: #fff; }
+  .ps-pill--maybe { background: #EAF2FF; color: #3B5BA5; border: 1px solid #C9DCF7; }
+  .ps-src { font-size: 9.5px; color: #5E6670; }
+  .ps-src--warn { color: #B06A2C; font-weight: 700; }
+  .ps-flags { margin: 0; padding-left: 14px; font-size: 10px; display: flex; flex-direction: column; gap: 3px; }
+  .ps-pre { white-space: pre-wrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; border: 1px solid #E1E5EB; background: #F7F9FB; padding: 8px; margin: 0; border-radius: 6px; }
+  .ps-two .ps-pre { font-size: 9px; }
+  .ssc-print--customer { font-size: 11.5px; }
 }
