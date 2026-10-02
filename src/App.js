@@ -51173,10 +51173,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v496
+**Last manifest update:** 2026-10-02 · App SW version: v497
 
 ---
 
+- **Tools tab — the three tools fill each other (Appliance Loads → Service Size / Generator Sizing, and the two calculators both ways)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy: *"so we have the three tools in the tools tab now, generator calc, appliance loads, and load calc. We want them to be able to all three work together to fill each one out if we want."* Opening a job in **Appliance Loads** makes its appliances available on that device, and the job page gets **Send to Generator Sizing** / **Send to Service Size** (the Service Size one only for people who hold that tool); both switch the Tools chip. **Generator Sizing** and **Service Size** each get a *Start from another tool* bar with 'Fill from Appliance Loads · #1438 Miller Residence · 14 loads · 2 min ago' style buttons and an Undo; nothing moves until you tap Fill. Service Size also gets **Send to Generator Sizing** next to Copy bid note, tags the fields it filled ('loads' / 'generator', like the 'plans' tag), and gains a **From another tool** group under Extras for appliances its fixed list has no row for (a kiln, a 240 V heater): counted as fixed appliances at nameplate under 220.82(B)(3), editable and removable, in the what-ifs and the bid note. Fridges, microwaves, hoods, disposals and the first dishwasher are listed as *covered by the standard allowances* and never counted twice. A load the sheet had no amps for arrives with the item's typical VA and a flag ('typical VA' in the generator, 'needs VA' on a Service Size extra). Service Size hands the generator its recommended service size for the transfer-switch pick and its HVAC as rows at the calc's own figures; the generator hands back square footage and circuit counts. Service Size "maybe" items reach the generator flagged 'maybe' only when Service Size is set to size for maybes. Built on one shared classifier, 'public/tools/shared/load-profile.js' (keyword table, volts × amps, localStorage mailbox, generator-row mappers; UMD so the generator page loads it as a script, Service Size bundles it, and 'tools-src/service-size/test/profile.test.mjs' tests it alongside the Service Size mapping in 'src/profile.js'). Appliance Loads is a source only: its rows come from the nightly Drive run, so nothing fills the Sheet. Josh's generator tables and calc ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS', 'calc', 'renderFuel', 'renderPad', 'renderConnections', 'render') are byte-identical, verified by a region diff; the page only gains a 'key' on preset rows and the fill bar. Guide 'tools.html' gains a *Tools that fill each other* section. **Why it won't lose data:** nothing in this change reads or writes Firestore; the handoff is one device-local localStorage key ('he_tools_profile_v1', plus 'he_tools_visible_v1' for which chips a person has), the same kind of per-device convenience as the remembered last tool; Appliance Loads keeps its existing write paths (import, 'applLinks', 'applSpecOk', 'applAmps') untouched; Service Size's calc change is additive (old or plan-filled states normalize with 'extras: []') and covered by tests (20 passing); no loader, rules or Cloud Function change.
 - **Panelized Lighting — a phone with an old copy can no longer un-tick or rename what it didn't touch; "Update N from FieldInk" only offers what the field changed since you last looked** · 'shipped 2026-10-01' · 'SW v496' · Koy, on Miller #1438 tonight: *"the panelized lighting section is saying FieldInk has 18 updates, and I feel like it's trying to push back the old ones again… I just want it fixed and I don't want to mess it up."* Read-only PITR forensics (every copy of the job doc since the 9/30 restore, per-load diffs, device versions, the field-ink 'ccloads' doc at four moments) found THREE things. (1) The 18 were a NEW bad publish, not the old names: at 1:14–1:16 pm a nameless FieldInk device ('updatedBy ""') republished the bridge with 31 loads' rooms shifted one room over (Great Room → Primary Water Closet, Main Powder → Primary Closey, Basement Stair Landing → Kitchen Exterior Deck…); the v450 auto-follow applied it to the 10 rows whose 'fieldSnap' still matched (silently, Keegan's Mac, 1:14:46 pm) and parked the 16 pre-v450 rows behind the button. (2) Two rollbacks v471 did not stop, both from iPhones coming back after a gap, both 'merged:true', both with 'plRev' going BACKWARDS: Austin 9/30 3:57 pm (plRev 2050 → 39) reverted 5 of fix-names' renames; Noah 10/1 5:12 pm (2097 → 2094) un-ticked 6 Loads-Ran boxes Keegan / Braden / Austin had ticked. The tripwire stayed silent because '_threeWayMerge' treats 'plRev' as a primitive (client wins). Replaying Noah's write through the real merge with an honest baseline KEEPS every foreign tick — so the phone's live baseline was not what its screen derived from; the exact on-phone path is not pinned and this ship stops trusting the baseline for this field instead of guessing. (3) The 9/30 4:40–4:51 pm module / load count changes were Koy's own edits. **Fix A — intent merge for 'panelizedLighting':** JobDetail's 'u()' records WHAT this copy changed ('plDiffIntent': per-load fields, added / removed ids, other panelizedLighting keys) and the save funnel lays only that onto the SERVER's current copy ('plApplyIntent'); untouched loads always come from the server, so a stale phone cannot un-tick or rename what it never touched. The intent rides the pending patch under '_plIntent' (unioned across a burst by 'plMergeIntents'; a panel write with no intent drops it), is stripped before every write (saveJob / flushJob / flushSaves) and never lands on the job object. A copy older than its baseline is now applied this way with a 'console.warn' instead of being refused. **Fix B — 'plRev' never goes backwards:** 'plMergedRev' makes the merged rev 'max(client, server)' or 'server + 1' (restored 1042 vs a copy at 45 → 1043, never 46). **Fix C — the no-intent path (hub toggle, replayed queue, legacy) keeps the baseline merge plus 'plRepairUnticks':** a merged load that is 'pulled:false' while still carrying someone's 'pulledBy' was un-ticked by a merge, not a person (a real un-tick clears the stamp) → the server's tick is put back with a loud 'console.error'. **Fix D — 'ccLoadSyncPlan':** an office-edited row whose bridge value still equals its 'fieldSnap' is no longer offered (the office's edit stands); it is offered again only when FieldInk moves that load to a third value, and never auto-applied. Harness: 'scripts/panel-loads-merge-test.js' +18 checks (both Miller rollback shapes replayed through the real helpers, add / remove / edit-vs-delete, other keys, bursts, rev rules, the un-tick repair); 'scripts/ccloads-suggest-test.js' +4 (the Miller "office fixed, bridge still wrong" shape). Guide 'panelizedlighting.html' updated. Data repair for Miller is a separate admin script Koy runs (names, 5 ticks, 31 snaps). **Why it won't lose data:** no field shape, loader or rules change — 'panelizedLighting' is written in the same whole-object shape through the same transaction; the intent is in-memory / pending-queue only and is deleted from every write patch before 'tx.update'; the intent path starts from the server's copy and changes only loads / fields this device actually edited (a client delete is honored, a client edit of a server-deleted load is kept, server adds are kept — the same keep bias as the structural merge); every other job field still goes through the unchanged three-way merge; when no intent is available the old path runs exactly as before plus two guards that can only ADD a tick back or raise the rev; 'plRev' stays one additive integer.
 - **Appliance Loads: set amps by hand on any appliance** · 'shipped 2026-10-01' · 'SW v494' · Koy: *"i need to be able to put in amperage. the example im having is wash tower in oak hill, its saying 30a but there is both a washer and dryer on the sheet. washer is 20a and dryer is 30 but theres no way to change the washer ot a 20a"*. The appliance drawer has a Set amps by hand box (load A, breaker A; breaker defaults to the load). The row shows the typed amps in place of the sheet's, counts as confirmed (green), the job totals use it, and the Home Runs import writes the typed amps and the wire size that goes with them. Use sheet puts it back. The Google Sheet is not changed. **Why it won't lose data:** one new additive field on the job, applAmps, saved through the same patch-save call as applLinks and applSpecOk (the loader already unwraps every job field; jobs without it behave exactly as before). It is read-only against the Sheet and Home Runs, and only the import button (unchanged, user-triggered) ever writes Home Runs.
 - **Appliance Loads: a "Likely in CC" appliance now shows its likely Home Run first, and yellow reads CONFIRM SPECS** · 'shipped 2026-10-01' · 'SW v489' · Koy: *"if it is marked likely in cc can it show the load it likely is first so i dont have to search through all the loads listed?"* and *"it should say confirm specs, so that isnt confused with confirm the load is in cc"*. In the Appliance Loads drawer, a row the sheet marks Likely now leads with the Home Run it named (with Yes, same), and the pick list opens on that one with same-kind Home Runs next, then the rest A to Z; Not-in-CC rows get the same ordering around the suggestion. The yellow status now reads CONFIRM SPECS (green SPECS CONFIRMED). A yellow appliance also gets a Confirm specs button in its drawer (with Undo) that turns it green, stored per job in a new applSpecOk field; red rows are never overridden. **Why it won't lose data:** display ordering and labels only. Linking still writes the same applLinks field through the same call as before. The one new field, applSpecOk on the job, is additive and written by the same patch-save call as applLinks (the loader already unwraps every field, so nothing is dropped, and jobs without it behave exactly as before); no rules or save-path changes, and Home Runs are never edited by this change.
@@ -55918,7 +55919,31 @@ const applRank = (row, list, first) => {
 };
 const applRowKey = (r) => [r.no, r.loc, r.item, r.model].map(x => String(x||"").trim().toLowerCase()).join("|");
 
-function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
+// Tools handoff (2026-10-02): a job's appliances as a load profile the two
+// calculators can fill from. Same device-local key the iframe tools use
+// (public/tools/shared/load-profile.js). Nothing is written to the job.
+const TOOLS_PROFILE_KEY = "he_tools_profile_v1";
+const TOOLS_VISIBLE_KEY = "he_tools_visible_v1";
+function applToolProfile(cur, cc) {
+  const loads = (cur.rows || []).map(r => {
+    const volts = applNum(r.volts) || null, amps = applNum(r.load) || null, qty = applNum(r.qty) || 1;
+    return { name: [r.loc, r.item].filter(Boolean).join(" · "), model: r.model || "", kind: "", qty, volts, amps,
+      va: volts && amps ? Math.round(volts * amps) : null, motor: false, status: "yes", note: "" };
+  });
+  const name = (cc && cc.name) || String(cur.label || "").replace(/^#?\d+\s*[-–·:]?\s*/, "").trim();
+  return { v: 1, source: "appliance-loads", at: new Date().toISOString(), label: `#${cur.no} ${name}`.trim(),
+    job: { no: String(cur.no), name, address: (cc && cc.address) || "" }, house: null, hvac: null, service: null, sizeFor: null, loads };
+}
+function writeToolProfile(p) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOOLS_PROFILE_KEY) || "{}");
+    const all = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    all[p.source] = p;
+    localStorage.setItem(TOOLS_PROFILE_KEY, JSON.stringify(all));
+    return true;
+  } catch (e) { return false; }
+}
+function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
   const [st, setSt] = useState({ loading:true, err:"", rows:[] });
   const [tick, setTick] = useState(0);
   const [openNo, setOpenNo] = useState(onlyNo || null);   // onlyNo: opened from one job's card, locked to that job
@@ -55999,6 +56024,19 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
 
   const sum = (k) => summary.reduce((a,j) => a + j[k], 0);
   const cur = openNo ? summary.find(j => j.no === openNo) : null;
+
+  // Opening a job's page makes its appliances available to Service Size / Generator Sizing on this device.
+  useEffect(() => { if (cur) writeToolProfile(applToolProfile(cur, ccFor(cur.no)));
+  // eslint-disable-next-line
+  }, [cur && cur.no, rowsEff]);
+  const TOOL_LABEL = { "service-size": "Service Size", "generator-sizing": "Generator Sizing" };
+  const sendTo = (key) => {
+    if (!cur) return;
+    const ok = writeToolProfile(applToolProfile(cur, ccFor(cur.no)));
+    if (!ok) { setMsg("This device would not let the app store the handoff. Try again, or use another browser."); return; }
+    if (onOpenTool) onOpenTool(key);
+    else setMsg(`Sent ${cur.rows.length} appliances. Open Tools, pick ${TOOL_LABEL[key]}, and tap Fill from Appliance Loads.`);
+  };
 
   const font = "'Bebas Neue',sans-serif";
   const GREEN = C.green, RED = C.red;
@@ -56118,6 +56156,18 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
         <span style={{fontSize:12,color:C.dim}}>{cur.rows.length} items · {applFmt(cur.amps)} A connected</span>
         <span style={{flex:1}}/>
+        {(!tools || tools.includes("generator-sizing")) && (
+          <button onClick={()=>sendTo("generator-sizing")} title="Use this job's appliances in the Generator Sizing tool"
+            style={{padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>
+            Send to Generator Sizing
+          </button>
+        )}
+        {tools && tools.includes("service-size") && (
+          <button onClick={()=>sendTo("service-size")} title="Use this job's appliances in the Service Size tool"
+            style={{padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>
+            Send to Service Size
+          </button>
+        )}
         <button onClick={()=>setImportOpen(true)} disabled={!cc}
           title={cc ? "Add this job's missing appliances to its Home Runs" : "No Command Center job has this job number"}
           style={{padding:"8px 16px",borderRadius:8,border:"none",background:cc?C.accent:C.muted,color:"#fff",fontSize:12,fontWeight:800,letterSpacing:"0.04em",fontFamily:"inherit",cursor:cc?"pointer":"not-allowed"}}>
@@ -56303,6 +56353,21 @@ function ToolsView({ jobs, onUpdateJob, who }) {
   });
   const tool = tools.find(t => t.key === toolKey) || tools[0];
   const pick = (key) => { setToolKey(key); try { localStorage.setItem(TOOLS_LAST_KEY, key); } catch {} };
+  // Tools handoff (2026-10-02): tell the iframe tools which chips this person has
+  // (Service Size is per-user), and switch chips when a tool asks (same origin only).
+  const toolKeys = tools.map(t => t.key).join(",");
+  useEffect(() => { try { localStorage.setItem(TOOLS_VISIBLE_KEY, JSON.stringify(toolKeys.split(","))); } catch (e) {} }, [toolKeys]);
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;
+      const d = e.data;
+      if (!d || d.type !== "he-tools-open" || !toolKeys.split(",").includes(d.key)) return;
+      pick(d.key);
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  // eslint-disable-next-line
+  }, [toolKeys]);
   return (
     <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 56px)",background:C.bg}}>
       <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface,overflowX:"auto",scrollbarWidth:"none",flex:"none"}}>
@@ -56325,7 +56390,7 @@ function ToolsView({ jobs, onUpdateJob, who }) {
         <HelpDot section="tools"/>
       </div>
       {tool.native
-        ? <ApplianceLoadsView key={tool.key} jobs={jobs} onUpdateJob={onUpdateJob}/>
+        ? <ApplianceLoadsView key={tool.key} jobs={jobs} onUpdateJob={onUpdateJob} onOpenTool={pick} tools={toolKeys.split(",")}/>
         : <iframe key={tool.key} src={tool.src} title={tool.label}
             style={{flex:1,width:"100%",border:"none",display:"block",background:"#141821"}}
             allow="clipboard-read; clipboard-write"/>}
