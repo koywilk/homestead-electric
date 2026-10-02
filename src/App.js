@@ -2105,6 +2105,74 @@ async function fetchSimproQuoteBasics(simproQuoteNo) {
 //       Site.Address      → address  (joined string from structured parts)
 //       SiteContact (full) → gc
 //       SiteContact.Phone → phone   (prefers CellPhone, then Phone, then WorkPhone)
+
+// ── Up to TWO contacts "running this job" (Justin, 2026-10-02) ──────────────
+// Design-build jobs have an on-site super AND an office PM, and the job setup
+// process requires both to be recorded. Slot 1 = gcContactLead, which mirrors
+// into the GC Contact / GC Phone boxes exactly as before. Slot 2 =
+// gcContactLead2, mirrored into gcContact2 / phone2. Both are keyed by the
+// Simpro contact ID and live BESIDE gcContacts, because every Simpro pull
+// replaces that list wholesale. The boxes are additive: a job with no second
+// contact is byte-identical to what it was.
+const gcContactKey = (c, i) => String(c.id || c.email || c.name || i);
+// A tap on contact `k` → { patch } to apply (null = nothing to do), or
+// { full:true } when both slots are taken and the tap must be refused rather
+// than silently bumping someone out.
+const gcRunningToggle = (job, k) => {
+  const list = Array.isArray(job && job.gcContacts) ? job.gcContacts : [];
+  const find = (key) => { for (let i = 0; i < list.length; i++) if (gcContactKey(list[i], i) === key) return list[i]; return null; };
+  const one = String((job && job.gcContactLead)  || "");
+  const two = String((job && job.gcContactLead2) || "");
+  if (k === one) {
+    // Clearing slot 1 while a second is set PROMOTES the second, so the boxes
+    // the crew actually calls from never go empty while somebody is still marked.
+    if (two) {
+      const c2 = find(two);
+      return { patch: { gcContactLead: two, gcContactLead2: "",
+        gcContact: c2 ? (c2.name || "") : String(job.gcContact2 || ""),
+        phone:     c2 ? (c2.phone || "") : String(job.phone2 || ""),
+        gcContact2: "", phone2: "" } };
+    }
+    // Clearing leaves the typed boxes alone — same as it always did.
+    return { patch: { gcContactLead: "" } };
+  }
+  if (k === two) return { patch: { gcContactLead2: "" } };
+  const c = find(k);
+  if (!c) return { patch: null };
+  if (!one) return { patch: { gcContactLead: k, gcContact: c.name || "", phone: c.phone || "" } };
+  if (!two) return { patch: { gcContactLead2: k, gcContact2: c.name || "", phone2: c.phone || "" } };
+  return { full: true };
+};
+
+// The second contact's own boxes, for jobs where the person isn't in the
+// Simpro list (or there's been no pull yet). Collapsed until there's something
+// in it; the header carries the name so it's visible without opening.
+function GcSecondContact({ job, u }) {
+  const has = !!(String(job.gcContact2 || "").trim() || String(job.phone2 || "").trim() || String(job.gcContactLead2 || "").trim());
+  const [open, setOpen] = useState(has);
+  useEffect(() => { if (has) setOpen(true); }, [has]);
+  const label = String((job.gcContactLabels || {})[job.gcContactLead2 || ""] || "").trim();
+  return (
+    <details open={open} onToggle={e => setOpen(e.currentTarget.open)} style={{gridColumn:"1 / -1"}}>
+      <summary style={{cursor:"pointer",fontSize:10,fontWeight:700,color:C.accent,letterSpacing:"0.04em",listStyle:"revert"}}>
+        {has
+          ? `2nd GC contact${label ? " · " + label : ""}${job.gcContact2 ? " · " + job.gcContact2 : ""}`
+          : "+ 2nd GC contact (e.g. office PM)"}
+      </summary>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:8}}>
+        <div>
+          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>GC Contact 2</div>
+          <Inp value={job.gcContact2 || ""} onChange={e => u({ gcContact2: e.target.value })} placeholder="GC Contact 2"/>
+        </div>
+        <div>
+          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>GC Phone 2</div>
+          <Inp value={job.phone2 || ""} onChange={e => u({ phone2: e.target.value })} placeholder="GC Phone 2"/>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function useSimproAutoPull(jobRef, u) {
   const [simproPulling, setSimproPulling] = useState(false);
   const lastPulledSimproRef = useRef("");
@@ -5326,7 +5394,7 @@ const blankJob = () => ({
   // while the record is type "quote" — Simpro numbers the two separately, so
   // they must never share a field (a quote # in simproNo can match an unrelated
   // real job and pull its financials). A quote earns its simproNo at conversion.
-  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], gcContactLead:"", gcContactLabels:{}, simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
+  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], gcContactLead:"", gcContactLead2:"", gcContact2:"", phone2:"", gcContactLabels:{}, simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", matterportLinks:[], driveFolderId:"",
 
@@ -27768,6 +27836,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                     onBlur={k === "simproNo" ? () => doPullSimpro() : undefined}/>
                 </div>
               ))}
+              <GcSecondContact job={job} u={u}/>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
                 <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
@@ -32256,37 +32325,47 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 ))}
 
+              {/* A second contact's own boxes — for the office PM who isn't in
+                  the Simpro list, or any job before its first pull. */}
+              <GcSecondContact job={job} u={u}/>
+
               {/* Every contact on the GC in Simpro, with per-JOB overrides.
                   `gcContacts` itself is a mirror that the Simpro pull REPLACES
                   wholesale, so nothing editable may live on it — Koy's labels
-                  and his "running this job" pick are stored beside it, keyed by
+                  and his "running this job" picks are stored beside it, keyed by
                   the Simpro contact ID, and survive every re-pull.
                   Why the override exists (Koy, 2026-08-06): "it says taylor is
                   primary but darris is actually the one running this job."
                   Simpro's primary flag is the CUSTOMER's default across every
                   job; who's actually running THIS one is job-specific and Simpro
-                  has nowhere to record it. Spans both grid columns; hidden
-                  entirely before the first pull so it never shows an empty shell. */}
+                  has nowhere to record it. Up to TWO can be marked (Justin,
+                  2026-10-02: design-build has an on-site super AND an office PM
+                  and job setup requires both) — see gcRunningToggle. Spans both
+                  grid columns; hidden entirely before the first pull so it never
+                  shows an empty shell. */}
               {Array.isArray(job.gcContacts) && job.gcContacts.length > 0 && (() => {
                 const labels = job.gcContactLabels || {};
-                const leadId = job.gcContactLead || "";
-                const keyOf  = (c, i) => String(c.id || c.email || c.name || i);
-                // Whoever is running this job sorts to the top, then Simpro's
-                // primary, then by name — so the person you actually call is
-                // first on a phone without scrolling.
-                const rows = job.gcContacts.map((c, i) => ({ c, k: keyOf(c, i) }))
+                const leadId  = job.gcContactLead  || "";
+                const lead2Id = job.gcContactLead2 || "";
+                const anyLead = !!(leadId || lead2Id);
+                const ROLE_CHIPS = ["Onsite Super", "Office PM"];
+                // Whoever is running this job sorts to the top (slot 1, then
+                // slot 2), then Simpro's primary, then by name — so the people
+                // you actually call are first on a phone without scrolling.
+                const rank = (k) => k === leadId ? 2 : k === lead2Id ? 1 : 0;
+                const rows = job.gcContacts.map((c, i) => ({ c, k: gcContactKey(c, i) }))
                   .sort((a, b) =>
-                    (Number(b.k === leadId) - Number(a.k === leadId)) ||
+                    (rank(b.k) - rank(a.k)) ||
                     (Number(!!b.c.primary) - Number(!!a.c.primary)) ||
                     String(a.c.name || "").localeCompare(String(b.c.name || "")));
                 return (
                 <div style={{gridColumn:"1 / -1"}}>
                   <div style={{fontSize:10,color:C.dim,marginBottom:4}}>
-                    GC Contacts ({job.gcContacts.length}) · from Simpro · tap a name to mark who&apos;s running this job
+                    GC Contacts ({job.gcContacts.length}) · from Simpro · tap a name to mark who&apos;s running this job (up to two — e.g. on-site super + office PM)
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
                     {rows.map(({ c, k }) => {
-                      const isLead = k === leadId;
+                      const isLead = k === leadId || k === lead2Id;
                       return (
                       <div key={k}
                         style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
@@ -32294,15 +32373,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           border:`1px solid ${isLead ? "#3E7D5A" : C.border}`,
                           borderRadius:7,padding:"6px 9px",fontSize:12}}>
                         {/* Tapping a contact makes them this job's contact AND
-                            promotes them into the GC Contact / GC Phone boxes.
+                            promotes them into the GC Contact / GC Phone boxes
+                            (the second one into GC Contact 2 / GC Phone 2).
                             That overwrite is deliberate — it's an explicit pick,
                             not the fill-blanks-only behaviour of an auto-pull.
-                            Tapping the lead again clears it back to Simpro's. */}
+                            Tapping a marked contact again clears it back to
+                            Simpro's; a third tap is refused, never swapped in. */}
                         <button type="button"
                           title={isLead ? "Running this job — tap to clear" : "Mark as running this job"}
                           onClick={()=>{
-                            if (isLead) { u({ gcContactLead: "" }); return; }
-                            u({ gcContactLead: k, gcContact: c.name || "", phone: c.phone || "" });
+                            const r = gcRunningToggle(job, k);
+                            if (r.full) { toast.info("Two contacts are already running this job — tap one to clear it first."); return; }
+                            if (r.patch) u(r.patch);
                           }}
                           style={{border:"none",background:"none",padding:0,margin:0,
                             font:"inherit",fontWeight:700,
@@ -32321,9 +32403,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {c.primary && (
                           <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.04em",
                             textTransform:"uppercase",
-                            color: leadId ? C.muted : "#3E7D5A",
-                            background: leadId ? "transparent" : "#E8F1EC",
-                            border: leadId ? `1px solid ${C.border}` : "none",
+                            color: anyLead ? C.muted : "#3E7D5A",
+                            background: anyLead ? "transparent" : "#E8F1EC",
+                            border: anyLead ? `1px solid ${C.border}` : "none",
                             borderRadius:4,padding:"1px 6px"}}>Simpro primary</span>
                         )}
                         {c.role && <span style={{color:C.dim,fontSize:11}}>{c.role}</span>}
@@ -32331,6 +32413,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           onChange={e=>u({ gcContactLabels: { ...labels, [k]: e.target.value } })}
                           placeholder="Label (e.g. Super, Billing)"
                           style={{flex:"0 1 180px",minWidth:120,width:"auto",fontSize:11,padding:"3px 7px"}}/>
+                        {/* One-tap roles for the two people running the job —
+                            they just fill the same free-text label above. */}
+                        {isLead && ROLE_CHIPS.map(role => {
+                          const on = String(labels[k] || "").trim() === role;
+                          return (
+                            <button key={role} type="button"
+                              onClick={()=>u({ gcContactLabels: { ...labels, [k]: on ? "" : role } })}
+                              style={{fontSize:9,fontWeight:700,letterSpacing:"0.03em",textTransform:"uppercase",
+                                fontFamily:"inherit",cursor:"pointer",borderRadius:4,padding:"2px 6px",
+                                color: on ? "#fff" : "#2F6349",
+                                background: on ? "#3E7D5A" : "transparent",
+                                border:"1px solid #3E7D5A"}}>{role}</button>
+                          );
+                        })}
                         <span style={{flex:1}}/>
                         {c.phone && (
                           <a href={safeUrl(`tel:${String(c.phone).replace(/[^\d+]/g,"")}`)}
@@ -51176,10 +51272,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-02 · App SW version: v497
+**Last manifest update:** 2026-10-02 · App SW version: v498
 
 ---
 
+- **Job Info: two GC contacts can run a job — an on-site super AND an office PM** · 'in-flight' · 'SW v498' · Justin, on a Design-Build job: *"it seems at least for these Design-Build jobs there's an onsite super and a office pm… can you make it possible for two? because our job setup says we have to establish both so it needs somewhere for that info to live."* In the GC Contacts list (after a Simpro pull), tap a name to mark who's running the job — now up to **two** can be marked. The first still drops into GC Contact / GC Phone exactly as before; the second lands in new **GC Contact 2 / GC Phone 2** boxes. A third tap is refused with a toast instead of silently swapping someone out, and clearing the first promotes the second so the boxes the crew calls from are never empty while somebody is still marked. Running contacts get one-tap **Onsite Super / Office PM** role chips (they just fill the existing label, which survives re-pulls). A collapsed **+ 2nd GC contact (e.g. office PM)** section under GC Phone lets you type the second contact by hand for jobs with no Simpro pull or a PM who isn't in Simpro's list; it opens by itself once it has anything in it and shows the name in its header. Both picks are keyed by the Simpro contact ID ('gcContactLead', new 'gcContactLead2'), live beside 'gcContacts', and survive every re-pull; the Pull button still only fills BLANKS and never touches the second contact. Purely additive — a job with one contact is unchanged. New fields 'gcContactLead2', 'gcContact2', 'phone2' ride the job's normal data payload (no loader whitelist). Guarded by 'scripts/gc-two-contacts-test.js' (wired into 'prebuild'). In-app guide 'public/sops/jobinfo.html' updated.
 - **Tools tab — the three tools fill each other (Appliance Loads → Service Size / Generator Sizing, and the two calculators both ways)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy: *"so we have the three tools in the tools tab now, generator calc, appliance loads, and load calc. We want them to be able to all three work together to fill each one out if we want."* Opening a job in **Appliance Loads** makes its appliances available on that device, and the job page gets **Send to Generator Sizing** / **Send to Service Size** (the Service Size one only for people who hold that tool); both switch the Tools chip. Koy (Miller #1438 test): *"for the load calc it should use the entire homeruns list"* — so the handoff carries the job's **whole Home Runs list** too: every Home Run the sheet does not already describe (by hand link or the sheet's CC home run name, which may name two runs like "B. Washer / B. Dryer") rides along with its wire's volts and no amps. The tools classify the names: lighting, receptacle, SA, AV and lighting-control circuits are **counted** (small-appliance and laundry circuit counts come from the list) and never sized; furnaces, boilers and humidifiers sit inside the heating/cooling allowance; a 120 V "water heater" or "dryer" circuit is a gas unit's accessory; dedicated circuits with no sheet row (sauna, EV, heat tape, steamer, AC condensers) arrive at the item's typical value, flagged, until a nameplate replaces it. Never breaker × volts. **Generator Sizing** and **Service Size** each get a *Start from another tool* bar with 'Fill from Appliance Loads · #1438 Miller Residence · 14 loads · 2 min ago' style buttons and an Undo; nothing moves until you tap Fill. Service Size also gets **Send to Generator Sizing** next to Copy bid note, tags the fields it filled ('loads' / 'generator', like the 'plans' tag), and gains a **From another tool** group under Extras for appliances its fixed list has no row for (a kiln, a 240 V heater): counted as fixed appliances at nameplate under 220.82(B)(3), editable and removable, in the what-ifs and the bid note. Fridges, microwaves, hoods, disposals and the first dishwasher are listed as *covered by the standard allowances* and never counted twice. A load the sheet had no amps for arrives with the item's typical VA and a flag ('typical VA' in the generator, 'needs VA' on a Service Size extra). A sheet row with no voltage (Miller #1438: range, wall oven, dryer, both speed ovens) takes its volts from the Home Run it is linked to ('applLinks', or the sheet's CC home run name) through that wire's poles, so 42.5 A on a 6/3 run is 240 V × 42.5 A, not a typical value; amps always stay the sheet's nameplate. Service Size hands the generator its recommended service size for the transfer-switch pick and its HVAC as rows at the calc's own figures; the generator hands back square footage and circuit counts. Service Size "maybe" items reach the generator flagged 'maybe' only when Service Size is set to size for maybes. **Confirm spec flag (Koy 2026-10-02):** a sheet row whose amps rest on a series / typical / breaker-only / voltage-only basis (the sheet's Confidence text, not the row's color — a row already in Home Runs shows green even when its amps are a breaker size) arrives in the generator with a 'confirm spec' pill and in Service Size with a *Confirm spec* note; the number is still used. Hand-set amps and a hand-confirmed spec count as confirmed. **Access (Koy 2026-10-02): the whole Tools tab is limited to Koy, Josh, Brady and Jeromy for now.** 'tools.view' becomes a per-user grant like 'tools.serviceSize' (no tier; it was every internal tier through v496). Settings → Team → TOOL ACCESS gains a first checkbox, **Tools tab (all calculators)**; the nav tabs and the Tools view now check the live team record ('myLiveRec'), the v465 lesson, so a grant shows without re-login. **Flip-day: tick Tools tab for the four in Settings → Team**; until then nobody sees Tools. The job card's own *Appliance loads* window on the Home Runs tab is a Home Runs feature and is unchanged. Built on one shared classifier, 'public/tools/shared/load-profile.js' (keyword table, volts × amps, localStorage mailbox, generator-row mappers; UMD so the generator page loads it as a script, Service Size bundles it, and 'tools-src/service-size/test/profile.test.mjs' tests it alongside the Service Size mapping in 'src/profile.js'). Appliance Loads is a source only: its rows come from the nightly Drive run, so nothing fills the Sheet. Josh's generator tables and calc ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS', 'calc', 'renderFuel', 'renderPad', 'renderConnections', 'render') are byte-identical, verified by a region diff; the page only gains a 'key' on preset rows and the fill bar. Guide 'tools.html' gains a *Tools that fill each other* section. **Why it won't lose data:** nothing in this change reads or writes Firestore; the handoff is one device-local localStorage key ('he_tools_profile_v1', plus 'he_tools_visible_v1' for which chips a person has), the same kind of per-device convenience as the remembered last tool; Appliance Loads keeps its existing write paths (import, 'applLinks', 'applSpecOk', 'applAmps') untouched; Service Size's calc change is additive (old or plan-filled states normalize with 'extras: []') and covered by tests (20 passing); no loader, rules or Cloud Function change.
 - **Panelized Lighting — a phone with an old copy can no longer un-tick or rename what it didn't touch; "Update N from FieldInk" only offers what the field changed since you last looked** · 'shipped 2026-10-01' · 'SW v496' · Koy, on Miller #1438 tonight: *"the panelized lighting section is saying FieldInk has 18 updates, and I feel like it's trying to push back the old ones again… I just want it fixed and I don't want to mess it up."* Read-only PITR forensics (every copy of the job doc since the 9/30 restore, per-load diffs, device versions, the field-ink 'ccloads' doc at four moments) found THREE things. (1) The 18 were a NEW bad publish, not the old names: at 1:14–1:16 pm a nameless FieldInk device ('updatedBy ""') republished the bridge with 31 loads' rooms shifted one room over (Great Room → Primary Water Closet, Main Powder → Primary Closey, Basement Stair Landing → Kitchen Exterior Deck…); the v450 auto-follow applied it to the 10 rows whose 'fieldSnap' still matched (silently, Keegan's Mac, 1:14:46 pm) and parked the 16 pre-v450 rows behind the button. (2) Two rollbacks v471 did not stop, both from iPhones coming back after a gap, both 'merged:true', both with 'plRev' going BACKWARDS: Austin 9/30 3:57 pm (plRev 2050 → 39) reverted 5 of fix-names' renames; Noah 10/1 5:12 pm (2097 → 2094) un-ticked 6 Loads-Ran boxes Keegan / Braden / Austin had ticked. The tripwire stayed silent because '_threeWayMerge' treats 'plRev' as a primitive (client wins). Replaying Noah's write through the real merge with an honest baseline KEEPS every foreign tick — so the phone's live baseline was not what its screen derived from; the exact on-phone path is not pinned and this ship stops trusting the baseline for this field instead of guessing. (3) The 9/30 4:40–4:51 pm module / load count changes were Koy's own edits. **Fix A — intent merge for 'panelizedLighting':** JobDetail's 'u()' records WHAT this copy changed ('plDiffIntent': per-load fields, added / removed ids, other panelizedLighting keys) and the save funnel lays only that onto the SERVER's current copy ('plApplyIntent'); untouched loads always come from the server, so a stale phone cannot un-tick or rename what it never touched. The intent rides the pending patch under '_plIntent' (unioned across a burst by 'plMergeIntents'; a panel write with no intent drops it), is stripped before every write (saveJob / flushJob / flushSaves) and never lands on the job object. A copy older than its baseline is now applied this way with a 'console.warn' instead of being refused. **Fix B — 'plRev' never goes backwards:** 'plMergedRev' makes the merged rev 'max(client, server)' or 'server + 1' (restored 1042 vs a copy at 45 → 1043, never 46). **Fix C — the no-intent path (hub toggle, replayed queue, legacy) keeps the baseline merge plus 'plRepairUnticks':** a merged load that is 'pulled:false' while still carrying someone's 'pulledBy' was un-ticked by a merge, not a person (a real un-tick clears the stamp) → the server's tick is put back with a loud 'console.error'. **Fix D — 'ccLoadSyncPlan':** an office-edited row whose bridge value still equals its 'fieldSnap' is no longer offered (the office's edit stands); it is offered again only when FieldInk moves that load to a third value, and never auto-applied. Harness: 'scripts/panel-loads-merge-test.js' +18 checks (both Miller rollback shapes replayed through the real helpers, add / remove / edit-vs-delete, other keys, bursts, rev rules, the un-tick repair); 'scripts/ccloads-suggest-test.js' +4 (the Miller "office fixed, bridge still wrong" shape). Guide 'panelizedlighting.html' updated. Data repair for Miller is a separate admin script Koy runs (names, 5 ticks, 31 snaps). **Why it won't lose data:** no field shape, loader or rules change — 'panelizedLighting' is written in the same whole-object shape through the same transaction; the intent is in-memory / pending-queue only and is deleted from every write patch before 'tx.update'; the intent path starts from the server's copy and changes only loads / fields this device actually edited (a client delete is honored, a client edit of a server-deleted load is kept, server adds are kept — the same keep bias as the structural merge); every other job field still goes through the unchanged three-way merge; when no intent is available the old path runs exactly as before plus two guards that can only ADD a tick back or raise the rev; 'plRev' stays one additive integer.
 - **Appliance Loads: set amps by hand on any appliance** · 'shipped 2026-10-01' · 'SW v494' · Koy: *"i need to be able to put in amperage. the example im having is wash tower in oak hill, its saying 30a but there is both a washer and dryer on the sheet. washer is 20a and dryer is 30 but theres no way to change the washer ot a 20a"*. The appliance drawer has a Set amps by hand box (load A, breaker A; breaker defaults to the load). The row shows the typed amps in place of the sheet's, counts as confirmed (green), the job totals use it, and the Home Runs import writes the typed amps and the wire size that goes with them. Use sheet puts it back. The Google Sheet is not changed. **Why it won't lose data:** one new additive field on the job, applAmps, saved through the same patch-save call as applLinks and applSpecOk (the loader already unwraps every job field; jobs without it behave exactly as before). It is read-only against the Sheet and Home Runs, and only the import button (unchanged, user-triggered) ever writes Home Runs.
