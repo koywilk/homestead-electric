@@ -838,6 +838,7 @@
     renderRows(); render(); dirty=true; publish();
     const parts=[{pre:"Filled "+rows.length+" load"+(rows.length===1?"":"s")+" from ",strong:LP.SOURCES[src],post:" ("+(p.label||"")+")"}];
     if(r.typical) parts.push(r.typical+" had no amps on the sheet and use typical VA (flagged)");
+    if(r.unconfirmed) parts.push(r.unconfirmed+" have a spec the sheet has not confirmed (flagged)");
     if(r.skipped.length){ const gen=r.skipped.filter(n=>LP.classify(n,{})==="general"), appl=r.skipped.filter(n=>LP.classify(n,{})!=="general"); if(appl.length) parts.push(appl.length+" covered by the general load above: "+appl.join(", ")); if(gen.length) parts.push(gen.length+" lighting and receptacle circuits counted in the general load"); }
     if(svcNote) parts.push(svcNote);
     showFillNote(parts,true);

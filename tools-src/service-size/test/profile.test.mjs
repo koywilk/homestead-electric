@@ -246,6 +246,23 @@ test("toGeneratorRows: a kind with its own typical VA uses it instead of the sta
   assert.equal(r.rows[2].va, 9600); assert.ok(!r.rows[2].flag, "a real nameplate is never replaced");
 });
 
+test("confirm spec: an unconfirmed sheet spec is flagged in the generator and noted in Service Size, a confirmed one is not", () => {
+  const loads = [
+    { name: "Pantry · Wall oven", kind: "", qty: 1, volts: 240, amps: 30, va: 7200, status: "yes", confidence: "unconfirmed" },
+    { name: "Kitchen · Range", kind: "", qty: 1, volts: 240, amps: 42.5, va: 10200, status: "yes", confidence: "ok" },
+    { name: "Studio · Kiln", kind: "", qty: 1, volts: 240, amps: 40, va: 9600, status: "yes", confidence: "unconfirmed" },
+  ];
+  const g = LP.toGeneratorRows({ sizeFor: "max", loads }, { ...PRESETS, walloven: { name: "Wall oven", va: 4000, motor: false, surge: 1, category: "general" } });
+  assert.equal(g.unconfirmed, 2);
+  assert.equal(g.rows.find((r) => /Wall oven/.test(r.name)).flag, "confirm spec");
+  assert.equal(g.rows.find((r) => /Wall oven/.test(r.name)).va, 7200, "the sheet's number is still used");
+  assert.ok(!g.rows.find((r) => /Range/.test(r.name)).flag);
+  const s = applyProfile(defaultState(), appl(loads));
+  assert.ok(s.extras[0].note.startsWith("confirm spec"), s.extras[0].note);
+  assert.equal(s.fill.unconfirmed, 2);
+  assert.ok(fillSummary(s).includes("2 with a spec the sheet has not confirmed"), fillSummary(s));
+});
+
 test("toGeneratorRows: general circuits are skipped like covered ones", () => {
   const r = LP.toGeneratorRows({ sizeFor: "max", loads: [{ name: "Great room + sitting", kind: "", qty: 1, status: "yes" }, { name: "Sauna", kind: "", qty: 1, volts: 240, amps: 40, va: 9600, status: "yes" }] }, PRESETS);
   assert.deepEqual(r.skipped, ["Great room + sitting"]);

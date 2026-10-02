@@ -23,6 +23,7 @@ const ITEM_KIND = { ev: "ev", ev2: "ev", hottub: "hottub", swimspa: "swimspa", p
 const MOTOR_KINDS = ["pool", "hottub", "swimspa", "plunge", "wellpump", "sump", "elevator", "heatpump", "minisplit", "ac"];
 
 const vaText = (l) => (l.volts && l.amps ? `${l.volts} V × ${l.amps} A` : "");
+const unconfirmed = (l) => l.confidence === "unconfirmed" && l.va > 0; // the sheet's spec is a series / typical value, not confirmed
 
 // Merge a profile from Appliance Loads or Generator Sizing into a state.
 export function applyProfile(prev, p) {
@@ -86,7 +87,7 @@ export function applyProfile(prev, p) {
     const it = ITEM_BY_ID[id]; if (!it) return;
     const cur = { ...(items[id] || { va: it.va, qty: it.qty[0], status: "no" }) };
     items[id] = { ...cur, status: l.status === "maybe" ? "maybe" : "yes", fromFill: true,
-      fillNote: `From ${from}: ${l.name}${vaText(l) ? " · " + vaText(l) : ""}`, ...patch };
+      fillNote: `${unconfirmed(l) ? "Confirm spec · " : ""}From ${from}: ${l.name}${vaText(l) ? " · " + vaText(l) : ""}`, ...patch };
   };
   const units = (ls) => ls.flatMap((l) => Array.from({ length: l.qty }, () => l));
   const evs = units(by("ev"));
@@ -115,12 +116,14 @@ export function applyProfile(prev, p) {
     // Electric heaters that are not the house's heat (deck heaters, a shop heater) count as fixed appliances at nameplate.
     const asExtra = l.kind === "other" || l.kind === "booster" || (l.kind === "electricheat" && !/garage/i.test(l.name) && !primaryElectricHeat);
     if (asExtra) {
-      extras.push({ id: `x_${src}_${i}`, name: l.name, va: Math.round(l.va), qty: l.qty, status: l.status === "maybe" ? "maybe" : "yes", note: l.va ? vaText(l) : "needs VA" });
+      extras.push({ id: `x_${src}_${i}`, name: l.name, va: Math.round(l.va), qty: l.qty, status: l.status === "maybe" ? "maybe" : "yes",
+        note: l.va ? (unconfirmed(l) ? "confirm spec · " : "") + vaText(l) : "needs VA" });
     }
   });
   s.extras = extras;
   s.fill = { source: src, tag: TAG[src] || "tool", label: p.label || from, at: p.at || new Date().toISOString(), covered, notes, general,
-    placed: loads.length - covered.length - extras.length - general, needVA: extras.filter((x) => !x.va).length };
+    placed: loads.length - covered.length - extras.length - general, needVA: extras.filter((x) => !x.va).length,
+    unconfirmed: loads.filter((l) => unconfirmed(l) && l.kind !== "covered" && l.kind !== "general").length };
   s.fillFields = fields;
   s.planFields = (s.planFields || []).filter((k) => !fields.includes(k)); // the fill now owns these tags
   return s;
@@ -132,6 +135,7 @@ export function fillSummary(s) {
   const parts = [`${f.placed} placed`];
   if (s.extras.length) parts.push(`${s.extras.length} added under Extras`);
   if (f.needVA) parts.push(`${f.needVA} need VA`);
+  if (f.unconfirmed) parts.push(`${f.unconfirmed} with a spec the sheet has not confirmed`);
   if (f.covered.length) parts.push(`${f.covered.length} covered by the standard allowances`);
   if (f.general) parts.push(`${f.general} lighting and receptacle circuits counted in the general load`);
   return `Filled from ${LP.SOURCES[f.source] || f.source} (${f.label}): ${parts.join(", ")}.${f.notes.length ? " " + f.notes.join(" ") : ""}`;

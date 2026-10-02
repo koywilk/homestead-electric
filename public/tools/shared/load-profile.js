@@ -153,7 +153,7 @@
   // profile → rows for the generator page. PRESETS is the page's own table,
   // passed in so this file never carries a copy of Josh's numbers.
   function toGeneratorRows(profile, PRESETS) {
-    var rows = [], skipped = [], typical = 0;
+    var rows = [], skipped = [], typical = 0, unconfirmed = 0;
     var loads = (profile && profile.loads) || [];
     for (var i = 0; i < loads.length; i++) {
       var l = loads[i]; if (!l) continue;
@@ -171,10 +171,12 @@
       row.key = key; row.name = String(l.name || pre.name); row.qty = Math.max(1, Math.round(num(l.qty) || 1)); row.soft = false;
       if (typeof l.motor === "boolean" && kind === "other") row.motor = l.motor;
       if (va) row.va = va; else { typical++; row.flag = "typical VA"; if (info.typ) row.va = info.typ; }
+      // The sheet found a spec but could not confirm it (series / typical value, yellow row).
+      if (va && l.confidence === "unconfirmed") { unconfirmed++; row.flag = "confirm spec"; }
       if (l.status === "maybe") row.flag = "maybe";
       rows.push(row);
     }
-    return { rows: rows, skipped: skipped, typical: typical };
+    return { rows: rows, skipped: skipped, typical: typical, unconfirmed: unconfirmed };
   }
 
   // generator rows + inputs → profile. inputs: {sqft, sac, laundry, svcA, jobCust, jobAddr}
