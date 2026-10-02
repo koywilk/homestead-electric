@@ -177,6 +177,41 @@
     <p>Utility requirements (meter class, transformer, lead time) and local amendments still
     need checking. Use the mechanical sub's tonnage when you have it.</p></div>
 
+  <h2 class="sec">Tools that fill each other</h2>
+  <p class="sub" style="margin:6px 0 0">Appliance Loads knows what is really going in the house. The two calculators can start from it, and from each other.</p>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <h3>Open the job in Appliance Loads</h3>
+    <p>Tap a job. Its appliances are now available to the calculators on this device. Tap
+    <b>Send to Generator Sizing</b> or <b>Send to Service Size</b> to jump straight there.</p>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body">
+    <h3>Tap Fill from Appliance Loads</h3>
+    <p>Each calculator has a <b>Start from another tool</b> bar near the top. The button names the job and
+    how many loads it has. Nothing changes until you tap it, and <b>Undo</b> puts back what was there.</p>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="body">
+    <h3>Check what landed</h3>
+    <p>Fields filled this way are tagged <b>loads</b> (or <b>generator</b> when the generator fills Service
+    Size). In Service Size, appliances with no row of their own show under <b>From another tool</b> in Extras,
+    counted as fixed appliances; fridges, microwaves, hoods and the first dishwasher are listed as covered by
+    the standard allowances and not counted twice. A load the sheet had no amps for arrives with a typical
+    value and a flag. Fix those first.</p>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="body">
+    <h3>Calculators both ways</h3>
+    <p>Service Size gives the generator its recommended service size for the transfer switch pick; the
+    generator gives Service Size the square footage and circuit counts. Use <b>Send to Generator Sizing</b>
+    next to Copy bid note, or <b>Open in Service Size</b> on the generator page.</p>
+  </div></div>
+
+  <div class="call key"><span class="lbl">Same device only</span>
+    <p>The handoff lives on the phone or computer you are using, like the remembered last tool. It is not
+    saved to the job and does not follow you to another device.</p></div>
+
   <h2 class="sec">Questions</h2>
   <div class="qa">
     <div class="row"><p class="q">"Reading plans needs an internet connection."</p><p class="a">The
@@ -190,11 +225,14 @@
     <div class="row"><p class="q">It says "Tool not cached on this device yet."</p><p class="a">You
     opened the Tools tab offline on a device that had never loaded that tool. Open it once with
     signal and it works offline after that.</p></div>
+    <div class="row"><p class="q">The Fill button isn't there.</p><p class="a">Nothing has been
+    sent on this device yet. Open the job in Appliance Loads first, or type something in the other
+    calculator, then look again.</p></div>
     <div class="row"><p class="q">Can we add more tools?</p><p class="a">Yes — that's what the strip
     at the top is for. Send Koy the tool as a self-contained web page and it gets its own chip.</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · in-app guide for the Tools tab · Generator Sizing built by Josh, Sept 2026 · guide drafted 2026-09-29</div>
+  <div class="foot">Homestead Electric · in-app guide for the Tools tab · Generator Sizing built by Josh, Sept 2026 · guide drafted 2026-09-29, updated 2026-10-02 (tools that fill each other)</div>
 </div>
 </body>
 </html>
