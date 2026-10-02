@@ -459,22 +459,30 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
 // The two printable sheets (v501). Hidden on screen; @media print hides everything else.
 // Koy: "a cool-looking dashboard kind of thing that's easy to understand and has HOMESTEAD's logo on it."
 function Gauge({ g }) {
-  const W = 600, x0 = 10, x1 = 590, y = 34;
+  const W = 600, x0 = 14, x1 = 586, y = 50, h = 20;
   const X = (p) => x0 + ((x1 - x0) * p) / 100;
   const mx = X(g.ml), bx = X(g.bl);
+  const wide = g.D > 500;
+  const mono = "'JetBrains Mono', ui-monospace, Menlo, monospace";
+  const disp = "'Barlow Condensed', 'Arial Narrow', sans-serif";
+  const fx = Math.min(Math.max(mx, 46), W - 46);
   return (
-    <svg className="ps-gauge" viewBox={`0 0 ${W} 78`} role="img" aria-label="Calculated load against standard service sizes">
-      <rect x={x0} y={y} width={x1 - x0} height={14} rx={4} fill="#E3E8EF" />
-      <rect x={x0} y={y} width={Math.max(0, mx - x0)} height={14} rx={4} fill="#66A8FF" />
-      <rect x={x0} y={y} width={Math.max(0, bx - x0)} height={14} rx={4} fill="#1B2030" />
-      {g.ticks.map((t) => (
-        <g key={t.x}>
-          <line x1={X(t.p)} x2={X(t.p)} y1={t.sel ? y - 8 : y - 3} y2={y + 20} stroke={t.sel ? "#3B5BA5" : "#B5BEC9"} strokeWidth={t.sel ? 3 : 1.2} />
-          <text x={X(t.p)} y={y + 36} textAnchor="middle" fontSize={t.sel ? 13 : 11} fontWeight={t.sel ? 800 : 600} fill={t.sel ? "#3B5BA5" : "#6B7484"} fontFamily="'Barlow Condensed','Arial Narrow',sans-serif">{t.x}{t.sel ? " A" : ""}</text>
-        </g>
-      ))}
-      <polygon points={`${mx - 7},${y - 12} ${mx + 7},${y - 12} ${mx},${y - 3}`} fill="#1B2030" />
-      <text x={Math.min(Math.max(mx, 40), W - 40)} y={y - 16} textAnchor="middle" fontSize={13} fontWeight={800} fill="#1B2030" fontFamily="'Barlow Condensed','Arial Narrow',sans-serif">{g.maxAmps} A{g.over ? " +" : ""}</text>
+    <svg className="ps-gauge" viewBox={`0 0 ${W} 112`} role="img" aria-label="Calculated load against the standard service sizes">
+      <rect x={x0} y={y} width={x1 - x0} height={h} rx={5} fill="#E3E8EF" />
+      <rect x={x0} y={y} width={Math.max(0, mx - x0)} height={h} rx={5} fill="#66A8FF" />
+      <rect x={x0} y={y} width={Math.max(0, bx - x0)} height={h} rx={5} fill="#1B2030" />
+      {g.ticks.map((t) => {
+        const skip = wide && (t.x === 125 || t.x === 225) && !t.sel;
+        return (
+          <g key={t.x}>
+            <rect x={X(t.p) - (t.sel ? 4 : 1.5)} y={t.sel ? y - 14 : y - 6} width={t.sel ? 8 : 3} height={t.sel ? h + 28 : h + 12} rx={2} fill={t.sel ? "#3B5BA5" : "#AEB8C6"} />
+            {!skip && <text x={X(t.p)} y={y + h + 30} textAnchor="middle" fontSize={t.sel ? 15 : 11} fontWeight={t.sel ? 800 : 600} fill={t.sel ? "#3B5BA5" : "#6B7484"} fontFamily={t.sel ? disp : mono}>{t.x}{t.sel ? " A" : ""}</text>}
+          </g>
+        );
+      })}
+      <rect x={fx - 30} y={6} width={60} height={22} rx={4} fill="#1B2030" />
+      <text x={fx} y={21} textAnchor="middle" fontSize={13} fontWeight={800} fill="#fff" fontFamily={disp}>{g.maxAmps} A{g.over ? "+" : ""}</text>
+      <polygon points={`${mx - 6},${30} ${mx + 6},${30} ${mx},${y - 4}`} fill="#1B2030" />
     </svg>
   );
 }
@@ -482,11 +490,16 @@ function Gauge({ g }) {
 function Band({ title, s, d }) {
   return (
     <header className="ps-band">
-      <img className="ps-logo" src="/hs-logo-white.png" alt="Homestead Electric" />
-      <div className="ps-band-text">
-        <div className="ps-eyebrow">{title}</div>
-        <div className="ps-h1">{s.job || "Your home"}</div>
-        <div className="ps-sub">{[s.address, d.today].filter(Boolean).join("   ·   ")}</div>
+      <div className="ps-band-main">
+        <img className="ps-logo" src="/hs-logo-white.png" alt="Homestead Electric" />
+        <div className="ps-band-text">
+          <div className="ps-eyebrow">{title}</div>
+          <div className="ps-h1">{s.job || "Your home"}</div>
+        </div>
+      </div>
+      <div className="ps-band-meta">
+        <div className="ps-meta-line">{s.address || "Site address"}</div>
+        <div className="ps-meta-line ps-meta-line--dim">{d.today}</div>
       </div>
     </header>
   );
