@@ -90,6 +90,7 @@ export function tierItems(tier) {
 export function defaultState(tier = 1) {
   return {
     job: "",
+    address: "", // site address, for the printed sheets (v501)
     sqft: 3200,
     tier,
     sac: [2, 3, 4][tier],
@@ -128,6 +129,7 @@ export function normalizeState(saved = {}) {
     items: { ...tierItems(tier), ...(saved.items || {}) },
     plan: saved.plan || null,
     planFields: Array.isArray(saved.planFields) ? saved.planFields : [],
+    address: String(saved.address || ""),
     extras: (Array.isArray(saved.extras) ? saved.extras : []).filter((x) => x && x.id).map((x) => ({
       id: String(x.id), name: String(x.name || "Appliance"), va: num(x.va), qty: num(x.qty, 1) || 1,
       status: ["yes", "maybe", "no"].includes(x.status) ? x.status : "yes", note: String(x.note || ""),

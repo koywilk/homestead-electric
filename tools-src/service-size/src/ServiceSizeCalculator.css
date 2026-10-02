@@ -162,3 +162,40 @@
 
 /* Tools handoff (2026-10-02): the small remove link under an extra from another tool */
 .ssc-link { font: inherit; font-size: 12.5px; color: var(--ssc-copper); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+
+/* Printable sheets (v501). Hidden on screen; when printing, only the sheet shows. */
+.ssc-print { display: none; }
+.ssc-warnline { margin: 10px 0 0; font-size: 13px; color: var(--ssc-warn); background: var(--ssc-warn-soft); padding: 8px 10px; border-radius: 4px; }
+@media print {
+  @page { margin: 14mm; }
+  html, body { background: #fff !important; }
+  .ssc { padding: 0; background: #fff; color: #111; }
+  .ssc > *:not(.ssc-print) { display: none !important; }
+  .ssc-print { display: block; color: #111; font-size: 12px; line-height: 1.45; }
+  .ssc-print h4 { font-family: var(--ssc-display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin: 16px 0 6px; padding-bottom: 3px; border-bottom: 1px solid #999; page-break-after: avoid; }
+  .ssc-print p { margin: 0 0 8px; }
+  .ssc-print ul { margin: 0 0 8px 18px; padding: 0; }
+  .ssc-print li { margin: 0 0 3px; }
+  .ps-head { border-bottom: 2px solid #3B5BA5; padding-bottom: 8px; margin-bottom: 12px; }
+  .ps-brand { font-family: var(--ssc-display); font-size: 12px; letter-spacing: .16em; color: #3B5BA5; }
+  .ps-title { font-family: var(--ssc-display); font-size: 22px; letter-spacing: .03em; text-transform: uppercase; margin: 2px 0; }
+  .ps-meta { font-size: 11px; color: #444; }
+  .ps-hero { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin: 6px 0 10px; }
+  .ps-big { font-family: var(--ssc-display); font-size: 52px; line-height: .9; font-weight: 700; }
+  .ps-big span { font-size: 22px; margin-left: 4px; }
+  .ps-herometa { font-size: 12.5px; max-width: 60ch; }
+  .ps-note { margin-top: 14px; padding-top: 8px; border-top: 1px solid #bbb; font-size: 10.5px; color: #444; }
+  .ps-small { font-size: 10.5px; color: #444; }
+  .ps-flag { font-size: 11.5px; padding: 6px 8px; border-left: 3px solid #9a6410; background: #f8ebcf; }
+  .ssc-print table { border-collapse: collapse; width: 100%; font-size: 11px; page-break-inside: auto; }
+  .ssc-print th, .ssc-print td { border: 1px solid #ccc; padding: 3px 6px; text-align: left; vertical-align: top; color: #111; }
+  .ssc-print th { background: #f0f2f4; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+  .ssc-print td.n, .ssc-print th.n { text-align: right; font-family: var(--ssc-mono); white-space: nowrap; }
+  .ssc-print tr { page-break-inside: avoid; }
+  .ssc-print .ssc-calc { min-width: 0; }
+  .ssc-print tr.sum td { font-weight: 600; } .ssc-print tr.total td { font-weight: 700; background: #f0f2f4; }
+  .ps-kv td:nth-child(odd) { color: #555; width: 18%; }
+  .ps-pre { white-space: pre-wrap; font-family: var(--ssc-mono); font-size: 10.5px; border: 1px solid #ccc; padding: 8px; margin: 0; }
+  .ssc-print--customer { font-size: 13px; }
+  .ssc-print--customer ul { margin-left: 20px; }
+}

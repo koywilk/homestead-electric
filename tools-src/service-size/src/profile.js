@@ -37,6 +37,7 @@ export function applyProfile(prev, p) {
   const covered = [], notes = [];
 
   if (p.job && p.job.name) set("job", String(p.job.name).slice(0, 80));
+  if (p.job && p.job.address) set("address", String(p.job.address).slice(0, 120));
   if (p.house) {
     if (num(p.house.sqft) > 0) set("sqft", Math.round(num(p.house.sqft)));
     if (num(p.house.sac) >= 2) set("sac", Math.round(num(p.house.sac)));
@@ -175,7 +176,7 @@ export function toProfile(state, a) {
   for (const x of state.extras || []) { if (x.status === "no" || !num(x.va)) continue; push(LP.classify(x.name, x), x.name, num(x.va), Math.max(1, Math.round(num(x.qty, 1))), x.status, false); }
   const name = String(state.job || "").trim();
   return { v: 1, source: SOURCE, at: new Date().toISOString(), label: `${name || "Service Size"} · ${a.rec ? a.rec + " A" : "600+ A"}`,
-    job: { no: "", name, address: "" }, house: { sqft, sac: Math.round(num(state.sac, 2)), laundry: Math.round(num(state.laundry, 1)) },
+    job: { no: "", name, address: String(state.address || "").trim() }, house: { sqft, sac: Math.round(num(state.sac, 2)), laundry: Math.round(num(state.laundry, 1)) },
     hvac: { heat: state.heat, cool: state.heat === "hp" ? "ac" : state.cool, tons }, service: a.rec ? { amps: a.rec } : null,
     sizeFor: state.sizeFor === "base" ? "base" : "max", loads };
 }

@@ -4,6 +4,7 @@ import {
   normalizeState, tierItems, effective, analyze, bidNote, applyPlan, toRecord, sizeLabel, fmt,
 } from "./calc.js";
 import { applyProfile, toProfile, fillSummary, LP } from "./profile.js";
+import { sheetData } from "./sheet.js";
 import "./ServiceSizeCalculator.css";
 
 /**
@@ -22,6 +23,10 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
   const [over, setOver] = useState(false);
   const [copied, setCopied] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
+  // Printable sheets (v501): "customer" (the size and why, no price) or "office" (everything).
+  const [printMode, setPrintMode] = useState("office");
+  const [printAsk, setPrintAsk] = useState(null);
+  useEffect(() => { const done = () => setPrintAsk(null); window.addEventListener("afterprint", done); return () => window.removeEventListener("afterprint", done); }, []);
   const ctl = useRef(null);
   const noteRef = useRef(null);
   // Handoff with the other Tools (device-local; see public/tools/shared/load-profile.js).
@@ -52,6 +57,9 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
   };
   const undoFill = () => { if (undo) { setS(undo); setUndo(null); setFillMsg("Put back what was here before the fill."); } };
   const sendToGenerator = () => { LP.writeProfile(toProfile(s, a)); LP.openTool("generator-sizing"); };
+  const sheet = useMemo(() => sheetData(s, a), [s, a]);
+  const doPrint = (mode) => { setPrintAsk(null); setPrintMode(mode); setTimeout(() => { try { window.print(); } catch (e) {} }, 80); };
+  const startPrint = (mode) => { if (mode === "customer" && sheet.estimates.length) setPrintAsk(sheet.estimates); else doPrint(mode); };
   const removeExtra = (id) => setS((p) => ({ ...p, extras: p.extras.filter((x) => x.id !== id) }));
   const setExtra = (id, patch) => setS((p) => ({ ...p, extras: p.extras.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
@@ -226,6 +234,8 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
             <div className="ssc-fields">
               <label className="ssc-field wide"><span className="ssc-lbl">Job name<Tag k="job" /></span>
                 <input type="text" value={s.job} onChange={set("job")} placeholder="e.g. Miller Residence" /></label>
+              <label className="ssc-field wide"><span className="ssc-lbl">Site address<Tag k="address" /></span>
+                <input type="text" value={s.address} onChange={set("address")} placeholder="For the printed sheets" /></label>
               <label className="ssc-field"><span className="ssc-lbl">Living area, sq ft<Tag k="sqft" /></span>
                 <input type="number" min="0" step="50" value={s.sqft} onChange={set("sqft")} />
                 <span className="ssc-hint">Include unfinished basement that can be finished later</span></label>
@@ -427,13 +437,97 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
             <button type="button" className="ssc-btn" onClick={copyNote}>Copy bid note</button>
             {genVisible && <button type="button" className="ssc-btn ghost" onClick={sendToGenerator}>Send to Generator Sizing</button>}
             {onSave && <button type="button" className="ssc-btn ghost" onClick={save}>Save to job</button>}
+            <button type="button" className="ssc-btn ghost" onClick={() => startPrint("customer")}>Print customer copy</button>
+            <button type="button" className="ssc-btn ghost" onClick={() => startPrint("office")}>Print office copy</button>
             <span className="ssc-status" aria-live="polite">{copied || saveMsg}</span>
           </div>
+          {printAsk && (
+            <p className="ssc-warnline">
+              {printAsk.length} item{printAsk.length === 1 ? " is" : "s are"} still an estimate: {printAsk.map((e) => `${e.name} (${e.why})`).join(", ")}. The customer copy will show the number without saying so.
+              {" "}<button type="button" className="ssc-btn small" onClick={() => doPrint("customer")}>Print anyway</button>
+              {" "}<button type="button" className="ssc-btn ghost small" onClick={() => setPrintAsk(null)}>Cancel</button>
+            </p>
+          )}
+          <p className="ssc-hint" style={{ marginTop: 8 }}>The customer copy is the size and why, no price. The office copy is everything on this page. On a phone, tap Open full screen at the top of the Tools tab first, so the print dialog belongs to the tool.</p>
         </section>
       </div>
+      <PrintSheet mode={printMode} s={s} a={a} d={sheet} />
     </div>
   );
 }
+
+// The two printable sheets. Hidden on screen; @media print hides everything else.
+function PrintSheet({ mode, s, a, d }) {
+  const customer = mode === "customer";
+  const head = (
+    <div className="ps-head">
+      <div className="ps-brand">HOMESTEAD ELECTRIC</div>
+      <div className="ps-title">{customer ? "Electrical Service Size" : "Service Size — Load Calculation (office copy)"}</div>
+      <div className="ps-meta">{[s.job || "(job name)", s.address, d.today].filter(Boolean).join("  ·  ")}</div>
+    </div>
+  );
+  const hero = (
+    <div className="ps-hero">
+      <div className="ps-big">{d.rec}<span> A</span></div>
+      <div className="ps-herometa">
+        Recommended service, 120/240 V single-phase. Calculated load {d.basisAmps} A{d.sizedFor === "max" && d.confirmedAmps !== d.basisAmps ? ` (${d.confirmedAmps} A with only the confirmed items)` : ""}.
+      </div>
+    </div>
+  );
+  const disclaimer = (
+    <p className="ps-note">Service size to be confirmed once appliance and equipment selections are final; loads added beyond this calculation may require a change order. Planning figures: verify against the final equipment nameplates, the utility's requirements and the authority having jurisdiction before quoting or installing.</p>
+  );
+  if (customer) {
+    return (
+      <div className="ssc-print ssc-print--customer">
+        {head}{hero}
+        <h4>Why this size</h4>
+        <p>{d.plainWhy}</p>
+        <h4>What is in the calculation</h4>
+        <ul>{d.drivers.map((x, i) => <li key={i}>{x}</li>)}</ul>
+        {d.allowances.length > 0 && (<>
+          <h4>Allowances included in this size</h4>
+          <p>These are counted so the service has room if they happen: {d.allowances.join(", ")}.</p>
+        </>)}
+        {d.changes.length > 0 && (<>
+          <h4>Choices that would need a larger service</h4>
+          <ul>{d.changes.map((c, i) => <li key={i}>{c.label}: would require {c.to}</li>)}</ul>
+        </>)}
+        {disclaimer}
+      </div>
+    );
+  }
+  return (
+    <div className="ssc-print ssc-print--office">
+      {head}{hero}
+      <h4>Inputs</h4>
+      <table className="ps-kv"><tbody>
+        <tr><td>Living area</td><td>{Math.round(d.eff.sqft).toLocaleString()} sq ft</td><td>Finish level</td><td>{["Standard / spec", "Upgraded", "Custom / luxury"][s.tier] || s.tier}</td></tr>
+        <tr><td>Small-appliance circuits</td><td>{s.sac}</td><td>Laundry circuits</td><td>{s.laundry}</td></tr>
+        <tr><td>Heating</td><td>{HEAT_LABEL_[s.heat] || s.heat}</td><td>Cooling</td><td>{s.heat === "hp" ? "Heat pump" : s.cool === "ac" ? "Central AC" : "None / mini-splits"}</td></tr>
+        <tr><td>Tonnage</td><td>{d.eff.tons} tons, {d.eff.systems} system{d.eff.systems === 1 ? "" : "s"}{s.tonsAuto ? " (estimated from sq ft)" : ""}</td><td>Backup strips</td><td>{d.eff.strip} kW{s.stripAuto ? " (10 kW per system)" : ""}</td></tr>
+        <tr><td>Sized for</td><td>{d.sizedFor === "max" ? "confirmed + maybes" : "confirmed only"}, at most {d.target}% of the service</td><td>Future solar</td><td>{s.solar ? "yes" : "no"}</td></tr>
+        <tr><td>Filled from</td><td colSpan={3}>{[s.plan && s.plan.source ? `plans (${s.plan.source})` : null, s.fill ? `${s.fill.label} (${s.fill.source})` : null].filter(Boolean).join("; ") || "typed by hand"}</td></tr>
+      </tbody></table>
+      <h4>Load calculation, NEC 220.82(B) + (C)</h4>
+      <CalcTable s={s} b={a.base} m={a.max} />
+      <h4>Items counted</h4>
+      <table className="ps-items"><thead><tr><th>Item</th><th>VA</th><th>Qty</th><th>Status</th><th>Source</th><th>Adds</th></tr></thead><tbody>
+        {d.rows.map((r, i) => <tr key={i}><td>{r.name}</td><td className="n">{r.va.toLocaleString()}</td><td className="n">{r.qty}{r.unit ? " " + r.unit : ""}</td><td>{r.status}</td><td>{r.source}</td><td className="n">{r.adds > 0 ? `+${r.adds} A` : "<1 A"}</td></tr>)}
+      </tbody></table>
+      {d.estimates.length > 0 && <p className="ps-flag"><b>Still estimates:</b> {d.estimates.map((e) => `${e.name} (${e.why})`).join(", ")}.</p>}
+      {s.fill && (s.fill.covered?.length > 0 || s.fill.general > 0) && (
+        <p className="ps-small">Covered by the standard allowances: {(s.fill.covered || []).join(", ") || "none"}.{s.fill.general ? ` ${s.fill.general} lighting and receptacle circuits counted in the general load.` : ""}</p>
+      )}
+      {d.changes.length > 0 && (<><h4>Owner changes that bump the size</h4><ul>{d.changes.map((c, i) => <li key={i}>{c.label} → {c.to}</li>)}</ul></>)}
+      {a.flags.length > 0 && (<><h4>Check before you bid</h4><ul>{a.flags.map((f, i) => <li key={i}>{f}</li>)}</ul></>)}
+      <h4>Bid note</h4>
+      <pre className="ps-pre">{d.note}</pre>
+      {disclaimer}
+    </div>
+  );
+}
+const HEAT_LABEL_ = { gas: "Gas furnace", hp: "Heat pump + electric backup", baseboard: "Electric baseboard / resistance", undecided: "Undecided (gas or heat pump)" };
 
 function CalcTable({ s, b, m }) {
   const rn = (r) => RANGE_SHORT[r.range];
