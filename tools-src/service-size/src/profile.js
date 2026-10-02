@@ -41,6 +41,9 @@ export function applyProfile(prev, p) {
     if (num(p.house.sac) >= 2) set("sac", Math.round(num(p.house.sac)));
     if (num(p.house.laundry) >= 1) set("laundry", Math.round(num(p.house.laundry)));
   }
+  const counted = LP.houseFromLoads(p.loads || []);
+  if (!(p.house && num(p.house.sac) >= 2) && counted.sac >= 2) set("sac", counted.sac);
+  if (!(p.house && num(p.house.laundry) >= 1) && counted.laundry >= 1) set("laundry", counted.laundry);
   if (p.hvac) {
     if (["gas", "hp", "baseboard", "undecided"].includes(p.hvac.heat)) set("heat", p.hvac.heat);
     if (["ac", "none"].includes(p.hvac.cool)) set("cool", p.hvac.cool);
@@ -73,8 +76,9 @@ export function applyProfile(prev, p) {
     if (hasHP) set("heat", "hp");
     else if (by("ac").length) set("cool", "ac");
     const eh = by("electricheat").filter((l) => !/garage/i.test(l.name));
-    if (eh.length && !hasHP) { set("heat", "baseboard"); notes.push("Electric heat was listed; heating set to electric resistance."); }
+    if (eh.length && !hasHP && !by("airhandler").length) { set("heat", "baseboard"); notes.push("Electric heat was listed and no furnace or heat pump; heating set to electric resistance."); }
   }
+  const primaryElectricHeat = s.heat === "baseboard" && fields.includes("heat");
 
   // Items
   const items = { ...s.items };
@@ -104,15 +108,19 @@ export function applyProfile(prev, p) {
   // Extras (no fixed row of their own) and covered (inside the standard allowances)
   const firstDW = loads.findIndex((l) => l.kind === "dishwasher");
   const extras = [];
+  let general = 0;
   loads.forEach((l, i) => {
+    if (l.kind === "general") { general++; return; } // lighting / receptacle / SA circuits: inside 3 VA per sq ft and the circuit counts
     if (l.kind === "covered" || l.kind === "airhandler" || l.kind === "garage" || (l.kind === "dishwasher" && i === firstDW)) { covered.push(l.name); return; }
-    if (l.kind === "other" || l.kind === "booster") {
+    // Electric heaters that are not the house's heat (deck heaters, a shop heater) count as fixed appliances at nameplate.
+    const asExtra = l.kind === "other" || l.kind === "booster" || (l.kind === "electricheat" && !/garage/i.test(l.name) && !primaryElectricHeat);
+    if (asExtra) {
       extras.push({ id: `x_${src}_${i}`, name: l.name, va: Math.round(l.va), qty: l.qty, status: l.status === "maybe" ? "maybe" : "yes", note: l.va ? vaText(l) : "needs VA" });
     }
   });
   s.extras = extras;
-  s.fill = { source: src, tag: TAG[src] || "tool", label: p.label || from, at: p.at || new Date().toISOString(), covered, notes,
-    placed: loads.length - covered.length - extras.length, needVA: extras.filter((x) => !x.va).length };
+  s.fill = { source: src, tag: TAG[src] || "tool", label: p.label || from, at: p.at || new Date().toISOString(), covered, notes, general,
+    placed: loads.length - covered.length - extras.length - general, needVA: extras.filter((x) => !x.va).length };
   s.fillFields = fields;
   return s;
 }
@@ -124,6 +132,7 @@ export function fillSummary(s) {
   if (s.extras.length) parts.push(`${s.extras.length} added under Extras`);
   if (f.needVA) parts.push(`${f.needVA} need VA`);
   if (f.covered.length) parts.push(`${f.covered.length} covered by the standard allowances`);
+  if (f.general) parts.push(`${f.general} lighting and receptacle circuits counted in the general load`);
   return `Filled from ${LP.SOURCES[f.source] || f.source} (${f.label}): ${parts.join(", ")}.${f.notes.length ? " " + f.notes.join(" ") : ""}`;
 }
 

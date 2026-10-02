@@ -23,7 +23,7 @@
     ["speed",        /speed oven|steam oven|microwave drawer|convection microwave|advantium/i, { gen: "generic" }],
     ["warm",         /warming drawer|plate warmer/i, { gen: "generic" }],
     ["dryer",        /wash ?tower|washer ?\/ ?dryer|washer[- ]dryer|laundry (center|tower)/i, { gen: "dryer" }],
-    ["covered",      /gas dryer|refrigerat|fridge|freezer|side[- ]by[- ]side|french[- ]door|bottom[- ]freezer|column (fridge|freezer|refrig)|microwave|disposal|disposer|\bhood\b|wine|beverage|ice ?maker|\bwasher\b|washing machine|compactor|coffee|under ?counter/i, { gen: null }],
+    ["covered",      /gas dryer|refrigerat|fridge|freezer|side[- ]by[- ]side|french[- ]door|bottom[- ]freezer|column (fridge|freezer|refrig)|microwave|disposal|disposer|\bhood\b|wine|beverage|ice ?maker|\bwasher\b|washing machine|compactor|coffee|under ?counter|water softener|towel warmer|fountain/i, { gen: null }],
     ["dryer",        /dryer/i, { gen: "dryer" }],
     ["wh_hpwh",      /heat ?pump water heater|hybrid water heater|hpwh/i, { gen: "wh" }],
     ["wh_tankless",  /tankless|on[- ]demand|instant(aneous)? water/i, { gen: "tankless" }],
@@ -32,17 +32,17 @@
     ["doubleoven",   /double (wall )?oven/i, { gen: "walloven" }],
     ["walloven",     /\boven\b/i, { gen: "walloven" }],
     ["cooktop",      /cook ?top|range ?top|induction/i, { gen: "cooktop" }],
-    ["dishwasher",   /dish ?washer|\bdw\b/i, { gen: "dishwasher" }],
+    ["dishwasher",   /dish ?washer|\bdw\b|\bd\/d\b/i, { gen: "dishwasher" }],
     ["ev",           /\bev\b|evse|car charger|vehicle charg|tesla|wall connector|chargepoint|level ?2 charg/i, { gen: "evse" }],
-    ["snowmelt",     /snow ?melt|heat ?trace|de-?ic|ice melt/i, { gen: "snowmelt" }],
+    ["snowmelt",     /snow ?melt|heat ?trace|heat ?tape|de-?ic|ice melt/i, { gen: "snowmelt" }],
     ["floorheat",    /floor (heat|warm)|radiant floor|heated floor|warm ?floor|in-?floor|nuheat|ditra/i, { gen: "electricheat" }],
     ["minisplit",    /mini[- ]?split|ductless/i, { gen: "minisplit" }],
     ["heatpump",     /heat ?pump/i, { gen: "heatpump" }],
-    ["electricheat", /electric furnace|baseboard|unit heater|wall heater|garage heater|resistance heat|space heater|cove heater|strip heat|electric heat/i, { gen: "electricheat" }],
+    ["electricheat", /electric furnace|baseboard|unit heater|wall heater|garage heater|resistance heat|space heater|cove heater|strip heat|electric heat|\bheaters?\b/i, { gen: "electricheat" }],
     ["ac",           /condenser|condensing unit|\ba\/c\b|\bac\b|air condition|\bhvac\b/i, { gen: "ac" }],
-    ["airhandler",   /air handler|furnace|blower|\bfau\b|\bahu\b/i, { gen: "airhandler" }],
+    ["airhandler",   /air handler|furnace|blower|\bfau\b|\bahu\b|boiler|humidifier/i, { gen: "airhandler" }],
     ["sauna",        /sauna/i, { gen: "generic" }],
-    ["steam",        /steam (shower|gen|unit|bath)|steamist|mr\.? ?steam/i, { gen: "generic" }],
+    ["steam",        /steam (shower|gen|unit|bath)|steamer|steamist|mr\.? ?steam/i, { gen: "generic" }],
     ["plunge",       /cold plunge|plunge|chiller/i, { gen: "generic_motor" }],
     ["swimspa",      /swim ?spa/i, { gen: "pool" }],
     ["hottub",       /hot ?tub|\bspa\b|jacuzzi/i, { gen: "pool" }],
@@ -53,6 +53,7 @@
     ["elevator",     /elevator|\blift\b|dumbwaiter/i, { gen: "elevator" }],
     ["garage",       /garage door|door opener|\bopener\b/i, { gen: "garage" }],
     ["shop",         /welder|compressor|shop recep|table saw|dust collect/i, { gen: "generic_motor" }],
+    ["general",      /\boutlets?\b|\blights?\b|lighting|recept|\bsa\s?\d|\blcp\b|\bmods?\b|\bshades?\b|low[- ]volt|\brack\b|security|processor|strobe|smoke|smokies|bedroom|\bbed\s?\d|\bhall(way)?\b|\bstairs?\b|\bsitting\b|\broom\b|closet|porch|\bentry\b|christmas|lounge|landing|\bbath\s?\d/i, { gen: null }],
     ["other",        /.^/, { gen: "generic", motorIf: /pump|motor|compressor|\bfan\b|blower|vacuum/i }]
   ];
   var INFO = {};
@@ -69,7 +70,29 @@
     for (var i = 0; i < KINDS.length; i++) { if (KINDS[i][1].test(s)) { kind = KINDS[i][0]; break; } }
     var va = num(o && o.va) || vaOf(o) || 0;
     if ((kind === "wh_tank" || kind === "wh_hpwh") && va >= 15000) kind = "wh_tankless";
+    // A 120 V circuit feeding a "water heater", "dryer" or "range" is the gas
+    // appliance's igniter / power vent / blower, not an electric element.
+    var v = num(o && o.volts);
+    if (v && v <= 130 && GAS_AT_120[kind]) kind = "covered";
     return kind;
+  }
+  var GAS_AT_120 = { wh_tank: 1, wh_hpwh: 1, wh_tankless: 1, dryer: 1, range: 1, cooktop: 1, walloven: 1, doubleoven: 1 };
+
+  // Small-appliance and laundry circuit counts from a job's circuit list
+  // (NEC 220.52): kitchen SA circuits plus dedicated fridge / freezer / ice
+  // maker circuits, and washer / laundry circuits. Used when a profile
+  // carries loads but no house block.
+  function houseFromLoads(loads) {
+    var sac = 0, laundry = 0, general = 0;
+    (loads || []).forEach(function (l) {
+      if (!l) return;
+      var name = String(l.name || ""), kind = l.kind || classify(name, l);
+      if (/\bsa\s?\d/i.test(name)) sac++;
+      else if (kind === "covered" && /refrigerat|fridge|freezer|ice ?maker|side[- ]by[- ]side|french[- ]door|column/i.test(name)) sac++;
+      if (/\bwasher\b|\blaundry\b|wash ?tower/i.test(name) && !/dish/i.test(name)) laundry++;
+      if (kind === "general") general++;
+    });
+    return { sac: sac, laundry: laundry, general: general };
   }
 
   // Generator preset key → kind, for rows that were added from the page's picker.
@@ -169,7 +192,7 @@
       hvac: null, service: num(inp.svcA) ? { amps: num(inp.svcA) } : null, sizeFor: "max", loads: loads };
   }
 
-  return { KEY: KEY, VISIBLE_KEY: VISIBLE_KEY, SOURCES: SOURCES, KINDS: KINDS, kindInfo: kindInfo, classify: classify, vaOf: vaOf,
+  return { KEY: KEY, VISIBLE_KEY: VISIBLE_KEY, SOURCES: SOURCES, KINDS: KINDS, kindInfo: kindInfo, classify: classify, vaOf: vaOf, houseFromLoads: houseFromLoads,
     kindFromPresetKey: kindFromPresetKey, readProfiles: readProfiles, writeProfile: writeProfile, onProfiles: onProfiles,
     readVisible: readVisible, writeVisible: writeVisible, isVisible: isVisible, ago: ago, openTool: openTool,
     toGeneratorRows: toGeneratorRows, fromGeneratorRows: fromGeneratorRows };

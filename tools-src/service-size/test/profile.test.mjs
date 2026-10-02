@@ -209,4 +209,39 @@ test("toProfile → toGeneratorRows: HVAC, big appliances, items and extras beco
   assert.ok(!g2.rows.find((r) => /hot tub/i.test(r.name)));
 });
 
+test("classify: Home Run names — general circuits, gas accessories at 120 V, mechanical, D/D", () => {
+  const cases = [
+    ["Great room + sitting", "general"], ["Kitchen SA1", "general"], ["Master bath outlets", "general"], ["LCP 1 mods 1-2 (1)", "general"],
+    ["Shades A1", "general"], ["Low volt rack 1", "general"], ["Security system", "general"], ["Horn and strobe ( old Lighting control 8)", "general"],
+    ["Smokies", "general"], ["Bed 1 + bath 1 lights", "general"], ["Sports court lounge", "general"], ["Christmas outlets", "general"],
+    ["Upstairs Furnace 1", "airhandler"], ["Attic furnace", "airhandler"], ["Boiler", "airhandler"], ["Mech 1 Humidifier", "airhandler"],
+    ["Kitchen D/D", "dishwasher"], ["Kitchenette D/D", "dishwasher"], ["Deck heater 1", "electricheat"], ["Master bath floor heat", "floorheat"],
+    ["Heat tape 3", "snowmelt"], ["Master steamer", "steam"], ["Cold plunge", "plunge"], ["EV charger 100’", "ev"], ["Mini split 135’", "minisplit"],
+    ["Water softener", "covered"], ["Master bath towel warmer", "covered"], ["Drinking fountain", "covered"], ["Garage door 1 + 2", "garage"],
+    ["Golf simulator", "other"], ["Basketball hoops", "other"], ["Pool panel", "pool"], ["AC 1 (up furnace 1) 225’", "ac"],
+  ];
+  for (const [name, kind] of cases) assert.equal(LP.classify(name, {}), kind, name);
+  assert.equal(LP.classify("Water heater 1", { volts: 120 }), "covered", "a 120 V water heater circuit is a gas unit's accessory");
+  assert.equal(LP.classify("Water heater 1", { volts: 240 }), "wh_tank");
+  assert.equal(LP.classify("Main level dryer", { volts: 120 }), "covered");
+  assert.equal(LP.classify("Main level dryer", { volts: 240 }), "dryer");
+  assert.equal(LP.classify("EV charger", { volts: 120 }), "ev", "a level-1 EV outlet is still a load");
+});
+
+test("houseFromLoads: SA circuits plus dedicated fridge circuits, washer circuits, general count", () => {
+  const h = LP.houseFromLoads([
+    { name: "Kitchen SA1" }, { name: "Kitchen SA2" }, { name: "Kitchenette SA1" },
+    { name: "Kitchen fridge", volts: 120 }, { name: "Kitchen freezer" }, { name: "Kitchen ice maker (in island)" }, { name: "Pantry fridge/ freezer" },
+    { name: "Main level washer" }, { name: "B. Washer" }, { name: "Kitchen D/D" },
+    { name: "Great room + sitting" }, { name: "Bed 1 + bath 1 lights" }, { name: "Kitchen range", volts: 240, amps: 42.5 },
+  ]);
+  assert.deepEqual(h, { sac: 7, laundry: 2, general: 2 });
+});
+
+test("toGeneratorRows: general circuits are skipped like covered ones", () => {
+  const r = LP.toGeneratorRows({ sizeFor: "max", loads: [{ name: "Great room + sitting", kind: "", qty: 1, status: "yes" }, { name: "Sauna", kind: "", qty: 1, volts: 240, amps: 40, va: 9600, status: "yes" }] }, PRESETS);
+  assert.deepEqual(r.skipped, ["Great room + sitting"]);
+  assert.equal(r.rows.length, 1); assert.equal(r.rows[0].key, "generic"); assert.equal(r.rows[0].va, 9600);
+});
+
 console.log(`\n${n} tests passed`);

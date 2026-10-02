@@ -332,8 +332,11 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
                 <p className="ssc-hint" style={{ marginTop: 8 }}>Counted as fixed appliances at nameplate, 220.82(B)(3). Fix the VA where the sheet had none.</p>
               </div>
             )}
-            {s.fill?.covered?.length > 0 && (
-              <p className="ssc-hint" style={{ marginTop: 10 }}>Covered by the standard allowances and not listed: {s.fill.covered.join(", ")}.</p>
+            {(s.fill?.covered?.length > 0 || s.fill?.general > 0) && (
+              <p className="ssc-hint" style={{ marginTop: 10 }}>
+                {s.fill.covered?.length > 0 && <>Covered by the standard allowances and not listed: {s.fill.covered.join(", ")}. </>}
+                {s.fill.general > 0 && <>{s.fill.general} lighting and receptacle circuits are inside the general load and the circuit counts.</>}
+              </p>
             )}
             <p className="ssc-hint" style={{ marginTop: 12 }}>VA values are typical nameplates. Replace them with the real spec sheet when you have it. "Adds" is how many calculated amps the item adds with maybes included.</p>
           </section>

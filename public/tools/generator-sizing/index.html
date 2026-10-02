@@ -830,13 +830,15 @@
     const r=LP.toGeneratorRows(p,PRESETS);
     rows=r.rows.map(x=>{ x._id="r"+(nextId++); return x; });
     if(p.house){ if(p.house.sqft>0)$("#sqft").value=p.house.sqft; if(p.house.sac>0)$("#saCkt").value=p.house.sac; if(p.house.laundry>0)$("#lndCkt").value=p.house.laundry; }
+    // No circuit counts in the profile: count them from the circuit list (SA, fridge and washer circuits).
+    if(!(p.house&&p.house.sac>0)&&LP.houseFromLoads){ const h=LP.houseFromLoads(p.loads); if(h.sac>=2)$("#saCkt").value=h.sac; if(h.laundry>=1&&!(p.house&&p.house.laundry>0))$("#lndCkt").value=h.laundry; }
     let svcNote=null;
     if(p.service&&p.service.amps){ const opts=[...$("#svcA").options].map(o=>+o.value); const pick=opts.find(a=>a>=p.service.amps); if(pick){ $("#svcA").value=String(pick); svcNote=(pick===p.service.amps?"service set to "+pick+" A":"service set to "+pick+" A, the next size up from "+p.service.amps+" A"); } }
     if(p.job){ if(p.job.name)$("#jobCust").value=p.job.name; if(p.job.address)$("#jobAddr").value=p.job.address; }
     renderRows(); render(); dirty=true; publish();
     const parts=[{pre:"Filled "+rows.length+" load"+(rows.length===1?"":"s")+" from ",strong:LP.SOURCES[src],post:" ("+(p.label||"")+")"}];
     if(r.typical) parts.push(r.typical+" had no amps on the sheet and use typical VA (flagged)");
-    if(r.skipped.length) parts.push(r.skipped.length+" covered by the general load above: "+r.skipped.join(", "));
+    if(r.skipped.length){ const gen=r.skipped.filter(n=>LP.classify(n,{})==="general"), appl=r.skipped.filter(n=>LP.classify(n,{})!=="general"); if(appl.length) parts.push(appl.length+" covered by the general load above: "+appl.join(", ")); if(gen.length) parts.push(gen.length+" lighting and receptacle circuits counted in the general load"); }
     if(svcNote) parts.push(svcNote);
     showFillNote(parts,true);
   }
