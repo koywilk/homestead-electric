@@ -235,7 +235,7 @@ test("houseFromLoads: SA circuits plus dedicated fridge circuits, washer circuit
     { name: "Main level washer" }, { name: "B. Washer" }, { name: "Kitchen D/D" },
     { name: "Great room + sitting" }, { name: "Bed 1 + bath 1 lights" }, { name: "Kitchen range", volts: 240, amps: 42.5 },
   ]);
-  assert.deepEqual(h, { sac: 7, laundry: 2, general: 2 });
+  assert.deepEqual(h, { sac: 7, laundry: 2, general: 5 }, "SA circuits are receptacle circuits: counted as SA and inside the general total");
 });
 
 test("toGeneratorRows: a kind with its own typical VA uses it instead of the stand-in preset's", () => {
