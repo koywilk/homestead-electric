@@ -7601,6 +7601,22 @@ function HEConfirmHost() {
   );
 }
 
+function HeMotionSwitch() {
+  const [off, setOff] = useState(() => heMotionOff());
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+      <button onClick={()=>{ const next=!off; heSetMotionOff(next); setOff(next); toast.info(next?"Animations off on this device":"Animations on"); }}
+        style={{fontFamily:"inherit",fontSize:13,fontWeight:700,padding:"9px 14px",minHeight:40,borderRadius:8,cursor:"pointer",
+          background:off?C.surface:C.accent,color:off?C.text:"#fff",border:`1px solid ${off?C.border:C.accent}`}}>
+        <Icon name="zap" size={13}/> {off ? "Animations: off" : "Animations: on"}
+      </button>
+      <span style={{fontSize:12,color:C.dim}}>
+        {heReducedRaw() ? "Your phone has Reduce Motion on; the app plays its animations anyway unless you turn them off here." : "Per device. Turn off here if the motion bothers you."}
+      </span>
+    </div>
+  );
+}
+
 function HEToastHost() {
   const [toasts, setToasts] = useState([]);
   useEffect(() => {
@@ -64483,6 +64499,10 @@ function App() {
             </SettingsSection>
             <SettingsSection title="NOTIFICATION DOCTOR" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
               <NotifDoctor identity={identity}/>
+            </SettingsSection>
+            {/* v497: animations switch lives here too — the ⋯ menu only exists on the Job Board header. */}
+            <SettingsSection title="ANIMATIONS" defaultOpen={true}>
+              <HeMotionSwitch/>
             </SettingsSection>
             <SettingsSection title="APP HELP" accent={{bg:"#ECF2EE", border:"#CDE6D7", text:"#2C5C40"}} defaultOpen={false}>
               <AppHelpBox/>
