@@ -649,8 +649,11 @@ export function HeUnfold(props) {
 // status). No hook per list: tag the row and the engine does the rest. useHeFlip() is kept as a no-op
 // so earlier call sites still compile.
 export function useHeFlip() { /* superseded by the global engine below */ }
-const eng = { prev: new Map(), text: new Map(), t0: 0, queued: false, started: false };
-const vrect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, left: r.left }; };
+const eng = { prev: new Map(), text: new Map(), t0: 0, queued: false, started: false, busy: new WeakSet() };
+// Layout position that IGNORES transforms: a row mid-slide must not be measured mid-slide, or the next
+// flush sees it "moved" again and slides it back (Koy: "wiggin out bouncing up and down"). offsetTop /
+// offsetLeft are layout values, so they are stable while an animation runs.
+const vrect = (el) => { let x = 0, y = 0, n = el; while (n) { x += n.offsetLeft; y += n.offsetTop; n = n.offsetParent; } return { top: y, left: x }; };
 function heEngineFlush() {
   eng.queued = false;
   if (heReduced()) { eng.prev = new Map(); eng.text = new Map(); return; }
@@ -658,14 +661,17 @@ function heEngineFlush() {
   const rows = document.querySelectorAll("[data-hekey]");
   for (let i = 0; i < rows.length; i++) {
     const el = rows[i];
-    if (!el.animate) continue;
+    if (!el.animate || !el.offsetParent) continue;          // hidden / detached: nothing to measure
     const k = el.getAttribute("data-hekey"), cur = vrect(el);
     next.set(k, cur);
     const p = prev.get(k);
     if (p) {
+      if (eng.busy.has(el)) continue;                        // already sliding: let it finish, never restart
       const dy = p.top - cur.top, dx = p.left - cur.left;
-      if ((Math.abs(dy) >= 2 || Math.abs(dx) >= 2) && Math.abs(dy) < 1500 && Math.abs(dx) < 1500) {
-        el.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }], { duration: 420, easing: EASE });
+      if ((Math.abs(dy) >= 2 || Math.abs(dx) >= 2) && Math.abs(dy) < 900 && Math.abs(dx) < 900) {
+        eng.busy.add(el);
+        const a = el.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }], { duration: 420, easing: EASE });
+        a.onfinish = a.oncancel = () => eng.busy.delete(el);
       }
     } else if (warm && prev.size && !el.classList.contains("he-drop") && !el.classList.contains("he-rise")) {
       // new row beside rows that were already on the page → drop in
@@ -685,7 +691,8 @@ function heEngineFlush() {
   }
   eng.text = tnext;
 }
-function heEngineQueue() { if (eng.queued) return; eng.queued = true; Promise.resolve().then(heEngineFlush); }
+// At most one flush per frame (counters that tick every frame used to flush every tick).
+function heEngineQueue() { if (eng.queued) return; eng.queued = true; requestAnimationFrame(heEngineFlush); }
 export function heStartEngine() {
   if (eng.started || typeof document === "undefined" || typeof MutationObserver === "undefined") return;
   eng.started = true; eng.t0 = Date.now();
