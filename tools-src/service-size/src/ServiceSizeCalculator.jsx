@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ITEMS, SIZES, RANGE_LABEL, RANGE_SHORT, DRYER_LABEL, WH_LABEL, HEAT_LABEL, COOL_LABEL, TIER_LABEL,
   normalizeState, tierItems, effective, analyze, bidNote, applyPlan, toRecord, sizeLabel, fmt,
 } from "./calc.js";
+import { applyProfile, toProfile, fillSummary, LP } from "./profile.js";
 import "./ServiceSizeCalculator.css";
 
 /**
@@ -23,10 +24,36 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
   const [saveMsg, setSaveMsg] = useState("");
   const ctl = useRef(null);
   const noteRef = useRef(null);
+  // Handoff with the other Tools (device-local; see public/tools/shared/load-profile.js).
+  const [profiles, setProfiles] = useState(() => LP.readProfiles());
+  const [undo, setUndo] = useState(null);
+  const [fillMsg, setFillMsg] = useState("");
+  const initialJson = useRef(JSON.stringify(normalizeState(initialState || {})));
+  const dirty = useRef(false);
+  useEffect(() => LP.onProfiles(setProfiles), []);
+  const genVisible = LP.isVisible("generator-sizing");
 
   const a = useMemo(() => analyze(s), [s]);
   const note = useMemo(() => bidNote(s, a), [s, a]);
   const eff = effective(s);
+  // Publish this page's state for the generator once the user has changed anything (never the untouched defaults).
+  useEffect(() => {
+    if (!dirty.current && JSON.stringify(s) === initialJson.current) return;
+    dirty.current = true;
+    const t = setTimeout(() => LP.writeProfile(toProfile(s, a)), 300);
+    return () => clearTimeout(t);
+  }, [s, a]);
+  const fillFrom = (src) => {
+    const p = profiles[src]; if (!p) return;
+    setUndo(s);
+    const next = applyProfile(s, p);
+    setS(next);
+    setFillMsg(fillSummary(next));
+  };
+  const undoFill = () => { if (undo) { setS(undo); setUndo(null); setFillMsg("Put back what was here before the fill."); } };
+  const sendToGenerator = () => { LP.writeProfile(toProfile(s, a)); LP.openTool("generator-sizing"); };
+  const removeExtra = (id) => setS((p) => ({ ...p, extras: p.extras.filter((x) => x.id !== id) }));
+  const setExtra = (id, patch) => setS((p) => ({ ...p, extras: p.extras.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
   const set = (k) => (e) => {
     const v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
@@ -38,7 +65,8 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
     setS((p) => ({ ...p, tier, sac: [2, 3, 4][tier], items: tierItems(tier) }));
   };
   const fromPlans = (k) => s.planFields?.includes(k);
-  const Tag = ({ k }) => (fromPlans(k) ? <span className="ssc-tag">plans</span> : null);
+  const fromFill = (k) => s.fillFields?.includes(k);
+  const Tag = ({ k }) => (fromPlans(k) ? <span className="ssc-tag">plans</span> : fromFill(k) ? <span className="ssc-tag">{s.fill?.tag || "tool"}</span> : null);
 
   async function onFiles(fileList) {
     if (ctl.current) return;
@@ -125,6 +153,30 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
               </div>
             )}
             {err && <p className="ssc-err">{err}</p>}
+          </section>
+
+          <section className="ssc-panel">
+            <h2>Start from another tool <span className="ssc-ref">this device</span></h2>
+            <div className="ssc-btnrow" style={{ marginTop: 0 }}>
+              {["appliance-loads", "generator-sizing"].map((src) => {
+                const p = profiles[src];
+                return p ? (
+                  <button key={src} type="button" className="ssc-btn ghost" onClick={() => fillFrom(src)}>
+                    Fill from {LP.SOURCES[src]} · {p.label} · {LP.ago(p.at)}
+                  </button>
+                ) : null;
+              })}
+              {!profiles["appliance-loads"] && !profiles["generator-sizing"] && (
+                <span className="ssc-hint">Nothing to fill from yet. Open a job in Appliance Loads, or work in Generator Sizing, then come back.</span>
+              )}
+              {genVisible && <button type="button" className="ssc-btn ghost small" onClick={() => LP.openTool("generator-sizing")}>Open Generator Sizing</button>}
+            </div>
+            {fillMsg && (
+              <p className="ssc-hint" style={{ marginTop: 10 }}>
+                {fillMsg} {undo && <button type="button" className="ssc-btn ghost small" onClick={undoFill}>Undo</button>}
+              </p>
+            )}
+            <p className="ssc-hint" style={{ marginTop: 8 }}>Fields it fills are tagged with where they came from. Nothing is saved to a job.</p>
           </section>
 
           {plan && (
@@ -238,8 +290,8 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
                   const d = a.impacts[it.id];
                   return (
                     <div className="ssc-row" key={it.id}>
-                      <div className="nm"><b>{it.name}{it2.fromPlans && <span className="ssc-tag">plans</span>}</b>
-                        {(it2.planNote || it.note) && <small>{it2.planNote || it.note}</small>}</div>
+                      <div className="nm"><b>{it.name}{it2.fromPlans && <span className="ssc-tag">plans</span>}{it2.fromFill && <span className="ssc-tag">{s.fill?.tag || "tool"}</span>}</b>
+                        {(it2.planNote || it2.fillNote || it.note) && <small>{it2.planNote || it2.fillNote || it.note}</small>}</div>
                       <div className="va"><input type="number" min="0" step={it.unit ? 5 : 100} value={it2.va} aria-label={`${it.name} VA`}
                         onChange={(e) => setItem(it.id, { va: e.target.value })} /></div>
                       <div className="qty"><input type="number" min="0" step={it.unit ? 50 : 1} value={it2.qty} aria-label={`${it.name} quantity`}
@@ -257,6 +309,32 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
                 })}
               </div>
             ))}
+            {s.extras.length > 0 && (
+              <div>
+                <div className="ssc-cat">From {LP.SOURCES[s.fill?.source] || "another tool"}</div>
+                {s.extras.map((x) => {
+                  const d = a.impacts[x.id] || 0;
+                  return (
+                    <div className="ssc-row" key={x.id}>
+                      <div className="nm"><b>{x.name}</b>
+                        <small>{x.note}{x.note ? " · " : ""}<button type="button" className="ssc-link" onClick={() => removeExtra(x.id)}>remove</button></small></div>
+                      <div className="va"><input type="number" min="0" step="100" value={x.va} aria-label={`${x.name} VA`} onChange={(e) => setExtra(x.id, { va: e.target.value })} /></div>
+                      <div className="qty"><input type="number" min="0" step="1" value={x.qty} aria-label={`${x.name} quantity`} onChange={(e) => setExtra(x.id, { qty: e.target.value })} /></div>
+                      <div className="ssc-seg" role="group" aria-label={`${x.name} status`}>
+                        {["yes", "maybe", "no"].map((v) => (
+                          <button key={v} type="button" data-v={v} aria-pressed={x.status === v} onClick={() => setExtra(x.id, { status: v })}>{v[0].toUpperCase() + v.slice(1)}</button>
+                        ))}
+                      </div>
+                      <div className={"impact" + (x.status !== "no" ? " on" : "")}>{d > 0.5 ? `+${Math.round(d)} A` : "<1 A"}</div>
+                    </div>
+                  );
+                })}
+                <p className="ssc-hint" style={{ marginTop: 8 }}>Counted as fixed appliances at nameplate, 220.82(B)(3). Fix the VA where the sheet had none.</p>
+              </div>
+            )}
+            {s.fill?.covered?.length > 0 && (
+              <p className="ssc-hint" style={{ marginTop: 10 }}>Covered by the standard allowances and not listed: {s.fill.covered.join(", ")}.</p>
+            )}
             <p className="ssc-hint" style={{ marginTop: 12 }}>VA values are typical nameplates. Replace them with the real spec sheet when you have it. "Adds" is how many calculated amps the item adds with maybes included.</p>
           </section>
 
@@ -344,6 +422,7 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
           <textarea ref={noteRef} readOnly value={note} />
           <div className="ssc-btnrow">
             <button type="button" className="ssc-btn" onClick={copyNote}>Copy bid note</button>
+            {genVisible && <button type="button" className="ssc-btn ghost" onClick={sendToGenerator}>Send to Generator Sizing</button>}
             {onSave && <button type="button" className="ssc-btn ghost" onClick={save}>Save to job</button>}
             <span className="ssc-status" aria-live="polite">{copied || saveMsg}</span>
           </div>

@@ -159,3 +159,6 @@
 
 /* Phones: fit the load table without sideways scrolling. Kept last so it overrides the rules above. */
 @media (max-width: 520px) { .ssc-calc { min-width: 0; font-size: 12.5px; } .ssc-calc th, .ssc-calc td { padding: 6px 4px; } .ssc-calc th.n { white-space: normal; } }
+
+/* Tools handoff (2026-10-02): the small remove link under an extra from another tool */
+.ssc-link { font: inherit; font-size: 12.5px; color: var(--ssc-copper); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
