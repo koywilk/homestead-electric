@@ -2,6 +2,8 @@
 // The shared handoff module (public/tools/shared/load-profile.js) and Service Size's profile mapping.
 import assert from "node:assert/strict";
 import LP from "../../../public/tools/shared/load-profile.js";
+import { defaultState, analyze, normalizeState } from "../src/calc.js";
+import { applyProfile, toProfile, fillSummary } from "../src/profile.js";
 
 let n = 0;
 const test = (name, fn) => { fn(); n++; console.log("ok -", name); };
@@ -110,6 +112,101 @@ test("storage: no localStorage in Node means empty profiles and a false write, n
   assert.equal(LP.writeProfile({ source: "service-size" }), false);
   assert.equal(LP.isVisible("generator-sizing"), true);
   assert.equal(LP.isVisible("service-size"), false);
+});
+
+// ---- Service Size mapping -------------------------------------------------
+const appl = (loads, extra) => ({ v: 1, source: "appliance-loads", at: "2026-10-02T10:00:00Z", label: "#1438 Miller Residence",
+  job: { no: "1438", name: "Miller Residence", address: "1 Elm" }, house: null, hvac: null, service: null, sizeFor: null, loads, ...(extra || {}) });
+const L = (name, volts, amps, qty = 1, o = {}) => ({ name, kind: "", qty, volts, amps, va: volts && amps ? volts * amps : null, status: "yes", ...o });
+
+test("applyProfile from Appliance Loads: big appliances, items, extras, covered", () => {
+  const p = appl([
+    L("Kitchen · Induction cooktop", 240, 40), L("Kitchen · Wall oven", 240, 20),
+    L("Laundry · Dryer", 240, 24, 2), L("Mech · Tankless water heater", 240, 112),
+    L("Garage · EV charger", 240, 48), L("Garage · Tesla Wall Connector", 240, 48),
+    L("Kitchen · Refrigerator", 120, 6), L("Kitchen · Dishwasher", 120, 12), L("Pantry · Dishwasher", 120, 12),
+    L("Studio · Kiln", 240, 40), L("Garage · Unit heater", null, null),
+    L("Mech · AC condenser", 240, 35), L("Driveway · Snowmelt", 240, 50),
+  ]);
+  const s = applyProfile(defaultState(), p);
+  assert.equal(s.job, "Miller Residence");
+  assert.equal(s.range, "cook_wall"); assert.equal(s.dryer, "elec"); assert.equal(s.dryerQty, 2);
+  assert.equal(s.wh, "tankless"); assert.equal(s.whQty, 1);
+  assert.equal(s.cool, "ac"); assert.equal(s.heat, defaultState().heat, "no heat pump seen: heating untouched");
+  assert.equal(s.items.ev.status, "yes"); assert.equal(s.items.ev.va, 11520); assert.equal(s.items.ev2.status, "yes");
+  assert.equal(s.items.dw2.status, "yes"); assert.equal(s.items.dw2.qty, 1);
+  assert.equal(s.items.garageheat.status, "yes"); assert.equal(s.items.garageheat.va, 5000, "no amps on the sheet: keeps the default VA");
+  assert.equal(s.items.snowmelt.status, "yes"); assert.equal(s.items.snowmelt.qty, 300); assert.equal(s.items.snowmelt.va, 40);
+  assert.ok(s.items.ev.fromFill && /Appliance Loads/.test(s.items.ev.fillNote));
+  assert.equal(s.extras.length, 1); assert.equal(s.extras[0].name, "Studio · Kiln"); assert.equal(s.extras[0].va, 9600); assert.equal(s.extras[0].status, "yes");
+  assert.deepEqual(s.fill.covered, ["Kitchen · Refrigerator", "Kitchen · Dishwasher"]);
+  assert.equal(s.fill.tag, "loads");
+  for (const k of ["job", "range", "dryer", "dryerQty", "wh", "whQty", "cool"]) assert.ok(s.fillFields.includes(k), k);
+  assert.ok(!s.fillFields.includes("sqft"), "no house data in an appliance profile");
+  assert.ok(fillSummary(s).includes("1 added under Extras"), fillSummary(s));
+  assert.doesNotThrow(() => analyze(s));
+});
+
+test("applyProfile: an unknown load with no amps becomes an extra that needs VA, never dropped", () => {
+  const s = applyProfile(defaultState(), appl([L("Studio · Kiln", null, null)]));
+  assert.equal(s.extras.length, 1); assert.equal(s.extras[0].va, 0); assert.equal(s.extras[0].note, "needs VA");
+  assert.ok(fillSummary(s).includes("1 need VA"), fillSummary(s));
+});
+
+test("applyProfile twice: the second fill owns the tags, statuses from the first stay", () => {
+  const first = applyProfile(defaultState(), appl([L("Patio · Hot tub", 240, 40)]));
+  const second = applyProfile(first, appl([L("Basement · Sauna", 240, 30)], { label: "#1439 Other" }));
+  assert.equal(second.items.hottub.status, "yes"); assert.ok(!second.items.hottub.fromFill);
+  assert.ok(second.items.sauna.fromFill); assert.equal(second.fill.label, "#1439 Other");
+});
+
+test("applyProfile from Generator Sizing: house inputs land, items by preset kind, heat pump sets heating", () => {
+  const PRESETS = { ac:{name:"A/C",va:6000,motor:true,surge:3,category:"cooling"}, heatpump:{name:"Heat pump",va:7200,motor:true,surge:3,category:"heating"},
+    wh:{name:"WH",va:4500,motor:false,surge:1,category:"general"}, range:{name:"Range",va:8000,motor:false,surge:1,category:"general"},
+    dryer:{name:"Dryer",va:5500,motor:true,surge:1.2,category:"general"}, pool:{name:"Pool",va:2000,motor:true,surge:3,category:"general"},
+    evse:{name:"EV",va:11520,motor:false,surge:1,category:"general"} };
+  const rows = [
+    { ...PRESETS.heatpump, key: "heatpump", qty: 1 }, { ...PRESETS.wh, key: "wh", qty: 2 }, { ...PRESETS.range, key: "range", qty: 1 },
+    { ...PRESETS.dryer, key: "dryer", qty: 1 }, { ...PRESETS.pool, key: "pool", qty: 1 }, { ...PRESETS.evse, key: "evse", qty: 1 },
+  ];
+  const p = LP.fromGeneratorRows(rows, { sqft: 6000, sac: 3, laundry: 2, svcA: 200, jobCust: "Miller", jobAddr: "" });
+  const s = applyProfile(defaultState(), p);
+  assert.equal(s.sqft, 6000); assert.equal(s.sac, 3); assert.equal(s.laundry, 2);
+  assert.equal(s.heat, "hp"); assert.equal(s.wh, "tank"); assert.equal(s.whQty, 2); assert.equal(s.range, "range"); assert.equal(s.dryer, "elec");
+  assert.equal(s.items.pool.status, "yes"); assert.equal(s.items.ev.status, "yes"); assert.equal(s.fill.tag, "generator");
+  assert.deepEqual(s.extras, []);
+});
+
+test("toProfile → toGeneratorRows: HVAC, big appliances, items and extras become generator rows; maybes follow sizeFor", () => {
+  const base = { ...defaultState(2), job: "Miller", sqft: 8000, heat: "hp", range: "cook_double", dryer: "elec", dryerQty: 2, wh: "tankless", sizeFor: "max",
+    extras: [{ id: "x1", name: "Studio kiln", va: 9600, qty: 1, status: "yes", note: "" }] };
+  const s = normalizeState({ ...base, items: { ...base.items, ev: { va: 11520, qty: 1, status: "yes" }, hottub: { va: 7500, qty: 1, status: "maybe" }, snowmelt: { va: 40, qty: 600, status: "yes" } } });
+  const a = analyze(s);
+  const p = toProfile(s, a);
+  assert.equal(p.source, "service-size"); assert.deepEqual(p.service, a.rec ? { amps: a.rec } : null); assert.equal(p.sizeFor, "max");
+  const d = defaultState(); const ad = analyze(d);
+  assert.ok(ad.rec > 0); assert.deepEqual(toProfile(d, ad).service, { amps: ad.rec }, "a standard house carries its recommended size");
+  assert.deepEqual(p.house, { sqft: 8000, sac: 4, laundry: 1 });
+  assert.equal(p.hvac.heat, "hp"); assert.equal(p.hvac.cool, "ac");
+  const hp = p.loads.find((l) => l.kind === "heatpump"); assert.ok(hp && hp.motor && hp.va > 0);
+  assert.ok(p.loads.find((l) => l.kind === "electricheat" && /strip/i.test(l.name)));
+  assert.ok(p.loads.find((l) => l.kind === "wh_tankless" && l.va === 27000));
+  assert.ok(p.loads.find((l) => l.kind === "dryer" && l.qty === 2));
+  assert.ok(p.loads.find((l) => l.kind === "range" && l.va === 17600));
+  assert.ok(p.loads.find((l) => l.kind === "snowmelt" && l.va === 24000 && l.qty === 1));
+  assert.ok(p.loads.find((l) => l.kind === "hottub" && l.status === "maybe"));
+  assert.ok(p.loads.find((l) => l.kind === "other" && l.name === "Studio kiln"));
+  const PRESETS = { heatpump:{name:"Heat pump",va:7200,motor:true,surge:3,category:"heating"}, electricheat:{name:"Heat",va:10000,motor:false,surge:1,category:"heating"},
+    tankless:{name:"Tankless",va:27000,motor:false,surge:1,category:"general"}, dryer:{name:"Dryer",va:5500,motor:true,surge:1.2,category:"general"},
+    walloven:{name:"Wall oven",va:4000,motor:false,surge:1,category:"general"}, cooktop:{name:"Cooktop",va:6000,motor:false,surge:1,category:"general"},
+    range:{name:"Range",va:8000,motor:false,surge:1,category:"general"}, snowmelt:{name:"Snowmelt",va:12000,motor:false,surge:1,category:"heating"},
+    evse:{name:"EV",va:11520,motor:false,surge:1,category:"general"}, pool:{name:"Pool",va:2000,motor:true,surge:3,category:"general"},
+    generic:{name:"Other",va:1500,motor:false,surge:1,category:"general"}, generic_motor:{name:"Motor",va:1500,motor:true,surge:3,category:"general"} };
+  const g = LP.toGeneratorRows(p, PRESETS);
+  assert.equal(g.rows.find((r) => /hot tub/i.test(r.name)).flag, "maybe");
+  assert.equal(g.rows.find((r) => r.name === "Studio kiln").key, "generic");
+  const g2 = LP.toGeneratorRows({ ...p, sizeFor: "base" }, PRESETS);
+  assert.ok(!g2.rows.find((r) => /hot tub/i.test(r.name)));
 });
 
 console.log(`\n${n} tests passed`);
