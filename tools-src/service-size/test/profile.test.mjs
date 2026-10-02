@@ -13,7 +13,7 @@ test("classify: sheet-style names land on the right kind", () => {
     ["Laundry · LG Wash Tower", "dryer"], ["Laundry · Gas dryer", "covered"], ["Laundry · Washer", "covered"],
     ["Kitchen · Wolf 48\" Dual Fuel Range", "range"], ["Kitchen · Induction cooktop", "cooktop"],
     ["Kitchen · Double wall oven", "doubleoven"], ["Kitchen · Wall oven", "walloven"], ["Kitchen · Speed oven", "speed"],
-    ["Kitchen · Sub-Zero refrigerator", "covered"], ["Kitchen · Microwave drawer", "speed"], ["Kitchen · Warming drawer", "warm"],
+    ["Kitchen · Sub-Zero refrigerator", "covered"], ["Pantry · Side-by-side", "covered"], ["Kitchenette · French-door fridge", "covered"], ["Kitchen · Column freezer w/ ice", "covered"], ["Kitchen · Microwave drawer", "speed"], ["Kitchen · Warming drawer", "warm"],
     ["Kitchen · Dishwasher", "dishwasher"], ["Garage · Tesla Wall Connector", "ev"], ["Garage · EV charger", "ev"],
     ["Mech · Rinnai tankless water heater", "wh_tankless"], ["Mech · Heat pump water heater", "wh_hpwh"], ["Mech · 50 gal water heater", "wh_tank"],
     ["Mech · AC condenser", "ac"], ["Mech · Heat pump", "heatpump"], ["Bonus · Mini split", "minisplit"], ["Mech · Furnace", "airhandler"],

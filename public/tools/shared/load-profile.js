@@ -23,7 +23,7 @@
     ["speed",        /speed oven|steam oven|microwave drawer|convection microwave|advantium/i, { gen: "generic" }],
     ["warm",         /warming drawer|plate warmer/i, { gen: "generic" }],
     ["dryer",        /wash ?tower|washer ?\/ ?dryer|washer[- ]dryer|laundry (center|tower)/i, { gen: "dryer" }],
-    ["covered",      /gas dryer|refrigerat|fridge|freezer|microwave|disposal|disposer|\bhood\b|wine|beverage|ice ?maker|\bwasher\b|washing machine|compactor|coffee|under ?counter/i, { gen: null }],
+    ["covered",      /gas dryer|refrigerat|fridge|freezer|side[- ]by[- ]side|french[- ]door|bottom[- ]freezer|column (fridge|freezer|refrig)|microwave|disposal|disposer|\bhood\b|wine|beverage|ice ?maker|\bwasher\b|washing machine|compactor|coffee|under ?counter/i, { gen: null }],
     ["dryer",        /dryer/i, { gen: "dryer" }],
     ["wh_hpwh",      /heat ?pump water heater|hybrid water heater|hpwh/i, { gen: "wh" }],
     ["wh_tankless",  /tankless|on[- ]demand|instant(aneous)? water/i, { gen: "tankless" }],
