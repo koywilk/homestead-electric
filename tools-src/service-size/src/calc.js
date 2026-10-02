@@ -68,6 +68,8 @@ const ITEM_BY_ID = Object.fromEntries(ITEMS.map((it) => [it.id, it]));
 
 // An item missing from a state (e.g. a record saved before the item was added to ITEMS) counts as "no".
 const itemState = (state, it) => state.items?.[it.id] || { va: it.va, qty: it.qty[0], status: "no" };
+// Free-form loads that came from another tool (Appliance Loads / Generator Sizing): {id, name, va, qty, status, note}.
+const extrasOf = (state) => (Array.isArray(state.extras) ? state.extras : []);
 
 const num = (v, d = 0) => {
   const x = parseFloat(v);
@@ -109,6 +111,9 @@ export function defaultState(tier = 1) {
     items: tierItems(tier),
     plan: null, // what was read from plans: {source, areas, findings, questions, notInCalc}
     planFields: [], // state keys filled from plans
+    extras: [], // loads from another tool with no fixed item of their own; counted like fixed appliances
+    fill: null, // {source, tag, label, at, covered, notes, placed, needVA} when filled from another tool
+    fillFields: [], // state keys that fill set
   };
 }
 
@@ -123,6 +128,12 @@ export function normalizeState(saved = {}) {
     items: { ...tierItems(tier), ...(saved.items || {}) },
     plan: saved.plan || null,
     planFields: Array.isArray(saved.planFields) ? saved.planFields : [],
+    extras: (Array.isArray(saved.extras) ? saved.extras : []).filter((x) => x && x.id).map((x) => ({
+      id: String(x.id), name: String(x.name || "Appliance"), va: num(x.va), qty: num(x.qty, 1) || 1,
+      status: ["yes", "maybe", "no"].includes(x.status) ? x.status : "yes", note: String(x.note || ""),
+    })),
+    fill: saved.fill && typeof saved.fill === "object" ? saved.fill : null,
+    fillFields: Array.isArray(saved.fillFields) ? saved.fillFields : [],
   };
 }
 
@@ -171,6 +182,12 @@ export function calc(state, scn, ov = {}) {
     if (it.g === "appl") { r.other += va; r.otherList.push(it.name); }
     else if (it.g === "res") { res += va; resUnits += it.unit ? 1 : num(s.qty); }
     else if (it.g === "hvac") { mini += va; }
+  }
+  for (const x of extrasOf(state)) {
+    const st = (ov.extras && ov.extras[x.id]) || x.status || "yes";
+    if (!(st === "yes" || (scn === "max" && st === "maybe"))) continue;
+    const va = num(x.va) * (num(x.qty, 1) || 1);
+    r.other += va; r.otherList.push(x.name);
   }
   if (heat === "baseboard") { res += sqft * 10; resUnits += Math.max(4, Math.ceil(sqft / 250)); }
 
@@ -238,6 +255,7 @@ export function analyze(state) {
     const s = itemState(state, it);
     if (s.status === "no" && num(s.qty) > 0) test(it.name, { items: { [it.id]: "yes" } });
   }
+  for (const x of extrasOf(state)) if (x.status === "no" && num(x.va) > 0) test(x.name, { extras: { [x.id]: "yes" } });
   if (max.wh !== "tankless") test("Electric tankless water heater", { sel: { wh: "tankless" } });
   if (max.heat !== "hp") test("Switch to heat pump heating", { sel: { heat: "hp" } });
   if (max.range === "gas" || max.range === "range") test("Cooktop + double oven", { sel: { range: "cook_double" } });
@@ -250,6 +268,11 @@ export function analyze(state) {
     const on = calc(state, "max", { items: { [it.id]: "yes" } });
     const off = calc(state, "max", { items: { [it.id]: "no" } });
     impacts[it.id] = on.amps - off.amps;
+  }
+  for (const x of extrasOf(state)) {
+    const on = calc(state, "max", { extras: { [x.id]: "yes" } });
+    const off = calc(state, "max", { extras: { [x.id]: "no" } });
+    impacts[x.id] = on.amps - off.amps;
   }
 
   const flags = [];
@@ -267,8 +290,9 @@ export function analyze(state) {
 export function bidNote(state, a) {
   // Lowercase the first letter unless it starts an acronym (EV, ADU).
   const lower = (s) => (/^[A-Z]{2}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1));
-  const maybes = ITEMS.filter((it) => itemState(state, it).status === "maybe").map((it) => lower(it.name));
-  const yes = ITEMS.filter((it) => itemState(state, it).status === "yes").map((it) => lower(it.name));
+  const xs = extrasOf(state);
+  const maybes = [...ITEMS.filter((it) => itemState(state, it).status === "maybe").map((it) => it.name), ...xs.filter((x) => x.status === "maybe").map((x) => x.name)].map(lower);
+  const yes = [...ITEMS.filter((it) => itemState(state, it).status === "yes").map((it) => it.name), ...xs.filter((x) => x.status === "yes").map((x) => x.name)].map(lower);
   const und = [];
   if (state.heat === "undecided") und.push("heat pump heating");
   if (state.range === "undecided") und.push("electric range");

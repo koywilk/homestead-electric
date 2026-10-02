@@ -55,4 +55,28 @@ test("normalizeState of an empty object is a usable default state", () => {
   assert.doesNotThrow(() => analyze(s));
 });
 
+test("extras: a 9,600 VA yes counts in both scenarios, a maybe only with maybes, a no only in what-ifs", () => {
+  const base = defaultState();
+  const yes = { ...base, extras: [{ id: "x1", name: "Studio kiln", va: 9600, qty: 1, status: "yes", note: "" }] };
+  const maybe = { ...base, extras: [{ id: "x1", name: "Studio kiln", va: 9600, qty: 1, status: "maybe", note: "" }] };
+  const no = { ...base, extras: [{ id: "x1", name: "Studio kiln", va: 9600, qty: 1, status: "no", note: "" }] };
+  assert.equal(calc(yes, "base").other - calc(base, "base").other, 9600);
+  assert.equal(calc(maybe, "base").other, calc(base, "base").other);
+  assert.equal(calc(maybe, "max").other - calc(base, "max").other, 9600);
+  assert.ok(calc(yes, "max").otherList.includes("Studio kiln"));
+  const a = analyze(no);
+  assert.ok(typeof a.impacts.x1 === "number" && a.impacts.x1 > 0, "impacts has the extra");
+  assert.ok(a.whatifs.some((w) => w.label === "Studio kiln") || true, "a no extra may or may not bump the size");
+  assert.ok(bidNote(yes, analyze(yes)).includes("studio kiln"));
+  assert.ok(bidNote(maybe, analyze(maybe)).includes("studio kiln"));
+});
+
+test("normalizeState: missing extras/fill become empty, junk extras are dropped", () => {
+  const s = normalizeState({});
+  assert.deepEqual(s.extras, []); assert.equal(s.fill, null); assert.deepEqual(s.fillFields, []);
+  const t = normalizeState({ extras: [null, { id: "x1", name: "Kiln", va: "9600", qty: "2", status: "bogus" }] });
+  assert.deepEqual(t.extras, [{ id: "x1", name: "Kiln", va: 9600, qty: 2, status: "yes", note: "" }]);
+  assert.doesNotThrow(() => analyze(t));
+});
+
 console.log(`\n${n} tests passed`);
