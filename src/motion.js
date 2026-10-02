@@ -693,7 +693,12 @@ function heEngineFlush() {
 }
 // At most one flush per frame (counters that tick every frame used to flush every tick).
 function heEngineQueue() { if (eng.queued) return; eng.queued = true; requestAnimationFrame(heEngineFlush); }
+// REMOVED 2026-10-02 (Koy: "still doing it… fix them or remove what is still having issues"): the engine
+// ran on its own on every page update and could not be made to sit still on the Job Board and the crew
+// schedule with real data. Nothing starts it any more; keyed rows are inert. Tap-driven motion is untouched.
 export function heStartEngine() {
+  return;
+  // eslint-disable-next-line no-unreachable
   if (eng.started || typeof document === "undefined" || typeof MutationObserver === "undefined") return;
   eng.started = true; eng.t0 = Date.now();
   const mo = new MutationObserver((recs) => {
@@ -707,7 +712,7 @@ export function heStartEngine() {
   mo.observe(document.body, { childList: true, subtree: true, characterData: true });
   heEngineQueue();
 }
-if (typeof document !== "undefined") { if (document.body) heStartEngine(); else document.addEventListener("DOMContentLoaded", heStartEngine); }
+// (engine auto-start removed — see heStartEngine)
 // Flash one keyed row from code (e.g. after an email goes out): heFlashKey("<data-hekey>", "Sent")
 export function heFlashKey(key, tag) {
   try {
