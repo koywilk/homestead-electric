@@ -9,7 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
-import { heReducedRaw, heMotionForced, heSetMotionForced, heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
+import { HeUnfold, useHeFlip, useHeViewSlide, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heSaveRipple, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
 // Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
@@ -51077,7 +51077,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v496
+**Last manifest update:** 2026-10-01 · App SW version: v497
 
 ---
 
@@ -51099,7 +51099,9 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Every piece honours the phone's Reduce Motion setting, and the Settings (⋯) menu gained **Animations: always on** to override it per device, because Koy's iPhone has Reduce Motion on and that had silently turned every animation off since v481. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
+- **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
+
+- **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Motion is now ON by default for everyone: the phone's Reduce Motion setting no longer silently wins (Koy's iPhone has it on, which had turned every animation off since v481 without anyone knowing). The Settings (⋯) menu has **Animations: on / off** to turn it off per device. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
 
 - **Return trip card: the inspection report PDF now shows as a file tile that opens** · 'shipped 2026-10-01' · 'SW v495' · Koy: *"the inspection report … loads underneath the final inspection in the finish section, but on the return trip, it won't load anything."* The Return Trips card drew every attachment through an image tag and the image lightbox; a PDF report copied from a failed 4-way or final inspection rendered blank and tapped to a blank viewer. Non-image attachments now get the same file tile the Finish tab's uploader uses, labelled "4-way / Final inspection report", and tapping opens the PDF in a new tab. Photos unchanged. **Why it won't lose data:** render-only; the attachment records on the trip are untouched.
 
@@ -56718,6 +56720,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
   const [undo, setUndo] = useState(null);
+  const _mdRoot = useRef(null);
+  useHeFlip(_mdRoot);                 // v497 A (G6/M4/M5): rows slide to their new group / pin slot / Done
+  const _qLast = useRef({});          // v497 A (M2): last discussion message per row, to flash a fresh reply
   // v434 Edit / Void / edit-your-reply panels (Row is a plain render fn, so
   // the state lives here, like updFor). One panel open at a time.
   const [editFor, setEditFor] = useState(null);      // row key whose Edit panel is open
@@ -57400,7 +57405,8 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   // v482: inline Answer box on a job-question row (writes the answer into the job).
   const [ansFor, setAnsFor] = useState(null);
   const [ansText, setAnsText] = useState("");
-  const [ansMode, setAnsMode] = useState("answer");   // v485: "answer" writes the answer; "reply" posts to the discussion
+  const [ansMode, setAnsMode] = useState("answer");
+  const [ansBusy, setAnsBusy] = useState(false);     // v497 A (M3): Save shows a spinner, then the box closes   // v485: "answer" writes the answer; "reply" posts to the discussion
   const [updKind, setUpdKind] = useState("note");
   const [updText, setUpdText] = useState("");
   const [updUntil, setUpdUntil] = useState("");
@@ -57445,7 +57451,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     const pinned = pinnedSet.has(r.key);
     const flashing = flashKey === r.key;   // v446: row a push / inbox tap deep-linked to
     return (
-      <div key={r.key} id={"mdrow_" + r.key} ref={el => { if (!el || !r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
+      <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key}
+        {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#3E7D5A", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: "#B0892C", fn: () => setSnoozeFor(r.key) } : null }))}
+        ref={el => { if (!el || !r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
@@ -57456,7 +57464,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
             squeezed to a few characters by the five action buttons beside it. On
             narrow screens the row wraps — text first, full width; buttons on their
             own line, right-aligned. Wide screens are unchanged. */}
-        <div onClick={() => { if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: narrow ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
+        <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: narrow ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
             {(r.isNew || r.newReply) && <span title={r.isNew ? "Wasn't on your list the last time you opened My Day on this device" : "A reply came in since you last opened My Day on this device"} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: "#2F6FDE" }}>{r.isNew ? "New" : "New reply"}</span>}
@@ -57498,10 +57506,13 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           )}
           {r.qThread && r.qThread.length > 0 && (() => {
             const t = r.qThread; const last = t[t.length - 1]; const open = histFor === r.key;
+            const _lid = String(last.id || last.at || ""); const _rec = _qLast.current[r.key];
+            if (!_rec) _qLast.current[r.key] = { id: _lid, t: 0 }; else if (_rec.id !== _lid) { _rec.id = _lid; _rec.t = Date.now(); }
+            const _fresh = !!_rec && Date.now() - _rec.t < 1900;
             const who = (m) => m.role === "client" ? `${first(m.by) || "Client"} (client)` : m.role === "field" ? `${first(m.by) || "Field"} (field)` : first(m.by) || "Homestead";
             const line = (m) => <>{String(m.text || "").trim() || `${(m.photos || []).length} photo${(m.photos || []).length === 1 ? "" : "s"}`}</>;
             return (
-              <div onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show the whole discussion"
+              <div className={_fresh ? "he-flash" : undefined} onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show the whole discussion"
                 style={{ marginTop: 4, fontSize: 12, cursor: "pointer" }}>
                 {!open && (
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -57645,17 +57656,17 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
             const replying = ansMode === "reply" && !!r.onReply;
             const go = () => (replying ? r.onReply : r.onAnswer)(ansText);
             return (
-            <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${replying ? C.border : C.accent + "66"}`, borderRadius: 8, padding: 8 }}>
+            <HeUnfold onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${replying ? C.border : C.accent + "66"}`, borderRadius: 8, padding: 8 }}>
               <input type="text" value={ansText} autoFocus onChange={e => setAnsText(e.target.value)} onKeyDown={e => { if (e.key === "Enter") go(); if (e.key === "Escape") { setAnsFor(null); setAnsText(""); } }}
                 placeholder={replying ? "Reply in the discussion…" : "Type the answer…"}
                 style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 11, color: C.dim }}>{replying ? "Goes in the question's discussion thread — the question stays open." : "Lands on the question in the job and marks it answered."}</span>
                 <button onClick={() => { setAnsFor(null); setAnsText(""); }} style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
-                <button onClick={go} disabled={!ansText.trim()}
-                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>{replying ? "Post reply" : "Save answer"}</button>
+                <button onClick={() => { if (ansBusy) return; setAnsBusy(true); setTimeout(() => { go(); setAnsBusy(false); }, 420); }} disabled={!ansText.trim() || ansBusy}
+                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>{ansBusy ? <><Spinner size={12} color="#fff"/> Saving…</> : (replying ? "Post reply" : "Save answer")}</button>
               </div>
-            </div>
+            </HeUnfold>
             );
           })()}
           {editFor === r.key && editDraft && r.need && !selectMode && (() => {
@@ -57786,7 +57797,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     return (
       <div key={g.key} style={{ marginBottom: 14 }}>
         <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
-          <span style={{ display: "inline-flex", transition: "transform .15s", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+          <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
           <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
@@ -57795,7 +57806,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           <span style={{ flex: 1, height: 1, background: C.border }} />
         </div>
         {isOpen && g.byCat && (g.byCat.length
-          ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {g.byCat.map(c => {
                 const ck = g.key === "mine" ? c.key : g.key + ":" + c.key;
                 const open = openCats.has(ck) || qOn;
@@ -57803,7 +57814,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                 return (
                   <div key={c.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${laneColor}`, borderRadius: 10 }}>
                     <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
-                      <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+                      <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
                       <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
                       {/* v490 (Koy: "want it to appear on each drop downs header so i can see it easy") */}
@@ -57813,11 +57824,11 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.scheduled > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#3B5BA5", background: "#3B5BA518", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.scheduled} scheduled</span>}
                     </div>
-                    {open && <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}{g.key === "mine" && c.key === "qc" && qcTracker}</div>}
+                    {open && <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}{g.key === "mine" && c.key === "qc" && qcTracker}</HeUnfold>}
                   </div>
                 );
               })}
-            </div>
+            </HeUnfold>
           : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)}
         {isOpen && !g.byCat && (g.byJob
           ? (g.byJob.length
@@ -57831,7 +57842,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                   return (
                     <div key={jobId} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
                       <div onClick={() => toggleHeadJob(jk)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44 }}>
-                        <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
+                        <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                         {isHead
                           ? <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
                           : <>
@@ -57842,7 +57853,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                             </>}
                       </div>
                       {open && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
+                        <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
                           {rows.map(Row)}
                           {isHead && canCreate && openQuickAdd && (
                             <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
@@ -57850,7 +57861,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                               + Add for {headFirst}
                             </button>
                           )}
-                        </div>
+                        </HeUnfold>
                       )}
                     </div>
                   );
@@ -57858,7 +57869,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
               </div>
             : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)
           : (g.rows.length
-            ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(Row)}</div>
+            ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(Row)}</HeUnfold>
             : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>))}
       </div>
     );
@@ -57972,7 +57983,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   );
 
   return (
-    <div style={{ padding: narrow ? "12px 12px 110px" : "16px 18px 60px", maxWidth: 1120, margin: "0 auto" }} onClick={() => { if (snoozeFor) setSnoozeFor(null); }}>
+    <div ref={_mdRoot} style={{ padding: narrow ? "12px 12px 110px" : "16px 18px 60px", maxWidth: 1120, margin: "0 auto" }} onClick={() => { if (snoozeFor) setSnoozeFor(null); }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 28, letterSpacing: "0.06em", color: C.text, lineHeight: 1 }}>MY DAY</div>
         <HelpDot section="myday" />
@@ -61976,6 +61987,12 @@ function App() {
   const openMyDay         = () =>  { setView("myday");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   // Shared top-nav click handler (used by both the main tab row and the "More"
   // dropdown). Every open* helper just setView(key), so this covers all tabs.
+  // v497 A: G1 the view slides in from the direction of travel; G2 update-ready banner; G6 Job Board FLIP.
+  const _navOrder = useMemo(() => [...NAV_MAIN_TABS.map(t => t.key), ...NAV_MORE_TABS.map(t => t.key), "settings", "foreman"], []);
+  useHeViewSlide(view, _navOrder);
+  const _swUpdate = useHeSwUpdate();
+  const _homeRoot = useRef(null);
+  useHeFlip(_homeRoot);
   const navClick = (key) => {
     if(key==="home") return goHome();
     if(key==="myday") return openMyDay();
@@ -62175,7 +62192,7 @@ function App() {
 
     return (
 
-      <div className={"job-row"+(_mfx?" "+_mfx.className:"")} onClick={(e)=>{heZoomFrom(e.currentTarget, job.name||"Untitled Job"); setSelected(job);}}
+      <div data-hekey={job.id} className={"job-row"+(_mfx?" "+_mfx.className:"")} onClick={(e)=>{heZoomFrom(e.currentTarget, job.name||"Untitled Job"); setSelected(job);}}
         style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:10,borderLeft:`3px solid ${rowLbord}`,
           ...(_mfx?{animationDelay:`${_mfx.delay}ms`}:null)}}>
 
@@ -62799,8 +62816,14 @@ function App() {
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
 
 
+      {/* v497 A (G2): a new version has downloaded — one tap reloads into it. */}
+      {_swUpdate && (
+        <div className="he-updbar" role="status" onClick={()=>window.location.reload()}>
+          <span>Update ready</span><span style={{opacity:.75,fontWeight:600}}>tap to reload</span>
+        </div>
+      )}
       {/* ── COMMAND NAV (dark console) ── */}
-      <div style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
+      <div data-he-nav="1" style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
         {/* ROW 1 — flag wordmark + live status */}
         <div style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
           <div style={{width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
@@ -62810,7 +62833,7 @@ function App() {
           </div>
           <div onClick={goHome} className="flagtext flag-stripes" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
-            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#E3B85F";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}</span>;})()}
+            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#E3B85F";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{syncStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#E3B85F",border:"1px solid #E3B85F66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{syncStatus==="error"&&<span style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
             <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
           </div>
@@ -62876,16 +62899,22 @@ function App() {
               </button>
               {moreOpen && createPortal(
                 <>
-                  <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:99998}}/>
-                  <div style={{position:"fixed",top:morePos.top,right:morePos.right,minWidth:190,
+                  <div className={ON_MOBILE?"he-scrim":undefined} onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:99998,background:ON_MOBILE?"rgba(15,23,42,0.45)":"transparent"}}/>
+                  {/* v497 A (G4): on a phone the More menu is a bottom sheet with the same spring as the others. */}
+                  <div className={ON_MOBILE?"he-sheet":undefined} style={ON_MOBILE
+                    ? {position:"fixed",left:0,right:0,bottom:0,zIndex:99999,background:C.card,borderRadius:"18px 18px 0 0",
+                       padding:"8px 12px calc(16px + env(safe-area-inset-bottom, 0px))",boxShadow:"0 -8px 24px rgba(0,0,0,0.18)",
+                       display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}
+                    : {position:"fixed",top:morePos.top,right:morePos.right,minWidth:190,
                     background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
                     boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:99999,padding:6,
                     display:"flex",flexDirection:"column",gap:2}}>
+                    {ON_MOBILE && <div style={{gridColumn:"1 / -1",width:42,height:5,background:C.border,borderRadius:99,margin:"2px auto 6px"}}/>}
                     {moreItems.map(({key,label,icon})=>{
                       const active=view===key;
                       return (
                         <button key={key} onClick={()=>{navClick(key);setMoreOpen(false);}}
-                          style={{padding:"9px 12px",fontSize:13,fontFamily:"inherit",cursor:"pointer",
+                          style={{padding:ON_MOBILE?"13px 12px":"9px 12px",minHeight:ON_MOBILE?48:undefined,fontSize:13,fontFamily:"inherit",cursor:"pointer",
                             textAlign:"left",border:"none",borderRadius:7,
                             background:active?`${C.accent}22`:"transparent",color:active?C.text:C.dim,
                             fontWeight:active?700:500,display:"inline-flex",alignItems:"center",gap:9,whiteSpace:"nowrap"}}>
@@ -63160,7 +63189,7 @@ function App() {
 
       {view==="home"&&(
 
-        <div>
+        <div ref={_homeRoot}>
 
           {/* ── HOME HEADER ── */}
           <div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
@@ -63215,12 +63244,12 @@ function App() {
                           <Icon name="rotateCw" size={13}/> Refresh
                         </button>
                         {/* v496: animations follow the phone's Reduce Motion setting unless forced on here. */}
-                        <button onClick={()=>{const next=!heMotionForced(); heSetMotionForced(next); setShowUtilMenu(false); toast.info(next?"Animations always on — even with Reduce Motion":"Animations follow your phone's Reduce Motion setting");}}
-                          title={heReducedRaw()?"Your phone has Reduce Motion on":"Your phone allows motion"}
+                        <button onClick={()=>{const off=!heMotionOff(); heSetMotionOff(off); setShowUtilMenu(false); toast.info(off?"Animations off on this device":"Animations on");}}
+                          title={heReducedRaw()?"Your phone has Reduce Motion on; the app plays motion anyway unless you turn it off here":"Turn the app's animations off on this device"}
                           style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
                             borderBottom:`1px solid ${C.border}`,color:C.text,fontSize:12,fontWeight:600,
                             padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                          <Icon name="zap" size={13}/> {heMotionForced()?"Animations: always on":heReducedRaw()?"Animations: off (Reduce Motion)":"Animations: on"}
+                          <Icon name="zap" size={13}/> {heMotionOff()?"Animations: off":"Animations: on"}
                         </button>
                         <button onClick={()=>{setShowUtilMenu(false);handleEnableNotifs();}}
                           disabled={notifStatus==='loading'}

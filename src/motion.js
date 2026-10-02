@@ -17,20 +17,22 @@ export const heReducedRaw = () => {
 };
 // v496: the in-app override. Koy's phone has Reduce Motion on, which silently turned every animation off
 // (the v487 strike "didn't show on my iPhone"). Settings menu → "Animations: always on" sets this.
-const FORCE_KEY = "he_motion_force";
-export const heMotionForced = () => { try { return localStorage.getItem(FORCE_KEY) === "1"; } catch (e) { return false; } };
-export const heSetMotionForced = (on) => {
-  try { if (on) localStorage.setItem(FORCE_KEY, "1"); else localStorage.removeItem(FORCE_KEY); } catch (e) { /* ignore */ }
-  try { document.documentElement.classList.toggle("he-force", !!on); } catch (e) { /* ignore */ }
+// Koy (2026-10-02, "All of them" not showing): motion is ON by default for everyone, whatever the phone
+// says. The Settings (⋯) menu lets a person turn it OFF on their device ("he_motion_off"); only then does
+// the app go still. The phone's Reduce Motion setting is shown in the menu but no longer silently wins.
+const OFF_KEY = "he_motion_off";
+export const heMotionOff = () => { try { return localStorage.getItem(OFF_KEY) === "1"; } catch (e) { return false; } };
+export const heSetMotionOff = (off) => {
+  try { if (off) localStorage.setItem(OFF_KEY, "1"); else localStorage.removeItem(OFF_KEY); } catch (e) { /* ignore */ }
+  try { document.documentElement.classList.toggle("he-still", !!off); } catch (e) { /* ignore */ }
 };
-export const heReduced = () => heReducedRaw() && !heMotionForced();
-if (typeof document !== "undefined" && heMotionForced()) { try { document.documentElement.classList.add("he-force"); } catch (e) { /* ignore */ } }
+export const heReduced = () => heMotionOff();
+if (typeof document !== "undefined" && heMotionOff()) { try { document.documentElement.classList.add("he-still"); } catch (e) { /* ignore */ } }
 
 /* ───────────────────────── CSS (injected once) ───────────────────────── */
 const CSS = `
 :root{--he-t:1;--he-ease:cubic-bezier(.2,.8,.2,1);--he-spring:cubic-bezier(.34,1.45,.5,1)}
-@media (prefers-reduced-motion: reduce){:root{--he-t:.01}}
-:root.he-force{--he-t:1}
+:root.he-still{--he-t:.01}
 
 /* remote change flash + who-changed-it tag */
 .he-flash{animation:he-m-flash calc(1900ms*var(--he-t)) ease-out}
@@ -40,7 +42,7 @@ const CSS = `
 .he-flash-by{display:inline-block;font-size:10px;font-weight:700;color:#8A5A00;white-space:nowrap;
   animation:he-m-by calc(6000ms*var(--he-t)) ease both}
 @keyframes he-m-by{0%{opacity:0;transform:translateY(4px)}5%{opacity:1;transform:none}88%{opacity:1}100%{opacity:0}}
-@media (prefers-reduced-motion: reduce){.he-flash-by{animation:none;opacity:1}}
+:root.he-still .he-flash-by{animation:none;opacity:1}
 
 /* list enter + bar grow */
 .he-rise{animation:he-m-rise calc(320ms*var(--he-t)) var(--he-ease) backwards}
@@ -75,7 +77,7 @@ const CSS = `
 .he-skel{border-radius:10px;background:linear-gradient(90deg,#E3E7EC 0,#F2F4F7 50%,#E3E7EC 100%);
   background-size:200% 100%;animation:he-m-shimmer calc(1100ms*var(--he-t)) linear infinite}
 @keyframes he-m-shimmer{to{background-position:-200% 0}}
-@media (prefers-reduced-motion: reduce){.he-skel{animation:none}}
+:root.he-still .he-skel{animation:none}
 
 /* save chip */
 .he-ico{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -83,7 +85,7 @@ const CSS = `
 @keyframes he-m-iconin{from{opacity:0;transform:scale(.5)}}
 .he-ico-spin{animation:he-m-spin calc(800ms*var(--he-t)) linear infinite}
 @keyframes he-m-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion: reduce){.he-ico-spin{animation:none}}
+:root.he-still .he-ico-spin{animation:none}
 .he-ico-draw path{stroke-dasharray:1;animation:he-m-draw calc(380ms*var(--he-t)) var(--he-ease) backwards}
 @keyframes he-m-draw{from{stroke-dashoffset:1}}
 .he-shake{animation:he-m-shake calc(380ms*var(--he-t))}
@@ -105,7 +107,7 @@ const CSS = `
 .he-sheen{position:relative;overflow:hidden}
 .he-sheen::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.55) 50%,transparent 75%);transform:translateX(-100%);animation:he-m-sheen calc(2200ms*var(--he-t)) ease-in-out infinite}
 @keyframes he-m-sheen{to{transform:translateX(100%)}}
-@media (prefers-reduced-motion: reduce){.he-sheen::after{animation:none}}
+:root.he-still .he-sheen::after{animation:none}
 /* save ripple from the field you just edited */
 .he-ripple{position:fixed;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:3px solid #3E7D5A;pointer-events:none;z-index:2147483000;animation:he-m-ripple calc(700ms*var(--he-t)) ease-out forwards}
 @keyframes he-m-ripple{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(14)}}
@@ -122,13 +124,18 @@ const CSS = `
 .he-pres{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;color:#fff;font:800 10px/1 system-ui;letter-spacing:.02em;flex:none;animation:he-m-presin calc(480ms*var(--he-t)) var(--he-spring) backwards,he-m-breathe 2s ease-in-out calc(480ms*var(--he-t)) infinite;box-shadow:0 0 0 0 var(--he-pres-c,rgba(176,106,44,.55))}
 @keyframes he-m-presin{from{opacity:0;transform:translateX(18px)}}
 @keyframes he-m-breathe{50%{box-shadow:0 0 0 7px transparent}}
-@media (prefers-reduced-motion: reduce){.he-pres{animation:none}}
+:root.he-still .he-pres{animation:none}
 /* undo countdown bar */
 .he-cd{position:absolute;left:0;bottom:0;height:3px;width:100%;background:#66A8FF;border-radius:0 0 10px 10px;transform-origin:left;animation:he-m-cd var(--he-cd-ms,10000ms) linear forwards}
 @keyframes he-m-cd{to{transform:scaleX(0)}}
 /* job card → detail zoom layer */
 .he-zoom{position:fixed;z-index:2147483000;pointer-events:none;background:#fff;border:1px solid #E1E4E9;border-radius:14px;overflow:hidden;will-change:transform,width,height;box-shadow:0 18px 60px rgba(27,31,36,.25)}
 .he-zoom b{display:block;padding:14px 16px;font:400 22px/1 'Bebas Neue',Impact,sans-serif;letter-spacing:.04em;color:#1B1F24}
+
+/* ── v497 batch A (Koy 2026-10-02: "I want all of them") ── */
+.he-updbar{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:99996;background:#1B1F24;color:#EEF0F3;border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;font:700 13px/1.3 system-ui;box-shadow:0 10px 32px rgba(0,0,0,.35);cursor:pointer;animation:he-m-updbar calc(480ms*var(--he-t)) var(--he-spring) backwards}
+@keyframes he-m-updbar{from{transform:translateY(140%)}}
+.he-swipe-under{user-select:none}
 `;
 
 if (typeof document !== "undefined" && !document.getElementById("he-motion-css")) {
@@ -611,6 +618,151 @@ export function HePresence({ presence, me, withinMin = 10 }) {
 /* ─────────────────── v496: undo countdown bar ─────────────────── */
 export function HeUndoBar({ ms = 10000 }) {
   return h("span", { className: "he-cd", "aria-hidden": true, style: { "--he-cd-ms": ms + "ms" } });
+}
+
+/* ─────────────────── v497 A: unfold on mount (collapsibles open with motion) ─────────────────── */
+// Wrap the content that a dropdown reveals. On mount it grows from 0 to its height; closing still unmounts
+// instantly (the content is gone, nothing to animate), which keeps the open/closed state code untouched.
+export function HeUnfold(props) {
+  const { tag, children, ...rest } = props;
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || heReduced() || !el.animate) return;
+    const hgt = el.scrollHeight;
+    if (!hgt) return;
+    el.style.overflow = "hidden";
+    const a = el.animate([{ height: "0px", opacity: 0 }, { height: hgt + "px", opacity: 1 }], { duration: 300, easing: EASE });
+    a.onfinish = () => { el.style.overflow = ""; };
+  }, []);
+  return h(tag || "div", Object.assign({ ref }, rest), children);
+}
+
+/* ─────────────────── v497 A: FLIP — rows slide to their new place ─────────────────── */
+// Put data-hekey="<stable id>" on each row and call useHeFlip(scopeRef) in the component that owns the list.
+// Every commit it compares each row's position (relative to the scope, so page scroll doesn't count) with
+// the previous commit and animates the difference. Rows that appear or vanish are left to their own enter
+// animation. Cheap: one getBoundingClientRect per row per commit.
+export function useHeFlip(scopeRef) {
+  const prev = useRef(new Map());
+  useLayoutEffect(() => {
+    const scope = scopeRef.current;
+    if (!scope) return;
+    const base = scope.getBoundingClientRect();
+    const next = new Map(), reduced = heReduced();
+    Array.prototype.forEach.call(scope.querySelectorAll("[data-hekey]"), (el) => {
+      const k = el.getAttribute("data-hekey"), r = el.getBoundingClientRect();
+      const cur = { top: r.top - base.top, left: r.left - base.left };
+      next.set(k, cur);
+      const p = prev.current.get(k);
+      if (!p || reduced || !el.animate) return;
+      const dy = p.top - cur.top, dx = p.left - cur.left;
+      if (Math.abs(dy) < 2 && Math.abs(dx) < 2) return;
+      if (Math.abs(dy) > 2000) return;
+      el.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }], { duration: 420, easing: EASE });
+    });
+    prev.current = next;
+  });
+}
+
+/* ─────────────────── v497 A: nav view slides in from the direction of travel ─────────────────── */
+// The nav bar carries data-he-nav; every sibling after it (the current view) eases in on view change.
+export function useHeViewSlide(view, order) {
+  const prev = useRef(view), first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; prev.current = view; return; }
+    const was = prev.current; prev.current = view;
+    if (heReduced()) return;
+    const nav = document.querySelector("[data-he-nav]");
+    if (!nav || !nav.parentElement) return;
+    const dir = order.indexOf(view) >= order.indexOf(was) ? 1 : -1;
+    let after = false;
+    Array.prototype.forEach.call(nav.parentElement.children, (el) => {
+      if (el === nav) { after = true; return; }
+      if (!after || !el.animate) return;
+      const cs = getComputedStyle(el);
+      if (cs.position === "fixed" || cs.display === "none") return;
+      el.animate([{ opacity: 0, transform: "translateX(" + dir * 22 + "px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: EASE });
+    });
+  }, [view]);
+}
+
+/* ─────────────────── v497 A: swipe a row right → done, left → snooze ─────────────────── */
+// Spread heSwipeRowProps({ right:{label,color,fn}, left:{...} }) on the row. Touch only. A coloured
+// underlay grows inside the row as the thumb drags; past 40% (or 110px) the action fires and the row
+// springs back (the list's FLIP then moves it where it belongs). heJustSwiped() lets a tap handler on the
+// same row ignore the click that follows a swipe.
+let lastSwipeT = 0;
+export const heJustSwiped = () => Date.now() - lastSwipeT < 500;
+export function heSwipeRowProps(opts) {
+  const st = { on: false, x0: 0, y0: 0, dx: 0, dir: 0, side: 0, cfg: null, el: null, under: null };
+  const under = (el, side, cfg) => {
+    const u = document.createElement("div");
+    u.className = "he-swipe-under";
+    u.setAttribute("aria-hidden", "true");
+    u.style.cssText = "position:absolute;top:0;bottom:0;width:0;" + (side > 0 ? "left:0;justify-content:flex-start;" : "right:0;justify-content:flex-end;") +
+      "background:" + cfg.color + ";color:#fff;font:800 12px system-ui;letter-spacing:.06em;display:flex;align-items:center;padding:0 12px;border-radius:inherit;overflow:hidden;white-space:nowrap;pointer-events:none";
+    u.textContent = cfg.label;
+    el.appendChild(u);
+    return u;
+  };
+  const end = () => {
+    if (!st.on) return;
+    st.on = false;
+    const el = st.el, u = st.under;
+    if (st.dir !== 1 || !el) return;
+    const w = el.offsetWidth || 1, hit = Math.abs(st.dx) > Math.max(110, w * 0.4);
+    el.style.transition = "transform 320ms cubic-bezier(.34,1.45,.5,1)";
+    el.style.transform = "";
+    if (u) { u.style.transition = "width 320ms cubic-bezier(.34,1.45,.5,1)"; u.style.width = "0px"; }
+    setTimeout(() => { if (el) { el.style.transition = ""; el.style.position = ""; } if (u && u.parentNode) u.parentNode.removeChild(u); }, 340);
+    if (hit && st.cfg && typeof st.cfg.fn === "function") { lastSwipeT = Date.now(); heBuzz([14, 30, 14]); try { st.cfg.fn(); } catch (e) { /* caller's problem */ } }
+  };
+  return {
+    onPointerDown: (e) => {
+      if (e.pointerType !== "touch" || heReduced() || (!opts.right && !opts.left)) return;
+      if (e.target && e.target.closest && e.target.closest("button,input,select,textarea,a,[data-he-noswipe]")) return;
+      st.on = true; st.x0 = e.clientX; st.y0 = e.clientY; st.dx = 0; st.dir = 0; st.el = e.currentTarget; st.under = null;
+    },
+    onPointerMove: (e) => {
+      if (!st.on) return;
+      const dx = e.clientX - st.x0, dy = e.clientY - st.y0;
+      if (st.dir === 0) {
+        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+        st.dir = Math.abs(dx) > Math.abs(dy) * 1.3 ? 1 : -1;
+        if (st.dir === 1) {
+          const side = dx > 0 ? 1 : -1, cfg = side > 0 ? opts.right : opts.left;
+          if (!cfg) { st.dir = -1; return; }
+          st.side = side; st.cfg = cfg;
+          st.el.style.position = "relative"; st.el.style.transition = "none";
+          st.under = under(st.el, side, cfg);
+          try { st.el.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
+        }
+      }
+      if (st.dir !== 1) return;
+      const same = (dx > 0 ? 1 : -1) === st.side;
+      st.dx = same ? dx : 0;
+      st.el.style.transform = "translateX(" + st.dx + "px)";
+      if (st.under) { st.under.style.width = Math.abs(st.dx) + "px"; st.under.style[st.side > 0 ? "left" : "right"] = (-Math.abs(st.dx)) + "px"; }
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+  };
+}
+
+/* ─────────────────── v497 A: "update ready" (a new service worker took over) ─────────────────── */
+// The app's worker calls skipWaiting + clients.claim, so a new version activates as soon as it installs; the
+// page keeps running the old files until a reload. controllerchange with a previous controller = update.
+export function useHeSwUpdate() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return undefined;
+    const had = !!navigator.serviceWorker.controller;
+    const onChange = () => { if (had) setReady(true); };
+    navigator.serviceWorker.addEventListener("controllerchange", onChange);
+    return () => navigator.serviceWorker.removeEventListener("controllerchange", onChange);
+  }, []);
+  return ready;
 }
 
 /* ─────────────────── 7. Skeleton rows for the first load ─────────────────── */
