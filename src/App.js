@@ -55925,10 +55925,24 @@ const applRowKey = (r) => [r.no, r.loc, r.item, r.model].map(x => String(x||"").
 const TOOLS_PROFILE_KEY = "he_tools_profile_v1";
 const TOOLS_VISIBLE_KEY = "he_tools_visible_v1";
 function applToolProfile(cur, cc) {
+  // The sheet often leaves Voltage blank on 240 V appliances (Miller #1438: range,
+  // wall oven, dryer, speed ovens). The job's own Home Run wire says 1-pole or
+  // 2-pole, so a row linked to a Home Run (applLinks, or the sheet's "CC home run"
+  // name) takes its volts from that wire. Amps always stay the sheet's nameplate.
+  const hrRows = cc ? flattenHomeRuns(cc.homeRuns) : [];
+  const hrById = {}, hrByName = {};
+  hrRows.forEach(h => { if (h.id) hrById[h.id] = h; const k = String(h.name || "").trim().toLowerCase(); if (k && !hrByName[k]) hrByName[k] = h; });
+  const links = (cc && cc.applLinks) || {};
   const loads = (cur.rows || []).map(r => {
-    const volts = applNum(r.volts) || null, amps = applNum(r.load) || null, qty = applNum(r.qty) || 1;
+    let volts = applNum(r.volts) || null, note = "";
+    const amps = applNum(r.load) || null, qty = applNum(r.qty) || 1;
+    if (!volts) {
+      const link = links[applRowKey(r)];
+      const hr = (link && hrById[link.id]) || hrByName[String(r.cc || "").trim().toLowerCase()];
+      if (hr && WIRE_BREAKER[hr.wire]) { volts = effectivePoles(hr.wire, hr.v240) === 2 ? 240 : 120; note = `volts from Home Run wire ${hr.wire}`; }
+    }
     return { name: [r.loc, r.item].filter(Boolean).join(" · "), model: r.model || "", kind: "", qty, volts, amps,
-      va: volts && amps ? Math.round(volts * amps) : null, motor: false, status: "yes", note: "" };
+      va: volts && amps ? Math.round(volts * amps) : null, motor: false, status: "yes", note };
   });
   const name = (cc && cc.name) || String(cur.label || "").replace(/^#?\d+\s*[-–·:]?\s*/, "").trim();
   return { v: 1, source: "appliance-loads", at: new Date().toISOString(), label: `#${cur.no} ${name}`.trim(),
