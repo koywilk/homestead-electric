@@ -188,6 +188,15 @@ vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.p
   plan = ccLoadSyncPlan([edited], after, FO2);
   eq("office-edited name → manual; untouched room → auto", [plan.auto[0].patch.room, plan.auto[0].patch.name, plan.manual[0].changes], ["Study", undefined, [{ key: "name", from: "Den Can Lights", to: "Study Cans" }]]);
   eq("manual patch carries the new value + snap", plan.manual[0].patch, { fieldSnap: { name: "Study Cans", room: "Study", location: "Main Level" }, name: "Study Cans" });
+  // v496: office-edited, and FieldInk has NOT moved since what the office last took → nothing offered
+  const stillDen = { f1: { id: "f1", name: "Cans", room: "Den", control: "panel", floor: "Main Level" } };
+  eq("v496: office-edited row + field unchanged since the snap → not offered, never auto", ccLoadSyncPlan([edited], stillDen, FO2), { auto: [], manual: [] });
+  // Miller 2026-10-01: the office fixed the name by hand and stamped the bridge's (wrong) value as the snap
+  const fixed = { id: "r3", name: "Main Stairway Cans", room: "Main Stairway", location: "Main Level", origin: "fieldink", fieldLoadId: "f3", fieldSnap: { name: "Stairway Cans", room: "Stairway", location: "Main Level" } };
+  const bridgeWrong = { f3: { id: "f3", name: "Cans", room: "Stairway", control: "panel", floor: "Main Level" } };
+  eq("v496 Miller: bridge still wrong, office fixed → not offered", ccLoadSyncPlan([fixed], bridgeWrong, FO2), { auto: [], manual: [] });
+  eq("v496 Miller: bridge fixed to match the office → nothing to do", ccLoadSyncPlan([fixed], { f3: { ...bridgeWrong.f3, room: "Main Stairway" } }, FO2), { auto: [], manual: [] });
+  eq("v496 Miller: bridge moves to a THIRD value → offered (manual), never auto", ccLoadSyncPlan([fixed], { f3: { ...bridgeWrong.f3, room: "Foyer" } }, FO2).manual.map(m => m.changes.map(c => c.key)), [["name", "room"]]);
   // legacy row (no fieldSnap) that differs → manual only
   const legacy = { id: "r2", name: "Den Cans", room: "Den", location: "Main Level", origin: "fieldink", fieldLoadId: "f1" };
   plan = ccLoadSyncPlan([legacy], after, FO2);

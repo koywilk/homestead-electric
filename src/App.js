@@ -839,6 +839,11 @@ function ccLoadImportRows(loads, existingRows, mk, floorOptions = []) {
 //            (fieldSnap), so the office never touched it → apply silently.
 //   manual — the office edited that field since (or the row predates fieldSnap,
 //            so we can't tell) → offered as one tap: "Update N from FieldInk".
+//   (v496)   …but ONLY when FieldInk has moved on since the snap. If the office
+//            edited the field and the bridge still says exactly what the office
+//            last took (snap), the office's edit stands: not offered, never auto.
+//            Miller 2026-10-01: a bad republish put wrong rooms on the bridge and
+//            the rows the office had fixed by hand were re-offered forever.
 // A blank field floor never blanks a typed floor. Both patches refresh
 // fieldSnap so the NEXT field change flows automatically. Pure.
 function ccLoadWantFromField(l, opts) {
@@ -862,6 +867,7 @@ function ccLoadSyncPlan(rows, inboxById, floorOptions = []) {
       if (cur === w) continue;
       if (k === "location" && !w) continue;
       if (snap && cur === String(snap[k] || "")) autoPatch[k] = w;
+      else if (snap && w === String(snap[k] || "")) continue;   // v496: office-edited, field unchanged since → the office's value stands
       else changes.push({ key: k, from: cur, to: w });
     }
     if (Object.keys(autoPatch).length) auto.push({ id: r.id, fieldLoadId: r.fieldLoadId, patch: { ...autoPatch, fieldSnap: want } });
@@ -26859,6 +26865,104 @@ function plWriteIsStale(clientPl, basePl, serverPl) {
   return c <= r;
 }
 let _plStaleToastAt = 0;
+// ── Intent merge for panel loads (Miller, 2026-10-01) ──────────────────────
+// Twice in two days a phone that came back after a gap wrote panelizedLighting
+// with merged:true and rolled back work it never touched (5 renames 9/30 3:57 pm,
+// 6 Loads-Ran ticks 10/1 5:12 pm). The structural merge above trusts the
+// baseline, and on those phones the baseline was not what the screen derived
+// from (the pure merge with an honest baseline keeps every foreign change —
+// replayed from PITR copies). So the funnel no longer trusts the baseline for
+// this field: JobDetail's u() records WHAT this copy changed (plDiffIntent —
+// per-load fields, added / removed ids, other panelizedLighting keys), the
+// intent rides the pending patch under PL_INTENT_KEY (unioned across a burst,
+// never written), and plApplyIntent lays only that onto the server's current
+// copy. Untouched loads always come from the server. The baseline merge stays
+// for every other field and for panel writes that carry no intent (hub toggle,
+// a replayed queue), where plRepairUnticks keeps a tick nobody un-ticked and
+// plMergedRev keeps plRev from ever going backwards (the merge treated it as a
+// primitive → client wins, which is why the v471 tripwire stayed silent).
+const PL_INTENT_KEY = "_plIntent";
+function plDiffIntent(prevPl, nextPl) {
+  const p = prevPl && typeof prevPl === "object" ? prevPl : {}, n = nextPl && typeof nextPl === "object" ? nextPl : {};
+  const pL = Array.isArray(p.loads) ? p.loads : [], nL = Array.isArray(n.loads) ? n.loads : [];
+  const untracked = pL.some(l => !l || l.id == null) || nL.some(l => !l || l.id == null);
+  const pById = new Map(pL.filter(l => l && l.id != null).map(l => [l.id, l]));
+  const nById = new Map(nL.filter(l => l && l.id != null).map(l => [l.id, l]));
+  const changed = {}, added = [], removed = [];
+  nById.forEach((l, id) => {
+    const o = pById.get(id);
+    if (!o) { added.push(id); return; }
+    const fields = [];
+    new Set([...Object.keys(o), ...Object.keys(l)]).forEach(f => { if (!_jeq(o[f], l[f])) fields.push(f); });
+    if (fields.length) changed[id] = fields;
+  });
+  pById.forEach((o, id) => { if (!nById.has(id)) removed.push(id); });
+  const keys = [];
+  new Set([...Object.keys(p), ...Object.keys(n)]).forEach(k => { if (k !== "loads" && k !== "plRev" && !_jeq(p[k], n[k])) keys.push(k); });
+  return { changed, added, removed, keys, untracked };
+}
+function plMergeIntents(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  const changed = {};
+  Object.keys(a.changed || {}).forEach(id => { changed[id] = [...a.changed[id]]; });
+  Object.keys(b.changed || {}).forEach(id => { changed[id] = Array.from(new Set([...(changed[id] || []), ...b.changed[id]])); });
+  const added = new Set([...(a.added || []), ...(b.added || [])]), removed = new Set([...(a.removed || []), ...(b.removed || [])]);
+  (b.removed || []).forEach(id => { added.delete(id); delete changed[id]; });
+  (b.added || []).forEach(id => removed.delete(id));
+  return { changed, added: [...added], removed: [...removed], keys: Array.from(new Set([...(a.keys || []), ...(b.keys || [])])), untracked: !!(a.untracked || b.untracked) };
+}
+function plOverlayLoad(serverLoad, clientLoad, fields) {
+  const o = { ...serverLoad };
+  (fields || []).forEach(f => { if (clientLoad[f] === undefined) delete o[f]; else o[f] = clientLoad[f]; });
+  return o;
+}
+function plApplyIntent(serverPl, clientPl, intent, basePl) {
+  const s = serverPl && typeof serverPl === "object" ? serverPl : {}, c = clientPl && typeof clientPl === "object" ? clientPl : {};
+  const sL = Array.isArray(s.loads) ? s.loads : [], cL = Array.isArray(c.loads) ? c.loads : [];
+  const sById = new Map(sL.filter(l => l && l.id != null).map(l => [l.id, l]));
+  const changed = (intent && intent.changed) || {}, added = new Set((intent && intent.added) || []), removed = new Set((intent && intent.removed) || []);
+  const out = [], seen = new Set();
+  // this copy's order for the loads it holds (its screen), server-only loads after it
+  cL.forEach(l => {
+    if (!l || l.id == null) return;
+    seen.add(l.id);
+    const sv = sById.get(l.id);
+    if (sv) { out.push(changed[l.id] ? plOverlayLoad(sv, l, changed[l.id]) : sv); return; }
+    if (added.has(l.id) || changed[l.id]) out.push(l);   // added here, or edited here after another device removed it → keep
+    /* else: gone from the server since this copy loaded and untouched here → honor the delete */
+  });
+  sL.forEach(l => { if (l && l.id != null && !seen.has(l.id) && !removed.has(l.id)) out.push(l); });
+  const res = { ...s, loads: out };
+  ((intent && intent.keys) || []).forEach(k => {
+    if (c[k] === undefined) { delete res[k]; return; }                     // this copy removed the key
+    res[k] = _threeWayMerge(basePl && typeof basePl === "object" ? basePl[k] : undefined, c[k], s[k]);
+  });
+  return res;
+}
+// Merged plRev never goes backwards: a copy ahead of the server keeps its rev, a
+// copy behind it lands at server + 1, so the rev every copy is compared against
+// only ever grows.
+function plMergedRev(outPl, clientPl, serverPl) {
+  const cr = Number(clientPl && clientPl.plRev) || 0, sr = Number(serverPl && serverPl.plRev) || 0;
+  const rev = cr > sr ? cr : sr + 1;
+  return outPl && typeof outPl === "object" ? (Number(outPl.plRev) === rev ? outPl : { ...outPl, plRev: rev }) : outPl;
+}
+// A real un-tick clears pulledBy / pulledAt (loadPulledPatch). A merged load that
+// is pulled:false while still carrying someone's pulledBy was un-ticked by a
+// merge, not by a person — put the server's tick back.
+function plRepairUnticks(outPl, serverPl) {
+  const sById = new Map(((serverPl && serverPl.loads) || []).filter(l => l && l.id != null).map(l => [l.id, l]));
+  const repaired = [];
+  const loads = ((outPl && outPl.loads) || []).map(l => {
+    if (!l || l.id == null) return l;
+    const sv = sById.get(l.id);
+    if (!sv || sv.pulled !== true || l.pulled === true || !String(l.pulledBy || "").trim()) return l;
+    repaired.push(String(l.name || l.id));
+    return { ...l, pulled: true, pulledBy: sv.pulledBy, pulledAt: sv.pulledAt };
+  });
+  return { pl: repaired.length ? { ...outPl, loads } : outPl, repaired };
+}
 // ── end Stale-copy guards ────────────────────────────────────────────────────
 
 // v338 scalar-conflict telemetry support (read-only observability; see
@@ -27994,10 +28098,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     // that derives from its baseline from one that is older than it (see
     // plWriteIsStale). The bump lands on the local copy too, so a burst of taps
     // keeps counting up.
+    let patchForJob = finalPatch;
     if (finalPatch && finalPatch.panelizedLighting && typeof finalPatch.panelizedLighting === "object") {
-      finalPatch = { ...finalPatch, panelizedLighting: plBumpRev({ ...finalPatch.panelizedLighting, plRev: jobRef.current?.panelizedLighting?.plRev }) };
+      const prevPl = jobRef.current?.panelizedLighting;
+      const nextPl = plBumpRev({ ...finalPatch.panelizedLighting, plRev: prevPl?.plRev });
+      // Intent (Miller 2026-10-01): WHAT this copy changed, for the funnel's intent
+      // merge (plApplyIntent). Rides the patch under PL_INTENT_KEY — never on the
+      // job object, never written to Firestore.
+      let intent = null;
+      try { intent = plDiffIntent(prevPl, nextPl); } catch {}
+      patchForJob = { ...finalPatch, panelizedLighting: nextPl };
+      finalPatch = intent ? { ...patchForJob, [PL_INTENT_KEY]: intent } : patchForJob;
     }
-    const updated = {...jobRef.current, ...finalPatch};
+    const updated = {...jobRef.current, ...patchForJob};
     jobRef.current = updated;
     setJob(updated);
     onUpdate(updated, finalPatch);
@@ -51060,10 +51173,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v495
+**Last manifest update:** 2026-10-01 · App SW version: v496
 
 ---
 
+- **Panelized Lighting — a phone with an old copy can no longer un-tick or rename what it didn't touch; "Update N from FieldInk" only offers what the field changed since you last looked** · 'shipped 2026-10-01' · 'SW v496' · Koy, on Miller #1438 tonight: *"the panelized lighting section is saying FieldInk has 18 updates, and I feel like it's trying to push back the old ones again… I just want it fixed and I don't want to mess it up."* Read-only PITR forensics (every copy of the job doc since the 9/30 restore, per-load diffs, device versions, the field-ink 'ccloads' doc at four moments) found THREE things. (1) The 18 were a NEW bad publish, not the old names: at 1:14–1:16 pm a nameless FieldInk device ('updatedBy ""') republished the bridge with 31 loads' rooms shifted one room over (Great Room → Primary Water Closet, Main Powder → Primary Closey, Basement Stair Landing → Kitchen Exterior Deck…); the v450 auto-follow applied it to the 10 rows whose 'fieldSnap' still matched (silently, Keegan's Mac, 1:14:46 pm) and parked the 16 pre-v450 rows behind the button. (2) Two rollbacks v471 did not stop, both from iPhones coming back after a gap, both 'merged:true', both with 'plRev' going BACKWARDS: Austin 9/30 3:57 pm (plRev 2050 → 39) reverted 5 of fix-names' renames; Noah 10/1 5:12 pm (2097 → 2094) un-ticked 6 Loads-Ran boxes Keegan / Braden / Austin had ticked. The tripwire stayed silent because '_threeWayMerge' treats 'plRev' as a primitive (client wins). Replaying Noah's write through the real merge with an honest baseline KEEPS every foreign tick — so the phone's live baseline was not what its screen derived from; the exact on-phone path is not pinned and this ship stops trusting the baseline for this field instead of guessing. (3) The 9/30 4:40–4:51 pm module / load count changes were Koy's own edits. **Fix A — intent merge for 'panelizedLighting':** JobDetail's 'u()' records WHAT this copy changed ('plDiffIntent': per-load fields, added / removed ids, other panelizedLighting keys) and the save funnel lays only that onto the SERVER's current copy ('plApplyIntent'); untouched loads always come from the server, so a stale phone cannot un-tick or rename what it never touched. The intent rides the pending patch under '_plIntent' (unioned across a burst by 'plMergeIntents'; a panel write with no intent drops it), is stripped before every write (saveJob / flushJob / flushSaves) and never lands on the job object. A copy older than its baseline is now applied this way with a 'console.warn' instead of being refused. **Fix B — 'plRev' never goes backwards:** 'plMergedRev' makes the merged rev 'max(client, server)' or 'server + 1' (restored 1042 vs a copy at 45 → 1043, never 46). **Fix C — the no-intent path (hub toggle, replayed queue, legacy) keeps the baseline merge plus 'plRepairUnticks':** a merged load that is 'pulled:false' while still carrying someone's 'pulledBy' was un-ticked by a merge, not a person (a real un-tick clears the stamp) → the server's tick is put back with a loud 'console.error'. **Fix D — 'ccLoadSyncPlan':** an office-edited row whose bridge value still equals its 'fieldSnap' is no longer offered (the office's edit stands); it is offered again only when FieldInk moves that load to a third value, and never auto-applied. Harness: 'scripts/panel-loads-merge-test.js' +18 checks (both Miller rollback shapes replayed through the real helpers, add / remove / edit-vs-delete, other keys, bursts, rev rules, the un-tick repair); 'scripts/ccloads-suggest-test.js' +4 (the Miller "office fixed, bridge still wrong" shape). Guide 'panelizedlighting.html' updated. Data repair for Miller is a separate admin script Koy runs (names, 5 ticks, 31 snaps). **Why it won't lose data:** no field shape, loader or rules change — 'panelizedLighting' is written in the same whole-object shape through the same transaction; the intent is in-memory / pending-queue only and is deleted from every write patch before 'tx.update'; the intent path starts from the server's copy and changes only loads / fields this device actually edited (a client delete is honored, a client edit of a server-deleted load is kept, server adds are kept — the same keep bias as the structural merge); every other job field still goes through the unchanged three-way merge; when no intent is available the old path runs exactly as before plus two guards that can only ADD a tick back or raise the rev; 'plRev' stays one additive integer.
 - **Appliance Loads: set amps by hand on any appliance** · 'shipped 2026-10-01' · 'SW v494' · Koy: *"i need to be able to put in amperage. the example im having is wash tower in oak hill, its saying 30a but there is both a washer and dryer on the sheet. washer is 20a and dryer is 30 but theres no way to change the washer ot a 20a"*. The appliance drawer has a Set amps by hand box (load A, breaker A; breaker defaults to the load). The row shows the typed amps in place of the sheet's, counts as confirmed (green), the job totals use it, and the Home Runs import writes the typed amps and the wire size that goes with them. Use sheet puts it back. The Google Sheet is not changed. **Why it won't lose data:** one new additive field on the job, applAmps, saved through the same patch-save call as applLinks and applSpecOk (the loader already unwraps every job field; jobs without it behave exactly as before). It is read-only against the Sheet and Home Runs, and only the import button (unchanged, user-triggered) ever writes Home Runs.
 - **Appliance Loads: a "Likely in CC" appliance now shows its likely Home Run first, and yellow reads CONFIRM SPECS** · 'shipped 2026-10-01' · 'SW v489' · Koy: *"if it is marked likely in cc can it show the load it likely is first so i dont have to search through all the loads listed?"* and *"it should say confirm specs, so that isnt confused with confirm the load is in cc"*. In the Appliance Loads drawer, a row the sheet marks Likely now leads with the Home Run it named (with Yes, same), and the pick list opens on that one with same-kind Home Runs next, then the rest A to Z; Not-in-CC rows get the same ordering around the suggestion. The yellow status now reads CONFIRM SPECS (green SPECS CONFIRMED). A yellow appliance also gets a Confirm specs button in its drawer (with Undo) that turns it green, stored per job in a new applSpecOk field; red rows are never overridden. **Why it won't lose data:** display ordering and labels only. Linking still writes the same applLinks field through the same call as before. The one new field, applSpecOk on the job, is additive and written by the same patch-save call as applLinks (the loader already unwraps every field, so nothing is dropped, and jobs without it behave exactly as before); no rules or save-path changes, and Home Runs are never edited by this change.
 - **Panelized Lighting Loads list — the Panel column shows the Builder's LCP, and a ran load shows who ran it** · 'shipped 2026-10-01' · 'SW v488' · Koy (Miller Loads list screenshot, Panel dropdown offering Panel A / B / C while every row already wore an "LCP 4 · Mod 1 · Z3" chip): *"they are assigned to panels and modules already, so why is the panel they are assigned to not an option, and why are they not sorted into them automatically from the module panel placer?"* and *"when a load is checked off as ran, please add who pulled it here as well — the loads ran drop down at the top blends in and nobody notices it."* **Why it was wrong:** the Panel column is the pre-v449 free-text 'panel' field, and its suggestions were the old floor-section labels ('plSectionLabels', default Panel A / B / C); nothing read the Builder's 'load.assign' into it. **Now:** on a Lutron job a load the Panel Builder has placed (zoned OR parked) shows that panel's name in the Panel column, read live from the assignment (new pure 'lutronPanelOf') — tap it to open the same move / park / clear sheet the badge opens. A load with no assignment keeps the text box, whose suggestions are now the Builder's panels (LCP 1 / LCP 2 …) once 'panels' is persisted, and typing or picking one of those names **parks the load on that panel** ('assign' with no module — exactly "Put on LCP n only"); on a job still on the migrated read-view the text is saved as before and the migration's existing "Panel column naming a panel parks there" rule applies. The Loads Ran card's meta line shows the same panel. **Who ran it:** a ran load's row now shows **✓ <who> · <date>** beside its name (desktop) / in its second line (phone) — the stamp v443 already stored and only the checkbox tooltip showed. Harness 'needs-dryrun' pins 'lutronPanelOf' (zoned, parked, unassigned, unknown panel, no load). Guide 'panelizedlighting.html' updated. Built and shipped from a clean worktree off origin/main (the shared folder held two other sessions' work). **Why it won't lose data:** the derived Panel cell writes nothing; the only new write is the park-on-type path, which sets 'assign:{panelId, moduleId:null, zone:null}' on one load through the same 'u({panelizedLighting:{...pl, loads}})' patch the list already uses, and only when the Builder's 'panels' already exist on the doc (never against migrated ids); the ran stamp is read-only; no field shape, loader, function or rules change.
@@ -60639,7 +60753,14 @@ function App() {
     const ids = Object.keys(restored);
     if (ids.length > 0) {
       ids.forEach(jid => {
-        pendingPatches.current[jid] = { ...(restored[jid] || {}), ...(pendingPatches.current[jid] || {}) };
+        {
+          const res = restored[jid] || {}, cur = pendingPatches.current[jid] || {};
+          const merged = { ...res, ...cur };
+          // A restored panel-loads intent only ever describes the restored panel value;
+          // if a newer panel patch is already pending without one, drop it (baseline merge).
+          if (Object.prototype.hasOwnProperty.call(cur, "panelizedLighting") && !cur[PL_INTENT_KEY]) delete merged[PL_INTENT_KEY];
+          pendingPatches.current[jid] = merged;
+        }
       });
       console.log(`[HE] Restored ${ids.length} unsynced job edit(s) from a previous session`);
     }
@@ -60666,7 +60787,7 @@ function App() {
   // from what the client sent — i.e. the write is about to carry server-side
   // content this device's LOCAL copy does not have. Callers use it to keep
   // the baseline honest (see the post-save baseline note in saveJob).
-  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData, rescuedKeys) => {
+  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData, rescuedKeys, plIntent = null) => {
     // ROOT-CAUSE FIX (punch/anything reverting): the baseline was stored from the
     // snapshot loader (NORMALIZED/migrated shape) while `serverData` inside the
     // save transaction is the RAW Firestore doc. Different shapes ⇒ `_jeq(server,
@@ -60703,7 +60824,8 @@ function App() {
       // adopted and the screen refreshes, and the user is told to redo the one
       // change. Never a rollback. Loud on purpose — if this ever fires, the
       // invariant broke somewhere new and we want to hear about it.
-      if (k === "panelizedLighting" && plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) {
+      const plIntentOk = k === "panelizedLighting" && !!plIntent && !plIntent.untracked && !!v && typeof v === "object" && !!sv && typeof sv === "object";
+      if (k === "panelizedLighting" && !plIntentOk && plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) {
         const refPl = rawBase ? base[k] : sv;
         console.error(`[HE] STALE panel-loads write REFUSED on ${jobName || jobId}: this copy's rev ${v && v.plRev} vs ${rawBase ? "baseline" : "server"} rev ${refPl && refPl.plRev} — the server's copy stands`);
         if (Date.now() - _plStaleToastAt > 5000) {
@@ -60714,7 +60836,26 @@ function App() {
         return;
       }
       if (v && typeof v === "object" && sv !== undefined && sv !== null) {
-        out = _threeWayMerge(base[k], v, sv);
+        if (plIntentOk) {
+          // INTENT MERGE (Miller 2026-10-01, see plApplyIntent): lay only what THIS
+          // copy changed onto the server's current copy. Untouched loads always come
+          // from the server, so a stale phone cannot un-tick or rename what it never
+          // touched — the two rollbacks v471 missed. The baseline is not trusted
+          // here; a copy older than its baseline is applied the same way, not refused.
+          if (plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) console.warn(`[HE] panel-loads copy on ${jobName || jobId} is older than its baseline (rev ${v.plRev} vs ${((rawBase ? base[k] : sv) || {}).plRev}) — applied only this copy's own changes`);
+          out = plMergedRev(plApplyIntent(sv, v, plIntent, rawBase ? base[k] : undefined), v, sv);
+          console.log(`[HE] panel-loads intent merge on ${jobName || jobId}: ${Object.keys(plIntent.changed || {}).length} load(s) edited, +${(plIntent.added || []).length} −${(plIntent.removed || []).length}, keys ${(plIntent.keys || []).join(",") || "—"}; rev client ${v.plRev} base ${rawBase ? (base[k] || {}).plRev : "—"} server ${sv.plRev} → ${out.plRev}`);
+        } else if (k === "panelizedLighting") {
+          // No intent (hub toggle, a replayed queue, legacy): the baseline merge, with
+          // two guards — plRev can no longer go backwards through it, and a load
+          // nobody un-ticked keeps its tick.
+          out = _threeWayMerge(base[k], v, sv);
+          const rep = plRepairUnticks(out, sv);
+          if (rep.repaired.length) { out = rep.pl; console.error(`[HE] panel-loads baseline merge on ${jobName || jobId} would have un-ticked ${rep.repaired.length} load(s) nobody un-ticked — kept the server's ticks: ${rep.repaired.join(" · ")}`); }
+          out = plMergedRev(out, v, sv);
+        } else {
+          out = _threeWayMerge(base[k], v, sv);
+        }
         if (!_jeq(out, v)) {
           console.log(`[HE] concurrent-edit merge: preserved server changes on "${k}" for ${jobName || jobId}`);
           if (rescuedKeys) rescuedKeys.push(k);
@@ -60791,7 +60932,19 @@ function App() {
 
     // Accumulate patches for this job so we only write changed fields
     if(patch) {
-      pendingPatches.current[job.id] = {...(pendingPatches.current[job.id]||{}), ...patch};
+      {
+        const prevPending = pendingPatches.current[job.id] || {};
+        const nextPending = {...prevPending, ...patch};
+        // Intent merge (Miller 2026-10-01): a panel write's intent (what this copy
+        // changed, from JobDetail's u()) is unioned across a burst; a panel write
+        // that carries none drops the pending intent, so the whole value goes
+        // through the baseline merge instead of a mismatched intent.
+        if (Object.prototype.hasOwnProperty.call(patch, "panelizedLighting")) {
+          if (patch[PL_INTENT_KEY]) nextPending[PL_INTENT_KEY] = plMergeIntents(prevPending[PL_INTENT_KEY], patch[PL_INTENT_KEY]);
+          else delete nextPending[PL_INTENT_KEY];
+        }
+        pendingPatches.current[job.id] = nextPending;
+      }
       persistPending();   // durable BEFORE any network work is attempted
       // Mirror change orders to FieldInk when they change (fire-and-forget,
       // hash-gated internally, separate field-ink project — cannot affect this
@@ -60844,13 +60997,17 @@ function App() {
       // had the full job.
       const accumulated = { ...(pendingPatches.current[job.id] || {}) };
       const accumulatedKeys = Object.keys(accumulated);
+      // The panel-loads intent rides the pending patch under a reserved key: it is
+      // handed to the merge and never written (see plApplyIntent).
+      const plIntent = accumulated[PL_INTENT_KEY] || null;
+      const toWrite = { ...accumulated }; delete toWrite[PL_INTENT_KEY];
 
       try {
 
         // Tag every save with device identity so we can trace who changed what
         const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
 
-        if(accumulatedKeys.length > 0) {
+        if(Object.keys(toWrite).length > 0) {
           // Patch mode: only write the fields that changed — but for structural
           // fields (roughPunch, changeOrders, returnTrips, updates, materials,
           // Q&A, …) the value the UI hands us is the ENTIRE field rebuilt from
@@ -60863,7 +61020,7 @@ function App() {
           // someone else since we loaded are preserved; this user's explicit
           // deletes still go through. Scalars behave exactly as before.
           const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
-          const cleanPatch = sanitize(accumulated);
+          const cleanPatch = sanitize(toWrite);
           let _writtenPatch = null;
           const _rescued = [];
           await runTransaction(db, async (tx) => {
@@ -60876,7 +61033,7 @@ function App() {
               return;
             }
             const serverData = snap.data()?.data || {};
-            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _rescued)};
+            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _rescued, plIntent)};
             // Flag writes whose transaction merged in ANOTHER device's concurrent
             // changes. The echo of a merged write must be re-adopted even by the
             // tab that wrote it — its local copy is missing the rescued content
@@ -60924,6 +61081,10 @@ function App() {
             setSelected(s => (s && s.id === job.id) ? apply(s) : s);
             _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, []);   // local now holds the merged content, so the baseline may too
           }
+        } else if (accumulatedKeys.length > 0) {
+          // Only the intent key was left over (its panel write already landed) — nothing to write.
+          delete pendingPatches.current[job.id];
+          persistPending();
         } else {
           // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
           // so we never wipe Firestore fields another user added that aren't in our local snapshot.
@@ -61128,9 +61289,11 @@ function App() {
       // Deliberately NOT persisting here. The durable copy must survive until
       // the server confirms — dropping it now would recreate the very window
       // this change exists to close.
-      if(accumulated && Object.keys(accumulated).length > 0) {
+      const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
+      const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
+      if(toWrite && Object.keys(toWrite).length > 0) {
         const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
-        const cleanPatch = sanitize(accumulated);
+        const cleanPatch = sanitize(toWrite);
         try {
           // Same transactional three-way merge as saveJob — a close-flush
           // from a stale device must not overwrite punch/CO/etc. wholesale.
@@ -61145,7 +61308,7 @@ function App() {
               return;
             }
             const serverData = snap.data()?.data || {};
-            const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
+            const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr, plIntent);
             _written = {...meta, merged:_fr.length > 0, ...wp};
             tx.update(jref, _written);
           });
@@ -61433,9 +61596,11 @@ function App() {
       // Deliberately NOT persisting here. The durable copy must survive until
       // the server confirms — dropping it now would recreate the very window
       // this change exists to close.
-      if(accumulated && Object.keys(accumulated).length > 0) {
+      const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
+      const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
+      if(toWrite && Object.keys(toWrite).length > 0) {
         const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
-        const cleanPatch = sanitize(accumulated);
+        const cleanPatch = sanitize(toWrite);
         // Transactional three-way merge -- NEVER a raw updateDoc on a structural
         // field (data.roughPunch etc.). Firestore has no partial-array update,
         // so a raw write wholesale-replaces the tree and silently drops items
@@ -61454,7 +61619,7 @@ function App() {
             return;
           }
           const serverData = snap.data()?.data || {};
-          const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
+          const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr, plIntent);
           _written = {...meta, merged:_fr.length > 0, ...wp};
           tx.update(jref, _written);
         }).then(() => {
