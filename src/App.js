@@ -51137,6 +51137,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
+- **My Day — NEW FOR YOU: anything sent to you by someone else stays pinned at the very top until you've seen it** · 'on branch 2026-10-03, awaiting Koy's go-ahead' · 'SW v497' · Koy: *"needs, tasks, anything assigned to me specifically by another person should always be at the top and be easily visible if i havent seen it yet."* A boxed, always-open **New for you** group above Focus today holds every Mine row sent by someone other than you (needs by assignedBy / createdBy, questions by addedBy, punch items assigned to you) that this device hasn't acknowledged. A row counts as seen once it has been on screen (≥60 % visible, page in the foreground) for 4 seconds, or the moment you touch it. Each row wears a blue **from Josh** chip and the header shows **N new for you**. Acknowledgements live in localStorage per user per device, like the New markers; the older "New since" group keeps everything else that's new and no longer repeats these rows. **Why it won't lose data:** read-only over the rows; the only write is a localStorage map on the device.
+
 - **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **Batch B — REMOVED same day** (Koy: rows bounced on the Job Board dropdowns and the crew schedule with real data; "fix them or remove what is still having issues"): the page-wide list engine is switched off and nothing starts it. The row tags it used are inert. Gone with it: G6, M4, M5, N1, N2, C1, C3, P1, P2, S1, O1, O3, J1, T1, RF2, PZ3, RT1. Kept from that batch: J3 (needs-attention unfolds) and J2 (tile bump). Original design, for the record: one page-wide list engine in 'motion.js' slides any keyed row to its new place, drops in a row that arrives beside existing ones, and flashes a keyed element whose text changes; rows are tagged on the Needs board (open + done), the COs tracker cards (slide between status columns, flash on status change — C1, C3), Job Prep rows and the redline-walk block (P1, P2), Time Off requests (O1), contractor requests (S1), Upcoming and Tasks (O3), the Job Board crew strip cells (J1) and Today's per-person pulse cards (T1). The Job Board's needs-attention banner unfolds (J3) and the pipeline tiles bump on tap (J2). Not done: Safety (an outside site in a frame), Service Size (prebuilt tool, no source here), Forecast R1/R2, Huddle H1, Settings toggles O2, Needs N3 — listed for Koy. **Batch C (job tabs):** Photos — the viewer zooms in from the thumbnail you tapped and gets ‹ › with a count to step through that set (PH1), each uploading photo shows a ring tile and the thumbnail drops in when done (PH2); Rough / Finish — the failed-items box unfolds and the Pass / Fail buttons crossfade (RF1), punch rows are keyed so new ones drop in and lists reflow (RF2); Home Runs — By Panel eases in (HR2); Panelized Lighting — load rows are keyed and flash when FieldInk follow-sync changes their text (PZ3); Change Orders — cards keyed, Email flashes the card with "Email sent" (CO1, C2); Return Trips — cards keyed so they slide between sections (RT1), a check-off on the trip flashes the matching inspection item (RT2); QC — Create return trip from the prompt flies to the tab (QC1). Not done this round: JI1, AC1, PL1, RF3/RF4, Q1/Q2, HR1, PZ1/PZ2, OI1 — listed for Koy. **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
 
 - **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Motion is now ON by default for everyone: the phone's Reduce Motion setting no longer silently wins (Koy's iPhone has it on, which had turned every animation off since v481 without anyone knowing). The Settings (⋯) menu has **Animations: on / off** to turn it off per device. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
@@ -56754,13 +56756,41 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
   const myTitle = myRec.title || myRec.role || "";
   const crewForeman = myTitle === "foreman" ? me : (myRec.foremanId ? (((users || []).find(u => u && u.id === myRec.foremanId) || {}).name || "") : "");
-  const [openGroups, setOpenGroups] = useState(() => new Set(["mine", "new"]));
+  const [openGroups, setOpenGroups] = useState(() => new Set(["mine", "new", "foryou"]));
   const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
   const [undo, setUndo] = useState(null);
   const _mdRoot = useRef(null);
   useHeFlip(_mdRoot);                 // v497 A (G6/M4/M5): rows slide to their new group / pin slot / Done
   const _qLast = useRef({});          // v497 A (M2): last discussion message per row, to flash a fresh reply
+  // v497 (Koy 2026-10-03: "needs, tasks, anything assigned to me specifically by another person should
+  // always be at the top and be easily visible if i havent seen it yet"): an "acknowledged" set per
+  // device + user. A row sent to me by someone else stays in the NEW FOR YOU box at the very top until
+  // it has been on screen for 4 s while the page is visible, or I touch it. Local only (like the New
+  // markers) — nothing is written to Firestore.
+  const ackKey = "he_myday_ack_" + (userKeyOf(identity) || "anon");
+  const ackRef = useRef(null);
+  if (ackRef.current === null) { try { ackRef.current = JSON.parse(localStorage.getItem(ackKey) || "{}") || {}; } catch { ackRef.current = {}; } }
+  const [, setAckTick] = useState(0);
+  const ack = (key) => { if (!key || ackRef.current[key]) return; ackRef.current[key] = Date.now(); try { localStorage.setItem(ackKey, JSON.stringify(ackRef.current)); } catch {} setAckTick(t => t + 1); };
+  const seenIO = useRef(null), seenTimers = useRef(new Map());
+  const observeSeen = (el, key) => {
+    if (!el) return;
+    if (!seenIO.current && typeof IntersectionObserver !== "undefined") {
+      seenIO.current = new IntersectionObserver(entries => {
+        entries.forEach(en => {
+          const k = en.target.getAttribute("data-ackkey"); if (!k) return;
+          const t = seenTimers.current.get(k);
+          if (en.isIntersecting && en.intersectionRatio >= 0.6 && document.visibilityState === "visible") {
+            if (!t) seenTimers.current.set(k, setTimeout(() => { seenTimers.current.delete(k); ack(k); }, 4000));
+          } else if (t) { clearTimeout(t); seenTimers.current.delete(k); }
+        });
+      }, { threshold: [0, 0.6, 1] });
+    }
+    el.setAttribute("data-ackkey", key);
+    if (seenIO.current) seenIO.current.observe(el);
+  };
+  useEffect(() => () => { if (seenIO.current) seenIO.current.disconnect(); seenTimers.current.forEach(t => clearTimeout(t)); }, []);
   // v434 Edit / Void / edit-your-reply panels (Row is a plain render fn, so
   // the state lives here, like updFor). One panel open at a time.
   const [editFor, setEditFor] = useState(null);      // row key whose Edit panel is open
@@ -56882,7 +56912,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
       need: n, canUpdate: !!onAddNeedUpdate, latest: lastNeedUpdate(n), nUpdates: needUpdates(n).length,
       snoozedUntil: isSnoozed(n, todayYmd) ? n.snoozedUntil : "", audience: needUpdateAudience(n, me),
       // v431: photos. Requester can add from Sent too; ✕ = uploader or the head board.
-      photos: needPhotos(n), canPhoto: !!onAddNeedPhotos && (!readOnly || sentByMe(n, identity)), canRmPhotos: !!onRemoveNeedPhoto,
+      by: from, photos: needPhotos(n), canPhoto: !!onAddNeedPhotos && (!readOnly || sentByMe(n, identity)), canRmPhotos: !!onRemoveNeedPhoto,
       onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n)); },
       onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); },
       // v434: Edit + Void — the sender (assignedBy/createdBy me) or whoever
@@ -56927,7 +56957,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const addNeeds = (list) => list.forEach(n => { if (seenNeed.has(n.id)) return; seenNeed.add(n.id); mineRows.push(needRow(n, false)); });
   addNeeds(iAmHead ? headQueue(needs, identity, todayYmd) : openNeeds.filter(n => isMine(n, identity)));
   coverees.forEach(name => { const who = { name }; addNeeds(sameName(name, headName) ? headQueue(needs, who, todayYmd) : openNeeds.filter(n => isMine(n, who))); });
-  punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", bucket: "today", title: plainText(i.text) || "open item",
+  punchAssignedTo(me, jobs).forEach(i => mineRows.push({ key: "punch_" + i.jobId + "_" + i.id, kind: "punch", by: (i.assignedBy || i.addedBy || ""), fromOther: true, bucket: "today", title: plainText(i.text) || "open item",
     tag: "Punch", tagColor: C.purple, sub: [i.jobName, i.phase, i.room].filter(Boolean), jobId: i.jobId, section: i.phase, canDone: true, canSnooze: false,
     onDone: () => { onTogglePunch(i.jobId, i.phase, i.id); stage("Punch item closed", () => onTogglePunch(i.jobId, i.phase, i.id)); } }));
   // v491 hotfix: this block must sit ABOVE the question-row builder below, which
@@ -56964,7 +56994,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     const patchQ = (fields) => { const job = (jobs || []).find(j => j && j.id === q.jobId); if (!job) return; const cur = job[field] || {}; const next = { ...cur, [q.floorKey]: (Array.isArray(cur[q.floorKey]) ? cur[q.floorKey] : []).map(x => x && x.id === q.id ? { ...x, ...fields } : x) }; onUpdateJob({ ...job, [field]: next }, { [field]: next }); };
     const qThread = [...(Array.isArray(q.thread) ? q.thread : []), ...(((qThreads[q.jobId] || {})[`${String(q.phase).toLowerCase()}_${q.floorKey}_${q.id}`]) || [])]
       .filter(m => m && (String(m.text || "").trim() || (m.photos || []).length)).sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
-    mineRows.push({ key: qKey, kind: "question", bucket: "today", title: plainText(q.question) || "question",
+    mineRows.push({ key: qKey, kind: "question", by: (q.addedBy || ""), bucket: "today", title: plainText(q.question) || "question",
       tag: "Question", tagColor: C.teal, sub: [q.jobName, q.phase, q.room || q.floor, q.addedBy ? `asked by ${first(q.addedBy)}` : ""].filter(Boolean), jobId: q.jobId, section: q.phase, canDone: true, canSnooze: false,
       qThread,
       onDone: () => { patchQ({ done: true }); stage("Question closed", () => patchQ({ done: false })); },
@@ -57389,9 +57419,14 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   // row (and every row with a new reply) is ALSO listed in its own group at the
   // very top of the page, open by default, titled with when you last looked.
   // Same row objects, so Done / Answer / Approve work from either place.
-  const newRowsTop = view === "person" ? [] : sortRows(mineQ.filter(r => r && (r.isNew || r.newReply)));
+  // v497: unseen rows sent to me by someone else — always on top, until acknowledged on this device.
+  mineRows.forEach(r => { if (!r) return; const other = r.fromOther === true || (r.by && !sameName(r.by, me)); r.unseen = !!(other && !ackRef.current[r.key] && r.state !== "with"); });
+  const forYouRows = view === "person" ? [] : sortRows(mineQ.filter(r => r && r.unseen));
+  const _fySet = new Set(forYouRows.map(r => r.key));
+  const newRowsTop = view === "person" ? [] : sortRows(mineQ.filter(r => r && (r.isNew || r.newReply) && !_fySet.has(r.key)));
   const seenAtLabel = (() => { const at = prevSeenRef.current && prevSeenRef.current.at; if (!at) return "last time"; const d = new Date(at); if (isNaN(d.getTime())) return "last time"; const sameDay = d.toDateString() === new Date().toDateString(); return (sameDay ? "" : d.toLocaleDateString([], { weekday: "short" }) + " ") + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); })();
   const groups = [
+    ...(forYouRows.length ? [{ key: "foryou", title: "New for you", rows: forYouRows, badge: `${forYouRows.length} unseen`, empty: "" }] : []),
     ...(newRowsTop.length ? [{ key: "new", title: `New since ${seenAtLabel}`, rows: newRowsTop, badge: `${newRowsTop.length} new`, empty: "" }] : []),
     ...(view === "person" ? personGroups : [
       // v459: the QC walks tracker (was its own tab, then a side card — Koy: "why do
@@ -57489,9 +57524,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     const pinned = pinnedSet.has(r.key);
     const flashing = flashKey === r.key;   // v446: row a push / inbox tap deep-linked to
     return (
-      <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key}
+      <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key} onPointerDownCapture={r.unseen ? () => ack(r.key) : undefined}
         {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#3E7D5A", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: "#B0892C", fn: () => setSnoozeFor(r.key) } : null }))}
-        ref={el => { if (!el || !r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
+        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
@@ -57505,6 +57540,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
         <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: narrow ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
+            {r.unseen && <span title="Sent to you by someone else and not seen yet on this device" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{r.by ? `from ${first(r.by)}` : "assigned to you"}</span>}
             {(r.isNew || r.newReply) && <span title={r.isNew ? "Wasn't on your list the last time you opened My Day on this device" : "A reply came in since you last opened My Day on this device"} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: "#2F6FDE" }}>{r.isNew ? "New" : "New reply"}</span>}
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
             {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
@@ -57830,10 +57866,12 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     );
   };
   const Group = (g) => {
-    const isOpen = openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
+    const isOpen = g.key === "foryou" || openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
     const overdue = g.rows.filter(r => r.bucket === "overdue").length;
     return (
-      <div key={g.key} style={{ marginBottom: 14 }}>
+      <div key={g.key} style={g.key === "foryou"
+        ? { marginBottom: 16, padding: "8px 10px 10px", background: "#2F6FDE10", border: "2px solid #2F6FDE", borderRadius: 12, boxShadow: "0 6px 24px #2F6FDE22" }
+        : { marginBottom: 14 }}>
         <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
           <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
@@ -58025,6 +58063,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 28, letterSpacing: "0.06em", color: C.text, lineHeight: 1 }}>MY DAY</div>
         <HelpDot section="myday" />
+        {forYouRows.length > 0 && <span key={forYouRows.length} className="he-bump" title="Sent to you by someone else, not seen yet" style={{ display: "inline-block", fontSize: 11, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 999, padding: "3px 10px" }}>{forYouRows.length} new for you</span>}
         <div style={{ display: "flex", gap: 12, alignItems: "center", marginLeft: "auto", flexWrap: "wrap" }}>
           {onGoHome && link("Job Board", onGoHome)}
           {crewForeman && onOpenCrew && link("My Crew", () => onOpenCrew(crewForeman))}
