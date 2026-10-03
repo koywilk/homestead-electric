@@ -5,7 +5,7 @@
   "description": "Source for public/tools/service-size (Service Size Calculator). Build output is committed; the app's deploy does not run this build.",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/calc.test.mjs && node test/profile.test.mjs && node test/sheet.test.mjs"
+    "test": "node test/calc.test.mjs && node test/profile.test.mjs && node test/sheet.test.mjs && node test/share.test.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "4.10.38",

@@ -5,6 +5,7 @@ import {
 } from "./calc.js";
 import { applyProfile, toProfile, fillSummary, LP } from "./profile.js";
 import { sheetData } from "./sheet.js";
+import { encodeState, encodeStateSync, buildPrintUrl } from "./share.js";
 import "./ServiceSizeCalculator.css";
 
 /**
@@ -16,7 +17,7 @@ import "./ServiceSizeCalculator.css";
  *   initialState  optional; a saved `inputs` object, or the result of applyPlan(...)
  *   onSave        optional async (record, state) => void. Shows a Save button. record = toRecord(state, analysis)
  */
-export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", accessKey, initialState, onSave }) {
+export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", accessKey, initialState, onSave, openedForPrint = "" }) {
   const [s, setS] = useState(() => normalizeState(initialState || {}));
   const [busy, setBusy] = useState(null); // progress text while reading plans
   const [err, setErr] = useState("");
@@ -24,9 +25,21 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
   const [copied, setCopied] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
   // Printable sheets (v501): "customer" (the size and why, no price) or "office" (everything).
-  const [printMode, setPrintMode] = useState("office");
+  // Both are always mounted; html[data-print] picks which one prints, set in the SAME click
+  // that calls window.print() so phone browsers accept it as a user action (v502).
   const [printAsk, setPrintAsk] = useState(null);
-  useEffect(() => { const done = () => setPrintAsk(null); window.addEventListener("afterprint", done); return () => window.removeEventListener("afterprint", done); }, []);
+  useEffect(() => {
+    const done = () => { setPrintAsk(null); document.documentElement.removeAttribute("data-print"); };
+    window.addEventListener("afterprint", done);
+    return () => window.removeEventListener("afterprint", done);
+  }, []);
+  // Phones: a frame (the Tools tab) cannot print, and the installed app has no print dialog,
+  // so the sheet opens in a real browser tab with the state carried in the link.
+  const encodedRef = useRef("");
+  const inFrame = typeof window !== "undefined" && window.top !== window;
+  const standalone = typeof window !== "undefined" && ((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true);
+  const coarse = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  const needsNewTab = !openedForPrint && (standalone || (inFrame && coarse));
   const ctl = useRef(null);
   const noteRef = useRef(null);
   // Handoff with the other Tools (device-local; see public/tools/shared/load-profile.js).
@@ -58,7 +71,23 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
   const undoFill = () => { if (undo) { setS(undo); setUndo(null); setFillMsg("Put back what was here before the fill."); } };
   const sendToGenerator = () => { LP.writeProfile(toProfile(s, a)); LP.openTool("generator-sizing"); };
   const sheet = useMemo(() => sheetData(s, a), [s, a]);
-  const doPrint = (mode) => { setPrintAsk(null); setPrintMode(mode); setTimeout(() => { try { window.print(); } catch (e) {} }, 80); };
+  useEffect(() => {
+    if (!needsNewTab) return;
+    let dead = false;
+    encodeState(s).then((enc) => { if (!dead) encodedRef.current = enc; }).catch(() => {});
+    return () => { dead = true; };
+  }, [s, needsNewTab]);
+  const doPrint = (mode) => {
+    setPrintAsk(null);
+    if (needsNewTab) {
+      // Same click: a popup opened later would be blocked on phones.
+      const enc = encodedRef.current || encodeStateSync(s);
+      window.open(buildPrintUrl(window.location.pathname, enc, mode), "_blank");
+      return;
+    }
+    document.documentElement.setAttribute("data-print", mode);
+    try { window.print(); } catch (e) { /* the browser said no; the sheet is still on screen when printed from its menu */ }
+  };
   const startPrint = (mode) => { if (mode === "customer" && sheet.estimates.length) setPrintAsk(sheet.estimates); else doPrint(mode); };
   const removeExtra = (id) => setS((p) => ({ ...p, extras: p.extras.filter((x) => x.id !== id) }));
   const setExtra = (id, patch) => setS((p) => ({ ...p, extras: p.extras.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
@@ -137,6 +166,14 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
 
   return (
     <div className="ssc">
+      {openedForPrint && (
+        <div className="ssc-openbar">
+          <b>Opened for printing.</b> Use the share or print button here, or tap
+          {" "}<button type="button" className="ssc-btn small" onClick={() => startPrint("customer")}>Print customer copy</button>
+          {" "}<button type="button" className="ssc-btn ghost small" onClick={() => startPrint("office")}>Print office copy</button>.
+          {" "}Changes made on this page do not go back to the app.
+        </div>
+      )}
       <div className="ssc-grid">
         <div className="ssc-col">
           {/* Drop zone */}
@@ -448,10 +485,11 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
               {" "}<button type="button" className="ssc-btn ghost small" onClick={() => setPrintAsk(null)}>Cancel</button>
             </p>
           )}
-          <p className="ssc-hint" style={{ marginTop: 8 }}>The customer copy is the size and why, no price. The office copy is everything on this page. On a phone, tap Open full screen at the top of the Tools tab first, so the print dialog belongs to the tool.</p>
+          <p className="ssc-hint" style={{ marginTop: 8 }}>The customer copy is the size and why, no price. The office copy is everything on this page. On a phone the sheet opens in its own browser tab; print or save it as a PDF from the share button there.</p>
         </section>
       </div>
-      <PrintSheet mode={printMode} s={s} a={a} d={sheet} />
+      <PrintSheet mode="customer" s={s} a={a} d={sheet} />
+      <PrintSheet mode="office" s={s} a={a} d={sheet} />
     </div>
   );
 }

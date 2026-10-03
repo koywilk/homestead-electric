@@ -167,6 +167,9 @@
    slate band with a schematic grid, steel-blue hero number, a ladder of breaker rungs,
    mono eyebrow labels, tinted flat chips. Hidden on screen; only the sheet prints. */
 .ssc-print { display: none; }
+.ssc-openbar { margin: -4px 0 14px; padding: 10px 12px; border-radius: 6px; background: var(--ssc-ink); color: var(--ssc-surface); font-size: 13.5px; line-height: 1.6; }
+.ssc-openbar .ssc-btn { vertical-align: baseline; }
+.ssc-openbar .ssc-btn.ghost { color: var(--ssc-surface); border-color: var(--ssc-surface); }
 .ssc-warnline { margin: 10px 0 0; font-size: 13px; color: var(--ssc-warn); background: var(--ssc-warn-soft); padding: 8px 10px; border-radius: 4px; }
 @media print {
   @page { margin: 9mm 10mm; }
@@ -178,8 +181,10 @@
     --ink: #1B1F24; --slate: #141821; --panel: #1B2030; --steel: #66A8FF; --steel-deep: #3B5BA5; --steel-wash: #EAF2FF; --steel-line: #C9DCF7;
     --line: #DCE2EA; --soft: #F3F5F8; --dim: #5E6670; --mute: #8A94A3; --ember: #B06A2C; --ember-wash: #FBEFE6;
     --disp: "Barlow Condensed", "Arial Narrow", Arial, sans-serif; --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; --body: "DM Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
-    display: block; color: var(--ink); font-family: var(--body); font-size: 11px; line-height: 1.4;
+    display: none; color: var(--ink); font-family: var(--body); font-size: 11px; line-height: 1.4;
   }
+  /* which sheet prints: the one the click chose; the office copy when printing from the browser menu */
+  html:not([data-print]) .ssc-print--office, html[data-print="office"] .ssc-print--office, html[data-print="customer"] .ssc-print--customer { display: block; }
   .ssc-print .ps-label { font-family: var(--mono); font-weight: 700; font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; display: flex; align-items: center; gap: 7px; }
   .ssc-print .ps-label::before { content: ""; width: 10px; height: 3px; background: var(--steel); border-radius: 2px; flex: none; }
   .ssc-print .ps-label--light { color: #9DB8DD; }
