@@ -51137,7 +51137,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **My Day — NEW FOR YOU: anything sent to you by someone else stays pinned at the very top until you've seen it** · 'on branch 2026-10-03, awaiting Koy's go-ahead' · 'SW v497' · Koy: *"needs, tasks, anything assigned to me specifically by another person should always be at the top and be easily visible if i havent seen it yet."* A boxed, always-open **New for you** group above Focus today holds every Mine row sent by someone other than you (needs by assignedBy / createdBy, questions by addedBy, punch items assigned to you) that this device hasn't acknowledged. A row counts as seen once it has been on screen (≥60 % visible, page in the foreground) for 4 seconds, or the moment you touch it. Each row wears a blue **from Josh** chip and the header shows **N new for you**. Acknowledgements live in localStorage per user per device, like the New markers; the older "New since" group keeps everything else that's new and no longer repeats these rows. **Why it won't lose data:** read-only over the rows; the only write is a localStorage map on the device.
+- **My Day — NEW FOR YOU: anything sent to you by someone else stays pinned at the very top until you've seen it** · 'on branch 2026-10-03, awaiting Koy's go-ahead' · 'SW v497' · Koy: *"needs, tasks, anything assigned to me specifically by another person should always be at the top and be easily visible if i havent seen it yet."* A boxed, always-open **New for you** group above Focus today holds every Mine row sent by someone other than you (needs by assignedBy / createdBy, questions by addedBy, punch items assigned to you) that this device hasn't acknowledged. A row counts as seen only when you tap it (Koy: *"only when i click on and view it, it should clear"*); sitting on screen does nothing. Each row wears a blue **from Josh** chip and the header shows **N new for you**. Acknowledgements live in localStorage per user per device, like the New markers; the older "New since" group keeps everything else that's new and no longer repeats these rows. **Why it won't lose data:** read-only over the rows; the only write is a localStorage map on the device.
 
 - **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v497' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **Batch B — REMOVED same day** (Koy: rows bounced on the Job Board dropdowns and the crew schedule with real data; "fix them or remove what is still having issues"): the page-wide list engine is switched off and nothing starts it. The row tags it used are inert. Gone with it: G6, M4, M5, N1, N2, C1, C3, P1, P2, S1, O1, O3, J1, T1, RF2, PZ3, RT1. Kept from that batch: J3 (needs-attention unfolds) and J2 (tile bump). Original design, for the record: one page-wide list engine in 'motion.js' slides any keyed row to its new place, drops in a row that arrives beside existing ones, and flashes a keyed element whose text changes; rows are tagged on the Needs board (open + done), the COs tracker cards (slide between status columns, flash on status change — C1, C3), Job Prep rows and the redline-walk block (P1, P2), Time Off requests (O1), contractor requests (S1), Upcoming and Tasks (O3), the Job Board crew strip cells (J1) and Today's per-person pulse cards (T1). The Job Board's needs-attention banner unfolds (J3) and the pipeline tiles bump on tap (J2). Not done: Safety (an outside site in a frame), Service Size (prebuilt tool, no source here), Forecast R1/R2, Huddle H1, Settings toggles O2, Needs N3 — listed for Koy. **Batch C (job tabs):** Photos — the viewer zooms in from the thumbnail you tapped and gets ‹ › with a count to step through that set (PH1), each uploading photo shows a ring tile and the thumbnail drops in when done (PH2); Rough / Finish — the failed-items box unfolds and the Pass / Fail buttons crossfade (RF1), punch rows are keyed so new ones drop in and lists reflow (RF2); Home Runs — By Panel eases in (HR2); Panelized Lighting — load rows are keyed and flash when FieldInk follow-sync changes their text (PZ3); Change Orders — cards keyed, Email flashes the card with "Email sent" (CO1, C2); Return Trips — cards keyed so they slide between sections (RT1), a check-off on the trip flashes the matching inspection item (RT2); QC — Create return trip from the prompt flies to the tab (QC1). Not done this round: JI1, AC1, PL1, RF3/RF4, Q1/Q2, HR1, PZ1/PZ2, OI1 — listed for Koy. **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
 
@@ -56766,31 +56766,14 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   // v497 (Koy 2026-10-03: "needs, tasks, anything assigned to me specifically by another person should
   // always be at the top and be easily visible if i havent seen it yet"): an "acknowledged" set per
   // device + user. A row sent to me by someone else stays in the NEW FOR YOU box at the very top until
-  // it has been on screen for 4 s while the page is visible, or I touch it. Local only (like the New
-  // markers) — nothing is written to Firestore.
+  // I touch it (Koy: "only when i click on and view it, it should clear" — no on-screen timer). Local
+  // only (like the New markers) — nothing is written to Firestore.
   const ackKey = "he_myday_ack_" + (userKeyOf(identity) || "anon");
   const ackRef = useRef(null);
   if (ackRef.current === null) { try { ackRef.current = JSON.parse(localStorage.getItem(ackKey) || "{}") || {}; } catch { ackRef.current = {}; } }
   const [, setAckTick] = useState(0);
   const ack = (key) => { if (!key || ackRef.current[key]) return; ackRef.current[key] = Date.now(); try { localStorage.setItem(ackKey, JSON.stringify(ackRef.current)); } catch {} setAckTick(t => t + 1); };
-  const seenIO = useRef(null), seenTimers = useRef(new Map());
-  const observeSeen = (el, key) => {
-    if (!el) return;
-    if (!seenIO.current && typeof IntersectionObserver !== "undefined") {
-      seenIO.current = new IntersectionObserver(entries => {
-        entries.forEach(en => {
-          const k = en.target.getAttribute("data-ackkey"); if (!k) return;
-          const t = seenTimers.current.get(k);
-          if (en.isIntersecting && en.intersectionRatio >= 0.6 && document.visibilityState === "visible") {
-            if (!t) seenTimers.current.set(k, setTimeout(() => { seenTimers.current.delete(k); ack(k); }, 4000));
-          } else if (t) { clearTimeout(t); seenTimers.current.delete(k); }
-        });
-      }, { threshold: [0, 0.6, 1] });
-    }
-    el.setAttribute("data-ackkey", key);
-    if (seenIO.current) seenIO.current.observe(el);
-  };
-  useEffect(() => () => { if (seenIO.current) seenIO.current.disconnect(); seenTimers.current.forEach(t => clearTimeout(t)); }, []);
+  const observeSeen = () => {};   // (timer-based seen removed on Koy's call — touch only)
   // v434 Edit / Void / edit-your-reply panels (Row is a plain render fn, so
   // the state lives here, like updFor). One panel open at a time.
   const [editFor, setEditFor] = useState(null);      // row key whose Edit panel is open
@@ -57540,7 +57523,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
         <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: narrow ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
-            {r.unseen && <span title="Sent to you by someone else and not seen yet on this device" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{r.by ? `from ${first(r.by)}` : "assigned to you"}</span>}
+            {r.unseen && <span title="Sent to you by someone else — stays here until you tap it" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{r.by ? `from ${first(r.by)}` : "assigned to you"}</span>}
             {(r.isNew || r.newReply) && <span title={r.isNew ? "Wasn't on your list the last time you opened My Day on this device" : "A reply came in since you last opened My Day on this device"} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: "#2F6FDE" }}>{r.isNew ? "New" : "New reply"}</span>}
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
             {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
