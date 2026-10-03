@@ -1,8 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ITEMS, SIZES, RANGE_LABEL, RANGE_SHORT, DRYER_LABEL, WH_LABEL, HEAT_LABEL, COOL_LABEL, TIER_LABEL,
   normalizeState, tierItems, effective, analyze, bidNote, applyPlan, toRecord, sizeLabel, fmt,
 } from "./calc.js";
+import { applyProfile, toProfile, fillSummary, LP } from "./profile.js";
+import { sheetData } from "./sheet.js";
+import { encodeState, encodeStateSync, buildPrintUrl } from "./share.js";
 import "./ServiceSizeCalculator.css";
 
 /**
@@ -14,19 +17,80 @@ import "./ServiceSizeCalculator.css";
  *   initialState  optional; a saved `inputs` object, or the result of applyPlan(...)
  *   onSave        optional async (record, state) => void. Shows a Save button. record = toRecord(state, analysis)
  */
-export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", accessKey, initialState, onSave }) {
+export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", accessKey, initialState, onSave, openedForPrint = "" }) {
   const [s, setS] = useState(() => normalizeState(initialState || {}));
   const [busy, setBusy] = useState(null); // progress text while reading plans
   const [err, setErr] = useState("");
   const [over, setOver] = useState(false);
   const [copied, setCopied] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
+  // Printable sheets (v501): "customer" (the size and why, no price) or "office" (everything).
+  // Both are always mounted; html[data-print] picks which one prints, set in the SAME click
+  // that calls window.print() so phone browsers accept it as a user action (v502).
+  const [printAsk, setPrintAsk] = useState(null);
+  useEffect(() => {
+    const done = () => { setPrintAsk(null); document.documentElement.removeAttribute("data-print"); };
+    window.addEventListener("afterprint", done);
+    return () => window.removeEventListener("afterprint", done);
+  }, []);
+  // Phones: a frame (the Tools tab) cannot print, and the installed app has no print dialog,
+  // so the sheet opens in a real browser tab with the state carried in the link.
+  const encodedRef = useRef("");
+  const inFrame = typeof window !== "undefined" && window.top !== window;
+  const standalone = typeof window !== "undefined" && ((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true);
+  const coarse = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  const needsNewTab = !openedForPrint && (standalone || (inFrame && coarse));
   const ctl = useRef(null);
   const noteRef = useRef(null);
+  // Handoff with the other Tools (device-local; see public/tools/shared/load-profile.js).
+  const [profiles, setProfiles] = useState(() => LP.readProfiles());
+  const [undo, setUndo] = useState(null);
+  const [fillMsg, setFillMsg] = useState("");
+  const initialJson = useRef(JSON.stringify(normalizeState(initialState || {})));
+  const dirty = useRef(false);
+  useEffect(() => LP.onProfiles(setProfiles), []);
+  const genVisible = LP.isVisible("generator-sizing");
 
   const a = useMemo(() => analyze(s), [s]);
   const note = useMemo(() => bidNote(s, a), [s, a]);
   const eff = effective(s);
+  // Publish this page's state for the generator once the user has changed anything (never the untouched defaults).
+  useEffect(() => {
+    if (!dirty.current && JSON.stringify(s) === initialJson.current) return;
+    dirty.current = true;
+    const t = setTimeout(() => LP.writeProfile(toProfile(s, a)), 300);
+    return () => clearTimeout(t);
+  }, [s, a]);
+  const fillFrom = (src) => {
+    const p = profiles[src]; if (!p) return;
+    setUndo(s);
+    const next = applyProfile(s, p);
+    setS(next);
+    setFillMsg(fillSummary(next));
+  };
+  const undoFill = () => { if (undo) { setS(undo); setUndo(null); setFillMsg("Put back what was here before the fill."); } };
+  const sendToGenerator = () => { LP.writeProfile(toProfile(s, a)); LP.openTool("generator-sizing"); };
+  const sheet = useMemo(() => sheetData(s, a), [s, a]);
+  useEffect(() => {
+    if (!needsNewTab) return;
+    let dead = false;
+    encodeState(s).then((enc) => { if (!dead) encodedRef.current = enc; }).catch(() => {});
+    return () => { dead = true; };
+  }, [s, needsNewTab]);
+  const doPrint = (mode) => {
+    setPrintAsk(null);
+    if (needsNewTab) {
+      // Same click: a popup opened later would be blocked on phones.
+      const enc = encodedRef.current || encodeStateSync(s);
+      window.open(buildPrintUrl(window.location.pathname, enc, mode), "_blank");
+      return;
+    }
+    document.documentElement.setAttribute("data-print", mode);
+    try { window.print(); } catch (e) { /* the browser said no; the sheet is still on screen when printed from its menu */ }
+  };
+  const startPrint = (mode) => { if (mode === "customer" && sheet.estimates.length) setPrintAsk(sheet.estimates); else doPrint(mode); };
+  const removeExtra = (id) => setS((p) => ({ ...p, extras: p.extras.filter((x) => x.id !== id) }));
+  const setExtra = (id, patch) => setS((p) => ({ ...p, extras: p.extras.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
   const set = (k) => (e) => {
     const v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
@@ -38,7 +102,8 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
     setS((p) => ({ ...p, tier, sac: [2, 3, 4][tier], items: tierItems(tier) }));
   };
   const fromPlans = (k) => s.planFields?.includes(k);
-  const Tag = ({ k }) => (fromPlans(k) ? <span className="ssc-tag">plans</span> : null);
+  const fromFill = (k) => s.fillFields?.includes(k);
+  const Tag = ({ k }) => (fromPlans(k) ? <span className="ssc-tag">plans</span> : fromFill(k) ? <span className="ssc-tag">{s.fill?.tag || "tool"}</span> : null);
 
   async function onFiles(fileList) {
     if (ctl.current) return;
@@ -101,6 +166,14 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
 
   return (
     <div className="ssc">
+      {openedForPrint && (
+        <div className="ssc-openbar">
+          <b>Opened for printing.</b> Use the share or print button here, or tap
+          {" "}<button type="button" className="ssc-btn small" onClick={() => startPrint("customer")}>Print customer copy</button>
+          {" "}<button type="button" className="ssc-btn ghost small" onClick={() => startPrint("office")}>Print office copy</button>.
+          {" "}Changes made on this page do not go back to the app.
+        </div>
+      )}
       <div className="ssc-grid">
         <div className="ssc-col">
           {/* Drop zone */}
@@ -125,6 +198,30 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
               </div>
             )}
             {err && <p className="ssc-err">{err}</p>}
+          </section>
+
+          <section className="ssc-panel">
+            <h2>Start from another tool <span className="ssc-ref">this device</span></h2>
+            <div className="ssc-btnrow" style={{ marginTop: 0 }}>
+              {["appliance-loads", "generator-sizing"].map((src) => {
+                const p = profiles[src];
+                return p ? (
+                  <button key={src} type="button" className="ssc-btn ghost" onClick={() => fillFrom(src)}>
+                    Fill from {LP.SOURCES[src]} · {p.label} · {LP.ago(p.at)}
+                  </button>
+                ) : null;
+              })}
+              {!profiles["appliance-loads"] && !profiles["generator-sizing"] && (
+                <span className="ssc-hint">Nothing to fill from yet. Open a job in Appliance Loads, or work in Generator Sizing, then come back.</span>
+              )}
+              {genVisible && <button type="button" className="ssc-btn ghost small" onClick={() => LP.openTool("generator-sizing")}>Open Generator Sizing</button>}
+            </div>
+            {fillMsg && (
+              <p className="ssc-hint" style={{ marginTop: 10 }}>
+                {fillMsg} {undo && <button type="button" className="ssc-btn ghost small" onClick={undoFill}>Undo</button>}
+              </p>
+            )}
+            <p className="ssc-hint" style={{ marginTop: 8 }}>Fields it fills are tagged with where they came from. Nothing is saved to a job.</p>
           </section>
 
           {plan && (
@@ -174,6 +271,8 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
             <div className="ssc-fields">
               <label className="ssc-field wide"><span className="ssc-lbl">Job name<Tag k="job" /></span>
                 <input type="text" value={s.job} onChange={set("job")} placeholder="e.g. Miller Residence" /></label>
+              <label className="ssc-field wide"><span className="ssc-lbl">Site address<Tag k="address" /></span>
+                <input type="text" value={s.address} onChange={set("address")} placeholder="For the printed sheets" /></label>
               <label className="ssc-field"><span className="ssc-lbl">Living area, sq ft<Tag k="sqft" /></span>
                 <input type="number" min="0" step="50" value={s.sqft} onChange={set("sqft")} />
                 <span className="ssc-hint">Include unfinished basement that can be finished later</span></label>
@@ -238,8 +337,8 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
                   const d = a.impacts[it.id];
                   return (
                     <div className="ssc-row" key={it.id}>
-                      <div className="nm"><b>{it.name}{it2.fromPlans && <span className="ssc-tag">plans</span>}</b>
-                        {(it2.planNote || it.note) && <small>{it2.planNote || it.note}</small>}</div>
+                      <div className="nm"><b>{it.name}{it2.fromPlans && <span className="ssc-tag">plans</span>}{it2.fromFill && <span className="ssc-tag">{s.fill?.tag || "tool"}</span>}</b>
+                        {(it2.planNote || it2.fillNote || it.note) && <small>{it2.planNote || it2.fillNote || it.note}</small>}</div>
                       <div className="va"><input type="number" min="0" step={it.unit ? 5 : 100} value={it2.va} aria-label={`${it.name} VA`}
                         onChange={(e) => setItem(it.id, { va: e.target.value })} /></div>
                       <div className="qty"><input type="number" min="0" step={it.unit ? 50 : 1} value={it2.qty} aria-label={`${it.name} quantity`}
@@ -257,6 +356,35 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
                 })}
               </div>
             ))}
+            {s.extras.length > 0 && (
+              <div>
+                <div className="ssc-cat">From {LP.SOURCES[s.fill?.source] || "another tool"}</div>
+                {s.extras.map((x) => {
+                  const d = a.impacts[x.id] || 0;
+                  return (
+                    <div className="ssc-row" key={x.id}>
+                      <div className="nm"><b>{x.name}</b>
+                        <small>{x.note}{x.note ? " · " : ""}<button type="button" className="ssc-link" onClick={() => removeExtra(x.id)}>remove</button></small></div>
+                      <div className="va"><input type="number" min="0" step="100" value={x.va} aria-label={`${x.name} VA`} onChange={(e) => setExtra(x.id, { va: e.target.value })} /></div>
+                      <div className="qty"><input type="number" min="0" step="1" value={x.qty} aria-label={`${x.name} quantity`} onChange={(e) => setExtra(x.id, { qty: e.target.value })} /></div>
+                      <div className="ssc-seg" role="group" aria-label={`${x.name} status`}>
+                        {["yes", "maybe", "no"].map((v) => (
+                          <button key={v} type="button" data-v={v} aria-pressed={x.status === v} onClick={() => setExtra(x.id, { status: v })}>{v[0].toUpperCase() + v.slice(1)}</button>
+                        ))}
+                      </div>
+                      <div className={"impact" + (x.status !== "no" ? " on" : "")}>{d > 0.5 ? `+${Math.round(d)} A` : "<1 A"}</div>
+                    </div>
+                  );
+                })}
+                <p className="ssc-hint" style={{ marginTop: 8 }}>Counted as fixed appliances at nameplate, 220.82(B)(3). Fix the VA where the sheet had none.</p>
+              </div>
+            )}
+            {(s.fill?.covered?.length > 0 || s.fill?.general > 0) && (
+              <p className="ssc-hint" style={{ marginTop: 10 }}>
+                {s.fill.covered?.length > 0 && <>Covered by the standard allowances and not listed: {s.fill.covered.join(", ")}. </>}
+                {s.fill.general > 0 && <>{s.fill.general} lighting and receptacle circuits are inside the general load and the circuit counts.</>}
+              </p>
+            )}
             <p className="ssc-hint" style={{ marginTop: 12 }}>VA values are typical nameplates. Replace them with the real spec sheet when you have it. "Adds" is how many calculated amps the item adds with maybes included.</p>
           </section>
 
@@ -344,11 +472,224 @@ export default function ServiceSizeCalculator({ apiPath = "/api/read-plans", acc
           <textarea ref={noteRef} readOnly value={note} />
           <div className="ssc-btnrow">
             <button type="button" className="ssc-btn" onClick={copyNote}>Copy bid note</button>
+            {genVisible && <button type="button" className="ssc-btn ghost" onClick={sendToGenerator}>Send to Generator Sizing</button>}
             {onSave && <button type="button" className="ssc-btn ghost" onClick={save}>Save to job</button>}
+            <button type="button" className="ssc-btn ghost" onClick={() => startPrint("customer")}>Print customer copy</button>
+            <button type="button" className="ssc-btn ghost" onClick={() => startPrint("office")}>Print office copy</button>
             <span className="ssc-status" aria-live="polite">{copied || saveMsg}</span>
           </div>
+          {printAsk && (
+            <p className="ssc-warnline">
+              {printAsk.length} item{printAsk.length === 1 ? " is" : "s are"} still an estimate: {printAsk.map((e) => `${e.name} (${e.why})`).join(", ")}. The customer copy will show the number without saying so.
+              {" "}<button type="button" className="ssc-btn small" onClick={() => doPrint("customer")}>Print anyway</button>
+              {" "}<button type="button" className="ssc-btn ghost small" onClick={() => setPrintAsk(null)}>Cancel</button>
+            </p>
+          )}
+          <p className="ssc-hint" style={{ marginTop: 8 }}>The customer copy is the size and why, no price. The office copy is everything on this page. On a phone the sheet opens in its own browser tab; print or save it as a PDF from the share button there.</p>
         </section>
       </div>
+      <PrintSheet mode="customer" s={s} a={a} d={sheet} />
+      <PrintSheet mode="office" s={s} a={a} d={sheet} />
+    </div>
+  );
+}
+
+// The two printable sheets (v501). Hidden on screen; @media print hides everything else.
+// Koy: "a cool-looking dashboard kind of thing that's easy to understand and has HOMESTEAD's logo on it."
+function Gauge({ g }) {
+  const W = 600, x0 = 14, x1 = 586, y = 50, h = 20;
+  const X = (p) => x0 + ((x1 - x0) * p) / 100;
+  const mx = X(g.ml), bx = X(g.bl);
+  const wide = g.D > 500;
+  const mono = "'JetBrains Mono', ui-monospace, Menlo, monospace";
+  const disp = "'Barlow Condensed', 'Arial Narrow', sans-serif";
+  const fx = Math.min(Math.max(mx, 46), W - 46);
+  return (
+    <svg className="ps-gauge" viewBox={`0 0 ${W} 112`} role="img" aria-label="Calculated load against the standard service sizes">
+      <rect x={x0} y={y} width={x1 - x0} height={h} rx={5} fill="#E3E8EF" />
+      <rect x={x0} y={y} width={Math.max(0, mx - x0)} height={h} rx={5} fill="#66A8FF" />
+      <rect x={x0} y={y} width={Math.max(0, bx - x0)} height={h} rx={5} fill="#1B2030" />
+      {g.ticks.map((t) => {
+        const skip = wide && (t.x === 125 || t.x === 225) && !t.sel;
+        return (
+          <g key={t.x}>
+            <rect x={X(t.p) - (t.sel ? 4 : 1.5)} y={t.sel ? y - 14 : y - 6} width={t.sel ? 8 : 3} height={t.sel ? h + 28 : h + 12} rx={2} fill={t.sel ? "#3B5BA5" : "#AEB8C6"} />
+            {!skip && <text x={X(t.p)} y={y + h + 30} textAnchor="middle" fontSize={t.sel ? 15 : 11} fontWeight={t.sel ? 800 : 600} fill={t.sel ? "#3B5BA5" : "#6B7484"} fontFamily={t.sel ? disp : mono}>{t.x}{t.sel ? " A" : ""}</text>}
+          </g>
+        );
+      })}
+      <rect x={fx - 30} y={6} width={60} height={22} rx={4} fill="#1B2030" />
+      <text x={fx} y={21} textAnchor="middle" fontSize={13} fontWeight={800} fill="#fff" fontFamily={disp}>{g.maxAmps} A{g.over ? "+" : ""}</text>
+      <polygon points={`${mx - 6},${30} ${mx + 6},${30} ${mx},${y - 4}`} fill="#1B2030" />
+    </svg>
+  );
+}
+
+function Band({ title, s, d }) {
+  return (
+    <header className="ps-band">
+      <div className="ps-band-main">
+        <img className="ps-logo" src="/hs-logo-white.png" alt="Homestead Electric" />
+        <div className="ps-band-text">
+          <div className="ps-eyebrow">{title}</div>
+          <div className="ps-h1">{s.job || "Your home"}</div>
+        </div>
+      </div>
+      <div className="ps-band-meta">
+        <div className="ps-meta-line">{s.address || "Site address"}</div>
+        <div className="ps-meta-line ps-meta-line--dim">{d.today}</div>
+      </div>
+    </header>
+  );
+}
+
+function Tile({ label, value, sub, tone }) {
+  return (
+    <div className={"ps-tile" + (tone ? " ps-tile--" + tone : "")}>
+      <div className="ps-label">{label}</div>
+      <div className="ps-tile-val">{value}</div>
+      {sub ? <div className="ps-tile-sub">{sub}</div> : null}
+    </div>
+  );
+}
+
+function Drivers({ c, compact }) {
+  return (
+    <div className={"ps-drivers" + (compact ? " ps-drivers--compact" : "")}>
+      {c.top.map((x, i) => (
+        <div className="ps-bar-row" key={i}>
+          <span className="ps-bar-label">{x.label}</span>
+          <span className="ps-bar"><i style={{ width: `${c.max ? Math.max(2, (x.va / c.max) * 100) : 0}%` }} /></span>
+          <span className="ps-bar-val">{(x.va / 1000).toFixed(1)} kVA</span>
+        </div>
+      ))}
+      {c.restCount > 0 && <div className="ps-bar-rest">+ {c.restCount} smaller item{c.restCount === 1 ? "" : "s"}, {(c.restVA / 1000).toFixed(1)} kVA together</div>}
+    </div>
+  );
+}
+
+function PrintSheet({ mode, s, a, d }) {
+  const customer = mode === "customer";
+  const eff = d.eff;
+  const n = (x) => Math.round(x).toLocaleString("en-US");
+  const confirmedLine = d.sizedFor === "max" && d.confirmedAmps !== d.basisAmps ? `${d.confirmedAmps} A with the confirmed items only` : "confirmed items only";
+  const headroom = d.headroom ? `${n(d.headroom.amps)} A` : "none";
+  const headroomSub = d.headroom ? `about ${d.headroom.kw.toFixed(0)} kW of appliances` : "beyond a 600 A service";
+  const foot = (
+    <footer className="ps-foot">
+      <p>{d.plainWhy}</p>
+      <p>Service size to be confirmed once appliance and equipment selections are final; loads added beyond this calculation may require a change order. Planning figures: verify against the final equipment nameplates, the utility's requirements and the authority having jurisdiction before quoting or installing.</p>
+    </footer>
+  );
+  if (customer) {
+    return (
+      <div className="ssc-print ssc-print--customer">
+        <Band title="Electrical service size" s={s} d={d} />
+        <section className="ps-hero">
+          <div className="ps-hero-num">
+            <div className="ps-label ps-label--light">Recommended service</div>
+            <div className="ps-amps">{d.rec}<span>A</span></div>
+            <div className="ps-hero-sub">120 / 240 V · single-phase</div>
+          </div>
+          <div className="ps-hero-gauge">
+            <div className="ps-label">Where this home lands</div>
+            <Gauge g={d.gauge} />
+            <p className="ps-caption">The calculated load is <b>{d.basisAmps} A</b>{d.sizedFor === "max" && d.confirmedAmps !== d.basisAmps ? ` (${d.confirmedAmps} A before the allowances)` : ""}. The next standard service size above it is <b>{d.rec} A</b>.</p>
+          </div>
+        </section>
+        <section className="ps-tiles">
+          <Tile label="Living area" value={`${n(eff.sqft)} sq ft`} />
+          <Tile label="Heating & cooling" value={`${eff.tons} tons`} sub={`${eff.systems} system${eff.systems === 1 ? "" : "s"}`} />
+          <Tile label="Calculated load" value={`${d.basisAmps} A`} sub={confirmedLine} />
+          <Tile label={`Room left at ${d.rec} A`} value={headroom} sub={headroomSub} tone="accent" />
+        </section>
+        <section className="ps-section">
+          <div className="ps-label">What's driving it</div>
+          <Drivers c={d.contrib} />
+        </section>
+        <section className="ps-two">
+          <div className="ps-box">
+            <div className="ps-label">Allowances built in</div>
+            {d.allowances.length ? <div className="ps-chips">{d.allowances.map((x, i) => <span className="ps-chip" key={i}>{x}</span>)}</div> : <p className="ps-muted">Only confirmed items are counted.</p>}
+          </div>
+          <div className="ps-box">
+            <div className="ps-label">Would need a larger service</div>
+            {d.changes.length ? <ul className="ps-list">{d.changes.map((c, i) => <li key={i}><span>{c.label}</span><b>{c.to}</b></li>)}</ul> : <p className="ps-muted">Nothing on the maybe list pushes past {d.rec} A.</p>}
+          </div>
+        </section>
+        {foot}
+      </div>
+    );
+  }
+  const HEAT = { gas: "Gas furnace", hp: "Heat pump + backup", baseboard: "Electric resistance", undecided: "Undecided" };
+  return (
+    <div className="ssc-print ssc-print--office">
+      <Band title="Service size · load calculation · office copy" s={s} d={d} />
+      <section className="ps-hero">
+        <div className="ps-hero-num">
+          <div className="ps-label ps-label--light">Recommended service</div>
+          <div className="ps-amps">{d.rec}<span>A</span></div>
+          <div className="ps-hero-sub">{d.basisAmps} A calculated · {d.sizedFor === "max" ? "confirmed + maybes" : "confirmed only"} · ≤ {d.target}%</div>
+        </div>
+        <div className="ps-hero-gauge">
+          <div className="ps-label">Confirmed {d.confirmedAmps} A · with maybes {d.maxAmps} A</div>
+          <Gauge g={d.gauge} />
+        </div>
+      </section>
+      <section className="ps-tiles ps-tiles--6">
+        <Tile label="Living area" value={`${n(eff.sqft)} sq ft`} sub={["Standard / spec", "Upgraded", "Custom / luxury"][s.tier] || ""} />
+        <Tile label="Circuits" value={`${s.sac} SA · ${s.laundry} laundry`} />
+        <Tile label="Heating / cooling" value={`${HEAT[s.heat] || s.heat}`} sub={s.heat === "hp" ? "heat pump cools" : s.cool === "ac" ? "central AC" : "no central AC"} />
+        <Tile label="Tonnage" value={`${eff.tons} t · ${eff.systems} sys`} sub={s.tonsAuto ? "estimated from sq ft" : "entered"} />
+        <Tile label="Backup strips" value={`${eff.strip} kW`} sub={s.stripAuto ? "10 kW per system" : "entered"} />
+        <Tile label="Room left" value={headroom} sub={d.headroom ? `${d.headroom.evs} more 48 A EV` : ""} tone="accent" />
+      </section>
+      {d.estimates.length > 0 && (
+        <section className="ps-flagband"><b>Still estimates ({d.estimates.length}):</b> {d.estimates.map((e) => `${e.name} (${e.why})`).join(", ")}.</section>
+      )}
+      <section className="ps-two">
+        <div className="ps-box">
+          <div className="ps-label">What's driving it</div>
+          <Drivers c={d.contrib} compact />
+        </div>
+        <div className="ps-box">
+          <div className="ps-label">Owner changes that bump the size</div>
+          {d.changes.length ? <ul className="ps-list">{d.changes.map((c, i) => <li key={i}><span>{c.label}</span><b>{c.to}</b></li>)}</ul> : <p className="ps-muted">None past {d.rec} A.</p>}
+          <div className="ps-label" style={{ marginTop: 10 }}>Filled from</div>
+          <p className="ps-muted">{[s.plan && s.plan.source ? `plans (${s.plan.source})` : null, s.fill ? `${s.fill.label} (${s.fill.source})` : null].filter(Boolean).join("; ") || "typed by hand"}</p>
+          {s.fill && (s.fill.covered?.length > 0 || s.fill.general > 0) && (
+            <p className="ps-muted">Covered by the standard allowances: {(s.fill.covered || []).join(", ") || "none"}.{s.fill.general ? ` ${s.fill.general} lighting and receptacle circuits counted in the general load.` : ""}</p>
+          )}
+        </div>
+      </section>
+      <section className="ps-flow">
+        <div className="ps-label">Load calculation, NEC 220.82(B) + (C)</div>
+        <CalcTable s={s} b={a.base} m={a.max} />
+      </section>
+      <section className="ps-flow">
+        <div className="ps-label">Items counted</div>
+        <table className="ps-items"><thead><tr><th>Item</th><th className="n">VA</th><th className="n">Qty</th><th>Status</th><th>Source</th><th className="n">Adds</th></tr></thead><tbody>
+          {d.rows.map((r, i) => (
+            <tr key={i}>
+              <td>{r.name}</td><td className="n">{r.va.toLocaleString()}</td><td className="n">{r.qty}{r.unit ? " " + r.unit : ""}</td>
+              <td><span className={"ps-pill ps-pill--" + r.status}>{r.status}</span></td>
+              <td><span className={"ps-src" + (/typical|confirm|needs/.test(r.source) ? " ps-src--warn" : "")}>{r.source}</span></td>
+              <td className="n">{r.adds > 0 ? `+${r.adds} A` : "<1 A"}</td>
+            </tr>
+          ))}
+        </tbody></table>
+      </section>
+      <section className="ps-two">
+        <div className="ps-box">
+          <div className="ps-label">Check before you bid</div>
+          {a.flags.length ? <ul className="ps-flags">{a.flags.map((f, i) => <li key={i}>{f}</li>)}</ul> : <p className="ps-muted">Nothing flagged.</p>}
+        </div>
+        <div className="ps-box">
+          <div className="ps-label">Bid note</div>
+          <pre className="ps-pre">{d.note}</pre>
+        </div>
+      </section>
+      {foot}
     </div>
   );
 }

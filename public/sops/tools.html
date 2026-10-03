@@ -51,7 +51,8 @@
 
   <div class="tldr">
     <h2>The 30-second version</h2>
-    <p>The <b>Tools</b> tab holds standalone calculators. Pick a tool from the strip at the
+    <p>The <b>Tools</b> tab holds standalone calculators. For now the whole tab is on only for the
+    people Koy has turned it on for (Settings → Team → Tool access). Pick a tool from the strip at the
     top and it opens right there. Nothing you type in a tool is saved anywhere — it recomputes
     as you go, and it works offline once you've opened it online at least once. To <b>print or
     save a job sheet on your phone</b>, tap <b>Open full screen</b> first, then use the tool's
@@ -121,6 +122,16 @@
   </div></div>
 
   <div class="step"><div class="num">8</div><div class="body">
+    <h3>Pull a job's generator loads (the bar above the tool)</h3>
+    <p>In <b>Pull a job's generator loads</b>, tap the job (jobs with generator loads marked are listed first; type part of a name or number to search every job, or tick All jobs) and tap <b>Pull</b>. It reads what that job's
+    Generator Load Selection has marked on the generator and makes a <b>Fill from Generator Selection</b>
+    button inside the tool. Tap it: the loads land in the homeowner's priority order with real volts and amps
+    where the appliance sheet has them, typical values flagged where it doesn't, lighting and outlet circuits
+    counted, and the transfer switch set to Essential circuits when only part of the house is on it. Enter the
+    square footage the generator serves; the job doesn't know it.</p>
+  </div></div>
+
+  <div class="step"><div class="num">9</div><div class="body">
     <h3>07 — Job sheet</h3>
     <p>Type the customer, address and your name, then <b>Print / Save as PDF</b> for a clean
     one-page summary. On a phone, tap <b>Open full screen</b> at the top of the Tools tab first
@@ -168,33 +179,77 @@
   </div></div>
 
   <div class="step"><div class="num">5</div><div class="body">
-    <h3>Copy the bid note</h3>
+    <h3>Copy the bid note, or print a sheet</h3>
     <p><b>Copy bid note</b> puts the size and its assumptions on the clipboard so you can paste
-    them into the proposal. Nothing is saved to a job. Copy the note if you want to keep it.</p>
+    them into the proposal. <b>Print customer copy</b> is one page for the homeowner: the size, why,
+    what's counted, and what choices would need a bigger service. No price. <b>Print office copy</b>
+    is everything on the page for the bid file. If anything is still an estimate, the customer copy
+    asks before it prints. On a phone the sheet opens in its own browser tab; print or save it as a PDF
+    from the share button there. Nothing is saved to a job.</p>
   </div></div>
 
   <div class="call warn"><span class="lbl">Bid-stage only</span>
     <p>Utility requirements (meter class, transformer, lead time) and local amendments still
     need checking. Use the mechanical sub's tonnage when you have it.</p></div>
 
+  <h2 class="sec">Tools that fill each other</h2>
+  <p class="sub" style="margin:6px 0 0">Appliance Loads knows what is really going in the house. The two calculators can start from it, and from each other.</p>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <h3>Open the job in Appliance Loads</h3>
+    <p>Tap a job. Its appliances <b>and its whole Home Runs list</b> are now available to the calculators
+    on this device. Tap <b>Send to Generator Sizing</b> or <b>Send to Service Size</b> to jump straight there.
+    Lighting and outlet circuits get counted, not sized; a dedicated circuit the sheet has no specs for comes
+    in at a typical value with a flag.</p>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body">
+    <h3>Tap Fill from Appliance Loads</h3>
+    <p>Each calculator has a <b>Start from another tool</b> bar near the top. The button names the job and
+    how many loads it has. Nothing changes until you tap it, and <b>Undo</b> puts back what was there.</p>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="body">
+    <h3>Check what landed</h3>
+    <p>Fields filled this way are tagged <b>loads</b> (or <b>generator</b> when the generator fills Service
+    Size). In Service Size, appliances with no row of their own show under <b>From another tool</b> in Extras,
+    counted as fixed appliances; fridges, microwaves, hoods and the first dishwasher are listed as covered by
+    the standard allowances and not counted twice. A load the sheet had no amps for arrives with a typical
+    value and a flag, and one whose spec the sheet could not confirm says <b>confirm spec</b>. Fix those first.</p>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="body">
+    <h3>Calculators both ways</h3>
+    <p>Service Size gives the generator its recommended service size for the transfer switch pick; the
+    generator gives Service Size the square footage and circuit counts. Use <b>Send to Generator Sizing</b>
+    next to Copy bid note, or <b>Open in Service Size</b> on the generator page.</p>
+  </div></div>
+
+  <div class="call key"><span class="lbl">Same device only</span>
+    <p>The handoff lives on the phone or computer you are using, like the remembered last tool. It is not
+    saved to the job and does not follow you to another device.</p></div>
+
   <h2 class="sec">Questions</h2>
   <div class="qa">
     <div class="row"><p class="q">"Reading plans needs an internet connection."</p><p class="a">The
     Service Size calculator works offline, but reading plans goes out to Claude. Fill it in by
     hand, or drop the plans again once you have signal.</p></div>
-    <div class="row"><p class="q">I don't see Service Size.</p><p class="a">It's limited to the
-    people Koy has turned it on for. Ask Koy.</p></div>
+    <div class="row"><p class="q">I don't see the Tools tab, or Service Size.</p><p class="a">Both are limited to
+    the people Koy has turned them on for (Settings → Team → Tool access). Ask Koy.</p></div>
     <div class="row"><p class="q">Does anything I enter get saved?</p><p class="a">No. The tool
     recomputes in the browser and writes nothing to the app or to any job. Refresh and it resets
     to the example loads. Print or save the job sheet if you want to keep a result.</p></div>
     <div class="row"><p class="q">It says "Tool not cached on this device yet."</p><p class="a">You
     opened the Tools tab offline on a device that had never loaded that tool. Open it once with
     signal and it works offline after that.</p></div>
+    <div class="row"><p class="q">The Fill button isn't there.</p><p class="a">Nothing has been
+    sent on this device yet. Open the job in Appliance Loads first, or type something in the other
+    calculator, then look again.</p></div>
     <div class="row"><p class="q">Can we add more tools?</p><p class="a">Yes — that's what the strip
     at the top is for. Send Koy the tool as a self-contained web page and it gets its own chip.</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · in-app guide for the Tools tab · Generator Sizing built by Josh, Sept 2026 · guide drafted 2026-09-29</div>
+  <div class="foot">Homestead Electric · in-app guide for the Tools tab · Generator Sizing built by Josh, Sept 2026 · guide drafted 2026-09-29, updated 2026-10-02 (tools that fill each other, generator pull, printed sheets, phone printing)</div>
 </div>
 </body>
 </html>

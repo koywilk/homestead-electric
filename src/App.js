@@ -839,6 +839,11 @@ function ccLoadImportRows(loads, existingRows, mk, floorOptions = []) {
 //            (fieldSnap), so the office never touched it → apply silently.
 //   manual — the office edited that field since (or the row predates fieldSnap,
 //            so we can't tell) → offered as one tap: "Update N from FieldInk".
+//   (v496)   …but ONLY when FieldInk has moved on since the snap. If the office
+//            edited the field and the bridge still says exactly what the office
+//            last took (snap), the office's edit stands: not offered, never auto.
+//            Miller 2026-10-01: a bad republish put wrong rooms on the bridge and
+//            the rows the office had fixed by hand were re-offered forever.
 // A blank field floor never blanks a typed floor. Both patches refresh
 // fieldSnap so the NEXT field change flows automatically. Pure.
 function ccLoadWantFromField(l, opts) {
@@ -862,6 +867,7 @@ function ccLoadSyncPlan(rows, inboxById, floorOptions = []) {
       if (cur === w) continue;
       if (k === "location" && !w) continue;
       if (snap && cur === String(snap[k] || "")) autoPatch[k] = w;
+      else if (snap && w === String(snap[k] || "")) continue;   // v496: office-edited, field unchanged since → the office's value stands
       else changes.push({ key: k, from: cur, to: w });
     }
     if (Object.keys(autoPatch).length) auto.push({ id: r.id, fieldLoadId: r.fieldLoadId, patch: { ...autoPatch, fieldSnap: want } });
@@ -2099,6 +2105,74 @@ async function fetchSimproQuoteBasics(simproQuoteNo) {
 //       Site.Address      → address  (joined string from structured parts)
 //       SiteContact (full) → gc
 //       SiteContact.Phone → phone   (prefers CellPhone, then Phone, then WorkPhone)
+
+// ── Up to TWO contacts "running this job" (Justin, 2026-10-02) ──────────────
+// Design-build jobs have an on-site super AND an office PM, and the job setup
+// process requires both to be recorded. Slot 1 = gcContactLead, which mirrors
+// into the GC Contact / GC Phone boxes exactly as before. Slot 2 =
+// gcContactLead2, mirrored into gcContact2 / phone2. Both are keyed by the
+// Simpro contact ID and live BESIDE gcContacts, because every Simpro pull
+// replaces that list wholesale. The boxes are additive: a job with no second
+// contact is byte-identical to what it was.
+const gcContactKey = (c, i) => String(c.id || c.email || c.name || i);
+// A tap on contact `k` → { patch } to apply (null = nothing to do), or
+// { full:true } when both slots are taken and the tap must be refused rather
+// than silently bumping someone out.
+const gcRunningToggle = (job, k) => {
+  const list = Array.isArray(job && job.gcContacts) ? job.gcContacts : [];
+  const find = (key) => { for (let i = 0; i < list.length; i++) if (gcContactKey(list[i], i) === key) return list[i]; return null; };
+  const one = String((job && job.gcContactLead)  || "");
+  const two = String((job && job.gcContactLead2) || "");
+  if (k === one) {
+    // Clearing slot 1 while a second is set PROMOTES the second, so the boxes
+    // the crew actually calls from never go empty while somebody is still marked.
+    if (two) {
+      const c2 = find(two);
+      return { patch: { gcContactLead: two, gcContactLead2: "",
+        gcContact: c2 ? (c2.name || "") : String(job.gcContact2 || ""),
+        phone:     c2 ? (c2.phone || "") : String(job.phone2 || ""),
+        gcContact2: "", phone2: "" } };
+    }
+    // Clearing leaves the typed boxes alone — same as it always did.
+    return { patch: { gcContactLead: "" } };
+  }
+  if (k === two) return { patch: { gcContactLead2: "" } };
+  const c = find(k);
+  if (!c) return { patch: null };
+  if (!one) return { patch: { gcContactLead: k, gcContact: c.name || "", phone: c.phone || "" } };
+  if (!two) return { patch: { gcContactLead2: k, gcContact2: c.name || "", phone2: c.phone || "" } };
+  return { full: true };
+};
+
+// The second contact's own boxes, for jobs where the person isn't in the
+// Simpro list (or there's been no pull yet). Collapsed until there's something
+// in it; the header carries the name so it's visible without opening.
+function GcSecondContact({ job, u }) {
+  const has = !!(String(job.gcContact2 || "").trim() || String(job.phone2 || "").trim() || String(job.gcContactLead2 || "").trim());
+  const [open, setOpen] = useState(has);
+  useEffect(() => { if (has) setOpen(true); }, [has]);
+  const label = String((job.gcContactLabels || {})[job.gcContactLead2 || ""] || "").trim();
+  return (
+    <details open={open} onToggle={e => setOpen(e.currentTarget.open)} style={{gridColumn:"1 / -1"}}>
+      <summary style={{cursor:"pointer",fontSize:10,fontWeight:700,color:C.accent,letterSpacing:"0.04em",listStyle:"revert"}}>
+        {has
+          ? `2nd GC contact${label ? " · " + label : ""}${job.gcContact2 ? " · " + job.gcContact2 : ""}`
+          : "+ 2nd GC contact (e.g. office PM)"}
+      </summary>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginTop:8}}>
+        <div>
+          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>GC Contact 2</div>
+          <Inp value={job.gcContact2 || ""} onChange={e => u({ gcContact2: e.target.value })} placeholder="GC Contact 2"/>
+        </div>
+        <div>
+          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>GC Phone 2</div>
+          <Inp value={job.phone2 || ""} onChange={e => u({ phone2: e.target.value })} placeholder="GC Phone 2"/>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function useSimproAutoPull(jobRef, u) {
   const [simproPulling, setSimproPulling] = useState(false);
   const lastPulledSimproRef = useRef("");
@@ -4633,7 +4707,10 @@ const PERMISSIONS = {
   // head for my jobs). All tiers incl. lead/crew so they finally see their own
   // punch items. Creating needs/tasks stays gated to board.add (foreman+).
   "myday.view":             ["admin","manager","standard","limited"],
-  "tools.view":             ["admin","manager","standard","limited"],  // Tools tab (v468): field calculators — everyone internal, contractors never
+  // Tools tab (v468). Koy 2026-10-02: "limit all of these tools to me josh brady and
+  // jeromy for now" — per-user grant only (Settings → Team → TOOL ACCESS → Tools tab),
+  // like tools.serviceSize. Was every internal tier through v496.
+  "tools.view":             [],
   // Service Size tool (v484): per-user grant only (Settings → Team → TOOL ACCESS).
   // It reads plan sets with Claude on a paid API key, so it stays with the few
   // people who bid services. Empty tier list = nobody gets it by tier.
@@ -5063,7 +5140,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>TOOL ACCESS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {TOOLS.filter(t=>t.perm).map(t=>{
+                        {[{ perm:"tools.view", label:"Tools tab (all calculators)" }, ...TOOLS.filter(t=>t.perm)].map(t=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(t.perm);
                           return (
                             <label key={t.perm} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -5075,7 +5152,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Shows that tool in their Tools tab. Everything else in Tools is open to everyone.</div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -5317,7 +5394,7 @@ const blankJob = () => ({
   // while the record is type "quote" — Simpro numbers the two separately, so
   // they must never share a field (a quote # in simproNo can match an unrelated
   // real job and pull its financials). A quote earns its simproNo at conversion.
-  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], gcContactLead:"", gcContactLabels:{}, simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
+  id:uid(), name:"", address:"", gc:"", phone:"", gcContacts:[], gcContactLead:"", gcContactLead2:"", gcContact2:"", phone2:"", gcContactLabels:{}, simproNo:"", simproQuoteNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", matterportLinks:[], driveFolderId:"",
 
@@ -12135,7 +12212,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null, roomPlaceholder="Add room (e.g. Master Bath)…", roomBtnLabel="+ Room" }) {
 
   const data = normFloor(floorData);
 
@@ -12379,11 +12456,11 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
             <Inp value={roomDraft} onChange={e => setRoomDraft(e.target.value)}
 
-              placeholder="Add room (e.g. Master Bath)…" style={{ flex: 1 }}
+              placeholder={roomPlaceholder} style={{ flex: 1 }}
 
               onKeyDown={e => e.key === 'Enter' && addRoom()} />
 
-            <Btn onClick={addRoom} variant="add" style={{ whiteSpace: 'nowrap' }}>+ Room</Btn>
+            <Btn onClick={addRoom} variant="add" style={{ whiteSpace: 'nowrap' }}>{roomBtnLabel}</Btn>
 
           </div>
 
@@ -26382,11 +26459,14 @@ const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","P
 // underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
 // (status · start / complete dates · notes · checklist · photos); Underground
 // keeps one record per sub-tab ("underground.utility" …).
+// v503 (Brady): `punch:true` tabs swap the flat checklist for a building punch
+// list — buildings / areas made once per job (commercial.buildings), each tab
+// keeps its own items under each (commercial.phases[key].punch[bkey]).
 const COMM_PHASE_TABS = {
-  "Power":       { key:"power",       color:"#3B5BA5" },
-  "Lighting":    { key:"lighting",    color:"#B0892C" },
+  "Power":       { key:"power",       color:"#3B5BA5", punch:true },
+  "Lighting":    { key:"lighting",    color:"#B0892C", punch:true },
   "Gear":        { key:"gear",        color:"#6A5E97" },
-  "Underground": { key:"underground", color:"#3E7D7A", subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
+  "Underground": { key:"underground", color:"#3E7D7A", punch:true, subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
 };
 const COMM_JOB_TYPES = [["groundup","Ground-up"],["ti","TI"],["service","Commercial service"]];
 // Blue Stakes (811) tickets are good for 14 calendar days in Utah. `called` is
@@ -26905,6 +26985,104 @@ function plWriteIsStale(clientPl, basePl, serverPl) {
   return c <= r;
 }
 let _plStaleToastAt = 0;
+// ── Intent merge for panel loads (Miller, 2026-10-01) ──────────────────────
+// Twice in two days a phone that came back after a gap wrote panelizedLighting
+// with merged:true and rolled back work it never touched (5 renames 9/30 3:57 pm,
+// 6 Loads-Ran ticks 10/1 5:12 pm). The structural merge above trusts the
+// baseline, and on those phones the baseline was not what the screen derived
+// from (the pure merge with an honest baseline keeps every foreign change —
+// replayed from PITR copies). So the funnel no longer trusts the baseline for
+// this field: JobDetail's u() records WHAT this copy changed (plDiffIntent —
+// per-load fields, added / removed ids, other panelizedLighting keys), the
+// intent rides the pending patch under PL_INTENT_KEY (unioned across a burst,
+// never written), and plApplyIntent lays only that onto the server's current
+// copy. Untouched loads always come from the server. The baseline merge stays
+// for every other field and for panel writes that carry no intent (hub toggle,
+// a replayed queue), where plRepairUnticks keeps a tick nobody un-ticked and
+// plMergedRev keeps plRev from ever going backwards (the merge treated it as a
+// primitive → client wins, which is why the v471 tripwire stayed silent).
+const PL_INTENT_KEY = "_plIntent";
+function plDiffIntent(prevPl, nextPl) {
+  const p = prevPl && typeof prevPl === "object" ? prevPl : {}, n = nextPl && typeof nextPl === "object" ? nextPl : {};
+  const pL = Array.isArray(p.loads) ? p.loads : [], nL = Array.isArray(n.loads) ? n.loads : [];
+  const untracked = pL.some(l => !l || l.id == null) || nL.some(l => !l || l.id == null);
+  const pById = new Map(pL.filter(l => l && l.id != null).map(l => [l.id, l]));
+  const nById = new Map(nL.filter(l => l && l.id != null).map(l => [l.id, l]));
+  const changed = {}, added = [], removed = [];
+  nById.forEach((l, id) => {
+    const o = pById.get(id);
+    if (!o) { added.push(id); return; }
+    const fields = [];
+    new Set([...Object.keys(o), ...Object.keys(l)]).forEach(f => { if (!_jeq(o[f], l[f])) fields.push(f); });
+    if (fields.length) changed[id] = fields;
+  });
+  pById.forEach((o, id) => { if (!nById.has(id)) removed.push(id); });
+  const keys = [];
+  new Set([...Object.keys(p), ...Object.keys(n)]).forEach(k => { if (k !== "loads" && k !== "plRev" && !_jeq(p[k], n[k])) keys.push(k); });
+  return { changed, added, removed, keys, untracked };
+}
+function plMergeIntents(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  const changed = {};
+  Object.keys(a.changed || {}).forEach(id => { changed[id] = [...a.changed[id]]; });
+  Object.keys(b.changed || {}).forEach(id => { changed[id] = Array.from(new Set([...(changed[id] || []), ...b.changed[id]])); });
+  const added = new Set([...(a.added || []), ...(b.added || [])]), removed = new Set([...(a.removed || []), ...(b.removed || [])]);
+  (b.removed || []).forEach(id => { added.delete(id); delete changed[id]; });
+  (b.added || []).forEach(id => removed.delete(id));
+  return { changed, added: [...added], removed: [...removed], keys: Array.from(new Set([...(a.keys || []), ...(b.keys || [])])), untracked: !!(a.untracked || b.untracked) };
+}
+function plOverlayLoad(serverLoad, clientLoad, fields) {
+  const o = { ...serverLoad };
+  (fields || []).forEach(f => { if (clientLoad[f] === undefined) delete o[f]; else o[f] = clientLoad[f]; });
+  return o;
+}
+function plApplyIntent(serverPl, clientPl, intent, basePl) {
+  const s = serverPl && typeof serverPl === "object" ? serverPl : {}, c = clientPl && typeof clientPl === "object" ? clientPl : {};
+  const sL = Array.isArray(s.loads) ? s.loads : [], cL = Array.isArray(c.loads) ? c.loads : [];
+  const sById = new Map(sL.filter(l => l && l.id != null).map(l => [l.id, l]));
+  const changed = (intent && intent.changed) || {}, added = new Set((intent && intent.added) || []), removed = new Set((intent && intent.removed) || []);
+  const out = [], seen = new Set();
+  // this copy's order for the loads it holds (its screen), server-only loads after it
+  cL.forEach(l => {
+    if (!l || l.id == null) return;
+    seen.add(l.id);
+    const sv = sById.get(l.id);
+    if (sv) { out.push(changed[l.id] ? plOverlayLoad(sv, l, changed[l.id]) : sv); return; }
+    if (added.has(l.id) || changed[l.id]) out.push(l);   // added here, or edited here after another device removed it → keep
+    /* else: gone from the server since this copy loaded and untouched here → honor the delete */
+  });
+  sL.forEach(l => { if (l && l.id != null && !seen.has(l.id) && !removed.has(l.id)) out.push(l); });
+  const res = { ...s, loads: out };
+  ((intent && intent.keys) || []).forEach(k => {
+    if (c[k] === undefined) { delete res[k]; return; }                     // this copy removed the key
+    res[k] = _threeWayMerge(basePl && typeof basePl === "object" ? basePl[k] : undefined, c[k], s[k]);
+  });
+  return res;
+}
+// Merged plRev never goes backwards: a copy ahead of the server keeps its rev, a
+// copy behind it lands at server + 1, so the rev every copy is compared against
+// only ever grows.
+function plMergedRev(outPl, clientPl, serverPl) {
+  const cr = Number(clientPl && clientPl.plRev) || 0, sr = Number(serverPl && serverPl.plRev) || 0;
+  const rev = cr > sr ? cr : sr + 1;
+  return outPl && typeof outPl === "object" ? (Number(outPl.plRev) === rev ? outPl : { ...outPl, plRev: rev }) : outPl;
+}
+// A real un-tick clears pulledBy / pulledAt (loadPulledPatch). A merged load that
+// is pulled:false while still carrying someone's pulledBy was un-ticked by a
+// merge, not by a person — put the server's tick back.
+function plRepairUnticks(outPl, serverPl) {
+  const sById = new Map(((serverPl && serverPl.loads) || []).filter(l => l && l.id != null).map(l => [l.id, l]));
+  const repaired = [];
+  const loads = ((outPl && outPl.loads) || []).map(l => {
+    if (!l || l.id == null) return l;
+    const sv = sById.get(l.id);
+    if (!sv || sv.pulled !== true || l.pulled === true || !String(l.pulledBy || "").trim()) return l;
+    repaired.push(String(l.name || l.id));
+    return { ...l, pulled: true, pulledBy: sv.pulledBy, pulledAt: sv.pulledAt };
+  });
+  return { pl: repaired.length ? { ...outPl, loads } : outPl, repaired };
+}
 // ── end Stale-copy guards ────────────────────────────────────────────────────
 
 // v338 scalar-conflict telemetry support (read-only observability; see
@@ -27707,6 +27885,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                     onBlur={k === "simproNo" ? () => doPullSimpro() : undefined}/>
                 </div>
               ))}
+              <GcSecondContact job={job} u={u}/>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
                 <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
@@ -28040,10 +28219,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     // that derives from its baseline from one that is older than it (see
     // plWriteIsStale). The bump lands on the local copy too, so a burst of taps
     // keeps counting up.
+    let patchForJob = finalPatch;
     if (finalPatch && finalPatch.panelizedLighting && typeof finalPatch.panelizedLighting === "object") {
-      finalPatch = { ...finalPatch, panelizedLighting: plBumpRev({ ...finalPatch.panelizedLighting, plRev: jobRef.current?.panelizedLighting?.plRev }) };
+      const prevPl = jobRef.current?.panelizedLighting;
+      const nextPl = plBumpRev({ ...finalPatch.panelizedLighting, plRev: prevPl?.plRev });
+      // Intent (Miller 2026-10-01): WHAT this copy changed, for the funnel's intent
+      // merge (plApplyIntent). Rides the patch under PL_INTENT_KEY — never on the
+      // job object, never written to Firestore.
+      let intent = null;
+      try { intent = plDiffIntent(prevPl, nextPl); } catch {}
+      patchForJob = { ...finalPatch, panelizedLighting: nextPl };
+      finalPatch = intent ? { ...patchForJob, [PL_INTENT_KEY]: intent } : patchForJob;
     }
-    const updated = {...jobRef.current, ...finalPatch};
+    const updated = {...jobRef.current, ...patchForJob};
     jobRef.current = updated;
     setJob(updated);
     onUpdate(updated, finalPatch);
@@ -31604,7 +31792,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
-          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab}/>)}
+          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab} assigneeOptions={punchAssigneeOptions}/>)}
           {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
           {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
           {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
@@ -32194,37 +32382,47 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 ))}
 
+              {/* A second contact's own boxes — for the office PM who isn't in
+                  the Simpro list, or any job before its first pull. */}
+              <GcSecondContact job={job} u={u}/>
+
               {/* Every contact on the GC in Simpro, with per-JOB overrides.
                   `gcContacts` itself is a mirror that the Simpro pull REPLACES
                   wholesale, so nothing editable may live on it — Koy's labels
-                  and his "running this job" pick are stored beside it, keyed by
+                  and his "running this job" picks are stored beside it, keyed by
                   the Simpro contact ID, and survive every re-pull.
                   Why the override exists (Koy, 2026-08-06): "it says taylor is
                   primary but darris is actually the one running this job."
                   Simpro's primary flag is the CUSTOMER's default across every
                   job; who's actually running THIS one is job-specific and Simpro
-                  has nowhere to record it. Spans both grid columns; hidden
-                  entirely before the first pull so it never shows an empty shell. */}
+                  has nowhere to record it. Up to TWO can be marked (Justin,
+                  2026-10-02: design-build has an on-site super AND an office PM
+                  and job setup requires both) — see gcRunningToggle. Spans both
+                  grid columns; hidden entirely before the first pull so it never
+                  shows an empty shell. */}
               {Array.isArray(job.gcContacts) && job.gcContacts.length > 0 && (() => {
                 const labels = job.gcContactLabels || {};
-                const leadId = job.gcContactLead || "";
-                const keyOf  = (c, i) => String(c.id || c.email || c.name || i);
-                // Whoever is running this job sorts to the top, then Simpro's
-                // primary, then by name — so the person you actually call is
-                // first on a phone without scrolling.
-                const rows = job.gcContacts.map((c, i) => ({ c, k: keyOf(c, i) }))
+                const leadId  = job.gcContactLead  || "";
+                const lead2Id = job.gcContactLead2 || "";
+                const anyLead = !!(leadId || lead2Id);
+                const ROLE_CHIPS = ["Onsite Super", "Office PM"];
+                // Whoever is running this job sorts to the top (slot 1, then
+                // slot 2), then Simpro's primary, then by name — so the people
+                // you actually call are first on a phone without scrolling.
+                const rank = (k) => k === leadId ? 2 : k === lead2Id ? 1 : 0;
+                const rows = job.gcContacts.map((c, i) => ({ c, k: gcContactKey(c, i) }))
                   .sort((a, b) =>
-                    (Number(b.k === leadId) - Number(a.k === leadId)) ||
+                    (rank(b.k) - rank(a.k)) ||
                     (Number(!!b.c.primary) - Number(!!a.c.primary)) ||
                     String(a.c.name || "").localeCompare(String(b.c.name || "")));
                 return (
                 <div style={{gridColumn:"1 / -1"}}>
                   <div style={{fontSize:10,color:C.dim,marginBottom:4}}>
-                    GC Contacts ({job.gcContacts.length}) · from Simpro · tap a name to mark who&apos;s running this job
+                    GC Contacts ({job.gcContacts.length}) · from Simpro · tap a name to mark who&apos;s running this job (up to two — e.g. on-site super + office PM)
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
                     {rows.map(({ c, k }) => {
-                      const isLead = k === leadId;
+                      const isLead = k === leadId || k === lead2Id;
                       return (
                       <div key={k}
                         style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
@@ -32232,15 +32430,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           border:`1px solid ${isLead ? "#3E7D5A" : C.border}`,
                           borderRadius:7,padding:"6px 9px",fontSize:12}}>
                         {/* Tapping a contact makes them this job's contact AND
-                            promotes them into the GC Contact / GC Phone boxes.
+                            promotes them into the GC Contact / GC Phone boxes
+                            (the second one into GC Contact 2 / GC Phone 2).
                             That overwrite is deliberate — it's an explicit pick,
                             not the fill-blanks-only behaviour of an auto-pull.
-                            Tapping the lead again clears it back to Simpro's. */}
+                            Tapping a marked contact again clears it back to
+                            Simpro's; a third tap is refused, never swapped in. */}
                         <button type="button"
                           title={isLead ? "Running this job — tap to clear" : "Mark as running this job"}
                           onClick={()=>{
-                            if (isLead) { u({ gcContactLead: "" }); return; }
-                            u({ gcContactLead: k, gcContact: c.name || "", phone: c.phone || "" });
+                            const r = gcRunningToggle(job, k);
+                            if (r.full) { toast.info("Two contacts are already running this job — tap one to clear it first."); return; }
+                            if (r.patch) u(r.patch);
                           }}
                           style={{border:"none",background:"none",padding:0,margin:0,
                             font:"inherit",fontWeight:700,
@@ -32259,9 +32460,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {c.primary && (
                           <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.04em",
                             textTransform:"uppercase",
-                            color: leadId ? C.muted : "#3E7D5A",
-                            background: leadId ? "transparent" : "#E8F1EC",
-                            border: leadId ? `1px solid ${C.border}` : "none",
+                            color: anyLead ? C.muted : "#3E7D5A",
+                            background: anyLead ? "transparent" : "#E8F1EC",
+                            border: anyLead ? `1px solid ${C.border}` : "none",
                             borderRadius:4,padding:"1px 6px"}}>Simpro primary</span>
                         )}
                         {c.role && <span style={{color:C.dim,fontSize:11}}>{c.role}</span>}
@@ -32269,6 +32470,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           onChange={e=>u({ gcContactLabels: { ...labels, [k]: e.target.value } })}
                           placeholder="Label (e.g. Super, Billing)"
                           style={{flex:"0 1 180px",minWidth:120,width:"auto",fontSize:11,padding:"3px 7px"}}/>
+                        {/* One-tap roles for the two people running the job —
+                            they just fill the same free-text label above. */}
+                        {isLead && ROLE_CHIPS.map(role => {
+                          const on = String(labels[k] || "").trim() === role;
+                          return (
+                            <button key={role} type="button"
+                              onClick={()=>u({ gcContactLabels: { ...labels, [k]: on ? "" : role } })}
+                              style={{fontSize:9,fontWeight:700,letterSpacing:"0.03em",textTransform:"uppercase",
+                                fontFamily:"inherit",cursor:"pointer",borderRadius:4,padding:"2px 6px",
+                                color: on ? "#fff" : "#2F6349",
+                                background: on ? "#3E7D5A" : "transparent",
+                                border:"1px solid #3E7D5A"}}>{role}</button>
+                          );
+                        })}
                         <span style={{flex:1}}/>
                         {c.phone && (
                           <a href={safeUrl(`tel:${String(c.phone).replace(/[^\d+]/g,"")}`)}
@@ -51115,10 +51330,18 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-01 · App SW version: v497
+**Last manifest update:** 2026-10-03 · App SW version: v504
 
 ---
 
+- **Commercial phase tabs get a punch list by building (Power · Lighting · Underground)** · 'shipped 2026-10-02' · 'SW v503' · Brady: *"Inside the tabs for power, lighting, underground etc: Can we make it like the residential punch list where you can make a building, or area and then make punchlist items underneath that? For now it would be good to work it as a punchlist that we build as we go, but if we can take the history of those punch lists after we get through a job or two and make it more of a pre built task list."* The flat checklist on Power, Lighting and the three Underground sub-tabs becomes a building punch list ('COMM_PHASE_TABS[*].punch'); Gear keeps its checklist. **Buildings once per job**: 'commercial.buildings = [{key, label, by, at}]', shared by every punch tab; each tab keeps its own items at 'commercial.phases[key].punch[bkey]' in the residential floor shape, drawn by the existing 'PunchFloor'. So it's the same UI (items, done, assignee, waiting, photos, rooms → "areas"; folded, with open / waiting / for-you counts on the header). It gets new optional 'roomPlaceholder' / 'roomBtnLabel' props with the residential defaults unchanged. Every tab has a **General** area first. **+ Add Building / Area** (duplicate names refused), **Rename** and **Remove** under each building; Remove confirms with the open count across tabs and drops that building's data from every phase. Sub-tab badges and the "Punch list · N open" label count across General + buildings ('commPhaseOpenCount'). Phase 2 (a template built from finished jobs' items) is not built yet; the item shape is the shared punch shape so it can be mined later. Guides 'power.html', 'lighting.html', 'underground.html' updated. **Why it won't lose data:** v467 checklist items aren't dropped. 'commPunchFloor' shows them as General's items until General is first written; that write stores them in 'punch.general' and clears 'items' in the same patch. All writes go through 'commPatch' → the save funnel's structural merge, like every commercial field. New fields are additive inside 'data.commercial'. No loader, rules or function change.
+- **Service Size — printing works from a phone: the sheet opens in its own browser tab with the job carried in the link** · 'shipped 2026-10-02' · 'SW v502' · Koy: *"It's not pulling anything up when I click print on my phone. It works in my desktop tho."* Two causes: inside the Tools tab the tool runs in a frame and phone browsers ignore a print request from a frame; the installed app has no print dialog at all, and it does not share the handoff drawer with Safari, so *Open full screen* would open the tool empty. Fix: on a phone (coarse pointer inside the frame) or in the installed app, **Print customer copy / Print office copy** open '/tools/service-size/#s=<state>&print=<mode>' in a new tab, in the same tap so the popup is not blocked; the state travels gzip + base64url in the link ('src/share.js', CompressionStream when the browser has it, plain base64url otherwise; a compressed copy is kept ready as the state changes, with a synchronous fallback). The opened page shows an *Opened for printing* bar with both print buttons and says changes there do not go back to the app; there, and on desktop, printing is now synchronous in the click (both sheets stay mounted and 'html[data-print]' picks the one that prints, cleared on 'afterprint'; the browser's own Print menu prints the office copy). Tests: 'test/share.test.mjs' (round trips compressed and plain, garbage → null, hash parsing). Guide and training updated: the phone rule is no longer "Open full screen first". **Why it won't lose data:** nothing is sent anywhere; the link is opened on the same device and carries the same numbers already on screen; no storage, job field, loader, rules or function change.
+- **Service Size — printable customer copy and office copy (Print / Save as PDF)** · 'shipped 2026-10-02' · 'SW v501' · Koy: *"is there no PDF download or anything of that info?"* then *"I probably want a customer copy side that just shows them the numbers and why we need to have that amperage, and then another office side with all of the info on it … keep price off it."* Two buttons next to Copy bid note. **Print customer copy** (one page, no price): Homestead header, job and site address, the recommended service big, the calculated load (and the confirmed-only figure when the size covers maybes), the method in one plain sentence, *What is in the calculation* in homeowner words (range, 2 electric dryers, EV charger, sauna, heating and cooling with tonnage), *Allowances included in this size*, *Choices that would need a larger service* (up to five what-ifs), the confirmation sentence and the planning-figures disclaimer; no VA figures, code ids, flags or sources. **Print office copy** (two pages): inputs (area, finish level, circuits, heating / cooling, tonnage and whether estimated, strips, sized-for and target, solar, what it was filled from), the full 220.82(B)+(C) table, every counted item with VA / qty / status / source ('plans', 'loads · nameplate', 'loads · typical', 'loads · confirm spec', 'typed', 'needs VA') and Adds, a *Still estimates* line, the covered list and lighting-circuit count, the what-ifs, the bid flags and the bid note. **Guard:** printing the customer copy while anything is still an estimate (typical value, spec to confirm, needs VA) first says which items and asks *Print anyway?* — the customer sheet never names them. New **Site address** field in The house (filled from the handoff when the job has one; tagged like the rest). **The look (Koy: "make it a cool-looking dashboard … with HOMESTEAD's logo on it"):** both sheets are laid out as a dashboard in the app's own language — slate header band with a schematic grid and the white longhorn logo, the job name big, address and date on an angled steel-blue block; the service size as the hero number in steel blue (Barlow Condensed); a size-ladder gauge with the standard sizes as breaker rungs, the chosen one lit, the confirmed and with-allowances loads as bars and a flag on the load; stat tiles; *What's driving it* as bars (contributors listed one by one — space heaters, floor heat and mini-splits stay inside the heating / cooling bar so nothing is counted twice, tested equal to B + hvac); allowance chips; mono eyebrow labels (JetBrains Mono joins Barlow Condensed and DM Sans as the tool's web fonts); no yellow, the only warm color is the ember *still estimates* strip on the office copy. Tables flow across pages on the office copy. Preview harness for the real '@media print' output: a scratch page that seeds a job, fills, and clicks the print button with 'window.print' stubbed, printed by headless Chrome. Pure sheet logic in 'tools-src/service-size/src/sheet.js', tested ('test/sheet.test.mjs', 5 checks: drivers in plain words with no VA or ids, allowances only when sized for maybes, the three kinds of estimate, a source on every office row, address normalizes). Phone rule unchanged: Open full screen first, then print. **Why it won't lose data:** print-only; nothing new is read or written anywhere (the sheets render the numbers already on screen); 'address' is one additive state key that old states normalize to ""; no job field, loader, rules or function change.
+- **Generator Sizing — the job pull gets a search box (jobs with generator loads marked first, type to search every job, All jobs switch)** · 'shipped 2026-10-02' · 'SW v500' · Koy: *"miller isnt showing in the list to select from. maybe a search bar would be good, or just show jobs with generator loads sleected."* The v499 native dropdown sorted stamped jobs first, so a job sat high in the list instead of under its letter and was easy to scroll past on a phone. Now the **PULL A JOB'S GENERATOR LOADS** strip is a search box: with nothing typed it lists the jobs whose Home Runs carry the Dedicated Loads stamp (marked GENERATOR), typing searches every active job by name or Simpro number, **All jobs** lists everything; tap a job to pick it (a chip with × to change), then **Pull**. Up to 12 matches show at once with a "keep typing" count beyond that. **Why it won't lose data:** picker UI only; the pull itself is unchanged and read-only (one getDoc + the sheet CSV, writes the device-local handoff key); no job field, loader, rules or function change.
+- **Job Info: two GC contacts can run a job — an on-site super AND an office PM** · 'shipped 2026-10-02' · 'SW v498' · Justin, on a Design-Build job: *"it seems at least for these Design-Build jobs there's an onsite super and a office pm… can you make it possible for two? because our job setup says we have to establish both so it needs somewhere for that info to live."* In the GC Contacts list (after a Simpro pull), tap a name to mark who's running the job — now up to **two** can be marked. The first still drops into GC Contact / GC Phone exactly as before; the second lands in new **GC Contact 2 / GC Phone 2** boxes. A third tap is refused with a toast instead of silently swapping someone out, and clearing the first promotes the second so the boxes the crew calls from are never empty while somebody is still marked. Running contacts get one-tap **Onsite Super / Office PM** role chips (they just fill the existing label, which survives re-pulls). A collapsed **+ 2nd GC contact (e.g. office PM)** section under GC Phone lets you type the second contact by hand for jobs with no Simpro pull or a PM who isn't in Simpro's list; it opens by itself once it has anything in it and shows the name in its header. Both picks are keyed by the Simpro contact ID ('gcContactLead', new 'gcContactLead2'), live beside 'gcContacts', and survive every re-pull; the Pull button still only fills BLANKS and never touches the second contact. Purely additive — a job with one contact is unchanged. New fields 'gcContactLead2', 'gcContact2', 'phone2' ride the job's normal data payload (no loader whitelist). Guarded by 'scripts/gc-two-contacts-test.js' (wired into 'prebuild'). In-app guide 'public/sops/jobinfo.html' updated.
+- **Generator Sizing — pull a job's generator-selected loads (choose the job, pull only what's on the generator)** · 'shipped 2026-10-02' · 'SW v499' · Koy: *"i think id rather have a pull from generator selected loads and pull them from the jobs i want."* A new strip above the Generator Sizing tool, **PULL A JOB'S GENERATOR LOADS**: a job picker (active jobs; those whose Home Runs carry the Dedicated Loads stamp sort first and read *generator selected*) and a **Pull** button. Pull reads that job's Generator Load Selection (the same 'homeowner_requests/{jobId}' doc and homeowner-overlay rule the Home Runs panel uses) and drops a **Generator Selection** note in the handoff drawer with ONLY the loads marked on the generator, in the homeowner's priority order (office-added ones after): the appliance sheet's nameplate where a Home Run stands for a sheet row (hand link or the sheet's CC home run name, two-run cells and duplicate names handled), else the Home Run's name with its wire's volts and no amps, so the tool's classifier gives it a flagged typical value and lighting / receptacle circuits are counted, not sized. Never breaker × volts. The tool then shows 'Fill from Generator Selection · #1438 Miller Residence - Alpine · 54 on the generator'; Fill sets the transfer-switch scope to **Essential circuits** when the selection is a subset, counts SA and laundry circuits from the list, and says plainly that square footage is not in the job (enter the served area). Service Size deliberately does not list this source: a service carries the whole house. The Appliance Loads sheet read moved into a shared 'fetchApplSheetRows()' (the view still reloads it fresh; the pull reuses a loaded copy). Pure mapping 'genSelectionLoads' is tested by new 'scripts/gen-pull-test.js' (5 checks against a copied Miller #1438 fixture, wired into 'prebuild'). Miller: 54 of 134 loads → 11 sized rows at 17,000 sq ft served → 80 kW in the test harness. **Why it won't lose data:** the pull is read-only (one 'getDoc' of the job's 'homeowner_requests' doc plus the Sheet CSV); it writes only the device-local handoff key; no job field, loader, rules or function change; the Generator Load Selection section itself is untouched and still carries no wattage; Josh's generator tables and calc are byte-identical.
+- **Tools tab — the three tools fill each other (Appliance Loads → Service Size / Generator Sizing, and the two calculators both ways)** · 'shipped 2026-10-02' · 'SW v497' · Koy: *"so we have the three tools in the tools tab now, generator calc, appliance loads, and load calc. We want them to be able to all three work together to fill each one out if we want."* Opening a job in **Appliance Loads** makes its appliances available on that device, and the job page gets **Send to Generator Sizing** / **Send to Service Size** (the Service Size one only for people who hold that tool); both switch the Tools chip. Koy (Miller #1438 test): *"for the load calc it should use the entire homeruns list"* — so the handoff carries the job's **whole Home Runs list** too: every Home Run the sheet does not already describe (by hand link or the sheet's CC home run name, which may name two runs like "B. Washer / B. Dryer") rides along with its wire's volts and no amps. The tools classify the names: lighting, receptacle, SA, AV and lighting-control circuits are **counted** (small-appliance and laundry circuit counts come from the list) and never sized; furnaces, boilers and humidifiers sit inside the heating/cooling allowance; a 120 V "water heater" or "dryer" circuit is a gas unit's accessory; dedicated circuits with no sheet row (sauna, EV, heat tape, steamer, AC condensers) arrive at the item's typical value, flagged, until a nameplate replaces it. Never breaker × volts. **Generator Sizing** and **Service Size** each get a *Start from another tool* bar with 'Fill from Appliance Loads · #1438 Miller Residence · 14 loads · 2 min ago' style buttons and an Undo; nothing moves until you tap Fill. Service Size also gets **Send to Generator Sizing** next to Copy bid note, tags the fields it filled ('loads' / 'generator', like the 'plans' tag), and gains a **From another tool** group under Extras for appliances its fixed list has no row for (a kiln, a 240 V heater): counted as fixed appliances at nameplate under 220.82(B)(3), editable and removable, in the what-ifs and the bid note. Fridges, microwaves, hoods, disposals and the first dishwasher are listed as *covered by the standard allowances* and never counted twice. A load the sheet had no amps for arrives with the item's typical VA and a flag ('typical VA' in the generator, 'needs VA' on a Service Size extra). A sheet row with no voltage (Miller #1438: range, wall oven, dryer, both speed ovens) takes its volts from the Home Run it is linked to ('applLinks', or the sheet's CC home run name) through that wire's poles, so 42.5 A on a 6/3 run is 240 V × 42.5 A, not a typical value; amps always stay the sheet's nameplate. Service Size hands the generator its recommended service size for the transfer-switch pick and its HVAC as rows at the calc's own figures; the generator hands back square footage and circuit counts. Service Size "maybe" items reach the generator flagged 'maybe' only when Service Size is set to size for maybes. **Confirm spec flag (Koy 2026-10-02):** a sheet row whose amps rest on a series / typical / breaker-only / voltage-only basis (the sheet's Confidence text, not the row's color — a row already in Home Runs shows green even when its amps are a breaker size) arrives in the generator with a 'confirm spec' pill and in Service Size with a *Confirm spec* note; the number is still used. Hand-set amps and a hand-confirmed spec count as confirmed. **Access (Koy 2026-10-02): the whole Tools tab is limited to Koy, Josh, Brady and Jeromy for now.** 'tools.view' becomes a per-user grant like 'tools.serviceSize' (no tier; it was every internal tier through v496). Settings → Team → TOOL ACCESS gains a first checkbox, **Tools tab (all calculators)**; the nav tabs and the Tools view now check the live team record ('myLiveRec'), the v465 lesson, so a grant shows without re-login. **Flip-day: tick Tools tab for the four in Settings → Team**; until then nobody sees Tools. The job card's own *Appliance loads* window on the Home Runs tab is a Home Runs feature and is unchanged. Built on one shared classifier, 'public/tools/shared/load-profile.js' (keyword table, volts × amps, localStorage mailbox, generator-row mappers; UMD so the generator page loads it as a script, Service Size bundles it, and 'tools-src/service-size/test/profile.test.mjs' tests it alongside the Service Size mapping in 'src/profile.js'). Appliance Loads is a source only: its rows come from the nightly Drive run, so nothing fills the Sheet. Josh's generator tables and calc ('PRESETS', 'AIR', 'LIQ', 'PIPE', 'COND', 'CM', 'ATS_WHOLE', 'ATS_ESS', 'calc', 'renderFuel', 'renderPad', 'renderConnections', 'render') are byte-identical, verified by a region diff; the page only gains a 'key' on preset rows and the fill bar. Guide 'tools.html' gains a *Tools that fill each other* section. **Why it won't lose data:** nothing in this change reads or writes Firestore; the handoff is one device-local localStorage key ('he_tools_profile_v1', plus 'he_tools_visible_v1' for which chips a person has), the same kind of per-device convenience as the remembered last tool; Appliance Loads keeps its existing write paths (import, 'applLinks', 'applSpecOk', 'applAmps') untouched; Service Size's calc change is additive (old or plan-filled states normalize with 'extras: []') and covered by tests (20 passing); no loader, rules or Cloud Function change.
+- **Panelized Lighting — a phone with an old copy can no longer un-tick or rename what it didn't touch; "Update N from FieldInk" only offers what the field changed since you last looked** · 'shipped 2026-10-01' · 'SW v496' · Koy, on Miller #1438 tonight: *"the panelized lighting section is saying FieldInk has 18 updates, and I feel like it's trying to push back the old ones again… I just want it fixed and I don't want to mess it up."* Read-only PITR forensics (every copy of the job doc since the 9/30 restore, per-load diffs, device versions, the field-ink 'ccloads' doc at four moments) found THREE things. (1) The 18 were a NEW bad publish, not the old names: at 1:14–1:16 pm a nameless FieldInk device ('updatedBy ""') republished the bridge with 31 loads' rooms shifted one room over (Great Room → Primary Water Closet, Main Powder → Primary Closey, Basement Stair Landing → Kitchen Exterior Deck…); the v450 auto-follow applied it to the 10 rows whose 'fieldSnap' still matched (silently, Keegan's Mac, 1:14:46 pm) and parked the 16 pre-v450 rows behind the button. (2) Two rollbacks v471 did not stop, both from iPhones coming back after a gap, both 'merged:true', both with 'plRev' going BACKWARDS: Austin 9/30 3:57 pm (plRev 2050 → 39) reverted 5 of fix-names' renames; Noah 10/1 5:12 pm (2097 → 2094) un-ticked 6 Loads-Ran boxes Keegan / Braden / Austin had ticked. The tripwire stayed silent because '_threeWayMerge' treats 'plRev' as a primitive (client wins). Replaying Noah's write through the real merge with an honest baseline KEEPS every foreign tick — so the phone's live baseline was not what its screen derived from; the exact on-phone path is not pinned and this ship stops trusting the baseline for this field instead of guessing. (3) The 9/30 4:40–4:51 pm module / load count changes were Koy's own edits. **Fix A — intent merge for 'panelizedLighting':** JobDetail's 'u()' records WHAT this copy changed ('plDiffIntent': per-load fields, added / removed ids, other panelizedLighting keys) and the save funnel lays only that onto the SERVER's current copy ('plApplyIntent'); untouched loads always come from the server, so a stale phone cannot un-tick or rename what it never touched. The intent rides the pending patch under '_plIntent' (unioned across a burst by 'plMergeIntents'; a panel write with no intent drops it), is stripped before every write (saveJob / flushJob / flushSaves) and never lands on the job object. A copy older than its baseline is now applied this way with a 'console.warn' instead of being refused. **Fix B — 'plRev' never goes backwards:** 'plMergedRev' makes the merged rev 'max(client, server)' or 'server + 1' (restored 1042 vs a copy at 45 → 1043, never 46). **Fix C — the no-intent path (hub toggle, replayed queue, legacy) keeps the baseline merge plus 'plRepairUnticks':** a merged load that is 'pulled:false' while still carrying someone's 'pulledBy' was un-ticked by a merge, not a person (a real un-tick clears the stamp) → the server's tick is put back with a loud 'console.error'. **Fix D — 'ccLoadSyncPlan':** an office-edited row whose bridge value still equals its 'fieldSnap' is no longer offered (the office's edit stands); it is offered again only when FieldInk moves that load to a third value, and never auto-applied. Harness: 'scripts/panel-loads-merge-test.js' +18 checks (both Miller rollback shapes replayed through the real helpers, add / remove / edit-vs-delete, other keys, bursts, rev rules, the un-tick repair); 'scripts/ccloads-suggest-test.js' +4 (the Miller "office fixed, bridge still wrong" shape). Guide 'panelizedlighting.html' updated. Data repair for Miller is a separate admin script Koy runs (names, 5 ticks, 31 snaps). **Why it won't lose data:** no field shape, loader or rules change — 'panelizedLighting' is written in the same whole-object shape through the same transaction; the intent is in-memory / pending-queue only and is deleted from every write patch before 'tx.update'; the intent path starts from the server's copy and changes only loads / fields this device actually edited (a client delete is honored, a client edit of a server-deleted load is kept, server adds are kept — the same keep bias as the structural merge); every other job field still goes through the unchanged three-way merge; when no intent is available the old path runs exactly as before plus two guards that can only ADD a tick back or raise the rev; 'plRev' stays one additive integer.
 - **Appliance Loads: set amps by hand on any appliance** · 'shipped 2026-10-01' · 'SW v494' · Koy: *"i need to be able to put in amperage. the example im having is wash tower in oak hill, its saying 30a but there is both a washer and dryer on the sheet. washer is 20a and dryer is 30 but theres no way to change the washer ot a 20a"*. The appliance drawer has a Set amps by hand box (load A, breaker A; breaker defaults to the load). The row shows the typed amps in place of the sheet's, counts as confirmed (green), the job totals use it, and the Home Runs import writes the typed amps and the wire size that goes with them. Use sheet puts it back. The Google Sheet is not changed. **Why it won't lose data:** one new additive field on the job, applAmps, saved through the same patch-save call as applLinks and applSpecOk (the loader already unwraps every job field; jobs without it behave exactly as before). It is read-only against the Sheet and Home Runs, and only the import button (unchanged, user-triggered) ever writes Home Runs.
 - **Appliance Loads: a "Likely in CC" appliance now shows its likely Home Run first, and yellow reads CONFIRM SPECS** · 'shipped 2026-10-01' · 'SW v489' · Koy: *"if it is marked likely in cc can it show the load it likely is first so i dont have to search through all the loads listed?"* and *"it should say confirm specs, so that isnt confused with confirm the load is in cc"*. In the Appliance Loads drawer, a row the sheet marks Likely now leads with the Home Run it named (with Yes, same), and the pick list opens on that one with same-kind Home Runs next, then the rest A to Z; Not-in-CC rows get the same ordering around the suggestion. The yellow status now reads CONFIRM SPECS (green SPECS CONFIRMED). A yellow appliance also gets a Confirm specs button in its drawer (with Undo) that turns it green, stored per job in a new applSpecOk field; red rows are never overridden. **Why it won't lose data:** display ordering and labels only. Linking still writes the same applLinks field through the same call as before. The one new field, applSpecOk on the job, is additive and written by the same patch-save call as applLinks (the loader already unwraps every field, so nothing is dropped, and jobs without it behave exactly as before); no rules or save-path changes, and Home Runs are never edited by this change.
 - **Panelized Lighting Loads list — the Panel column shows the Builder's LCP, and a ran load shows who ran it** · 'shipped 2026-10-01' · 'SW v488' · Koy (Miller Loads list screenshot, Panel dropdown offering Panel A / B / C while every row already wore an "LCP 4 · Mod 1 · Z3" chip): *"they are assigned to panels and modules already, so why is the panel they are assigned to not an option, and why are they not sorted into them automatically from the module panel placer?"* and *"when a load is checked off as ran, please add who pulled it here as well — the loads ran drop down at the top blends in and nobody notices it."* **Why it was wrong:** the Panel column is the pre-v449 free-text 'panel' field, and its suggestions were the old floor-section labels ('plSectionLabels', default Panel A / B / C); nothing read the Builder's 'load.assign' into it. **Now:** on a Lutron job a load the Panel Builder has placed (zoned OR parked) shows that panel's name in the Panel column, read live from the assignment (new pure 'lutronPanelOf') — tap it to open the same move / park / clear sheet the badge opens. A load with no assignment keeps the text box, whose suggestions are now the Builder's panels (LCP 1 / LCP 2 …) once 'panels' is persisted, and typing or picking one of those names **parks the load on that panel** ('assign' with no module — exactly "Put on LCP n only"); on a job still on the migrated read-view the text is saved as before and the migration's existing "Panel column naming a panel parks there" rule applies. The Loads Ran card's meta line shows the same panel. **Who ran it:** a ran load's row now shows **✓ <who> · <date>** beside its name (desktop) / in its second line (phone) — the stamp v443 already stored and only the checkbox tooltip showed. Harness 'needs-dryrun' pins 'lutronPanelOf' (zoned, parked, unassigned, unknown panel, no load). Guide 'panelizedlighting.html' updated. Built and shipped from a clean worktree off origin/main (the shared folder held two other sessions' work). **Why it won't lose data:** the derived Panel cell writes nothing; the only new write is the park-on-type path, which sets 'assign:{panelId, moduleId:null, zone:null}' on one load through the same 'u({panelizedLighting:{...pl, loads}})' patch the list already uses, and only when the Builder's 'panels' already exist on the doc (never against migrated ids); the ran stamp is read-only; no field shape, loader, function or rules change.
@@ -53861,11 +54084,35 @@ const commGearSummary = (job) => {
   const late = rows.filter(r => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now()).length;
   return { n: rows.length, appr, rel, late };
 };
+// v503: building punch for the commercial phase tabs. commercial.buildings =
+// [{key, label}] is job-wide; commercial.phases[key].punch = { general, [bkey] }
+// holds PunchFloor data per building. "general" reads the v467 flat checklist
+// (phases[key].items) until General is first written, then the items move into
+// punch.general and `items` clears — nothing is dropped, nothing is copied twice.
+const commBuildings = (job) => { const b = commOf(job).buildings; return Array.isArray(b) ? b.filter(x => x && x.key) : []; };
+const commLegacyPunchItems = (ph) => (Array.isArray(ph && ph.items) ? ph.items : []).filter(Boolean).map(i => ({ ...i, id: i.id || uid(), text: String(i.text || ""), done: !!i.done, addedBy: i.addedBy || i.by || "", addedAt: i.addedAt || i.at || "" }));
+const commPunchFloor = (ph, bkey) => {
+  const punch = (ph && ph.punch) || {};
+  if (bkey !== "general") return normFloor(punch[bkey]);
+  const legacy = commLegacyPunchItems(ph);
+  if (!punch.general) return normFloor(legacy);
+  // A phone still on v502 can add to `items` after the move — show those too
+  // (the next General write folds them in and clears `items` again).
+  const f = normFloor(punch.general); const ids = new Set(f.general.map(i => i && i.id));
+  const late = legacy.filter(i => !ids.has(i.id));
+  return late.length ? { ...f, general: [...f.general, ...late] } : f;
+};
+const commFloorOpen = (f) => f.general.filter(i => i && !i.done).length + f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => i && !i.done).length : 0), 0);
+const commPhaseOpenCount = (job, key) => {
+  const ph = (commOf(job).phases || {})[key] || {};
+  return ["general", ...commBuildings(job).map(b => b.key)].reduce((a, k) => a + commFloorOpen(commPunchFloor(ph, k)), 0);
+};
+
 // v467: one on-site commercial phase (Power / Lighting / Gear / Underground sub).
 // Stored under commercial.phases[key] = { status, start, end, notes, items:[{id,
 // text, done, by, at}], photos:[] } — written through commPatch's spread-merge
 // so two people on different phases never clobber each other.
-function CommPhaseTab({ job, u, identity, tabLabel }) {
+function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
   const def = COMM_PHASE_TABS[tabLabel] || { key: String(tabLabel||"").toLowerCase(), color: C.teal };
   const subs = def.subs || null;
   const [sub, setSub] = useState(subs ? subs[0][0] : null);
@@ -53876,7 +54123,35 @@ function CommPhaseTab({ job, u, identity, tabLabel }) {
   const me = (identity && identity.name) || "";
   const patch = (fn) => u(commPatch(job, c => ({ ...c, phases: { ...(c.phases || {}), [key]: fn({ status:"", start:"", end:"", notes:"", items:[], photos:[], ...(((c.phases || {})[key]) || {}) }) } })));
   const items = Array.isArray(ph.items) ? ph.items : [];
-  const openCount = (k) => { const p = phases[k]; return Array.isArray(p && p.items) ? p.items.filter(i => i && !i.done).length : 0; };
+  const openCount = (k) => { if (def.punch) return commPhaseOpenCount(job, k); const p = phases[k]; return Array.isArray(p && p.items) ? p.items.filter(i => i && !i.done).length : 0; };
+  // v503 building punch. One building's floor data goes back through the same
+  // commPatch spread-merge; writing General also retires the legacy `items`.
+  const buildings = commBuildings(job);
+  const [newBuilding, setNewBuilding] = useState("");
+  const [addingBuilding, setAddingBuilding] = useState(false);
+  const [renaming, setRenaming] = useState(null);   // { key, text } while a building name is being edited
+  const setBuildingFloor = (bkey, data) => patch(x => ({ ...x, punch: { ...(x.punch || {}), [bkey]: data }, ...(bkey === "general" ? { items: [] } : {}) }));
+  const addBuilding = () => {
+    const label = newBuilding.trim().slice(0, 80); if (!label) return;
+    if (buildings.some(b => String(b.label).toLowerCase() === label.toLowerCase())) { toast(`"${label}" is already on this job`); return; }
+    const bkey = "b_" + uid();
+    u(commPatch(job, c => ({ ...c, buildings: [...(Array.isArray(c.buildings) ? c.buildings : []), { key: bkey, label, by: me, at: commLocalDate() }] })));
+    setNewBuilding(""); setAddingBuilding(false);
+  };
+  const renameBuilding = (bkey, label) => { const v = String(label || "").trim().slice(0, 80); if (!v) return; u(commPatch(job, c => ({ ...c, buildings: (Array.isArray(c.buildings) ? c.buildings : []).map(b => b && b.key === bkey ? { ...b, label: v } : b) }))); };
+  const removeBuilding = async (b) => {
+    const allPhases = commOf(job).phases || {};
+    const where = Object.keys(allPhases).map(k => [k, commFloorOpen(commPunchFloor(allPhases[k], b.key))]).filter(([, n]) => n > 0);
+    const total = where.reduce((a, [, n]) => a + n, 0);
+    const msg = total ? `Remove "${b.label}" from this job? It has ${total} open item${total === 1 ? "" : "s"} across ${where.length} tab${where.length === 1 ? "" : "s"} — they go with it.` : `Remove "${b.label}" from this job? It comes off every tab.`;
+    if (!await showConfirm(msg)) return;
+    u(commPatch(job, c => {
+      const ph = { ...(c.phases || {}) };
+      Object.keys(ph).forEach(k => { if (ph[k] && ph[k].punch && b.key in ph[k].punch) { const pu = { ...ph[k].punch }; delete pu[b.key]; ph[k] = { ...ph[k], punch: pu }; } });
+      return { ...c, phases: ph, buildings: (Array.isArray(c.buildings) ? c.buildings : []).filter(x => x && x.key !== b.key) };
+    }));
+  };
+  const BUILDING_COLORS = [C.blue, C.purple, C.teal, C.accent, C.green];
   const STATUS = [["","Not started"],["inprogress","In progress"],["complete","Complete"]];
   const col = def.color;
   const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
@@ -53915,6 +54190,44 @@ function CommPhaseTab({ job, u, identity, tabLabel }) {
         <textarea value={ph.notes||""} rows={3} placeholder={`Notes for ${subs ? (subs.find(([k])=>k===sub)||[])[1] : tabLabel}…`} onChange={e=>{ const v=e.target.value; patch(x=>({...x, notes:v})); }}
           style={{width:"100%",boxSizing:"border-box",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",resize:"vertical"}}/>
       </div>
+      {def.punch ? (
+      <div style={{marginBottom:12}}>
+        {lbl(`Punch list · ${openCount(key)} open`)}
+        <PunchFloor key={`${key}_general`} floorKey={`comm_${key.replace(".","_")}_general`} floorData={commPunchFloor(ph, "general")} onFloorChange={(_, d) => setBuildingFloor("general", d)}
+          floorLabel="General" floorColor={col} jobId={job.id} assigneeOptions={assigneeOptions} myName={me}
+          roomPlaceholder="Add area (e.g. Site, Parking lot)…" roomBtnLabel="+ Area"/>
+        {buildings.map((b, i) => (
+          <div key={b.key}>
+            <PunchFloor key={`${key}_${b.key}`} floorKey={`comm_${key.replace(".","_")}_${b.key}`} floorData={commPunchFloor(ph, b.key)} onFloorChange={(_, d) => setBuildingFloor(b.key, d)}
+              floorLabel={b.label} floorColor={BUILDING_COLORS[i % BUILDING_COLORS.length]} jobId={job.id} assigneeOptions={assigneeOptions} myName={me}
+              roomPlaceholder="Add area (e.g. Suite 101, Electrical room)…" roomBtnLabel="+ Area"/>
+            <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,margin:"-8px 0 10px"}}>
+              {renaming && renaming.key === b.key ? (<>
+                <input value={renaming.text} autoFocus onChange={e=>setRenaming({ key:b.key, text:e.target.value })} onKeyDown={e=>{ if(e.key==="Enter"){ renameBuilding(b.key, renaming.text); setRenaming(null); } if(e.key==="Escape") setRenaming(null); }}
+                  style={{flex:1,maxWidth:260,border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
+                <button onClick={()=>{ renameBuilding(b.key, renaming.text); setRenaming(null); }} style={{background:"none",border:"none",color:col,cursor:"pointer",fontSize:11,fontWeight:700,padding:"2px 4px",fontFamily:"inherit"}}>Save</button>
+                <button onClick={()=>setRenaming(null)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit"}}>Cancel</button>
+              </>) : (
+                <button onClick={()=>setRenaming({ key:b.key, text:b.label })} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Rename</button>
+              )}
+              <button onClick={() => removeBuilding(b)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Remove {b.label}</button>
+            </div>
+          </div>
+        ))}
+        {addingBuilding ? (
+          <div style={{display:"flex",gap:8,alignItems:"center",marginTop:4}}>
+            <input value={newBuilding} autoFocus onChange={e=>setNewBuilding(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") addBuilding(); if(e.key==="Escape") setAddingBuilding(false); }}
+              placeholder="Building / area name (e.g. Building A)…"
+              style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
+            <Btn onClick={addBuilding} variant="add" style={{fontSize:11,padding:"6px 12px"}}>Add</Btn>
+            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+          </div>
+        ) : (
+          <Btn onClick={()=>setAddingBuilding(true)} variant="add" style={{fontSize:11,padding:"5px 12px",marginTop:2}}>+ Add Building / Area</Btn>
+        )}
+        <div style={{fontSize:10,color:C.muted,marginTop:6}}>Buildings are shared by Power, Lighting and Underground on this job — each tab keeps its own items.</div>
+      </div>
+      ) : (
       <div style={{marginBottom:12}}>
         {lbl(`Checklist · ${items.filter(i=>!i.done).length} open`)}
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -53935,6 +54248,7 @@ function CommPhaseTab({ job, u, identity, tabLabel }) {
           </div>
         </div>
       </div>
+      )}
       <div>{lbl("Photos")}
         <PhotoAttacher storagePath={`jobs/${job.id}/commphase/${key.replace(".","_")}`} photos={Array.isArray(ph.photos)?ph.photos:[]} color={col} label="Add photo"
           onChange={(next)=>patch(x=>({...x, photos: next}))}/>
@@ -55865,7 +56179,198 @@ const applRank = (row, list, first) => {
 };
 const applRowKey = (r) => [r.no, r.loc, r.item, r.model].map(x => String(x||"").trim().toLowerCase()).join("|");
 
-function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
+// Read the Appliance Loads master Sheet (Master tab as CSV; needs link-viewing).
+// Shared by the Appliance Loads view (always fresh) and the generator pull below
+// (fresh unless a view already loaded it this session). Read-only.
+let _applSheetRows = null;
+async function fetchApplSheetRows(force) {
+  if (_applSheetRows && !force) return _applSheetRows;
+  const res = await fetch(APPL_SHEET_URL, { cache:"no-store" });
+  if (!res.ok) throw new Error("The master sheet could not be read (HTTP " + res.status + ").");
+  const txt = await res.text();
+  if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The master sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\", then press Refresh.");
+  const grid = parseCSVText(txt);
+  const H = (grid[0]||[]).map(h => String(h||"").trim().toLowerCase());
+  const ix = (...names) => { for (const n of names) { const i = H.findIndex(h => h===n || h.startsWith(n)); if (i>=0) return i; } return -1; };
+  const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
+        iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iTot=ix("total amps"), iConf=ix("confidence"), iBasis=ix("basis"), iIn=ix("in cc"), iCc=ix("cc home run"),
+        iDoc=ix("source doc"), iLink=ix("source file link"), iPage=ix("source page"), iSpec=ix("spec file");
+  if ([iJob,iItem,iQty].some(i => i<0)) throw new Error("The master sheet columns were not what this view expects.");
+  const g = (c, i) => i>=0 ? String(c[i]||"").trim() : "";
+  const rows = [];
+  grid.slice(1).forEach(c => {
+    const label = g(c, iJob), item = g(c, iItem), no = applJobNo(label);
+    if (!no || !item) return;
+    rows.push({ no, label, loc:g(c,iLoc), floor:g(c,iFloor), item, model:g(c,iModel), qty:g(c,iQty), volts:g(c,iV), brk:g(c,iBrk),
+      load:g(c,iLoad), total:applNum(g(c,iTot)), conf:g(c,iConf), basis:g(c,iBasis), inCC:g(c,iIn).toLowerCase(), cc:g(c,iCc),
+      doc:g(c,iDoc), link:g(c,iLink), page:g(c,iPage), spec:g(c,iSpec) });
+  });
+  _applSheetRows = rows;
+  return rows;
+}
+
+// ── Pull a job's generator selection into the Generator Sizing tool (v498) ──
+// Koy 2026-10-02: "pull from generator selected loads and pull them from the
+// jobs i want." Only the loads marked ON the generator, in the homeowner's
+// priority order: the sheet's nameplate where a Home Run stands for a sheet
+// row (hand link or the sheet's CC home run name), else the Home Run's name
+// with its wire's volts and no amps — the tool's classifier gives it a flagged
+// typical value, and lighting / receptacle circuits are counted, not sized.
+// Never breaker × volts (the v280 lesson). Pure; tested by scripts/gen-pull-test.js.
+const genSelectionLoads = (included, job, sheetRows) => {
+  const hrRows = flattenHomeRuns(job && job.homeRuns);
+  const hrById = {}, hrByName = {};
+  hrRows.forEach(h => { if (h.id) hrById[h.id] = h; const k = String(h.name || "").trim().toLowerCase(); if (k) (hrByName[k] = hrByName[k] || []).push(h); });
+  const links = (job && job.applLinks) || {}, ampsMap = (job && job.applAmps) || {}, okMap = (job && job.applSpecOk) || {};
+  const no = String((job && job.simproNo) || "").trim();
+  const rows = (sheetRows || []).filter(r => r && String(r.no) === no);
+  const hrsOf = (r) => {
+    const link = links[applRowKey(r)];
+    if (link && hrById[link.id]) return [hrById[link.id]];
+    const k = String(r.cc || "").trim().toLowerCase();
+    if (!k) return [];
+    if (hrByName[k]) return hrByName[k];
+    return k.split("/").map(x => x.trim()).filter(Boolean).flatMap(x => hrByName[x] || []);
+  };
+  const byHr = {};
+  rows.forEach(r => hrsOf(r).forEach(h => { (byHr[h.id] = byHr[h.id] || []).push(r); }));
+  const voltsOfWire = (wire, v240) => WIRE_BREAKER[wire] ? (effectivePoles(wire, v240) === 2 ? 240 : 120) : null;
+  const confidenceOf = (r) => {
+    const key = applRowKey(r);
+    if (ampsMap[key] || okMap[key]) return "ok";
+    const c = String(r.conf || "").trim().toLowerCase(), b = String(r.basis || "").trim().toLowerCase();
+    if (!applNum(r.load) || /^(none|tbd|not found)/.test(c)) return "none";
+    if (c === "" || /series|typical|voltage only|circuit only|breaker only|conflicting|not confirmed|partial|not found/.test(c + " " + b)) return "unconfirmed";
+    return "ok";
+  };
+  // Homeowner-ranked loads first (priority 1..n), then office-added ones (priority 0).
+  const rank = (l) => (l && l.priority > 0 ? l.priority : 1e6);
+  const sorted = (included || []).filter(Boolean).slice().sort((a, b) => rank(a) - rank(b));
+  const loads = [], seenRow = new Set();
+  sorted.forEach(l => {
+    const name = String(l.name || "").trim(), key = name.toLowerCase();
+    const hr = (l.hrId && hrById[l.hrId]) || (hrByName[key] || [])[0] || null;
+    const wire = (hr && hr.wire) || l.wire || "";
+    const v = voltsOfWire(wire, hr ? hr.v240 : l.v240);
+    const tag = `on generator${l.priority > 0 ? " (p" + l.priority + ")" : ""}`;
+    const matched = (hr && byHr[hr.id]) || [];
+    if (matched.length) {
+      matched.forEach(r => {
+        const rk = applRowKey(r); if (seenRow.has(rk)) return; seenRow.add(rk);
+        const ov = ampsMap[rk];
+        const a = applNum(ov ? ov.load : r.load) || null;
+        const volts = applNum(r.volts) || v || null;
+        loads.push({ name: [r.loc, r.item].filter(Boolean).join(" · "), model: r.model || "", kind: "", qty: applNum(r.qty) || 1, volts, amps: a,
+          va: volts && a ? Math.round(volts * a) : null, motor: false, status: "yes", confidence: confidenceOf(r),
+          note: `${tag} · Home Run "${name}"${wire ? " " + wire : ""}` });
+      });
+      return;
+    }
+    loads.push({ name, model: "", kind: "", qty: /\d\s*\+\s*\d/.test(name) ? 2 : 1, volts: v, amps: null, va: null, motor: false, status: "yes",
+      confidence: "none", note: `${tag} · Home Run${wire ? " " + wire : ", no wire yet"}` });
+  });
+  return loads;
+};
+// Reads the job's Generator Load Selection (same doc + overlay rule the Home Runs
+// panel uses) and builds the profile. Read-only; throws a plain sentence when
+// the job has nothing on the generator.
+async function pullGenSelectionProfile(job) {
+  const snap = await getDoc(doc(db, "homeowner_requests", job.id));
+  const d = snap.exists() ? snap.data() : null;
+  const base = (d && Array.isArray(d.genLoads)) ? d.genLoads : [];
+  const gl = homeownerOverlayApplies(d) ? applyHomeownerChoices(base, d.items) : base;
+  const included = gl.filter(l => l && l.included);
+  if (!included.length) throw new Error(gl.length ? "Nothing is marked on the generator for this job yet." : "This job has no Generator Load Selection yet.");
+  let rows = [], sheetOk = true;
+  try { rows = await fetchApplSheetRows(false); } catch (e) { sheetOk = false; }
+  const loads = genSelectionLoads(included, job, rows);
+  const profile = { v: 1, source: "generator-selection", at: new Date().toISOString(),
+    label: `#${job.simproNo || ""} ${job.name || ""}`.trim() + ` · ${included.length} on the generator`,
+    job: { no: String(job.simproNo || ""), name: job.name || "", address: job.address || "" },
+    house: null, hvac: null, service: null, sizeFor: "max", scope: included.length < gl.length ? "essential" : "whole", loads };
+  return { profile, included: included.length, total: gl.length, sheetOk };
+}
+
+// Tools handoff (2026-10-02): a job's appliances as a load profile the two
+// calculators can fill from. Same device-local key the iframe tools use
+// (public/tools/shared/load-profile.js). Nothing is written to the job.
+const TOOLS_PROFILE_KEY = "he_tools_profile_v1";
+const TOOLS_VISIBLE_KEY = "he_tools_visible_v1";
+function applToolProfile(cur, cc) {
+  // The sheet often leaves Voltage blank on 240 V appliances (Miller #1438: range,
+  // wall oven, dryer, speed ovens). The job's own Home Run wire says 1-pole or
+  // 2-pole, so a row linked to a Home Run (applLinks, or the sheet's "CC home run"
+  // name) takes its volts from that wire. Amps always stay the sheet's nameplate.
+  const hrRows = cc ? flattenHomeRuns(cc.homeRuns) : [];
+  // A name can label two runs ("Kitchenette D/D" = dishwasher + disposal), so names map to lists.
+  const hrById = {}, hrByName = {};
+  hrRows.forEach(h => { if (h.id) hrById[h.id] = h; const k = String(h.name || "").trim().toLowerCase(); if (k) (hrByName[k] = hrByName[k] || []).push(h); });
+  const links = (cc && cc.applLinks) || {};
+  // The Home Run(s) a sheet row stands for: its hand link, else the sheet's "CC home
+  // run" name — whole name first, then each "/"-separated part ("B. Washer / B. Dryer").
+  const hrsOf = (r) => {
+    const link = links[applRowKey(r)];
+    if (link && hrById[link.id]) return [hrById[link.id]];
+    const k = String(r.cc || "").trim().toLowerCase();
+    if (!k) return [];
+    if (hrByName[k]) return hrByName[k];
+    return k.split("/").map(x => x.trim()).filter(Boolean).flatMap(x => hrByName[x] || []);
+  };
+  // How much to trust the sheet's amps: the sheet's Confidence text, not the row's
+  // color (a row already in Home Runs shows green even when its amps are a breaker
+  // size). Hand-set amps and a hand-confirmed spec count as confirmed.
+  const confidenceOf = (r) => {
+    if (r.ovr || r.specOk) return "ok";
+    const c = String(r.conf || "").trim().toLowerCase(), b = String(r.basis || "").trim().toLowerCase();
+    if (!applNum(r.load) || /^(none|tbd|not found)/.test(c)) return "none";
+    // "Exact model" with a basis of "breaker only" is still a breaker size, not a draw.
+    if (c === "" || /series|typical|voltage only|circuit only|breaker only|conflicting|not confirmed|partial|not found/.test(c + " " + b)) return "unconfirmed";
+    return "ok";
+  };
+  const loads = (cur.rows || []).map(r => {
+    let volts = applNum(r.volts) || null, note = "";
+    const amps = applNum(r.load) || null, qty = applNum(r.qty) || 1;
+    const confidence = confidenceOf(r);
+    if (confidence === "unconfirmed") note = `sheet spec to confirm (${[r.basis, r.conf].map(x => String(x || "").trim()).filter(Boolean).join(" · ") || "no basis given"})`;
+    if (!volts) {
+      const hrs = hrsOf(r);
+      const hr = hrs.find(h => WIRE_BREAKER[h.wire] && effectivePoles(h.wire, h.v240) === 2) || hrs.find(h => WIRE_BREAKER[h.wire]);
+      if (hr) { volts = effectivePoles(hr.wire, hr.v240) === 2 ? 240 : 120; note = (note ? note + " · " : "") + `volts from Home Run wire ${hr.wire}`; }
+    }
+    return { name: [r.loc, r.item].filter(Boolean).join(" · "), model: r.model || "", kind: "", qty, volts, amps,
+      va: volts && amps ? Math.round(volts * amps) : null, motor: false, status: "yes", note, confidence };
+  });
+  // Koy (2026-10-02, Miller #1438): the load calc should see the ENTIRE Home Runs
+  // list, not just the appliance package. Every Home Run the sheet does not
+  // already describe rides along with its wire's volts and no amps: the tools
+  // classify the name — lighting / receptacle / SA circuits are counted, not
+  // sized; dedicated circuits get a flagged typical value until a nameplate
+  // replaces it. Never breaker × volts (the v280 lesson).
+  const describedIds = new Set((cur.rows || []).flatMap(hrsOf).map(h => h.id));
+  const hrCount = { total: 0, sent: 0 };
+  hrRows.forEach(h => {
+    hrCount.total++;
+    if (describedIds.has(h.id)) return; // a sheet row carries this one, with real amps
+    const volts = WIRE_BREAKER[h.wire] ? (effectivePoles(h.wire, h.v240) === 2 ? 240 : 120) : null;
+    hrCount.sent++;
+    loads.push({ name: String(h.name || "").trim(), model: "", kind: "", qty: 1, volts, amps: null, va: null, motor: false, status: "yes",
+      note: h.wire ? `Home Run ${h.wire}` : "Home Run, no wire yet", confidence: "none" });
+  });
+  const name = (cc && cc.name) || String(cur.label || "").replace(/^#?\d+\s*[-–·:]?\s*/, "").trim();
+  return { v: 1, source: "appliance-loads", at: new Date().toISOString(),
+    label: `#${cur.no} ${name}`.trim() + (hrCount.sent ? ` · ${(cur.rows || []).length} appliances + ${hrCount.sent} Home Runs` : ""),
+    job: { no: String(cur.no), name, address: (cc && cc.address) || "" }, house: null, hvac: null, service: null, sizeFor: null, loads };
+}
+function writeToolProfile(p) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOOLS_PROFILE_KEY) || "{}");
+    const all = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    all[p.source] = p;
+    localStorage.setItem(TOOLS_PROFILE_KEY, JSON.stringify(all));
+    return true;
+  } catch (e) { return false; }
+}
+function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
   const [st, setSt] = useState({ loading:true, err:"", rows:[] });
   const [tick, setTick] = useState(0);
   const [openNo, setOpenNo] = useState(onlyNo || null);   // onlyNo: opened from one job's card, locked to that job
@@ -55882,26 +56387,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
     setSt(s => ({ ...s, loading:true, err:"" }));
     (async () => {
       try {
-        const res = await fetch(APPL_SHEET_URL, { cache:"no-store" });
-        if (!res.ok) throw new Error("The master sheet could not be read (HTTP " + res.status + ").");
-        const txt = await res.text();
-        if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The master sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\", then press Refresh.");
-        const grid = parseCSVText(txt);
-        const H = (grid[0]||[]).map(h => String(h||"").trim().toLowerCase());
-        const ix = (...names) => { for (const n of names) { const i = H.findIndex(h => h===n || h.startsWith(n)); if (i>=0) return i; } return -1; };
-        const iJob=ix("job"), iLoc=ix("location"), iFloor=ix("floor"), iItem=ix("item"), iModel=ix("model"), iQty=ix("qty"),
-              iV=ix("voltage"), iBrk=ix("breaker"), iLoad=ix("load amps"), iTot=ix("total amps"), iConf=ix("confidence"), iIn=ix("in cc"), iCc=ix("cc home run"),
-              iDoc=ix("source doc"), iLink=ix("source file link"), iPage=ix("source page"), iSpec=ix("spec file");
-        if ([iJob,iItem,iQty].some(i => i<0)) throw new Error("The master sheet columns were not what this view expects.");
-        const g = (c, i) => i>=0 ? String(c[i]||"").trim() : "";
-        const rows = [];
-        grid.slice(1).forEach(c => {
-          const label = g(c, iJob), item = g(c, iItem), no = applJobNo(label);
-          if (!no || !item) return;
-          rows.push({ no, label, loc:g(c,iLoc), floor:g(c,iFloor), item, model:g(c,iModel), qty:g(c,iQty), volts:g(c,iV), brk:g(c,iBrk),
-            load:g(c,iLoad), total:applNum(g(c,iTot)), conf:g(c,iConf), inCC:g(c,iIn).toLowerCase(), cc:g(c,iCc),
-            doc:g(c,iDoc), link:g(c,iLink), page:g(c,iPage), spec:g(c,iSpec) });
-        });
+        const rows = await fetchApplSheetRows(true);
         if (!dead) setSt({ loading:false, err:"", rows });
       } catch (e) {
         if (!dead) setSt(s => ({ ...s, loading:false, err:String(e.message||e) }));
@@ -55946,6 +56432,19 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
 
   const sum = (k) => summary.reduce((a,j) => a + j[k], 0);
   const cur = openNo ? summary.find(j => j.no === openNo) : null;
+
+  // Opening a job's page makes its appliances available to Service Size / Generator Sizing on this device.
+  useEffect(() => { if (cur) writeToolProfile(applToolProfile(cur, ccFor(cur.no)));
+  // eslint-disable-next-line
+  }, [cur && cur.no, rowsEff]);
+  const TOOL_LABEL = { "service-size": "Service Size", "generator-sizing": "Generator Sizing" };
+  const sendTo = (key) => {
+    if (!cur) return;
+    const ok = writeToolProfile(applToolProfile(cur, ccFor(cur.no)));
+    if (!ok) { setMsg("This device would not let the app store the handoff. Try again, or use another browser."); return; }
+    if (onOpenTool) onOpenTool(key);
+    else setMsg(`Sent ${cur.rows.length} appliances. Open Tools, pick ${TOOL_LABEL[key]}, and tap Fill from Appliance Loads.`);
+  };
 
   const font = "'Bebas Neue',sans-serif";
   const GREEN = C.green, RED = C.red;
@@ -56065,6 +56564,18 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo }) {
       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
         <span style={{fontSize:12,color:C.dim}}>{cur.rows.length} items · {applFmt(cur.amps)} A connected</span>
         <span style={{flex:1}}/>
+        {(!tools || tools.includes("generator-sizing")) && (
+          <button onClick={()=>sendTo("generator-sizing")} title="Use this job's appliances in the Generator Sizing tool"
+            style={{padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>
+            Send to Generator Sizing
+          </button>
+        )}
+        {tools && tools.includes("service-size") && (
+          <button onClick={()=>sendTo("service-size")} title="Use this job's appliances in the Service Size tool"
+            style={{padding:"8px 14px",borderRadius:8,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>
+            Send to Service Size
+          </button>
+        )}
         <button onClick={()=>setImportOpen(true)} disabled={!cc}
           title={cc ? "Add this job's missing appliances to its Home Runs" : "No Command Center job has this job number"}
           style={{padding:"8px 16px",borderRadius:8,border:"none",background:cc?C.accent:C.muted,color:"#fff",fontSize:12,fontWeight:800,letterSpacing:"0.04em",fontFamily:"inherit",cursor:cc?"pointer":"not-allowed"}}>
@@ -56243,6 +56754,84 @@ const TOOLS = [
     src: "/tools/service-size/index.html" },
 ];
 const TOOLS_LAST_KEY = "he_tools_last";   // per-device convenience only: the tool last opened
+// The strip above the Generator Sizing tool: choose a job, pull the loads marked
+// on its generator into the handoff drawer; the tool then shows "Fill from
+// Generator Selection". Jobs whose Home Runs carry the Dedicated Loads stamp
+// are listed first and marked, since that stamp means a selection was made.
+function GenPullBar({ jobs }) {
+  // v500 (Koy: "miller isnt showing in the list … maybe a search bar would be good,
+  // or just show jobs with generator loads selected"): a search box instead of a
+  // native dropdown. With nothing typed it lists the jobs whose Home Runs carry the
+  // Dedicated Loads stamp (a selection was made); typing searches every active job
+  // by name or number; "All jobs" lists everything.
+  const all = useMemo(() => (jobs || []).filter(j => j && !isInactiveJob(j) && j.name)
+    .map(j => ({ j, gen: flattenHomeRuns(j.homeRuns).some(r => (r.panel || "") === DEDICATED_PANEL) }))
+    .sort((a, b) => String(a.j.name).localeCompare(String(b.j.name))), [jobs]);
+  const [q, setQ] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [sel, setSel] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const needle = q.trim().toLowerCase();
+  const hit = (x) => !needle || String(x.j.name).toLowerCase().includes(needle) || String(x.j.simproNo || "").includes(needle);
+  const matches = all.filter(x => hit(x) && (showAll || needle || x.gen));
+  const genCount = all.filter(x => x.gen).length;
+  const labelOf = (x) => `${x.j.simproNo ? "#" + x.j.simproNo + " " : ""}${x.j.name}`;
+  const pull = async () => {
+    if (!sel) return;
+    setBusy(true); setMsg("");
+    try {
+      const r = await pullGenSelectionProfile(sel.j);
+      const ok = writeToolProfile(r.profile);
+      setMsg(ok
+        ? `Pulled ${r.included} of ${r.total} loads marked on the generator for ${labelOf(sel)}${r.sheetOk ? "" : " (the appliance sheet could not be read, so every load is a typical value)"}. Tap Fill from Generator Selection in the tool below.`
+        : "This device would not let the app store the handoff. Try again, or use another browser.");
+    } catch (e) { setMsg((e && e.message) || "Could not read that job's generator selection."); }
+    setBusy(false);
+  };
+  const ctl = { padding:"6px 9px", borderRadius:7, border:`1px solid ${C.border}`, background:C.card, color:C.text, fontSize:12, fontFamily:"inherit" };
+  const shown = matches.slice(0, 12);
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:6,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface,flex:"none"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.dim,whiteSpace:"nowrap"}}>PULL A JOB'S GENERATOR LOADS</span>
+        {sel ? (
+          <span style={{display:"inline-flex",alignItems:"center",gap:6,padding:"5px 9px",borderRadius:7,border:`1px solid ${C.accent}`,background:C.card,color:C.text,fontSize:12,fontWeight:700}}>
+            {labelOf(sel)}
+            <button onClick={()=>{ setSel(null); setMsg(""); }} title="Pick a different job"
+              style={{border:"none",background:"transparent",color:C.dim,cursor:"pointer",fontSize:14,lineHeight:1,padding:0,fontFamily:"inherit"}}>×</button>
+          </span>
+        ) : (
+          <input value={q} onChange={e=>{ setQ(e.target.value); setMsg(""); }} placeholder="Type a job name or number…" inputMode="search"
+            style={{...ctl, flex:"1 1 180px", minWidth:160}}/>
+        )}
+        {!sel && (
+          <label style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,whiteSpace:"nowrap",cursor:"pointer"}}>
+            <input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)} style={{width:13,height:13,accentColor:C.accent}}/> All jobs
+          </label>
+        )}
+        <button disabled={!sel || busy} onClick={pull}
+          style={{...ctl, fontWeight:800, background:(!sel||busy)?C.muted:C.accent, color:"#fff", border:"none", cursor:(!sel||busy)?"default":"pointer"}}>
+          {busy ? "Reading…" : "Pull"}
+        </button>
+      </div>
+      {!sel && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+          {shown.map(x => (
+            <button key={x.j.id} onClick={()=>{ setSel(x); setMsg(""); }}
+              style={{padding:"5px 9px",borderRadius:7,border:`1px solid ${x.gen?C.accent:C.border}`,background:C.card,color:C.text,fontSize:12,fontFamily:"inherit",cursor:"pointer",textAlign:"left"}}>
+              {labelOf(x)}{x.gen && <span style={{marginLeft:6,fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:C.accent}}>GENERATOR</span>}
+            </button>
+          ))}
+          {matches.length > shown.length && <span style={{fontSize:11,color:C.dim}}>and {matches.length - shown.length} more; keep typing</span>}
+          {!matches.length && <span style={{fontSize:11,color:C.dim}}>{needle ? "No job matches that." : "No job has generator loads marked yet. Type a name, or tick All jobs."}</span>}
+          {!needle && !showAll && matches.length > 0 && <span style={{fontSize:11,color:C.dim,flexBasis:"100%"}}>Showing the {genCount} job{genCount===1?"":"s"} with generator loads marked. Type to search every job, or tick All jobs.</span>}
+        </div>
+      )}
+      {msg && <span style={{fontSize:12,color:C.dim,lineHeight:1.4}}>{msg}</span>}
+    </div>
+  );
+}
 function ToolsView({ jobs, onUpdateJob, who }) {
   const tools = TOOLS.filter(t => !t.perm || can(who, t.perm));   // per-user tools (perm) read the LIVE team record
   const [toolKey, setToolKey] = useState(() => {
@@ -56250,6 +56839,21 @@ function ToolsView({ jobs, onUpdateJob, who }) {
   });
   const tool = tools.find(t => t.key === toolKey) || tools[0];
   const pick = (key) => { setToolKey(key); try { localStorage.setItem(TOOLS_LAST_KEY, key); } catch {} };
+  // Tools handoff (2026-10-02): tell the iframe tools which chips this person has
+  // (Service Size is per-user), and switch chips when a tool asks (same origin only).
+  const toolKeys = tools.map(t => t.key).join(",");
+  useEffect(() => { try { localStorage.setItem(TOOLS_VISIBLE_KEY, JSON.stringify(toolKeys.split(","))); } catch (e) {} }, [toolKeys]);
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin) return;
+      const d = e.data;
+      if (!d || d.type !== "he-tools-open" || !toolKeys.split(",").includes(d.key)) return;
+      pick(d.key);
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  // eslint-disable-next-line
+  }, [toolKeys]);
   return (
     <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 56px)",background:C.bg}}>
       <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,background:C.surface,overflowX:"auto",scrollbarWidth:"none",flex:"none"}}>
@@ -56271,8 +56875,9 @@ function ToolsView({ jobs, onUpdateJob, who }) {
           style={{fontSize:12,fontWeight:600,color:C.accent,textDecoration:"none",whiteSpace:"nowrap"}}>Open full screen</a>}
         <HelpDot section="tools"/>
       </div>
+      {tool.key === "generator-sizing" && <GenPullBar jobs={jobs}/>}
       {tool.native
-        ? <ApplianceLoadsView key={tool.key} jobs={jobs} onUpdateJob={onUpdateJob}/>
+        ? <ApplianceLoadsView key={tool.key} jobs={jobs} onUpdateJob={onUpdateJob} onOpenTool={pick} tools={toolKeys.split(",")}/>
         : <iframe key={tool.key} src={tool.src} title={tool.label}
             style={{flex:1,width:"100%",border:"none",display:"block",background:"#141821"}}
             allow="clipboard-read; clipboard-write"/>}
@@ -60730,7 +61335,14 @@ function App() {
     const ids = Object.keys(restored);
     if (ids.length > 0) {
       ids.forEach(jid => {
-        pendingPatches.current[jid] = { ...(restored[jid] || {}), ...(pendingPatches.current[jid] || {}) };
+        {
+          const res = restored[jid] || {}, cur = pendingPatches.current[jid] || {};
+          const merged = { ...res, ...cur };
+          // A restored panel-loads intent only ever describes the restored panel value;
+          // if a newer panel patch is already pending without one, drop it (baseline merge).
+          if (Object.prototype.hasOwnProperty.call(cur, "panelizedLighting") && !cur[PL_INTENT_KEY]) delete merged[PL_INTENT_KEY];
+          pendingPatches.current[jid] = merged;
+        }
       });
       console.log(`[HE] Restored ${ids.length} unsynced job edit(s) from a previous session`);
     }
@@ -60757,7 +61369,7 @@ function App() {
   // from what the client sent — i.e. the write is about to carry server-side
   // content this device's LOCAL copy does not have. Callers use it to keep
   // the baseline honest (see the post-save baseline note in saveJob).
-  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData, rescuedKeys) => {
+  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData, rescuedKeys, plIntent = null) => {
     // ROOT-CAUSE FIX (punch/anything reverting): the baseline was stored from the
     // snapshot loader (NORMALIZED/migrated shape) while `serverData` inside the
     // save transaction is the RAW Firestore doc. Different shapes ⇒ `_jeq(server,
@@ -60794,7 +61406,8 @@ function App() {
       // adopted and the screen refreshes, and the user is told to redo the one
       // change. Never a rollback. Loud on purpose — if this ever fires, the
       // invariant broke somewhere new and we want to hear about it.
-      if (k === "panelizedLighting" && plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) {
+      const plIntentOk = k === "panelizedLighting" && !!plIntent && !plIntent.untracked && !!v && typeof v === "object" && !!sv && typeof sv === "object";
+      if (k === "panelizedLighting" && !plIntentOk && plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) {
         const refPl = rawBase ? base[k] : sv;
         console.error(`[HE] STALE panel-loads write REFUSED on ${jobName || jobId}: this copy's rev ${v && v.plRev} vs ${rawBase ? "baseline" : "server"} rev ${refPl && refPl.plRev} — the server's copy stands`);
         if (Date.now() - _plStaleToastAt > 5000) {
@@ -60805,7 +61418,26 @@ function App() {
         return;
       }
       if (v && typeof v === "object" && sv !== undefined && sv !== null) {
-        out = _threeWayMerge(base[k], v, sv);
+        if (plIntentOk) {
+          // INTENT MERGE (Miller 2026-10-01, see plApplyIntent): lay only what THIS
+          // copy changed onto the server's current copy. Untouched loads always come
+          // from the server, so a stale phone cannot un-tick or rename what it never
+          // touched — the two rollbacks v471 missed. The baseline is not trusted
+          // here; a copy older than its baseline is applied the same way, not refused.
+          if (plWriteIsStale(v, rawBase ? base[k] : undefined, sv)) console.warn(`[HE] panel-loads copy on ${jobName || jobId} is older than its baseline (rev ${v.plRev} vs ${((rawBase ? base[k] : sv) || {}).plRev}) — applied only this copy's own changes`);
+          out = plMergedRev(plApplyIntent(sv, v, plIntent, rawBase ? base[k] : undefined), v, sv);
+          console.log(`[HE] panel-loads intent merge on ${jobName || jobId}: ${Object.keys(plIntent.changed || {}).length} load(s) edited, +${(plIntent.added || []).length} −${(plIntent.removed || []).length}, keys ${(plIntent.keys || []).join(",") || "—"}; rev client ${v.plRev} base ${rawBase ? (base[k] || {}).plRev : "—"} server ${sv.plRev} → ${out.plRev}`);
+        } else if (k === "panelizedLighting") {
+          // No intent (hub toggle, a replayed queue, legacy): the baseline merge, with
+          // two guards — plRev can no longer go backwards through it, and a load
+          // nobody un-ticked keeps its tick.
+          out = _threeWayMerge(base[k], v, sv);
+          const rep = plRepairUnticks(out, sv);
+          if (rep.repaired.length) { out = rep.pl; console.error(`[HE] panel-loads baseline merge on ${jobName || jobId} would have un-ticked ${rep.repaired.length} load(s) nobody un-ticked — kept the server's ticks: ${rep.repaired.join(" · ")}`); }
+          out = plMergedRev(out, v, sv);
+        } else {
+          out = _threeWayMerge(base[k], v, sv);
+        }
         if (!_jeq(out, v)) {
           console.log(`[HE] concurrent-edit merge: preserved server changes on "${k}" for ${jobName || jobId}`);
           if (rescuedKeys) rescuedKeys.push(k);
@@ -60882,7 +61514,19 @@ function App() {
 
     // Accumulate patches for this job so we only write changed fields
     if(patch) {
-      pendingPatches.current[job.id] = {...(pendingPatches.current[job.id]||{}), ...patch};
+      {
+        const prevPending = pendingPatches.current[job.id] || {};
+        const nextPending = {...prevPending, ...patch};
+        // Intent merge (Miller 2026-10-01): a panel write's intent (what this copy
+        // changed, from JobDetail's u()) is unioned across a burst; a panel write
+        // that carries none drops the pending intent, so the whole value goes
+        // through the baseline merge instead of a mismatched intent.
+        if (Object.prototype.hasOwnProperty.call(patch, "panelizedLighting")) {
+          if (patch[PL_INTENT_KEY]) nextPending[PL_INTENT_KEY] = plMergeIntents(prevPending[PL_INTENT_KEY], patch[PL_INTENT_KEY]);
+          else delete nextPending[PL_INTENT_KEY];
+        }
+        pendingPatches.current[job.id] = nextPending;
+      }
       persistPending();   // durable BEFORE any network work is attempted
       // Mirror change orders to FieldInk when they change (fire-and-forget,
       // hash-gated internally, separate field-ink project — cannot affect this
@@ -60935,13 +61579,17 @@ function App() {
       // had the full job.
       const accumulated = { ...(pendingPatches.current[job.id] || {}) };
       const accumulatedKeys = Object.keys(accumulated);
+      // The panel-loads intent rides the pending patch under a reserved key: it is
+      // handed to the merge and never written (see plApplyIntent).
+      const plIntent = accumulated[PL_INTENT_KEY] || null;
+      const toWrite = { ...accumulated }; delete toWrite[PL_INTENT_KEY];
 
       try {
 
         // Tag every save with device identity so we can trace who changed what
         const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
 
-        if(accumulatedKeys.length > 0) {
+        if(Object.keys(toWrite).length > 0) {
           // Patch mode: only write the fields that changed — but for structural
           // fields (roughPunch, changeOrders, returnTrips, updates, materials,
           // Q&A, …) the value the UI hands us is the ENTIRE field rebuilt from
@@ -60954,7 +61602,7 @@ function App() {
           // someone else since we loaded are preserved; this user's explicit
           // deletes still go through. Scalars behave exactly as before.
           const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
-          const cleanPatch = sanitize(accumulated);
+          const cleanPatch = sanitize(toWrite);
           let _writtenPatch = null;
           const _rescued = [];
           await runTransaction(db, async (tx) => {
@@ -60967,7 +61615,7 @@ function App() {
               return;
             }
             const serverData = snap.data()?.data || {};
-            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _rescued)};
+            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _rescued, plIntent)};
             // Flag writes whose transaction merged in ANOTHER device's concurrent
             // changes. The echo of a merged write must be re-adopted even by the
             // tab that wrote it — its local copy is missing the rescued content
@@ -61015,6 +61663,10 @@ function App() {
             setSelected(s => (s && s.id === job.id) ? apply(s) : s);
             _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, []);   // local now holds the merged content, so the baseline may too
           }
+        } else if (accumulatedKeys.length > 0) {
+          // Only the intent key was left over (its panel write already landed) — nothing to write.
+          delete pendingPatches.current[job.id];
+          persistPending();
         } else {
           // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
           // so we never wipe Firestore fields another user added that aren't in our local snapshot.
@@ -61220,9 +61872,11 @@ function App() {
       // Deliberately NOT persisting here. The durable copy must survive until
       // the server confirms — dropping it now would recreate the very window
       // this change exists to close.
-      if(accumulated && Object.keys(accumulated).length > 0) {
+      const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
+      const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
+      if(toWrite && Object.keys(toWrite).length > 0) {
         const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
-        const cleanPatch = sanitize(accumulated);
+        const cleanPatch = sanitize(toWrite);
         try {
           // Same transactional three-way merge as saveJob — a close-flush
           // from a stale device must not overwrite punch/CO/etc. wholesale.
@@ -61237,7 +61891,7 @@ function App() {
               return;
             }
             const serverData = snap.data()?.data || {};
-            const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
+            const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr, plIntent);
             _written = {...meta, merged:_fr.length > 0, ...wp};
             tx.update(jref, _written);
           });
@@ -61525,9 +62179,11 @@ function App() {
       // Deliberately NOT persisting here. The durable copy must survive until
       // the server confirms — dropping it now would recreate the very window
       // this change exists to close.
-      if(accumulated && Object.keys(accumulated).length > 0) {
+      const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
+      const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
+      if(toWrite && Object.keys(toWrite).length > 0) {
         const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
-        const cleanPatch = sanitize(accumulated);
+        const cleanPatch = sanitize(toWrite);
         // Transactional three-way merge -- NEVER a raw updateDoc on a structural
         // field (data.roughPunch etc.). Firestore has no partial-array update,
         // so a raw write wholesale-replaces the tree and silently drops items
@@ -61546,7 +62202,7 @@ function App() {
             return;
           }
           const serverData = snap.data()?.data || {};
-          const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
+          const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr, plIntent);
           _written = {...meta, merged:_fr.length > 0, ...wp};
           tx.update(jref, _written);
         }).then(() => {
@@ -62917,7 +63573,7 @@ function App() {
         <div style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
-          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,identity,mode))
+          : NAV_MAIN_TABS.filter(t=>navTabVisible(t,myLiveRec,mode))
               .map(t=>t.key==="contractors"?{...t,badge:gcInboxOpen,badgeTitle:gcInboxOpen+" contractor request"+(gcInboxOpen===1?"":"s")+" waiting"}  // v433: list lives in NAV_MAIN_TABS (usage report reads it too)
                     :t.key==="myday"?{...t,badge:mydayBadge,badgeTitle:mydayBadge+" task"+(mydayBadge===1?"":"s")+" overdue, due today or urgent"}   // v446
                     :t)
@@ -62944,7 +63600,7 @@ function App() {
             subcontractor) tucked here to keep the top bar short. Office only. */}
         {!isContractor && (()=>{
           const moreItems = [
-            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,identity,mode)),
+            ...NAV_MORE_TABS.filter(t=>navTabVisible(t,myLiveRec,mode)),
             ...(contractorUsers.length>0?[{...NAV_SUBS_TAB,label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:NAV_SUBS_TAB.label}]:[]),
           ];
           const moreActive = moreItems.some(i=>i.key===view);
@@ -64415,7 +65071,7 @@ function App() {
       )}
 
       {/* Tools tab (v468) — standalone field calculators in an iframe; see TOOLS. */}
-      {view==="tools"&&can(identity,"tools.view")&&(
+      {view==="tools"&&can(myLiveRec,"tools.view")&&(
         <ToolsView jobs={allJobs} onUpdateJob={updateJob} who={myLiveRec}/>
       )}
 

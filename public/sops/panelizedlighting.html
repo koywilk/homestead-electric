@@ -251,8 +251,10 @@
       many). The one exception is a row somebody edited <i>here</i> after importing it &mdash; the
       app won't silently overwrite that. Those show <b>changed in FieldInk</b> in orange on the
       inbox row (under the Imported chip) and an orange <b>Update N from FieldInk</b> button in the
-      inbox header; tap it, check the list it shows, and FieldInk's version wins. Watts, type,
-      pulled and panel / module assignments are never touched by this.</p>
+      inbox header; tap it, check the list it shows, and FieldInk's version wins. The button only
+      offers loads FieldInk has actually changed since you last took them: if you fixed a name here
+      and FieldInk still shows what it showed back then, your fix stands and the row is not offered
+      again. Watts, type, pulled and panel / module assignments are never touched by this.</p>
       <p><b>The office never changes the load itself</b> — the field accepts or dismisses
       each suggestion on the plan (FieldInk has the Accept-all), and the status line tells
       you where it stands: <b>waiting on the field</b>, <b>accepted</b>, <b>dismissed</b>,
@@ -336,7 +338,10 @@
       device (or tab) had already saved. The app kept the newer list instead of writing the
       old one over it — that's the fix for loads snapping back to old names and losing their
       zones. Just make that one change again on the refreshed list. If you see it more than
-      once in a row, tell Koy which device it was.</p>
+      once in a row, tell Koy which device it was. Since v496 a phone or tab holding an old copy
+      saves only the thing you tapped &mdash; a Loads Ran check, a rename, a zone &mdash; and
+      everything else on the list stays as the server has it, so an old copy can no longer undo
+      somebody else's checks or names.</p>
     </div>
     <div class="row">
       <p class="q">Whose tab is this — ours or Tech Lighting's?</p>
