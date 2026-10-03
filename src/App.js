@@ -12168,7 +12168,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null, roomPlaceholder="Add room (e.g. Master Bath)…", roomBtnLabel="+ Room" }) {
 
   const data = normFloor(floorData);
 
@@ -12412,11 +12412,11 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
             <Inp value={roomDraft} onChange={e => setRoomDraft(e.target.value)}
 
-              placeholder="Add room (e.g. Master Bath)…" style={{ flex: 1 }}
+              placeholder={roomPlaceholder} style={{ flex: 1 }}
 
               onKeyDown={e => e.key === 'Enter' && addRoom()} />
 
-            <Btn onClick={addRoom} variant="add" style={{ whiteSpace: 'nowrap' }}>+ Room</Btn>
+            <Btn onClick={addRoom} variant="add" style={{ whiteSpace: 'nowrap' }}>{roomBtnLabel}</Btn>
 
           </div>
 
@@ -26413,11 +26413,14 @@ const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","P
 // underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
 // (status · start / complete dates · notes · checklist · photos); Underground
 // keeps one record per sub-tab ("underground.utility" …).
+// v503 (Brady): `punch:true` tabs swap the flat checklist for a building punch
+// list — buildings / areas made once per job (commercial.buildings), each tab
+// keeps its own items under each (commercial.phases[key].punch[bkey]).
 const COMM_PHASE_TABS = {
-  "Power":       { key:"power",       color:"#3B5BA5" },
-  "Lighting":    { key:"lighting",    color:"#B0892C" },
+  "Power":       { key:"power",       color:"#3B5BA5", punch:true },
+  "Lighting":    { key:"lighting",    color:"#B0892C", punch:true },
   "Gear":        { key:"gear",        color:"#6A5E97" },
-  "Underground": { key:"underground", color:"#3E7D7A", subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
+  "Underground": { key:"underground", color:"#3E7D7A", punch:true, subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
 };
 const COMM_JOB_TYPES = [["groundup","Ground-up"],["ti","TI"],["service","Commercial service"]];
 // Blue Stakes (811) tickets are good for 14 calendar days in Utah. `called` is
@@ -31737,7 +31740,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
-          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab}/>)}
+          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab} assigneeOptions={punchAssigneeOptions}/>)}
           {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
           {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
           {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
@@ -51272,10 +51275,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-02 · App SW version: v500
+**Last manifest update:** 2026-10-02 · App SW version: v502
 
 ---
 
+- **Commercial phase tabs get a punch list by building (Power · Lighting · Underground)** · 'shipped 2026-10-02' · 'SW v503' · Brady: *"Inside the tabs for power, lighting, underground etc: Can we make it like the residential punch list where you can make a building, or area and then make punchlist items underneath that? For now it would be good to work it as a punchlist that we build as we go, but if we can take the history of those punch lists after we get through a job or two and make it more of a pre built task list."* The flat checklist on Power, Lighting and the three Underground sub-tabs becomes a building punch list ('COMM_PHASE_TABS[*].punch'); Gear keeps its checklist. **Buildings once per job**: 'commercial.buildings = [{key, label, by, at}]', shared by every punch tab; each tab keeps its own items at 'commercial.phases[key].punch[bkey]' in the residential floor shape, drawn by the existing 'PunchFloor'. So it's the same UI (items, done, assignee, waiting, photos, rooms → "areas"; folded, with open / waiting / for-you counts on the header). It gets new optional 'roomPlaceholder' / 'roomBtnLabel' props with the residential defaults unchanged. Every tab has a **General** area first. **+ Add Building / Area** (duplicate names refused), **Rename** and **Remove** under each building; Remove confirms with the open count across tabs and drops that building's data from every phase. Sub-tab badges and the "Punch list · N open" label count across General + buildings ('commPhaseOpenCount'). Phase 2 (a template built from finished jobs' items) is not built yet; the item shape is the shared punch shape so it can be mined later. Guides 'power.html', 'lighting.html', 'underground.html' updated. **Why it won't lose data:** v467 checklist items aren't dropped. 'commPunchFloor' shows them as General's items until General is first written; that write stores them in 'punch.general' and clears 'items' in the same patch. All writes go through 'commPatch' → the save funnel's structural merge, like every commercial field. New fields are additive inside 'data.commercial'. No loader, rules or function change.
+- **Service Size — printing works from a phone: the sheet opens in its own browser tab with the job carried in the link** · 'shipped 2026-10-02' · 'SW v502' · Koy: *"It's not pulling anything up when I click print on my phone. It works in my desktop tho."* Two causes: inside the Tools tab the tool runs in a frame and phone browsers ignore a print request from a frame; the installed app has no print dialog at all, and it does not share the handoff drawer with Safari, so *Open full screen* would open the tool empty. Fix: on a phone (coarse pointer inside the frame) or in the installed app, **Print customer copy / Print office copy** open '/tools/service-size/#s=<state>&print=<mode>' in a new tab, in the same tap so the popup is not blocked; the state travels gzip + base64url in the link ('src/share.js', CompressionStream when the browser has it, plain base64url otherwise; a compressed copy is kept ready as the state changes, with a synchronous fallback). The opened page shows an *Opened for printing* bar with both print buttons and says changes there do not go back to the app; there, and on desktop, printing is now synchronous in the click (both sheets stay mounted and 'html[data-print]' picks the one that prints, cleared on 'afterprint'; the browser's own Print menu prints the office copy). Tests: 'test/share.test.mjs' (round trips compressed and plain, garbage → null, hash parsing). Guide and training updated: the phone rule is no longer "Open full screen first". **Why it won't lose data:** nothing is sent anywhere; the link is opened on the same device and carries the same numbers already on screen; no storage, job field, loader, rules or function change.
+- **Service Size — printable customer copy and office copy (Print / Save as PDF)** · 'shipped 2026-10-02' · 'SW v501' · Koy: *"is there no PDF download or anything of that info?"* then *"I probably want a customer copy side that just shows them the numbers and why we need to have that amperage, and then another office side with all of the info on it … keep price off it."* Two buttons next to Copy bid note. **Print customer copy** (one page, no price): Homestead header, job and site address, the recommended service big, the calculated load (and the confirmed-only figure when the size covers maybes), the method in one plain sentence, *What is in the calculation* in homeowner words (range, 2 electric dryers, EV charger, sauna, heating and cooling with tonnage), *Allowances included in this size*, *Choices that would need a larger service* (up to five what-ifs), the confirmation sentence and the planning-figures disclaimer; no VA figures, code ids, flags or sources. **Print office copy** (two pages): inputs (area, finish level, circuits, heating / cooling, tonnage and whether estimated, strips, sized-for and target, solar, what it was filled from), the full 220.82(B)+(C) table, every counted item with VA / qty / status / source ('plans', 'loads · nameplate', 'loads · typical', 'loads · confirm spec', 'typed', 'needs VA') and Adds, a *Still estimates* line, the covered list and lighting-circuit count, the what-ifs, the bid flags and the bid note. **Guard:** printing the customer copy while anything is still an estimate (typical value, spec to confirm, needs VA) first says which items and asks *Print anyway?* — the customer sheet never names them. New **Site address** field in The house (filled from the handoff when the job has one; tagged like the rest). **The look (Koy: "make it a cool-looking dashboard … with HOMESTEAD's logo on it"):** both sheets are laid out as a dashboard in the app's own language — slate header band with a schematic grid and the white longhorn logo, the job name big, address and date on an angled steel-blue block; the service size as the hero number in steel blue (Barlow Condensed); a size-ladder gauge with the standard sizes as breaker rungs, the chosen one lit, the confirmed and with-allowances loads as bars and a flag on the load; stat tiles; *What's driving it* as bars (contributors listed one by one — space heaters, floor heat and mini-splits stay inside the heating / cooling bar so nothing is counted twice, tested equal to B + hvac); allowance chips; mono eyebrow labels (JetBrains Mono joins Barlow Condensed and DM Sans as the tool's web fonts); no yellow, the only warm color is the ember *still estimates* strip on the office copy. Tables flow across pages on the office copy. Preview harness for the real '@media print' output: a scratch page that seeds a job, fills, and clicks the print button with 'window.print' stubbed, printed by headless Chrome. Pure sheet logic in 'tools-src/service-size/src/sheet.js', tested ('test/sheet.test.mjs', 5 checks: drivers in plain words with no VA or ids, allowances only when sized for maybes, the three kinds of estimate, a source on every office row, address normalizes). Phone rule unchanged: Open full screen first, then print. **Why it won't lose data:** print-only; nothing new is read or written anywhere (the sheets render the numbers already on screen); 'address' is one additive state key that old states normalize to ""; no job field, loader, rules or function change.
 - **Generator Sizing — the job pull gets a search box (jobs with generator loads marked first, type to search every job, All jobs switch)** · 'shipped 2026-10-02' · 'SW v500' · Koy: *"miller isnt showing in the list to select from. maybe a search bar would be good, or just show jobs with generator loads sleected."* The v499 native dropdown sorted stamped jobs first, so a job sat high in the list instead of under its letter and was easy to scroll past on a phone. Now the **PULL A JOB'S GENERATOR LOADS** strip is a search box: with nothing typed it lists the jobs whose Home Runs carry the Dedicated Loads stamp (marked GENERATOR), typing searches every active job by name or Simpro number, **All jobs** lists everything; tap a job to pick it (a chip with × to change), then **Pull**. Up to 12 matches show at once with a "keep typing" count beyond that. **Why it won't lose data:** picker UI only; the pull itself is unchanged and read-only (one getDoc + the sheet CSV, writes the device-local handoff key); no job field, loader, rules or function change.
 - **Job Info: two GC contacts can run a job — an on-site super AND an office PM** · 'shipped 2026-10-02' · 'SW v498' · Justin, on a Design-Build job: *"it seems at least for these Design-Build jobs there's an onsite super and a office pm… can you make it possible for two? because our job setup says we have to establish both so it needs somewhere for that info to live."* In the GC Contacts list (after a Simpro pull), tap a name to mark who's running the job — now up to **two** can be marked. The first still drops into GC Contact / GC Phone exactly as before; the second lands in new **GC Contact 2 / GC Phone 2** boxes. A third tap is refused with a toast instead of silently swapping someone out, and clearing the first promotes the second so the boxes the crew calls from are never empty while somebody is still marked. Running contacts get one-tap **Onsite Super / Office PM** role chips (they just fill the existing label, which survives re-pulls). A collapsed **+ 2nd GC contact (e.g. office PM)** section under GC Phone lets you type the second contact by hand for jobs with no Simpro pull or a PM who isn't in Simpro's list; it opens by itself once it has anything in it and shows the name in its header. Both picks are keyed by the Simpro contact ID ('gcContactLead', new 'gcContactLead2'), live beside 'gcContacts', and survive every re-pull; the Pull button still only fills BLANKS and never touches the second contact. Purely additive — a job with one contact is unchanged. New fields 'gcContactLead2', 'gcContact2', 'phone2' ride the job's normal data payload (no loader whitelist). Guarded by 'scripts/gc-two-contacts-test.js' (wired into 'prebuild'). In-app guide 'public/sops/jobinfo.html' updated.
 - **Generator Sizing — pull a job's generator-selected loads (choose the job, pull only what's on the generator)** · 'shipped 2026-10-02' · 'SW v499' · Koy: *"i think id rather have a pull from generator selected loads and pull them from the jobs i want."* A new strip above the Generator Sizing tool, **PULL A JOB'S GENERATOR LOADS**: a job picker (active jobs; those whose Home Runs carry the Dedicated Loads stamp sort first and read *generator selected*) and a **Pull** button. Pull reads that job's Generator Load Selection (the same 'homeowner_requests/{jobId}' doc and homeowner-overlay rule the Home Runs panel uses) and drops a **Generator Selection** note in the handoff drawer with ONLY the loads marked on the generator, in the homeowner's priority order (office-added ones after): the appliance sheet's nameplate where a Home Run stands for a sheet row (hand link or the sheet's CC home run name, two-run cells and duplicate names handled), else the Home Run's name with its wire's volts and no amps, so the tool's classifier gives it a flagged typical value and lighting / receptacle circuits are counted, not sized. Never breaker × volts. The tool then shows 'Fill from Generator Selection · #1438 Miller Residence - Alpine · 54 on the generator'; Fill sets the transfer-switch scope to **Essential circuits** when the selection is a subset, counts SA and laundry circuits from the list, and says plainly that square footage is not in the job (enter the served area). Service Size deliberately does not list this source: a service carries the whole house. The Appliance Loads sheet read moved into a shared 'fetchApplSheetRows()' (the view still reloads it fresh; the pull reuses a loaded copy). Pure mapping 'genSelectionLoads' is tested by new 'scripts/gen-pull-test.js' (5 checks against a copied Miller #1438 fixture, wired into 'prebuild'). Miller: 54 of 134 loads → 11 sized rows at 17,000 sq ft served → 80 kW in the test harness. **Why it won't lose data:** the pull is read-only (one 'getDoc' of the job's 'homeowner_requests' doc plus the Sheet CSV); it writes only the device-local handoff key; no job field, loader, rules or function change; the Generator Load Selection section itself is untouched and still carries no wattage; Josh's generator tables and calc are byte-identical.
@@ -54017,11 +54023,35 @@ const commGearSummary = (job) => {
   const late = rows.filter(r => r.releasedAt && !r.deliveredAt && r.promisedShip && parseAnyDate(r.promisedShip) && parseAnyDate(r.promisedShip).getTime() < Date.now()).length;
   return { n: rows.length, appr, rel, late };
 };
+// v503: building punch for the commercial phase tabs. commercial.buildings =
+// [{key, label}] is job-wide; commercial.phases[key].punch = { general, [bkey] }
+// holds PunchFloor data per building. "general" reads the v467 flat checklist
+// (phases[key].items) until General is first written, then the items move into
+// punch.general and `items` clears — nothing is dropped, nothing is copied twice.
+const commBuildings = (job) => { const b = commOf(job).buildings; return Array.isArray(b) ? b.filter(x => x && x.key) : []; };
+const commLegacyPunchItems = (ph) => (Array.isArray(ph && ph.items) ? ph.items : []).filter(Boolean).map(i => ({ ...i, id: i.id || uid(), text: String(i.text || ""), done: !!i.done, addedBy: i.addedBy || i.by || "", addedAt: i.addedAt || i.at || "" }));
+const commPunchFloor = (ph, bkey) => {
+  const punch = (ph && ph.punch) || {};
+  if (bkey !== "general") return normFloor(punch[bkey]);
+  const legacy = commLegacyPunchItems(ph);
+  if (!punch.general) return normFloor(legacy);
+  // A phone still on v502 can add to `items` after the move — show those too
+  // (the next General write folds them in and clears `items` again).
+  const f = normFloor(punch.general); const ids = new Set(f.general.map(i => i && i.id));
+  const late = legacy.filter(i => !ids.has(i.id));
+  return late.length ? { ...f, general: [...f.general, ...late] } : f;
+};
+const commFloorOpen = (f) => f.general.filter(i => i && !i.done).length + f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => i && !i.done).length : 0), 0);
+const commPhaseOpenCount = (job, key) => {
+  const ph = (commOf(job).phases || {})[key] || {};
+  return ["general", ...commBuildings(job).map(b => b.key)].reduce((a, k) => a + commFloorOpen(commPunchFloor(ph, k)), 0);
+};
+
 // v467: one on-site commercial phase (Power / Lighting / Gear / Underground sub).
 // Stored under commercial.phases[key] = { status, start, end, notes, items:[{id,
 // text, done, by, at}], photos:[] } — written through commPatch's spread-merge
 // so two people on different phases never clobber each other.
-function CommPhaseTab({ job, u, identity, tabLabel }) {
+function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
   const def = COMM_PHASE_TABS[tabLabel] || { key: String(tabLabel||"").toLowerCase(), color: C.teal };
   const subs = def.subs || null;
   const [sub, setSub] = useState(subs ? subs[0][0] : null);
@@ -54032,7 +54062,35 @@ function CommPhaseTab({ job, u, identity, tabLabel }) {
   const me = (identity && identity.name) || "";
   const patch = (fn) => u(commPatch(job, c => ({ ...c, phases: { ...(c.phases || {}), [key]: fn({ status:"", start:"", end:"", notes:"", items:[], photos:[], ...(((c.phases || {})[key]) || {}) }) } })));
   const items = Array.isArray(ph.items) ? ph.items : [];
-  const openCount = (k) => { const p = phases[k]; return Array.isArray(p && p.items) ? p.items.filter(i => i && !i.done).length : 0; };
+  const openCount = (k) => { if (def.punch) return commPhaseOpenCount(job, k); const p = phases[k]; return Array.isArray(p && p.items) ? p.items.filter(i => i && !i.done).length : 0; };
+  // v503 building punch. One building's floor data goes back through the same
+  // commPatch spread-merge; writing General also retires the legacy `items`.
+  const buildings = commBuildings(job);
+  const [newBuilding, setNewBuilding] = useState("");
+  const [addingBuilding, setAddingBuilding] = useState(false);
+  const [renaming, setRenaming] = useState(null);   // { key, text } while a building name is being edited
+  const setBuildingFloor = (bkey, data) => patch(x => ({ ...x, punch: { ...(x.punch || {}), [bkey]: data }, ...(bkey === "general" ? { items: [] } : {}) }));
+  const addBuilding = () => {
+    const label = newBuilding.trim().slice(0, 80); if (!label) return;
+    if (buildings.some(b => String(b.label).toLowerCase() === label.toLowerCase())) { toast(`"${label}" is already on this job`); return; }
+    const bkey = "b_" + uid();
+    u(commPatch(job, c => ({ ...c, buildings: [...(Array.isArray(c.buildings) ? c.buildings : []), { key: bkey, label, by: me, at: commLocalDate() }] })));
+    setNewBuilding(""); setAddingBuilding(false);
+  };
+  const renameBuilding = (bkey, label) => { const v = String(label || "").trim().slice(0, 80); if (!v) return; u(commPatch(job, c => ({ ...c, buildings: (Array.isArray(c.buildings) ? c.buildings : []).map(b => b && b.key === bkey ? { ...b, label: v } : b) }))); };
+  const removeBuilding = async (b) => {
+    const allPhases = commOf(job).phases || {};
+    const where = Object.keys(allPhases).map(k => [k, commFloorOpen(commPunchFloor(allPhases[k], b.key))]).filter(([, n]) => n > 0);
+    const total = where.reduce((a, [, n]) => a + n, 0);
+    const msg = total ? `Remove "${b.label}" from this job? It has ${total} open item${total === 1 ? "" : "s"} across ${where.length} tab${where.length === 1 ? "" : "s"} — they go with it.` : `Remove "${b.label}" from this job? It comes off every tab.`;
+    if (!await showConfirm(msg)) return;
+    u(commPatch(job, c => {
+      const ph = { ...(c.phases || {}) };
+      Object.keys(ph).forEach(k => { if (ph[k] && ph[k].punch && b.key in ph[k].punch) { const pu = { ...ph[k].punch }; delete pu[b.key]; ph[k] = { ...ph[k], punch: pu }; } });
+      return { ...c, phases: ph, buildings: (Array.isArray(c.buildings) ? c.buildings : []).filter(x => x && x.key !== b.key) };
+    }));
+  };
+  const BUILDING_COLORS = [C.blue, C.purple, C.teal, C.accent, C.green];
   const STATUS = [["","Not started"],["inprogress","In progress"],["complete","Complete"]];
   const col = def.color;
   const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
@@ -54071,6 +54129,44 @@ function CommPhaseTab({ job, u, identity, tabLabel }) {
         <textarea value={ph.notes||""} rows={3} placeholder={`Notes for ${subs ? (subs.find(([k])=>k===sub)||[])[1] : tabLabel}…`} onChange={e=>{ const v=e.target.value; patch(x=>({...x, notes:v})); }}
           style={{width:"100%",boxSizing:"border-box",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",resize:"vertical"}}/>
       </div>
+      {def.punch ? (
+      <div style={{marginBottom:12}}>
+        {lbl(`Punch list · ${openCount(key)} open`)}
+        <PunchFloor key={`${key}_general`} floorKey={`comm_${key.replace(".","_")}_general`} floorData={commPunchFloor(ph, "general")} onFloorChange={(_, d) => setBuildingFloor("general", d)}
+          floorLabel="General" floorColor={col} jobId={job.id} assigneeOptions={assigneeOptions} myName={me}
+          roomPlaceholder="Add area (e.g. Site, Parking lot)…" roomBtnLabel="+ Area"/>
+        {buildings.map((b, i) => (
+          <div key={b.key}>
+            <PunchFloor key={`${key}_${b.key}`} floorKey={`comm_${key.replace(".","_")}_${b.key}`} floorData={commPunchFloor(ph, b.key)} onFloorChange={(_, d) => setBuildingFloor(b.key, d)}
+              floorLabel={b.label} floorColor={BUILDING_COLORS[i % BUILDING_COLORS.length]} jobId={job.id} assigneeOptions={assigneeOptions} myName={me}
+              roomPlaceholder="Add area (e.g. Suite 101, Electrical room)…" roomBtnLabel="+ Area"/>
+            <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,margin:"-8px 0 10px"}}>
+              {renaming && renaming.key === b.key ? (<>
+                <input value={renaming.text} autoFocus onChange={e=>setRenaming({ key:b.key, text:e.target.value })} onKeyDown={e=>{ if(e.key==="Enter"){ renameBuilding(b.key, renaming.text); setRenaming(null); } if(e.key==="Escape") setRenaming(null); }}
+                  style={{flex:1,maxWidth:260,border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
+                <button onClick={()=>{ renameBuilding(b.key, renaming.text); setRenaming(null); }} style={{background:"none",border:"none",color:col,cursor:"pointer",fontSize:11,fontWeight:700,padding:"2px 4px",fontFamily:"inherit"}}>Save</button>
+                <button onClick={()=>setRenaming(null)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit"}}>Cancel</button>
+              </>) : (
+                <button onClick={()=>setRenaming({ key:b.key, text:b.label })} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Rename</button>
+              )}
+              <button onClick={() => removeBuilding(b)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Remove {b.label}</button>
+            </div>
+          </div>
+        ))}
+        {addingBuilding ? (
+          <div style={{display:"flex",gap:8,alignItems:"center",marginTop:4}}>
+            <input value={newBuilding} autoFocus onChange={e=>setNewBuilding(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") addBuilding(); if(e.key==="Escape") setAddingBuilding(false); }}
+              placeholder="Building / area name (e.g. Building A)…"
+              style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
+            <Btn onClick={addBuilding} variant="add" style={{fontSize:11,padding:"6px 12px"}}>Add</Btn>
+            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+          </div>
+        ) : (
+          <Btn onClick={()=>setAddingBuilding(true)} variant="add" style={{fontSize:11,padding:"5px 12px",marginTop:2}}>+ Add Building / Area</Btn>
+        )}
+        <div style={{fontSize:10,color:C.muted,marginTop:6}}>Buildings are shared by Power, Lighting and Underground on this job — each tab keeps its own items.</div>
+      </div>
+      ) : (
       <div style={{marginBottom:12}}>
         {lbl(`Checklist · ${items.filter(i=>!i.done).length} open`)}
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -54091,6 +54187,7 @@ function CommPhaseTab({ job, u, identity, tabLabel }) {
           </div>
         </div>
       </div>
+      )}
       <div>{lbl("Photos")}
         <PhotoAttacher storagePath={`jobs/${job.id}/commphase/${key.replace(".","_")}`} photos={Array.isArray(ph.photos)?ph.photos:[]} color={col} label="Add photo"
           onChange={(next)=>patch(x=>({...x, photos: next}))}/>
