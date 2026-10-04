@@ -22,6 +22,15 @@ const { cleanName } = require("../docPull.js");
 
 const STATE = "planIntakeState", QUEUE = "agentQueue", FINDINGS = "agentFindings";
 const QUOTES_FOLDER = "_Quotes";
+// Koy's job-folder layout (2026-10-03): SIMPRO = an exact mirror of Simpro's
+// attachment folders (plans, take-offs, vendor quotes); MOST UPDATED = the
+// current set, in standard category folders; ARCHIVE = superseded plans. The
+// watcher only ever files into SIMPRO — what is "current" and what gets
+// archived is judgment, so MOST UPDATED / ARCHIVE are filled by people and the
+// Routine (Phases 2–3). Folders that already have their own MOST UPDATED /
+// ARCHIVE (any spelling) are left alone.
+const SIMPRO_DIR = "SIMPRO", CURRENT_DIR = "MOST UPDATED", ARCHIVE_DIR = "ARCHIVE";
+const CURRENT_CATEGORIES = ["DESIGN", "CABINET PLANS", "APPLIANCE SPECS", "SPECS", "REDLINES"];
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const DEFAULT_CALENDAR = "koy@homesteadelectric.net";
 const RUN_BUDGET_MS = 470 * 1000;           // function ceiling is 540 s
@@ -159,6 +168,32 @@ module.exports = function makePlanIntake(deps) {
     return { name: r.data.name, moved: quotesParent.length > 0, oldName: f.data.name };
   }
 
+  // Make SIMPRO / MOST UPDATED (+ categories) / ARCHIVE where missing. Additive
+  // only; an existing "Most Updated Plans" or "Archive" counts as present.
+  async function ensureSkeleton(drive, folderId, { create }) {
+    const top = (await listChildren(drive, folderId)).filter(f => f.mimeType === FOLDER_MIME);
+    const find = (re) => top.find(f => re.test(String(f.name || "")));
+    let simpro = find(/^\s*simpro\s*$/i);
+    if (!create) return { simproId: simpro ? simpro.id : "" };
+    if (!simpro) simpro = { id: (await findOrMakeFolder(drive, folderId, SIMPRO_DIR, { create })).id };
+    if (!find(/most\s*updated/i)) {
+      const cur = await findOrMakeFolder(drive, folderId, CURRENT_DIR, { create });
+      for (const c of CURRENT_CATEGORIES) await findOrMakeFolder(drive, cur.id, c, { create });
+    }
+    if (!find(/archive/i)) await findOrMakeFolder(drive, folderId, ARCHIVE_DIR, { create });
+    return { simproId: simpro.id };
+  }
+  // Every md5 anywhere in the job folder (MOST UPDATED, ARCHIVE, old root
+  // Plans/ from the v413 pull…) — a file people already filed is never re-copied.
+  async function treeMd5s(drive, folderId, depth = 0, out = new Set()) {
+    if (depth > 4) return out;
+    for (const it of await listChildren(drive, folderId)) {
+      if (it.mimeType === FOLDER_MIME) await treeMd5s(drive, it.id, depth + 1, out);
+      else if (it.md5Checksum) out.add(it.md5Checksum);
+    }
+    return out;
+  }
+
   // ── Attachments: Simpro quote/job → its Drive folder ────────────────────
   // Same planner as the v413 pull (filename dedupe within a folder, same
   // subfolder names), plus an MD5 check against what Drive already holds and
@@ -176,19 +211,21 @@ module.exports = function makePlanIntake(deps) {
       details.push(d ? { id: d.ID, name: String(d.Filename || ""), bytes: Number(d.FileSizeBytes) || 0, mime: String(d.MimeType || ""),
         folder: d.Folder && d.Folder.Name ? String(d.Folder.Name) : "" } : { id: f.ID, name: String(f.Filename || ""), bytes: 0, mime: "", folder: "" });
     }
-    const driveFolders = {}, driveFiles = [], md5s = new Set();
-    if (folderId) {
-      for (const it of await listChildren(drive, folderId)) {
+    // Files land in <job folder>/SIMPRO/<Simpro's folder>; dedupe by name
+    // inside SIMPRO (same planner as the v413 pull) and by md5 across the tree.
+    const driveFolders = {}, driveFiles = [];
+    let md5s = new Set();
+    const { simproId } = folderId ? await ensureSkeleton(drive, folderId, { create: cfg.mode !== "dry" }) : { simproId: "" };
+    if (simproId) {
+      for (const it of await listChildren(drive, simproId)) {
         if (it.mimeType === FOLDER_MIME) driveFolders[String(it.name || "").trim()] = it.id;
-        else { driveFiles.push({ name: it.name, folderName: "" }); if (it.md5Checksum) md5s.add(it.md5Checksum); }
+        else driveFiles.push({ name: it.name, folderName: "" });
       }
       for (const [name, id] of Object.entries(driveFolders)) {
-        for (const it of await listChildren(drive, id)) {
-          if (it.mimeType === FOLDER_MIME) continue;
-          driveFiles.push({ name: it.name, folderName: name }); if (it.md5Checksum) md5s.add(it.md5Checksum);
-        }
+        for (const it of await listChildren(drive, id)) if (it.mimeType !== FOLDER_MIME) driveFiles.push({ name: it.name, folderName: name });
       }
     }
+    if (folderId) md5s = await treeMd5s(drive, folderId);
     const plan = planDocPull({ files: details, folders: (Array.isArray(folders) ? folders : []).map(f => String(f.Name || "")), driveFolders, driveFiles });
     // Mark what the planner skipped so it is never fetched again (same cleanName as the planner).
     const copyIds = new Set(plan.copies.map(c => String(c.id)));
@@ -198,9 +235,9 @@ module.exports = function makePlanIntake(deps) {
         ledger[`${kind}_${d.id}`] = { status: s.reason === "already in Drive" ? "present" : "skipped", name: s.name, at: nowIso() };
       }
     }
-    if (cfg.mode === "dry" || !folderId) return { copied: [], present: plan.skipped.length, would: plan.copies.length, wouldBytes: plan.totalBytes, wouldNames: plan.copies.map(c => c.name) };
+    if (cfg.mode === "dry" || !folderId || !simproId) return { copied: [], present: plan.skipped.length, would: plan.copies.length, wouldBytes: plan.totalBytes, wouldNames: plan.copies.map(c => c.name) };
     for (const name of plan.makeFolders) {
-      const r = await drive.files.create({ requestBody: { name, parents: [folderId], mimeType: FOLDER_MIME }, fields: "id", supportsAllDrives: true });
+      const r = await drive.files.create({ requestBody: { name, parents: [simproId], mimeType: FOLDER_MIME }, fields: "id", supportsAllDrives: true });
       driveFolders[name] = r.data.id;
     }
     const copied = [];
@@ -212,11 +249,11 @@ module.exports = function makePlanIntake(deps) {
         const buffer = Buffer.from(r.data.Base64Data, "base64");
         const md5 = crypto.createHash("md5").update(buffer).digest("hex");
         if (md5s.has(md5)) { ledger[`${kind}_${c.id}`] = { status: "present", name: c.name, md5, at: nowIso() }; continue; }
-        const parentId = c.folderName ? driveFolders[c.folderName] : folderId;
+        const parentId = c.folderName ? driveFolders[c.folderName] : simproId;
         const driveId = await driveUploadResumable(auth, { name: c.name, mime: c.mime, parentId, buffer });
         md5s.add(md5);
         ledger[`${kind}_${c.id}`] = { status: "copied", name: c.name, folder: c.folderName, md5, driveId, at: nowIso() };
-        copied.push(c.folderName ? `${c.folderName}/${c.name}` : c.name);
+        copied.push(`${SIMPRO_DIR}/${c.folderName ? `${c.folderName}/` : ""}${c.name}`);
       } catch (e) {
         log.warn("planIntake: file copy failed", { kind, no, file: c.name, error: e.message });   // no ledger mark → retried next run
       }
@@ -250,6 +287,7 @@ module.exports = function makePlanIntake(deps) {
       if (qf.id) {
         const f = await findOrMakeFolder(drive, qf.id, name, { create });
         folderId = f.id; made = f.made;
+        if (folderId && create) await ensureSkeleton(drive, folderId, { create });
       }
       folderName = name; inQuotes = true;
     }

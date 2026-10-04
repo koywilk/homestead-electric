@@ -15,7 +15,7 @@ const { planDocPull } = require("../functions/docPull.js");
 const PARENT = "PARENT";
 const eq = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), m);
 
-function world({ ccJobs = {}, appQuoteFolder = null } = {}) {
+function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [] } = {}) {
   // ── Firestore ──
   const store = new Map();               // "coll/id" → object
   const writes = [];
@@ -57,6 +57,7 @@ function world({ ccJobs = {}, appQuoteFolder = null } = {}) {
   let nextId = 1; const driveLog = [];
   files.set(PARENT, { id: PARENT, name: "Job Plans", mimeType: "application/vnd.google-apps.folder", parents: [] });
   if (appQuoteFolder) files.set(appQuoteFolder, { id: appQuoteFolder, name: "Tolbert Residence", mimeType: "application/vnd.google-apps.folder", parents: [PARENT] });
+  for (const f of seedFiles) files.set(f.id, { mimeType: "application/pdf", ...f });
   const drive = { files: {
     async list({ q }) { const pid = q.match(/'([^']+)' in parents/)[1]; return { data: { files: [...files.values()].filter(f => f.parents.includes(pid)) } }; },
     async create({ requestBody }) { const id = `F${nextId++}`; files.set(id, { id, name: requestBody.name, mimeType: requestBody.mimeType, parents: requestBody.parents }); driveLog.push(["create", requestBody.name]); return { data: { id } }; },
@@ -165,6 +166,14 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   eq(jobWrites(w).map(x => Object.keys(x.v).sort()), [["data.driveFolderId", "updated_at"]], "the ONLY job write is driveFolderId (+ ISO updated_at)");
   const uploads = w.driveLog.filter(x => x[0] === "upload").map(x => x[1]);
   eq(uploads.sort(), ["TOLBERT ELECTRICAL — Redlines.pdf", "Tolbert Residence Full Set.pdf"], "quote files copied; job's same-name + same-bytes copies deduped");
+  const kids = (id) => [...w.files.values()].filter(f => f.parents.includes(id));
+  const kid = (id, name) => kids(id).find(f => f.name === name);
+  eq(kids(st.folderId).map(f => f.name).sort(), ["ARCHIVE", "MOST UPDATED", "SIMPRO"], "job folder = SIMPRO / MOST UPDATED / ARCHIVE");
+  eq(kids(kid(st.folderId, "MOST UPDATED").id).map(f => f.name).sort(), ["APPLIANCE SPECS", "CABINET PLANS", "DESIGN", "REDLINES", "SPECS"], "MOST UPDATED has the standard categories");
+  const simproPlans = kid(kid(st.folderId, "SIMPRO").id, "Plans");
+  eq(kids(simproPlans.id).map(f => f.name).sort(), ["TOLBERT ELECTRICAL — Redlines.pdf", "Tolbert Residence Full Set.pdf"], "Simpro's Plans folder mirrored under SIMPRO");
+  assert(kid(kid(st.folderId, "SIMPRO").id, "Take-offs"), "empty Simpro folders are mirrored too");
+  eq(kids(kid(st.folderId, "MOST UPDATED").id).filter(f => f.mimeType !== "application/vnd.google-apps.folder").length, 0, "the watcher never files into MOST UPDATED");
   assert(Object.values(st.ledger || w.get("planIntakeState/quote_2299").ledger).length === 4, "all 4 Simpro files are in the ledger");
   // second run: nothing new
   const before = { drive: w.driveLog.length, findings: w.docs("agentFindings").length };
@@ -234,5 +243,21 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   } finally { process.env.PLAN_INTAKE_GOOGLE_OAUTH = saved; }
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert scenarios passed");
+// 8 ── an app folder people already organised: their "Most Updated Plans" is kept, a plan they filed is not re-copied
+{
+  const APP = "1AppQuoteFolder_abcdefghijkl";
+  const fullMd5 = crypto.createHash("md5").update(Buffer.from("%PDF-full")).digest("hex");
+  const w = world({ ccJobs: { q1: { type: "quote", name: "Tolbert Residence", simproQuoteNo: "2299", simproNo: "", driveFolderId: APP } }, appQuoteFolder: APP,
+    seedFiles: [{ id: "MUP", name: "Most Updated Plans", mimeType: "application/vnd.google-apps.folder", parents: [APP] },
+                { id: "CAB", name: "Cabinet + Appliance Specs", mimeType: "application/vnd.google-apps.folder", parents: ["MUP"] },
+                { id: "HAND", name: "Tolbert set (from GC).pdf", parents: ["CAB"], md5Checksum: fullMd5 }] });
+  w.setMode("live");
+  await (w.pi._runOnce());
+  const top = [...w.files.values()].filter(f => f.parents.includes(APP)).map(f => f.name).sort();
+  eq(top, ["ARCHIVE", "Most Updated Plans", "SIMPRO"], "existing Most Updated Plans kept, no second MOST UPDATED; SIMPRO + ARCHIVE added");
+  eq(w.driveLog.filter(x => x[0] === "upload").map(x => x[1]), ["TOLBERT ELECTRICAL — Redlines.pdf"], "the full set people already filed (same bytes, other name) is not copied again");
+  assert(w.driveLog.every(x => x[0] !== "update" || x[1] !== "Tolbert set (from GC).pdf"), "hand-filed files untouched");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });

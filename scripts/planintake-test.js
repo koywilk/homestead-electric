@@ -33,6 +33,8 @@ const cases = [
   [ev("josh", "Welliver Zoom Call Walkthrough - E Builders", undefined), "skip", null],
   [ev("brady", "Sandlin Design - Google Meet", undefined), "skip", null],
   [ev("brady", "James - 2nd Interview", undefined), "skip", null],
+  [ev("brady", "James Livingston 1st Day", undefined), "skip", null],               // first dry run, 2026-10-04
+  [ev("josh", "New hire first day - orientation", "974 S Main St"), "skip", null],
   [ev("josh", "Weekly Scramble", "974 S Main St", { recurringEventId: "r1" }), "skip", null],
   [ev("koy", "Brandt Walk", "721 S 2200 E"), "skip", null],                      // Koy's own events
   [ev("keegan", "Some Walk", "721 S 2200 E"), "skip", null],                     // not a walker
