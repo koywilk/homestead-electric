@@ -137,58 +137,58 @@ function coordUserOf(users, foremanName) {
   return (users || []).find(u => (u.name || "").toLowerCase() === String(fm.coordinator).toLowerCase()) || null;
 }
 
-// ── In-app notification inbox ────────────────────────────────────────────────
-// Every nudge is ALSO written to notifications/{userKey}/items so the app can
-// show a bell inbox that never depends on FCM tokens. Push stays best-effort;
-// the inbox is the guarantee. userKey = user.id, falling back to a name slug
-// for legacy users without ids (the client derives the same key from identity).
+// ── Notification delivery: inbox first, push on top ─────────────────────────
+// FCM reliability pass (2026-10-04). The inbox record in
+// notifications/{userKey}/items IS the notification; push is only the attention
+// layer. The pure half (ids, payload, error classes, retry math) lives in
+// functions/notifyDelivery.js and is unit-tested in the prebuild chain.
+//
+// What changed vs the old deliver():
+//  - The inbox write used to run IN PARALLEL with the push and its failure was a
+//    warn log. Now the record (plus a pushQueue lease) is committed FIRST, with
+//    retries; only then is the push attempted.
+//  - Every push outcome is written back onto the record (delivery.*) and logged
+//    as one structured "[notify] delivery" line — no more swallowed errors.
+//  - Transient FCM failures go back on pushQueue and pushRetrySweep re-sends
+//    them with backoff, instead of being dropped after one try.
+//  - One notification = one banner. The old tag (job+section, renotify:false)
+//    made a second event on the same job silently replace the first.
+//  - The inbox doc id is an idempotency key, so a re-fired trigger can't
+//    double-ping anyone.
+// userKey = user.id, falling back to a name slug for legacy users without ids
+// (the client derives the same key from identity).
+const ND = require("./notifyDelivery.js");
+
 const inboxKeyOf = (user) =>
   (user && (user.id || String(user.name || "").trim().toLowerCase().replace(/\s+/g, "_"))) || null;
 
-async function logInboxNotif(user, { title, body, jobId, section, view, needId }) {
-  const key = inboxKeyOf(user);
-  if (!key) return;
-  try {
-    await db.collection("notifications").doc(key).collection("items").add({
-      title:   title   || "",
-      body:    body    || "",
-      jobId:   jobId   || "",
-      section: section || "",
-      view:    view    || "",
-      needId:  needId  || "",   // v446: task-loop items open My Day ON this task
-      createdAt: new Date().toISOString(),
-      read: false,
-    });
-  } catch (e) {
-    functions.logger.warn("[inbox] write failed", { user: user && user.name, error: e.message });
+const inboxRef = (userKey, nid) =>
+  db.collection("notifications").doc(userKey).collection("items").doc(nid);
+const queueRef = (userKey, nid) => db.collection("pushQueue").doc(`${userKey}__${nid}`);
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Retry a Firestore write a few times on transient errors. ALREADY_EXISTS (6)
+// and other non-retryable codes are thrown straight back to the caller.
+async function withWriteRetry(fn, label) {
+  const RETRYABLE = new Set([4, 8, 10, 13, 14]); // DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, INTERNAL, UNAVAILABLE
+  let lastErr;
+  for (let i = 0; i < 3; i++) {
+    try { return await fn(); } catch (e) {
+      lastErr = e;
+      if (!RETRYABLE.has(e && e.code)) throw e;
+      functions.logger.warn(`[notify] ${label} write retry`, { attempt: i + 1, code: e.code, error: e.message });
+      await sleep(250 * Math.pow(3, i));
+    }
   }
+  throw lastErr;
 }
 
-// Single delivery chokepoint: inbox write + every device token. Use this for
-// any user-level send so push and inbox can never drift apart.
-async function deliver(user, notif) {
-  if (!user) return;
-  const sends = getTokens(user).map(t => sendFCM(t, notif));
-  sends.push(logInboxNotif(user, notif));
-  await Promise.all(sends);
-}
-
-// deliver() but gated on the recipient's per-person toggle. Used by the wave-2
-// nudges so anyone can mute a category without losing the rest.
-async function deliverIfWanted(user, key, notif) {
-  if (!user || !wantsNotif(user, key)) return;
-  await deliver(user, notif);
-}
-
-// Token error codes that mean the token is permanently dead and should be purged.
-const STALE_TOKEN_CODES = [
-  "messaging/registration-token-not-registered",
-  "messaging/invalid-registration-token",
-  "messaging/mismatched-credential",
-];
-
-/** Remove a single bad token from every user record in settings/users. */
-async function removeStaleToken(token) {
+// Remove dead tokens from settings/users in ONE transaction (the old path ran
+// one transaction per token, in parallel, all contending on the same doc).
+async function removeStaleTokens(tokens) {
+  const dead = Array.from(new Set((tokens || []).filter(Boolean)));
+  if (!dead.length) return;
   try {
     const ref = db.doc("settings/users");
     await db.runTransaction(async (tx) => {
@@ -197,13 +197,13 @@ async function removeStaleToken(token) {
       const cur = snap.data().list || [];
       let changed = false;
       const list = cur.map(u => {
-        const inArray   = (u.fcmTokens || []).includes(token);
-        const isPrimary = u.fcmToken === token;
+        const inArray   = (u.fcmTokens || []).some(t => dead.includes(t));
+        const isPrimary = dead.includes(u.fcmToken);
         if (!inArray && !isPrimary) return u;
         changed = true;
         return {
           ...u,
-          fcmTokens: (u.fcmTokens || []).filter(t => t !== token),
+          fcmTokens: (u.fcmTokens || []).filter(t => !dead.includes(t)),
           fcmToken:  isPrimary ? "" : (u.fcmToken || ""),
         };
       });
@@ -212,99 +212,285 @@ async function removeStaleToken(token) {
       // dropped updated_at/saved_by/device, which silently disarmed the
       // client's saveUsers stale-write guard (remoteTs went null → guard
       // fails open → blind team-list overwrite). tx.update leaves those audit
-      // fields untouched. The transaction also re-reads under lock, so two
-      // concurrent prunes (deliver()'s Promise.all over many dead tokens)
-      // can't clobber each other's removal, and a concurrent team-list save
-      // is merged against rather than lost. Purely additive/removal-only on
-      // the token fields — no team data touched.
+      // fields untouched, and the transaction re-reads under lock so a
+      // concurrent team-list save is merged against rather than lost.
+      // Removal-only on the token fields — no team data touched.
       tx.update(ref, { list });
     });
-    functions.logger.info("Removed stale FCM token", { token: token.slice(0, 20) });
+    functions.logger.info("[notify] removed stale FCM tokens", { count: dead.length, tokens: dead.map(ND.tokenTag) });
   } catch (e) {
-    functions.logger.warn("Failed to remove stale token", { error: e.message });
+    functions.logger.error("[notify] stale-token prune FAILED", { error: e.message, tokens: dead.map(ND.tokenTag) });
   }
 }
 
-async function sendFCM(token, { title, body, jobId, section, view, needId }) {
-  if (!token) return;
-  // Stable tag used for OS-level dedup (Android collapses dup notifications with
-  // the same tag; web push uses it the same way). Without this, the iOS->Android
-  // bridge or a re-fired SW could surface the same notification twice.
-  const tag = jobId ? `job-${jobId}-${section || "general"}` : `homestead-${Date.now()}`;
-  // Deep-link target for the click handler — opens the app at the specific job.
-  const linkPath = jobId
-    ? `/?jobId=${encodeURIComponent(jobId)}${section ? `&section=${encodeURIComponent(section)}` : ""}`
-    : "/";
+// Send one normalized notification to a list of tokens. Never throws.
+async function pushToTokens(tokens, n, meta) {
+  if (!tokens.length) return [];
+  const messages = tokens.map(t => ND.buildMessage(t, n, meta));
   try {
-    // DATA-ONLY payload to prevent duplicate notifications on every device.
-    //
-    // Why: when a payload contains BOTH a top-level `notification` field AND
-    // a `webpush.notification` field (the previous shape), the FCM JS SDK
-    // running inside firebase-messaging-sw.js auto-displays the system-level
-    // notification AND our own `onBackgroundMessage` handler ALSO calls
-    // `self.registration.showNotification(...)`. That's where "two of the
-    // same notification per push" was coming from.
-    //
-    // Going data-only routes ALL display through the SW's onBackgroundMessage
-    // handler, which reads payload.data.{title,body,jobId,section} and shows
-    // exactly one notification. The test-push helper (which already worked
-    // without dupes) uses the same shape — this just brings real pushes in
-    // line. The `tag` we set in the SW (`he-${jobId}-${section}`) still
-    // dedupes back-to-back pushes for the same job+section.
-    //
-    // iOS Safari PWA still works: Apple's web-push gateway routes to the SW
-    // via APNS transport, and `apns-push-type: alert` keeps Apple's gateway
-    // from silently dropping it. The SW renders on iOS too.
-    await messaging.send({
-      token,
-      data: {
-        title:   title   || "",
-        body:    body    || "",
-        jobId:   jobId   || "",
-        section: section || "",
-        view:    view    || "",
-        needId:  needId  || "",   // v446: the SW appends &need=<id> to the ?view=myday deep-link
-        tag,
-        link:    linkPath,
-      },
-      webpush: {
-        headers: { Urgency: "high" },
-      },
-      android: {
-        priority: "high",
-        // collapseKey makes Android replace any pending notification with the
-        // same key instead of stacking — fixes the "2-3 per notification" bug.
-        collapseKey: tag,
-      },
-      apns: {
-        headers: {
-          // REQUIRED for iOS Safari PWA push — without "apns-push-type: alert"
-          // Apple's gateway silently drops the notification. This was the
-          // root cause of "Apple users don't get them anymore."
-          "apns-push-type": "alert",
-          "apns-priority":  "10",
-        },
-        payload: { aps: { contentAvailable: true } },
-      },
-    });
-    functions.logger.info("[sendFCM] sent OK", {
-      token: token.slice(0, 20), title, jobId, section,
-    });
+    const res = await messaging.sendEach(messages);
+    return ND.summarizeResults(tokens, res, null);
   } catch (e) {
-    const isStale = STALE_TOKEN_CODES.some(
-      code => e.code === code || (e.message || "").includes(code)
-    );
-    if (isStale) {
-      functions.logger.warn("[sendFCM] stale token pruned", { token: token.slice(0, 20), code: e.code });
-      await removeStaleToken(token);
-    } else {
-      functions.logger.warn("[sendFCM] send failed", {
-        token: token.slice(0, 20), title, jobId, section,
-        error: e.message, code: e.code,
-      });
-    }
+    // Whole-batch failure (auth, network, quota) — nothing was sent.
+    return ND.summarizeResults(tokens, null, e);
   }
 }
+
+// Push + record for an inbox item that is already persisted. Shared by
+// deliver() (first attempt) and pushRetrySweep (later attempts).
+async function attemptPush({ userKey, nid, n, tokens, attempts, persisted, firstAttemptAt, to, prior = null }) {
+  const t0 = Date.now();
+  const rows = await pushToTokens(tokens, n, { nid, userKey });
+  const roll = ND.rollup(rows, attempts);
+  // A retry only re-sends to the devices that failed transiently. Devices an
+  // earlier attempt already reached still count, so a record never slides from
+  // "partial" to "failed" just because the leftover device stayed down.
+  const priorOk = (prior && Number(prior.okCount)) || 0;
+  if (priorOk > 0 && (roll.status === "failed" || roll.status === "retrying")) roll.status = "partial";
+  const now = new Date();
+
+  const staleTokens = rows.filter(r => !r.ok && r.kind === "stale").map(r => r.token);
+  if (staleTokens.length) await removeStaleTokens(staleTokens);
+
+  const logFields = {
+    to, userKey, nid, category: n.category || "", priority: n.priority,
+    title: n.title.slice(0, 80), jobId: n.jobId, view: n.view,
+    status: roll.status, attempt: attempts, tokens: rows.length, ok: roll.ok,
+    stale: roll.stale, transient: roll.transient, permanent: roll.permanent,
+    errors: rows.filter(r => !r.ok).map(r => `${r.tk}:${r.code}`),
+    persisted, ms: Date.now() - t0,
+  };
+  // One line per send attempt. Severity tracks outcome: ERROR only when no
+  // device was reached and nothing is left to retry (a real push loss — the
+  // inbox still has it); WARN for partial/retrying; INFO for clean sends. A
+  // log-based alert on severity>=ERROR therefore fires on losses, not on a
+  // routine dead token alongside a live one.
+  if (roll.status === "failed") functions.logger.error("[notify] delivery", logFields);
+  else if (roll.status === "sent" || roll.status === "no_tokens") functions.logger.info("[notify] delivery", logFields);
+  else functions.logger.warn("[notify] delivery", logFields);
+
+  if (!persisted) return roll;   // inbox write failed — nothing to record on
+
+  const delivery = {
+    status: roll.status,
+    priority: n.priority,
+    attempts,
+    tokenCount: Math.max(rows.length, (prior && Number(prior.tokenCount)) || 0),
+    okCount: priorOk + roll.ok,
+    failedCount: roll.failed,
+    lastAttemptAt: now.toISOString(),
+    firstAttemptAt: firstAttemptAt || now.toISOString(),
+    // Latest row per device: this attempt's rows replace that device's older row.
+    results: [
+      ...((prior && Array.isArray(prior.results)) ? prior.results.filter(p => !rows.some(r => r.tk === p.tk)) : []),
+      ...ND.publicResults(rows),
+    ].slice(-12),
+  };
+  if (roll.ok > 0) delivery.sentAt = now.toISOString();
+  else if (prior && prior.sentAt) delivery.sentAt = prior.sentAt;
+  try {
+    // A WriteBatch can only be committed once, so each retry builds a fresh one.
+    await withWriteRetry(() => {
+      const batch = db.batch();
+      // Merge-update ONLY the delivery map — read/title/receipts are never
+      // touched, so a "mark read" from the app or a device receipt that lands
+      // a moment earlier can't be overwritten by this record write.
+      batch.set(inboxRef(userKey, nid), { delivery }, { mergeFields: ["delivery"] });
+      if (roll.retryTokens.length) {
+        batch.set(queueRef(userKey, nid), {
+          userKey, nid, attempts, notif: n, tokens: roll.retryTokens,
+          nextAttemptAt: new Date(now.getTime() + roll.nextAttemptMs).toISOString(),
+          createdAt: firstAttemptAt || now.toISOString(),
+          lastError: rows.filter(r => !r.ok).map(r => r.code).join(",").slice(0, 300),
+        });
+      } else {
+        batch.delete(queueRef(userKey, nid));
+      }
+      return batch.commit();
+    }, "delivery-record");
+  } catch (e) {
+    // The push itself already happened; only the bookkeeping failed. The queue
+    // lease (if still there) makes the sweep look at it again.
+    functions.logger.error("[notify] delivery record write FAILED", { userKey, nid, error: e.message });
+  }
+  return roll;
+}
+
+// Single delivery chokepoint for every user-level notification. Returns a small
+// summary ({status, nid, ...}) that callers may ignore.
+async function deliver(user, notif) {
+  if (!user) {
+    functions.logger.warn("[notify] no recipient — not delivered", { title: notif && notif.title });
+    return { status: "no_recipient" };
+  }
+  const userKey = inboxKeyOf(user);
+  const n = ND.normalizeNotif(notif);
+  const to = user.name || userKey || "?";
+  if (!userKey) {
+    functions.logger.error("[notify] recipient has no inbox key — not delivered", { title: n.title });
+    return { status: "no_recipient" };
+  }
+  const nowMs = Date.now();
+  const nid = ND.notifDocId(userKey, n, nowMs);
+  const createdAt = new Date(nowMs).toISOString();
+  const tokens = getTokens(user);
+
+  // 1. Persist — the record, plus a push lease, in one atomic batch.
+  let persisted = false;
+  try {
+    await withWriteRetry(() => {
+      const batch = db.batch();
+      batch.create(inboxRef(userKey, nid), {
+        // Same fields the bell has always read (title/body/jobId/section/view/
+        // needId/createdAt/read) — additive only.
+        title: n.title, body: n.body, jobId: n.jobId, section: n.section,
+        view: n.view, needId: n.needId,
+        category: n.category, priority: n.priority,
+        link: ND.deepLinkOf(n, nid),
+        createdAt,
+        read: false,
+        delivery: { status: tokens.length ? "pending" : "no_tokens", priority: n.priority,
+          attempts: 0, tokenCount: tokens.length },
+      });
+      if (tokens.length) {
+        batch.set(queueRef(userKey, nid), {
+          userKey, nid, attempts: 0, notif: n, tokens: null,   // null = "all current tokens"
+          nextAttemptAt: new Date(nowMs + ND.LEASE_MS).toISOString(),
+          createdAt, lastError: "",
+        });
+      }
+      return batch.commit();
+    }, "inbox");
+    persisted = true;
+  } catch (e) {
+    if (e && (e.code === 6 || /already exists/i.test(e.message || ""))) {
+      functions.logger.info("[notify] duplicate suppressed (same event already delivered)", { to, userKey, nid, title: n.title.slice(0, 80) });
+      return { status: "duplicate", nid };
+    }
+    // Could not store the record. Still push — a banner is better than nothing —
+    // but this is a real loss of the durable copy, so it logs at ERROR.
+    functions.logger.error("[notify] INBOX WRITE FAILED — push only", { to, userKey, nid, title: n.title, error: e.message, code: e.code });
+  }
+
+  if (!tokens.length) {
+    functions.logger.warn("[notify] delivery", { to, userKey, nid, category: n.category || "", priority: n.priority,
+      title: n.title.slice(0, 80), status: "no_tokens", tokens: 0, persisted });
+    return { status: "no_tokens", nid, persisted };
+  }
+
+  // 2 + 3. Push to every device and record the outcome.
+  const roll = await attemptPush({ userKey, nid, n, tokens, attempts: 1, persisted, firstAttemptAt: createdAt, to });
+  return { ...roll, nid, persisted, retryTokens: undefined };
+}
+
+// deliver() but gated on the recipient's per-person toggle. Used by the wave-2
+// nudges so anyone can mute a category without losing the rest.
+async function deliverIfWanted(user, key, notif) {
+  if (!user) return deliver(null, notif);
+  if (!wantsNotif(user, key)) {
+    functions.logger.info("[notify] muted by recipient pref", { to: user.name, category: key, title: notif && notif.title });
+    return { status: "muted" };
+  }
+  return deliver(user, { category: key, ...notif });
+}
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — pushRetrySweep (every 5 minutes)
+// Re-sends pushes that failed transiently, and pushes whose function died
+// between "record persisted" and "push recorded" (expired lease). The inbox
+// record already exists in both cases; this only retries the attention layer.
+// Gives up after ND.MAX_ATTEMPTS, or once the notification is older than
+// ND.PUSH_STALE_MS (the bell still has it). Single-field query on
+// nextAttemptAt — no composite index needed.
+// ─────────────────────────────────────────────────────────────
+exports.pushRetrySweep = functions.pubsub
+  .schedule("every 5 minutes")
+  .onRun(async () => {
+    const nowIso = new Date().toISOString();
+    const snap = await db.collection("pushQueue").where("nextAttemptAt", "<=", nowIso).limit(100).get();
+    if (snap.empty) return null;
+    const users = await getUsers();
+    let retried = 0, expired = 0, gone = 0;
+    for (const qd of snap.docs) {
+      const q = qd.data() || {};
+      const { userKey, nid } = q;
+      const n = ND.normalizeNotif(q.notif || {});
+      const age = Date.now() - new Date(q.createdAt || 0).getTime();
+      const attemptsDone = Number(q.attempts) || 0;
+      const user = users.find(u => inboxKeyOf(u) === userKey) || null;
+      const itemSnap = await inboxRef(userKey, nid).get().catch(() => null);
+      const markGaveUp = async (status, reason) => {
+        functions.logger.error("[notify] delivery", { to: user && user.name, userKey, nid, title: n.title.slice(0, 80),
+          status, attempt: attemptsDone, reason, lastError: q.lastError || "" });
+        const batch = db.batch();
+        if (itemSnap && itemSnap.exists) {
+          batch.set(inboxRef(userKey, nid), { delivery: { ...(itemSnap.data().delivery || {}), status,
+            gaveUpAt: nowIso, gaveUpReason: reason } }, { mergeFields: ["delivery"] });
+        }
+        batch.delete(qd.ref);
+        await batch.commit().catch(e => functions.logger.error("[notify] sweep record FAILED", { nid, error: e.message }));
+      };
+      if (!itemSnap || !itemSnap.exists) { await qd.ref.delete().catch(() => {}); gone++; continue; }
+      if (itemSnap.data().read) {
+        // They already saw it in the app — ringing the phone now is just noise.
+        await qd.ref.delete().catch(() => {});
+        await inboxRef(userKey, nid).set({ delivery: { ...(itemSnap.data().delivery || {}), status: "read_before_push" } },
+          { mergeFields: ["delivery"] }).catch(() => {});
+        gone++; continue;
+      }
+      if (age > ND.PUSH_STALE_MS) { await markGaveUp("expired", "older than push window — inbox only"); expired++; continue; }
+      if (attemptsDone >= ND.MAX_ATTEMPTS) { await markGaveUp("failed", "max attempts"); expired++; continue; }
+      if (!user) { await markGaveUp("failed", "recipient no longer in team list"); expired++; continue; }
+      if (user.active === false) { await markGaveUp("failed", "recipient deactivated"); expired++; continue; }
+      const current = getTokens(user);
+      // tokens === null → lease expired before the first attempt was recorded: all devices.
+      const tokens = Array.isArray(q.tokens) ? q.tokens.filter(t => current.includes(t)) : current;
+      if (!tokens.length) { await markGaveUp(current.length ? "failed" : "no_tokens", "no live tokens left to retry"); expired++; continue; }
+      await attemptPush({ userKey, nid, n, tokens, attempts: attemptsDone + 1, persisted: true,
+        firstAttemptAt: q.createdAt, to: user.name, prior: itemSnap.data().delivery || null });
+      retried++;
+    }
+    functions.logger.info("[pushRetrySweep] ran", { due: snap.size, retried, expired, gone });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// CALLABLE — pushReceipt
+// The service worker calls this after it shows a notification, so a record can
+// say "FCM accepted it" AND "the device actually displayed it". That is the
+// difference between a push-service problem and a device problem. Best-effort:
+// the SW never retries, and nothing depends on a receipt arriving. Writes only
+// `receipts` + `displayedAt` on an EXISTING inbox item (never creates one).
+// ─────────────────────────────────────────────────────────────
+exports.pushReceipt = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const userKey = String((data && data.uk) || "").slice(0, 120);
+  const nid = String((data && data.nid) || "").slice(0, 80);
+  if (!userKey || !nid || userKey.includes("/") || nid.includes("/")) return { ok: false };
+  const ref = inboxRef(userKey, nid);
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+      const cur = snap.data() || {};
+      const receipts = Array.isArray(cur.receipts) ? cur.receipts.slice(-9) : [];
+      const at = new Date().toISOString();
+      receipts.push({
+        tk: String((data && data.tk) || "").slice(0, 12),
+        at,
+        shown: !!(data && data.shown),
+        visible: !!(data && data.visible),   // an app window was open + visible
+      });
+      // Top-level fields, NOT inside `delivery`: the server's delivery-record
+      // write replaces that whole map and could race a fast phone's receipt.
+      tx.set(ref, { receipts, displayedAt: cur.displayedAt || at }, { mergeFields: ["receipts", "displayedAt"] });
+    });
+  } catch (e) {
+    functions.logger.warn("[pushReceipt] write failed", { userKey, nid, error: e.message });
+    return { ok: false };
+  }
+  return { ok: true };
+});
 
 // ─── Notification Doctor — test push to a single user ───────────────────────
 // Lets the in-app diagnostic page send a push to a specific user and see
@@ -323,47 +509,31 @@ exports.sendTestPush = functions.https.onCall(async (data) => {
   }
   const title = "Test push from Command Center";
   const body  = `If you see this, your notifications are working. ${new Date().toLocaleTimeString()}`;
-  const results = [];
-  for (const token of tokens) {
-    const tokenPreview = token.slice(0, 20) + "…";
-    try {
-      // Test push is DATA-ONLY (no `notification` field at top level) so the
-      // browser's onMessage handler reliably fires when foregrounded. With
-      // a `notification` field present, some FCM SDK versions suppress
-      // onMessage and let the OS handle display — which silently does
-      // nothing on macOS Chrome if site notifications are blocked at OS
-      // level. Data-only forces the app to surface the toast itself.
-      await messaging.send({
-        token,
-        data: {
-          title, body, jobId: "", section: "",
-          // marker so the client knows this is a doctor test push
-          __test: "1",
-        },
-        webpush: {
-          headers: { Urgency: "high" },
-        },
-        android: { priority: "high" },
-        apns: {
-          headers: { "apns-push-type": "alert", "apns-priority": "10" },
-          payload: { aps: { contentAvailable: true } },
-        },
-      });
-      results.push({ token: tokenPreview, ok: true });
-    } catch (e) {
-      const isStale = STALE_TOKEN_CODES.some(
-        code => e.code === code || (e.message || "").includes(code)
-      );
-      results.push({
-        token: tokenPreview,
-        ok: false,
-        error: e.message,
-        code: e.code || "",
-        stale: isStale,
-      });
-      if (isStale) await removeStaleToken(token);
-    }
+  // Same message builder as every real push (functions/notifyDelivery.js), so
+  // a passing test proves the production payload shape — not a lookalike.
+  // No inbox record: a test should not clutter the bell.
+  const n = ND.normalizeNotif({ title, body, category: "test", priority: "high" });
+  const nid = `test-${Date.now().toString(36)}`;
+  const messages = tokens.map(t => {
+    const m = ND.buildMessage(t, n, { nid, userKey: "" });
+    m.data.__test = "1";   // marker so the client knows this is a doctor test push
+    return m;
+  });
+  let rows;
+  try {
+    rows = ND.summarizeResults(tokens, await messaging.sendEach(messages), null);
+  } catch (e) {
+    rows = ND.summarizeResults(tokens, null, e);
   }
+  const results = rows.map(r => ({
+    token: r.token.slice(0, 20) + "…",
+    ok: r.ok,
+    ...(r.ok ? { messageId: r.messageId } : { error: r.error, code: r.code, stale: r.kind === "stale", kind: r.kind }),
+  }));
+  const dead = rows.filter(r => !r.ok && r.kind === "stale").map(r => r.token);
+  if (dead.length) await removeStaleTokens(dead);
+  functions.logger.info("[sendTestPush]", { to: user.name, tokens: rows.length, ok: rows.filter(r => r.ok).length,
+    errors: rows.filter(r => !r.ok).map(r => `${r.tk}:${r.code}`) });
   return {
     ok: results.some(r => r.ok),
     user: user.name,
@@ -449,7 +619,10 @@ async function sendToName(name, notification) {
   const users = await getUsers();
   const n = name.toLowerCase().trim();
   const user = userByName(users, n);
-  if (!user) return;
+  if (!user) {
+    functions.logger.warn("[notify] recipient name not in team list — not delivered", { name, title: notification && notification.title });
+    return;
+  }
   await deliver(user, notification);
 }
 
@@ -462,7 +635,7 @@ async function sendToRoles(roles, notification, excludeTokens = [], prefKey = nu
     // whole user (push AND inbox) so nobody gets the same nudge twice.
     if (getTokens(u).some(t => excludeTokens.includes(t))) continue;
     if (prefKey && !wantsNotif(u, prefKey)) continue;
-    sends.push(deliver(u, notification));
+    sends.push(deliver(u, prefKey ? { category: prefKey, ...notification } : notification));
   }
   await Promise.all(sends);
 }
@@ -477,7 +650,10 @@ async function sendToNameIfWanted(name, key, notification) {
   const users = await getUsers();
   const n = name.toLowerCase().trim();
   const user = userByName(users, n);
-  if (!user) return;
+  if (!user) {
+    functions.logger.warn("[notify] recipient name not in team list — not delivered", { name, category: key, title: notification && notification.title });
+    return;
+  }
   await deliverIfWanted(user, key, notification);
 }
 
@@ -5247,10 +5423,10 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
     section: "",
   };
 
-  // Send to every current token. sendFCM prunes dead tokens automatically
-  // via removeStaleToken when the messaging error indicates registration
-  // is invalid, so we re-fetch tokens after to compute what's left.
-  await Promise.all(before.map(t => sendFCM(t, notif)));
+  // Full production path: inbox record first, then push to every device, then
+  // the outcome recorded on the record. deliver() prunes dead tokens itself,
+  // so we re-fetch tokens after to compute what's left.
+  const result = await deliver(user, { ...notif, category: "test", priority: "high" });
 
   // Re-read the user record to find out what survived.
   const afterUsers = await getUsers();
@@ -5264,6 +5440,8 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
     remaining: after.length,
     jobId,
     jobName,
+    status: result && result.status,
+    nid: result && result.nid,
   };
 });
 

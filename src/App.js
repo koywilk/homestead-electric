@@ -1654,62 +1654,26 @@ async function validateAndSyncFCMToken(userId) {
 }
 window.__HE_VALIDATE_FCM = validateAndSyncFCMToken;
 
-// Handle foreground messages (app is open) — show a brief alert-style banner.
-// Reads from payload.data since we send data-only messages to prevent double notifications.
-// Also forwards jobId + section so the toast can deep-link on tap.
-//
-// DEBUG: every step of the foreground-push chain logs to console so we can
-// trace where a "delivered but not visible" push is failing. If you sent a
-// test push and saw NOTHING in the console at all, the push didn't reach the
-// device's service worker. If you see "[HE push] onMessage fired" but no
-// "[HE push] toast set", the React listener didn't pick up the custom event
-// (component not mounted yet, etc).
+// Handle foreground messages (app is open) — in-app toast only.
+// FCM reliability pass (2026-10-04): the push service worker now shows the OS
+// banner for EVERY push, app open or not (public/firebase-messaging-sw.js). This
+// handler used to also call `new Notification(...)`, which throws on Android
+// Chrome and does not exist in an iOS Home-Screen app — so phones with the app
+// open got no banner, and iOS counted those pushes as "silent" and revoked
+// permission. The Firebase SDK in the worker still forwards the payload here
+// when a window is visible, which drives the toast and the Notification
+// Doctor's "received by this browser" check (the he-push event).
 if (messaging) {
-  console.log("[HE push] FCM messaging initialized, registering onMessage handler");
   onMessage(messaging, payload => {
     console.log("[HE push] onMessage fired — payload:", payload);
-    const title   = payload.data?.title   || payload.notification?.title;
-    const body    = payload.data?.body    || payload.notification?.body;
-    const jobId   = payload.data?.jobId   || "";
-    const section = payload.data?.section || "";
-    const tag     = payload.data?.tag     || (jobId ? `he-${jobId}-${section}` : `he-${Date.now()}`);
+    const d = payload.data || {};
+    const title = d.title || payload.notification?.title;
+    const body  = d.body  || payload.notification?.body;
     if (title || body) {
-      console.log("[HE push] dispatching he-push custom event:", { title, body, jobId, section });
-      const ev = new CustomEvent("he-push", { detail: { title, body, jobId, section } });
-      window.dispatchEvent(ev);
-
-      // Also show a system notification banner. This is THE fix for "I assigned
-      // myself foreman and saw nothing" — the foreground onMessage path used to
-      // ONLY render an in-app toast (top-right, 5s), which is invisible when
-      // you're focused on a form. The SW's onBackgroundMessage doesn't fire
-      // when the page is foregrounded, so without this call there's no system
-      // banner at all when the app is visible. Now both fire: in-app toast
-      // (instant feedback) AND OS banner (impossible to miss). Tag dedups the
-      // two so the OS doesn't show two banners — the in-app toast comes from
-      // the he-push event listener, the OS banner from this Notification call.
-      try {
-        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          const n = new Notification(title || "Homestead Electric", {
-            body: body || "",
-            icon: "/icon-192.png",
-            tag,
-            data: { jobId, section },
-          });
-          n.onclick = () => {
-            window.focus();
-            // Reuse the same SW postMessage shape so existing handlers fire.
-            window.dispatchEvent(new MessageEvent("message", {
-              data: { type: "HE_NOTIF_CLICK", jobId, section },
-            }));
-            try { n.close(); } catch {}
-          };
-          // Auto-close after 6s so banners don't pile up if many pushes arrive.
-          setTimeout(() => { try { n.close(); } catch {} }, 6000);
-          console.log("[HE push] foreground system Notification shown");
-        }
-      } catch (e) {
-        console.warn("[HE push] foreground Notification failed:", e.message);
-      }
+      window.dispatchEvent(new CustomEvent("he-push", { detail: {
+        title, body, jobId: d.jobId || "", section: d.section || "",
+        view: d.view || "", needId: d.needId || "", nid: d.nid || "",
+      } }));
     } else {
       console.warn("[HE push] payload had no title/body — skipping toast");
     }
@@ -1717,6 +1681,14 @@ if (messaging) {
 } else {
   console.warn("[HE push] FCM messaging NOT initialized — pushes will not work");
 }
+
+// A notification tapped while the app was CLOSED opens /?…&nid=<record id>.
+// Captured at module load, before the pendingNav / pendingView initializers
+// strip the query string, so App can mark that inbox record read once the
+// identity loads.
+const LAUNCH_NOTIF_ID = (() => {
+  try { return new URLSearchParams(window.location.search).get("nid") || null; } catch { return null; }
+})();
 
 // Force-update the FCM service worker on every app load to kill stale SW
 // issues. A stale firebase-messaging-sw.js can quietly stop firing onMessage
@@ -46499,6 +46471,21 @@ function NotifDoctor({ identity }) {
   const [checks, setChecks] = useState(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [recent, setRecent] = useState(null);   // last inbox records + their push outcome
+
+  // Delivery history (FCM reliability pass, 2026-10-04): every notification is
+  // stored first and the server records what happened to its push on the same
+  // record — accepted by FCM, which devices, displayed on a device (receipt),
+  // retried, given up. This reads it back so "I never got it" can be answered
+  // from the app instead of the Cloud Functions log.
+  const loadRecent = async () => {
+    const key = identity ? (identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_")) : null;
+    if (!key) return;
+    try {
+      const snap = await getDocs(query(collection(db, "notifications", key, "items"), orderBy("createdAt", "desc"), limit(10)));
+      setRecent(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (e) { setRecent([]); }
+  };
 
   const runChecks = async () => {
     const out = [];
@@ -46602,6 +46589,7 @@ function NotifDoctor({ identity }) {
                     : (subEndpoint.slice(0, 60) + (subEndpoint.length > 60 ? "…" : "")),
     });
     setChecks(out);
+    loadRecent();
   };
 
   // Bypass FCM entirely — fire a Notification via the local Web Notifications
@@ -46609,7 +46597,7 @@ function NotifDoctor({ identity }) {
   // notifications at the macOS / iOS / Windows system level (regardless of
   // browser permission). If this DOES pop a banner, the OS is fine and the
   // FCM/SW chain is the actual problem.
-  const testOSNotif = () => {
+  const testOSNotif = async () => {
     if (typeof Notification === "undefined") {
       setTestResult({ kind: "err", text: "Notification API not available in this browser." });
       return;
@@ -46619,17 +46607,22 @@ function NotifDoctor({ identity }) {
       return;
     }
     try {
-      const n = new Notification("Direct OS notification test", {
-        body: "If you see this banner, your OS allows notifications. The FCM chain is the problem.",
-        icon: "/icon-192.png",
-        tag: "he-os-test",
-      });
+      // Through the push worker's registration — the same call that shows real
+      // pushes. `new Notification()` throws on Android Chrome and doesn't exist
+      // in an iOS Home-Screen app, so this test used to fail on phones even
+      // when notifications were fine.
+      const opts = { body: "If you see this banner, your OS allows notifications. The FCM chain is the problem.",
+        icon: "/icon-192.png", tag: "he-os-test" };
+      const reg = await getExistingMessagingRegistration();
+      let n = null;
+      if (reg && reg.showNotification) await reg.showNotification("Direct OS notification test", opts);
+      else n = new Notification("Direct OS notification test", opts);
       setTestResult({
         kind: "info",
         text: "✓ Notification was created. If you see a banner pop on screen, your OS allows notifications and the FCM chain is the bug. If you don't see a banner, macOS Chrome notifications are off — System Settings → Notifications → Chrome → Allow Notifications.",
       });
       // Auto-close after 5s so it doesn't pile up
-      setTimeout(() => { try { n.close(); } catch {} }, 5000);
+      setTimeout(() => { try { n && n.close(); } catch {} }, 5000);
     } catch(e) {
       setTestResult({ kind: "err", text: `Failed to create notification: ${e.message}` });
     }
@@ -46792,6 +46785,46 @@ function NotifDoctor({ identity }) {
       ) : (
         <div style={{ fontSize: 11, color: C.dim }}>Checking…</div>
       )}
+
+      {recent && recent.length > 0 && (() => {
+        // Plain-language read of each record's delivery map (functions/notifyDelivery.js rollup).
+        const LABEL = { sent: "Pushed", partial: "Pushed to some devices", pending: "Sending…", retrying: "Retrying push",
+          failed: "Push failed — in-app only", no_tokens: "No device registered — in-app only",
+          expired: "Push gave up — in-app only", read_before_push: "Seen in-app first" };
+        const GOOD = { sent: 1, read_before_push: 1 };
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: C.dim, marginBottom: 6 }}>
+              YOUR LAST {recent.length} NOTIFICATIONS
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {recent.map(it => {
+                const d = it.delivery || {};
+                const st = d.status || "legacy";
+                const shown = Array.isArray(it.receipts) && it.receipts.length > 0;
+                const errs = (d.results || []).filter(r => !r.ok).map(r => `${r.tk}…: ${String(r.code || "").replace("messaging/", "")}`);
+                return (
+                  <div key={it.id} style={{ fontSize: 11, lineHeight: 1.35, padding: "5px 8px", borderRadius: 7, background: C.bg || "transparent" }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                      <span style={{ color: C.text, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {stripEmoji(it.title) || "Notification"}
+                      </span>
+                      <span style={{ color: C.dim, flexShrink: 0 }}>{it.createdAt ? timeAgo(it.createdAt) : ""}</span>
+                    </div>
+                    <div style={{ color: st === "legacy" ? C.dim : (GOOD[st] || (st === "partial" && shown)) ? "#3E7D5A" : (st === "pending" || st === "retrying") ? "#B0892C" : "#B23A3A" }}>
+                      {st === "legacy" ? "Sent before delivery tracking" : LABEL[st] || st}
+                      {d.tokenCount ? ` · ${d.okCount || 0}/${d.tokenCount} devices` : ""}
+                      {d.attempts > 1 ? ` · ${d.attempts} tries` : ""}
+                      {shown ? ` · shown on a device ${timeAgo(it.displayedAt || it.receipts[it.receipts.length - 1].at)}` : (st === "sent" ? " · no device confirmed it yet" : "")}
+                    </div>
+                    {errs.length > 0 && <div style={{ fontSize: 10, color: C.dim }}>{errs.join(" · ")}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={runChecks}
@@ -51330,10 +51363,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-03 · App SW version: v504
+**Last manifest update:** 2026-10-04 · App SW version: v505
 
 ---
 
+- **Notifications you can't miss — every notification is saved to the bell first, the push is tracked, retried, and shows on every phone whether the app is open or not** · 'in-flight 2026-10-04' · 'SW v505' · branch 'claude/fcm-notification-reliability-l9vl8v', not deployed · Koy: browser notifications were inconsistent; keep FCM, but make missing a push never mean missing the notification. **Server ('functions/notifyDelivery.js' + 'deliver()' in 'functions/index.js'):** the inbox record in 'notifications/{userKey}/items' is now committed (with retries) BEFORE any push, in one batch with a 'pushQueue' lease; the push goes out with 'messaging.sendEach' (one message per device); the per-device outcome is written back on the record as 'delivery' (status sent / partial / retrying / failed / no_tokens / expired / read_before_push, attempts, devices reached, error codes, token tags only — never full tokens) and logged as one '[notify] delivery' line (ERROR on a real loss). Transient FCM errors re-queue and the new **'pushRetrySweep'** (every 5 min) re-sends to only the failed devices with backoff (1/3/10/30/60 min, 5 tries, 12 h push window; skipped if already read in-app). Dead tokens prune in one transaction (list-only 'tx.update', audit fields untouched). The record id is an idempotency key (same recipient + content in the same minute, or an explicit 'eventKey'), so a re-fired trigger can't double-ping. Priority: digests/routine reminders/quotes go 'Urgency: normal' + quiet banner + 6 h TTL; everything else 'high' + 24 h TTL. Push body trimmed under FCM's 4 KB cap (inbox keeps the full text) — long notes used to fail outright. Unknown recipient names and muted categories now log instead of vanishing. New callable **'pushReceipt'**: the phone reports "I displayed it", so the record separates "FCM accepted" from "the device showed it". 'sendTestPush' / 'sendTestNotification' use the same message builder (the Settings test now runs the full inbox-first path). **Push worker ('public/firebase-messaging-sw.js'):** shows the banner itself on every push, app open or not — the Firebase SDK only showed it when no window was visible and the page fallback ('new Notification') throws on Android and doesn't exist on an iOS Home-Screen app, so phones with the app open got nothing and iOS revoked push permission for "silent" pushes. One banner per notification (tag = record id; the old job+section tag with 'renotify:false' made a second event on the same job silently replace the first). Firebase SDK load is wrapped so a CDN hiccup can't kill the push handler. Tap: the push worker doesn't control the page, so 'navigate()' always failed since v364 — it now posts the target to the open app (job, My Day task, Huddle… all routed like a bell tap) or opens the deep link when closed. **App:** foreground push = in-app toast only (the worker owns the OS banner); toast and push taps route view/task notifications, not just jobs; tapping marks that bell item read (also on a cold open via '&nid='); unread badge comes from its own 'read == false' query (no longer capped by the 50-item list) and sets the Home-Screen icon badge; Mark all read clears every unread; Notification Doctor gains **YOUR LAST 10 NOTIFICATIONS** (pushed / to how many devices / shown on a device / retried / failed + FCM codes) and its OS test uses the worker's 'showNotification' so it works on phones. Guide 'public/sops/myday.html' step 3 updated. Test 'scripts/notify-delivery-test.js' (pure helpers + the full pipeline against an in-memory Firestore/FCM fake; in the prebuild chain). **Why it won't lose data:** inbox items keep every field the bell already reads (title/body/jobId/section/view/needId/createdAt/read) and only ADD 'category', 'priority', 'link', 'delivery', 'receipts', 'displayedAt'; the server's later writes merge only the 'delivery' map (receipts live beside it so they can't be clobbered), so a "mark read" is never overwritten; 'pushQueue' is a new function-only collection (covered by the existing deny-all catch-all — no rules change); token pruning is the same removal-only list update as before, now in one transaction; jobs/needs/users data and the jobs loader are untouched. Needs 'firebase deploy --only functions' (deliver path + new 'pushRetrySweep' + 'pushReceipt') alongside the Vercel push.
 - **Commercial phase tabs get a punch list by building (Power · Lighting · Underground)** · 'shipped 2026-10-02' · 'SW v503' · Brady: *"Inside the tabs for power, lighting, underground etc: Can we make it like the residential punch list where you can make a building, or area and then make punchlist items underneath that? For now it would be good to work it as a punchlist that we build as we go, but if we can take the history of those punch lists after we get through a job or two and make it more of a pre built task list."* The flat checklist on Power, Lighting and the three Underground sub-tabs becomes a building punch list ('COMM_PHASE_TABS[*].punch'); Gear keeps its checklist. **Buildings once per job**: 'commercial.buildings = [{key, label, by, at}]', shared by every punch tab; each tab keeps its own items at 'commercial.phases[key].punch[bkey]' in the residential floor shape, drawn by the existing 'PunchFloor'. So it's the same UI (items, done, assignee, waiting, photos, rooms → "areas"; folded, with open / waiting / for-you counts on the header). It gets new optional 'roomPlaceholder' / 'roomBtnLabel' props with the residential defaults unchanged. Every tab has a **General** area first. **+ Add Building / Area** (duplicate names refused), **Rename** and **Remove** under each building; Remove confirms with the open count across tabs and drops that building's data from every phase. Sub-tab badges and the "Punch list · N open" label count across General + buildings ('commPhaseOpenCount'). Phase 2 (a template built from finished jobs' items) is not built yet; the item shape is the shared punch shape so it can be mined later. Guides 'power.html', 'lighting.html', 'underground.html' updated. **Why it won't lose data:** v467 checklist items aren't dropped. 'commPunchFloor' shows them as General's items until General is first written; that write stores them in 'punch.general' and clears 'items' in the same patch. All writes go through 'commPatch' → the save funnel's structural merge, like every commercial field. New fields are additive inside 'data.commercial'. No loader, rules or function change.
 - **Service Size — printing works from a phone: the sheet opens in its own browser tab with the job carried in the link** · 'shipped 2026-10-02' · 'SW v502' · Koy: *"It's not pulling anything up when I click print on my phone. It works in my desktop tho."* Two causes: inside the Tools tab the tool runs in a frame and phone browsers ignore a print request from a frame; the installed app has no print dialog at all, and it does not share the handoff drawer with Safari, so *Open full screen* would open the tool empty. Fix: on a phone (coarse pointer inside the frame) or in the installed app, **Print customer copy / Print office copy** open '/tools/service-size/#s=<state>&print=<mode>' in a new tab, in the same tap so the popup is not blocked; the state travels gzip + base64url in the link ('src/share.js', CompressionStream when the browser has it, plain base64url otherwise; a compressed copy is kept ready as the state changes, with a synchronous fallback). The opened page shows an *Opened for printing* bar with both print buttons and says changes there do not go back to the app; there, and on desktop, printing is now synchronous in the click (both sheets stay mounted and 'html[data-print]' picks the one that prints, cleared on 'afterprint'; the browser's own Print menu prints the office copy). Tests: 'test/share.test.mjs' (round trips compressed and plain, garbage → null, hash parsing). Guide and training updated: the phone rule is no longer "Open full screen first". **Why it won't lose data:** nothing is sent anywhere; the link is opened on the same device and carries the same numbers already on screen; no storage, job field, loader, rules or function change.
 - **Service Size — printable customer copy and office copy (Print / Save as PDF)** · 'shipped 2026-10-02' · 'SW v501' · Koy: *"is there no PDF download or anything of that info?"* then *"I probably want a customer copy side that just shows them the numbers and why we need to have that amperage, and then another office side with all of the info on it … keep price off it."* Two buttons next to Copy bid note. **Print customer copy** (one page, no price): Homestead header, job and site address, the recommended service big, the calculated load (and the confirmed-only figure when the size covers maybes), the method in one plain sentence, *What is in the calculation* in homeowner words (range, 2 electric dryers, EV charger, sauna, heating and cooling with tonnage), *Allowances included in this size*, *Choices that would need a larger service* (up to five what-ifs), the confirmation sentence and the planning-figures disclaimer; no VA figures, code ids, flags or sources. **Print office copy** (two pages): inputs (area, finish level, circuits, heating / cooling, tonnage and whether estimated, strips, sized-for and target, solar, what it was filled from), the full 220.82(B)+(C) table, every counted item with VA / qty / status / source ('plans', 'loads · nameplate', 'loads · typical', 'loads · confirm spec', 'typed', 'needs VA') and Adds, a *Still estimates* line, the covered list and lighting-circuit count, the what-ifs, the bid flags and the bid note. **Guard:** printing the customer copy while anything is still an estimate (typical value, spec to confirm, needs VA) first says which items and asks *Print anyway?* — the customer sheet never names them. New **Site address** field in The house (filled from the handoff when the job has one; tagged like the rest). **The look (Koy: "make it a cool-looking dashboard … with HOMESTEAD's logo on it"):** both sheets are laid out as a dashboard in the app's own language — slate header band with a schematic grid and the white longhorn logo, the job name big, address and date on an angled steel-blue block; the service size as the hero number in steel blue (Barlow Condensed); a size-ladder gauge with the standard sizes as breaker rungs, the chosen one lit, the confirmed and with-allowances loads as bars and a flag on the load; stat tiles; *What's driving it* as bars (contributors listed one by one — space heaters, floor heat and mini-splits stay inside the heating / cooling bar so nothing is counted twice, tested equal to B + hvac); allowance chips; mono eyebrow labels (JetBrains Mono joins Barlow Condensed and DM Sans as the tool's web fonts); no yellow, the only warm color is the ember *still estimates* strip on the office copy. Tables flow across pages on the office copy. Preview harness for the real '@media print' output: a scratch page that seeds a job, fills, and clicks the print button with 'window.print' stubbed, printed by headless Chrome. Pure sheet logic in 'tools-src/service-size/src/sheet.js', tested ('test/sheet.test.mjs', 5 checks: drivers in plain words with no VA or ids, allowances only when sized for maybes, the three kinds of estimate, a source on every office row, address normalizes). Phone rule unchanged: Open full screen first, then print. **Why it won't lose data:** print-only; nothing new is read or written anywhere (the sheets render the numbers already on screen); 'address' is one additive state key that old states normalize to ""; no job field, loader, rules or function change.
@@ -51364,7 +51398,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 - **Motion batch A — app-wide + My Day (walkthrough G1–G6, M1–M5)** · 'shipped 2026-10-03' · 'SW v504' · Koy, on the walkthrough: *"I want all of them."* **App-wide:** the view slides in from the direction of travel on nav change (G1); an "Update ready · tap to reload" bar springs up when a new version has installed (G2); the header dot grows a SAVING / NOT SAVED chip (G3); on phones the More menu is a bottom sheet with the usual spring and scrim (G4); every My Day dropdown unfolds with motion and its chevron springs (G5); rows slide to their new place when a list changes — My Day groups, pins, Done, and the Job Board (G6). **Batch B — REMOVED same day** (Koy: rows bounced on the Job Board dropdowns and the crew schedule with real data; "fix them or remove what is still having issues"): the page-wide list engine is switched off and nothing starts it. The row tags it used are inert. Gone with it: G6, M4, M5, N1, N2, C1, C3, P1, P2, S1, O1, O3, J1, T1, RF2, PZ3, RT1. Kept from that batch: J3 (needs-attention unfolds) and J2 (tile bump). Original design, for the record: one page-wide list engine in 'motion.js' slides any keyed row to its new place, drops in a row that arrives beside existing ones, and flashes a keyed element whose text changes; rows are tagged on the Needs board (open + done), the COs tracker cards (slide between status columns, flash on status change — C1, C3), Job Prep rows and the redline-walk block (P1, P2), Time Off requests (O1), contractor requests (S1), Upcoming and Tasks (O3), the Job Board crew strip cells (J1) and Today's per-person pulse cards (T1). The Job Board's needs-attention banner unfolds (J3) and the pipeline tiles bump on tap (J2). Not done: Safety (an outside site in a frame), Service Size (prebuilt tool, no source here), Forecast R1/R2, Huddle H1, Settings toggles O2, Needs N3 — listed for Koy. **Batch C (job tabs):** Photos — the viewer zooms in from the thumbnail you tapped and gets ‹ › with a count to step through that set (PH1), each uploading photo shows a ring tile and the thumbnail drops in when done (PH2); Rough / Finish — the failed-items box unfolds and the Pass / Fail buttons crossfade (RF1), punch rows are keyed so new ones drop in and lists reflow (RF2); Home Runs — By Panel eases in (HR2); Panelized Lighting — load rows are keyed and flash when FieldInk follow-sync changes their text (PZ3); Change Orders — cards keyed, Email flashes the card with "Email sent" (CO1, C2); Return Trips — cards keyed so they slide between sections (RT1), a check-off on the trip flashes the matching inspection item (RT2); QC — Create return trip from the prompt flies to the tab (QC1). Not done this round: JI1, AC1, PL1, RF3/RF4, Q1/Q2, HR1, PZ1/PZ2, OI1 — listed for Koy. **My Day:** swipe a row right for Done, left for Snooze, with a coloured underlay that follows the thumb (M1); a fresh reply in a question's discussion flashes its line (M2); the Answer / Reply box unfolds and Save shows a spinner before closing (M3); pins and time-off decisions move with the FLIP slide (M4, M5). All presentation only in 'src/motion.js' + 'HeUnfold' / 'useHeFlip' / 'useHeViewSlide' / 'heSwipeRowProps' / 'useHeSwUpdate' hooks. **Why it won't lose data:** no Firestore read or write path changed; swipe-to-done calls the same onDone the button calls.
 
-- **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'on branch 2026-10-02, awaiting Koy's go-ahead' · 'SW v496' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Motion is now ON by default for everyone: the phone's Reduce Motion setting no longer silently wins (Koy's iPhone has it on, which had turned every animation off since v481 without anyone knowing). The Settings (⋯) menu has **Animations: on / off** to turn it off per device. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
+- **Motion batch 2 — navigation, live and fix-confusion picks from the sampler** · 'shipped 2026-10-03' · 'SW v496 → v504' · Koy, after trying the motion sampler on his phone: *"I want all the navigation live and fix the confusion ones. I don't want the fun ones."* All in 'src/motion.js' (presentation only) with one-line hooks in App.js. **Fix confusion:** punch check-off strike is now a thick dark line led by a dot, with an Android buzz (iPhone has no web haptics); a green ring spreads out of the field you just edited when the save lands; Create Return Trip (rough + final), Convert CO and Promote-to-RT fly a chip from the button to the Return Trips tab, which bumps; a success/info toast fired right after a tap rises out of that button instead of the corner (errors and sticky toasts stay in the corner); the My Day Undo bar shows a shrinking countdown. **Live:** the job header shows a breathing initials bubble for anyone else seen on the job in the last 10 min (reads 'job.presence', writes nothing); new My Day rows drop in from above and the N new pill bumps; the nav badge and My Day counts roll to the new number; stage bars under 100% carry a slow sheen. **Navigation:** swipe the job detail body sideways to change tab (touch only, follows the thumb, resisted at the ends); tapping a Job Board row zooms the card up into the detail page. Motion is now ON by default for everyone: the phone's Reduce Motion setting no longer silently wins (Koy's iPhone has it on, which had turned every animation off since v481 without anyone knowing). The Settings (⋯) menu has **Animations: on / off** to turn it off per device. **Why it won't lose data:** presentation only; no Firestore read or write path changed, no job field added.
 
 - **Return trip card: the inspection report PDF now shows as a file tile that opens** · 'shipped 2026-10-01' · 'SW v495' · Koy: *"the inspection report … loads underneath the final inspection in the finish section, but on the return trip, it won't load anything."* The Return Trips card drew every attachment through an image tag and the image lightbox; a PDF report copied from a failed 4-way or final inspection rendered blank and tapped to a blank viewer. Non-image attachments now get the same file tile the Finish tab's uploader uses, labelled "4-way / Final inspection report", and tapping opens the PDF in a new tab. Photos unchanged. **Why it won't lose data:** render-only; the attachment records on the trip are untouched.
 
@@ -63204,11 +63238,36 @@ function App() {
       snap => setInboxItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
       err => console.warn("[inbox] listener error", err));
   }, [inboxKey]);
-  const inboxUnread = inboxItems.filter(i => !i.read).length;
+  // Unread count comes from its own query so it isn't capped by the 50-item
+  // list above (an unread item older than the newest 50 used to vanish from
+  // the badge). Single-field equality — no composite index needed.
+  const [inboxUnreadIds, setInboxUnreadIds] = useState([]);
+  useEffect(() => {
+    if (!inboxKey) { setInboxUnreadIds([]); return; }
+    const qy = query(collection(db, "notifications", inboxKey, "items"), where("read", "==", false), limit(200));
+    return onSnapshot(qy,
+      snap => setInboxUnreadIds(snap.docs.map(d => d.id)),
+      err => console.warn("[inbox] unread listener error", err));
+  }, [inboxKey]);
+  const inboxUnread = inboxUnreadIds.length;
+  // Home-Screen / installed-app icon badge (iOS 16.4+, Android, desktop PWA).
+  useEffect(() => {
+    try {
+      if (inboxUnread > 0) navigator.setAppBadge?.(inboxUnread)?.catch?.(() => {});
+      else navigator.clearAppBadge?.()?.catch?.(() => {});
+    } catch {}
+  }, [inboxUnread]);
   const markInboxRead = useCallback((ids) => {
     if (!inboxKey) return;
-    ids.forEach(id => updateDoc(doc(db, "notifications", inboxKey, "items", id), { read: true }).catch(() => {}));
+    ids.filter(Boolean).forEach(id => updateDoc(doc(db, "notifications", inboxKey, "items", id), { read: true }).catch(() => {}));
   }, [inboxKey]);
+  // Tapped a notification while the app was closed → that record is seen.
+  const launchNidDone = useRef(false);
+  useEffect(() => {
+    if (!inboxKey || !LAUNCH_NOTIF_ID || launchNidDone.current) return;
+    launchNidDone.current = true;
+    markInboxRead([LAUNCH_NOTIF_ID]);
+  }, [inboxKey, markInboxRead]);
   const openInboxItem = useCallback((item) => {
     if (!item.read) markInboxRead([item.id]);
     setInboxOpen(false);
@@ -63223,15 +63282,21 @@ function App() {
   }, [identity, openJobById, markInboxRead]);
 
   // ── Listen for postMessage from SW (app was already open when notif tapped) ─
+  // The push worker doesn't control this page, so it can't navigate() it — it
+  // posts the target instead. Routed exactly like a bell tap (job, My Day task,
+  // Huddle, …) and marks the inbox record read. Before 2026-10-04 only jobId
+  // was handled, so task / view notifications just focused the app.
   useEffect(() => {
     const handler = e => {
-      if (e.data?.type === "HE_NOTIF_CLICK" && e.data.jobId) {
-        openJobById(e.data.jobId, e.data.section);
-      }
+      const d = e.data;
+      if (d?.type !== "HE_NOTIF_CLICK") return;
+      if (!d.jobId && !d.view) { if (d.nid) markInboxRead([d.nid]); return; }
+      openInboxItem({ id: d.nid || "", read: !d.nid, jobId: d.jobId || "", section: d.section || "",
+        view: d.view || "", needId: d.needId || "" });
     };
     navigator.serviceWorker?.addEventListener("message", handler);
     return () => navigator.serviceWorker?.removeEventListener("message", handler);
-  }, [openJobById]);
+  }, [openInboxItem, markInboxRead]);
 
   // ── Foreground push notification toast ───────────────────────────────────
   const [pushToast, setPushToast] = useState(null);
@@ -63510,7 +63575,10 @@ function App() {
       {/* Push notification foreground toast — tap to open the relevant job */}
       {pushToast && (
         <div onClick={() => {
-          if (pushToast.jobId) openJobById(pushToast.jobId, pushToast.section);
+          if (pushToast.jobId || pushToast.view) {
+            openInboxItem({ id: pushToast.nid || "", read: !pushToast.nid, jobId: pushToast.jobId || "",
+              section: pushToast.section || "", view: pushToast.view || "", needId: pushToast.needId || "" });
+          }
           setPushToast(null);
         }} style={{
           position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
@@ -63521,7 +63589,7 @@ function App() {
         }}>
           <div style={{fontWeight:700, fontSize:14}}>{stripEmoji(pushToast.title)}</div>
           {pushToast.body && <div style={{fontSize:13, color:"#CDD3DB"}}>{stripEmoji(pushToast.body)}</div>}
-          {pushToast.jobId && <div style={{fontSize:11, color:"#8A929D", marginTop:2}}>Tap to open →</div>}
+          {(pushToast.jobId || pushToast.view) && <div style={{fontSize:11, color:"#8A929D", marginTop:2}}>Tap to open →</div>}
         </div>
       )}
 
@@ -63684,7 +63752,7 @@ function App() {
                     <Icon name="bell" size={12} stroke={2.5}/> NOTIFICATIONS
                   </span>
                   {inboxUnread>0 && (
-                    <button onClick={()=>markInboxRead(inboxItems.filter(i=>!i.read).map(i=>i.id))}
+                    <button onClick={()=>markInboxRead(inboxUnreadIds)}
                       style={{fontSize:11,color:C.accent,background:"none",border:"none",cursor:"pointer",
                         fontFamily:"inherit",fontWeight:700,padding:"2px 4px"}}>
                       Mark all read
