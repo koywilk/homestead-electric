@@ -241,8 +241,9 @@ module.exports = function makePlanIntake(deps) {
       driveFolders[name] = r.data.id;
     }
     const copied = [];
+    let incomplete = false;
     for (const c of plan.copies) {
-      if (deadline() < 60 * 1000) break;              // leave the rest for the next run; the ledger knows
+      if (deadline() < 60 * 1000) { incomplete = true; break; }   // the rest go next run (the ledger knows what's done)
       try {
         const r = await simproReqWithRetry("GET", `${base}/attachments/files/${c.id}?display=Base64`, null, { maxAttempts: 3 });
         if (!r.ok || !r.data || !r.data.Base64Data) throw new Error(`Simpro download ${r.status}`);
@@ -258,7 +259,7 @@ module.exports = function makePlanIntake(deps) {
         log.warn("planIntake: file copy failed", { kind, no, file: c.name, error: e.message });   // no ledger mark → retried next run
       }
     }
-    return { copied, present: plan.skipped.length, would: 0 };
+    return { copied, present: plan.skipped.length, would: 0, incomplete };
   }
 
   // ── Quote folder ────────────────────────────────────────────────────────
@@ -321,7 +322,9 @@ module.exports = function makePlanIntake(deps) {
     const { cfg } = ctx;
     const p = prefixOf(cfg.mode);
     const cal = google.calendar({ version: "v3", auth: calendarAuth() });
-    const timeMin = new Date(Date.now() - (W.LOOKAHEAD_DAYS + 1) * 86400e3).toISOString();
+    // config.lookbackDays (1–200) lets a test run replay older walks; default = the 14-day lookahead + 1.
+    const lookback = Math.min(200, Math.max(1, Number(cfg.lookbackDays) || W.LOOKAHEAD_DAYS + 1));
+    const timeMin = new Date(Date.now() - lookback * 86400e3).toISOString();
     const timeMax = new Date(Date.now() + 90 * 86400e3).toISOString();
     const events = []; let pageToken;
     do {
@@ -461,15 +464,17 @@ module.exports = function makePlanIntake(deps) {
       const sources = [["quote", st.quoteNo]];
       if (st.jobNo && !st.mergedIntoJob) sources.push(["job", st.jobNo]);
       const filed = [], would = [];
-      let wouldBytes = 0;
+      let wouldBytes = 0, incomplete = false;
       try {
         for (const [kind, no] of sources) {
           const r = await fileSource(ctx, kind, no, st.folderId, ledger);
-          filed.push(...r.copied); if (r.would) { would.push(...(r.wouldNames || [])); wouldBytes += r.wouldBytes || 0; }
+          filed.push(...r.copied); if (r.incomplete) incomplete = true; if (r.would) { would.push(...(r.wouldNames || [])); wouldBytes += r.wouldBytes || 0; }
         }
       } catch (e) { counts.errors.push(`files ${st.quoteNo}: ${e.message}`.slice(0, 200)); }
       const old = Date.now() - Date.parse(st.createdAt || 0) > TRACK_DAYS * 86400e3;
-      await ref.update({ ledger, lastFilesCheckAt: nowIso(), updatedAt: nowIso(), ...(old ? { tracking: false } : {}) });
+      // A run cut short by the time budget leaves lastFilesCheckAt alone, so the
+      // next run (30 min) carries on instead of waiting the full 2 h.
+      await ref.update({ ledger, ...(incomplete ? {} : { lastFilesCheckAt: nowIso() }), updatedAt: nowIso(), ...(old ? { tracking: false } : {}) });
       const number = st.jobNo || `Q${st.quoteNo}`;
       const links = st.folderId ? [{ label: "Folder", url: folderUrl(st.folderId) }] : [];
       if (filed.length) {
