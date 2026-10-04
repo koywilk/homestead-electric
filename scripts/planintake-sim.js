@@ -259,5 +259,16 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   assert(w.driveLog.every(x => x[0] !== "update" || x[1] !== "Tolbert set (from GC).pdf"), "hand-filed files untouched");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed scenarios passed");
+// 9 ── going live "from here on": walks dated before walksSince are never acted on
+{
+  const w = world({ ccJobs: { j1407: { name: "Tolbert Residence", simproNo: "1407", driveFolderId: "" } } });
+  w.setMode("live", { walksSince: "2026-10-04T06:00:00Z" });
+  const c = await (w.pi._runOnce());
+  eq([c.matched, c.queued, c.pending, c.existingJob], [0, 0, 0, 0], "no past walk is matched, queued or retried");
+  eq(w.driveLog, [], "no Drive writes for past walks");
+  eq(jobWrites(w), [], "no job writes for past walks");
+  eq(w.docs("agentQueue").length, 0, "nothing queued for past walks");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });

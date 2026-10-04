@@ -337,6 +337,10 @@ module.exports = function makePlanIntake(deps) {
       if (ctx.deadline() < 120 * 1000) { counts.deferred = (counts.deferred || 0) + 1; continue; }
       const c = W.classifyEvent(ev);
       if (c.kind === "skip") continue;
+      // config.walksSince: walks dated before it are never acted on (Koy, going
+      // live 2026-10-04: "i dont need a rollback, just from here on").
+      const startIso = String((ev.start && (ev.start.dateTime || ev.start.date)) || "");
+      if (cfg.walksSince && startIso && new Date(startIso).getTime() < Date.parse(cfg.walksSince)) continue;
       const ref = db.collection(STATE).doc(`${p}walk_${ev.id}`);
       const prev = (await ref.get()).data();
       if (prev && ["matched", "existing_job", "queued"].includes(prev.status)) continue;

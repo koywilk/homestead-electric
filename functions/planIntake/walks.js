@@ -13,7 +13,8 @@ const WALKERS = new Set(["josh", "brady", "justin"]);
 // conferenceData. (Found in Koy's Jul–Sep 2026 calendar: 100% had a Meet URL.)
 const VIRTUAL_RE = /\b(zoom|google meet|meet|teams|facetime|phone call|call)\b/i;
 // "James Livingston 1st Day" (first dry run, 2026-10-04): new-hire events aren't walks.
-const MEETING_RE = /\b(meeting|trade partner|interview|training|lunch|scramble|strategy|coordination|showcase|onboarding|orientation)\b|\b(1st|first) day\b/i;
+// Test run 2026-10-04 added "Lutron Show Room" and "1 of 3 Truck Detail" — not walks.
+const MEETING_RE = /\b(meeting|trade partner|interview|training|lunch|scramble|strategy|coordination|showcase|onboarding|orientation|show ?room|truck)\b|\b(1st|first) day\b/i;
 const WALK_RE = /\b(walk|walks|walkthrough|walk-through|walk through|redlines?|red[ -]lines?)\b/i;
 // "#1407", "Job 1407", "job #1407" — a walk on a job we already have.
 const JOB_REF_RE = /#\s?\d{3,5}\b|\bjob\s*#?\s*\d{3,5}\b/i;
