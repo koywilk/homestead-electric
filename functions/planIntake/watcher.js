@@ -723,7 +723,10 @@ module.exports = function makePlanIntake(deps) {
   }
 
   const planRoutineApi = functions
-    .runWith({ timeoutSeconds: 300, memory: "1GB", secrets: [ROUTINE_SECRET] })
+    // invoker "public": this deploy created planRoutineApi private (Google's own 403
+    // page, 2026-10-04) while the older https functions are public. Google's door
+    // stays open so the Routine can reach it; the bearer-token check is the gate.
+    .runWith({ timeoutSeconds: 300, memory: "1GB", secrets: [ROUTINE_SECRET], invoker: "public" })
     .https.onRequest(async (req, res) => {
       if (!tokenOk(req)) { res.status(401).json({ error: "unauthorized" }); return; }
       try {
