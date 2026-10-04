@@ -7428,8 +7428,15 @@ const _planIntake = require("./planIntake/watcher.js")({
   JOBS_PARENT_FOLDER_ID,
   requireAppKey,
   sendToName,   // ops alert to Koy if the calendar sign-in dies (once a day)
+  sendGcMail,   // Phase 4: the 5 pm plan summary email (Resend)
+  requireAdmin, // Phase 4: "file it from the Plans card" (name + PIN, admin/manager)
+  gcAccessOf: gcAdminAccessOf,
 });
 exports.planIntakeWatcher = _planIntake.planIntakeWatcher;
 exports.linkQuoteFolder   = _planIntake.linkQuoteFolder;
 // Phase 2: the Claude Code Routine's only door in (bearer token PLAN_ROUTINE_TOKEN).
 exports.planRoutineApi    = _planIntake.planRoutineApi;
+// Phase 4: 5 pm summary email, 6:30 am walk push, file-from-the-card.
+exports.planIntakeDigest   = _planIntake.planIntakeDigest;
+exports.planIntakeWalkPush = _planIntake.planIntakeWalkPush;
+exports.planFileByHand     = _planIntake.planFileByHand;

@@ -123,7 +123,7 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [] }
       attachments: { get: async ({ messageId, id }) => ({ data: { data: Buffer.from(mail.find(m => m.id === messageId).bytes[id]).toString("base64").replace(/\+/g, "-").replace(/\//g, "_") } }) },
     } } }),
   };
-  const pushes = [];
+  const pushes = [], mails = [];
   const HttpsError = class extends Error { constructor(code, msg) { super(msg); this.code = code; } };
   const chain = { runWith: () => chain, pubsub: { schedule: () => ({ timeZone: () => ({ onRun: (fn) => fn }) }) }, https: { onCall: (fn) => fn, onRequest: (fn) => fn, HttpsError }, logger: { info() {}, warn() {}, error() {} } };
   const pi = makePlanIntake({
@@ -132,10 +132,13 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [] }
     jobFolderName: (j) => (j.simproNo ? `#${j.simproNo} - ${j.name}` : j.name), JOBS_PARENT_FOLDER_ID: PARENT,
     requireAppKey: (d) => { if (!d || d._appKey !== "k") throw new HttpsError("permission-denied", "key"); },
     sendToName: async (name, n) => { pushes.push({ name, ...n }); },
+    sendGcMail: async (m) => { mails.push(m); return true; },
+    requireAdmin: async (d) => { const u = { koy: { name: "Koy", caps: ["resi.head"], access: "admin" }, keegan: { name: "Keegan", caps: [], access: "manager" } }[String(d && d.by).toLowerCase()]; if (!u || d.pin !== "1234") throw new HttpsError("permission-denied", "pin"); return u; },
+    gcAccessOf: (u) => u.access,
   });
   const setMode = (mode, extra = {}) => store.set("planIntakeState/config", { ...(get("planIntakeState/config") || {}), mode, ...extra });
   const docs = (coll) => [...store.keys()].filter(k => k.startsWith(`${coll}/`)).map(k => ({ id: k.slice(coll.length + 1), ...get(k) }));
-  return { pi, store, get, writes, files, driveLog, setMode, docs, pushes, simproCalls: () => simproCalls };
+  return { pi, store, get, writes, files, driveLog, setMode, docs, pushes, mails, simproCalls: () => simproCalls };
 }
 const jobWrites = (w) => w.writes.filter(x => x.path.startsWith("jobs/"));
 const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueue|agentFindings|jobs)\//.test(x.path));
@@ -331,7 +334,39 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   assert(w.docs("agentFindings").some(f => f.type === "unmatched_plan" && /best guess #1407/.test(f.summary)), "unmatched logged with the guess");
   eq((await call("POST", "/decide", { body: { item: "dry_x", action: "dismiss" } })).code, 404, "items from another mode are invisible");
   eq(w.driveLog.filter(x => x[0] === "delete").length, 0, "nothing deleted");
+
+  // 11 ── Phase 4: file an unsure plan from the card, the 5 pm email, the walk push
+  const att2 = { id: "m5", threadId: "t5", internalDate: String(Date.parse("2026-10-04T19:00:00Z")), bytes: { a: "%PDF-design-book" },
+    payload: { headers: hdr("designer@studio.com", "design book"), parts: [pdfPart("Design Book.pdf", "a")] } };
+  mail.push(att2);
+  w.store.set("planIntakeState/config", { ...w.get("planIntakeState/config"), runLockAt: "" });
+  await (w.pi._runOnce());
+  const unsure = w.docs("agentQueue").find(x => x.filename === "Design Book.pdf");
+  await call("POST", "/decide", { body: { item: unsure.id, action: "unmatched", bestGuess: "#1407", reason: "designer book, no address" } });
+  const fnd = w.get(`agentFindings/unmatched_${unsure.id}`);
+  eq([fnd.item, fnd.bestGuess, fnd.canFile], [unsure.id, "#1407", true], "unsure finding carries the item + guess for the card");
+  await assert.rejects(w.pi.planFileByHand({ item: unsure.id, number: "1407", category: "design", by: "Keegan", pin: "1234" }), /Head of Residential/, "a manager without the hat can't file");
+  await assert.rejects(w.pi.planFileByHand({ item: unsure.id, number: "1407", category: "design", by: "Koy", pin: "0000" }), /pin/, "wrong PIN refused");
+  const byHand = await (w.pi.planFileByHand({ item: unsure.id, kind: "job", number: "1407", category: "design", by: "Koy", pin: "1234" }));
+  eq(byHand.name, "#1407 – 2026-10-04 – Design Book.pdf", "filed from the card with Koy's name format");
+  eq(w.files.get(w.files.get(unsure.inboxFileId).parents[0]).name, "DESIGN", "landed in MOST UPDATED / DESIGN");
+  eq(w.get(`agentFindings/unmatched_${unsure.id}`).seen, true, "the unsure row clears once filed");
+  await assert.rejects(w.pi.planFileByHand({ item: unsure.id, kind: "job", number: "1407", category: "design", by: "Koy", pin: "1234" }), /already/, "can't file twice");
+
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Denver" });
+  for (const d of w.docs("agentFindings")) w.store.set(`agentFindings/${d.id}`, { ...w.get(`agentFindings/${d.id}`), day: today });
+  await w.pi.planIntakeDigest();
+  eq(w.mails.length, 1, "5 pm email sent");
+  eq(w.mails[0].to, "koywilkinson@gmail.com", "to Koy's Gmail until the domain is verified");
+  assert(/filed/.test(w.mails[0].subject) && /Plan intake/.test(w.mails[0].html), "subject + body built");
+
+  w.store.set("planIntakeState/walk_evToday", { type: "walk", walkDate: today, title: "Brandt Walk", status: "matched", quoteNo: "2299" });
+  const before = w.pushes.length;
+  await w.pi.planIntakeWalkPush();
+  const wp = w.pushes[before];
+  eq([wp.name, wp.title, wp.view], ["Koy", "Walk today: Brandt Walk", "today"], "6:30 push to Koy only, opens Today");
+  assert(/Quote #2299 folder ready · 2 plans in SIMPRO/.test(wp.body), "push names the quote and how many plans are filed");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api scenarios passed");
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });

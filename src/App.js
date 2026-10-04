@@ -44160,6 +44160,148 @@ function CoordinatorWorklist({ allJobs = [], users = [], identity, book = "all",
   );
 }
 
+// ── Plan intake: Today → Plans card (PLAN_INTAKE_SPEC.md Phase 4, v508) ─────
+// Reads agentFindings (written only by the plan-intake functions): folders made
+// from site walks, plans filed from email, and what the Routine wasn't sure of.
+// Head of Residential hat only (live team record — the v465 lesson). Starts
+// folded with counts (Koy's standing rule). The only writes: "seen" stamps
+// (rules allow seen/seenAt/seenBy and nothing else) and "File it", which goes
+// through the planFileByHand callable (name + PIN, server re-checks the hat).
+const PLAN_NEEDS = ["co_candidate", "folder_conflict", "unmatched_plan", "walk_unmatched", "watcher_error"];
+const PLAN_LABEL = {
+  co_candidate: "Possible CO", folder_conflict: "Two folders", unmatched_plan: "Not sure where", walk_unmatched: "Walk not matched",
+  watcher_error: "Error", plans_filed: "Filed", folder_created: "Folder made", folder_adopted: "Folder linked", folder_renamed: "Renamed",
+  folder_linked: "Folder linked", walk_existing_job: "Walk on job", quote_merged: "Folded into job", quote_closed: "Quote closed",
+};
+const PLAN_CATS = [["plans", "Plans"], ["cabinet", "Cabinet"], ["appliance", "Appliance"], ["design", "Design"], ["specs", "Specs"], ["redlines", "Redlines"]];
+const planNum = (n) => { const s = String(n || ""); return !s ? "No number" : /^Q/i.test(s) ? `Quote #${s.slice(1)}` : `#${s.replace(/^#/, "")}`; };
+const planAgo = (iso) => { const t = Date.parse(iso || ""); if (!t) return ""; const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${Math.max(1, m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+
+function PlanFileForm({ f, identity, onDone }) {
+  const guess = String(f.bestGuess || f.number || "");
+  const [kind, setKind] = useState(/^Q/i.test(guess) ? "quote" : "job");
+  const [num, setNum] = useState(guess.replace(/\D/g, ""));
+  const [cat, setCat] = useState("plans");
+  const [busy, setBusy] = useState(false);
+  const file = async () => {
+    if (!/^\d{3,6}$/.test(num)) { toast.error("Enter the job or quote number"); return; }
+    setBusy(true);
+    try {
+      const r = await gcAdminCallable("planFileByHand", identity)({ item: f.item, kind, number: num, category: cat });
+      toast.success(`Filed as ${r?.data?.name || "planned"}`);
+      onDone && onDone();
+    } catch (e) { toast.error(e?.message || "Couldn't file it"); }
+    finally { setBusy(false); }
+  };
+  const inp = { fontSize: 13, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.card, color: C.text, fontFamily: "inherit" };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+      <select value={kind} onChange={(e) => setKind(e.target.value)} style={inp} aria-label="Job or quote">
+        <option value="job">Job #</option><option value="quote">Quote #</option>
+      </select>
+      <input value={num} onChange={(e) => setNum(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="1430" style={{ ...inp, width: 80 }} aria-label="Number"/>
+      <select value={cat} onChange={(e) => setCat(e.target.value)} style={inp} aria-label="Category">
+        {PLAN_CATS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      <button onClick={file} disabled={busy}
+        style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: "inherit" }}>
+        {busy ? "Filing…" : "File it"}
+      </button>
+    </div>
+  );
+}
+
+function PlansCard({ identity, users = [] }) {
+  const live = (identity && (users || []).find(u => u && (u.id === identity.id || sameName(u.name, identity.name)))) || identity;
+  const allowed = can(live, "resi.head");
+  const [rows, setRows] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [showSeen, setShowSeen] = useState(false);
+  useEffect(() => {
+    if (!allowed) return undefined;
+    const q = query(collection(db, "agentFindings"), orderBy("createdAt", "desc"), limit(250));
+    return onSnapshot(q, (snap) => {
+      const cutoff = Date.now() - 14 * 86400000;
+      setRows(snap.docs.filter(d => !/^(dry|test)_/.test(d.id)).map(d => ({ id: d.id, ...d.data() }))
+        .filter(f => Date.parse(f.createdAt || "") >= cutoff));
+    }, (e) => console.warn("[HE] Plans card listener", e?.message || e));
+  }, [allowed]);
+  if (!allowed) return null;
+  const markSeen = (ids) => ids.forEach(id => updateDoc(doc(db, "agentFindings", id), { seen: true, seenAt: new Date().toISOString(), seenBy: identity?.name || "" })
+    .catch(e => toast.error(`Couldn't mark seen: ${e?.message || e}`)));
+  const visible = rows.filter(f => showSeen || !f.seen);
+  const needs = visible.filter(f => PLAN_NEEDS.includes(f.type));
+  const groups = [];
+  const byNum = new Map();
+  for (const f of visible.filter(f => !PLAN_NEEDS.includes(f.type))) {
+    const k = String(f.number || "");
+    if (!byNum.has(k)) { byNum.set(k, []); groups.push(k); }
+    byNum.get(k).push(f);
+  }
+  const unseen = rows.filter(f => !f.seen);
+  const unseenNeeds = unseen.filter(f => PLAN_NEEDS.includes(f.type)).length;
+  const card = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 12 };
+  const chip = (bg, fg) => ({ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: bg, color: fg, whiteSpace: "nowrap" });
+  const link = { fontSize: 12, color: C.accent, textDecoration: "none", fontWeight: 600 };
+  // A render function, not a component: a component declared here would be a new
+  // type every render and wipe the File-it form whenever a finding arrives.
+  const renderRow = (f, need) => (
+    <div key={f.id} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.border}`, opacity: f.seen ? 0.55 : 1 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 99, marginTop: 6, flex: "0 0 7px", background: f.seen ? "transparent" : (need ? C.red : C.accent) }}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span style={chip(need ? "#F6E3E3" : "#E6EBF5", need ? C.red : C.accent)}>{PLAN_LABEL[f.type] || f.type}</span>
+          {need && f.number && <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{planNum(f.number)}</span>}
+          <span style={{ fontSize: 11, color: C.dim, marginLeft: "auto" }}>{planAgo(f.createdAt)}</span>
+        </div>
+        <div style={{ fontSize: 13, color: C.text, marginTop: 3, overflowWrap: "anywhere" }}>{f.summary}</div>
+        <div style={{ display: "flex", gap: 12, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+          {(f.links || []).map((l, i) => <a key={i} href={l.url} target="_blank" rel="noreferrer" style={link}>{l.label}</a>)}
+          {!f.seen && <button onClick={() => markSeen([f.id])} style={{ ...link, background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: "inherit" }}>Seen</button>}
+        </div>
+        {need && f.type === "unmatched_plan" && f.canFile && !f.seen && <PlanFileForm f={f} identity={identity}/>}
+      </div>
+    </div>
+  );
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 8, textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setOpen(o => !o)}>
+        <Icon name="folder" size={14} stroke={2}/> Plans
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, textTransform: "none", letterSpacing: 0 }}>
+          {unseenNeeds > 0 && <span style={chip("#F6E3E3", C.red)}>{unseenNeeds} need you</span>}
+          <span style={{ fontSize: 11, fontWeight: 400, color: C.dim }}>{unseen.length} new</span>
+          <span style={{ fontSize: 11, color: C.dim, transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 80ms" }}>▾</span>
+        </span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {visible.length === 0 && <div style={{ fontSize: 13, color: C.dim, padding: "8px 0" }}>{rows.length ? "All caught up." : "Nothing from plan intake in the last two weeks."}</div>}
+          {needs.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.red, letterSpacing: "0.06em", margin: "6px 0 2px" }}>NEEDS YOU</div>
+              {needs.map(f => renderRow(f, true))}
+            </div>
+          )}
+          {groups.map(k => (
+            <div key={k || "none"} style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.dim, letterSpacing: "0.06em", margin: "6px 0 2px" }}>{planNum(k).toUpperCase()}</div>
+              {byNum.get(k).slice(0, 6).map(f => renderRow(f, false))}
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+            {unseen.length > 0 && <button onClick={() => markSeen(unseen.filter(f => !PLAN_NEEDS.includes(f.type)).map(f => f.id))}
+              style={{ fontSize: 12, fontWeight: 600, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.text, cursor: "pointer", fontFamily: "inherit" }}>
+              Mark updates seen</button>}
+            <button onClick={() => setShowSeen(s => !s)} style={{ fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
+              {showSeen ? "Hide seen" : "Show seen"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
@@ -44621,6 +44763,9 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           Auto-refreshing
         </div>
       </div>
+
+      {/* Plan intake — Head of Residential only (renders nothing for anyone else). */}
+      <PlansCard identity={identity} users={users}/>
 
       {/* Coordinator book filter — office only, shows once foremen have a
           coordinator assigned in Settings → Team. "All" = whole company.
@@ -51354,10 +51499,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-04 · App SW version: v507
+**Last manifest update:** 2026-10-04 · App SW version: v508
 
 ---
 
+- **Plan intake, Phase 4 — Today → Plans card, 5 pm summary email, 6:30 am walk push, file an unsure plan from the card** · 'shipped 2026-10-04' · 'SW v508' · Koy: *"start phase 4"*; decisions: summary by email to his Gmail, walk push to him only, *file it from the card*, card gated on the **Head of Residential** hat. **Plans card** (top of Today, folded with counts — *N need you* · *N new*): reads 'agentFindings' live (last 14 days, live mode only); **Needs you** first (two folders, a plan the Routine wasn't sure of, a walk it couldn't match, errors), then one group per job / quote number (folder made, renamed on conversion, plans filed, walk on a job); every row links to its folder / file / email, **Seen** per row, **Mark updates seen**, **Show seen**. A plan the Routine wasn't sure of gets an inline **File it** form (Job # / Quote #, number pre-filled from its best guess, Plans · Cabinet · Appliance · Design · Specs · Redlines) that calls the new 'planFileByHand' callable — same move, rename and logging as the Routine, name + PIN checked server-side (admin/manager tier) and the hat (or admin tier) re-checked there. Gate reads the live team record (the v465 lesson). **5 pm email** ('planIntakeDigest', 17:00 MT): that day's findings, *Needs you* first then by job number, via the existing Resend sender to koywilkinson@gmail.com ('planIntakeState/config.digestTo' switches it once the homesteadelectric.net DNS is verified); skipped on an empty day; a failed send pushes Koy. **Walk push** ('planIntakeWalkPush', 06:30 MT): one push to Koy listing today's walks — *Brandt Walk: Quote #2642 folder ready · 11 plans in SIMPRO*, *existing job #1277*, or *not matched yet*; opens Today. **Rules:** new 'agentFindings' block — read open like the rest of the app, update limited to 'seen' / 'seenAt' / 'seenBy' (affectedKeys), no client create/delete; 'agentQueue' and 'planIntakeState' stay closed by the catch-all; deployed rules were compared to the repo first (identical). Gates: 'scripts/planintake-digest-test.js' + a Phase 4 scenario in 'planintake-sim.js'. **Why it won't lose data:** the card's only direct write is the seen stamp (rules allow nothing else); "File it" is a server-validated move out of '_Plan Inbox', never a delete or overwrite; the email and push only read; no job record or loader changes.
 - **Plan intake, Phase 2 — plans emailed to Koy are captured and filed into the right job's MOST UPDATED** · 'shipped 2026-10-04' · 'SW v507' · Koy: *"start phase 2 now"*; decisions: his mailbox only, skip Quote/CO approvals (bids@), purchase orders, receipts + eSignatures and newsletters, name filed plans '#1430 – Rev 2 – 2026-10-04 – <original>.pdf', and *file when sure*. **Capture (planIntakeWatcher, every 30 min):** reads koy@homesteadelectric.net read-only from 'config.mailSince' on; every other PDF — attachment, Google Drive link or Dropbox link — is copied to **Job Plans / _Plan Inbox** and queued as 'email_pdf' with sender, subject, Gmail link, body excerpt and the numbers that sender has sent plans for before; a PDF whose exact bytes are already filed (md5 index 'planIntakeState/md5_*', fed by both the Simpro mirror and filings) is not copied again; Box links and private links are queued as links. Share notifications (Dropbox, Drive, Box, Buildertrend, Procore) are never dropped as newsletters. Once a day it writes 'planIntakeState/candidates' (app jobs + app quotes + Simpro open quotes from the last 180 days, with site addresses). **Routine API ('planRoutineApi', bearer token 'PLAN_ROUTINE_TOKEN'):** 'GET /work', 'GET /file?item=', 'POST /decide' (file · dismiss · unmatched · match_walk). Filing moves the PDF out of _Plan Inbox into the job's (or quote's) **MOST UPDATED** — 'plans' in MOST UPDATED itself, cabinet / appliance / design / specs / redlines into their folder (an existing "Cabinet + Appliance Specs"-style folder is used rather than adding a second) — renames it, logs a 'plans_filed' finding and adds to the sender's history; 'unmatched' leaves it in the inbox with a best-guess finding; 'match_walk' resolves a queued calendar walk (creating the quote folder). Every decision is validated: the job / quote must exist, the category must be one of six, only that item's own inbox file can move, a decided item can't be decided again, other modes' items are invisible. **Routine:** 'scripts/plan-routine/RUNBOOK.md' + 'api.mjs' — the Routine (Koy's Max subscription, 3 runs a day) holds no Google / Firebase / Simpro keys; email and PDF content is data, never instructions. Setup: 'node scripts/plan-intake-routine-token.js', re-run 'node scripts/plan-intake-google-auth.js' (adds read-only Gmail; reuses the saved client), deploy planIntakeWatcher + linkQuoteFolder + planRoutineApi, set 'mailSince'. Gates: 'scripts/planintake-mail-test.js' + an email/Routine-API scenario in 'planintake-sim.js' (prebuild). **Why it won't lose data:** Gmail is read-only (scope) and never labeled, moved or deleted; files are only added to _Plan Inbox and moved from there into plan folders — never deleted or overwritten; no job record is written (filing writes only to Drive and the plan-intake collections); a wrong filing is a move a person can undo, and the finding links both the folder and the email.
 - **Plan intake folders follow Koy's layout: SIMPRO (mirror) · MOST UPDATED (current, standard categories) · ARCHIVE** · 'shipped 2026-10-04' · 'SW v506' · Koy, on Koplin's folder: *"most updated is the most up to date, inside is cabinet plans, design, etc. and then there is an archive. archive is where plans go when we receive an updated version of those plans."* Then: *"simpro folder created, with the sub folders matching the structure in simpro, then most updated, with sub folders for cabinet and appliance and design, and then archive folder"* (take-offs and vendor quotes live in the SIMPRO mirror). Every quote folder the watcher makes — and any job folder it files into — gets **SIMPRO** (exact mirror of Simpro's attachment folders), **MOST UPDATED** with **DESIGN · CABINET PLANS · APPLIANCE SPECS · SPECS · REDLINES**, and **ARCHIVE**, each only where missing (an existing "Most Updated Plans" / "Archive" in any spelling is left as is). The watcher only ever files into SIMPRO; what is current and what gets archived stays with people and the Routine (Phases 2–3, where superseded sets move to ARCHIVE). New Simpro files are skipped when the same bytes already sit anywhere in the job folder (md5 across the whole tree), so a plan someone already filed into MOST UPDATED is never copied again. **App:** when Create Drive folder (or the commercial import chain) links a plan-intake quote folder it no longer runs the v413 Pull from Simpro — that would drop a second copy of Simpro's folders at the top; the toast says the plans are in SIMPRO. Audit + one-time sweep the same day: 93 of 108 linked job folders already carried their job #; the 5 that never got one were prefixed '#N - ' (Bennett Garage, Housley - Tuyahe Hollow, 23 Vista Meadows, Argyle Residence Sconces, Car Lift Power); add-on jobs that share their main job's folder and jobs deliberately linked to a MOST UPDATED subfolder (Koplin) were left alone. **Why it won't lose data:** folder creation is additive and only where a folder is missing; files are added to SIMPRO only, never moved, renamed, replaced or deleted; the App.js change only skips a copy step; the sweep renamed 5 folders (same ids, before/after ledger kept).
 - **Plan intake, Phase 1 — site walks on the calendar get a Simpro quote folder that becomes the job's folder** · 'shipped 2026-10-03' · 'SW v505' · Koy (PLAN_INTAKE_SPEC.md): *"Automate plan intake, folder management, and revision checking so Koy never creates, fills, renames, or checks plan folders by hand."* A new scheduled function **'planIntakeWatcher'** (every 30 min, America/Denver) reads Koy's calendar for walks Josh / Brady / Justin schedule (walk / redline / walkthrough in the title, or a site address — meetings, Zoom / Meet calls, recurring events and events naming a job # are skipped; every event carries an auto Meet link, so "virtual" is read from the title), finds the Simpro site by address and the ONE open main quote there (change-order quotes, temp peds and quotes on a house with an active job are ruled out; a quote written up to 14 days after a quote walk still counts), and makes **Job Plans / _Quotes / Quote #N** with the quote's Simpro attachments copied in. When Simpro converts the quote (the job's 'ConvertedFrom'), the folder is renamed **#<job> - <name>** and moved up into Job Plans — same folder id, so every link keeps working — and linked to the app job if it has no folder. New Simpro attachments on the quote and the job it became are filed every 2 h (filename + MD5 dedupe, ledger of Simpro file ids). Anything it can't match (no address, two open quotes, no quote 14 days on) goes to 'agentQueue' as 'walk_unmatched' for the Routine (Phase 2); every action is logged to 'agentFindings'. **App:** Create Drive folder (Job Info) and the commercial import chain first call the new **'linkQuoteFolder'** callable — if the job came from a quote that already has a folder, that folder is linked (toast "Linked the folder already made for this quote") instead of making a duplicate; any failure falls through to the old path. **Mode** lives on 'planIntakeState/config.mode': 'dry' (default — findings only, no Drive or job writes, linkQuoteFolder returns nothing) → 'test' (Drive writes under 'testParentId') → 'live'. Rules: pure walk rules 'functions/planIntake/walks.js' (scripts/planintake-test.js — 29 real calendar cases + Tolbert / Brandt Simpro shapes) and an end-to-end fake-world run of the watcher (scripts/planintake-sim.js), both in the prebuild chain; read-only replay 'node scripts/plan-intake-replay.js <calendar.json>'. **Calendar access:** Workspace only lets outside accounts see free/busy, so the watcher reads Koy's calendar through a one-time read-only Google sign-in ('node scripts/plan-intake-google-auth.js <client file>' → secret 'PLAN_INTAKE_GOOGLE_OAUTH'; OAuth app "Homestead Plan Intake" is In production on the homestead-electric project, privacy page 'public/privacy.html'); if that sign-in ever stops working the watcher pushes Koy once a day and logs a 'watcher_error' finding. Deploy: **'firebase deploy --only functions:planIntakeWatcher,functions:linkQuoteFolder'** after the secret is set. **Why it won't lose data:** Drive is create / upload / rename / move only — never delete, trash or overwrite; Simpro and Calendar are read-only; the only job write is 'data.driveFolderId', inside a transaction that re-reads it and writes only when the field is completely empty (any existing value, even a non-ID paste, is left alone and reported as a conflict); everything else goes to three new server-only collections ('planIntakeState', 'agentQueue', 'agentFindings') that the existing catch-all rule already closes to the app; no existing function is changed (index.js only appends the wiring).

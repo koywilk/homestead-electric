@@ -224,6 +224,18 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── PLAN INTAKE FINDINGS (PLAN_INTAKE_SPEC.md Phase 4, 2026-10-04) ────────
+    // agentFindings/{id}: what the plan-intake functions did (folders made,
+    // plans filed, plans the Routine wasn't sure of). Written ONLY by Cloud
+    // Functions (admin SDK). The Today → Plans card reads them and may stamp
+    // seen / seenAt / seenBy — nothing else (same pattern as notifications).
+    // agentQueue and planIntakeState stay function-only via the catch-all below.
+    match /agentFindings/{id} {
+      allow read: if true;
+      allow create, delete: if false;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen', 'seenAt', 'seenBy']);
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {

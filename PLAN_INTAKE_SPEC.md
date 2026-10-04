@@ -129,6 +129,8 @@ Koy: *"in theory here you can also be checking off my pre job prep punch list as
 2. **5pm email to Koy.** Sent by the 4:30pm Routine run. Covers everything in `agentFindings` from that day, grouped by job number, worst first (CO flags at the top).
 3. **Morning-of-walk push** (Cloud Function, 6:30am on walk days). Includes the quote #, the folder link, the latest rev, and any changes since the first set was filed.
 
+**Phase 4 decisions + build (Koy, 2026-10-04):** the 5 pm summary is an **email to koywilkinson@gmail.com** sent by a function (`planIntakeDigest`, the Routine has no email access by design; Resend test sender until the homesteadelectric.net DNS is verified, then `config.digestTo`); the walk push goes **to Koy only** (`planIntakeWalkPush`, 06:30); an unsure plan can be **filed from the card** (`planFileByHand`, name + PIN + hat); the card follows the **Head of Residential hat**. Card reads `agentFindings` (rules: read + seen stamps only).
+
 ---
 
 ## Phase 5 — Routine setup

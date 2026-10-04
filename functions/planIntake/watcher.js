@@ -57,7 +57,7 @@ function folderIdOf(v) {
 
 module.exports = function makePlanIntake(deps) {
   const { functions, db, google, TZ, simproReqWithRetry, driveFullClient, driveUploadResumable,
-    planDocPull, jobFolderName, JOBS_PARENT_FOLDER_ID, requireAppKey, sendToName } = deps;
+    planDocPull, jobFolderName, JOBS_PARENT_FOLDER_ID, requireAppKey, sendToName, sendGcMail, requireAdmin, gcAccessOf } = deps;
   const log = functions.logger;
   const nowIso = () => new Date().toISOString();
   const today = () => new Date().toLocaleDateString("en-CA", { timeZone: TZ });   // YYYY-MM-DD, Denver
@@ -678,6 +678,7 @@ module.exports = function makePlanIntake(deps) {
     if (d.action === "dismiss") return { status: "dismissed", note: String(d.reason || "").slice(0, 200) };
     if (d.action === "unmatched") {
       await finding(cfg.mode, `unmatched_${item.id}`, { number: String(d.bestGuess || ""), type: "unmatched_plan",
+        extra: { item: item.id, bestGuess: String(d.bestGuess || ""), canFile: !!item.inboxFileId, filename: item.filename || "", from: item.from || "" },
         summary: `Plan not matched: ${item.filename || item.link || "link"} from ${item.from}${d.bestGuess ? ` — best guess ${d.bestGuess}` : ""}${d.reason ? ` (${String(d.reason).slice(0, 120)})` : ""}`,
         links: [...(item.inboxFileId ? [{ label: "File", url: `https://drive.google.com/file/d/${item.inboxFileId}/view` }] : []), { label: "Email", url: item.gmailLink }] });
       return { status: "unmatched", note: String(d.reason || "").slice(0, 200) };
@@ -768,6 +769,72 @@ module.exports = function makePlanIntake(deps) {
         log.warn("planRoutineApi failed", { error: e.message });
         res.status(e.code && e.code >= 400 && e.code < 600 ? e.code : 500).json({ error: String(e.message || e).slice(0, 300) });
       }
+    });
+
+  // ══ Phase 4 — delivery (PLAN_INTAKE_SPEC.md, Koy 2026-10-04) ═══════════════
+  // 5 pm summary email (Resend, to koywilkinson@gmail.com until the domain is
+  // verified — config.digestTo overrides), 6:30 am walk push to Koy, and
+  // "file it from the card" for plans the Routine wasn't sure about.
+  const DIGEST = require("./digest.js");
+  const planIntakeDigest = functions.pubsub.schedule("0 17 * * *").timeZone(TZ).onRun(async () => {
+    const cfg = await loadConfig();
+    if (cfg.mode !== "live" || !sendGcMail) return null;
+    const day = today();
+    const snap = await db.collection(FINDINGS).where("day", "==", day).get();
+    const rows = snap.docs.filter(d => !/^(dry|test)_/.test(d.id)).map(d => d.data());
+    const mail = DIGEST.digestEmail({ day, findings: rows });
+    const cfgRef = db.collection(STATE).doc("config");
+    if (!mail.total) { await cfgRef.set({ lastDigest: { at: nowIso(), day, sent: false, reason: "nothing today" } }, { merge: true }); return null; }
+    const to = String(cfg.digestTo || "koywilkinson@gmail.com");
+    const sent = await sendGcMail({ to, subject: mail.subject, html: mail.html });
+    await cfgRef.set({ lastDigest: { at: nowIso(), day, sent: !!sent, to, total: mail.total, needs: mail.needs } }, { merge: true });
+    if (!sent && sendToName) await sendToName("Koy", { title: "Plan intake summary didn't send", body: `${mail.subject} — open Today → Plans`, view: "today" }).catch(() => {});
+    return null;
+  });
+
+  const planIntakeWalkPush = functions.pubsub.schedule("30 6 * * *").timeZone(TZ).onRun(async () => {
+    const cfg = await loadConfig();
+    if (cfg.mode !== "live" || !sendToName) return null;
+    const day = today();
+    const snap = await db.collection(STATE).where("walkDate", "==", day).get();
+    const walks = snap.docs.filter(d => d.id.startsWith("walk_")).map(d => d.data()).filter(w => w.type === "walk");
+    const quotes = {};
+    for (const w of walks) {
+      if (!w.quoteNo || quotes[w.quoteNo]) continue;
+      const q = (await db.collection(STATE).doc(`quote_${w.quoteNo}`).get()).data() || {};
+      quotes[w.quoteNo] = { folderName: q.renamedTo || q.folderName || "", filedCount: Object.values(q.ledger || {}).filter(x => x && x.status === "copied").length };
+    }
+    const push = DIGEST.walkPush(walks, quotes);
+    if (push) await sendToName("Koy", { ...push, view: "today" });
+    return null;
+  });
+
+  const planFileByHand = functions
+    .runWith({ timeoutSeconds: 120 })
+    .https.onCall(async (data) => {
+      const user = await requireAdmin(data);              // app key + name + PIN, admin/manager tier
+      const isHead = Array.isArray(user.caps) && user.caps.includes("resi.head");
+      if (!isHead && gcAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "Only the Head of Residential can file plans from the card.");
+      const cfg = await loadConfig();
+      if (cfg.mode !== "live") throw new functions.https.HttpsError("failed-precondition", `plan intake is in ${cfg.mode} mode`);
+      const itemId = String((data && data.item) || "");
+      if (!itemId || /^(dry|test)_/.test(itemId)) throw new functions.https.HttpsError("not-found", "No such plan.");
+      const iref = db.collection(QUEUE).doc(itemId);
+      const item = { id: itemId, ...((await iref.get()).data() || {}) };
+      if (item.type !== "email_pdf") throw new functions.https.HttpsError("not-found", "No such plan.");
+      if (!["open", "unmatched"].includes(item.status)) throw new functions.https.HttpsError("failed-precondition", `This plan is already ${item.status}.`);
+      const { drive, auth } = driveFullClient();
+      const started = Date.now();
+      const ctx = { cfg, drive, auth, deadline: () => 100 * 1000 - (Date.now() - started) };
+      let out;
+      try {
+        out = await decide(ctx, item, { action: "file", kind: data.kind === "quote" ? "quote" : "job", number: data.number, category: data.category, rev: data.rev, date: data.date, reason: `filed by ${user.name} from the Plans card` });
+      } catch (e) {
+        throw new functions.https.HttpsError(e.code === 409 ? "failed-precondition" : e.code === 422 ? "invalid-argument" : "internal", String(e.message || e));
+      }
+      await iref.update({ status: out.status, decision: { action: "file", number: String(data.number || ""), category: String(data.category || ""), by: user.name, note: out.note, at: nowIso() }, decidedAt: nowIso() });
+      await db.collection(FINDINGS).doc(`unmatched_${itemId}`).set({ seen: true, seenAt: nowIso(), seenBy: user.name }, { merge: true }).catch(() => {});
+      return { ok: true, name: out.note };
     });
 
   // ── The run ─────────────────────────────────────────────────────────────
@@ -880,5 +947,5 @@ module.exports = function makePlanIntake(deps) {
       return { linked: true, folderId: st.folderId, folderName };
     });
 
-  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide };
+  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide };
 };
