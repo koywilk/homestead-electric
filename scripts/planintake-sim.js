@@ -15,7 +15,7 @@ const { planDocPull } = require("../functions/docPull.js");
 const PARENT = "PARENT";
 const eq = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), m);
 
-function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [] } = {}) {
+function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [] } = {}) {
   // ── Firestore ──
   const store = new Map();               // "coll/id" → object
   const writes = [];
@@ -47,7 +47,7 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [] } = {}) {
     },
   });
   const db = {
-    collection: (coll) => ({ doc: (id) => docRef(coll, id), where: (f, op, v) => query(coll, [[f, op, v]]) }),
+    collection: (coll) => ({ doc: (id) => docRef(coll, id), where: (f, op, v) => query(coll, [[f, op, v]]), get: () => query(coll, []).get() }),
     async runTransaction(fn) { return fn({ get: (r) => r.get(), update: (r, v) => r.update(v), set: (r, v, o) => r.set(v, o) }); },
   };
   for (const [id, data] of Object.entries(ccJobs)) store.set(`jobs/${id}`, { data, updated_at: "x" });
@@ -60,8 +60,8 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [] } = {}) {
   for (const f of seedFiles) files.set(f.id, { mimeType: "application/pdf", ...f });
   const drive = { files: {
     async list({ q }) { const pid = q.match(/'([^']+)' in parents/)[1]; return { data: { files: [...files.values()].filter(f => f.parents.includes(pid)) } }; },
-    async create({ requestBody }) { const id = `F${nextId++}`; files.set(id, { id, name: requestBody.name, mimeType: requestBody.mimeType, parents: requestBody.parents }); driveLog.push(["create", requestBody.name]); return { data: { id } }; },
-    async get({ fileId }) { const f = files.get(fileId); if (!f) throw new Error("404"); return { data: { ...f } }; },
+    async create({ requestBody }) { const id = `F${String(nextId++).padStart(12, "0")}`; /* Drive-length ids: the real id check wants 10+ */ files.set(id, { id, name: requestBody.name, mimeType: requestBody.mimeType, parents: requestBody.parents }); driveLog.push(["create", requestBody.name]); return { data: { id } }; },
+    async get({ fileId, alt }) { const f = files.get(fileId); if (!f) throw new Error("404"); if (alt === "media") return { data: f.content || Buffer.alloc(0) }; const { content, ...meta } = f; return { data: meta }; },
     async update({ fileId, requestBody, addParents, removeParents }) {
       const f = files.get(fileId);
       if (requestBody && requestBody.name) f.name = requestBody.name;
@@ -72,7 +72,7 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [] } = {}) {
     async delete() { throw new Error("DELETE CALLED — never allowed"); },
   } };
   const upload = async (auth, { name, parentId, buffer }) => {
-    const id = `U${nextId++}`; files.set(id, { id, name, mimeType: "application/pdf", parents: [parentId], md5Checksum: crypto.createHash("md5").update(buffer).digest("hex") });
+    const id = `U${String(nextId++).padStart(12, "0")}`; files.set(id, { id, name, mimeType: "application/pdf", parents: [parentId], md5Checksum: crypto.createHash("md5").update(buffer).digest("hex"), content: buffer });
     driveLog.push(["upload", name]); return id;
   };
 
@@ -117,12 +117,17 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [] } = {}) {
   const google = {
     auth: { GoogleAuth: function () {}, OAuth2: class { constructor(id, sec) { this.id = id; } setCredentials(c) { this.c = c; } } },
     calendar: () => ({ events: { list: async () => ({ data: { items: events } }) } }),
+    gmail: () => ({ users: { messages: {
+      list: async () => ({ data: { messages: mail.map(m => ({ id: m.id })).reverse() } }),
+      get: async ({ id }) => ({ data: mail.find(m => m.id === id) }),
+      attachments: { get: async ({ messageId, id }) => ({ data: { data: Buffer.from(mail.find(m => m.id === messageId).bytes[id]).toString("base64").replace(/\+/g, "-").replace(/\//g, "_") } }) },
+    } } }),
   };
   const pushes = [];
   const HttpsError = class extends Error { constructor(code, msg) { super(msg); this.code = code; } };
-  const chain = { runWith: () => chain, pubsub: { schedule: () => ({ timeZone: () => ({ onRun: (fn) => fn }) }) }, https: { onCall: (fn) => fn, HttpsError }, logger: { info() {}, warn() {}, error() {} } };
+  const chain = { runWith: () => chain, pubsub: { schedule: () => ({ timeZone: () => ({ onRun: (fn) => fn }) }) }, https: { onCall: (fn) => fn, onRequest: (fn) => fn, HttpsError }, logger: { info() {}, warn() {}, error() {} } };
   const pi = makePlanIntake({
-    functions: chain, db, google, TZ: "America/Denver", FieldValue: { arrayUnion: (v) => ({ __arrayUnion: true, v }) },
+    functions: chain, db, google, TZ: "America/Denver", FieldValue: { arrayUnion: (v) => ({ __arrayUnion: true, v }), increment: (n) => n },
     simproReqWithRetry: simpro, driveFullClient: () => ({ drive, auth: {} }), driveUploadResumable: upload, planDocPull,
     jobFolderName: (j) => (j.simproNo ? `#${j.simproNo} - ${j.name}` : j.name), JOBS_PARENT_FOLDER_ID: PARENT,
     requireAppKey: (d) => { if (!d || d._appKey !== "k") throw new HttpsError("permission-denied", "key"); },
@@ -270,5 +275,63 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   eq(w.docs("agentQueue").length, 0, "nothing queued for past walks");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on scenarios passed");
+// 10 ── Phase 2: email capture → _Plan Inbox → Routine API decisions
+{
+  const hdr = (from, subject, extra = []) => [{ name: "From", value: from }, { name: "Subject", value: subject }, ...extra];
+  const pdfPart = (name, id) => ({ filename: name, mimeType: "application/pdf", body: { attachmentId: id, size: 10 } });
+  const body = (t) => ({ mimeType: "text/plain", body: { data: Buffer.from(t).toString("base64") } });
+  const mail = [
+    { id: "m1", threadId: "t1", internalDate: String(Date.parse("2026-10-04T15:00:00Z")), bytes: { a: "%PDF-co" },
+      payload: { headers: hdr("bids@homesteadelectric.net", "Quote/Change Order Approved - Tuhaye Hollow"), parts: [pdfPart("CO.pdf", "a")] } },
+    { id: "m2", threadId: "t2", internalDate: String(Date.parse("2026-10-04T16:00:00Z")), bytes: { a: "%PDF-cabinets-rev2" },
+      payload: { headers: hdr("Josh <josh@homesteadelectric.net>", "Fwd: Tolbert cabinets"), parts: [body("Updated cabinets attached"), pdfPart("Tolbert Cabinets Rev 2.pdf", "a")] } },
+    { id: "m3", threadId: "t3", internalDate: String(Date.parse("2026-10-04T17:00:00Z")), bytes: { a: "%PDF-cabinets-rev2" },
+      payload: { headers: hdr("designer@studio.com", "cabinets again"), parts: [pdfPart("copy.pdf", "a")] } },
+    { id: "m4", threadId: "t4", internalDate: String(Date.parse("2026-10-04T18:00:00Z")), bytes: {},
+      payload: { headers: hdr("gc@builder.com", "plans link"), parts: [body("Set is here https://app.box.com/s/abc123xyz")] } },
+  ];
+  const w = world({ ccJobs: { j1407: { name: "Tolbert Residence", simproNo: "1407", driveFolderId: "" } }, mail });
+  w.setMode("live", { mailSince: "2026-10-04T00:00:00Z" });
+  const c10 = await (w.pi._runOnce());
+  if (process.env.SIMDEBUG) console.log("RUN10", JSON.stringify(c10), JSON.stringify(w.get("jobs/j1407")));
+  const q = w.docs("agentQueue").filter(x => x.type === "email_pdf");
+  eq(q.map(x => x.source).sort(), ["attachment", "box link"], "CO approval skipped, duplicate dropped, attachment + Box link queued");
+  const item = q.find(x => x.source === "attachment");
+  const inbox = [...w.files.values()].find(f => f.name === "_Plan Inbox");
+  assert(inbox && inbox.parents[0] === PARENT, "_Plan Inbox made under the jobs parent");
+  eq(w.files.get(item.inboxFileId).parents, [inbox.id], "PDF copied into _Plan Inbox");
+  eq(item.from, "josh@homesteadelectric.net", "sender recorded");
+  eq(w.get("planIntakeState/mail_m1").status, "skipped", "skip recorded so it is never re-read");
+  eq(w.get("planIntakeState/mail_m3").status, "duplicate", "same bytes from another email = duplicate");
+
+  const TOKEN = "f".repeat(64);
+  process.env.PLAN_ROUTINE_TOKEN = TOKEN;
+  const call = async (method, path, { body: b = {}, query = {}, token = TOKEN } = {}) => {
+    const res = { code: 200, status(c) { this.code = c; return this; }, json(o) { this.body = o; return this; }, set() { return this; }, send(x) { this.body = x; return this; } };
+    await w.pi.planRoutineApi({ method, path, query, body: b, get: (h) => (h.toLowerCase() === "authorization" && token ? `Bearer ${token}` : "") }, res);
+    return res;
+  };
+  eq((await call("GET", "/work", { token: "x".repeat(64) })).code, 401, "wrong key refused");
+  const work = await call("GET", "/work");
+  assert(work.body.items.some(x => x.id === item.id) && work.body.categories.includes("cabinet"), "/work lists the queue + categories");
+  const file = await call("GET", "/file", { query: { item: item.id } });
+  eq(Buffer.from(file.body).toString(), "%PDF-cabinets-rev2", "/file returns the queued PDF");
+  eq((await call("POST", "/decide", { body: { item: item.id, action: "file", kind: "job", number: "1407", category: "invoice" } })).code, 422, "unknown category refused");
+  const ok = await call("POST", "/decide", { body: { item: item.id, action: "file", kind: "job", number: "1407", category: "cabinet", rev: "2", date: "2026-10-04", reason: "title block: Tolbert, 1326 S 5360 E" } });
+  if (!ok.body.ok) console.log("DECIDE:", ok.code, JSON.stringify(ok.body));
+  eq(ok.body.note, "#1407 – Rev 2 – 2026-10-04 – Tolbert Cabinets Rev 2.pdf", "filed with Koy's name");
+  const moved = w.files.get(item.inboxFileId);
+  const cab = w.files.get(moved.parents[0]), cur = w.files.get(cab.parents[0]);
+  eq([cab.name, cur.name, w.files.get(cur.parents[0]).id], ["CABINET PLANS", "MOST UPDATED", w.get("jobs/j1407").data.driveFolderId], "moved into the job's MOST UPDATED / CABINET PLANS");
+  eq((await call("POST", "/decide", { body: { item: item.id, action: "file", kind: "job", number: "1407", category: "cabinet" } })).code, 409, "a decided item can't be decided twice");
+  const box = q.find(x => x.source === "box link");
+  eq((await call("POST", "/decide", { body: { item: box.id, action: "file", kind: "job", number: "1407", category: "plans" } })).code, 422, "a link-only item can't be filed");
+  eq((await call("POST", "/decide", { body: { item: box.id, action: "unmatched", bestGuess: "#1407", reason: "Box link — needs a person" } })).body.status, "unmatched", "link-only → unmatched with a best guess");
+  assert(w.docs("agentFindings").some(f => f.type === "plans_filed" && /CABINET PLANS/.test(f.summary)), "filing logged");
+  assert(w.docs("agentFindings").some(f => f.type === "unmatched_plan" && /best guess #1407/.test(f.summary)), "unmatched logged with the guess");
+  eq((await call("POST", "/decide", { body: { item: "dry_x", action: "dismiss" } })).code, 404, "items from another mode are invisible");
+  eq(w.driveLog.filter(x => x[0] === "delete").length, 0, "nothing deleted");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -7431,3 +7431,5 @@ const _planIntake = require("./planIntake/watcher.js")({
 });
 exports.planIntakeWatcher = _planIntake.planIntakeWatcher;
 exports.linkQuoteFolder   = _planIntake.linkQuoteFolder;
+// Phase 2: the Claude Code Routine's only door in (bearer token PLAN_ROUTINE_TOKEN).
+exports.planRoutineApi    = _planIntake.planRoutineApi;

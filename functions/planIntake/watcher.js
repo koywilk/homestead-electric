@@ -19,6 +19,7 @@
 const crypto = require("crypto");
 const W = require("./walks.js");
 const { cleanName } = require("../docPull.js");
+const MAIL = require("./mail.js");
 
 const STATE = "planIntakeState", QUEUE = "agentQueue", FINDINGS = "agentFindings";
 const QUOTES_FOLDER = "_Quotes";
@@ -254,6 +255,7 @@ module.exports = function makePlanIntake(deps) {
         const driveId = await driveUploadResumable(auth, { name: c.name, mime: c.mime, parentId, buffer });
         md5s.add(md5);
         ledger[`${kind}_${c.id}`] = { status: "copied", name: c.name, folder: c.folderName, md5, driveId, at: nowIso() };
+        await md5Mark(cfg.mode, md5, { fileId: driveId, where: `simpro ${kind} ${no}`, name: c.name }).catch(() => {});   // so an emailed copy is known
         copied.push(`${SIMPRO_DIR}/${c.folderName ? `${c.folderName}/` : ""}${c.name}`);
       } catch (e) {
         log.warn("planIntake: file copy failed", { kind, no, file: c.name, error: e.message });   // no ledger mark → retried next run
@@ -493,6 +495,278 @@ module.exports = function makePlanIntake(deps) {
     }
   }
 
+  // ══ Phase 2 — email intake (PLAN_INTAKE_SPEC.md, Koy 2026-10-04) ═══════════
+  // Koy's mailbox only, read-only, from config.mailSince on. Rule skips drop the
+  // automated mail; every other PDF (attachment, or a Drive / Dropbox link) is
+  // copied to <jobs parent>/_Plan Inbox and queued as `email_pdf` for the Routine.
+  // Box links can't be fetched without Box's API → queued as a link to look at.
+  const INBOX_FOLDER = "_Plan Inbox";
+  const MAX_FETCH_BYTES = 150 * 1024 * 1024;
+  const gmailLink = (threadId) => `https://mail.google.com/mail/?authuser=koy%40homesteadelectric.net#all/${threadId}`;
+  const md5Of = (buf) => crypto.createHash("md5").update(buf).digest("hex");
+  async function md5Seen(mode, md5) { return (await db.collection(STATE).doc(`${prefixOf(mode)}md5_${md5}`).get()).data() || null; }
+  async function md5Mark(mode, md5, where) { await db.collection(STATE).doc(`${prefixOf(mode)}md5_${md5}`).set({ type: "md5", mode, ...where, at: nowIso() }, { merge: true }); }
+  async function inboxId(ctx) {
+    if (ctx.inboxId) return ctx.inboxId;
+    const f = await findOrMakeFolder(ctx.drive, homeParent(ctx.cfg), INBOX_FOLDER, { create: ctx.cfg.mode !== "dry" });
+    ctx.inboxId = f.id; return f.id;
+  }
+  async function senderHistory(mode, email) {
+    const d = (await db.collection(STATE).doc(`${prefixOf(mode)}sender_${email}`).get()).data();
+    return d && d.numbers ? d.numbers : {};
+  }
+
+  async function processMail(ctx, counts) {
+    const { cfg, drive, auth } = ctx;
+    if (!cfg.mailSince) return;                                   // email intake not switched on yet
+    const gmail = google.gmail({ version: "v1", auth: calendarAuth() });
+    const after = Math.floor(Date.parse(cfg.mailSince) / 1000);
+    const q = `after:${after} -in:sent -in:chats -in:spam -in:trash (filename:pdf OR "drive.google.com" OR "dropbox.com" OR "box.com")`;
+    const ids = []; let pageToken;
+    do {
+      const r = await gmail.users.messages.list({ userId: "me", q, maxResults: 100, pageToken });
+      ids.push(...(r.data.messages || []).map(m => m.id)); pageToken = r.data.nextPageToken;
+    } while (pageToken && ids.length < 300);
+    counts.mail = counts.mail || { seen: 0, skipped: 0, queued: 0, duplicate: 0, links: 0 };
+    for (const id of ids.reverse()) {                              // oldest first
+      if (ctx.deadline() < 120 * 1000) break;
+      const sref = db.collection(STATE).doc(`${prefixOf(cfg.mode)}mail_${id}`);
+      if ((await sref.get()).exists) continue;
+      const msg = (await gmail.users.messages.get({ userId: "me", id, format: "full" })).data;
+      counts.mail.seen++;
+      const from = MAIL.senderEmail(msg), subject = MAIL.header(msg, "Subject");
+      const date = new Date(Number(msg.internalDate) || Date.now()).toLocaleDateString("en-CA", { timeZone: TZ });
+      const base = { type: "mail", mode: cfg.mode, from, subject, date, threadId: msg.threadId, at: nowIso() };
+      const skip = MAIL.skipReason(msg);
+      if (skip) {
+        await sref.set({ ...base, status: "skipped", reason: skip });
+        counts.mail.skipped++; continue;
+      }
+      const body = MAIL.bodyText(msg);
+      const history = await senderHistory(cfg.mode, from);
+      const ctxItem = { from, subject, date, threadId: msg.threadId, gmailLink: gmailLink(msg.threadId), body: body.slice(0, 1500), senderHistory: history };
+      let n = 0, queued = 0;
+      const ingest = async (buffer, filename, source) => {
+        n++;
+        const md5 = md5Of(buffer);
+        const seen = await md5Seen(cfg.mode, md5);
+        if (seen) { counts.mail.duplicate++; return; }
+        let fileId = "";
+        if (cfg.mode !== "dry") {
+          const name = `${date} – ${String(filename || "plans.pdf").replace(/[\\/]/g, "-")}`;
+          fileId = await driveUploadResumable(auth, { name, mime: "application/pdf", parentId: await inboxId(ctx), buffer });
+          await md5Mark(cfg.mode, md5, { fileId, where: "inbox", name });
+        }
+        await enqueue(cfg.mode, `email_${id}_${n}`, { type: "email_pdf", ...ctxItem, filename, source, md5, bytes: buffer.length, inboxFileId: fileId });
+        queued++;
+      };
+      for (const p of MAIL.pdfParts(msg)) {
+        try {
+          const a = await gmail.users.messages.attachments.get({ userId: "me", messageId: id, id: p.attachmentId });
+          await ingest(Buffer.from(String(a.data.data || "").replace(/-/g, "+").replace(/_/g, "/"), "base64"), p.filename, "attachment");
+        } catch (e) { counts.errors.push(`mail attachment ${p.filename}: ${e.message}`.slice(0, 200)); }
+      }
+      for (const l of MAIL.shareLinks(body)) {
+        counts.mail.links++;
+        try {
+          if (l.kind === "drive") {
+            const f = (await drive.files.get({ fileId: l.id, fields: "id,name,mimeType,size", supportsAllDrives: true })).data;
+            if (!/pdf/i.test(f.mimeType || "")) continue;
+            if (Number(f.size) > MAX_FETCH_BYTES) throw new Error("too large");
+            const r = await drive.files.get({ fileId: l.id, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+            await ingest(Buffer.from(r.data), f.name, "drive link");
+          } else if (l.kind === "dropbox") {
+            const r = await fetch(l.direct, { redirect: "follow" });
+            if (!r.ok) throw new Error(`Dropbox ${r.status}`);
+            const buf = Buffer.from(await r.arrayBuffer());
+            if (buf.length > MAX_FETCH_BYTES || buf.slice(0, 5).toString() !== "%PDF-") continue;   // folders / non-PDFs are left for a person
+            const name = decodeURIComponent((l.url.split("?")[0].split("/").pop() || "dropbox.pdf"));
+            await ingest(buf, /\.pdf$/i.test(name) ? name : `${name}.pdf`, "dropbox link");
+          } else {
+            n++;
+            await enqueue(cfg.mode, `email_${id}_${n}`, { type: "email_pdf", ...ctxItem, filename: "", source: "box link", link: l.url, inboxFileId: "" });
+            queued++;
+          }
+        } catch (e) {
+          // A link we can't open (private Drive file, expired Dropbox) still goes to the Routine as a link.
+          n++;
+          await enqueue(cfg.mode, `email_${id}_${n}`, { type: "email_pdf", ...ctxItem, filename: "", source: `${l.kind} link (not fetched: ${String(e.message).slice(0, 60)})`, link: l.url, inboxFileId: "" });
+          queued++;
+        }
+      }
+      counts.mail.queued += queued;
+      await sref.set({ ...base, status: queued ? "queued" : (n ? "duplicate" : "no pdf"), pieces: n, queued });
+    }
+  }
+
+  // Once a day: the jobs + open quotes the Routine may file against, with
+  // addresses — so the Routine never needs Simpro or Firestore access itself.
+  async function refreshCandidates(ctx, counts) {
+    const ref = db.collection(STATE).doc("candidates");
+    const prev = (await ref.get()).data() || {};
+    if (prev.at && Date.now() - Date.parse(prev.at) < 20 * 3600 * 1000) return;
+    if (ctx.deadline() < 240 * 1000) return;
+    const snap = await db.collection("jobs").get();
+    const jobs = [], appQuotes = [];
+    for (const d of snap.docs) {
+      const j = d.data().data || {};
+      if (j.deleted || j.archived) continue;
+      const row = { name: String(j.name || ""), address: String(j.address || ""), gc: String(j.gc || ""), hasFolder: !!String(j.driveFolderId || "").trim() };
+      if (j.type === "quote") { if (/^\d+$/.test(String(j.simproQuoteNo || ""))) appQuotes.push({ number: String(j.simproQuoteNo), ...row }); }
+      else if (/^\d+$/.test(String(j.simproNo || "").trim())) jobs.push({ number: String(j.simproNo).trim(), ...row });
+    }
+    const siteAddr = { ...(prev.siteAddr || {}) };
+    const quotes = [];
+    const cutoff = new Date(Date.now() - 180 * 86400e3).toISOString().slice(0, 10);
+    for (let page = 1; page <= 3; page++) {
+      const rows = await sget(`/quotes/?pageSize=250&page=${page}&orderby=-ID&columns=ID,Name,Site,DateIssued,IsClosed,Stage,LinkedJobID`);
+      if (!Array.isArray(rows) || !rows.length) break;
+      for (const q of rows) {
+        if (String(q.DateIssued || "") < cutoff || q.IsClosed || q.Stage === "Archived" || q.LinkedJobID) continue;
+        const sid = q.Site && q.Site.ID;
+        if (sid && siteAddr[sid] === undefined && ctx.deadline() > 120 * 1000) {
+          const s = await sget(`/sites/${sid}`).catch(() => null);
+          siteAddr[sid] = s && s.Address ? [s.Address.Address, s.Address.City].filter(Boolean).join(", ").trim() : "";
+        }
+        quotes.push({ number: String(q.ID), name: String(q.Name || ""), site: (q.Site && q.Site.Name) || "", address: siteAddr[sid] || "", issued: q.DateIssued });
+      }
+      if (String(rows[rows.length - 1].DateIssued || "") < cutoff) break;
+    }
+    await ref.set({ at: nowIso(), jobs, appQuotes, quotes, siteAddr });
+    counts.candidates = { jobs: jobs.length, quotes: quotes.length };
+  }
+
+  // ══ Routine API (Phase 2) ═══════════════════════════════════════════════
+  // The Routine's ONLY door in: bearer token (secret PLAN_ROUTINE_TOKEN, held by
+  // the Routine as an API credential). It can read the queue, fetch a queued
+  // PDF, and post a decision; this function does every move and write, and
+  // only ever moves a queued file out of _Plan Inbox into a plan folder.
+  const ROUTINE_SECRET = "PLAN_ROUTINE_TOKEN";
+  const CATS = Object.keys(MAIL.CATEGORIES);
+  function tokenOk(req) {
+    const want = String(process.env[ROUTINE_SECRET] || "");
+    const got = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (want.length < 32 || got.length !== want.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+  }
+  async function currentFolder(drive, folderId, create) {
+    const meta = (await drive.files.get({ fileId: folderId, fields: "id,name", supportsAllDrives: true })).data;
+    if (/most\s*updated/i.test(meta.name || "")) return meta.id;                 // job linked straight to MOST UPDATED (Koplin)
+    await ensureSkeleton(drive, folderId, { create });
+    const kids = (await listChildren(drive, folderId)).filter(f => f.mimeType === FOLDER_MIME);
+    const cur = kids.find(f => /most\s*updated/i.test(f.name || ""));
+    return cur ? cur.id : "";
+  }
+  async function folderFor(ctx, kind, number) {
+    if (kind === "job") {
+      const js = await ccJobsBy("simproNo", number);
+      if (js.length !== 1) throw Object.assign(new Error(js.length ? `${js.length} app jobs carry #${number}` : `no app job #${number}`), { code: 422 });
+      const id = folderIdOf(js[0].driveFolderId);
+      if (!id) throw Object.assign(new Error(`job #${number} has no Drive folder yet`), { code: 422 });
+      return { folderId: id, jobId: js[0].id };
+    }
+    const st = (await db.collection(STATE).doc(`${prefixOf(ctx.cfg.mode)}quote_${number}`).get()).data();
+    if (st && st.folderId) return { folderId: st.folderId };
+    const q = await sget(`/quotes/${encodeURIComponent(number)}?columns=ID,Name,Site`).catch(() => null);
+    if (!q || !q.ID) throw Object.assign(new Error(`no Simpro quote ${number}`), { code: 422 });
+    const made = await ensureQuoteFolder(ctx, number, { quoteName: q.Name || "", siteName: (q.Site && q.Site.Name) || "", source: "email" });
+    return { folderId: made.folderId };
+  }
+  async function decide(ctx, item, d) {
+    const { cfg, drive } = ctx;
+    const live = cfg.mode !== "dry";
+    if (d.action === "dismiss") return { status: "dismissed", note: String(d.reason || "").slice(0, 200) };
+    if (d.action === "unmatched") {
+      await finding(cfg.mode, `unmatched_${item.id}`, { number: String(d.bestGuess || ""), type: "unmatched_plan",
+        summary: `Plan not matched: ${item.filename || item.link || "link"} from ${item.from}${d.bestGuess ? ` — best guess ${d.bestGuess}` : ""}${d.reason ? ` (${String(d.reason).slice(0, 120)})` : ""}`,
+        links: [...(item.inboxFileId ? [{ label: "File", url: `https://drive.google.com/file/d/${item.inboxFileId}/view` }] : []), { label: "Email", url: item.gmailLink }] });
+      return { status: "unmatched", note: String(d.reason || "").slice(0, 200) };
+    }
+    if (d.action === "match_walk") {
+      if (item.type !== "walk_unmatched") throw Object.assign(new Error("match_walk is for walk items"), { code: 422 });
+      const number = String(d.number || "").replace(/\D/g, "");
+      if (d.kind === "job") {
+        await finding(cfg.mode, `walk_job_${item.eventId}`, { number, type: "walk_existing_job", summary: `Walk on existing job #${number}: ${item.title} (${item.walkDate}) — matched by the Routine` });
+        return { status: "done", note: `existing job #${number}` };
+      }
+      const q = await sget(`/quotes/${number}?columns=ID,Name,Site`).catch(() => null);
+      if (!q || !q.ID) throw Object.assign(new Error(`no Simpro quote ${number}`), { code: 422 });
+      await ensureQuoteFolder(ctx, number, { eventId: item.eventId, quoteName: q.Name || "", siteName: (q.Site && q.Site.Name) || "", walkTitle: item.title, walkDate: item.walkDate, source: "walk (Routine)" });
+      await db.collection(STATE).doc(`${prefixOf(cfg.mode)}walk_${item.eventId}`).set({ status: "matched", quoteNo: number, matchedBy: "routine" }, { merge: true });
+      return { status: "done", note: `quote #${number}` };
+    }
+    if (d.action !== "file") throw Object.assign(new Error(`unknown action ${d.action}`), { code: 422 });
+    if (item.type !== "email_pdf" || !item.inboxFileId) throw Object.assign(new Error("only a fetched email PDF can be filed"), { code: 422 });
+    const kind = d.kind === "quote" ? "quote" : "job";
+    const number = String(d.number || "").replace(/\D/g, "");
+    if (!number) throw Object.assign(new Error("number required"), { code: 422 });
+    const cat = String(d.category || "").toLowerCase();
+    if (!CATS.includes(cat)) throw Object.assign(new Error(`category must be one of ${CATS.join(", ")}`), { code: 422 });
+    const name = MAIL.filedName({ number, kind, rev: d.rev, date: d.date || item.date, original: item.filename });
+    if (!live) return { status: "decided_dry", note: `would file as ${name}` };
+    const { folderId } = await folderFor(ctx, kind, number);
+    const cur = await currentFolder(drive, folderId, true);
+    if (!cur) throw Object.assign(new Error("no MOST UPDATED folder"), { code: 500 });
+    const kids = (await listChildren(drive, cur)).filter(f => f.mimeType === FOLDER_MIME).map(f => f.name);
+    const cf = MAIL.categoryFolder(cat, kids);
+    const targetId = cf.name ? (await findOrMakeFolder(drive, cur, cf.name, { create: true })).id : cur;
+    const f = (await drive.files.get({ fileId: item.inboxFileId, fields: "id,parents", supportsAllDrives: true })).data;
+    const inbox = await inboxId(ctx);
+    if (!(f.parents || []).includes(inbox)) throw Object.assign(new Error("file is no longer in _Plan Inbox — someone moved it"), { code: 409 });
+    await drive.files.update({ fileId: item.inboxFileId, addParents: targetId, removeParents: inbox, requestBody: { name }, fields: "id", supportsAllDrives: true });
+    await md5Mark(cfg.mode, item.md5, { fileId: item.inboxFileId, where: `${kind} ${number}`, name });
+    await db.collection(STATE).doc(`${prefixOf(cfg.mode)}sender_${item.from}`).set({ type: "sender", numbers: { [`${kind === "quote" ? "Q" : "#"}${number}`]: deps.FieldValue.increment(1) } }, { merge: true });
+    await finding(cfg.mode, `filed_${item.id}`, { number: kind === "quote" ? `Q${number}` : number, type: "plans_filed",
+      summary: `Filed "${item.filename}" from ${item.from} into ${kind === "quote" ? "Q" : "#"}${number} / MOST UPDATED${cf.name ? ` / ${cf.name}` : ""} as "${name}"${d.reason ? ` — ${String(d.reason).slice(0, 120)}` : ""}`,
+      links: [{ label: "Folder", url: folderUrl(targetId) }, { label: "Email", url: item.gmailLink }] });
+    return { status: "done", note: name };
+  }
+
+  const planRoutineApi = functions
+    .runWith({ timeoutSeconds: 300, memory: "1GB", secrets: [ROUTINE_SECRET] })
+    .https.onRequest(async (req, res) => {
+      if (!tokenOk(req)) { res.status(401).json({ error: "unauthorized" }); return; }
+      try {
+        const cfg = await loadConfig();
+        const p = prefixOf(cfg.mode);
+        const route = String(req.path || "/").replace(/\/+$/, "") || "/";
+        if (req.method === "GET" && route === "/work") {
+          const snap = await db.collection(QUEUE).where("status", "==", "open").get();
+          const items = snap.docs.filter(d => p ? d.id.startsWith(p) : !/^(dry|test)_/.test(d.id))
+            .map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(0, 40);
+          const cand = (await db.collection(STATE).doc("candidates").get()).data() || {};
+          res.json({ mode: cfg.mode, today: today(), categories: CATS, items, candidates: { at: cand.at, jobs: cand.jobs || [], appQuotes: cand.appQuotes || [], quotes: cand.quotes || [] } });
+          return;
+        }
+        const itemId = String((req.query && req.query.item) || (req.body && req.body.item) || "");
+        if (!itemId || !itemId.startsWith(p) || (!p && /^(dry|test)_/.test(itemId))) { res.status(404).json({ error: "no such item" }); return; }
+        const iref = db.collection(QUEUE).doc(itemId);
+        const item = { id: itemId, ...((await iref.get()).data() || {}) };
+        if (!item.type) { res.status(404).json({ error: "no such item" }); return; }
+        if (req.method === "GET" && route === "/file") {
+          if (!item.inboxFileId) { res.status(404).json({ error: "this item has no fetched file", link: item.link || "" }); return; }
+          const { drive } = driveFullClient();
+          const r = await drive.files.get({ fileId: item.inboxFileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+          res.set("Content-Type", "application/pdf").send(Buffer.from(r.data));
+          return;
+        }
+        if (req.method === "POST" && route === "/decide") {
+          if (item.status !== "open") { res.status(409).json({ error: `item is ${item.status}` }); return; }
+          const { drive, auth } = driveFullClient();
+          const started = Date.now();
+          const ctx = { cfg, drive, auth, deadline: () => 250 * 1000 - (Date.now() - started) };
+          const out = await decide(ctx, item, req.body || {});
+          await iref.update({ status: out.status, decision: { ...(req.body || {}), note: out.note, at: nowIso() }, decidedAt: nowIso() });
+          res.json({ ok: true, ...out });
+          return;
+        }
+        res.status(404).json({ error: "unknown route" });
+      } catch (e) {
+        log.warn("planRoutineApi failed", { error: e.message });
+        res.status(e.code && e.code >= 400 && e.code < 600 ? e.code : 500).json({ error: String(e.message || e).slice(0, 300) });
+      }
+    });
+
   // ── The run ─────────────────────────────────────────────────────────────
   async function runOnce() {
     const started = Date.now();
@@ -513,6 +787,7 @@ module.exports = function makePlanIntake(deps) {
       const { drive, auth } = driveFullClient();
       const ctx = { cfg, drive, auth, deadline: () => RUN_BUDGET_MS - (Date.now() - started) };
       await processWalks(ctx, counts).catch(e => { counts.errors.push(`calendar: ${e.message}`.slice(0, 200)); });
+      await processMail(ctx, counts).catch(e => { counts.errors.push(`mail: ${e.message}`.slice(0, 200)); });
       const p = prefixOf(cfg.mode);
       const snap = await db.collection(STATE).where("type", "==", "quote").get();
       const tracked = snap.docs.filter(d => d.id.startsWith(`${p}quote_`))
@@ -521,6 +796,7 @@ module.exports = function makePlanIntake(deps) {
       const fresh = (await db.collection(STATE).where("type", "==", "quote").get()).docs
         .filter(d => d.id.startsWith(`${p}quote_`)).map(d => ({ ref: d.ref, st: d.data() }));
       await processFiles(ctx, fresh.filter(t => t.st.tracking !== false), counts);
+      await refreshCandidates(ctx, counts).catch(e => { counts.errors.push(`candidates: ${e.message}`.slice(0, 200)); });
     } catch (e) {
       counts.errors.push(String(e.message || e).slice(0, 200));
     } finally {
@@ -601,5 +877,5 @@ module.exports = function makePlanIntake(deps) {
       return { linked: true, folderId: st.folderId, folderName };
     });
 
-  return { planIntakeWatcher, linkQuoteFolder, _runOnce: runOnce, _folderIdOf: folderIdOf };
+  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide };
 };
