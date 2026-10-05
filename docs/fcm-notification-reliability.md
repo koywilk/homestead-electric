@@ -1,6 +1,6 @@
 # FCM Web Notification Reliability: diagnosis, design, verification
 
-Branch `claude/fcm-notification-reliability-l9vl8v` · SW v505 · 2026-10-04 · **not deployed**
+Branch `claude/fcm-notification-reliability-l9vl8v` · SW v509 · 2026-10-05
 
 FCM stays as the browser push transport. The change: the stored notification is now the record, and push is only the alert on top of it. A missed push no longer means a missed notification, and every send attempt is now recorded where we can see it.
 
@@ -83,9 +83,9 @@ Domain event (punch assigned, CO approved, task assigned, nudge, …)
 | `functions/index.js` | New `deliver()` pipeline; `pushRetrySweep` (scheduled); `pushReceipt` (callable); test callables use the shared builder; unknown-name / muted logs; batched stale-token prune; `sendFCM` removed (nothing called it) |
 | `public/firebase-messaging-sw.js` | Own `push` listener that always shows a notification; Firebase SDK load wrapped in try; click → `postMessage` or `openWindow`; receipt ping |
 | `src/App.js` | Foreground push → toast only; click/toast routing for view/task notifications plus mark-read; `nid` cold-open mark-read; unread via its own query; app icon badge; Doctor delivery history; Doctor OS test via the SW registration |
-| `public/service-worker.js` | v504 → v505 |
+| `public/service-worker.js` | v508 → v509 (merged over main) |
 | `public/sops/myday.html` | Step 3: taps work with the app open, mark read; the bell is the record |
-| `FEATURES.md` | v505 entry |
+| `FEATURES.md` | v509 entry |
 | `scripts/notify-delivery-test.js` (new, prebuild) | Pure helpers + full pipeline against an in-memory Firestore/FCM fake |
 | `scripts/sw-push-check.js` (new, `npm run sw-push-check`) | Real Chromium: pushes injected via DevTools protocol |
 
@@ -128,7 +128,7 @@ Also check:
 ### Production rollout (needs Koy's approval; nothing here has been deployed)
 Either deploy order is safe. The old SW handles the new payload (it still reads `title/body/jobId/section/view/needId/tag`). The new SW handles the old payload (it falls back to the old `tag` and `jobId` link). Recommended order:
 1. **Functions first:** `firebase deploy --only functions:pushRetrySweep,functions:pushReceipt` (new), then `firebase deploy --only functions`. Every trigger and callable uses `deliver()`, so the whole codebase has to be redeployed for the new path to take effect. The new scheduled function creates a Cloud Scheduler job.
-2. **Then the app:** merge to `main` → Vercel builds (SW v505 + new `firebase-messaging-sw.js`). Devices pick up the new worker on next open (`reg.update()` on load, `skipWaiting` + `clients.claim`).
+2. **Then the app:** merge to `main` → Vercel builds (SW v509 + new `firebase-messaging-sw.js`). Devices pick up the new worker on next open (`reg.update()` on load, `skipWaiting` + `clients.claim`).
 3. **Watch for 24 h:**
    - Logs Explorer: `jsonPayload.message="[notify] delivery"`. Group by `jsonPayload.status`. Expect mostly `sent`. Look at every `failed` (severity ERROR).
    - `[pushRetrySweep] ran` every 5 min with small `due` counts.
