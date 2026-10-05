@@ -28,7 +28,19 @@ const keeps = [
   msg("Dropbox <no-reply@dropboxmail.com>", "Jake shared \"Bellini Garage\" with you", { extra: [{ name: "List-Unsubscribe", value: "<x>" }] }),
   msg("Google Drive <drive-shares-dm-noreply@google.com>", "Item shared with you: \"Koplin set\"", { extra: [{ name: "List-Unsubscribe", value: "<x>" }] }),
 ];
+// Via OUR bids@ Google Group: every message carries the group's list headers (2026-10-04 replay).
+const viaBids = [{ name: "List-ID", value: "<bids.homesteadelectric.net>" }, { name: "Precedence", value: "list" },
+  { name: "Mailing-list", value: "list bids@homesteadelectric.net; contact bids+owners@homesteadelectric.net" },
+  { name: "List-Unsubscribe", value: "<mailto:googlegroups-manage+790156725398+unsubscribe@googlegroups.com>" }];
+keeps.push(
+  msg("Josh <josh@homesteadelectric.net>", "Fwd: Plans", { extra: viaBids }),
+  msg("cassmosier@gmail.com", "Mosier Project Drawing_V5", { extra: viaBids }),
+  msg("jake@stratfordcreations.com", "Bid for Bellini Garage", { extra: viaBids }),
+);
 for (const m of keeps) eq(M.skipReason(m), "", `keep: ${M.header(m, "Subject")}`);
+eq(M.skipReason(msg("Quantum <malmitchell@quantumltg.com>", "Quantum Fall Showcase 2026 - TOMORROW!", { extra: [{ name: "List-Unsubscribe", value: "<x>" }, { name: "List-ID", value: "<news.quantumltg.com>" }] })), "newsletter", "an outside list is still a newsletter");
+eq(M.skipReason(msg("bids@homesteadelectric.net", "Quote/Change Order Approved - Rose Residence", { extra: viaBids })), "quote/CO approval", "Simpro approvals via the group still skipped");
+eq(M.skipReason(msg("keegan@homesteadelectric.net", "Purchase Order no. 7117 - Skyridge Lot 208", { extra: viaBids })), "purchase order", "POs via the group still skipped");
 eq(M.senderEmail(msg("Josh Cloward <JOSH@homesteadelectric.net>", "x")), "josh@homesteadelectric.net", "sender email lowercased from a display name");
 
 // attachments (nested multipart, non-PDFs ignored)

@@ -26,7 +26,14 @@ function skipReason(msg) {
   // Share notifications carry an unsubscribe header too but can BE the plans
   // ("Dropbox: X shared a folder with you") — never drop those as newsletters.
   const shareService = /(^|\.)(dropbox(mail)?\.com|box\.com|google\.com|buildertrend\.(com|net)|procore\.com|coconstruct\.com|wetransfer\.com)$/.test(from.split("@")[1] || "");
-  if (!shareService && (header(msg, "List-Unsubscribe") || /^(newsletter|marketing)@/.test(from))) return "newsletter";
+  // Mail that reaches Koy through one of OUR Google Groups (bids@ …) carries the
+  // group's own List-* / Precedence headers — on every message, real plans
+  // included ("Fwd: Plans" from Josh, 2026-10-04 replay: 28 of 32 "newsletters"
+  // were bids@ mail). Group headers say nothing about the email itself, so they
+  // never count; the Routine dismisses any marketing that comes that way.
+  const listId = header(msg, "List-ID");
+  const ownGroup = /homesteadelectric\.net>?\s*$/i.test(listId) || /\bhomesteadelectric\.net\b/i.test(header(msg, "Mailing-list"));
+  if (!shareService && !ownGroup && (header(msg, "List-Unsubscribe") || /^(newsletter|marketing)@/.test(from))) return "newsletter";
   return "";
 }
 

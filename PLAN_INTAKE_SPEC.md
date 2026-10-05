@@ -82,6 +82,10 @@ The routine has a daily run cap, so anything rule-based stays in the function.
 4. **Not confident?** Leave the file in `_Plan Inbox` and write an `unmatched_plan` finding with a best-guess number.
 5. Also resolve `walk_unmatched` items from Phase 1 using the same name, builder, and sender clues.
 
+**Residential only (Koy, 2026-10-04: "this is residential only").** Simpro's *Business Group* custom field (on jobs AND quotes) decides; Commercial / Multi Family per `config/app.commercialBusinessGroups` (the commercial-mode setting). A commercial walk gets no folder or card row; the candidates list holds only residential jobs/quotes; the API and the card's File it refuse a commercial job or quote; the Routine dismisses commercial plans, and dismissed PDFs move to `_Plan Inbox/Dismissed` (moved, never deleted).
+
+**Email replay (2026-10-04, 14 days, read-only):** our **bids@ Google Group** stamps list headers on every relayed message, so the newsletter rule was dropping real plans (28 of 32); group headers no longer count. Fixed capture: 158 emails → 42 kept → 48 unique PDFs + 3 links. Residential-only judgment: filed #1454 Brown/Oak Hill 5 (3 files) + Q3183 Sandlin redlines; unsure → card: Mosier (Q3303), Young, Hunt garage, Bellini garage, MLD appliance order; everything commercial dismissed.
+
 **Phase 2 decisions (Koy, 2026-10-04):**
 - **Mailbox:** koy@homesteadelectric.net only (plans to Josh/Brady reach it when forwarded or cc'd). Read via the same one-time sign-in, re-run with read-only Gmail added (`PLAN_INTAKE_GOOGLE_OAUTH`). From go-live on only (`config.mailSince`).
 - **Skip by rule (never queued):** Quote/CO approvals from bids@homesteadelectric.net, "Purchase Order no." emails, receipts + eSignature notices, newsletters/marketing (List-Unsubscribe header). ~200 PDF emails/month, most of them these.

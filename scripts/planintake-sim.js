@@ -15,7 +15,7 @@ const { planDocPull } = require("../functions/docPull.js");
 const PARENT = "PARENT";
 const eq = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), m);
 
-function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [] } = {}) {
+function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], groups = {} } = {}) {
   // ── Firestore ──
   const store = new Map();               // "coll/id" → object
   const writes = [];
@@ -94,6 +94,8 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [] }
     if (p === "/jobs/") return ok([{ ID: 1407, Name: "Tolbert Residence - Wasatch County", Stage: "Progress", DateIssued: "2026-07-15", ConvertedFrom: { ID: 2299, Type: "Quote", Date: "2026-07-15T08:04:33-06:00" } }]);
     if (p === "/quotes/2299") return ok({ ID: 2299, Name: "Tolbert Residence - Wasatch County", Stage: "Complete", IsClosed: true, JobNo: 1407 });
     if (p === "/jobs/1407") return ok({ ID: 1407, Name: "Tolbert Residence - Wasatch County", Site: { ID: 6488, Name: "Tolbert Residence" }, ConvertedFrom: { ID: 2299, Type: "Quote", Date: "2026-07-15T08:04:33-06:00" } });
+    const cf = p.match(/^\/(quotes|jobs)\/(\d+)\/customFields\/$/);
+    if (cf) return ok([{ CustomField: { Name: "Sharepoint URL" }, Value: "" }, { CustomField: { Name: "Business Group" }, Value: groups[`${cf[1].slice(0, -1)}_${cf[2]}`] || "Residential" }]);
     const m = p.match(/^\/(quotes|jobs)\/(\d+)\/attachments\/(folders|files)\/(\d+)?$/);
     if (m) {
       const list = m[1] === "quotes" ? quoteFiles : jobFiles;
@@ -368,5 +370,44 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   assert(/Quote #2299 folder ready · 2 plans in SIMPRO/.test(wp.body), "push names the quote and how many plans are filed");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery scenarios passed");
+// 12 ── residential only (Koy, 2026-10-04): a commercial walk gets nothing; the API refuses commercial; dismiss tidies the inbox
+{
+  const w = world({ ccJobs: { j1407: { name: "Tolbert Residence", simproNo: "1407", driveFolderId: "" } }, groups: { quote_2299: "Commercial" } });
+  w.setMode("live");
+  const c = await (w.pi._runOnce());
+  eq([c.matched, c.commercial], [0, 1], "commercial walk counted, not matched");
+  eq(w.get("planIntakeState/walk_ev1").status, "commercial", "walk marked commercial (terminal)");
+  assert(![...w.files.values()].some(f => /Quote #2299|_Quotes/.test(f.name)), "no quote folder for a commercial walk");
+  assert(!w.docs("agentFindings").some(f => /2299/.test(f.summary)), "no card row for a commercial walk");
+}
+{
+  const hdr = (from, subject) => [{ name: "From", value: from }, { name: "Subject", value: subject }];
+  const mail = [
+    { id: "c1", threadId: "tc1", internalDate: String(Date.parse("2026-10-04T16:00:00Z")), bytes: { a: "%PDF-redwood" },
+      payload: { headers: hdr("jeromy@homesteadelectric.net", "Redwood Sports DUE 10/2"), parts: [{ filename: "Redwood Electrical.pdf", mimeType: "application/pdf", body: { attachmentId: "a", size: 9 } }] } },
+    { id: "c2", threadId: "tc2", internalDate: String(Date.parse("2026-10-04T17:00:00Z")), bytes: { a: "%PDF-hba" },
+      payload: { headers: hdr("hbautah2@hbautah2.gmuser.net", "Don't miss this"), parts: [{ filename: "flyer.pdf", mimeType: "application/pdf", body: { attachmentId: "a", size: 9 } }] } },
+  ];
+  const w = world({ mail, groups: { quote_3308: "Commercial", job_1412: "Commercial" } });
+  w.setMode("live", { mailSince: "2026-10-04T00:00:00Z", walksSince: "2099-01-01T00:00:00Z" });
+  await (w.pi._runOnce());
+  process.env.PLAN_ROUTINE_TOKEN = "f".repeat(64);
+  const call = async (body) => { const res = { code: 200, status(c) { this.code = c; return this; }, json(o) { this.body = o; return this; }, set() { return this; }, send(x) { this.body = x; return this; } };
+    await w.pi.planRoutineApi({ method: "POST", path: "/decide", query: {}, body, get: () => `Bearer ${"f".repeat(64)}` }, res); return res; };
+  const q = w.docs("agentQueue");
+  const red = q.find(x => x.filename === "Redwood Electrical.pdf"), hba = q.find(x => x.filename === "flyer.pdf");
+  const r1 = await call({ item: red.id, action: "file", kind: "quote", number: "3308", category: "plans" });
+  eq([r1.code, /residential only/.test(r1.body.error)], [422, true], "filing into a commercial quote is refused");
+  const r2 = await call({ item: red.id, action: "match_walk", kind: "quote", number: "3308" });
+  eq(r2.code, 422, "match_walk is for walks (and commercial is refused anyway)");
+  const r3 = await call({ item: hba.id, action: "dismiss", reason: "marketing" });
+  eq(r3.body.status, "dismissed", "dismissed");
+  const moved = w.files.get(hba.inboxFileId);
+  eq(w.files.get(moved.parents[0]).name, "Dismissed", "dismissed PDF moved to _Plan Inbox/Dismissed (not deleted)");
+  eq(w.files.get(w.files.get(moved.parents[0]).parents[0]).name, "_Plan Inbox", "…inside _Plan Inbox");
+  const cand = w.get("planIntakeState/candidates");
+  assert(cand && cand.resiOnly === true, "candidates rebuilt residential-only");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });

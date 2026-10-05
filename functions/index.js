@@ -7431,6 +7431,7 @@ const _planIntake = require("./planIntake/watcher.js")({
   sendGcMail,   // Phase 4: the 5 pm plan summary email (Resend)
   requireAdmin, // Phase 4: "file it from the Plans card" (name + PIN, admin/manager)
   gcAccessOf: gcAdminAccessOf,
+  commercialGroups: _commercialGroups,   // residential only: same Commercial / Multi Family setting as commercial mode
 });
 exports.planIntakeWatcher = _planIntake.planIntakeWatcher;
 exports.linkQuoteFolder   = _planIntake.linkQuoteFolder;

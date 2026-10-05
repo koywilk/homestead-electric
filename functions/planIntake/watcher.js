@@ -119,6 +119,28 @@ module.exports = function makePlanIntake(deps) {
     if (!r.ok) throw new Error(`Simpro ${r.status} ${path.split("?")[0]}`);
     return r.data;
   }
+  // ── Residential only (Koy, 2026-10-04: "this is residential only") ────────
+  // Simpro's "Business Group" custom field (jobs AND quotes; one call each,
+  // cached) decides. Commercial / Multi Family per config/app (same setting the
+  // app's commercial mode reads). Unset = residential.
+  const groupCache = new Map();
+  async function businessGroup(kind, no) {
+    const key = `${kind}_${no}`;
+    if (groupCache.has(key)) return groupCache.get(key);
+    const rows = await sget(`/${kind === "quote" ? "quotes" : "jobs"}/${encodeURIComponent(no)}/customFields/`).catch(() => []);
+    const bg = (Array.isArray(rows) ? rows : []).find(x => x && x.CustomField && /^business\s*group$/i.test(String(x.CustomField.Name || "").trim()));
+    const v = bg && bg.Value != null ? String(bg.Value).trim() : "";
+    groupCache.set(key, v);
+    return v;
+  }
+  async function isCommercial(kind, no, ccJob) {
+    if (ccJob && ccJob.division === "commercial") return true;
+    const g = (await businessGroup(kind, no)).toLowerCase();
+    const list = deps.commercialGroups ? await deps.commercialGroups() : ["commercial", "multi family"];
+    return !!g && list.includes(g);
+  }
+  const notResi = (what) => Object.assign(new Error(`${what} is commercial — plan intake is residential only`), { code: 422 });
+
   async function siteFacts(addr, cache) {
     const key = `${addr.number} ${addr.tokens.join(" ")}`;
     if (cache.has(key)) return cache.get(key);
@@ -345,7 +367,7 @@ module.exports = function makePlanIntake(deps) {
       if (cfg.walksSince && startIso && new Date(startIso).getTime() < Date.parse(cfg.walksSince)) continue;
       const ref = db.collection(STATE).doc(`${p}walk_${ev.id}`);
       const prev = (await ref.get()).data();
-      if (prev && ["matched", "existing_job", "queued"].includes(prev.status)) continue;
+      if (prev && ["matched", "existing_job", "queued", "commercial"].includes(prev.status)) continue;
       if (prev && prev.status === "pending" && Date.now() - Date.parse(prev.lastTriedAt || 0) < RETRY_MS) continue;
       const walkDate = String((ev.start && (ev.start.dateTime || ev.start.date)) || "").slice(0, 10);
       const base = {
@@ -376,6 +398,12 @@ module.exports = function makePlanIntake(deps) {
         };
         if (!facts.sites.length) { await pendOrQueue(`no Simpro site at ${c.address.raw}`); continue; }
         const pick = W.pickQuote({ walkDate, quotes: facts.quotes, jobs: facts.jobs, now: today() });
+        if ((pick.result === "quote" && await isCommercial("quote", pick.quoteId)) || (pick.result === "existing_job" && await isCommercial("job", pick.jobId))) {
+          // Residential only: a commercial walk gets no folder and no card row.
+          await ref.set({ ...base, status: "commercial", quoteNo: String(pick.quoteId || ""), jobNo: String(pick.jobId || "") }, { merge: true });
+          counts.commercial = (counts.commercial || 0) + 1;
+          continue;
+        }
         if (pick.result === "quote") {
           const q = facts.quotes.find(x => x.ID === pick.quoteId) || {};
           const site = facts.sites[0] || {};
@@ -531,7 +559,10 @@ module.exports = function makePlanIntake(deps) {
     for (const id of ids.reverse()) {                              // oldest first
       if (ctx.deadline() < 120 * 1000) break;
       const sref = db.collection(STATE).doc(`${prefixOf(cfg.mode)}mail_${id}`);
-      if ((await sref.get()).exists) continue;
+      // Already handled — except mail the pre-v509 rule skipped as a "newsletter":
+      // our bids@ group stamps list headers on everything, so re-check it with the fixed rule.
+      const prev = (await sref.get()).data();
+      if (prev && !(prev.status === "skipped" && prev.reason === "newsletter")) continue;
       const msg = (await gmail.users.messages.get({ userId: "me", id, format: "full" })).data;
       counts.mail.seen++;
       const from = MAIL.senderEmail(msg), subject = MAIL.header(msg, "Subject");
@@ -604,18 +635,20 @@ module.exports = function makePlanIntake(deps) {
   async function refreshCandidates(ctx, counts) {
     const ref = db.collection(STATE).doc("candidates");
     const prev = (await ref.get()).data() || {};
-    if (prev.at && Date.now() - Date.parse(prev.at) < 20 * 3600 * 1000) return;
+    if (prev.at && prev.resiOnly && Date.now() - Date.parse(prev.at) < 20 * 3600 * 1000) return;
     if (ctx.deadline() < 240 * 1000) return;
     const snap = await db.collection("jobs").get();
     const jobs = [], appQuotes = [];
     for (const d of snap.docs) {
       const j = d.data().data || {};
-      if (j.deleted || j.archived) continue;
+      if (j.deleted || j.archived || j.division === "commercial") continue;   // residential only
       const row = { name: String(j.name || ""), address: String(j.address || ""), gc: String(j.gc || ""), hasFolder: !!String(j.driveFolderId || "").trim() };
       if (j.type === "quote") { if (/^\d+$/.test(String(j.simproQuoteNo || ""))) appQuotes.push({ number: String(j.simproQuoteNo), ...row }); }
       else if (/^\d+$/.test(String(j.simproNo || "").trim())) jobs.push({ number: String(j.simproNo).trim(), ...row });
     }
     const siteAddr = { ...(prev.siteAddr || {}) };
+    const groups = { ...(prev.groups || {}) };              // quote # → Business Group, kept between runs
+    const commList = deps.commercialGroups ? await deps.commercialGroups() : ["commercial", "multi family"];
     const quotes = [];
     const cutoff = new Date(Date.now() - 180 * 86400e3).toISOString().slice(0, 10);
     for (let page = 1; page <= 3; page++) {
@@ -628,11 +661,13 @@ module.exports = function makePlanIntake(deps) {
           const s = await sget(`/sites/${sid}`).catch(() => null);
           siteAddr[sid] = s && s.Address ? [s.Address.Address, s.Address.City].filter(Boolean).join(", ").trim() : "";
         }
+        if (groups[q.ID] === undefined && ctx.deadline() > 90 * 1000) groups[q.ID] = await businessGroup("quote", q.ID);
+        if (groups[q.ID] && commList.includes(String(groups[q.ID]).toLowerCase())) continue;   // residential only
         quotes.push({ number: String(q.ID), name: String(q.Name || ""), site: (q.Site && q.Site.Name) || "", address: siteAddr[sid] || "", issued: q.DateIssued });
       }
       if (String(rows[rows.length - 1].DateIssued || "") < cutoff) break;
     }
-    await ref.set({ at: nowIso(), jobs, appQuotes, quotes, siteAddr });
+    await ref.set({ at: nowIso(), resiOnly: true, jobs, appQuotes, quotes, siteAddr, groups });
     counts.candidates = { jobs: jobs.length, quotes: quotes.length };
   }
 
@@ -661,10 +696,12 @@ module.exports = function makePlanIntake(deps) {
     if (kind === "job") {
       const js = await ccJobsBy("simproNo", number);
       if (js.length !== 1) throw Object.assign(new Error(js.length ? `${js.length} app jobs carry #${number}` : `no app job #${number}`), { code: 422 });
+      if (await isCommercial("job", number, js[0])) throw notResi(`job #${number}`);
       const id = folderIdOf(js[0].driveFolderId);
       if (!id) throw Object.assign(new Error(`job #${number} has no Drive folder yet`), { code: 422 });
       return { folderId: id, jobId: js[0].id };
     }
+    if (await isCommercial("quote", number)) throw notResi(`quote #${number}`);
     const st = (await db.collection(STATE).doc(`${prefixOf(ctx.cfg.mode)}quote_${number}`).get()).data();
     if (st && st.folderId) return { folderId: st.folderId };
     const q = await sget(`/quotes/${encodeURIComponent(number)}?columns=ID,Name,Site`).catch(() => null);
@@ -675,7 +712,20 @@ module.exports = function makePlanIntake(deps) {
   async function decide(ctx, item, d) {
     const { cfg, drive } = ctx;
     const live = cfg.mode !== "dry";
-    if (d.action === "dismiss") return { status: "dismissed", note: String(d.reason || "").slice(0, 200) };
+    if (d.action === "dismiss") {
+      // Out of sight, not gone: dismissed PDFs move to _Plan Inbox/Dismissed.
+      if (live && item.inboxFileId) {
+        try {
+          const inbox = await inboxId(ctx);
+          const f = (await drive.files.get({ fileId: item.inboxFileId, fields: "id,parents", supportsAllDrives: true })).data;
+          if ((f.parents || []).includes(inbox)) {
+            const dis = (await findOrMakeFolder(drive, inbox, "Dismissed", { create: true })).id;
+            await drive.files.update({ fileId: item.inboxFileId, addParents: dis, removeParents: inbox, fields: "id", supportsAllDrives: true });
+          }
+        } catch (e) { log.warn("planIntake: dismiss move failed", { item: item.id, error: e.message }); }
+      }
+      return { status: "dismissed", note: String(d.reason || "").slice(0, 200) };
+    }
     if (d.action === "unmatched") {
       await finding(cfg.mode, `unmatched_${item.id}`, { number: String(d.bestGuess || ""), type: "unmatched_plan",
         extra: { item: item.id, bestGuess: String(d.bestGuess || ""), canFile: !!item.inboxFileId, filename: item.filename || "", from: item.from || "" },
@@ -686,6 +736,7 @@ module.exports = function makePlanIntake(deps) {
     if (d.action === "match_walk") {
       if (item.type !== "walk_unmatched") throw Object.assign(new Error("match_walk is for walk items"), { code: 422 });
       const number = String(d.number || "").replace(/\D/g, "");
+      if (await isCommercial(d.kind === "job" ? "job" : "quote", number)) throw notResi(`${d.kind === "job" ? "job" : "quote"} #${number}`);
       if (d.kind === "job") {
         await finding(cfg.mode, `walk_job_${item.eventId}`, { number, type: "walk_existing_job", summary: `Walk on existing job #${number}: ${item.title} (${item.walkDate}) — matched by the Routine` });
         return { status: "done", note: `existing job #${number}` };
