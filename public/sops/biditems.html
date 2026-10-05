@@ -1,0 +1,128 @@
+<!doctype html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-10-05 by Claude when Bid Items
+     moved out of Plans & Links into its own tab (BidItemsPanel). Replace by
+     dropping a SOP Recorder Standalone HTML export over this file, same filename. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bid Items — Crew Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#EEF0F3;--surface:#F4F6F8;--card:#FFF;--border:#E1E4E9;--text:#1B1F24;--dim:#5E6670;--blue:#3B5BA5;--green:#3E7D5A;--red:#B23A3A;--orange:#B06A2C;--head:'Bebas Neue','Arial Narrow',sans-serif;--body:'DM Sans',-apple-system,'Segoe UI',Roboto,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%;padding:18px 16px 64px}
+  .wrap{max-width:760px;margin:0 auto}
+  .kicker{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:6px}
+  h1{font-family:var(--head);font-size:34px;letter-spacing:.05em;margin:0 0 6px;line-height:1.05;font-weight:400}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 22px}
+  .tldr{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--blue);border-radius:10px;padding:15px 16px;margin:0 0 26px}
+  .tldr h2{font-family:var(--head);font-size:19px;letter-spacing:.07em;margin:0 0 8px;color:var(--blue);font-weight:400}
+  .tldr p{margin:0;font-size:14px}
+  h2.sec{font-family:var(--head);font-size:22px;letter-spacing:.07em;margin:34px 0 4px;font-weight:400;padding-bottom:7px;border-bottom:2px solid rgba(59,91,165,.27)}
+  .step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 15px;margin:12px 0;display:flex;gap:13px;align-items:flex-start}
+  .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .body{flex:1;min-width:0}
+  .step h3{margin:0 0 3px;font-size:15px;font-weight:700}
+  .step p{margin:0;font-size:14px}
+  .call{border-radius:9px;padding:12px 14px;margin:12px 0;font-size:14px}
+  .call .lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+  .call p{margin:0}
+  .call.key{background:rgba(59,91,165,.07);border:1px solid rgba(59,91,165,.3)}.call.key .lbl{color:var(--blue)}
+  .call.warn{background:rgba(178,58,58,.06);border:1px solid rgba(178,58,58,.28)}.call.warn .lbl{color:var(--red)}
+  .call.tip{background:rgba(62,125,90,.07);border:1px solid rgba(62,125,90,.3)}.call.tip .lbl{color:var(--green)}
+  .qa{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 15px;margin:12px 0}
+  .qa .row{padding:12px 0;border-bottom:1px solid var(--border)}.qa .row:last-child{border-bottom:none}
+  .qa .q{font-weight:700;font-size:14px;margin:0 0 3px}.qa .a{margin:0;font-size:14px;color:var(--dim)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--dim);font-size:11.5px}
+  b,strong{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">Homestead Electric · Crew Guide</div>
+  <h1>Bid Items</h1>
+  <p class="sub">What the Simpro bid calls for, and what's been assigned against it</p>
+
+  <div class="tldr">
+    <h2>The 30-second version</h2>
+    <p>This tab is the job's Simpro bid: every cost center and line item, quantities
+    included. Check it before you schedule material, pull wire, or write a change order,
+    because it answers "is this in the bid?" Names and quantities only, no pricing. It sits
+    right next to Plans &amp; Links (it used to be a folded section at the top of that tab).</p>
+  </div>
+
+  <h2 class="sec">Using it</h2>
+
+  <div class="step">
+    <div class="num">1</div>
+    <div class="body">
+      <h3>Search it first</h3>
+      <p>Type a part or task in the search box. A match means it's in the bid. "No match —
+      looks like this would be a change order" means it isn't, and the app just answered
+      the CO question for you.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">2</div>
+    <div class="body">
+      <h3>Required vs Assigned</h3>
+      <p>Sections start folded; tap one to see its cost centers, then tap a cost center to see
+      every material line with <b>Required</b> (what the bid calls for) next to <b>Assigned</b>
+      (what's been allocated to it from the shop, a van, or a delivered PO). Red <b>over</b>
+      means more was assigned than bid, with the overage; orange <b>to go</b> means still
+      short; green means on the number.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">3</div>
+    <div class="body">
+      <h3>Wire at a glance</h3>
+      <p>Wire and cable sit first in every cost center, and the <b>Wire &amp; cable — whole
+      job</b> box at the bottom adds every cost center together so footage is one glance.
+      <b>Over only</b> and <b>Wire only</b> narrow the list.</p>
+    </div>
+  </div>
+  <div class="step">
+    <div class="num">4</div>
+    <div class="body">
+      <h3>Refresh when Simpro changed</h3>
+      <p>The bid loads when you open the job and is kept for 12 hours. <b>Refresh stock</b>
+      re-reads Simpro right now. The old bid lines (assemblies and one-offs) are still there
+      under <b>Bid lines</b> inside each cost center.</p>
+    </div>
+  </div>
+
+  <div class="call key">
+    <span class="lbl">Deductions aren't overages</span>
+    <p>A grey <b>deduction</b> is a Simpro line that takes material back out of the base bid.
+    It is never counted as "over".</p>
+  </div>
+
+  <h2 class="sec">Quick answers</h2>
+  <div class="qa">
+    <div class="row">
+      <p class="q">It says "Add a Simpro Job # to this job to see bid items."</p>
+      <p class="a">The job has no Simpro job number yet. Add it on Job Info. A quote shows
+      this too, because a quote has no bid on Simpro's jobs side until it converts.</p>
+    </div>
+    <div class="row">
+      <p class="q">The numbers don't match what I see in Simpro.</p>
+      <p class="a">Tap <b>Refresh stock</b>; the tab may be showing the copy from earlier
+      today. Still off after a refresh → tell the office which cost center and line.</p>
+    </div>
+    <div class="row">
+      <p class="q">Where did Bid Items go on Plans &amp; Links?</p>
+      <p class="a">It moved here, one tab over. Plans &amp; Links has a line at the top that
+      jumps straight to this tab.</p>
+    </div>
+  </div>
+
+  <p class="foot">Homestead Electric · Bid Items — Crew Guide · updated October 2026</p>
+
+</div>
+</body>
+</html>

@@ -6945,7 +6945,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -7405,6 +7405,172 @@ const toast = {
   // stays up; a later toast with the same key replaces it, dismiss(key) drops it.
   dismiss: (key)=>window.dispatchEvent(new CustomEvent('he-toast-dismiss', { detail: { key } })),
 };
+
+// ── Drop files on any upload spot (Koy, 2026-10-05) ──────────────────────────
+// "can we make it so i can drag and drop files anywhere you can add files or
+// pictures to? instead of having to click upload and find them everytime"
+//
+// ONE window-level layer, not a handler per upload spot. Every place that takes
+// files already has a hidden <input type="file"> behind its button, and every
+// one of them reads e.target.files in onChange. So a drop hands the files to
+// the input it landed on and fires the same `change` event a click-and-pick
+// would: each spot's own upload code (Storage path, limits, toasts) runs
+// unchanged, and any upload spot added later gets drag-and-drop for free.
+//
+// Which input a drop lands on: each visible, enabled input owns the biggest box
+// around it that holds no OTHER input (a punch row, a note card, a whole tab
+// when it is the only one), never reaching past a fixed layer (an open job, a
+// modal). While dragging, that box is outlined and the button that will receive
+// the files gets a ring + its own label, so you see where they go before you
+// let go. Off every box the cursor shows no-drop and nothing happens; the drop
+// is swallowed either way, so a missed drop can never navigate the app away to
+// the file. Skipped: camera-only twins (`capture`, always paired with a
+// pick-files input) and anything inside [data-no-drop] (settings restore).
+// Only OS file drags are touched; the crew board's card drags never carry
+// "Files", so they pass straight through.
+const heDropAccepts = (file, accept) => {
+  const toks = String(accept || "").split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  if (!toks.length) return true;
+  const name = String((file && file.name) || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot) : "";
+  // Desktop browsers leave the type blank for some phone photos (HEIC) — infer it.
+  const type = String((file && file.type) || "").toLowerCase()
+    || (/^\.(heic|heif|jpe?g|png|gif|webp|bmp|tiff?)$/.test(ext) ? "image/" + ext.slice(1) : "");
+  return toks.some(t => t.startsWith(".") ? ext === t
+    : t.endsWith("/*") ? type.startsWith(t.slice(0, -1))
+    : type === t);
+};
+const heDropKind = (accept) => {
+  const toks = String(accept || "").split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  return toks.length && toks.every(t => t === "image/*" || t.startsWith("image/")) ? "photos" : "files";
+};
+function installFileDrop() {
+  if (typeof window === "undefined" || window.__heFileDrop) return;
+  window.__heFileDrop = true;
+  const hasFiles = (e) => { try { return Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files"); } catch (x) { return false; } };
+  const shown = (el) => !!(el && el.getClientRects().length);
+  const candidates = () => Array.from(document.querySelectorAll('input[type="file"]'))
+    .filter(i => !i.disabled && !i.hasAttribute("capture") && !i.closest("[data-no-drop]") && shown(i.parentElement));
+  const regionOf = (input, all) => {
+    let region = input.parentElement;
+    for (let el = region; el && el !== document.body && el.id !== "root"; el = el.parentElement) {
+      if (all.some(o => o !== input && el.contains(o))) break;
+      region = el;
+      if (getComputedStyle(el).position === "fixed") break;
+    }
+    return region;
+  };
+  const labelOf = (input) => {
+    const t = String((input.parentElement && input.parentElement.textContent) || "").replace(/\s+/g, " ").trim();
+    // Only a real button caption ("Upload Files", "Attach photo / file"); an
+    // icon-only button ("+", "📷 3") gives no name and the hint says "here".
+    return t.length <= 40 && /[a-z]{3}/i.test(t) ? t : "";
+  };
+  // `zones` is built lazily on the first dragover/drop of a drag and thrown
+  // away by reset(), so anything that clears it mid-drag (a missed dragleave,
+  // the idle timer) self-heals on the very next event instead of leaving the
+  // rest of the drag with nowhere to drop.
+  let zones = null, depth = 0, active = false, cur = null, raf = 0, idle = 0;
+  const ensureZones = () => {
+    if (zones) return;
+    const all = candidates();
+    zones = all.map(input => ({ input, region: regionOf(input, all), label: labelOf(input) }));
+  };
+  const box = document.createElement("div"), ring = document.createElement("div"), chip = document.createElement("div");
+  box.style.cssText = "position:fixed;pointer-events:none;z-index:2147483000;border:2px dashed #3B5BA5;border-radius:10px;background:rgba(59,91,165,0.08);display:none;box-sizing:border-box";
+  ring.style.cssText = "position:fixed;pointer-events:none;z-index:2147483001;border:2px solid #3B5BA5;border-radius:8px;box-shadow:0 0 0 4px rgba(59,91,165,0.25);display:none;box-sizing:border-box";
+  chip.style.cssText = "position:fixed;pointer-events:none;z-index:2147483002;left:50%;transform:translateX(-50%);background:#3B5BA5;color:#fff;font:600 13px/1.2 system-ui,-apple-system,sans-serif;padding:7px 14px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,0.25);display:none;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis";
+  const mount = () => { if (!box.isConnected) document.body.append(box, ring, chip); };
+  const place = (el, r, pad) => {
+    const top = Math.max(r.top - pad, 2), left = Math.max(r.left - pad, 2);
+    const bottom = Math.min(r.bottom + pad, window.innerHeight - 2), right = Math.min(r.right + pad, window.innerWidth - 2);
+    if (bottom <= top || right <= left) { el.style.display = "none"; return; }
+    Object.assign(el.style, { display: "block", top: top + "px", left: left + "px", width: (right - left) + "px", height: (bottom - top) + "px" });
+  };
+  const paint = () => {
+    raf = 0;
+    if (!active) { box.style.display = ring.style.display = chip.style.display = "none"; return; }
+    mount();
+    if (!cur) {
+      box.style.display = ring.style.display = "none";
+      chip.textContent = "Drop on a spot that takes files or photos";
+      chip.style.background = "#5E6670"; chip.style.top = ""; chip.style.bottom = "24px"; chip.style.display = "block";
+      return;
+    }
+    const rr = cur.region.getBoundingClientRect();
+    place(box, rr, 0);
+    place(ring, cur.input.parentElement.getBoundingClientRect(), 3);
+    const what = heDropKind(cur.input.accept);
+    chip.textContent = cur.label ? `Drop to add ${what} · ${cur.label}` : `Drop to add ${what} here`;
+    chip.style.background = "#3B5BA5";
+    // Sit just above the outlined box so it never covers the button it names;
+    // below it when the box starts at the top; bottom of the screen when the
+    // box fills the screen.
+    if (rr.top - 40 >= 4) { chip.style.top = (rr.top - 40) + "px"; chip.style.bottom = ""; }
+    else if (rr.bottom + 44 <= window.innerHeight) { chip.style.top = (rr.bottom + 8) + "px"; chip.style.bottom = ""; }
+    else { chip.style.top = ""; chip.style.bottom = "24px"; }
+    chip.style.display = "block";
+  };
+  const repaint = () => { if (!raf) raf = requestAnimationFrame(paint); };
+  const zoneAt = (target) => {
+    ensureZones();
+    for (const z of zones) if (z.region.contains(target)) return z;
+    return null;
+  };
+  const reset = () => { clearTimeout(idle); depth = 0; active = false; cur = null; zones = null; repaint(); };
+  window.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    depth++;
+  }, true);
+  window.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    if (--depth <= 0) reset();
+  }, true);
+  window.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();          // also what stops the browser opening the file in place of the app
+    e.stopPropagation();         // file drags belong to this layer, not to any card-drag handler
+    active = true;
+    cur = zoneAt(e.target);
+    try { e.dataTransfer.dropEffect = cur ? "copy" : "none"; } catch (x) { /* read-only in some browsers */ }
+    // dragover keeps firing while a file is over the page, even with the mouse
+    // still (Chrome ~50 ms; the spec allows ~350 ms ± 200). When it stops (Esc,
+    // or the drag left through a spot that never fired dragleave) the outline
+    // would hang; this clears it. Generous on purpose: a late timer only hides
+    // the outline, and the next dragover brings everything back.
+    clearTimeout(idle); idle = setTimeout(reset, 1500);
+    repaint();
+  }, true);
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const z = zoneAt(e.target);
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    reset();
+    if (!z || !files.length) return;
+    const input = z.input;
+    if (input.disabled || !input.isConnected) { toast.info("That spot is busy — drop again in a moment."); return; }
+    const ok = files.filter(f => heDropAccepts(f, input.accept));
+    if (!ok.length) { toast.error(`This spot only takes ${heDropKind(input.accept)} — nothing was added.`); return; }
+    const use = input.multiple ? ok : ok.slice(0, 1);
+    try {
+      const dt = new DataTransfer();
+      use.forEach(f => dt.items.add(f));
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (x) {
+      console.error("[HE] file drop failed", x);
+      toast.error("This browser can't drop files here — use the upload button.");
+      return;
+    }
+    const skipped = files.length - use.length;
+    if (skipped) toast.info(`${skipped} file${skipped !== 1 ? "s" : ""} skipped — ${input.multiple ? `this spot only takes ${heDropKind(input.accept)}` : "this spot takes one file"}.`);
+  }, true);
+  window.addEventListener("dragend", reset, true);
+}
+installFileDrop();
 
 // ── Zoomable photo lightbox (2026-08-10, Koy: "need any pictures uploaded to
 // be zoominable") ─────────────────────────────────────────────────────────────
@@ -26185,28 +26351,23 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
-function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters, simproStock=null, simproStockErr=null, simproStockRefreshing=false, onRefreshSimproStock=null}) {
+function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
   return (
 
     <div>
 
-      {/* Bid Items — "Is this in the bid?" search at the top of the tab.
-          Lives here because it's the first place the field team checks
-          before scheduling material, pulling wire, or writing a CO. */}
-      <Section label="Bid Items (Simpro)" color={C.blue||"#3B5BA5"} defaultOpen={false}>
-        <BidItemsPanel
-          simproNo={simproJobNoOf(job)}
-          data={simproCostCenters}
-          error={simproCostCentersErr}
-          refreshing={simproCostCentersRefreshing}
-          onRefresh={onRefreshSimproCostCenters}
-          stock={simproStock}
-          stockErr={simproStockErr}
-          stockRefreshing={simproStockRefreshing}
-          onRefreshStock={onRefreshSimproStock}
-        />
-      </Section>
+      {/* Bid Items used to be a folded section right here; it has its own tab
+          now (next one over). This line catches anyone whose thumb still
+          comes here first. */}
+      {onOpenBidItems && (
+        <button type="button" onClick={onOpenBidItems}
+          style={{display:"flex",alignItems:"center",gap:6,width:"100%",marginBottom:14,
+            background:"none",border:`1px dashed ${C.border}`,borderRadius:8,padding:"8px 12px",
+            color:C.blue,fontSize:12,fontWeight:600,fontFamily:"inherit",cursor:"pointer",textAlign:"left"}}>
+          Looking for Bid Items (Simpro)? It has its own tab now — tap to open it →
+        </button>
+      )}
 
       {/* Google Drive Plans */}
       <DriveFilesSection job={job} onUpdate={onUpdate} />
@@ -26444,12 +26605,14 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 
 // Default tab order. Panelized Lighting + Tape Light sit just after Home Runs
 // because on lighting-heavy jobs the foreman hops between Home Runs and the
-// lighting tabs constantly.
-const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
+// lighting tabs constantly. Bid Items got its own tab right after Plans & Links
+// (Koy, 2026-10-05: "people cant remember where it is so it needs to be easier
+// to see") — it used to be a folded section at the top of Plans & Links.
+const TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","Completed","QC"];
 // ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
 // v467: the on-site commercial phase tabs (Koy: "power, lighting, gear, underground;
 // tabs inside of underground: utility work, building site work, building
 // underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
@@ -31863,14 +32026,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <PlansTab
               job={job}
               onUpdate={u}
-              simproCostCenters={simproCostCenters}
-              simproCostCentersErr={simproCostCentersErr}
-              simproCostCentersRefreshing={simproCostCentersRefreshing}
-              onRefreshSimproCostCenters={refetchSimproCostCenters}
-              simproStock={simproStock}
-              simproStockErr={simproStockErr}
-              simproStockRefreshing={simproStockRefreshing}
-              onRefreshSimproStock={refetchSimproStock}
+              onOpenBidItems={()=>setTab("Bid Items")}
+            />
+          )}
+
+          {/* Bid Items — "Is this in the bid?" Every cost center and line on the
+              job's Simpro bid, plus Required vs Assigned. Its own tab since
+              v510; the data still loads when the job opens (simproCostCenters /
+              simproStock effects above), so switching here is instant. */}
+          {tab==="Bid Items"&&(
+            <BidItemsPanel
+              simproNo={simproJobNoOf(job)}
+              data={simproCostCenters}
+              error={simproCostCentersErr}
+              refreshing={simproCostCentersRefreshing}
+              onRefresh={refetchSimproCostCenters}
+              stock={simproStock}
+              stockErr={simproStockErr}
+              stockRefreshing={simproStockRefreshing}
+              onRefreshStock={refetchSimproStock}
             />
           )}
 
@@ -48492,7 +48666,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           )}
           {onRestoreFromFile&&(
             <>
-              <input type="file" accept=".json" ref={fileInputRef} style={{display:"none"}} onChange={async(e)=>{
+              <input type="file" accept=".json" ref={fileInputRef} data-no-drop="" style={{display:"none"}} onChange={async(e)=>{
                 const file=e.target.files[0];
                 if(!file) return;
                 try {
@@ -51532,10 +51706,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-05 · App SW version: v509
+**Last manifest update:** 2026-10-05 · App SW version: v510
 
 ---
 
+- **Bid Items is its own job tab, right after Plans & Links** · 'shipped 2026-10-05' · 'SW v510' · Koy: *"bid items from simpro needs to be its own tab right next to the plans and links tab, people cant remember where it is so it needs to be easier to see."* The Simpro bid (every cost center and line, Required vs Assigned, the whole-job wire box, Over only / Wire only, Refresh stock) used to be a folded **Bid Items (Simpro)** section at the top of Plans & Links; it is now the **Bid Items** tab, fifth in the bar on residential AND commercial jobs ('TABS' / 'COMM_TABS', right after Plans & Links), rendering the same 'BidItemsPanel' with the same props. Plans & Links keeps a one-line *"Looking for Bid Items (Simpro)? It has its own tab now"* button at the top that jumps there, for anyone whose thumb still goes to the old spot. The data still loads when the job opens (the 'simproCostCenters' / 'simproStock' effects in 'JobDetail' were never tied to the tab), so the tab opens instantly from the 12-hour cache. New in-app guide 'public/sops/biditems.html' (the "?" on the tab turns on by itself — the SOP scan reads the tab list); 'planslinks.html', 'changeorders.html' point to the new tab. **Why it won't lose data:** display-only move — no Firestore read or write added, removed or changed; 'simproCostCentersCache' / 'simproStockCache' are written exactly as before; no field, loader, rules or functions change.
+- **Drag and drop files onto any upload spot** · 'shipped 2026-10-05' · 'SW v510' · Koy: *"can we make it so i can drag and drop files anywhere you can add files or pictures to? instead of having to click upload and find them everytime."* One window-level drop layer ('installFileDrop', next to 'toast') instead of a handler per spot: every place that takes files already has a hidden '<input type="file">' behind its button and reads 'e.target.files' in 'onChange', so a drop hands the files to the input it landed on and fires the same 'change' event a click-and-pick does. Each spot's own upload code (Storage path, limits, toasts) runs unchanged, and any upload spot added later gets drag-and-drop for free — today that is all 15 pick-files inputs: Plans & Links files, punch / QC rows, job notes, return trips, My Day tasks, Need quick-add, quick jobs, temp peds, every 'PhotoAttacher', and the GC portal's send box. **Which spot gets the drop:** each visible, enabled input owns the biggest box around it that holds no other input (a punch row, a note card, a whole tab when it is the only one), never past a fixed layer (an open job). While dragging, that box gets a dashed blue outline, the receiving button gets a ring, and a pill above it says *Drop to add photos · Attach photo / file* (or *files*). Off every box the cursor shows no-drop with *Drop on a spot that takes files or photos*; the drop is swallowed either way so a missed drop can never navigate the app away to the file. **Guards:** files are matched against the input's own 'accept' ('heDropAccepts', with HEIC photos the desktop browser leaves untyped counted as photos) — a PDF on a photos-only spot is refused with a toast, mixed drops add what fits and say how many were skipped, a one-file spot takes the first; disabled (mid-upload) inputs are skipped; camera-only twins ('capture') are skipped in favour of their pick-files partner; the settings **Restore from file** input carries 'data-no-drop' and can never take a dropped file. Zones are rebuilt lazily so a stalled drag self-heals (found in testing: a 700 ms idle timer cleared the targets mid-drag; now the timer only hides the outline). Card drags on the crew board carry no "Files" and pass straight through. Verified in a real browser against React 18 with the live code (10 drops: right spot, refused types, busy / restore skipped, one-file spot, off-zone, a 2 s pause mid-drag, repeat drops) + 'scripts/file-drop-test.js' (10 checks, 'prebuild'). Not available inside the Tools tab calculators (separate pages in their own frame). Guides 'planslinks.html', 'myday.html' mention it. **Why it won't lose data:** no Firestore code touched — a drop only fills the same file input a person would and fires the same event, so every write still goes through that spot's existing, unchanged upload path; restore-from-file is excluded outright.
 - **Notifications you can't miss — every notification is saved to the bell first, the push is tracked, retried, and shows on every phone whether the app is open or not** · 'shipped 2026-10-05' · 'SW v509' · app half live via Vercel; server half needs 'firebase deploy --only functions' (until then pushes still come from the old server path) · Koy: browser notifications were inconsistent; keep FCM, but make missing a push never mean missing the notification. **Server ('functions/notifyDelivery.js' + 'deliver()' in 'functions/index.js'):** the inbox record in 'notifications/{userKey}/items' is now committed (with retries) BEFORE any push, in one batch with a 'pushQueue' lease; the push goes out with 'messaging.sendEach' (one message per device); the per-device outcome is written back on the record as 'delivery' (status sent / partial / retrying / failed / no_tokens / expired / read_before_push, attempts, devices reached, error codes, token tags only — never full tokens) and logged as one '[notify] delivery' line (ERROR on a real loss). Transient FCM errors re-queue and the new **'pushRetrySweep'** (every 5 min) re-sends to only the failed devices with backoff (1/3/10/30/60 min, 5 tries, 12 h push window; skipped if already read in-app). Dead tokens prune in one transaction (list-only 'tx.update', audit fields untouched). The record id is an idempotency key (same recipient + content in the same minute, or an explicit 'eventKey'), so a re-fired trigger can't double-ping. Priority: digests/routine reminders/quotes go 'Urgency: normal' + quiet banner + 6 h TTL; everything else 'high' + 24 h TTL. Push body trimmed under FCM's 4 KB cap (inbox keeps the full text) — long notes used to fail outright. Unknown recipient names and muted categories now log instead of vanishing. New callable **'pushReceipt'**: the phone reports "I displayed it", so the record separates "FCM accepted" from "the device showed it". 'sendTestPush' / 'sendTestNotification' use the same message builder (the Settings test now runs the full inbox-first path). **Push worker ('public/firebase-messaging-sw.js'):** shows the banner itself on every push, app open or not — the Firebase SDK only showed it when no window was visible and the page fallback ('new Notification') throws on Android and doesn't exist on an iOS Home-Screen app, so phones with the app open got nothing and iOS revoked push permission for "silent" pushes. One banner per notification (tag = record id; the old job+section tag with 'renotify:false' made a second event on the same job silently replace the first). Firebase SDK load is wrapped so a CDN hiccup can't kill the push handler. Tap: the push worker doesn't control the page, so 'navigate()' always failed since v364 — it now posts the target to the open app (job, My Day task, Huddle… all routed like a bell tap) or opens the deep link when closed. **App:** foreground push = in-app toast only (the worker owns the OS banner); toast and push taps route view/task notifications, not just jobs; tapping marks that bell item read (also on a cold open via '&nid='); unread badge comes from its own 'read == false' query (no longer capped by the 50-item list) and sets the Home-Screen icon badge; Mark all read clears every unread; Notification Doctor gains **YOUR LAST 10 NOTIFICATIONS** (pushed / to how many devices / shown on a device / retried / failed + FCM codes) and its OS test uses the worker's 'showNotification' so it works on phones. Guide 'public/sops/myday.html' step 3 updated. Test 'scripts/notify-delivery-test.js' (pure helpers + the full pipeline against an in-memory Firestore/FCM fake; in the prebuild chain). **Why it won't lose data:** inbox items keep every field the bell already reads (title/body/jobId/section/view/needId/createdAt/read) and only ADD 'category', 'priority', 'link', 'delivery', 'receipts', 'displayedAt'; the server's later writes merge only the 'delivery' map (receipts live beside it so they can't be clobbered), so a "mark read" is never overwritten; 'pushQueue' is a new function-only collection (covered by the existing deny-all catch-all — no rules change); token pruning is the same removal-only list update as before, now in one transaction; jobs/needs/users data and the jobs loader are untouched. Needs 'firebase deploy --only functions' (deliver path + new 'pushRetrySweep' + 'pushReceipt') alongside the Vercel push.
 - **Plan intake, Phase 4 — Today → Plans card, 5 pm summary email, 6:30 am walk push, file an unsure plan from the card** · 'shipped 2026-10-04' · 'SW v508' · Koy: *"start phase 4"*; decisions: summary by email to his Gmail, walk push to him only, *file it from the card*, card gated on the **Head of Residential** hat. **Plans card** (top of Today, folded with counts — *N need you* · *N new*): reads 'agentFindings' live (last 14 days, live mode only); **Needs you** first (two folders, a plan the Routine wasn't sure of, a walk it couldn't match, errors), then one group per job / quote number (folder made, renamed on conversion, plans filed, walk on a job); every row links to its folder / file / email, **Seen** per row, **Mark updates seen**, **Show seen**. A plan the Routine wasn't sure of gets an inline **File it** form (Job # / Quote #, number pre-filled from its best guess, Plans · Cabinet · Appliance · Design · Specs · Redlines) that calls the new 'planFileByHand' callable — same move, rename and logging as the Routine, name + PIN checked server-side (admin/manager tier) and the hat (or admin tier) re-checked there. Gate reads the live team record (the v465 lesson). **5 pm email** ('planIntakeDigest', 17:00 MT): that day's findings, *Needs you* first then by job number, via the existing Resend sender to koywilkinson@gmail.com ('planIntakeState/config.digestTo' switches it once the homesteadelectric.net DNS is verified); skipped on an empty day; a failed send pushes Koy. **Walk push** ('planIntakeWalkPush', 06:30 MT): one push to Koy listing today's walks — *Brandt Walk: Quote #2642 folder ready · 11 plans in SIMPRO*, *existing job #1277*, or *not matched yet*; opens Today. **Rules:** new 'agentFindings' block — read open like the rest of the app, update limited to 'seen' / 'seenAt' / 'seenBy' (affectedKeys), no client create/delete; 'agentQueue' and 'planIntakeState' stay closed by the catch-all; deployed rules were compared to the repo first (identical). Gates: 'scripts/planintake-digest-test.js' + a Phase 4 scenario in 'planintake-sim.js'. **Why it won't lose data:** the card's only direct write is the seen stamp (rules allow nothing else); "File it" is a server-validated move out of '_Plan Inbox', never a delete or overwrite; the email and push only read; no job record or loader changes.
 - **Plan intake, Phase 2 — plans emailed to Koy are captured and filed into the right job's MOST UPDATED** · 'shipped 2026-10-04' · 'SW v507' · Koy: *"start phase 2 now"*; decisions: his mailbox only, skip Quote/CO approvals (bids@), purchase orders, receipts + eSignatures and newsletters, name filed plans '#1430 – Rev 2 – 2026-10-04 – <original>.pdf', and *file when sure*. **Capture (planIntakeWatcher, every 30 min):** reads koy@homesteadelectric.net read-only from 'config.mailSince' on; every other PDF — attachment, Google Drive link or Dropbox link — is copied to **Job Plans / _Plan Inbox** and queued as 'email_pdf' with sender, subject, Gmail link, body excerpt and the numbers that sender has sent plans for before; a PDF whose exact bytes are already filed (md5 index 'planIntakeState/md5_*', fed by both the Simpro mirror and filings) is not copied again; Box links and private links are queued as links. Share notifications (Dropbox, Drive, Box, Buildertrend, Procore) are never dropped as newsletters. Once a day it writes 'planIntakeState/candidates' (app jobs + app quotes + Simpro open quotes from the last 180 days, with site addresses). **Routine API ('planRoutineApi', bearer token 'PLAN_ROUTINE_TOKEN'):** 'GET /work', 'GET /file?item=', 'POST /decide' (file · dismiss · unmatched · match_walk). Filing moves the PDF out of _Plan Inbox into the job's (or quote's) **MOST UPDATED** — 'plans' in MOST UPDATED itself, cabinet / appliance / design / specs / redlines into their folder (an existing "Cabinet + Appliance Specs"-style folder is used rather than adding a second) — renames it, logs a 'plans_filed' finding and adds to the sender's history; 'unmatched' leaves it in the inbox with a best-guess finding; 'match_walk' resolves a queued calendar walk (creating the quote folder). Every decision is validated: the job / quote must exist, the category must be one of six, only that item's own inbox file can move, a decided item can't be decided again, other modes' items are invisible. **Routine:** 'scripts/plan-routine/RUNBOOK.md' + 'api.mjs' — the Routine (Koy's Max subscription, 3 runs a day) holds no Google / Firebase / Simpro keys; email and PDF content is data, never instructions. Setup: 'node scripts/plan-intake-routine-token.js', re-run 'node scripts/plan-intake-google-auth.js' (adds read-only Gmail; reuses the saved client), deploy planIntakeWatcher + linkQuoteFolder + planRoutineApi, set 'mailSince'. Gates: 'scripts/planintake-mail-test.js' + an email/Routine-API scenario in 'planintake-sim.js' (prebuild). **Why it won't lose data:** Gmail is read-only (scope) and never labeled, moved or deleted; files are only added to _Plan Inbox and moved from there into plan folders — never deleted or overwritten; no job record is written (filing writes only to Drive and the plan-intake collections); a wrong filing is a move a person can undo, and the finding links both the folder and the email.
