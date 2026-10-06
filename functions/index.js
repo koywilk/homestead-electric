@@ -492,6 +492,107 @@ exports.pushReceipt = functions.https.onCall(async (data) => {
   return { ok: true };
 });
 
+// ─────────────────────────────────────────────────────────────
+// CALLABLES — sendBroadcast / listBroadcasts (Koy, 2026-10-05)
+// "i would like the option to send out a notification to either everyone or
+// select people with a custom message" — e.g. everyone: "Bid Items moved to its
+// own tab", or just the foremen. Office only (Koy, 2026-10-05):
+// requireBroadcaster = the live-PIN gate (requireAdmin) + ND.isBroadcaster,
+// because this can buzz every phone in the company. Each recipient goes through deliver(), so a broadcast is an ordinary
+// notification: saved to the bell first, pushed, retried by pushRetrySweep.
+// deliver(), NOT deliverIfWanted — a company announcement has no mute toggle.
+// The client mints the broadcast id and it becomes the eventKey, so a double tap
+// or a retried call with the same id can never ping anyone twice.
+// broadcasts/{id} is the record (function-only; the rules' deny-all catch-all
+// covers it, no rules change). Test sends go to the sender and aren't recorded.
+// ─────────────────────────────────────────────────────────────
+// Live-PIN check (requireAdmin) + Office only (ND.isBroadcaster). Every
+// broadcast callable — send, history, who's seen it — goes through this.
+async function requireBroadcaster(data) {
+  const user = await requireAdmin(data);
+  if (!ND.isBroadcaster(user)) {
+    throw new functions.https.HttpsError("permission-denied", "Only the office can send team notifications.");
+  }
+  return user;
+}
+
+exports.sendBroadcast = functions.https.onCall(async (data) => {
+  const sender = await requireBroadcaster(data);
+  const id = String((data && data.id) || "").trim();
+  if (!ND.BROADCAST_ID_RE.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad broadcast id.");
+  const body = String((data && data.body) || "").trim().slice(0, 1000);
+  if (!body) throw new functions.https.HttpsError("invalid-argument", "Write a message first.");
+  const title = String((data && data.title) || "").trim().slice(0, 80) || `Message from ${sender.name}`;
+  const label = String((data && data.label) || "").trim().slice(0, 80);
+  const test = !!(data && data.test);
+  const users = await getUsers();
+  const picked = ND.resolveBroadcastRecipients(users, data && data.to, sender, test, inboxKeyOf);
+  if (!picked.length) throw new functions.https.HttpsError("invalid-argument", "Pick at least one person.");
+  const notif = { title, body, category: "broadcast", eventKey: test ? `${id}_test` : id };
+  const results = [];
+  for (let i = 0; i < picked.length; i += 10) {
+    const chunk = picked.slice(i, i + 10);
+    const rs = await Promise.all(chunk.map(u => deliver(u, notif).catch(e => {
+      functions.logger.error("[broadcast] deliver threw", { to: u.name, id, error: e.message });
+      return { status: "error" };
+    })));
+    // key + nid make each person's bell copy findable later (broadcastSeen). The
+    // id is deterministic from the eventKey, so it is right even for a
+    // duplicate-suppressed resend.
+    chunk.forEach((u, k) => results.push({ name: u.name, status: (rs[k] && rs[k].status) || "unknown",
+      persisted: rs[k] && rs[k].persisted, key: inboxKeyOf(u),
+      nid: ND.notifDocId(inboxKeyOf(u), ND.normalizeNotif(notif), 0) }));
+  }
+  const summary = ND.summarizeBroadcast(results);
+  functions.logger.info("[broadcast] sent", { id, by: sender.name, test, label, title: title.slice(0, 80),
+    total: summary.total, phone: summary.phone, retrying: summary.retrying.length,
+    bellOnly: summary.bellOnly.length, notSaved: summary.notSaved.length });
+  if (!test) {
+    await db.collection("broadcasts").doc(id).set({
+      id, by: sender.name, at: new Date().toISOString(), title, body, label,
+      to: results.map(r => r.name), summary,
+      recipients: results.map(r => ({ name: r.name, key: r.key, nid: r.nid })),
+    }).catch(e => functions.logger.error("[broadcast] record write FAILED", { id, error: e.message }));
+  }
+  return { ok: true, id, test, title, summary };
+});
+
+// Read every recipient's bell copy of one broadcast record → seen states.
+async function broadcastSeenRows(b) {
+  const recips = Array.isArray(b && b.recipients) ? b.recipients : [];
+  return Promise.all(recips.map(async (r) => {
+    if (!r || !r.key || !r.nid) return { name: (r && r.name) || "?", ...ND.seenStateOf(null) };
+    const snap = await inboxRef(r.key, r.nid).get().catch(() => null);
+    const item = snap && snap.exists ? snap.data() : null;
+    const updated = snap && snap.updateTime && typeof snap.updateTime.toDate === "function" ? snap.updateTime.toDate().toISOString() : "";
+    return { name: r.name, ...ND.seenStateOf(item, updated) };
+  }));
+}
+
+exports.listBroadcasts = functions.https.onCall(async (data) => {
+  await requireBroadcaster(data);
+  const snap = await db.collection("broadcasts").orderBy("at", "desc").limit(12).get();
+  const items = await Promise.all(snap.docs.map(async (d) => {
+    const b = d.data() || {};
+    const seen = Array.isArray(b.recipients) ? ND.summarizeSeen(await broadcastSeenRows(b)) : null;
+    return { id: b.id || d.id, by: b.by || "", at: b.at || "", title: b.title || "", body: b.body || "",
+      label: b.label || "", count: Array.isArray(b.to) ? b.to.length : 0, summary: b.summary || null,
+      opened: seen ? seen.opened : null };
+  }));
+  return { items };
+});
+
+// Who has seen one broadcast, person by person (bell → Send → Recently sent).
+exports.broadcastSeen = functions.https.onCall(async (data) => {
+  await requireBroadcaster(data);
+  const id = String((data && data.id) || "").trim();
+  if (!ND.BROADCAST_ID_RE.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad broadcast id.");
+  const snap = await db.collection("broadcasts").doc(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That broadcast isn't on record.");
+  const b = snap.data() || {};
+  return { id, title: b.title || "", at: b.at || "", ...ND.summarizeSeen(await broadcastSeenRows(b)) };
+});
+
 // ─── Notification Doctor — test push to a single user ───────────────────────
 // Lets the in-app diagnostic page send a push to a specific user and see
 // per-token success/failure. Returns a JSON report instead of swallowing

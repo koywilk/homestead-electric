@@ -324,5 +324,73 @@ const seedUsers = (list) => store.set("settings/users", { list, updated_at: "202
   assert.deepStrictEqual(await fx.pushReceipt({ ...APP, uk: "../x", nid: "a/b" }), { ok: false }, "path injection refused");
   await assert.rejects(fx.pushReceipt({ uk: "u1", nid }), "requires the app key");
 
+  // J. Broadcasts (2026-10-05): admin-PIN gated, one ordinary notification per
+  //    recipient through deliver(), bell-only people listed, a re-sent id never
+  //    pings twice, test sends go to the sender only and aren't recorded.
+  reset();
+  seedUsers([
+    { id: "koy", name: "Koy Wilkinson", access: "admin", pin: "1234", fcmTokens: ["tokK_1234567890"] },
+    { id: "u1", name: "Colby Fogh", title: "foreman", access: "standard", pin: "5555", fcmTokens: ["tokC_1234567890"] },
+    { id: "u3", name: "Jacob Spackman", title: "crew", access: "limited" },
+    { id: "u4", name: "Old Hand", access: "limited", active: false, fcmTokens: ["tokO_1234567890"] },
+    { id: "u5", name: "Design Build", access: "contractor", fcmTokens: ["tokG_1234567890"] },
+    { id: "u6", name: "Gage Lund", title: "foreman", access: "manager", pin: "7777", fcmTokens: ["tokL_1234567890"] },
+  ]);
+  const BC = { ...APP, by: "Koy Wilkinson", pin: "1234" };
+  const to = [{ id: "u1", name: "Colby Fogh" }, { id: "u3" }, { id: "u4" }, { id: "u5" }];
+  await assert.rejects(fx.sendBroadcast({ ...APP, id: "bc_aaaaaa_1", body: "x", to }), "no PIN → refused");
+  await assert.rejects(fx.sendBroadcast({ ...BC, pin: "0000", id: "bc_aaaaaa_1", body: "x", to }), "wrong PIN → refused");
+  await assert.rejects(fx.sendBroadcast({ ...APP, by: "Colby Fogh", pin: "5555", id: "bc_aaaaaa_1", body: "x", to }), "a foreman can't broadcast");
+  await assert.rejects(fx.sendBroadcast({ ...APP, by: "Gage Lund", pin: "7777", id: "bc_aaaaaa_1", body: "x", to }), "a foreman with Manager access can't broadcast (office only)");
+  await assert.rejects(fx.listBroadcasts({ ...APP, by: "Gage Lund", pin: "7777" }), "nor read the history");
+  await assert.rejects(fx.sendBroadcast({ ...BC, id: "bc_aaaaaa_1", body: "   ", to }), "empty message refused");
+  await assert.rejects(fx.sendBroadcast({ ...BC, id: "../users", body: "x", to }), "bad id refused");
+  assert.strictEqual(fakeMessaging.sent.length, 0, "nothing pushed by a refused call");
+  res = await fx.sendBroadcast({ ...BC, id: "bc_mfx3k2_a9q4z1", title: "Bid Items moved", body: "It has its own tab now.", label: "Everyone", to });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.summary.total, 2, "deactivated + contractor dropped");
+  assert.strictEqual(res.summary.phone, 1);
+  assert.deepStrictEqual(res.summary.bellOnly, ["Jacob Spackman"], "no phone → listed as bell only");
+  assert.strictEqual(items("u1").length, 1);
+  assert.strictEqual(items("u1")[0].title, "Bid Items moved");
+  assert.strictEqual(items("u1")[0].category, "broadcast");
+  assert.strictEqual(items("u1")[0].delivery.status, "sent");
+  assert.strictEqual(items("u3").length, 1, "bell copy even with no phone");
+  assert.strictEqual(items("u4").length + items("u5").length, 0);
+  const rec = store.get("broadcasts/bc_mfx3k2_a9q4z1");
+  assert.ok(rec, "broadcast recorded");
+  assert.deepStrictEqual(rec.to, ["Colby Fogh", "Jacob Spackman"]);
+  assert.strictEqual(rec.by, "Koy Wilkinson");
+  const pushedBefore = fakeMessaging.sent.length;
+  res = await fx.sendBroadcast({ ...BC, id: "bc_mfx3k2_a9q4z1", title: "Bid Items moved", body: "It has its own tab now.", to });
+  assert.strictEqual(res.summary.duplicate, 2, "same id again → suppressed for everyone");
+  assert.strictEqual(fakeMessaging.sent.length, pushedBefore, "a re-sent broadcast never pings twice");
+  assert.strictEqual(items("u1").length, 1);
+  res = await fx.sendBroadcast({ ...BC, id: "bc_mfx3k3_t0t0t0", body: "Test", to, test: true });
+  assert.strictEqual(res.summary.total, 1, "test goes to the sender only");
+  assert.strictEqual(items("koy").length, 1);
+  assert.strictEqual(items("u1").length, 1, "test never reaches the picks");
+  assert.ok(!store.get("broadcasts/bc_mfx3k3_t0t0t0"), "test sends aren't recorded");
+  const list = await fx.listBroadcasts({ ...BC });
+  assert.strictEqual(list.items.length, 1);
+  assert.strictEqual(list.items[0].count, 2);
+  assert.strictEqual(list.items[0].opened, 0, "nobody has opened it yet");
+  await assert.rejects(fx.listBroadcasts({ ...APP }), "history needs the admin PIN too");
+  // Who has seen it: the record points at each person's real bell copy.
+  assert.deepStrictEqual(rec.recipients.map(r => r.nid), [items("u1")[0].id, items("u3")[0].id], "record nids = the bell copies' ids");
+  let seen = await fx.broadcastSeen({ ...BC, id: "bc_mfx3k2_a9q4z1" });
+  assert.strictEqual(seen.opened, 0);
+  assert.deepStrictEqual(seen.people.map(p => [p.name, p.state]), [["Colby Fogh", "phone"], ["Jacob Spackman", "bell"]]);
+  // Colby opens it in the app (the client flips only `read`, as the rules allow).
+  const colbyPath = [...store.keys()].find(k => k.startsWith("notifications/u1/items/"));
+  store.set(colbyPath, { ...store.get(colbyPath), read: true });
+  seen = await fx.broadcastSeen({ ...BC, id: "bc_mfx3k2_a9q4z1" });
+  assert.strictEqual(seen.opened, 1);
+  assert.deepStrictEqual(seen.people[0], { name: "Colby Fogh", state: "opened", at: "" }, "opened sorts first");
+  assert.strictEqual((await fx.listBroadcasts({ ...BC })).items[0].opened, 1);
+  await assert.rejects(fx.broadcastSeen({ ...APP, id: "bc_mfx3k2_a9q4z1" }), "seen list needs the admin PIN");
+  await assert.rejects(fx.broadcastSeen({ ...BC, id: "bc_nope_000000" }), "unknown broadcast → not found");
+  await assert.rejects(fx.broadcastSeen({ ...BC, id: "../x" }), "bad id refused");
+
   console.log("notify-delivery-test ok");
 })().catch(e => { console.error(e); process.exit(1); });

@@ -224,9 +224,96 @@ function publicResults(rows) {
   });
 }
 
+// ── Broadcasts (Koy, 2026-10-05) ─────────────────────────────────────────────
+// "send out a notification to either everyone or select people with a custom
+// message". index.js sendBroadcast does the I/O; these two decide WHO gets it
+// and how the result reads back to the sender.
+const BROADCAST_MAX_RECIPIENTS = 200;
+const BROADCAST_ID_RE = /^bc_[a-z0-9_]{6,40}$/;
+const _norm = (v) => String(v || "").trim().toLowerCase();
+// Resolve the client's picks ({id, name}) against the LIVE team list: matched by
+// id first, then exact name; deactivated members and contractors never; each
+// person once. A test send goes to the sender only. `keyOf` is index.js's
+// inboxKeyOf, so dedupe uses the same key the bell does.
+function resolveBroadcastRecipients(users, asked, sender, test, keyOf) {
+  const accessOf = (u) => u.access || ({ admin: "admin", justin: "admin", jeromy: "manager", foreman: "standard" }[u.role] || "limited");
+  const live = (users || []).filter(u => u && u.active !== false && accessOf(u) !== "contractor");
+  if (test) return sender ? [sender] : [];
+  const out = [], seen = new Set();
+  for (const r of (Array.isArray(asked) ? asked : []).slice(0, BROADCAST_MAX_RECIPIENTS)) {
+    const rid = String((r && r.id) || "").trim();
+    const rname = _norm(r && r.name);
+    const u = (rid && live.find(x => x.id === rid)) || (rname && live.find(x => _norm(x.name) === rname)) || null;
+    const k = u && keyOf(u);
+    if (!u || !k || seen.has(k)) continue;
+    seen.add(k); out.push(u);
+  }
+  return out;
+}
+// Who may send a broadcast (Koy 2026-10-05: "Office only"). Office = title
+// Admin, or Admin/Manager access WITHOUT a field title — access alone is wrong
+// because five foremen carry Manager access. Live list: Koy, Josh, Brady,
+// Justin, Jeromy. A per-person `caps: ["notify.broadcast"]` grant also counts
+// (delegation without a code change). Mirrors bcIsOffice in src/App.js.
+function isBroadcaster(u) {
+  if (!u || u.active === false) return false;
+  if (Array.isArray(u.caps) && u.caps.includes("notify.broadcast")) return true;
+  const access = u.access || ({ admin: "admin", justin: "admin", jeromy: "manager", foreman: "standard" }[u.role] || "limited");
+  const title = u.title || (["admin", "justin", "jeromy"].includes(u.role) ? "admin" : (["foreman", "lead", "crew"].includes(u.role) ? u.role : "crew"));
+  return title === "admin" || (["admin", "manager"].includes(access) && !["foreman", "jrforeman", "lead"].includes(title));
+}
+// deliver() statuses → what the sender needs to know. "phone" = a device took
+// it now; "retrying" = the sweep keeps trying for 12 h; "bellOnly" = saved to
+// their in-app bell but no phone set up / every device refused it; "notSaved" =
+// even the bell copy failed (should never happen; listed by name if it does).
+function summarizeBroadcast(results) {
+  const names = (pred) => results.filter(pred).map(r => r.name);
+  return {
+    total: results.length,
+    phone: names(r => r.status === "sent" || r.status === "partial").length,
+    retrying: names(r => r.status === "retrying"),
+    bellOnly: names(r => r.status === "no_tokens" || (r.status === "failed" && r.persisted !== false)),
+    duplicate: names(r => r.status === "duplicate").length,
+    notSaved: names(r => r.persisted === false || ["error", "no_recipient", "unknown"].includes(r.status)),
+  };
+}
+
+// "is there a way to see who has viewed it so i know" (Koy, 2026-10-05).
+// One recipient's bell copy → where they are with it, strongest signal first:
+//   opened  — read in the app (tapped the push or the bell line, or cleared the
+//             bell). `at` = the record's last-change time, which for a read item
+//             is the moment they opened it (the rules only let the app flip
+//             `read`, so there is no separate readAt field).
+//   shown   — the banner came up on their phone (the push worker's receipt);
+//             not opened yet. Reading a lock-screen banner lands here.
+//   phone   — the push reached their phone; no display receipt yet.
+//   trying  — the push is still being retried.
+//   bell    — only in their bell (no phone set up, or every device refused it).
+//   missing — no bell copy (it never saved; nothing in the app deletes them).
+function seenStateOf(item, updatedIso) {
+  if (!item) return { state: "missing", at: "" };
+  if (item.read) return { state: "opened", at: updatedIso || "" };
+  if (item.displayedAt) return { state: "shown", at: String(item.displayedAt) };
+  const st = item.delivery && item.delivery.status;
+  if (st === "sent" || st === "partial") return { state: "phone", at: String((item.delivery && item.delivery.sentAt) || "") };
+  if (st === "retrying" || st === "pending") return { state: "trying", at: "" };
+  return { state: "bell", at: "" };
+}
+const SEEN_ORDER = ["opened", "shown", "phone", "trying", "bell", "missing"];
+function summarizeSeen(rows) {
+  const counts = Object.fromEntries(SEEN_ORDER.map(k => [k, 0]));
+  rows.forEach(r => { counts[r.state] = (counts[r.state] || 0) + 1; });
+  const people = rows.slice().sort((a, b) =>
+    (SEEN_ORDER.indexOf(a.state) - SEEN_ORDER.indexOf(b.state)) ||
+    String(b.at || "").localeCompare(String(a.at || "")) ||
+    String(a.name).localeCompare(String(b.name)));
+  return { total: rows.length, opened: counts.opened, counts, people };
+}
+
 module.exports = {
   STALE_TOKEN_CODES, TRANSIENT_CODES, MAX_ATTEMPTS, BACKOFF_MIN, LEASE_MS, PUSH_STALE_MS,
-  PUSH_BODY_MAX, LOW_PRIORITY_CATEGORIES,
+  PUSH_BODY_MAX, LOW_PRIORITY_CATEGORIES, BROADCAST_MAX_RECIPIENTS, BROADCAST_ID_RE,
   tokenTag, classifyError, priorityOf, normalizeNotif, deepLinkOf, notifDocId,
   buildMessage, summarizeResults, rollup, publicResults,
+  resolveBroadcastRecipients, summarizeBroadcast, seenStateOf, summarizeSeen, SEEN_ORDER, isBroadcaster,
 };
