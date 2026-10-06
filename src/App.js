@@ -58127,6 +58127,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const canMarkUrgent = (r) => !r.readOnly && (r.sel || r.canReassign) && (r.kind === "need" ? !!(r.need && onPatchNeed) : !!onSetPrio);
   const Row = (r) => {
     const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
+    // v505: a row in the right-hand column (r.side) wraps like a phone row — the column is too
+    // tight to hold the text beside six buttons (Koy's screenshot: one word per line).
+    const tight = narrow || !!r.side;
     const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
     // v429 select mode: a row never opens its job or a panel — tapping a
     // selectable row toggles it; per-row buttons / panels are hidden.
@@ -58138,7 +58141,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     return (
       <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key} onPointerDownCapture={r.unseen ? () => ack(r.key) : undefined}
         {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#3E7D5A", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: "#B0892C", fn: () => setSnoozeFor(r.key) } : null }))}
-        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: narrow ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
+        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: tight ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
@@ -58149,7 +58152,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
             squeezed to a few characters by the five action buttons beside it. On
             narrow screens the row wraps — text first, full width; buttons on their
             own line, right-aligned. Wide screens are unchanged. */}
-        <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: narrow ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
+        <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: tight ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.dim, marginTop: 3 }}>
             {r.unseen && <span title="Sent to you by someone else — stays here until you tap it" style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>NEW</span>}
@@ -58423,7 +58426,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
             </div>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: narrow ? "auto" : 0 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: tight ? "auto" : 0 }}>
         {!selectMode && canMarkUrgent(r) && (
           <button onClick={() => toggleUrgent(r)} title={r.prio === "urgent" ? "Urgent — tap to clear" : "Mark urgent"} aria-pressed={r.prio === "urgent"}
             style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.muted, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
@@ -58458,7 +58461,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
         ))}
         {!selectMode && r.canUpdate && (
           <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); closePanels(); setUpdFor(r.key); } }} title={r.audience ? `Reply to ${first(r.audience)}` : "Add a note"}
-            style={{ ...ib, width: "auto", padding: "0 10px", gap: 5, fontFamily: "inherit", fontSize: 13, fontWeight: 700, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}>{!narrow && <Icon name="note" size={16} stroke={2} />}Reply</button>
+            style={{ ...ib, width: "auto", padding: "0 10px", gap: 5, fontFamily: "inherit", fontSize: 13, fontWeight: 700, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}>{!tight && <Icon name="note" size={16} stroke={2} />}Reply</button>
         )}
         </div>
         {snoozeFor === r.key && (
@@ -58478,6 +58481,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
     );
   };
   const Group = (g) => {
+    const RowIn = (!g.main && g.key !== "foryou") ? ((r) => Row({ ...r, side: true })) : Row;
     const isOpen = g.key === "foryou" || openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
     const overdue = g.rows.filter(r => r.bucket === "overdue").length;
     return (
@@ -58512,7 +58516,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.scheduled > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#3B5BA5", background: "#3B5BA518", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.scheduled} scheduled</span>}
                     </div>
-                    {open && <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(Row)}{g.key === "mine" && c.key === "qc" && qcTracker}</HeUnfold>}
+                    {open && <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(RowIn)}{g.key === "mine" && c.key === "qc" && qcTracker}</HeUnfold>}
                   </div>
                 );
               })}
@@ -58542,7 +58546,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
                       </div>
                       {open && (
                         <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
-                          {rows.map(Row)}
+                          {rows.map(RowIn)}
                           {isHead && canCreate && openQuickAdd && (
                             <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
                               style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
@@ -58557,7 +58561,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
               </div>
             : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)
           : (g.rows.length
-            ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(Row)}</HeUnfold>
+            ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(RowIn)}</HeUnfold>
             : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 13, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>))}
       </div>
     );
@@ -58608,8 +58612,9 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   }, [batchQ]); // eslint-disable-line
   const segBtn = (on) => ({ fontFamily: "inherit", fontSize: 12, fontWeight: on ? 700 : 500, padding: "6px 10px", minHeight: 34, border: "none", cursor: "pointer", background: on ? C.accent : "transparent", color: on ? "#fff" : C.text });
   const barBtn = { fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: "#66A8FF", border: "1px solid #66A8FF55" };
+  const topGroups = groups.filter(g => g.key === "foryou");   // v505: full width, above both columns
   const mainGroups = groups.filter(g => g.main);
-  const sideGroups = groups.filter(g => !g.main);
+  const sideGroups = groups.filter(g => !g.main && g.key !== "foryou");
   // v431: Team pulse (head only) — folded card, right column, above Sent.
   // Tapping a person switches to Person view and opens that person's group
   // (same "p:<name>" fold key the Person view itself uses).
@@ -58730,6 +58735,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           )}
         </div>
       )}
+      {topGroups.map(Group)}
       {narrow || groups.length === 1
         ? <>{mainGroups.map(Group)}{staleFooter}{sideNodes}</>
         : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{mainGroups.map(Group)}{staleFooter}</div><div>{sideNodes}</div></div>}
