@@ -128,4 +128,41 @@ t("only the office can send: title Admin, or Admin/Manager access without a fiel
   assert.ok(ND.isBroadcaster({ ...live.colby, caps: ["notify.broadcast"] }), "a per-person grant counts");
 });
 
+t("announcement kinds: unknown falls back to announcement; the push title carries the kind", () => {
+  assert.strictEqual(ND.normalizeKind("important"), "important");
+  assert.strictEqual(ND.normalizeKind("discussion"), "discussion");
+  assert.strictEqual(ND.normalizeKind("shout"), "announcement");
+  assert.strictEqual(ND.normalizeKind(undefined), "announcement");
+  assert.strictEqual(ND.broadcastPushTitle("important", "New PPE rule"), "IMPORTANT · New PPE rule");
+  assert.strictEqual(ND.broadcastPushTitle("nope", "x"), "ANNOUNCEMENT · x");
+});
+t("attachments: only Firebase Storage download links, names cleaned, 10 max", () => {
+  const ok = "https://firebasestorage.googleapis.com/v0/b/homestead-electric.firebasestorage.app/o/broadcasts%2Fbc_a%2Fx.pdf?alt=media&token=1";
+  const out = ND.cleanAttachments([
+    { name: "<b>plan</b>.pdf", url: ok, type: "application/pdf" },
+    { name: "evil", url: "https://evil.example/x.pdf" },
+    { name: "js", url: "javascript:alert(1)" },
+    { name: "", url: ok, type: "image/jpeg" },
+  ]);
+  assert.deepStrictEqual(out.map(a => a.name), ["bplan/b.pdf", "file"]);
+  assert.strictEqual(ND.cleanAttachments(Array.from({ length: 14 }, () => ({ url: ok }))).length, 10);
+  assert.strictEqual(ND.cleanAttachments(Array.from({ length: 9 }, () => ({ url: ok })), 6).length, 6);
+  assert.deepStrictEqual(ND.cleanAttachments("nope"), []);
+});
+t("participants: the people it was sent to, plus the sender", () => {
+  const b = { by: "Koy Wilkinson", recipients: [{ name: "Colby Fogh", key: "u1" }, { name: "Jacob Spackman", key: "u3" }] };
+  assert.ok(ND.isParticipant(b, "u1", "Colby Fogh"));
+  assert.ok(ND.isParticipant(b, "", "jacob spackman"));
+  assert.ok(ND.isParticipant(b, "koy", "Koy Wilkinson"), "sender");
+  assert.ok(!ND.isParticipant(b, "u6", "Gage Lund"));
+  assert.ok(!ND.isParticipant(null, "u1", "Colby Fogh"));
+});
+t("Got it is the strongest seen state and counts as opened", () => {
+  assert.deepStrictEqual(ND.seenStateOf({ read: true, ackAt: "2026-10-06T14:00:00Z" }), { state: "acked", at: "2026-10-06T14:00:00Z" });
+  const s = ND.summarizeSeen([{ name: "A", state: "acked", at: "x" }, { name: "B", state: "opened", at: "y" }, { name: "C", state: "bell", at: "" }]);
+  assert.strictEqual(s.acked, 1); assert.strictEqual(s.opened, 2);
+  assert.deepStrictEqual(s.people.map(p => p.name), ["A", "B", "C"]);
+  assert.ok(ND.REPLY_ID_RE.test("r_mfx3k2_a9q4z1")); assert.ok(!ND.REPLY_ID_RE.test("r_x/../y"));
+});
+
 console.log(`\n${pass} passed`);

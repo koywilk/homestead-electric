@@ -318,7 +318,10 @@ async function attemptPush({ userKey, nid, n, tokens, attempts, persisted, first
 
 // Single delivery chokepoint for every user-level notification. Returns a small
 // summary ({status, nid, ...}) that callers may ignore.
-async function deliver(user, notif) {
+// `extra` (announcements, 2026-10-06): additional fields stored on the inbox
+// record only (kind, broadcastId, headline, from, attachments…). Spread FIRST
+// so it can never override the record's own fields (read, delivery, title…).
+async function deliver(user, notif, extra = null) {
   if (!user) {
     functions.logger.warn("[notify] no recipient — not delivered", { title: notif && notif.title });
     return { status: "no_recipient" };
@@ -341,6 +344,7 @@ async function deliver(user, notif) {
     await withWriteRetry(() => {
       const batch = db.batch();
       batch.create(inboxRef(userKey, nid), {
+        ...(extra && typeof extra === "object" ? extra : {}),
         // Same fields the bell has always read (title/body/jobId/section/view/
         // needId/createdAt/read) — additive only.
         title: n.title, body: n.body, jobId: n.jobId, section: n.section,
@@ -493,21 +497,23 @@ exports.pushReceipt = functions.https.onCall(async (data) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// CALLABLES — sendBroadcast / listBroadcasts (Koy, 2026-10-05)
-// "i would like the option to send out a notification to either everyone or
-// select people with a custom message" — e.g. everyone: "Bid Items moved to its
-// own tab", or just the foremen. Office only (Koy, 2026-10-05):
-// requireBroadcaster = the live-PIN gate (requireAdmin) + ND.isBroadcaster,
-// because this can buzz every phone in the company. Each recipient goes through deliver(), so a broadcast is an ordinary
-// notification: saved to the bell first, pushed, retried by pushRetrySweep.
-// deliver(), NOT deliverIfWanted — a company announcement has no mute toggle.
-// The client mints the broadcast id and it becomes the eventKey, so a double tap
-// or a retried call with the same id can never ping anyone twice.
-// broadcasts/{id} is the record (function-only; the rules' deny-all catch-all
-// covers it, no rules change). Test sends go to the sender and aren't recorded.
+// CALLABLES — office messages: broadcasts → announcements
+// v511 (Koy, 2026-10-05): "send out a notification to either everyone or select
+// people with a custom message". v513 (2026-10-06, approved mockup): three kinds —
+// "announcement" (one-way), "important" (each person taps Got it; pinned on My
+// Day until they do; weekday-morning reminder), "discussion" (a group thread;
+// every reply notifies everyone in it) — plus photo / file attachments.
+// Sending, history, the seen list and Remind are office only: requireBroadcaster
+// = the live-PIN gate (requireAdmin) + ND.isBroadcaster. Opening a message, Got
+// it and replying are for the people it was sent to: requireMember (their own
+// live PIN) + ND.isParticipant. Every message and reply goes through deliver()
+// (bell first, push, pushRetrySweep retries), with the kind / headline / sender /
+// attachments stored on the bell copy via deliver's `extra`. deliver(), NOT
+// deliverIfWanted — office messages have no mute toggle. Ids are client-minted
+// and become eventKeys, so a double tap or a retried call never pings twice.
+// broadcasts/{id} (+ /replies) is function-only: the rules' deny-all catch-all
+// covers it, no rules change. Test sends go to the sender and aren't recorded.
 // ─────────────────────────────────────────────────────────────
-// Live-PIN check (requireAdmin) + Office only (ND.isBroadcaster). Every
-// broadcast callable — send, history, who's seen it — goes through this.
 async function requireBroadcaster(data) {
   const user = await requireAdmin(data);
   if (!ND.isBroadcaster(user)) {
@@ -516,56 +522,92 @@ async function requireBroadcaster(data) {
   return user;
 }
 
+// Any active team member, proven by their own live PIN. Matched by id first
+// (the app sends identity.id), then by name — and among same-name records
+// (Justin is listed twice) the one whose PIN matches, so the right record wins.
+async function requireMember(data) {
+  requireAppKey(data);
+  const by = String((data && data.by) || "").trim().toLowerCase();
+  const pin = String((data && data.pin) || "");
+  const uid = String((data && data.uid) || "");
+  if ((!by && !uid) || !pin) throw new functions.https.HttpsError("permission-denied", "Sign in again to open this.");
+  const users = await getUsers();
+  const live = users.filter(u => u && u.active !== false && u.pin && String(u.pin) === pin);
+  const user = (uid && live.find(u => u.id === uid)) || live.find(u => String(u.name || "").trim().toLowerCase() === by) || null;
+  if (!user) throw new functions.https.HttpsError("permission-denied", "Sign in again to open this.");
+  return user;
+}
+
+const broadcastRef = (id) => db.collection("broadcasts").doc(id);
+const cleanId = (v, re, what) => {
+  const id = String(v || "").trim();
+  if (!re.test(id)) throw new functions.https.HttpsError("invalid-argument", `Bad ${what} id.`);
+  return id;
+};
+// The bell-copy fields every message / reply / reminder carries (deliver extra).
+const announceExtra = (b, more = {}) => ({
+  kind: ND.normalizeKind(b.kind), broadcastId: b.id, headline: String(b.title || "").slice(0, 80),
+  from: String(b.by || "").slice(0, 80), attachments: Array.isArray(b.attachments) ? b.attachments : [],
+  label: String(b.label || "").slice(0, 80), ...more,
+});
+// Deliver to many users, 10 at a time, never throwing.
+async function deliverMany(users, notif, extra, tag) {
+  const out = [];
+  for (let i = 0; i < users.length; i += 10) {
+    const chunk = users.slice(i, i + 10);
+    const rs = await Promise.all(chunk.map(u => deliver(u, notif, extra).catch(e => {
+      functions.logger.error(`[${tag}] deliver threw`, { to: u.name, error: e.message });
+      return { status: "error" };
+    })));
+    chunk.forEach((u, k) => out.push({ user: u, status: (rs[k] && rs[k].status) || "unknown", persisted: rs[k] && rs[k].persisted }));
+  }
+  return out;
+}
+
 exports.sendBroadcast = functions.https.onCall(async (data) => {
   const sender = await requireBroadcaster(data);
-  const id = String((data && data.id) || "").trim();
-  if (!ND.BROADCAST_ID_RE.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad broadcast id.");
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "broadcast");
   const body = String((data && data.body) || "").trim().slice(0, 1000);
   if (!body) throw new functions.https.HttpsError("invalid-argument", "Write a message first.");
   const title = String((data && data.title) || "").trim().slice(0, 80) || `Message from ${sender.name}`;
   const label = String((data && data.label) || "").trim().slice(0, 80);
+  const kind = ND.normalizeKind(data && data.kind);
+  const attachments = ND.cleanAttachments(data && data.attachments);
   const test = !!(data && data.test);
   const users = await getUsers();
   const picked = ND.resolveBroadcastRecipients(users, data && data.to, sender, test, inboxKeyOf);
   if (!picked.length) throw new functions.https.HttpsError("invalid-argument", "Pick at least one person.");
-  const notif = { title, body, category: "broadcast", eventKey: test ? `${id}_test` : id };
-  const results = [];
-  for (let i = 0; i < picked.length; i += 10) {
-    const chunk = picked.slice(i, i + 10);
-    const rs = await Promise.all(chunk.map(u => deliver(u, notif).catch(e => {
-      functions.logger.error("[broadcast] deliver threw", { to: u.name, id, error: e.message });
-      return { status: "error" };
-    })));
-    // key + nid make each person's bell copy findable later (broadcastSeen). The
-    // id is deterministic from the eventKey, so it is right even for a
-    // duplicate-suppressed resend.
-    chunk.forEach((u, k) => results.push({ name: u.name, status: (rs[k] && rs[k].status) || "unknown",
-      persisted: rs[k] && rs[k].persisted, key: inboxKeyOf(u),
-      nid: ND.notifDocId(inboxKeyOf(u), ND.normalizeNotif(notif), 0) }));
-  }
+  const at = new Date().toISOString();
+  const b = { id, by: sender.name, at, title, body, label, kind, attachments };
+  const notif = { title: ND.broadcastPushTitle(kind, title), body, category: "broadcast",
+    view: "announce", needId: id, eventKey: test ? `${id}_test` : id };
+  const delivered = await deliverMany(picked, notif, announceExtra(b, { test }), "broadcast");
+  // key + nid make each person's bell copy findable later (seen list, Got it,
+  // My Day pin). Deterministic from the eventKey, so right even for a resend.
+  const results = delivered.map(r => ({ name: r.user.name, status: r.status, persisted: r.persisted,
+    key: inboxKeyOf(r.user), nid: ND.notifDocId(inboxKeyOf(r.user), ND.normalizeNotif(notif), 0) }));
   const summary = ND.summarizeBroadcast(results);
-  functions.logger.info("[broadcast] sent", { id, by: sender.name, test, label, title: title.slice(0, 80),
-    total: summary.total, phone: summary.phone, retrying: summary.retrying.length,
+  functions.logger.info("[broadcast] sent", { id, by: sender.name, kind, test, label, title: title.slice(0, 80),
+    attachments: attachments.length, total: summary.total, phone: summary.phone, retrying: summary.retrying.length,
     bellOnly: summary.bellOnly.length, notSaved: summary.notSaved.length });
   if (!test) {
-    await db.collection("broadcasts").doc(id).set({
-      id, by: sender.name, at: new Date().toISOString(), title, body, label,
-      to: results.map(r => r.name), summary,
+    await broadcastRef(id).set({
+      ...b, to: results.map(r => r.name), summary, replyCount: 0,
       recipients: results.map(r => ({ name: r.name, key: r.key, nid: r.nid })),
     }).catch(e => functions.logger.error("[broadcast] record write FAILED", { id, error: e.message }));
   }
-  return { ok: true, id, test, title, summary };
+  return { ok: true, id, test, kind, title, summary };
 });
 
 // Read every recipient's bell copy of one broadcast record → seen states.
 async function broadcastSeenRows(b) {
   const recips = Array.isArray(b && b.recipients) ? b.recipients : [];
   return Promise.all(recips.map(async (r) => {
-    if (!r || !r.key || !r.nid) return { name: (r && r.name) || "?", ...ND.seenStateOf(null) };
+    if (!r || !r.key || !r.nid) return { name: (r && r.name) || "?", key: (r && r.key) || "", ...ND.seenStateOf(null) };
     const snap = await inboxRef(r.key, r.nid).get().catch(() => null);
     const item = snap && snap.exists ? snap.data() : null;
     const updated = snap && snap.updateTime && typeof snap.updateTime.toDate === "function" ? snap.updateTime.toDate().toISOString() : "";
-    return { name: r.name, ...ND.seenStateOf(item, updated) };
+    return { name: r.name, key: r.key, ...ND.seenStateOf(item, updated) };
   }));
 }
 
@@ -577,7 +619,9 @@ exports.listBroadcasts = functions.https.onCall(async (data) => {
     const seen = Array.isArray(b.recipients) ? ND.summarizeSeen(await broadcastSeenRows(b)) : null;
     return { id: b.id || d.id, by: b.by || "", at: b.at || "", title: b.title || "", body: b.body || "",
       label: b.label || "", count: Array.isArray(b.to) ? b.to.length : 0, summary: b.summary || null,
-      opened: seen ? seen.opened : null };
+      kind: ND.normalizeKind(b.kind), attachments: Array.isArray(b.attachments) ? b.attachments.length : 0,
+      replyCount: Number(b.replyCount) || 0,
+      opened: seen ? seen.opened : null, acked: seen ? seen.acked : null };
   }));
   return { items };
 });
@@ -585,13 +629,154 @@ exports.listBroadcasts = functions.https.onCall(async (data) => {
 // Who has seen one broadcast, person by person (bell → Send → Recently sent).
 exports.broadcastSeen = functions.https.onCall(async (data) => {
   await requireBroadcaster(data);
-  const id = String((data && data.id) || "").trim();
-  if (!ND.BROADCAST_ID_RE.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad broadcast id.");
-  const snap = await db.collection("broadcasts").doc(id).get();
-  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That broadcast isn't on record.");
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "broadcast");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record.");
   const b = snap.data() || {};
-  return { id, title: b.title || "", at: b.at || "", ...ND.summarizeSeen(await broadcastSeenRows(b)) };
+  const seen = ND.summarizeSeen(await broadcastSeenRows(b));
+  return { id, title: b.title || "", at: b.at || "", kind: ND.normalizeKind(b.kind),
+    replyCount: Number(b.replyCount) || 0, ...seen, people: seen.people.map(p => ({ name: p.name, state: p.state, at: p.at })) };
 });
+
+// Open one message (the people it was sent to, the sender, or the office): the
+// full message, its attachments, my Got it, and — for a discussion — the thread.
+exports.broadcastOpen = functions.https.onCall(async (data) => {
+  const me = await requireMember(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record any more.");
+  const b = snap.data() || {};
+  const myKey = inboxKeyOf(me);
+  if (!ND.isParticipant(b, myKey, me.name) && !ND.isBroadcaster(me)) {
+    throw new functions.https.HttpsError("permission-denied", "This message wasn't sent to you.");
+  }
+  const mine = (Array.isArray(b.recipients) ? b.recipients : []).find(r => r && r.key === myKey) || null;
+  let myAckAt = "";
+  if (mine && mine.nid) {
+    const it = await inboxRef(myKey, mine.nid).get().catch(() => null);
+    myAckAt = (it && it.exists && it.data().ackAt) || "";
+  }
+  let replies = [];
+  if (ND.normalizeKind(b.kind) === "discussion") {
+    const rs = await broadcastRef(id).collection("replies").orderBy("at", "asc").limit(300).get();
+    replies = rs.docs.map(d => { const r = d.data() || {}; return { id: d.id, by: r.by || "", at: r.at || "", text: r.text || "",
+      attachments: Array.isArray(r.attachments) ? r.attachments : [] }; });
+  }
+  return { id, kind: ND.normalizeKind(b.kind), title: b.title || "", body: b.body || "", by: b.by || "", at: b.at || "",
+    label: b.label || "", count: Array.isArray(b.to) ? b.to.length : 0, attachments: Array.isArray(b.attachments) ? b.attachments : [],
+    isRecipient: !!mine, myAckAt, replies };
+});
+
+// Got it on an Important message. Stamps the person's own bell copy (ackAt +
+// read) server-side — the rules only let the app flip `read`, so a Got it can't
+// be faked by editing the bell. Idempotent: a second tap keeps the first time.
+exports.ackBroadcast = functions.https.onCall(async (data) => {
+  const me = await requireMember(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record any more.");
+  const b = snap.data() || {};
+  const myKey = inboxKeyOf(me);
+  const mine = (Array.isArray(b.recipients) ? b.recipients : []).find(r => r && r.key === myKey);
+  if (!mine || !mine.nid) throw new functions.https.HttpsError("permission-denied", "This message wasn't sent to you.");
+  const ref = inboxRef(myKey, mine.nid);
+  let ackAt = new Date().toISOString();
+  await db.runTransaction(async (tx) => {
+    const it = await tx.get(ref);
+    if (it.exists && it.data().ackAt) { ackAt = it.data().ackAt; return; }
+    tx.set(ref, { ackAt, read: true }, { mergeFields: ["ackAt", "read"] });
+  });
+  functions.logger.info("[broadcast] got it", { id, by: me.name, ackAt });
+  return { ok: true, ackAt };
+});
+
+// A reply in a Discussion. Stored under the message; every OTHER person in it
+// (the recipients + the sender) gets a notification — Koy: "Everyone in it".
+exports.replyBroadcast = functions.https.onCall(async (data) => {
+  const me = await requireMember(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const rid = cleanId(data && data.rid, ND.REPLY_ID_RE, "reply");
+  const text = String((data && data.text) || "").trim().slice(0, 1000);
+  const attachments = ND.cleanAttachments(data && data.attachments, 6);
+  if (!text && !attachments.length) throw new functions.https.HttpsError("invalid-argument", "Write a reply first.");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That discussion isn't on record any more.");
+  const b = snap.data() || {};
+  if (ND.normalizeKind(b.kind) !== "discussion") throw new functions.https.HttpsError("failed-precondition", "Replies are only for discussions.");
+  const myKey = inboxKeyOf(me);
+  if (!ND.isParticipant(b, myKey, me.name)) throw new functions.https.HttpsError("permission-denied", "You're not in this discussion.");
+  const at = new Date().toISOString();
+  try {
+    await broadcastRef(id).collection("replies").doc(rid).create({ by: me.name, byKey: myKey, at, text, attachments });
+  } catch (e) {
+    if (e && (e.code === 6 || /already exists/i.test(e.message || ""))) return { ok: true, duplicate: true };
+    throw e;
+  }
+  await broadcastRef(id).set({ replyCount: admin.firestore.FieldValue.increment(1), lastReplyAt: at, lastReplyBy: me.name },
+    { merge: true }).catch(e => functions.logger.warn("[broadcast] reply count write failed", { id, error: e.message }));
+  const users = await getUsers();
+  const keys = new Set((Array.isArray(b.recipients) ? b.recipients : []).map(r => r && r.key).filter(Boolean));
+  const senderUser = users.find(u => String(u.name || "").trim().toLowerCase() === String(b.by || "").trim().toLowerCase());
+  if (senderUser) keys.add(inboxKeyOf(senderUser));
+  keys.delete(myKey);
+  const others = users.filter(u => u && u.active !== false && keys.has(inboxKeyOf(u)));
+  const first = String(me.name || "").split(/\s+/)[0] || me.name;
+  const notif = { title: ND.broadcastPushTitle("discussion", b.title), body: `${first}: ${text || "sent a photo"}`.slice(0, 1000),
+    category: "broadcast_reply", view: "announce", needId: id, eventKey: `${id}_${rid}` };
+  const out = await deliverMany(others, notif, announceExtra(b, { replyBy: me.name }), "broadcast-reply");
+  functions.logger.info("[broadcast] reply", { id, by: me.name, notified: out.length });
+  return { ok: true, at, notified: out.length };
+});
+
+// Office "Remind the ones who haven't": Important → everyone without Got it;
+// Announcement / Discussion → everyone who hasn't opened it.
+async function remindUnconfirmed(b, nonce, users) {
+  const rows = await broadcastSeenRows(b);
+  const kind = ND.normalizeKind(b.kind);
+  const pending = rows.filter(r => kind === "important" ? r.state !== "acked" : !["acked", "opened"].includes(r.state));
+  const byKey = new Map((users || []).filter(u => u && u.active !== false).map(u => [inboxKeyOf(u), u]));
+  const targets = pending.map(r => byKey.get(r.key)).filter(Boolean);
+  const notif = { title: `Reminder · ${ND.broadcastPushTitle(kind, b.title)}`.slice(0, 120),
+    body: kind === "important" ? "Still needs your Got it." : String(b.body || "").slice(0, 300),
+    category: "broadcast_reminder", view: "announce", needId: b.id, eventKey: `${b.id}_rem_${nonce}` };
+  await deliverMany(targets, notif, announceExtra(b, { reminder: true }), "broadcast-remind");
+  return targets.map(u => u.name);
+}
+
+exports.remindBroadcast = functions.https.onCall(async (data) => {
+  const me = await requireBroadcaster(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const nonce = cleanId(data && data.nonce, ND.REPLY_ID_RE, "reminder");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record.");
+  const names = await remindUnconfirmed(snap.data() || {}, nonce, await getUsers());
+  functions.logger.info("[broadcast] remind", { id, by: me.name, count: names.length });
+  return { ok: true, reminded: names };
+});
+
+// Weekday mornings: anyone still missing Got it on an Important message sent at
+// least 12 h ago gets one reminder per day, for up to 3 mornings (Koy: pinned on
+// My Day until Got it, plus a reminder the next morning). The eventKey is the
+// date, so a re-run the same morning can't double-ping.
+exports.importantGotItReminder = functions.pubsub
+  .schedule("35 6 * * 1-5").timeZone(TZ)
+  .onRun(async () => {
+    const snap = await db.collection("broadcasts").where("kind", "==", "important").limit(50).get();
+    if (snap.empty) return null;
+    const users = await getUsers();
+    const now = Date.now();
+    const ymd = new Date().toLocaleDateString("en-CA", { timeZone: TZ }).replace(/-/g, "");
+    let msgs = 0, people = 0;
+    for (const d of snap.docs) {
+      const b = d.data() || {};
+      const age = now - new Date(b.at || 0).getTime();
+      if (!(age >= 12 * 3600e3 && age <= 4 * 86400e3)) continue;
+      const names = await remindUnconfirmed(b, `r_auto${ymd}`, users);
+      if (names.length) { msgs++; people += names.length; }
+    }
+    functions.logger.info("[importantGotItReminder] ran", { messages: msgs, people });
+    return null;
+  });
 
 // ─── Notification Doctor — test push to a single user ───────────────────────
 // Lets the in-app diagnostic page send a push to a specific user and see

@@ -191,6 +191,14 @@ function gcAdminCallable(name, identity) {
   const raw = httpsCallable(functions, name);
   return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "" });
 }
+// Same live-PIN proof for ANY team member (announcements: open a message, Got
+// it, reply). Adds the identity id so the server picks the right record even
+// when two people share a name (the server's requireMember).
+function memberCallable(name, identity) {
+  const raw = httpsCallable(functions, name);
+  return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "",
+    uid: (identity && identity.id) || "" });
+}
 
 // ── FieldInk (TraceVault) read-only link ─────────────────────────────────────
 // The crew's PDF-markup app lives in its OWN Firebase project ("field-ink").
@@ -46865,12 +46873,255 @@ const bcErrText = (e) => /permission/i.test(String((e && (e.code || e.message)) 
   ? "Only the office can send team notifications. If that's you, sign out and back in so your PIN is fresh."
   : `Couldn't send: ${String((e && e.message) || "unknown error").slice(0, 140)}`;
 
+// ── Announcements (Koy, 2026-10-06 — approved mockup) ───────────────────────
+// Office messages come in three kinds, each with its own color so they never
+// blend into the change-order / return-trip pings: Announcement (one-way),
+// Important (each person taps Got it; pinned on My Day until they do) and
+// Discussion (one thread; every reply notifies everyone in it). No yellow.
+const BC_KINDS = {
+  announcement: { label: "Announcement", color: C.accent, desc: "One-way. Shows who opened it." },
+  important:    { label: "Important",    color: C.red,    desc: "Each person taps Got it. Pinned on their My Day until they do, with a morning reminder." },
+  discussion:   { label: "Discussion",   color: C.purple, desc: "Everyone can reply in one thread. Every reply notifies the whole group." },
+};
+const bcKindOf = (k) => (BC_KINDS[k] ? k : "announcement");
+const bcReplyId = () => `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+const bcIsImage = (a) => /^image\//.test((a && a.type) || "") || /\.(jpe?g|png|gif|webp|heic|heif)(\?|$)/i.test((a && a.name) || "");
+const bcOpenErr = (e) => {
+  const c = String((e && (e.code || e.message)) || "");
+  if (/not-found/i.test(c)) return "This message isn't on record any more.";
+  if (/permission/i.test(c)) return String((e && e.message) || "") || "Sign in again to open this.";
+  return `Couldn't load it: ${String((e && e.message) || "unknown error").slice(0, 140)}`;
+};
+const bcTag = (kind, text) => (
+  <span style={{ display: "inline-flex", alignItems: "center", fontSize: 10, fontWeight: 800, letterSpacing: "0.06em",
+    textTransform: "uppercase", color: "#fff", background: BC_KINDS[bcKindOf(kind)].color, borderRadius: 5, padding: "2px 7px", flexShrink: 0 }}>
+    {text || BC_KINDS[bcKindOf(kind)].label}
+  </span>
+);
+
+// Photos as a tap-to-open grid, other files as named tiles.
+function BcAttachments({ list }) {
+  const all = Array.isArray(list) ? list.filter(a => a && a.url) : [];
+  if (!all.length) return null;
+  const imgs = all.filter(bcIsImage), files = all.filter(a => !bcIsImage(a));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {imgs.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>
+          {imgs.map(a => (
+            <a key={a.url} href={safeUrl(a.url)} target="_blank" rel="noreferrer" title={a.name}
+              style={{ display: "block", aspectRatio: "1 / 1", maxWidth: "100%", borderRadius: 8, overflow: "hidden", border: `1px solid ${C.border}`, background: C.surface }}>
+              <img src={a.url} alt={a.name || "Photo"} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
+            </a>
+          ))}
+        </div>
+      )}
+      {files.map(a => (
+        <a key={a.url} href={safeUrl(a.url)} target="_blank" rel="noreferrer"
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", borderRadius: 8, border: `1px solid ${C.border}`,
+            background: C.surface, color: C.text, textDecoration: "none", fontSize: 13, fontWeight: 600, minWidth: 0 }}>
+          <Icon name="fileText" size={15}/>
+          <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{a.name || "File"}</span>
+          <span style={{ fontSize: 11, color: C.accent, flexShrink: 0 }}>Open ↗</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// The full message, opened from the bell, a push, or the My Day pin.
+function AnnouncementView({ identity, id, onClose }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [acking, setAcking] = useState(false);
+  const [reply, setReply] = useState("");
+  const [replyFiles, setReplyFiles] = useState([]);
+  const [posting, setPosting] = useState(false);
+  const replyIdRef = useRef(bcReplyId());
+  const load = useCallback(() => {
+    memberCallable("broadcastOpen", identity)({ id })
+      .then(r => { setD((r && r.data) || null); setErr(""); })
+      .catch(e => setErr(bcOpenErr(e)));
+  }, [identity, id]);
+  useEffect(() => { load(); }, [load]);
+  // A discussion refreshes while it's open, so new replies show up on their own.
+  const isDiscussion = !!(d && d.kind === "discussion");
+  useEffect(() => {
+    if (!isDiscussion) return undefined;
+    const t = setInterval(load, 25000);
+    return () => clearInterval(t);
+  }, [isDiscussion, load]);
+
+  const ack = async () => {
+    setAcking(true);
+    try {
+      const r = await memberCallable("ackBroadcast", identity)({ id });
+      setD(prev => ({ ...(prev || {}), myAckAt: (r && r.data && r.data.ackAt) || new Date().toISOString() }));
+      toast.success("Confirmed — the office can see you've read it.");
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setAcking(false);
+  };
+  const post = async () => {
+    const text = reply.trim();
+    if (!text && !replyFiles.length) return;
+    setPosting(true);
+    try {
+      await memberCallable("replyBroadcast", identity)({ id, rid: replyIdRef.current, text,
+        attachments: replyFiles.map(a => ({ name: a.name, url: a.url, type: a.type || "" })) });
+      replyIdRef.current = bcReplyId(); setReply(""); setReplyFiles([]); load();
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setPosting(false);
+  };
+
+  const k = BC_KINDS[bcKindOf(d && d.kind)];
+  const me = String((identity && identity.name) || "").trim().toLowerCase();
+  const when = (iso) => { try { return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } };
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
+      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 8px 8px", overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Message from the office"
+        style={{ width: "min(600px, 100%)", background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
+          boxShadow: "0 18px 48px rgba(0,0,0,0.25)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ borderTop: `4px solid ${k.color}`, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {bcTag(d && d.kind)}
+            <span style={{ flex: 1 }}/>
+            <button type="button" onClick={onClose} title="Close"
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
+              <Icon name="x" size={16}/>
+            </button>
+          </div>
+          {err && <div style={{ fontSize: 13, color: C.red }}>{err}</div>}
+          {!d && !err && <div style={{ fontSize: 13, color: C.dim }}>Opening…</div>}
+          {d && (
+            <>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.text, lineHeight: 1.25, textWrap: "balance" }}>{d.title}</div>
+              <div style={{ fontSize: 11.5, color: C.dim }}>
+                From {d.by}{d.label ? ` · to ${d.label === "Everyone" ? "everyone" : d.label}` : ""}{d.count ? ` (${d.count})` : ""} · {when(d.at)}
+              </div>
+            </>
+          )}
+        </div>
+        {d && (
+          <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 14, color: C.text, whiteSpace: "pre-wrap", lineHeight: 1.45 }}>{d.body}</div>
+            <BcAttachments list={d.attachments}/>
+
+            {d.kind === "important" && d.isRecipient && (
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                {d.myAckAt ? (
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.green }}>✓ You confirmed · {when(d.myAckAt)}
+                    <div style={{ fontSize: 11.5, fontWeight: 500, color: C.dim }}>The office can see you've read it.</div></div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 11.5, color: C.dim }}>{d.by} needs everyone on this to confirm they've read it.</div>
+                    <button type="button" onClick={ack} disabled={acking}
+                      style={{ width: "100%", padding: "12px 14px", borderRadius: 9, border: "none", background: C.red, color: "#fff",
+                        fontSize: 14, fontWeight: 800, fontFamily: "inherit", cursor: acking ? "default" : "pointer", opacity: acking ? 0.7 : 1 }}>
+                      {acking ? "Confirming…" : "Got it"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {d.kind === "discussion" && (
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: C.dim, textTransform: "uppercase", flex: 1 }}>
+                    {d.replies.length} {d.replies.length === 1 ? "reply" : "replies"}
+                  </span>
+                  <button type="button" onClick={load}
+                    style={{ fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", background: "none",
+                      border: `1px solid ${C.border}`, borderRadius: 99, padding: "3px 10px", color: C.accent }}>Refresh</button>
+                </div>
+                {d.replies.map(r => {
+                  const mine = String(r.by || "").trim().toLowerCase() === me;
+                  return (
+                    <div key={r.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "88%", borderRadius: 12, padding: "8px 10px",
+                      background: mine ? `${C.purple}18` : C.surface, border: `1px solid ${mine ? `${C.purple}55` : C.border}`,
+                      display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: C.purple }}>{mine ? "You" : r.by}
+                        <span style={{ fontSize: 10, color: C.dim, fontWeight: 500, marginLeft: 6 }}>{r.at ? timeAgo(r.at) : ""}</span></div>
+                      {r.text && <div style={{ fontSize: 13, color: C.text, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{r.text}</div>}
+                      <BcAttachments list={r.attachments}/>
+                    </div>
+                  );
+                })}
+                <textarea value={reply} onChange={e => setReply(e.target.value)} maxLength={1000} rows={2} placeholder="Reply to the group…"
+                  style={{ width: "100%", boxSizing: "border-box", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                    color: C.text, padding: "9px 11px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }}/>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <PhotoAttacher storagePath={`broadcasts/${id}/replies`} photos={replyFiles} onChange={setReplyFiles}
+                    color={C.purple} label="Add photo"/>
+                  <span style={{ flex: 1 }}/>
+                  <button type="button" onClick={post} disabled={posting || (!reply.trim() && !replyFiles.length)}
+                    style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: C.purple, color: "#fff", fontSize: 13,
+                      fontWeight: 800, fontFamily: "inherit", cursor: "pointer", opacity: posting || (!reply.trim() && !replyFiles.length) ? 0.5 : 1 }}>
+                    {posting ? "Sending…" : "Send reply"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: C.dim }}>Every reply notifies everyone in this discussion.</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// Important messages still waiting on my Got it — pinned at the top of My Day.
+function AnnouncePins({ pins, identity, onOpen }) {
+  const [busy, setBusy] = useState("");
+  const [done, setDone] = useState(() => new Set());
+  const list = (pins || []).filter(p => !done.has(p.broadcastId));
+  if (!list.length) return null;
+  const ack = async (p) => {
+    setBusy(p.broadcastId);
+    try {
+      await memberCallable("ackBroadcast", identity)({ id: p.broadcastId });
+      setDone(prev => new Set(prev).add(p.broadcastId));
+      toast.success("Confirmed — the office can see you've read it.");
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setBusy("");
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+      {list.map(p => (
+        <div key={p.broadcastId} style={{ border: `1px solid ${C.red}66`, background: `${C.red}0D`, borderRadius: 12, padding: 12,
+          display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {bcTag("important")}
+            <span style={{ fontSize: 13.5, fontWeight: 800, color: C.text, flex: 1, minWidth: 0 }}>{p.headline || stripEmoji(p.title)}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.dim }}>From {p.from || "the office"}{p.createdAt ? ` · ${timeAgo(p.createdAt)}` : ""}
+            {Array.isArray(p.attachments) && p.attachments.length ? ` · ${p.attachments.length} attached` : ""}</div>
+          {p.body && <div style={{ fontSize: 13, color: C.text, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{p.body}</div>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" onClick={() => onOpen(p.broadcastId)}
+              style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text,
+                fontSize: 12.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>Read it</button>
+            <button type="button" onClick={() => ack(p)} disabled={busy === p.broadcastId}
+              style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.red, color: "#fff",
+                fontSize: 12.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer", opacity: busy === p.broadcastId ? 0.7 : 1 }}>
+              {busy === p.broadcastId ? "Confirming…" : "Got it"}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // "is there a way to see who has viewed it so i know" (Koy, 2026-10-05).
 // broadcastSeen reads each recipient's bell copy server-side (seenStateOf):
-// Opened = read in the app; Banner showed = their phone displayed it but they
-// haven't opened it; then on-phone / still-trying / bell-only / didn't save.
-const BC_SEEN_ORDER = ["opened", "shown", "phone", "trying", "bell", "missing"];
+// Got it (Important) > Opened > Banner showed > on phone > still trying >
+// bell only > didn't save. Remind re-pings everyone not done yet.
+const BC_SEEN_ORDER = ["acked", "opened", "shown", "phone", "trying", "bell", "missing"];
 const BC_SEEN_LABEL = {
+  acked:   "Got it",
   opened:  "Opened it",
   shown:   "Banner showed on their phone · not opened",
   phone:   "On their phone · not opened yet",
@@ -46882,6 +47133,7 @@ function BroadcastSeenList({ identity, id }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reminding, setReminding] = useState(false);
   const load = useCallback(() => {
     setBusy(true); setErr("");
     gcAdminCallable("broadcastSeen", identity)({ id })
@@ -46892,34 +47144,69 @@ function BroadcastSeenList({ identity, id }) {
   useEffect(() => { load(); }, [load]);
   if (err) return <div style={{ fontSize: 12, color: C.red }}>{err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: C.dim }}>Checking who's seen it…</div>;
+  const important = data.kind === "important";
+  const doneN = important ? (data.acked || 0) : data.opened;
+  const pending = Math.max(0, data.total - doneN);
   const groups = BC_SEEN_ORDER.map(k => [k, (data.people || []).filter(p => p.state === k)]).filter(([, ps]) => ps.length);
+  const labelFor = (k) => (important && k === "opened") ? "Opened · hasn't tapped Got it" : BC_SEEN_LABEL[k];
+  const remind = async () => {
+    setReminding(true);
+    try {
+      const r = await gcAdminCallable("remindBroadcast", identity)({ id, nonce: bcReplyId() });
+      const n = (r && r.data && r.data.reminded && r.data.reminded.length) || 0;
+      toast.success(n ? `Reminder sent to ${n}` : "Everyone's already done — no reminder needed.");
+      load();
+    } catch (e) { toast.error(bcErrText(e)); }
+    setReminding(false);
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 800, color: C.text, flex: 1 }}>Opened by {data.opened} of {data.total}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.text, flex: 1 }}>
+          {important ? `Got it from ${data.acked || 0} of ${data.total}` : `Opened by ${data.opened} of ${data.total}`}
+          {important && <span style={{ fontSize: 11, fontWeight: 600, color: C.dim }}> · opened {data.opened}</span>}
+          {data.kind === "discussion" && <span style={{ fontSize: 11, fontWeight: 600, color: C.dim }}> · {data.replyCount || 0} replies</span>}
+        </span>
         <button type="button" onClick={load} disabled={busy}
           style={{ fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: busy ? "default" : "pointer", background: "none",
             border: `1px solid ${C.border}`, borderRadius: 99, padding: "3px 10px", color: C.accent }}>
           {busy ? "Checking…" : "Refresh"}
         </button>
       </div>
+      {data.total > 0 && (
+        <div style={{ height: 7, borderRadius: 99, background: C.surface, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+          <div style={{ width: `${Math.round(100 * doneN / data.total)}%`, height: "100%", background: C.green }}/>
+        </div>
+      )}
       {groups.map(([k, ps]) => (
         <div key={k} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: k === "opened" ? C.green : k === "missing" ? C.red : C.dim }}>
-            {BC_SEEN_LABEL[k]} · {ps.length}
+          <div style={{ fontSize: 11, fontWeight: 700, color: (k === "acked" || (k === "opened" && !important)) ? C.green : k === "missing" ? C.red : C.dim }}>
+            {labelFor(k)} · {ps.length}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {ps.map(p => (
-              <span key={p.name} style={{ fontSize: 12, color: C.text, borderRadius: 99, padding: "3px 9px",
-                border: `1px solid ${k === "opened" ? `${C.green}66` : C.border}`, background: k === "opened" ? `${C.green}12` : "transparent" }}>
-                {p.name}{p.at && (k === "opened" || k === "shown") ? <span style={{ color: C.dim }}> · {timeAgo(p.at)}</span> : null}
-              </span>
-            ))}
+            {ps.map(p => {
+              const good = k === "acked" || (k === "opened" && !important);
+              return (
+                <span key={p.name} style={{ fontSize: 12, color: C.text, borderRadius: 99, padding: "3px 9px",
+                  border: `1px solid ${good ? `${C.green}66` : C.border}`, background: good ? `${C.green}12` : "transparent" }}>
+                  {p.name}{p.at && (k === "acked" || k === "opened" || k === "shown") ? <span style={{ color: C.dim }}> · {timeAgo(p.at)}</span> : null}
+                </span>
+              );
+            })}
           </div>
         </div>
       ))}
+      {pending > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={remind} disabled={reminding}
+            style={{ fontSize: 12, fontWeight: 700, fontFamily: "inherit", cursor: reminding ? "default" : "pointer", borderRadius: 8,
+              padding: "7px 12px", border: `1px solid ${C.border}`, background: C.card, color: C.text }}>
+            {reminding ? "Reminding…" : `Remind the ${pending} who haven't`}
+          </button>
+        </div>
+      )}
       <div style={{ fontSize: 11, color: C.dim }}>
-        Opened = they tapped it or cleared their bell. Someone who only read the banner on a locked phone shows as "banner showed".
+        {important ? "Got it = they tapped it in the app. " : ""}Opened = they tapped it or cleared their bell. Someone who only read the banner on a locked phone shows as "banner showed".
       </div>
     </div>
   );
@@ -46940,6 +47227,8 @@ function BroadcastComposer({ identity, users, onClose }) {
   const [recent, setRecent] = useState(null);   // null = loading, [] = none
   const [recentOpen, setRecentOpen] = useState(false);
   const [seenFor, setSeenFor] = useState("");      // Recently sent row whose seen list is open
+  const [kind, setKind] = useState("announcement");  // announcement | important | discussion
+  const [attachments, setAttachments] = useState([]);  // uploaded under broadcasts/<id>/ (PhotoAttacher)
   const idRef = useRef(bcNewId());
 
   const loadRecent = useCallback(() => {
@@ -46973,7 +47262,8 @@ function BroadcastComposer({ identity, users, onClose }) {
   const addPerson = (u) => { setSel(prev => new Set(prev).add(bcKeyOf(u))); setQ(""); };
 
   const send = async (test) => {
-    const payload = { id: test ? bcNewId() : idRef.current, title: title.trim(), body: body.trim(), label,
+    const payload = { id: test ? bcNewId() : idRef.current, title: title.trim(), body: body.trim(), label, kind,
+      attachments: attachments.map(a => ({ name: a.name, url: a.url, type: a.type || "" })),
       to: test ? [] : picked.map(u => ({ id: u.id || "", name: u.name })), test };
     if (test) setTesting(true); else setStage("sending");
     try {
@@ -47046,13 +47336,32 @@ function BroadcastComposer({ identity, users, onClose }) {
               </div>
             )}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button type="button" onClick={() => { setStage("edit"); setResult(null); setBody(""); setTitle(""); setSel(new Set()); }}
+              <button type="button" onClick={() => { setStage("edit"); setResult(null); setBody(""); setTitle(""); setSel(new Set()); setAttachments([]); setKind("announcement"); }}
                 style={{ ...chip(false), borderRadius: 8 }}>Send another</button>
               <button type="button" onClick={onClose} style={{ ...chip(true), borderRadius: 8 }}>Done</button>
             </div>
           </div>
         ) : (
           <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={label10}>What kind</div>
+              {Object.entries(BC_KINDS).map(([key, kd]) => {
+                const on = kind === key;
+                return (
+                  <button key={key} type="button" onClick={() => setKind(key)} disabled={stage !== "edit"} aria-pressed={on}
+                    style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", borderRadius: 10, cursor: "pointer",
+                      padding: on ? "9px 10px" : "10px 11px", border: `${on ? 2 : 1}px solid ${on ? kd.color : C.border}`,
+                      background: on ? `${kd.color}0F` : C.card, fontFamily: "inherit", color: C.text }}>
+                    <span style={{ flex: "0 0 12px", height: 12, marginTop: 3, borderRadius: 99, background: kd.color }}/>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 13, fontWeight: 800 }}>{kd.label}</span>
+                      <span style={{ display: "block", fontSize: 11.5, color: C.dim }}>{kd.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={label10}>To</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -47146,12 +47455,18 @@ function BroadcastComposer({ identity, users, onClose }) {
               <textarea value={body} maxLength={1000} disabled={stage !== "edit"} onChange={e => setBody(e.target.value)} rows={4}
                 placeholder="What do you want everyone to know?" style={{ ...field, resize: "vertical", lineHeight: 1.4 }}/>
               <div style={{ fontSize: 11, color: C.dim, textAlign: "right" }}>{body.length}/1000</div>
+              <div style={label10}>Photos &amp; files</div>
+              <PhotoAttacher storagePath={`broadcasts/${idRef.current}`} photos={attachments} onChange={setAttachments}
+                label="Add photos or files" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" iconName="paperclip"/>
+              <div style={{ fontSize: 11, color: C.dim }}>On a computer you can also drag files right onto this box.</div>
             </div>
 
             {body.trim() && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={label10}>How it shows up</div>
                 <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", background: `${C.accent}10` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>{bcTag(kind)}
+                    {attachments.length > 0 && <span style={{ fontSize: 11, color: C.dim }}>{attachments.length} attached</span>}</div>
                   <div style={{ fontSize: 12, fontWeight: 800, color: C.text }}>{shownTitle}</div>
                   <div style={{ fontSize: 12, color: C.text, marginTop: 3, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>{body.trim()}</div>
                 </div>
@@ -47173,7 +47488,7 @@ function BroadcastComposer({ identity, users, onClose }) {
               <div style={{ background: `${C.accent}12`, border: `1px solid ${C.accent}55`, borderRadius: 10, padding: "12px 14px",
                 display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ fontSize: 13, color: C.text }}>
-                  Send <b>{shownTitle}</b> to <b>{label === "Everyone" ? `everyone (${picked.length})` : `${picked.length} ${picked.length === 1 ? "person" : "people"}`}</b> now? Their phones will buzz.
+                  Send this <b>{BC_KINDS[kind].label}</b> message, <b>{shownTitle}</b>, to <b>{label === "Everyone" ? `everyone (${picked.length})` : `${picked.length} ${picked.length === 1 ? "person" : "people"}`}</b> now? Their phones will buzz.
                 </div>
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                   <button type="button" onClick={() => setStage("edit")} disabled={stage === "sending"} style={{ ...chip(false), borderRadius: 8 }}>Back</button>
@@ -47202,7 +47517,8 @@ function BroadcastComposer({ identity, users, onClose }) {
                 const bs = b.summary || {};
                 return (
                   <div key={b.id} style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "8px 10px" }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {bcTag(b.kind)}
                       <span style={{ fontSize: 12, fontWeight: 800, color: C.text, flex: 1, minWidth: 0 }}>{b.title}</span>
                       <span style={{ fontSize: 10, color: C.dim, flexShrink: 0 }}>{b.at ? timeAgo(b.at) : ""}</span>
                     </div>
@@ -47216,7 +47532,8 @@ function BroadcastComposer({ identity, users, onClose }) {
                         style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6, background: "none", border: "none",
                           padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: C.accent }}>
                         <Icon name={seenFor === b.id ? "chevronDown" : "chevronRight"} size={12}/>
-                        Opened by {b.opened} of {b.count}
+                        {b.kind === "important" ? `Got it from ${b.acked || 0} of ${b.count}` : `Opened by ${b.opened} of ${b.count}`}
+                        {b.kind === "discussion" ? ` · ${b.replyCount || 0} replies` : ""}
                       </button>
                     )}
                     {seenFor === b.id && (
@@ -52132,10 +52449,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-06 · App SW version: v512
+**Last manifest update:** 2026-10-06 · App SW version: v513
 
 ---
 
+- **Office announcements: Announcement · Important (Got it) · Discussion, with photos and files** · 'shipped 2026-10-06' · 'SW v513' · Koy: *"the send one needs to be like an announcement or important message, something to seperate it from the other notifications. I want to be able to attach files and photos, and also have the option to start a group discussion or have it strictly an announcment or important message."* Built to the approved clickable mockup (artifact JKFJ9XiX…; Koy: *"I like the mock up"*, *"Build it and deploy"*). **Send (bell → Send, office only):** a **What kind** picker — **Announcement** (one-way; shows who opened it), **Important** (each person taps **Got it**; pinned at the top of their My Day until they do; weekday-morning reminder), **Discussion** (one thread; every reply notifies everyone in it — Koy's pick) — plus **Photos & files** (the existing 'PhotoAttacher', uploads to Storage under 'broadcasts/<id>/'; drag-and-drop works by the v510 drop layer); the preview and the confirm name the kind. **The bell:** office messages get their own **FROM THE OFFICE** group at the top — colored strip + tag (Announcement steel blue, Important red, Discussion purple; no yellow), headline, who sent it, attachment count, and on Important *Tap to confirm* / *✓ Got it*; reminders and replies carry their own tag; everything else sits under **EVERYTHING ELSE**. The phone banner's title carries the kind (*IMPORTANT · New PPE rule*). **Reading it ('AnnouncementView'):** opens from the bell, a push tap (view 'announce' + the broadcast id; works from a cold open too) or the My Day pin — the full message, who sent it, to whom, photos as a tap-to-open grid and files as named tiles; **Important** has a big red **Got it** (then *✓ You confirmed · time*); **Discussion** shows the thread with a reply box (text + photo), refreshes itself every 25 s, and says every reply notifies everyone. **My Day:** each Important message still waiting on this person's Got it is a red pinned card under the title with **Read it** / **Got it** ('AnnouncePins', from a single-field 'kind == important' inbox listener; reminders, tests and replies never pin). **Who's confirmed (Recently sent):** every row carries its kind tag; Important rows read **Got it from X of N**, Discussion adds the reply count; the per-person list adds **Got it** (with time) above Opened, a progress bar, and **Remind the N who haven't** (Important: everyone without Got it; others: everyone who hasn't opened it). **Server:** 'sendBroadcast' takes 'kind' + 'attachments' ('cleanAttachments': Firebase Storage download URLs only, names cleaned, 10 max) and stores kind / broadcastId / headline / from / attachments on each bell copy through a new optional 'extra' argument on 'deliver()' (spread first so it can never override the record's own fields). New callables: 'broadcastOpen' (the message + my Got it + the thread), 'ackBroadcast' (stamps 'ackAt' + 'read' on the person's own copy in a transaction — the rules only let the app flip 'read', so a Got it can't be faked; idempotent), 'replyBroadcast' (reply stored under 'broadcasts/<id>/replies/<rid>', 'replyCount' incremented, every other participant notified — recipients + sender, never the replier; client-minted rid = eventKey, a retried reply never re-pings), 'remindBroadcast' (office; nonce = eventKey) and the scheduled 'importantGotItReminder' (6:35 am weekdays, Mountain: anyone still missing Got it on an Important message 12 h–4 days old, one reminder per day keyed by date). Open / Got it / reply are for the people it was sent to, proven by their own live PIN ('requireMember': matched by id, then name among PIN-matching records — so Justin's duplicate record can't block him); send / history / seen / remind stay office-only ('requireBroadcaster'). 'seenStateOf' gains **acked** (strongest; counts as opened). Tests: 'scripts/broadcast-test.js' 16 checks (+kinds, push titles, attachment cleaning, participants, Got it state) and scenario **K** in 'scripts/notify-delivery-test.js' (kind + attachments on the bell copy and a non-Storage URL dropped; open allowed for recipients / office, refused for outsiders and bad PINs; Got it stamped, idempotent, refused for outsiders, shows in the seen list and history; Remind reaches only the unconfirmed and never double-pings; the morning sweep reminds once a day and skips Got it; a discussion reply notifies the sender + other recipients but not the replier, a retried reply never re-pings, outsiders and Important can't take replies, the thread reads back in order). Guide 'myday.html' updated. **Why it won't lose data:** additive only — new optional fields on new bell copies ('kind', 'broadcastId', 'headline', 'from', 'attachments', 'label', 'ackAt', …) and on new 'broadcasts' docs (+ a 'replies' subcollection), all in the function-only 'broadcasts' collection or written by the server; 'deliver()''s new 'extra' defaults to nothing, so every existing notification is byte-identical; Storage uploads go to a new 'broadcasts/' folder; no existing field, loader, job / need / user data or Firestore rules touched. Functions deployed 2026-10-06 BEFORE the app push (created 'broadcastOpen', 'ackBroadcast', 'replyBroadcast', 'remindBroadcast', 'importantGotItReminder'; updated 'sendBroadcast', 'listBroadcasts', 'broadcastSeen'; us-central1, Node 22).
 - **Mobile: wide lists scroll sideways again, and Bid Items shows full names** · 'shipped 2026-10-06' · 'SW v512' · Koy: *"there are a bunch of spots on mobile you should be able to scrol to the righ to see all info, specific ones ive noticed are the wire section of bid items, you cant see the full names there either, and the home runs you cant scroll to right, the appliance pulled list you cant scroll to see the info."* **Root cause:** v496's swipe-between-tabs put 'touchAction:"pan-y"' on the job body so the swipe could own sideways drags. That told the phone the job page only scrolls up and down: content wider than the screen could no longer be dragged into view, and on iPhone it also froze the sideways scroll of the wide tables INSIDE the job (Appliance loads, panel schedules) even though each has its own scroll box. **Fix:** the body keeps normal touch behaviour (no 'touchAction'), and 'useHeTabSwipe' (src/motion.js) moved from pointer events to touch events with a new guard, 'heSwipeBlocked': a swipe never starts on something that scrolls sideways itself, on a tab whose content is wider than the screen, inside a pop-up (anything 'position:fixed' over the tab), or on a form control; once a drag is clearly sideways it calls 'preventDefault' on 'touchmove' (non-passive) so the page holds still while the tab follows the thumb — the old job pan-y did that globally. **Bid Items:** the stock rows (each cost center and the **Wire & cable — whole job** box) cut names off with "…" because the three number columns left the name almost no room on a phone. Names now wrap in full, the name column keeps at least 150 px, and each table sits in its own sideways-scroll box (min 444 px) so Required / Assigned / badge are a swipe away. Verified in the in-app browser at 375 px with the real 'motion.js' and synthetic touch gestures: swipe on plain content changes tab both ways and holds the page; swipe on a wide table, inside a pop-up, on a text box, or on a tab wider than the screen does not; a vertical drag just scrolls; swipe works again once the content fits. **Why it won't lose data:** layout and touch handling only — no Firestore read or write, no field, loader, rules or functions change.
 - **Send a notification to everyone, a group, or picked people** · 'shipped 2026-10-06' · 'SW v511' · Koy: *"I think i would like the option to send out a notificiation to either everyone or select peiople with a custom message. For example i could send a mass notification right now to everyone that says bid items moved to its own tab, or i could send a custom one to just foreman, or whoever i select etc."* **Where:** the bell → **Send**. **Who can send — Office only** (Koy, asked *"who has acess to send these"*, picked Office only): 'canBroadcast' / server 'ND.isBroadcaster' = title Admin, or Admin/Manager access without a field title, plus an optional per-person 'caps: ["notify.broadcast"]' grant — live list Koy, Josh, Brady, Justin, Jeromy. Tier alone was rejected because five foremen carry Manager access (Keegan, Colby, Abraham, Daegan, Gage) and would have been able to message the whole company; 'PERMISSIONS["notify.broadcast"]' is '[]' (grant-only). Opens 'BroadcastComposer': **To** = group chips with live counts (Everyone · Office · Foremen · Leads & Jr. Foremen · Crew — active internal people only, never contractors or deactivated members; **Office** uses the same office rule, so Manager-access foremen sit under Foremen and Jeromy under Office, and **Crew** excludes office) plus **Or pick people** (Koy: *"i need an option to send to specific individuals not just titles"*) — an always-visible *Type a name to add someone* box with type-ahead (tap a match or press Enter), each pick a removable chip (a count past 15), **Clear**, and **See everyone** (folded checklist of the whole team). Groups and individual names mix freely; **Message** = optional headline (defaults to *Message from <name>*) + the message (1000 max); **How it shows up** preview; **Send me a test** (to you only, not recorded); **Send to N people** → one in-page confirm (*Their phones will buzz*) → result: *N got it on their phone now, N will see it in their bell, N still trying*, with the bell-only and still-trying names listed. **Recently sent** (folded) shows the last 12 with who sent them, the audience and the reach. **Who's seen it** (Koy: *"is there a way to see who has viewed it so i know"*): each Recently sent row says **Opened by X of N** and opens a per-person list, and the result screen shows the same list right after sending, with **Refresh**. Grouped strongest first: **Opened it** (with when) · **Banner showed on their phone · not opened** · **On their phone · not opened yet** · **Still trying their phone** · **In their bell only · not opened yet** · **Didn't save**. Read server-side by new callable 'broadcastSeen' (+ an 'opened' count per row in 'listBroadcasts') from each recipient's own bell copy ('seenStateOf'): Opened = 'read' (they tapped the push or the bell line, or cleared the bell), its time = the record's last-change time (the rules only let the app flip 'read', so there is no separate readAt and no rules change); Banner showed = the push worker's display receipt ('displayedAt'). Someone who reads the banner on a locked phone without tapping shows as banner-showed, and the list says so. Each broadcast record keeps every recipient's bell key + id (deterministic from the eventKey). **Server:** new callables 'sendBroadcast' + 'listBroadcasts' (+ 'broadcastSeen'), all behind 'requireBroadcaster' = 'requireAdmin' (the live PIN, the GC-portal gate — the public app key alone can't buzz the company) + 'ND.isBroadcaster' (office only). Each recipient goes through the same 'deliver()' every notification uses (bell first, then push, 'pushRetrySweep' retries for 12 h), not 'deliverIfWanted' — a company announcement has no mute toggle; category 'broadcast', high priority. The client mints one broadcast id per send (kept until it succeeds) and it is the 'eventKey', so a double tap or a retried call can never buzz anyone twice. Recipients are re-resolved server-side against the live team list ('resolveBroadcastRecipients', by id then exact name, deduped by bell key, capped at 200); the record lands in 'broadcasts/{id}' (function-only collection, covered by the rules' deny-all catch-all). Tests: 'scripts/broadcast-test.js' (12 checks on recipient resolution, cap, summary, id format, priority, seen states + ordering, who may send) + a new scenario J in 'scripts/notify-delivery-test.js' that runs 'sendBroadcast' / 'listBroadcasts' against the in-memory Firestore + FCM fake (no PIN / wrong PIN / a foreman / a Manager-access foreman with his real PIN all refused, history too; deactivated + contractor dropped; no-phone person bell-only; re-sent id pings nobody; test goes to the sender only and isn't recorded; the record's ids = the real bell copies; a foreman opening it moves to Opened in 'broadcastSeen' and the row count; the seen list needs the PIN too). The composer was clicked through in a React harness with the real component (group counts, People list, preview, confirm, result). Guide 'myday.html' (*Messages from the office*). **Why it won't lose data:** additive only — two new callables, a new function-only 'broadcasts' collection, inbox items written by the unchanged 'deliver()' with the same fields every notification has; no existing field, loader, job / need / user data or rules touched. Functions 'sendBroadcast', 'listBroadcasts', 'broadcastSeen' deployed 2026-10-06 (created, us-central1, Node 22) BEFORE the app push, so the Send button never appeared without its backend.
 - **Bid Items is its own job tab, right after Plans & Links** · 'shipped 2026-10-05' · 'SW v510' · Koy: *"bid items from simpro needs to be its own tab right next to the plans and links tab, people cant remember where it is so it needs to be easier to see."* The Simpro bid (every cost center and line, Required vs Assigned, the whole-job wire box, Over only / Wire only, Refresh stock) used to be a folded **Bid Items (Simpro)** section at the top of Plans & Links; it is now the **Bid Items** tab, fifth in the bar on residential AND commercial jobs ('TABS' / 'COMM_TABS', right after Plans & Links), rendering the same 'BidItemsPanel' with the same props. Plans & Links keeps a one-line *"Looking for Bid Items (Simpro)? It has its own tab now"* button at the top that jumps there, for anyone whose thumb still goes to the old spot. The data still loads when the job opens (the 'simproCostCenters' / 'simproStock' effects in 'JobDetail' were never tied to the tab), so the tab opens instantly from the 12-hour cache. New in-app guide 'public/sops/biditems.html' (the "?" on the tab turns on by itself — the SOP scan reads the tab list); 'planslinks.html', 'changeorders.html' point to the new tab. **Why it won't lose data:** display-only move — no Firestore read or write added, removed or changed; 'simproCostCentersCache' / 'simproStockCache' are written exactly as before; no field, loader, rules or functions change.
@@ -58151,7 +58469,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   const narrow = winW < 900;
@@ -59474,6 +59792,8 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           )}
         </div>
       </div>
+      {/* Important office messages waiting on this person's Got it (announcements, v513). */}
+      {topSlot}
       {/* v429 toolbar: search · Category | Job | Person · Select (stacks when narrow) */}
       <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", alignItems: narrow ? "stretch" : "center", gap: 8, marginBottom: 10 }}>
         <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs…"
@@ -63992,7 +64312,8 @@ function App() {
   });
   useEffect(() => {
     if (!pendingView || !identity) return;
-    if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
+    if (pendingView === "announce" && pendingNeed) { setAnnounceOpen(pendingNeed); setPendingNeed(null); }
+    else if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (pendingView === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop deep-links (need_assigned / need_done → My Day; bodies → Forecast).
     else if (pendingView === "myday" && can(identity, "myday.view")) { setView("myday"); if (pendingNeed) { setMydayJump(pendingNeed); setPendingNeed(null); } }
@@ -64009,6 +64330,25 @@ function App() {
   const [inboxItems, setInboxItems] = useState([]);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [broadcastOpen, setBroadcastOpen] = useState(false);   // bell → Send (notify.broadcast)
+  const [announceOpen, setAnnounceOpen] = useState(null);       // broadcast id of the office message being read
+  // Important office messages waiting on MY Got it → pinned at the top of My
+  // Day. Single-field equality (kind) — no composite index; the original copy
+  // carries ackAt once Got it is tapped (reminders / tests / replies never pin).
+  const [importantItems, setImportantItems] = useState([]);
+  useEffect(() => {
+    if (!inboxKey) { setImportantItems([]); return; }
+    const qy = query(collection(db, "notifications", inboxKey, "items"), where("kind", "==", "important"), limit(40));
+    return onSnapshot(qy,
+      snap => setImportantItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => console.warn("[inbox] important listener error", err));
+  }, [inboxKey]);
+  const announcePins = useMemo(() => {
+    const seen = new Set();
+    return importantItems
+      .filter(i => i.broadcastId && !i.ackAt && !i.test && !i.reminder && !i.replyBy)
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .filter(i => (seen.has(i.broadcastId) ? false : (seen.add(i.broadcastId), true)));
+  }, [importantItems]);
   useEffect(() => {
     if (!inboxKey) { setInboxItems([]); return; }
     const qy = query(collection(db, "notifications", inboxKey, "items"), orderBy("createdAt", "desc"), limit(50));
@@ -64050,6 +64390,7 @@ function App() {
     if (!item.read) markInboxRead([item.id]);
     setInboxOpen(false);
     if (item.jobId) { openJobById(item.jobId, item.section); return; }
+    if (item.view === "announce" && item.needId) { setAnnounceOpen(item.needId); return; }   // office message
     if (item.view === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (item.view === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop items carry `view`, never jobId (so they land on the list, not a job).
@@ -64521,6 +64862,9 @@ function App() {
           {broadcastOpen && canBroadcast(identity) && (
             <BroadcastComposer identity={identity} users={users} onClose={()=>setBroadcastOpen(false)}/>
           )}
+          {announceOpen && identity && (
+            <AnnouncementView identity={identity} id={announceOpen} onClose={()=>setAnnounceOpen(null)}/>
+          )}
           {inboxOpen && (
             <>
               <div onClick={()=>setInboxOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
@@ -64554,7 +64898,46 @@ function App() {
                     No notifications yet — nudges and reminders will land here.
                   </div>
                 )}
-                {inboxItems.map(item=>(
+                {/* Office messages (announcements) sit in their own group at the top
+                    with a colored strip + tag, so they never get lost between change
+                    orders and return trips (Koy, 2026-10-06 mockup). */}
+                {inboxItems.some(i=>i.kind) && (
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"4px 8px 4px"}}>FROM THE OFFICE</div>
+                )}
+                {inboxItems.filter(i=>i.kind).map(item=>{
+                  const kd = BC_KINDS[bcKindOf(item.kind)];
+                  const pinned = item.kind==="important" && !item.reminder && !item.test && !item.replyBy;
+                  return (
+                    <button key={item.id} onClick={()=>openInboxItem(item)}
+                      style={{display:"flex",width:"100%",textAlign:"left",padding:0,marginBottom:4,border:`1px solid ${kd.color}55`,
+                        borderRadius:9,cursor:"pointer",fontFamily:"inherit",background:"transparent",overflow:"hidden"}}>
+                      <span style={{width:4,background:kd.color,flexShrink:0}}/>
+                      <span style={{flex:1,minWidth:0,padding:"8px 10px",background:item.read?"transparent":`${C.accent}14`,display:"block"}}>
+                        <span style={{display:"flex",alignItems:"center",gap:6}}>
+                          {bcTag(item.kind, item.reminder ? "Reminder" : item.replyBy ? "Reply" : null)}
+                          <span style={{fontSize:12,fontWeight:item.read?600:800,color:C.text,flex:1,minWidth:0,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.headline||stripEmoji(item.title)}</span>
+                          <span style={{fontSize:10,color:C.dim,flexShrink:0}}>{item.createdAt?timeAgo(item.createdAt):""}</span>
+                        </span>
+                        {item.body && (
+                          <span style={{fontSize:11.5,color:item.read?C.dim:C.text,marginTop:3,lineHeight:1.35,
+                            overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.body}</span>
+                        )}
+                        <span style={{display:"flex",gap:8,marginTop:4,fontSize:10.5,color:C.dim,flexWrap:"wrap"}}>
+                          {item.from && <span>{item.from}</span>}
+                          {Array.isArray(item.attachments)&&item.attachments.length>0 && <span>{item.attachments.length} attached</span>}
+                          {pinned && (item.ackAt
+                            ? <span style={{color:C.green,fontWeight:700}}>✓ Got it</span>
+                            : <span style={{color:C.red,fontWeight:700}}>Tap to confirm</span>)}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+                {inboxItems.some(i=>i.kind) && inboxItems.some(i=>!i.kind) && (
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
+                )}
+                {inboxItems.filter(i=>!i.kind).map(item=>(
                   <button key={item.id} onClick={()=>openInboxItem(item)}
                     style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",marginBottom:2,
                       border:"none",borderRadius:9,cursor:"pointer",fontFamily:"inherit",
@@ -65943,7 +66326,8 @@ function App() {
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
-          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}/>
+          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}
+          topSlot={announcePins.length ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}/>
       )}
 
       {view==="today"&&can(identity,"today.view")&&(

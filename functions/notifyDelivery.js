@@ -292,6 +292,8 @@ function summarizeBroadcast(results) {
 //   missing — no bell copy (it never saved; nothing in the app deletes them).
 function seenStateOf(item, updatedIso) {
   if (!item) return { state: "missing", at: "" };
+  // Important messages: Got it (a server-stamped ackAt) beats everything.
+  if (item.ackAt) return { state: "acked", at: String(item.ackAt) };
   if (item.read) return { state: "opened", at: updatedIso || "" };
   if (item.displayedAt) return { state: "shown", at: String(item.displayedAt) };
   const st = item.delivery && item.delivery.status;
@@ -299,7 +301,7 @@ function seenStateOf(item, updatedIso) {
   if (st === "retrying" || st === "pending") return { state: "trying", at: "" };
   return { state: "bell", at: "" };
 }
-const SEEN_ORDER = ["opened", "shown", "phone", "trying", "bell", "missing"];
+const SEEN_ORDER = ["acked", "opened", "shown", "phone", "trying", "bell", "missing"];
 function summarizeSeen(rows) {
   const counts = Object.fromEntries(SEEN_ORDER.map(k => [k, 0]));
   rows.forEach(r => { counts[r.state] = (counts[r.state] || 0) + 1; });
@@ -307,7 +309,43 @@ function summarizeSeen(rows) {
     (SEEN_ORDER.indexOf(a.state) - SEEN_ORDER.indexOf(b.state)) ||
     String(b.at || "").localeCompare(String(a.at || "")) ||
     String(a.name).localeCompare(String(b.name)));
-  return { total: rows.length, opened: counts.opened, counts, people };
+  // Anyone who tapped Got it has necessarily opened it.
+  return { total: rows.length, opened: counts.opened + counts.acked, acked: counts.acked, counts, people };
+}
+
+// ── Announcements (Koy, 2026-10-06 — approved mockup) ───────────────────────
+// Three kinds of office message. "announcement" is the default (one-way);
+// "important" asks each person for Got it; "discussion" opens a group thread
+// where every reply notifies everyone in it.
+const BROADCAST_KINDS = ["announcement", "important", "discussion"];
+const normalizeKind = (k) => (BROADCAST_KINDS.includes(String(k || "")) ? String(k) : "announcement");
+const KIND_WORD = { announcement: "ANNOUNCEMENT", important: "IMPORTANT", discussion: "DISCUSSION" };
+// The push banner's title carries the kind, so a lock-screen glance tells
+// "IMPORTANT · New PPE rule" from a routine return-trip ping.
+const broadcastPushTitle = (kind, headline) => `${KIND_WORD[normalizeKind(kind)]} · ${String(headline || "").slice(0, 80)}`;
+// Attachments the app uploaded to Firebase Storage. Only Storage download URLs
+// for this project's bucket pass; names are tag-stripped and capped; 10 max.
+const STORAGE_URL_RE = /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/[a-z0-9.\-]+\/o\/[^\s"'<>]+$/i;
+function cleanAttachments(list, max = 10) {
+  const out = [];
+  for (const a of (Array.isArray(list) ? list : [])) {
+    if (out.length >= max) break;
+    const url = String((a && a.url) || "").trim();
+    if (!url || url.length > 2000 || !STORAGE_URL_RE.test(url)) continue;
+    const name = String((a && a.name) || "file").replace(/[<>]/g, "").trim().slice(0, 120) || "file";
+    const type = String((a && a.type) || "").replace(/[^a-z0-9.+\/-]/gi, "").slice(0, 80);
+    out.push({ name, url, type });
+  }
+  return out;
+}
+const REPLY_ID_RE = /^r_[a-z0-9_]{6,40}$/;
+// Who can see / reply to a broadcast: anyone it was sent to, plus the sender.
+function isParticipant(b, userKey, userName) {
+  if (!b) return false;
+  const k = String(userKey || "");
+  const n = String(userName || "").trim().toLowerCase();
+  if (n && String(b.by || "").trim().toLowerCase() === n) return true;
+  return (Array.isArray(b.recipients) ? b.recipients : []).some(r => r && ((k && r.key === k) || (n && String(r.name || "").trim().toLowerCase() === n)));
 }
 
 module.exports = {
@@ -316,4 +354,5 @@ module.exports = {
   tokenTag, classifyError, priorityOf, normalizeNotif, deepLinkOf, notifDocId,
   buildMessage, summarizeResults, rollup, publicResults,
   resolveBroadcastRecipients, summarizeBroadcast, seenStateOf, summarizeSeen, SEEN_ORDER, isBroadcaster,
+  BROADCAST_KINDS, normalizeKind, broadcastPushTitle, cleanAttachments, REPLY_ID_RE, isParticipant,
 };

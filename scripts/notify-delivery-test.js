@@ -86,6 +86,7 @@ class DocRef {
   collection(c) { return new CollRef(`${this.path}/${c}`); }
   async get() { return new DocSnap(this.path); }
   async set(d, o) { applySet(this.path, d, o); }
+  async create(d) { if (store.has(this.path)) { const e = new Error("6 ALREADY_EXISTS: Document already exists"); e.code = 6; throw e; } store.set(this.path, clone(d)); }
   async delete() { store.delete(this.path); }
 }
 function applySet(p, d, o) {
@@ -352,7 +353,8 @@ const seedUsers = (list) => store.set("settings/users", { list, updated_at: "202
   assert.strictEqual(res.summary.phone, 1);
   assert.deepStrictEqual(res.summary.bellOnly, ["Jacob Spackman"], "no phone → listed as bell only");
   assert.strictEqual(items("u1").length, 1);
-  assert.strictEqual(items("u1")[0].title, "Bid Items moved");
+  assert.strictEqual(items("u1")[0].title, "ANNOUNCEMENT · Bid Items moved", "default kind = announcement, carried in the title");
+  assert.strictEqual(items("u1")[0].headline, "Bid Items moved");
   assert.strictEqual(items("u1")[0].category, "broadcast");
   assert.strictEqual(items("u1")[0].delivery.status, "sent");
   assert.strictEqual(items("u3").length, 1, "bell copy even with no phone");
@@ -391,6 +393,84 @@ const seedUsers = (list) => store.set("settings/users", { list, updated_at: "202
   await assert.rejects(fx.broadcastSeen({ ...APP, id: "bc_mfx3k2_a9q4z1" }), "seen list needs the admin PIN");
   await assert.rejects(fx.broadcastSeen({ ...BC, id: "bc_nope_000000" }), "unknown broadcast → not found");
   await assert.rejects(fx.broadcastSeen({ ...BC, id: "../x" }), "bad id refused");
+
+  // K. Announcements (v513): kinds + attachments on the bell copy, Got it,
+  //    open, replies fan out to everyone else, Remind, the morning sweep.
+  reset();
+  seedUsers([
+    { id: "koy", name: "Koy Wilkinson", access: "admin", pin: "1234", fcmTokens: ["tokK_1234567890"] },
+    { id: "u1", name: "Colby Fogh", title: "foreman", access: "manager", pin: "5555", fcmTokens: ["tokC_1234567890"] },
+    { id: "u3", name: "Jacob Spackman", title: "crew", access: "limited", pin: "2222" },
+    { id: "u6", name: "Gage Lund", title: "foreman", access: "manager", pin: "7777", fcmTokens: ["tokL_1234567890"] },
+  ]);
+  const KOY = { ...APP, by: "Koy Wilkinson", pin: "1234", uid: "koy" };
+  const COLBY = { ...APP, by: "Colby Fogh", pin: "5555", uid: "u1" };
+  const JACOB = { ...APP, by: "Jacob Spackman", pin: "2222", uid: "u3" };
+  const GAGE = { ...APP, by: "Gage Lund", pin: "7777", uid: "u6" };
+  const two = [{ id: "u1" }, { id: "u3" }];
+  const goodUrl = "https://firebasestorage.googleapis.com/v0/b/homestead-electric.appspot.com/o/broadcasts%2Fbc_imp001_x%2Fa.jpg?alt=media&token=t";
+  res = await fx.sendBroadcast({ ...KOY, id: "bc_imp001_x", kind: "important", title: "New PPE rule", body: "Hard hats Monday.",
+    label: "2 picked", to: two, attachments: [{ name: "glasses.jpg", url: goodUrl, type: "image/jpeg" }, { name: "x", url: "https://evil.example/x.jpg" }] });
+  assert.strictEqual(res.kind, "important");
+  let ci = items("u1")[0];
+  assert.strictEqual(ci.kind, "important"); assert.strictEqual(ci.broadcastId, "bc_imp001_x");
+  assert.strictEqual(ci.headline, "New PPE rule"); assert.strictEqual(ci.from, "Koy Wilkinson");
+  assert.strictEqual(ci.title, "IMPORTANT · New PPE rule", "push / bell title carries the kind");
+  assert.strictEqual(ci.view, "announce"); assert.strictEqual(ci.needId, "bc_imp001_x");
+  assert.deepStrictEqual(ci.attachments.map(a => a.name), ["glasses.jpg"], "non-Storage URLs dropped");
+  assert.strictEqual(ci.read, false, "extra can't override the record's own fields");
+  assert.strictEqual(store.get("broadcasts/bc_imp001_x").kind, "important");
+  // Open: recipients yes, outsiders and bad PINs no.
+  let op = await fx.broadcastOpen({ ...COLBY, id: "bc_imp001_x" });
+  assert.strictEqual(op.isRecipient, true); assert.strictEqual(op.myAckAt, ""); assert.strictEqual(op.attachments.length, 1);
+  await assert.rejects(fx.broadcastOpen({ ...GAGE, id: "bc_imp001_x" }), "not sent to Gage");
+  await assert.rejects(fx.broadcastOpen({ ...COLBY, pin: "0000", id: "bc_imp001_x" }), "wrong PIN refused");
+  assert.strictEqual((await fx.broadcastOpen({ ...KOY, id: "bc_imp001_x" })).isRecipient, false, "office can open it");
+  // Got it: stamped server-side, idempotent, shows in the seen list.
+  const ack1 = await fx.ackBroadcast({ ...COLBY, id: "bc_imp001_x" });
+  ci = items("u1")[0];
+  assert.strictEqual(ci.ackAt, ack1.ackAt); assert.strictEqual(ci.read, true);
+  assert.strictEqual((await fx.ackBroadcast({ ...COLBY, id: "bc_imp001_x" })).ackAt, ack1.ackAt, "second tap keeps the first time");
+  await assert.rejects(fx.ackBroadcast({ ...GAGE, id: "bc_imp001_x" }), "only recipients can Got it");
+  let sn = await fx.broadcastSeen({ ...KOY, id: "bc_imp001_x" });
+  assert.strictEqual(sn.acked, 1); assert.strictEqual(sn.opened, 1);
+  assert.deepStrictEqual(sn.people[0], { name: "Colby Fogh", state: "acked", at: ack1.ackAt });
+  assert.strictEqual((await fx.listBroadcasts({ ...KOY })).items[0].acked, 1);
+  assert.strictEqual((await fx.broadcastOpen({ ...COLBY, id: "bc_imp001_x" })).myAckAt, ack1.ackAt);
+  // Remind: only the one without Got it; same nonce twice never double-pings.
+  let rm = await fx.remindBroadcast({ ...KOY, id: "bc_imp001_x", nonce: "r_abc123" });
+  assert.deepStrictEqual(rm.reminded, ["Jacob Spackman"]);
+  assert.strictEqual(items("u3").length, 2); assert.strictEqual(items("u1").length, 1);
+  await fx.remindBroadcast({ ...KOY, id: "bc_imp001_x", nonce: "r_abc123" });
+  assert.strictEqual(items("u3").length, 2, "a retried Remind is suppressed");
+  await assert.rejects(fx.remindBroadcast({ ...GAGE, id: "bc_imp001_x", nonce: "r_abc124" }), "Remind is office only");
+  // Morning sweep: 13 h old → Jacob reminded again (new day key), Colby (Got it) not.
+  store.set("broadcasts/bc_imp001_x", { ...store.get("broadcasts/bc_imp001_x"), at: new Date(Date.now() - 13 * 3600e3).toISOString() });
+  await fx.importantGotItReminder();
+  assert.strictEqual(items("u3").length, 3); assert.strictEqual(items("u1").length, 1);
+  await fx.importantGotItReminder();
+  assert.strictEqual(items("u3").length, 3, "one sweep reminder per day");
+  // Discussion: every reply notifies everyone else in it (recipients + sender).
+  res = await fx.sendBroadcast({ ...KOY, id: "bc_disc01_x", kind: "discussion", title: "Thanksgiving week", body: "Mon–Wed?", to: two });
+  const koyBefore = items("koy").length, jacobBefore = items("u3").length, colbyBefore = items("u1").length;
+  let rp = await fx.replyBroadcast({ ...COLBY, id: "bc_disc01_x", rid: "r_reply01", text: "Works for me" });
+  assert.strictEqual(rp.notified, 2);
+  assert.strictEqual(items("koy").length, koyBefore + 1, "sender notified");
+  assert.strictEqual(items("u3").length, jacobBefore + 1, "other recipient notified");
+  assert.strictEqual(items("u1").length, colbyBefore, "replier not notified of their own reply");
+  const kr = items("koy").find(i => i.category === "broadcast_reply");
+  assert.strictEqual(kr.body, "Colby: Works for me"); assert.strictEqual(kr.kind, "discussion");
+  rp = await fx.replyBroadcast({ ...COLBY, id: "bc_disc01_x", rid: "r_reply01", text: "Works for me" });
+  assert.strictEqual(rp.duplicate, true);
+  assert.strictEqual(items("koy").length, koyBefore + 1, "a retried reply never re-pings");
+  await assert.rejects(fx.replyBroadcast({ ...GAGE, id: "bc_disc01_x", rid: "r_reply02", text: "hi" }), "outsider can't reply");
+  await assert.rejects(fx.replyBroadcast({ ...COLBY, id: "bc_imp001_x", rid: "r_reply03", text: "hi" }), "no replies on Important");
+  await fx.replyBroadcast({ ...KOY, id: "bc_disc01_x", rid: "r_reply04", text: "Locking it in" });
+  op = await fx.broadcastOpen({ ...JACOB, id: "bc_disc01_x" });
+  assert.deepStrictEqual(op.replies.map(r => [r.by, r.text]), [["Colby Fogh", "Works for me"], ["Koy Wilkinson", "Locking it in"]]);
+  // The fake's FieldValue.increment(n) is a plain set (real Firestore adds), so
+  // only check it was written; the two replies themselves are checked above.
+  assert.ok(store.get("broadcasts/bc_disc01_x").replyCount >= 1);
 
   console.log("notify-delivery-test ok");
 })().catch(e => { console.error(e); process.exit(1); });
