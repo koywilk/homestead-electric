@@ -28317,7 +28317,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[], onUpdateOtherJob=null}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -28331,6 +28331,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   //   • Same job, OUR OWN device's echo → skip (our local copy is the freshest).
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
+  // Temp ped cards that may be this job's ped (ask first — see tpLinkWhy).
+  const pedGroupsAll = useMemo(()=>tempPedGroups(jobs), [jobs]);
+  const pedLinkSuggest = useMemo(()=>(job.type==="quote" ? [] : tpLinkSuggestionsForJob(job, jobs, pedGroupsAll)), [job, jobs, pedGroupsAll]);
   const _lastJobIdRef = useRef(rawJob?.id);
   useEffect(()=>{
     const idChanged = rawJob?.id !== _lastJobIdRef.current;
@@ -32539,6 +32542,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Job Info"&&(
 
             <div>
+              {pedLinkSuggest.length>0&&onUpdateOtherJob&&!isSectionHidden(job,"tempPed")&&pedLinkSuggest.map(s=>(
+                <div key={s.inst.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14,background:`${C.blue}0D`,
+                  border:`1px solid ${C.blue}44`,borderRadius:10,padding:"10px 12px",fontSize:12.5,color:C.text}}>
+                  <span style={{flex:"1 1 240px",minWidth:0}}>
+                    <b>Temp ped{s.num?` #${s.num}`:""}</b> is out on the temp ped card <b>“{s.inst.name||"Untitled"}”</b>
+                    <span style={{color:C.dim}}> · {s.why}. Is it on this job?</span>
+                  </span>
+                  <button type="button" onClick={()=>onUpdateOtherJob(s.inst.id, tpSkipPatch(s.inst, job.id))}
+                    style={{padding:"7px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Not this one</button>
+                  <button type="button" onClick={()=>{ const p=tpLinkPatches(s.inst, job); u(p.full); onUpdateOtherJob(s.inst.id, p.install);
+                      toast.success(`Ped ${s.num?`#${s.num} `:""}linked to this job`); }}
+                    style={{padding:"7px 12px",borderRadius:8,border:"none",background:C.blue,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Link to this job</button>
+                </div>
+              ))}
 
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
@@ -33033,6 +33050,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {job.tempPedReturnedAt
                           ? <span style={{fontSize:12,color:C.green,fontWeight:700}}>Picked up {job.tempPedReturnedAt}{job.tempPedReturnedBy?` · ${job.tempPedReturnedBy}`:""}</span>
                           : job.tempPedOutAt ? <span style={{fontSize:12,color:C.dim}}>Out since {job.tempPedOutAt}</span> : null}
+                        {job.tempPedInstallId&&(()=>{ const inst=(jobs||[]).find(x=>x.id===job.tempPedInstallId);
+                          return <span style={{fontSize:12,color:C.dim}}>from temp ped card “{inst?inst.name||"Untitled":"removed"}”
+                            {onUpdateOtherJob&&<button type="button" onClick={()=>{ const p=tpUnlinkPatches(inst, job); u(p.full); if(p.install) onUpdateOtherJob(inst.id, p.install);
+                                toast.success("Unlinked from the temp ped card"); }}
+                              style={{marginLeft:6,background:"none",border:"none",padding:0,color:C.blue,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Unlink</button>}</span>; })()}
                       </div>
                     )}
                   </div>
@@ -52672,6 +52694,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 - **Office messages fold in the bell when they're done, and My Day keeps them all in tabs (Important · Announcements · Discussions · Sent)** · 'shipped 2026-10-06' · 'SW v514' · Koy: *"when a important message is sent and receieved it should like collapse or somethin in the bell. i think we should have an important message and announcement, chat tabs in the my day area… somewhere to keep track of all of these"*, then *"office only, add the sent tab"* and *"can i click into each one to open all of them for each section"*. Built to the approved clickable mockup (artifact LB7Cv49y…; "Chat" became **Discussions**, since only the office starts one). **One rule, one place:** 'bcGroupMessages' merges each message's bell copies (the message, office reminders, one per discussion reply, all sharing 'broadcastId'; test sends excluded) into one row, and the bell, the badge-free tab counts and the Important pins all read the same **needs you** rule — Important until **Got it**, Announcement until opened (an unread reminder brings it back), Discussion while it has unread replies or was never opened. The app listens to one single-field 'kind in [announcement, important, discussion]' query on the person's own inbox (no index, limit 400), replacing the v513 'kind == important' listener, so office messages no longer fall off the 50-item bell list. **The bell:** FROM THE OFFICE shows one card per message that still needs you (kind tag, headline, newest activity time, last reply on a discussion, *Tap Got it* / *N new replies* / *New*); everything finished folds into one dashed **✓ N done** line (starts folded) that opens the newest 5 plus **See all N in My Day →**. Opening a message (bell, push, pin, tab, arrows) marks every unread copy of it read, so it folds on its own. **My Day → Messages from the office** ('OfficeMessages', under the red Got it pins, starts folded): header chips (*N needs Got it · N new replies · N unread*, or *✓ All caught up · N messages*), tabs **Important · Announcements · Discussions** with counts, each tab listing what needs you first then the finished ones (newest 3 + **Show N older**); Important rows carry a **Got it** button; Discussion rows show the last reply. **Sent** (office only, 'canBroadcast') lists what the office sent with the same reach + who's-seen + Remind as Bell → Send → Recently sent (both now render the shared 'BcSentRow'; 'listBroadcasts' takes an optional 'limit', 12 by default, 25 for the tab, capped at 30). **Reading:** 'AnnouncementView' gets **‹ N of M ›** by the tag, stepping through that kind's messages in tab order without going back. **Server:** the Sunday inbox cleanup 'notifInboxPrune' keeps office messages (anything with a 'broadcastId') a year instead of 30 days ('ND.isPrunable'), and pages in 'createdAt' order so kept items can't fill the 400-doc window and stall it. Tests: 'scripts/office-msgs-peds-test.js' (grouping, needs rule, sender-only reply copies, tab order — helpers extracted live from App.js; wired into prebuild) + a cleanup case in 'scripts/broadcast-test.js'. Guide 'myday.html' updated. **Why it won't lose data:** read-only grouping of bell items the app already reads; the only write is the existing 'read: true' flip on the person's own bell copies (the rules already allow it, and Opened is what the office's seen list already counts); no job / need / user data, loader or Firestore rules touched. The cleanup change only deletes LESS (office messages kept longer); every other bell item still goes at 30 days. Functions to deploy: 'notifInboxPrune', 'listBroadcasts'.
 - **Job Prep: Temp Peds Out — every temp ped on a job, how long it's been out, pickups, and Picked up (Justin's lane)** · 'shipped 2026-10-06' · 'SW v514' · Koy: *"is there anywhere in the app that lists all the temp peds that are out being used?"*, then *"probably in justins job prep section? hes asking for it"* and *"auto clear is fine"*. Built to the approved mockup (artifact Q1KBDYfE…). Before this, a ped lived only as a checkbox + Ped # inside each job, install jobs left the board once Completed, and nothing cleared a ped when it was picked up. **New folded lane TEMP PEDS OUT** between Office Admin and Pre-Job Prep ('TempPedsLane', labelled Justin's lane): 'tempPedGroups' builds one row per physical ped from EVERY live job in any stage (not 'jobPrepIncluded', which drops finished jobs; deleted / archived / quotes excluded) — out = a full job with **Temp pedestal on site** ticked, or a temp ped install job ('tempPed') with status Completed; an install job and a full job at the same address (normalized) with the same Ped # are one ped, the full job leading. Header pills: *N out · N need a look · N out 90+ days · N pickups scheduled*; the Job Prep subtitle adds *· N temp peds out*. Rows: big **Ped #**, job (tap to open), Simpro #, foreman, address, *On the job* / *Temp ped install*, **days out** (red past 90), pickup status (tap opens the pickup job). **Needs a look** on top: no Ped # (set it on the row) or the same Ped # on two different jobs. Sort **Longest out** / **Ped #**; the Job Prep search (also *14*, *#14*, *ped 14*) and foreman filter apply. **Out since:** new 'tempPedOutAt' (M/D/YYYY) stamped when the Job Info checkbox or the Office Admin TEMP PED chip goes on; install jobs use their sign-off date; older peds show *Out since not recorded* with a date picker on the row. **Schedule pickup** creates a **Temp Ped Pickup** quick job ('blankQuickJob("tempped")', job's address / GC / foreman / lead, scope filled) linked by 'pickupPedFor' (+ 'pickupPedNumber', 'pickupPedJobName' shown as a banner in the quick job) and opens it. **Auto-clear (Koy's pick):** when that pickup job is signed off / complete / ready to invoice, the ped moves to **Returned recently** on its own (tagged *auto*) — derived at render, so every path that completes a quick job counts. **Picked up** (inline confirm) stamps 'tempPedReturnedAt' + 'tempPedReturnedBy' on every job in the row; the checkbox and Ped # stay as history (unticking would flip Justin's TEMP PED chip back to "no ped"), and Job Info shows *Picked up date · name* / *Out since date*. **Returned recently** (last 30 days, folded) has **Undo**: clears the stamps, or for an auto return adds the pickup to 'tempPedPickupIgnore'. Ticking the box again on a returned job starts a new out-date and clears the old return. Tests: 'scripts/office-msgs-peds-test.js' (who's out, one ped per install + full job, duplicates, no number, days out, Picked up, auto-clear, Undo, unlinked pickups never clear). Guide 'jobprep.html' updated. **Why it won't lose data:** additive only — new optional job fields ('tempPedOutAt', 'tempPedReturnedAt', 'tempPedReturnedBy', 'tempPedPickupIgnore' on jobs; 'pickupPedFor', 'pickupPedNumber', 'pickupPedJobName' on new pickup quick jobs) written through the existing 'updateJob' / 'saveJob' funnel inside 'data', which the loader already spreads; no existing field is renamed, cleared or rewritten (the checkbox and Ped # are never touched by Picked up); Schedule pickup only creates a new quick job doc; no rules, function or loader change.
+- **Temp Peds Out: a temp ped card links to its job card once the job card exists (ask first)** · 'built 2026-10-06, held with v514' · 'SW v514' · Koy: *"a temp ped card is made before we have a job card for that job, becuase the quote usually hasnt been signed yet … when we make or import that job from simpro to a job card, can it auto detect the name from temp ped cards and link it to that job card.?"* — then picked **Ask first** over auto-linking (a name-only match like two Smiths would silently tick a ped on the wrong job; an import often has no address yet, since a site name equal to the job name imports blank). 'tpLinkWhy(install, job)' says why a live full job may be an out install card's job: same Simpro #, same address (normalized), or a shared name word ('tpNameWords' drops filler like Residence / Temp / Ped / Lot and bare numbers); never a quick job, quote, the install itself, a job already linked ('tempPedInstallId'), a job with a DIFFERENT Ped # out, a job in the install's 'tempPedLinkSkip', or a job card made 30+ days before the ped card (job ids are 'Date.now()'-seeded 'uid()'s, so they read as creation time — keeps old same-name jobs from being asked about). **Where it asks:** on the Temp Peds Out row of a ped that is only an install card (*Job card found: name · #Simpro · why. Is this ped on that job?* — up to 3), and at the top of the matching job card's **Job Info** tab (so whoever imports the job sees it right away; hidden when the job hides the Temp Pedestal section). **Link to this job** ('tpLinkPatches') writes on the job card 'hasTempPed: true', the Ped # (the job card's own if it has one), 'tempPedOutAt' = the earlier of the install's out date / sign-off and the job card's own live out date, clears an old pickup stamp, sets 'tempPedInstallId', and keeps 'tempPedLinkPrev' (what the job card had); on the install card 'tempPedLinkedJobId'. 'tempPedGroups' now groups a linked pair by the link ('link|<installId>') whatever the addresses say, so it's one row with the job card leading and no duplicate-# flag. **Not this one** adds the job to 'tempPedLinkSkip'. **Unlink** (lane row, or next to the Ped # in Job Info: *from temp ped card “X” · Unlink*) restores the job card from 'tempPedLinkPrev', clears both link fields and skips that pair from then on. JobDetail gets 'onUpdateOtherJob' (writes another job through 'updateJob', never the open one — the open card writes through its own 'u'). Tests: 'scripts/office-msgs-peds-test.js' §3 (name words, who's suggested and who isn't, lane + Job Info suggestions, Link merges the rows and carries # + date, Unlink restores and never re-suggests, deleted install card still unlinks). Guides 'jobprep.html' + 'jobinfo.html' updated. **Why it won't lose data:** nothing writes until someone taps Link / Not this one / Unlink; every write is a patch through the existing 'updateJob' / 'saveJob' funnel inside 'data'; new optional fields only ('tempPedInstallId', 'tempPedLinkPrev' on job cards; 'tempPedLinkedJobId', 'tempPedLinkSkip' on temp ped cards); Link only adds the ped fields the checkbox already writes, and Unlink puts back exactly what Link saved; no rules, function or loader change.
 - **Office announcements: Announcement · Important (Got it) · Discussion, with photos and files** · 'shipped 2026-10-06' · 'SW v513' · Koy: *"the send one needs to be like an announcement or important message, something to seperate it from the other notifications. I want to be able to attach files and photos, and also have the option to start a group discussion or have it strictly an announcment or important message."* Built to the approved clickable mockup (artifact JKFJ9XiX…; Koy: *"I like the mock up"*, *"Build it and deploy"*). **Send (bell → Send, office only):** a **What kind** picker — **Announcement** (one-way; shows who opened it), **Important** (each person taps **Got it**; pinned at the top of their My Day until they do; weekday-morning reminder), **Discussion** (one thread; every reply notifies everyone in it — Koy's pick) — plus **Photos & files** (the existing 'PhotoAttacher', uploads to Storage under 'broadcasts/<id>/'; drag-and-drop works by the v510 drop layer); the preview and the confirm name the kind. **The bell:** office messages get their own **FROM THE OFFICE** group at the top — colored strip + tag (Announcement steel blue, Important red, Discussion purple; no yellow), headline, who sent it, attachment count, and on Important *Tap to confirm* / *✓ Got it*; reminders and replies carry their own tag; everything else sits under **EVERYTHING ELSE**. The phone banner's title carries the kind (*IMPORTANT · New PPE rule*). **Reading it ('AnnouncementView'):** opens from the bell, a push tap (view 'announce' + the broadcast id; works from a cold open too) or the My Day pin — the full message, who sent it, to whom, photos as a tap-to-open grid and files as named tiles; **Important** has a big red **Got it** (then *✓ You confirmed · time*); **Discussion** shows the thread with a reply box (text + photo), refreshes itself every 25 s, and says every reply notifies everyone. **My Day:** each Important message still waiting on this person's Got it is a red pinned card under the title with **Read it** / **Got it** ('AnnouncePins', from a single-field 'kind == important' inbox listener; reminders, tests and replies never pin). **Who's confirmed (Recently sent):** every row carries its kind tag; Important rows read **Got it from X of N**, Discussion adds the reply count; the per-person list adds **Got it** (with time) above Opened, a progress bar, and **Remind the N who haven't** (Important: everyone without Got it; others: everyone who hasn't opened it). **Server:** 'sendBroadcast' takes 'kind' + 'attachments' ('cleanAttachments': Firebase Storage download URLs only, names cleaned, 10 max) and stores kind / broadcastId / headline / from / attachments on each bell copy through a new optional 'extra' argument on 'deliver()' (spread first so it can never override the record's own fields). New callables: 'broadcastOpen' (the message + my Got it + the thread), 'ackBroadcast' (stamps 'ackAt' + 'read' on the person's own copy in a transaction — the rules only let the app flip 'read', so a Got it can't be faked; idempotent), 'replyBroadcast' (reply stored under 'broadcasts/<id>/replies/<rid>', 'replyCount' incremented, every other participant notified — recipients + sender, never the replier; client-minted rid = eventKey, a retried reply never re-pings), 'remindBroadcast' (office; nonce = eventKey) and the scheduled 'importantGotItReminder' (6:35 am weekdays, Mountain: anyone still missing Got it on an Important message 12 h–4 days old, one reminder per day keyed by date). Open / Got it / reply are for the people it was sent to, proven by their own live PIN ('requireMember': matched by id, then name among PIN-matching records — so Justin's duplicate record can't block him); send / history / seen / remind stay office-only ('requireBroadcaster'). 'seenStateOf' gains **acked** (strongest; counts as opened). Tests: 'scripts/broadcast-test.js' 16 checks (+kinds, push titles, attachment cleaning, participants, Got it state) and scenario **K** in 'scripts/notify-delivery-test.js' (kind + attachments on the bell copy and a non-Storage URL dropped; open allowed for recipients / office, refused for outsiders and bad PINs; Got it stamped, idempotent, refused for outsiders, shows in the seen list and history; Remind reaches only the unconfirmed and never double-pings; the morning sweep reminds once a day and skips Got it; a discussion reply notifies the sender + other recipients but not the replier, a retried reply never re-pings, outsiders and Important can't take replies, the thread reads back in order). Guide 'myday.html' updated. **Why it won't lose data:** additive only — new optional fields on new bell copies ('kind', 'broadcastId', 'headline', 'from', 'attachments', 'label', 'ackAt', …) and on new 'broadcasts' docs (+ a 'replies' subcollection), all in the function-only 'broadcasts' collection or written by the server; 'deliver()''s new 'extra' defaults to nothing, so every existing notification is byte-identical; Storage uploads go to a new 'broadcasts/' folder; no existing field, loader, job / need / user data or Firestore rules touched. Functions deployed 2026-10-06 BEFORE the app push (created 'broadcastOpen', 'ackBroadcast', 'replyBroadcast', 'remindBroadcast', 'importantGotItReminder'; updated 'sendBroadcast', 'listBroadcasts', 'broadcastSeen'; us-central1, Node 22).
 - **Mobile: wide lists scroll sideways again, and Bid Items shows full names** · 'shipped 2026-10-06' · 'SW v512' · Koy: *"there are a bunch of spots on mobile you should be able to scrol to the righ to see all info, specific ones ive noticed are the wire section of bid items, you cant see the full names there either, and the home runs you cant scroll to right, the appliance pulled list you cant scroll to see the info."* **Root cause:** v496's swipe-between-tabs put 'touchAction:"pan-y"' on the job body so the swipe could own sideways drags. That told the phone the job page only scrolls up and down: content wider than the screen could no longer be dragged into view, and on iPhone it also froze the sideways scroll of the wide tables INSIDE the job (Appliance loads, panel schedules) even though each has its own scroll box. **Fix:** the body keeps normal touch behaviour (no 'touchAction'), and 'useHeTabSwipe' (src/motion.js) moved from pointer events to touch events with a new guard, 'heSwipeBlocked': a swipe never starts on something that scrolls sideways itself, on a tab whose content is wider than the screen, inside a pop-up (anything 'position:fixed' over the tab), or on a form control; once a drag is clearly sideways it calls 'preventDefault' on 'touchmove' (non-passive) so the page holds still while the tab follows the thumb — the old job pan-y did that globally. **Bid Items:** the stock rows (each cost center and the **Wire & cable — whole job** box) cut names off with "…" because the three number columns left the name almost no room on a phone. Names now wrap in full, the name column keeps at least 150 px, and each table sits in its own sideways-scroll box (min 444 px) so Required / Assigned / badge are a swipe away. Verified in the in-app browser at 375 px with the real 'motion.js' and synthetic touch gestures: swipe on plain content changes tab both ways and holds the page; swipe on a wide table, inside a pop-up, on a text box, or on a tab wider than the screen does not; a vertical drag just scrolls; swipe works again once the content fits. **Why it won't lose data:** layout and touch handling only — no Firestore read or write, no field, loader, rules or functions change.
 - **Send a notification to everyone, a group, or picked people** · 'shipped 2026-10-06' · 'SW v511' · Koy: *"I think i would like the option to send out a notificiation to either everyone or select peiople with a custom message. For example i could send a mass notification right now to everyone that says bid items moved to its own tab, or i could send a custom one to just foreman, or whoever i select etc."* **Where:** the bell → **Send**. **Who can send — Office only** (Koy, asked *"who has acess to send these"*, picked Office only): 'canBroadcast' / server 'ND.isBroadcaster' = title Admin, or Admin/Manager access without a field title, plus an optional per-person 'caps: ["notify.broadcast"]' grant — live list Koy, Josh, Brady, Justin, Jeromy. Tier alone was rejected because five foremen carry Manager access (Keegan, Colby, Abraham, Daegan, Gage) and would have been able to message the whole company; 'PERMISSIONS["notify.broadcast"]' is '[]' (grant-only). Opens 'BroadcastComposer': **To** = group chips with live counts (Everyone · Office · Foremen · Leads & Jr. Foremen · Crew — active internal people only, never contractors or deactivated members; **Office** uses the same office rule, so Manager-access foremen sit under Foremen and Jeromy under Office, and **Crew** excludes office) plus **Or pick people** (Koy: *"i need an option to send to specific individuals not just titles"*) — an always-visible *Type a name to add someone* box with type-ahead (tap a match or press Enter), each pick a removable chip (a count past 15), **Clear**, and **See everyone** (folded checklist of the whole team). Groups and individual names mix freely; **Message** = optional headline (defaults to *Message from <name>*) + the message (1000 max); **How it shows up** preview; **Send me a test** (to you only, not recorded); **Send to N people** → one in-page confirm (*Their phones will buzz*) → result: *N got it on their phone now, N will see it in their bell, N still trying*, with the bell-only and still-trying names listed. **Recently sent** (folded) shows the last 12 with who sent them, the audience and the reach. **Who's seen it** (Koy: *"is there a way to see who has viewed it so i know"*): each Recently sent row says **Opened by X of N** and opens a per-person list, and the result screen shows the same list right after sending, with **Refresh**. Grouped strongest first: **Opened it** (with when) · **Banner showed on their phone · not opened** · **On their phone · not opened yet** · **Still trying their phone** · **In their bell only · not opened yet** · **Didn't save**. Read server-side by new callable 'broadcastSeen' (+ an 'opened' count per row in 'listBroadcasts') from each recipient's own bell copy ('seenStateOf'): Opened = 'read' (they tapped the push or the bell line, or cleared the bell), its time = the record's last-change time (the rules only let the app flip 'read', so there is no separate readAt and no rules change); Banner showed = the push worker's display receipt ('displayedAt'). Someone who reads the banner on a locked phone without tapping shows as banner-showed, and the list says so. Each broadcast record keeps every recipient's bell key + id (deterministic from the eventKey). **Server:** new callables 'sendBroadcast' + 'listBroadcasts' (+ 'broadcastSeen'), all behind 'requireBroadcaster' = 'requireAdmin' (the live PIN, the GC-portal gate — the public app key alone can't buzz the company) + 'ND.isBroadcaster' (office only). Each recipient goes through the same 'deliver()' every notification uses (bell first, then push, 'pushRetrySweep' retries for 12 h), not 'deliverIfWanted' — a company announcement has no mute toggle; category 'broadcast', high priority. The client mints one broadcast id per send (kept until it succeeds) and it is the 'eventKey', so a double tap or a retried call can never buzz anyone twice. Recipients are re-resolved server-side against the live team list ('resolveBroadcastRecipients', by id then exact name, deduped by bell key, capped at 200); the record lands in 'broadcasts/{id}' (function-only collection, covered by the rules' deny-all catch-all). Tests: 'scripts/broadcast-test.js' (12 checks on recipient resolution, cap, summary, id format, priority, seen states + ordering, who may send) + a new scenario J in 'scripts/notify-delivery-test.js' that runs 'sendBroadcast' / 'listBroadcasts' against the in-memory Firestore + FCM fake (no PIN / wrong PIN / a foreman / a Manager-access foreman with his real PIN all refused, history too; deactivated + contractor dropped; no-phone person bell-only; re-sent id pings nobody; test goes to the sender only and isn't recorded; the record's ids = the real bell copies; a foreman opening it moves to Opened in 'broadcastSeen' and the row count; the seen list needs the PIN too). The composer was clicked through in a React harness with the real component (group counts, People list, preview, confirm, result). Guide 'myday.html' (*Messages from the office*). **Why it won't lose data:** additive only — two new callables, a new function-only 'broadcasts' collection, inbox items written by the unchanged 'deliver()' with the same fields every notification has; no existing field, loader, job / need / user data or rules touched. Functions 'sendBroadcast', 'listBroadcasts', 'broadcastSeen' deployed 2026-10-06 (created, us-central1, Node 22) BEFORE the app push, so the Send button never appeared without its backend.
@@ -55036,10 +55059,20 @@ const tempPedGroups = (jobs, nowMs) => {
     if (!pickupsFor.has(q.pickupPedFor)) pickupsFor.set(q.pickupPedFor, []);
     pickupsFor.get(q.pickupPedFor).push(q);
   });
+  // A full job linked to its install card (tempPedInstallId, set by Link) is one
+  // ped with it whatever the addresses say — the install card often carries just
+  // a last name where the job card has the street address.
+  const onJob = live.filter(tpOnJob);
+  const onIds = new Set(onJob.map(j => j.id));
+  const linkOf = new Map();
+  onJob.forEach(j => { if (!j.tempPed && j.tempPedInstallId && onIds.has(j.tempPedInstallId)) linkOf.set(j.id, j.tempPedInstallId); });
+  const linkedInstalls = new Set(linkOf.values());
   const byKey = new Map();
-  live.filter(tpOnJob).forEach(j => {
+  onJob.forEach(j => {
     const num = String(j.tempPedNumber || "").trim(), addr = tpAddrKey(j.address);
-    const key = num && addr ? `${num}|${addr}` : `job|${j.id}`;
+    const key = linkOf.has(j.id) ? `link|${linkOf.get(j.id)}`
+      : linkedInstalls.has(j.id) ? `link|${j.id}`
+      : num && addr ? `${num}|${addr}` : `job|${j.id}`;
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key).push(j);
   });
@@ -55064,6 +55097,81 @@ const tempPedGroups = (jobs, nowMs) => {
   return groups;
 };
 const tpNeedsLook = (g) => !g.num || g.dupWith.length > 0;
+
+// ── Temp ped → job card link (Koy 2026-10-06: the ped goes in before the quote is
+// signed, so its card exists before the job card; "can it auto detect the name
+// from temp ped cards and link it to that job card"). Koy's pick: ASK FIRST —
+// a match is only a suggestion (lane row + Job Info); one tap links. Link ticks
+// the job card's Temp pedestal on site, carries the Ped # and out-since date, and
+// stores tempPedInstallId (job) / tempPedLinkedJobId (install). tempPedLinkPrev
+// keeps what the job card had so Unlink puts it back; "Not this one" and Unlink
+// add the job to the install's tempPedLinkSkip so it isn't suggested again.
+const TP_NAME_SKIP = new Set(("temp ped peds pedestal power pole install residence res home homes house new build builders building " +
+  "construction custom remodel addition basement shop garage barn lot the and job electric electrical service upgrade project phase " +
+  "unit pickup rough finish llc inc street road lane drive court way east west north south").split(" "));
+const tpNameWords = (name) => String(name || "").toLowerCase().split(/[^a-z0-9]+/)
+  .filter(w => w.length >= 3 && !/^\d+$/.test(w) && !TP_NAME_SKIP.has(w));
+// Job ids are uid() = Date.now()-seeded, so they read as creation time.
+const tpIdMs = (id) => (/^\d{12,14}$/.test(String(id || "")) ? Number(id) : null);
+// Why this full job might be the install's job card, or null.
+const tpLinkWhy = (inst, full) => {
+  if (!inst || !full || inst.id === full.id || !tpLive(full) || full.tempPed || full.quickJob) return null;
+  if ((Array.isArray(inst.tempPedLinkSkip) ? inst.tempPedLinkSkip : []).includes(full.id)) return null;
+  if (full.tempPedInstallId) return null;                       // already linked (to this or another install)
+  const iNum = String(inst.tempPedNumber || "").trim(), fNum = String(full.tempPedNumber || "").trim();
+  if (full.hasTempPed && !full.tempPedReturnedAt && iNum && fNum && iNum !== fNum) return null;  // has a different ped out
+  const iMs = tpIdMs(inst.id), fMs = tpIdMs(full.id);
+  if (iMs && fMs && fMs < iMs - 30 * 86400000) return null;      // card made a month+ before the ped: not its job
+  if (inst.simproNo && String(inst.simproNo) === String(full.simproNo || "")) return "same Simpro #";
+  const a = tpAddrKey(inst.address);
+  if (a && a === tpAddrKey(full.address)) return "same address";
+  const fw = new Set(tpNameWords(full.name));
+  const hit = tpNameWords(inst.name).find(w => fw.has(w));
+  return hit ? `name matches “${hit}”` : null;
+};
+// Ped rows that are only an install card (no job card yet) → job cards that may be theirs.
+const tpLinkSuggestions = (groups, jobs) => {
+  const out = new Map();
+  (groups || []).forEach(g => {
+    if (g.returned || g.members.some(m => !m.tempPed)) return;
+    const list = [];
+    g.members.forEach(inst => (jobs || []).forEach(f => { const why = tpLinkWhy(inst, f); if (why) list.push({ inst, job: f, why }); }));
+    if (list.length) out.set(g.key, list.slice(0, 3));
+  });
+  return out;
+};
+// Same, from the job card's side (Job Info prompt).
+const tpLinkSuggestionsForJob = (job, jobs, groups) => {
+  if (!job || job.tempPed || job.quickJob || job.tempPedInstallId) return [];
+  const list = [];
+  (groups || tempPedGroups(jobs)).forEach(g => {
+    if (g.returned || g.members.some(m => !m.tempPed)) return;
+    g.members.forEach(inst => { const why = tpLinkWhy(inst, job); if (why) list.push({ inst, num: g.num, why }); });
+  });
+  return list;
+};
+const tpLinkPatches = (inst, full) => {
+  const iNum = String(inst.tempPedNumber || "").trim();
+  const iOut = inst.tempPedOutAt || inst.tempPedSignedOffDate || tpToday();
+  const fOut = full.hasTempPed && !full.tempPedReturnedAt ? full.tempPedOutAt : "";
+  const earliest = [iOut, fOut].filter(Boolean).sort((x, y) => ((parseAnyDate(x) || 0) - (parseAnyDate(y) || 0)))[0] || iOut;
+  return {
+    full: { hasTempPed: true, tempPedNumber: String(full.tempPedNumber || "").trim() || iNum, tempPedOutAt: earliest,
+      tempPedReturnedAt: "", tempPedReturnedBy: "", tempPedInstallId: inst.id,
+      tempPedLinkPrev: { hasTempPed: !!full.hasTempPed, tempPedNumber: full.tempPedNumber || "", tempPedOutAt: full.tempPedOutAt || "",
+        tempPedReturnedAt: full.tempPedReturnedAt || "", tempPedReturnedBy: full.tempPedReturnedBy || "" } },
+    install: { tempPedLinkedJobId: full.id },
+  };
+};
+const tpUnlinkPatches = (inst, full) => {
+  const prev = full.tempPedLinkPrev || {};
+  return {
+    full: { hasTempPed: !!prev.hasTempPed, tempPedNumber: prev.tempPedNumber || "", tempPedOutAt: prev.tempPedOutAt || "",
+      tempPedReturnedAt: prev.tempPedReturnedAt || "", tempPedReturnedBy: prev.tempPedReturnedBy || "", tempPedInstallId: "", tempPedLinkPrev: null },
+    install: inst ? { tempPedLinkedJobId: "", tempPedLinkSkip: [...new Set([...(Array.isArray(inst.tempPedLinkSkip) ? inst.tempPedLinkSkip : []), full.id])] } : null,
+  };
+};
+const tpSkipPatch = (inst, fullId) => ({ tempPedLinkSkip: [...new Set([...(Array.isArray(inst.tempPedLinkSkip) ? inst.tempPedLinkSkip : []), fullId])] });
 
 const JOBPREP_ADMIN_ITEMS = [
   { key:"jobAccount", boolKey:"jobAccount",  chip:"ACCOUNT",  label:"Job account created" },
@@ -55459,7 +55567,7 @@ function JobPrepDrawerOverride({ job, identity, u }) {
 
 // Job Prep → TEMP PEDS OUT (Justin's lane, v514). One row per ped on a job;
 // what needs a look (no Ped #, same # on two jobs) first, then longest out.
-function TempPedsLane({ groups, filterFn, filtered, open, onToggle, identity, onSelectJob, onUpdateJob, onSchedulePickup }) {
+function TempPedsLane({ groups, suggest, filterFn, filtered, open, onToggle, identity, onSelectJob, onUpdateJob, onSchedulePickup }) {
   const [sort, setSort] = useState("long");     // long | num
   const [confirm, setConfirm] = useState("");   // group key awaiting "Yes, picked up"
   const [backOpen, setBackOpen] = useState(false);
@@ -55485,6 +55593,16 @@ function TempPedsLane({ groups, filterFn, filtered, open, onToggle, identity, on
     if (g.returned.auto) onUpdateJob(g.primary.id, { tempPedPickupIgnore: [...(Array.isArray(g.primary.tempPedPickupIgnore) ? g.primary.tempPedPickupIgnore : []), g.returned.pickupId] });
     else g.members.filter(j => j.tempPedReturnedAt).forEach(j => onUpdateJob(j.id, { tempPedReturnedAt: "", tempPedReturnedBy: "" }));
     toast.success(`Ped ${g.num ? `#${g.num} ` : ""}is back on the list`);
+  };
+  const link = (s, num) => {
+    const p = tpLinkPatches(s.inst, s.job);
+    onUpdateJob(s.job.id, p.full); onUpdateJob(s.inst.id, p.install);
+    toast.success(`Ped ${num ? `#${num} ` : ""}linked to ${s.job.name || "the job card"}`);
+  };
+  const unlink = (inst, full) => {
+    const p = tpUnlinkPatches(inst, full);
+    onUpdateJob(full.id, p.full); if (p.install) onUpdateJob(inst.id, p.install);
+    toast.success(`Unlinked ${full.name || "the job card"} from the temp ped card`);
   };
   const pill = (color, text) => (
     <span key={text} style={{ borderRadius: 99, padding: "2px 10px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
@@ -55515,6 +55633,9 @@ function TempPedsLane({ groups, filterFn, filtered, open, onToggle, identity, on
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 6px" }}>
               {j.tempPed ? "Temp ped install" : "On the job"}</span>
             {install && <span>also on temp ped install “{install.name}”</span>}
+            {install && j.tempPedInstallId === install.id && (
+              <button type="button" onClick={() => unlink(install, j)}
+                style={{ background: "none", border: "none", padding: 0, color: C.blue, fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>Unlink</button>)}
           </div>
           {!g.num && <div style={{ marginTop: 5, fontSize: 11.5, fontWeight: 700, color: C.red }}>No Ped # set. Pick the number on the ped.</div>}
           {g.dupWith.length > 0 && <div style={{ marginTop: 5, fontSize: 11.5, fontWeight: 700, color: C.red }}>Ped #{g.num} is also on {g.dupWith.join(", ")}. One of them is wrong.</div>}
@@ -55550,6 +55671,17 @@ function TempPedsLane({ groups, filterFn, filtered, open, onToggle, identity, on
             <button type="button" onClick={() => pickedUp(g)} style={btn(true)}>Yes, picked up</button>
           </div>
         )}
+        {(suggest && suggest.get(g.key) || []).map(s => (
+          <div key={s.inst.id + "|" + s.job.id} style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+            background: `${C.blue}0D`, border: `1px solid ${C.blue}44`, borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: C.text }}>
+            <span style={{ flex: "1 1 240px", minWidth: 0 }}>
+              Job card found: <b onClick={() => onSelectJob(s.job)} style={{ cursor: "pointer" }}>{s.job.name || "Untitled Job"}</b>
+              <span style={{ color: C.dim }}>{s.job.simproNo ? ` · #${s.job.simproNo}` : ""} · {s.why}. Is this ped on that job?</span>
+            </span>
+            <button type="button" onClick={() => onUpdateJob(s.inst.id, tpSkipPatch(s.inst, s.job.id))} style={btn(false)}>Not this one</button>
+            <button type="button" onClick={() => link(s, g.num)} style={{ ...btn(true), background: C.blue }}>Link to this job</button>
+          </div>
+        ))}
       </div>
     );
   };
@@ -56210,6 +56342,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
 
   const included = useMemo(() => jobPrepIncluded(jobs), [jobs]);
   const pedGroups = useMemo(() => tempPedGroups(jobs), [jobs]);
+  const pedSuggest = useMemo(() => tpLinkSuggestions(pedGroups, jobs), [pedGroups, jobs]);
   const pedsOut = pedGroups.filter(g => !g.returned).length;
 
   const [search, setSearch] = useState("");
@@ -56301,7 +56434,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
       </div>
 
       {/* ══ TEMP PEDS OUT (v514) — every ped on a job, any stage ══ */}
-      <TempPedsLane groups={pedGroups} filtered={filtered} open={laneOpen.peds} onToggle={()=>setLaneOpen(o=>({...o,peds:!o.peds}))}
+      <TempPedsLane groups={pedGroups} suggest={pedSuggest} filtered={filtered} open={laneOpen.peds} onToggle={()=>setLaneOpen(o=>({...o,peds:!o.peds}))}
         filterFn={(g)=>(!q || g.members.some(j=>`${j.name||""} ${j.gc||""} ${j.simproNo||""} ${j.foreman||""} ${j.address||""}`.toLowerCase().includes(q))
             || (!!g.num && [`#${g.num}`, `ped ${g.num}`, `ped #${g.num}`, g.num].includes(q)))
           && (!foremanFilter || g.members.some(j=>j.foreman===foremanFilter))}
@@ -66518,6 +66651,7 @@ function App() {
             canConvertQuote={can(identity,"quotes.convert")}
             initialTab={openTab} users={users} identity={identity} needs={needs}
             jobs={jobs}
+            onUpdateOtherJob={(jobId,patch)=>{ const other=allJobs.find(j=>j.id===jobId); if(other && jobId!==selected.id) updateJob({...other,...patch},patch); }}
             onQuickAdd={(preset)=>setQuickAdd(preset||{})}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
