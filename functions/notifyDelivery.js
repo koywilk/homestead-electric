@@ -348,6 +348,19 @@ function isParticipant(b, userKey, userName) {
   return (Array.isArray(b.recipients) ? b.recipients : []).some(r => r && ((k && r.key === k) || (n && String(r.name || "").trim().toLowerCase() === n)));
 }
 
+// Sunday inbox cleanup (notifInboxPrune): ordinary bell items go after 30 days.
+// Office messages (anything with a broadcastId — the message, reminders and
+// discussion replies) are the history behind My Day → Messages from the office
+// (v514), so they stay a year. Pure so the test pins it.
+const INBOX_KEEP_DAYS = 30;
+const OFFICE_KEEP_DAYS = 365;
+function isPrunable(item, nowMs) {
+  const at = Date.parse(String((item && item.createdAt) || ""));
+  if (!Number.isFinite(at)) return false;               // no readable date → leave it alone
+  const days = (item && item.broadcastId) ? OFFICE_KEEP_DAYS : INBOX_KEEP_DAYS;
+  return at < nowMs - days * 86400000;
+}
+
 module.exports = {
   STALE_TOKEN_CODES, TRANSIENT_CODES, MAX_ATTEMPTS, BACKOFF_MIN, LEASE_MS, PUSH_STALE_MS,
   PUSH_BODY_MAX, LOW_PRIORITY_CATEGORIES, BROADCAST_MAX_RECIPIENTS, BROADCAST_ID_RE,
@@ -355,4 +368,5 @@ module.exports = {
   buildMessage, summarizeResults, rollup, publicResults,
   resolveBroadcastRecipients, summarizeBroadcast, seenStateOf, summarizeSeen, SEEN_ORDER, isBroadcaster,
   BROADCAST_KINDS, normalizeKind, broadcastPushTitle, cleanAttachments, REPLY_ID_RE, isParticipant,
+  INBOX_KEEP_DAYS, OFFICE_KEEP_DAYS, isPrunable,
 };

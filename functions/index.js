@@ -613,7 +613,9 @@ async function broadcastSeenRows(b) {
 
 exports.listBroadcasts = functions.https.onCall(async (data) => {
   await requireBroadcaster(data);
-  const snap = await db.collection("broadcasts").orderBy("at", "desc").limit(12).get();
+  // 12 for Bell → Send → Recently sent; My Day → Sent asks for more (v514), capped.
+  const n = Math.min(30, Math.max(1, parseInt(data && data.limit, 10) || 12));
+  const snap = await db.collection("broadcasts").orderBy("at", "desc").limit(n).get();
   const items = await Promise.all(snap.docs.map(async (d) => {
     const b = d.data() || {};
     const seen = Array.isArray(b.recipients) ? ND.summarizeSeen(await broadcastSeenRows(b)) : null;
@@ -6513,28 +6515,43 @@ exports.scheduledSimproCoStatusSync = functions
 // Deletes inbox items older than 30 days so the notifications
 // collection can't grow unbounded. Iterates the team list and
 // queries each user's items subcollection directly (collection-
-// scope query — no collection-group index needed). ADDITIVE:
-// new export only; touches nothing but old inbox docs.
+// scope query — no collection-group index needed).
+// v514: office messages (broadcastId) are the My Day → Messages
+// history, so they're kept a year (ND.isPrunable). The query
+// pages past them in createdAt order, so kept items can never
+// fill the 400-doc window and stall the cleanup behind them.
 // ─────────────────────────────────────────────────────────────
 exports.notifInboxPrune = functions.pubsub
   .schedule("0 3 * * 0")
   .timeZone(TZ)
   .onRun(async () => {
     const users = await getUsers();
-    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-    let deleted = 0;
+    const now = Date.now();
+    const cutoff = new Date(now - ND.INBOX_KEEP_DAYS * 86400000).toISOString();
+    let deleted = 0, kept = 0;
     for (const u of users) {
       const key = inboxKeyOf(u);
       if (!key) continue;
-      const snap = await db.collection("notifications").doc(key).collection("items")
-        .where("createdAt", "<", cutoff).limit(400).get();
-      if (snap.empty) continue;
-      const batch = db.batch();
-      snap.docs.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      deleted += snap.size;
+      const col = db.collection("notifications").doc(key).collection("items");
+      let last = null;
+      for (let page = 0; page < 25; page++) {
+        let qy = col.where("createdAt", "<", cutoff).orderBy("createdAt").limit(400);
+        if (last) qy = qy.startAfter(last);
+        const snap = await qy.get();
+        if (snap.empty) break;
+        const gone = snap.docs.filter(d => ND.isPrunable(d.data(), now));
+        if (gone.length) {
+          const batch = db.batch();
+          gone.forEach(d => batch.delete(d.ref));
+          await batch.commit();
+          deleted += gone.length;
+        }
+        kept += snap.size - gone.length;
+        if (snap.size < 400) break;
+        last = snap.docs[snap.docs.length - 1];
+      }
     }
-    functions.logger.info("[notifInboxPrune] ran", { deleted });
+    functions.logger.info("[notifInboxPrune] ran", { deleted, keptOfficeMessages: kept });
     return null;
   });
 

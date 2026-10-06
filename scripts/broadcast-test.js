@@ -164,5 +164,16 @@ t("Got it is the strongest seen state and counts as opened", () => {
   assert.deepStrictEqual(s.people.map(p => p.name), ["A", "B", "C"]);
   assert.ok(ND.REPLY_ID_RE.test("r_mfx3k2_a9q4z1")); assert.ok(!ND.REPLY_ID_RE.test("r_x/../y"));
 });
+t("inbox cleanup: bell items go after 30 days, office messages stay a year", () => {
+  const now = Date.parse("2026-10-06T12:00:00Z");
+  const ago = (d) => new Date(now - d * 86400000).toISOString();
+  assert.ok(ND.isPrunable({ createdAt: ago(31) }, now), "old bell item goes");
+  assert.ok(!ND.isPrunable({ createdAt: ago(29) }, now), "recent bell item stays");
+  assert.ok(!ND.isPrunable({ createdAt: ago(200), broadcastId: "bc_x" }, now), "office message stays");
+  assert.ok(!ND.isPrunable({ createdAt: ago(200), broadcastId: "bc_x", replyBy: "Gage Lund" }, now), "discussion reply stays");
+  assert.ok(ND.isPrunable({ createdAt: ago(366), broadcastId: "bc_x" }, now), "office message past a year goes");
+  assert.ok(!ND.isPrunable({ createdAt: "" }, now), "no date → left alone");
+  assert.ok(!ND.isPrunable(null, now));
+});
 
 console.log(`\n${pass} passed`);

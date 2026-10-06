@@ -14,13 +14,29 @@
 <body><div class="wrap">
 <h1>Job Prep — Office Guide</h1>
 <p>One board for everything that has to happen before a job breaks ground. Office only (admin + manager).
-Both lanes start collapsed — tap a lane's header bar to open it (the counts on the header stay visible
+Every lane starts collapsed — tap a lane's header bar to open it (the counts on the header stay visible
 either way, and searching opens both lanes automatically).</p>
 <h2>Office Admin lane (Justin)</h2>
 <p>Every active job shows three chips: <b>ACCOUNT</b>, <b>PRE-LIEN</b>, <b>TEMP PED</b>. Tap a chip to mark it done;
 tap the small ▾ for the menu — including <b>Not needed (N/A)</b> for jobs that genuinely don't need one (gray chip,
 counts as handled). When Temp Ped is done, pick the Ped # right on the row. When all three are done or N/A, the
 row drops into the ✓ complete strip.</p>
+<h2>Temp Peds Out lane (Justin)</h2>
+<p>Every temp ped sitting on a job right now, one row per ped, on any job in any stage (a ped often stays after the
+finish, so this lane doesn't drop finished jobs). A ped counts as out when a job has <b>Temp pedestal on site</b>
+ticked, or a temp ped install job is marked <b>Completed</b>. An install job and the full job at the same address with
+the same Ped # are the same ped, so they share one row. The header shows how many are out, how many need a look,
+how many have been out 90+ days, and how many have a pickup scheduled.</p>
+<p>Each row shows the big <b>Ped #</b>, the job, foreman and address, <b>days out</b> (red past 90), and whether a
+pickup is scheduled. Sort by <b>Longest out</b> or <b>Ped #</b>; the search box and foreman filter work here too
+(type <b>14</b> or <b>#14</b> to find Ped #14). <b>Needs a look</b> sits on top: a ped with no number (pick it right on
+the row) or the same Ped # on two different jobs (one of them is wrong). Peds that were already out before this lane
+existed say <b>Out since not recorded</b>; set the date on the row. New ones start counting the day the box is ticked.</p>
+<p><b>Schedule pickup</b> creates a <b>Temp Ped Pickup</b> quick job for that ped and opens it so you can set the date
+and crew. When that pickup job is completed, the ped moves to <b>Returned recently</b> on its own (tagged
+<b>auto</b>). <b>Picked up</b> does it by hand: confirm, and it moves there with your name and today's date. Wrong one?
+Tap <b>Undo</b> in Returned recently and it goes back on the list. A pickup quick job made the old way (+ Quick) isn't
+linked to a ped, so use Picked up for those.</p>
 <h2>Pre-Job Prep lane (Koy)</h2>
 <p>The five prep checklist items are tappable right on the board — redline plans, cabinet plans, appliance specs,
 plans uploaded, hand-off. The row shows the prep stage, progress, and what's next. Like Justin's chips, each has
