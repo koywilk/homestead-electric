@@ -57347,6 +57347,7 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
   // "narrow" by the My Day column itself, not the window — the app is often in a split view.
+  const _mdRoot = useRef(null);
   const [rootW, setRootW] = useState(0);
   useEffect(() => {
     const el = _mdRoot.current;
@@ -57377,7 +57378,6 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
   const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
   const [undo, setUndo] = useState(null);
-  const _mdRoot = useRef(null);
   useHeFlip(_mdRoot);                 // v497 A (G6/M4/M5): rows slide to their new group / pin slot / Done
   const _qLast = useRef({});          // v497 A (M2): last discussion message per row, to flash a fresh reply
   // v497 (Koy 2026-10-03: "needs, tasks, anything assigned to me specifically by another person should
