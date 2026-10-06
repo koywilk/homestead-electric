@@ -200,6 +200,72 @@ function memberCallable(name, identity) {
     uid: (identity && identity.id) || "" });
 }
 
+// ── Version Lock (08-Specs/Version Lock Spec.md) — Phase 1: stamp + popup ───
+// An old copy of the app must not be able to save. Every client write to the
+// funnel collections (jobs, needs, redlineWalks — manualTasks and quoteWalks
+// have no client writer left) carries two TOP-LEVEL fields beside `data` and
+// `updated_at`:
+//   app_build  the build this bundle was compiled from, as an integer
+//              (homestead-v514 → 514; dev server / missing → 0)
+//   w          a fresh random string per write ("<build>.<8 chars>")
+// The Phase 2 rules (firestore.phase2.rules, NOT deployed with this build)
+// refuse a write whose app_build is below appGate/version.minBuild, and
+// require `w` to CHANGE on every write — the rules see the document AFTER the
+// write, so an old build's updateDoc that never touched app_build would
+// otherwise inherit the stamp the last good save left on the doc.
+//
+// The stamp is meta: the jobs loader builds job objects from `raw.data` plus
+// named meta fields, so app_build / w never reach the in-memory job and are
+// never written back inside `data`. Never stamp the console rescue utilities
+// (__HE_RESTORE, _hsRescue*, __HE_BULK_ADD_LOADS): under a lock they run
+// through the kill switch (minBuild 0) by design.
+// VERSION_LOCK_HELPERS_START (scripts/version-lock-test.js extracts this block)
+const parseAppBuild = (v) => {
+  const m = String(v || "").trim().match(/v(\d{1,6})$/i);
+  return m ? parseInt(m[1], 10) : 0;
+};
+const APP_BUILD = parseAppBuild(process.env.REACT_APP_VERSION);
+const newWriteStamp = (build) => {
+  let r = "";
+  while (r.length < 8) r += Math.random().toString(36).slice(2);
+  return `${build}.${r.slice(0, 8)}`;
+};
+const stampWrite = (payload) => ({ ...(payload || {}), app_build: APP_BUILD, w: newWriteStamp(APP_BUILD) });
+// The rules can't return a custom message — a refused write surfaces as
+// permission-denied. It is a VERSION refusal only when the gate says this
+// build is below the minimum; any other denial keeps today's handling.
+const isPermissionDenied = (e) => !!e && (
+  e.code === "permission-denied" ||
+  /permission[-_ ]denied|insufficient permissions/i.test(String((e && e.message) || "")));
+const isVersionRefusal = (e, minBuild, appBuild = APP_BUILD) =>
+  isPermissionDenied(e) && Number.isFinite(Number(minBuild)) && Number(minBuild) > appBuild;
+// VERSION_LOCK_HELPERS_END
+// App() registers the popup here; write paths outside App (public punch page,
+// time-off requests) report through the same funnel.
+const _versionLock = { onRefusal: null, minBuild: null };
+const readMinBuild = async () => {
+  // Readable once the Phase 2 rules are live; until then the catch-all deny
+  // answers permission-denied and we return null (unknown) — never throw.
+  try {
+    const snap = await getDoc(doc(db, "appGate", "version"));
+    const v = snap.exists() ? Number(snap.data().minBuild) : 0;
+    return Number.isFinite(v) ? v : 0;
+  } catch (e) { return null; }
+};
+// Call from the catch of any write to a locked collection. Returns true when
+// the denial was a version refusal (the popup is now up); the CALLER keeps the
+// write in its own queue either way — never clear a queued write on a refusal.
+const reportWriteDenied = async (e, coll, id) => {
+  if (!isPermissionDenied(e)) return false;
+  const minBuild = await readMinBuild();
+  if (minBuild === null) return false;
+  _versionLock.minBuild = minBuild;
+  if (!isVersionRefusal(e, minBuild)) return false;
+  console.error(`[HE version-lock] ${coll}/${id} refused: this build is v${APP_BUILD}, minimum is v${minBuild} — write kept, update required`);
+  try { _versionLock.onRefusal && _versionLock.onRefusal(minBuild); } catch (err) {}
+  return true;
+};
+
 // ── FieldInk (TraceVault) read-only link ─────────────────────────────────────
 // The crew's PDF-markup app lives in its OWN Firebase project ("field-ink").
 // Its `shares` collection is public-read by design (it powers the GC live-link
@@ -6965,7 +7031,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -48289,9 +48355,19 @@ function UsageReportCard() {
   );
 }
 
-function DeviceVersionsCard() {
+// Version lock (Phase 1): the card also shows each device's BUILD, flags rows
+// below the gate's minimum in red, and carries the two office controls —
+// "Require v___ (N devices will be asked)" and "Turn off the lock" — which call
+// the setMinBuild callable (requireAdmin, Admin SDK write to appGate/version).
+// Inert until the functions are deployed; the gate doc is unreadable until the
+// Phase 2 rules are live (shown honestly as "not readable yet").
+function DeviceVersionsCard({ identity }) {
   const [devices, setDevices] = useState(null);
   const [latest, setLatest] = useState(null);
+  const [gate, setGate] = useState(undefined);      // undefined = loading, null = not readable, {minBuild,…}
+  const [stats, setStats] = useState(null);         // settings/versionLockStats.days
+  const [req, setReq] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -48303,30 +48379,94 @@ function DeviceVersionsCard() {
       const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/);
       setLatest(m ? m[1] : null);
     } catch(e) {}
+    try {
+      const g = await getDoc(doc(db, "appGate", "version"));
+      setGate(g.exists() ? { minBuild: Number(g.data().minBuild) || 0, setBy: g.data().setBy || "", setAt: g.data().setAt || "", note: g.data().note || "" } : { minBuild: 0, missing: true });
+    } catch (e) { setGate(null); }
+    try {
+      const s = await getDoc(doc(db, "settings", "versionLockStats"));
+      setStats(s.exists() ? (s.data().days || {}) : {});
+    } catch (e) {}
   };
 
   useEffect(() => { load(); const id = setInterval(load, 60*1000); return () => clearInterval(id); }, []);
+  const latestBuild = parseAppBuild(latest);
+  useEffect(() => { if (latestBuild && !req) setReq(String(latestBuild)); }, [latestBuild]); // eslint-disable-line
 
-  const list = Object.entries(devices || {}).map(([id, d]) => ({ id, ...d }))
+  const list = Object.entries(devices || {}).map(([id, d]) => ({ id, ...d, build: parseAppBuild(d.version) }))
     .sort((a,b) => new Date(b.lastSeenAt||0) - new Date(a.lastSeenAt||0));
   const sevenDaysAgo = Date.now() - 7*24*60*60*1000;
+  const minBuild = gate && gate.minBuild ? gate.minBuild : 0;
+  const reqN = parseInt(req, 10) || 0;
+  const willAsk = list.filter(d => Date.parse(d.lastSeenAt||0) > sevenDaysAgo && d.build < reqN).length;
+  const recentDays = Object.keys(stats || {}).sort().slice(-3);
+  const unstamped = recentDays.reduce((n, k) => n + ((stats[k] && stats[k].client) || 0), 0);
+
+  const setMin = async (value, why) => {
+    if (!identity) return;
+    if (!await showConfirm(why)) return;
+    setBusy(true);
+    try {
+      const r = await gcAdminCallable("setMinBuild", identity)({ minBuild: value, note: value ? `Required from Settings (latest ${latest || "?"})` : "Lock turned off from Settings" });
+      toast.success(value ? `Lock set: every device must run v${r.data?.minBuild ?? value} or newer to save.` : "Lock turned off — any version can save again.");
+      load();
+    } catch (e) {
+      toast.error("Couldn't set the lock: " + (e?.message || "") + (/not-found|NOT_FOUND|internal/i.test(String(e?.code||e?.message)) ? " — is the setMinBuild function deployed?" : ""));
+    }
+    setBusy(false);
+  };
 
   return (
     <div style={{padding:"12px 14px"}}>
       <div style={{fontSize:11,color:C.dim,marginBottom:12}}>
-        Latest deployed version: <strong>{latest || "…"}</strong> — devices on an older version reload themselves within minutes of coming back into view; red rows are recently-active devices still behind.
+        Latest deployed version: <strong>{latest || "…"}</strong> — devices on an older version reload themselves within minutes of coming back into view, or see the <b>Update now</b> popup if they are mid-task; red rows are recently-active devices still behind.
       </div>
+      <div style={{fontSize:11,marginBottom:12,padding:"8px 10px",borderRadius:8,
+        background: minBuild ? "rgba(59,91,165,0.08)" : "rgba(94,102,112,0.08)", border:`1px solid ${minBuild ? "rgba(59,91,165,0.25)" : C.border}`}}>
+        <div style={{fontWeight:700,color:C.text}}>
+          {gate === undefined ? "Version lock: checking…"
+            : gate === null ? "Version lock: not readable yet (the lock rules are not deployed — stamping only)"
+            : minBuild ? `Version lock ON — saves need v${minBuild} or newer` : "Version lock OFF — any version can save"}
+        </div>
+        {gate && gate.setBy && <div style={{color:C.dim,marginTop:2}}>Set by {gate.setBy}{gate.setAt ? " · " + new Date(gate.setAt).toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : ""}{gate.note ? " · " + gate.note : ""}</div>}
+        {stats && <div style={{color:C.dim,marginTop:2}}>Unstamped saves, last {recentDays.length || 0} day{recentDays.length===1?"":"s"}: <b style={{color: unstamped ? C.red : C.green}}>{unstamped}</b> {unstamped ? "(an old copy, or a save path that is not stamped yet — do not turn the lock on until this is 0 for 3 working days)" : "(every save carries its build — safe to require a version)"}</div>}
+      </div>
+      {identity && (
+        <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:12}}>
+          <span style={{fontSize:11,color:C.dim}}>Require v</span>
+          <input type="number" min={0} value={req} onChange={e => setReq(e.target.value.replace(/\D/g,"").slice(0,6))}
+            style={{width:80,padding:"7px 8px",borderRadius:8,border:`1px solid ${C.border}`,fontFamily:"inherit",fontSize:13,fontWeight:700}}/>
+          <button type="button" disabled={busy || !reqN}
+            onClick={() => setMin(reqN, `Require v${reqN}? ${willAsk} recently-active device${willAsk===1?"":"s"} will be asked to update, and an older copy can no longer save. Your own device runs v${APP_BUILD || "dev"}.`)}
+            style={{padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+              background:busy?"#99A0AA":C.blue,color:"#fff",border:"none"}}>
+            Require v{reqN || "___"} ({willAsk} device{willAsk===1?"":"s"} will be asked)
+          </button>
+          <button type="button" disabled={busy || !minBuild}
+            onClick={() => setMin(0, "Turn the version lock off? Any version of the app will be able to save until you require one again.")}
+            style={{padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:minBuild?"pointer":"default",fontFamily:"inherit",
+              background:"transparent",color:minBuild?C.red:C.dim,border:`1px solid ${minBuild?C.red:C.border}`}}>
+            Turn off the lock
+          </button>
+          <div style={{flexBasis:"100%",fontSize:10,color:C.dim,lineHeight:1.5}}>
+            Rolling a deploy back? <b>Lower the required version (or turn the lock off) FIRST, then roll back</b> — otherwise the rolled-back build is below the minimum and every save is refused. The minimum is never raised automatically.
+          </div>
+        </div>
+      )}
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         {list.map(d => {
-          const stale = latest && d.version !== latest && Date.parse(d.lastSeenAt||0) > sevenDaysAgo;
+          const recent = Date.parse(d.lastSeenAt||0) > sevenDaysAgo;
+          const stale = latest && d.version !== latest && recent;
+          const below = minBuild > 0 && d.build < minBuild;
           return (
             <div key={d.id} style={{display:"flex",alignItems:"center",gap:10,fontSize:12,
               padding:"6px 8px",borderRadius:6,
-              background:stale?"rgba(178,58,58,0.06)":"transparent",
-              border:`1px solid ${stale?"rgba(178,58,58,0.20)":"transparent"}`}}>
+              background:(stale||below)?"rgba(178,58,58,0.06)":"transparent",
+              border:`1px solid ${(stale||below)?"rgba(178,58,58,0.20)":"transparent"}`}}>
               <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-                color:C.text,fontWeight:stale?700:500}}>{d.name||d.id}</span>
-              <span style={{fontSize:10,fontWeight:700,color:stale?"#B23A3A":C.dim,flexShrink:0}}>{d.version}</span>
+                color:C.text,fontWeight:(stale||below)?700:500}}>{d.name||d.id}</span>
+              {below && <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:C.red,borderRadius:4,padding:"2px 5px",flexShrink:0}}>BELOW MINIMUM</span>}
+              <span style={{fontSize:10,fontWeight:700,color:(stale||below)?"#B23A3A":C.dim,flexShrink:0}}>{d.version}{d.build ? "" : " (no build)"}</span>
               <span style={{fontSize:10,color:C.dim,minWidth:110,textAlign:"right",flexShrink:0}}>
                 {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : ""}
               </span>
@@ -51835,14 +51975,18 @@ function PunchSharePage({ jobId, stage }) {
               ...punchStamp(), // was toLocaleDateString — same format bug as the job-note paths
               done: false, checkedBy: '', checkedAt: '',
             };
-            await updateDoc(doc(db,'jobs',jobId), {
+            await updateDoc(doc(db,'jobs',jobId), stampWrite({
               [`data.${externalKey}`]: arrayUnion(newItem),
               lastActivityAt: serverTimestamp(),
-            });
+            }));
             setNewItemText('');
             setAddedCount(c=>c+1);
           } catch(e) {
-            toast.error('Failed to submit. Check your connection and try again.');
+            // Version lock: this page is the same bundle as the app — an old copy
+            // left open gets refused once the rules are live. The text stays in
+            // the box; a reload picks up the current build.
+            if (await reportWriteDenied(e, 'jobs', jobId)) toast.error('This page is out of date — reload it and submit again. Your text is still in the box.');
+            else toast.error('Failed to submit. Check your connection and try again.');
           }
           setAddingItem(false);
         };
@@ -53414,7 +53558,7 @@ function TimeOffPage({ identity = null, users = [] }) {
             dueDate: entry.start, dueBucket: dueBucketFromDate(entry.start) || "week",
             status: "open",
           };
-          await setDoc(doc(db,"needs",need.id), { data:need, updated_at:nowIso, saved_by:me });
+          await setDoc(doc(db,"needs",need.id), stampWrite({ data:need, updated_at:nowIso, saved_by:me }));
         }
       } catch(_) {}
     } catch(e) { toast.error("Couldn't submit: "+(e?.message||"")); }
@@ -53428,7 +53572,7 @@ function TimeOffPage({ identity = null, users = [] }) {
       // surgical (never a full-doc overwrite); silent (doneBy=head, createdBy
       // empty → onNeedWrite branch 2 can't fire). Older requests predating this
       // routing have no such doc → updateDoc 404s, caught and ignored.
-      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), { "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me }); } catch(_) {}
+      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), stampWrite({ "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me })); } catch(_) {}
       if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
         const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off", usePaid:r.usePaid!==false };
         await mergeSaveSettingsFields("crewPTO", { list:[...(ptoList||[]), entry] });
@@ -62539,6 +62683,12 @@ function App() {
 
   const isDirty   = useRef(false);
 
+  // Version lock: Settings → "Force Update All Devices" (config/app watcher,
+  // below) used to window.location.reload() every open app at once, flushing
+  // nothing and ignoring anyone typing. It now raises the Update now popup;
+  // the popup flushes saves and honours typing grace before reloading.
+  const forceUpdateRef = useRef(null);
+
   const saveTimers = useRef({});
 
   // Trailing-debounce for the Upcoming pipeline's single-doc save (mirrors
@@ -62754,7 +62904,7 @@ function App() {
               if(!d) return;
               const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
               if(daysBetween >= 60) {
-                updateDoc(doc(db,"jobs",job.id),{"data.finishStatus":"waiting_date",updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()}).catch(()=>{});
+                updateDoc(doc(db,"jobs",job.id),stampWrite({"data.finishStatus":"waiting_date",updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()})).catch(()=>{});
                 advancedCount++;
               }
             });
@@ -62944,8 +63094,11 @@ function App() {
       if(!v) return;
       if(firstVersionSeen === null) { firstVersionSeen = v; return; } // first load — just record it
       if(v !== firstVersionSeen) {
-        console.log(`[HE] App version changed (${firstVersionSeen} → ${v}) — reloading...`);
-        window.location.reload();
+        // Version lock: through the Update now popup (flush + typing grace),
+        // never a bare reload — the old reload lost typed-but-unsaved text.
+        console.log(`[HE] App version changed (${firstVersionSeen} → ${v}) — update required`);
+        if (forceUpdateRef.current) forceUpdateRef.current();
+        else window.location.reload();
       }
     }, ()=>{});
 
@@ -63098,6 +63251,14 @@ function App() {
       const merged = {};
       const now = Date.now();
       let changed = false;
+      // Version lock: "Update now" hands this tab's queue to the session that
+      // replaces it. The reload keeps sessionStorage, so the marker names the
+      // slot the previous page load owned — adopt it regardless of age (it is
+      // ours, not a live sibling's), then clear the marker. Without this a
+      // refused save flushed seconds before the reload would sit in storage
+      // until the NEXT app open (the 20 s live-sibling rule below).
+      let handoff = null;
+      try { handoff = sessionStorage.getItem("he_pending_handoff") || null; if (handoff) sessionStorage.removeItem("he_pending_handoff"); } catch (e) { handoff = null; }
       Object.keys(all).forEach(tab => {
         const slot = all[tab] || {};
         const age = slot.at ? (now - slot.at) : Infinity;
@@ -63106,7 +63267,7 @@ function App() {
         if (age > PENDING_MAX_AGE_MS) { delete all[tab]; changed = true; return; }
         // A LIVE other tab refreshes its slot on every save, so a recent foreign
         // slot is still being worked on — leave it alone.
-        if (tab !== TAB_ID && age <= 20000) return;
+        if (tab !== TAB_ID && tab !== handoff && age <= 20000) return;
         Object.keys(slot.patches || {}).forEach(jid => {
           merged[jid] = { ...(merged[jid] || {}), ...slot.patches[jid] };
         });
@@ -63398,7 +63559,8 @@ function App() {
           // (baseline vs ours vs server) before writing. Items added by
           // someone else since we loaded are preserved; this user's explicit
           // deletes still go through. Scalars behave exactly as before.
-          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
+          // Version-lock stamp (app_build + w) rides in meta so every branch below carries it.
+          const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID});
           const cleanPatch = sanitize(toWrite);
           let _writtenPatch = null;
           const _rescued = [];
@@ -63408,7 +63570,7 @@ function App() {
             const snap = await tx.get(jref);
             if(!snap.exists()) {
               // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
-              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device, tab:TAB_ID});
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device, tab:TAB_ID, app_build:meta.app_build, w:meta.w});
               return;
             }
             const serverData = snap.data()?.data || {};
@@ -63479,7 +63641,7 @@ function App() {
               return;
             }
           }
-          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
+          const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID});
           // MODE-B FIX (Cougar Moon, 2026-07-06): this branch used to rewrite
           // EVERY field of the job from this device's local snapshot. The old
           // dot-notation write protected fields this device had never seen,
@@ -63544,6 +63706,14 @@ function App() {
           console.error(`[HE] Save failed (size). Run: ${cmd}`);
         } else {
           setSyncStatus("error");
+          // Version lock: a permission-denied from a build below the gate's
+          // minimum KEEPS the patch exactly where it is — pendingPatches, and
+          // he_pending_patches which was persisted at enqueue — and raises the
+          // Update now popup. The 5 s retry below is skipped for that case
+          // (it would be refused again every 5 s); the new build replays the
+          // queue through this same merge after the reload. Any other failure
+          // keeps today's retry.
+          const refused = await reportWriteDenied(e, "jobs", job.id);
           // Transactions (unlike the old updateDoc) fail immediately when
           // offline instead of queueing — so re-arm a retry while this job's
           // patch is still pending. The patch was NOT cleared above, so no
@@ -63551,7 +63721,7 @@ function App() {
           // Guard: only retry if patches are actually still pending (the
           // reconnect flush may have already drained them), so this can never
           // route a job through the no-patch full-save branch.
-          if(!saveTimers.current[job.id]) {
+          if(!refused && !saveTimers.current[job.id]) {
             setTimeout(() => {
               const p = pendingPatches.current[job.id];
               if (p && Object.keys(p).length > 0 && !saveTimers.current[job.id]) saveJob(job);
@@ -63672,7 +63842,7 @@ function App() {
       const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
       const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
       if(toWrite && Object.keys(toWrite).length > 0) {
-        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
+        const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID});
         const cleanPatch = sanitize(toWrite);
         try {
           // Same transactional three-way merge as saveJob — a close-flush
@@ -63684,7 +63854,7 @@ function App() {
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
             if(!snap.exists()) {
-              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID});
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID, app_build:meta.app_build, w:meta.w});
               return;
             }
             const serverData = snap.data()?.data || {};
@@ -63703,6 +63873,7 @@ function App() {
           // Put the patch back so the retry / reconnect paths can deliver it.
           pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
           persistPending();
+          reportWriteDenied(e, "jobs", job.id);   // version refusal → popup; the patch is already back in the queue
         }
       }
       // No else — never do a full overwrite from flushJob, it can wipe other users' data
@@ -63740,7 +63911,7 @@ function App() {
     setNeeds(prev => { const i=(prev||[]).findIndex(x=>x.id===n.id); if(i>=0){ const nx=[...prev]; nx[i]=n; return nx; } return [...(prev||[]), n]; });
     // `saved_by` is envelope meta — only the server ledger reads it (it logged
     // "?" for every need before); the loader returns `data` and ignores it.
-    try { await setDoc(doc(db,"needs",n.id),{data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""}); } catch(e){ console.error("saveNeed error:",e); }
+    try { await setDoc(doc(db,"needs",n.id),stampWrite({data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""})); } catch(e){ console.error("saveNeed error:",e); reportWriteDenied(e, "needs", n.id); }
   };
   // Field-surgical update: dotted `data.<field>` paths so two devices editing
   // different fields of one need can't last-write-wins each other. `current`
@@ -63760,8 +63931,8 @@ function App() {
     const upd = { updated_at: nowIso, saved_by: identity?.name || "" };
     Object.keys(p).forEach(k => { upd["data."+k] = p[k]; });
     if (entry) upd["data.updates"] = arrayUnion(entry);
-    try { await updateDoc(doc(db,"needs",id), upd); }
-    catch(e){ if (current) { await saveNeed({ ...current, ...p, ...(entry ? { updates: [...needUpdates(current), entry] } : {}) }); } else { console.error("patchNeed error:",e); } }
+    try { await updateDoc(doc(db,"needs",id), stampWrite(upd)); }
+    catch(e){ if (current && !(await reportWriteDenied(e, "needs", id))) { await saveNeed({ ...current, ...p, ...(entry ? { updates: [...needUpdates(current), entry] } : {}) }); } else { console.error("patchNeed error:",e); } }
   };
   // v421: append one update entry. arrayUnion (never a whole-array write) so
   // two phones posting at once can't clobber each other. Assignee's "waiting"
@@ -63777,8 +63948,8 @@ function App() {
     setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, updates: [...needUpdates(n), entry], ...extra } : n));
     const upd = { updated_at: nowIso, saved_by: entry.by, "data.updates": arrayUnion(entry) };
     Object.keys(extra).forEach(k => { upd["data."+k] = extra[k]; });
-    try { await updateDoc(doc(db,"needs",id), upd); }
-    catch(e){ if (current) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
+    try { await updateDoc(doc(db,"needs",id), stampWrite(upd)); }
+    catch(e){ if (current && !(await reportWriteDenied(e, "needs", id))) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
   };
   // v434: edit your own reply. A transaction on needs/<id> re-reads the doc,
   // swaps ONLY the matching entry's text (matched by by + at) and writes
@@ -63800,11 +63971,12 @@ function App() {
         const cur = (snap.data() || {}).data || {};
         const list = Array.isArray(cur.updates) ? cur.updates : [];
         if (!list.some(match)) throw new Error("reply not found");
-        tx.update(ref, { "data.updates": swap(list, u => ({ ...u, text, editedAt })), updated_at: editedAt, saved_by: identity?.name || "" });
+        tx.update(ref, stampWrite({ "data.updates": swap(list, u => ({ ...u, text, editedAt })), updated_at: editedAt, saved_by: identity?.name || "" }));
       });
     } catch(e) {
       console.error("editNeedUpdate error:", e);
       toast.error("Couldn't save your edit — check connection.");
+      reportWriteDenied(e, "needs", needId);
       setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, updates: swap(n.updates, u => { const r = { ...u, text: entry.text }; if (entry.editedAt) r.editedAt = entry.editedAt; else delete r.editedAt; return r; }) } : n));
     }
   };
@@ -63846,10 +64018,11 @@ function App() {
       const nowIso = new Date().toISOString();
       setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: [...((n && n.photos) || []), ...entries] } : n));
       try {
-        await updateDoc(doc(db,"needs",needId), { updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) });
+        await updateDoc(doc(db,"needs",needId), stampWrite({ updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) }));
         toast.success(entries.length === 1 ? "Photo added" : `${entries.length} photos added`);
       } catch(e) {
         console.error("addNeedPhotos error:", e);
+        reportWriteDenied(e, "needs", needId);
         const ids = new Set(entries.map(p => p.id));
         setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: ((n && n.photos) || []).filter(p => !(p && ids.has(p.id))) } : n));
         toast.error("Photo uploaded but couldn't attach to the task — try again.");
@@ -63883,13 +64056,13 @@ function App() {
         deleteObject(ref(storage, sp)).catch(() => {});
       }, 11000));
     }
-    updateDoc(doc(db,"needs",needId), { updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayRemove(photo) })
-      .catch(e => { console.error("removeNeedPhoto error:", e); cancelDelete(); addLocal(); toast.error("Couldn't remove the photo — try again."); });
+    updateDoc(doc(db,"needs",needId), stampWrite({ updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayRemove(photo) }))
+      .catch(e => { console.error("removeNeedPhoto error:", e); cancelDelete(); addLocal(); toast.error("Couldn't remove the photo — try again."); reportWriteDenied(e, "needs", needId); });
     return () => {
       cancelDelete();
       addLocal();
-      updateDoc(doc(db,"needs",needId), { updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayUnion(photo) })
-        .catch(e => { console.error("restore photo error:", e); toast.error("Couldn't restore the photo."); });
+      updateDoc(doc(db,"needs",needId), stampWrite({ updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayUnion(photo) }))
+        .catch(e => { console.error("restore photo error:", e); toast.error("Couldn't restore the photo."); reportWriteDenied(e, "needs", needId); });
     };
   };
   const deleteNeed = async (id) => {
@@ -63979,7 +64152,7 @@ function App() {
       const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
       const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
       if(toWrite && Object.keys(toWrite).length > 0) {
-        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
+        const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID});
         const cleanPatch = sanitize(toWrite);
         // Transactional three-way merge -- NEVER a raw updateDoc on a structural
         // field (data.roughPunch etc.). Firestore has no partial-array update,
@@ -63995,7 +64168,7 @@ function App() {
           const jref = doc(db,"jobs",job.id);
           const snap = await tx.get(jref);
           if(!snap.exists()) {
-            tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID});
+            tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID, app_build:meta.app_build, w:meta.w});
             return;
           }
           const serverData = snap.data()?.data || {};
@@ -64015,6 +64188,7 @@ function App() {
           console.error('[HE] flushSaves merge error:',e?.message);
           pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
           persistPending();
+          reportWriteDenied(e, "jobs", job.id);   // version refusal → popup; the patch is already back in the queue
         });
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
@@ -64070,6 +64244,40 @@ function App() {
   const [updateReady, setUpdateReady] = useState(false);
   const latestVersionRef = useRef(null);
   const RELOAD_GUARD = "he_sw_reload_pending";
+  // ── Version lock (Phase 1) — the Update now popup is the FACE of the lock ──
+  // The lock itself is the Phase 2 rules (firestore.phase2.rules): a write
+  // stamped with a build below appGate/version.minBuild is refused. Four
+  // things raise the popup; any one of them is enough:
+  //   newer    the poll (2 min / on visible) found a newer bundle and the
+  //            silent idle reload could not fire (mid-task: pending saves or
+  //            a focused field)
+  //   gate     the realtime appGate/version listener says minBuild > APP_BUILD
+  //   refused  a write to a locked collection came back permission-denied and
+  //            the gate confirms this build is below the minimum (the write
+  //            stays queued — reportWriteDenied, module scope)
+  //   forced   Settings → Force Update All Devices (config/app watcher)
+  // Phases: wait → block (or a red "finish typing" bar during the 5-minute
+  // typing grace) → saving (flushSaves, wait for the queue, ≤ 8 s) → reload.
+  // After a reload that STILL runs the old bundle (CDN edge lag): retry a
+  // cache-busted reload ≤ 3× / 20 s apart, then "close and reopen".
+  const LOCK_RETRY_KEY = "he_update_retries";
+  const LOCK_HANDOFF_KEY = "he_pending_handoff";
+  const LOCK_TYPING_GRACE_MS = 5 * 60 * 1000;
+  const [lock, setLock] = useState(null);           // null | { newer, gate, refused, forced, minBuild, since }
+  const [lockPhase, setLockPhase] = useState("wait"); // wait | block | saving | retry | stuck
+  const [lockGraceBar, setLockGraceBar] = useState(false);
+  const lockRef = useRef(null); lockRef.current = lock;
+  const lockNeeded = !!lock && (lock.newer || lock.refused || lock.forced || (lock.gate != null && lock.gate > APP_BUILD));
+  const requireUpdate = (reason, extra = {}) => {
+    setLock(prev => ({ ...(prev || { since: Date.now() }), ...extra, [reason]: reason === "gate" ? (extra.minBuild ?? 0) : true }));
+  };
+  const cacheBustReload = () => {
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("he_v", String(Date.now()));   // cache-busting; stripped again on load
+      window.location.replace(u.toString());
+    } catch (e) { window.location.reload(); }
+  };
 
   const getLatestVersion = async () => {
     try {
@@ -64090,16 +64298,37 @@ function App() {
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
   };
 
+  // Silent reload for IDLE phones (kept): visible tab, nothing pending, no
+  // focused field. Anyone mid-task meets the Update now popup instead of the
+  // old bottom-left pill. Returns true when a reload was started.
   const tryAutoReload = () => {
-    if (document.visibilityState !== "visible") return;
-    if (hasPendingSaves() || isTypingFocused()) return;
-    if (sessionStorage.getItem(RELOAD_GUARD)) return;
+    if (document.visibilityState !== "visible") return false;
+    if (hasPendingSaves() || isTypingFocused()) return false;
+    if (sessionStorage.getItem(RELOAD_GUARD)) return false;
     try { sessionStorage.setItem(RELOAD_GUARD, "1"); } catch(e){}
     flushSaves();
     // flushSaves is fire-and-forget (same accepted race as beforeunload) —
     // give in-flight writes a beat before tearing the page down.
     setTimeout(() => window.location.reload(), 700);
+    return true;
   };
+  // Update now: flush, wait for the queue (cap 8 s; 1.5 s when the server is
+  // refusing this build anyway, since the flush is refused too), hand the
+  // durable queue to the next session (he_pending_handoff → adoptPersistedPending),
+  // then reload with a cache-busting URL. The punch "Add punch item…" box
+  // commits on blur, so tapping the button saves a half-typed item too.
+  const updateNow = async () => {
+    setLockPhase("saving");
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
+    try { flushSaves(); } catch (e) {}
+    const cap = (lockRef.current && lockRef.current.refused) ? 1500 : 8000;
+    const t0 = Date.now();
+    while (hasPendingSaves() && Date.now() - t0 < cap) await new Promise(r => setTimeout(r, 250));
+    try { sessionStorage.setItem(LOCK_HANDOFF_KEY, TAB_ID); } catch (e) {}
+    try { sessionStorage.setItem(RELOAD_GUARD, "1"); } catch (e) {}
+    cacheBustReload();
+  };
+  const updateNowRef = useRef(updateNow); updateNowRef.current = updateNow;
 
   // Device-version ping — Koy's observability into who runs what (Settings →
   // Devices). settings/deviceVersions map keyed by he_device_id; transaction
@@ -64134,6 +64363,11 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     const running = process.env.REACT_APP_VERSION || "";
+    // Strip the cache-busting ?he_v= an Update now reload added.
+    try {
+      const u = new URL(window.location.href);
+      if (u.searchParams.has("he_v")) { u.searchParams.delete("he_v"); window.history.replaceState(null, "", u.pathname + u.search + u.hash); }
+    } catch (e) {}
     const checkForUpdate = async () => {
       const latest = await getLatestVersion();
       if (cancelled || !latest) return;
@@ -64141,26 +64375,95 @@ function App() {
       pingRef.current(running || latest);
       if (!running) return; // dev server / env missing — observe only, never reload
       if (running === latest) {
-        try { sessionStorage.removeItem(RELOAD_GUARD); } catch(e){}
+        try { sessionStorage.removeItem(RELOAD_GUARD); sessionStorage.removeItem(LOCK_RETRY_KEY); } catch(e){}
         setUpdateReady(false);
+        setLock(prev => (prev && prev.newer) ? { ...prev, newer: false } : prev);
         return;
       }
       setUpdateReady(true);
       try { const reg = await getAppRegistration(); reg?.update().catch(()=>{}); } catch(e){}
-      tryAutoReload();
+      // Loop guard: we already reloaded for this version and STILL run the old
+      // bundle (CDN edge lag). Retry a cache-busted reload ≤ 3×, 20 s apart,
+      // then tell the user to close and reopen the app.
+      let guarded = false; try { guarded = !!sessionStorage.getItem(RELOAD_GUARD); } catch (e) {}
+      if (guarded) {
+        let n = 0; try { n = parseInt(sessionStorage.getItem(LOCK_RETRY_KEY) || "0", 10) || 0; } catch (e) {}
+        requireUpdate("newer", { latest });
+        if (n < 3) {
+          // One retry per PAGE LOAD, however many times App mounts (the PIN
+          // gate remounts it) — the module flag survives remounts, the
+          // sessionStorage count survives reloads.
+          if (!_versionLock.retryCounted) {
+            _versionLock.retryCounted = true;
+            try { sessionStorage.setItem(LOCK_RETRY_KEY, String(n + 1)); } catch (e) {}
+            // Page-level timer on purpose — NOT gated on `cancelled`: a remount
+            // would cancel it and the flag above would stop a second one.
+            setTimeout(cacheBustReload, 20 * 1000);
+          }
+          setLockPhase("retry");
+        } else {
+          setLockPhase("stuck");
+        }
+        return;
+      }
+      if (!tryAutoReload()) requireUpdate("newer", { latest });   // mid-task → the popup
     };
     checkForUpdate();
     const onVis = () => { if (document.visibilityState === "visible") checkForUpdate(); };
     document.addEventListener("visibilitychange", onVis);
-    const poll = setInterval(checkForUpdate, 10 * 60 * 1000);
+    const poll = setInterval(checkForUpdate, 2 * 60 * 1000);   // was 10 min (Version Lock Spec: faster detection)
     return () => { cancelled = true; document.removeEventListener("visibilitychange", onVis); clearInterval(poll); };
   }, []);
 
+  // Idle phones still self-heal silently while the popup is up for anyone mid-task.
   useEffect(() => {
     if (!updateReady) return;
     const retry = setInterval(tryAutoReload, 60 * 1000);
     return () => clearInterval(retry);
   }, [updateReady]);
+
+  // Realtime gate listener + the two other raise paths (refusal, forced).
+  // appGate/version is readable only once the Phase 2 rules are live; until
+  // then the catch-all deny answers permission-denied, which is ignored.
+  useEffect(() => {
+    let unsub = null;
+    try {
+      unsub = onSnapshot(doc(db, "appGate", "version"), (snap) => {
+        const v = snap.exists() ? Number(snap.data().minBuild) : 0;
+        const minBuild = Number.isFinite(v) ? v : 0;
+        _versionLock.minBuild = minBuild;
+        if (APP_BUILD > 0) {
+          if (minBuild > APP_BUILD) requireUpdate("gate", { minBuild });
+          else setLock(prev => (prev && prev.gate != null) ? { ...prev, gate: minBuild } : prev);
+        } else if (minBuild > 0) {
+          console.warn(`[HE version-lock] dev build (0) is below minBuild ${minBuild} — writes to locked collections will be refused`);
+        }
+      }, () => {});
+    } catch (e) {}
+    _versionLock.onRefusal = (minBuild) => requireUpdate("refused", { minBuild });
+    forceUpdateRef.current = () => requireUpdate("forced");
+    return () => { try { unsub && unsub(); } catch (e) {} _versionLock.onRefusal = null; forceUpdateRef.current = null; };
+  }, []); // eslint-disable-line
+
+  // Typing grace: while a field is focused (and for at most 5 minutes) the
+  // lock shows as a red bar instead of the full block, so a form that only
+  // saves on its own Save button (new CO, new task…) can be finished first.
+  useEffect(() => {
+    if (!lockNeeded) { setLockGraceBar(false); return; }
+    const since = (lockRef.current && lockRef.current.since) || Date.now();
+    const tick = () => {
+      const typing = isTypingFocused() && (Date.now() - since) < LOCK_TYPING_GRACE_MS;
+      setLockGraceBar(typing);
+      if (!typing) {
+        setLockPhase(p => (p === "wait" ? "block" : p));
+        try { if (document.activeElement && document.activeElement.blur && isTypingFocused()) document.activeElement.blur(); } catch (e) {}
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    document.addEventListener("focusout", tick);
+    return () => { clearInterval(id); document.removeEventListener("focusout", tick); };
+  }, [lockNeeded]); // eslint-disable-line
 
 
   // Update a job everywhere it lives: jobs list, selected (if open), Firestore.
@@ -64195,12 +64498,13 @@ function App() {
           n++;
         });
         if (!n) return;
-        try { await updateDoc(doc(db, "redlineWalks", walk.id), upd); return; }
+        try { await updateDoc(doc(db, "redlineWalks", walk.id), stampWrite(upd)); return; }
         catch (e) { if (e?.code !== "not-found") throw e; /* doc gone → create it whole below */ }
       }
-      await setDoc(doc(db, "redlineWalks", walk.id), { data: next, updated_at: next.updatedAt });
+      await setDoc(doc(db, "redlineWalks", walk.id), stampWrite({ data: next, updated_at: next.updatedAt }));
     } catch (e) {
       console.error("[HE] saveRedlineWalk failed:", e?.message);
+      reportWriteDenied(e, "redlineWalks", walk.id);
       try { toast.error("Redline walk didn't save — check the connection and try again."); } catch {}
     }
   };
@@ -64281,10 +64585,10 @@ function App() {
     j._importedFromSimpro = true;
     j.imported_at = new Date().toISOString();
     try {
-      await setDoc(doc(db,"jobs",j.id), {
+      await setDoc(doc(db,"jobs",j.id), stampWrite({
         data: j,
         updated_at: new Date().toISOString(),
-      });
+      }));
       setAllJobs(js => [j, ...js]);
       // Remove from candidates doc — pull the freshest list from state, drop
       // this one, write back. Real-time listener will pick up the change.
@@ -65165,23 +65469,61 @@ function App() {
         <NeedQuickAdd identity={identity} users={users} jobs={jobs} preset={quickAdd} onSave={saveNeed} onAddNeedPhotos={addNeedPhotos} onClose={()=>setQuickAdd(null)}/>
       )}
 
-      {/* Update pill — bottom-left (SIMPRO owns bottom-right). Shows when a
-          newer bundle is deployed and the safe auto-reload couldn't fire yet
-          (unsaved work or a focused input). Tap = flush + reload. The 60s
-          retry in the update effect clears it automatically once idle. */}
-      {updateReady && (
-        <button onClick={() => { try{sessionStorage.removeItem(RELOAD_GUARD);}catch(e){} flushSaves(); setTimeout(()=>window.location.reload(),300); }}
-          style={{
-            position:"fixed", bottom:"calc(24px + env(safe-area-inset-bottom, 0px))", left:24, zIndex:9000,
-            background:C.blue, color:"#fff", border:"none", borderRadius:99,
-            padding:"12px 18px", cursor:"pointer", fontFamily:"inherit",
-            fontWeight:700, fontSize:13,
-            boxShadow:"0 6px 20px rgba(59,91,165,0.4), 0 2px 6px rgba(0,0,0,0.15)",
-            display:"inline-flex", alignItems:"center", gap:8,
-          }}>
-          <Icon name="rotateCw" size={16} stroke={2.25}/>
-          New version ready — tap to update
-        </button>
+      {/* Version lock — the Update now popup (replaces the old bottom-left
+          pill, which could be ignored). Hard block: full screen, no close,
+          the app dimmed and inert behind it. During typing grace (a focused
+          field, ≤ 5 min) a red top bar shows instead so a half-filled form
+          can be finished and saved first. Phases: block / saving / retry /
+          stuck — see the Always-current block. */}
+      {lockNeeded && lockGraceBar && lockPhase === "wait" && (
+        <div data-he-lock="grace" style={{position:"fixed", top:0, left:0, right:0, zIndex:99990,
+          background:C.red, color:"#fff", padding:"10px 16px", fontSize:13, fontWeight:700,
+          textAlign:"center", boxShadow:"0 2px 10px rgba(0,0,0,0.25)", paddingTop:"calc(10px + env(safe-area-inset-top, 0px))"}}>
+          Update needed. Finish what you're typing and save.
+        </div>
+      )}
+      {lockNeeded && !(lockGraceBar && lockPhase === "wait") && (
+        <div data-he-lock={lockPhase === "wait" ? "block" : lockPhase} role="dialog" aria-modal="true"
+          style={{position:"fixed", inset:0, zIndex:99990, background:"rgba(20,24,33,0.78)",
+            backdropFilter:"blur(3px)", WebkitBackdropFilter:"blur(3px)",
+            display:"flex", alignItems:"center", justifyContent:"center", padding:24}}>
+          <div style={{background:"#fff", color:C.text, borderRadius:16, padding:"28px 26px", width:"100%", maxWidth:380,
+            boxShadow:"0 24px 60px rgba(0,0,0,0.45)", textAlign:"center", fontFamily:"inherit"}}>
+            <div style={{width:56, height:56, borderRadius:"50%", background:"#EAEEF6", color:C.blue, display:"inline-flex",
+              alignItems:"center", justifyContent:"center", marginBottom:14}}>
+              <Icon name="rotateCw" size={26} stroke={2.25}/>
+            </div>
+            {(lockPhase === "wait" || lockPhase === "block") && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:30, letterSpacing:"0.04em", lineHeight:1.05}}>A new version is ready</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:10, lineHeight:1.5}}>
+                {lock && lock.refused
+                  ? "This copy of the app is too old to save. Your edits are kept on this device and will be sent after the update."
+                  : "Everyone needs to be on the same version so saves can't collide. Your edits are saved first."}
+              </div>
+              <button type="button" onClick={() => updateNowRef.current()}
+                style={{marginTop:20, width:"100%", padding:"14px 18px", borderRadius:12, border:"none", cursor:"pointer",
+                  background:C.blue, color:"#fff", fontFamily:"inherit", fontWeight:800, fontSize:16, letterSpacing:"0.02em",
+                  boxShadow:"0 6px 20px rgba(59,91,165,0.4)"}}>
+                Update now
+              </button>
+              <div style={{fontSize:10, color:C.dim, marginTop:12}}>
+                This device: v{APP_BUILD || "dev"}{lock && lock.latest ? ` · latest ${lock.latest}` : ""}{lock && lock.minBuild ? ` · minimum v${lock.minBuild}` : ""}
+              </div>
+            </>)}
+            {lockPhase === "saving" && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:26, letterSpacing:"0.04em"}}>Saving your changes…</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:8}}>The app reloads as soon as they're on the server.</div>
+            </>)}
+            {lockPhase === "retry" && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:26, letterSpacing:"0.04em"}}>Updating… one moment</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:8}}>The new version is still arriving. Trying again shortly.</div>
+            </>)}
+            {lockPhase === "stuck" && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:26, letterSpacing:"0.04em"}}>Close and reopen the app</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:8}}>This copy would not update on its own. Close it fully, then open it again. Your edits are kept on this device.</div>
+            </>)}
+          </div>
+        </div>
       )}
 
       {/* Simpro Inbox — floating button + modal. Admin-only: the badge is
@@ -67148,6 +67490,11 @@ function App() {
           {/* Activity log collapsed by default — most days nobody needs to
               look at it, but it's still one click away. */}
           <div style={{padding:"20px 26px 0"}}>
+            {/* "?" → public/sops/settings.html (version lock, Devices, Force Update, backups). */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.dim}}>SETTINGS</span>
+              <HelpDot section="settings"/>
+            </div>
             <SettingsSection title="ACTIVITY LOG" defaultOpen={false}>
               <ActivityLog jobs={jobs} embedded={true}/>
             </SettingsSection>
@@ -67168,7 +67515,7 @@ function App() {
             )}
             {getAccess(identity)==="admin" && (
               <SettingsSection title="DEVICES — APP VERSIONS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
-                <DeviceVersionsCard/>
+                <DeviceVersionsCard identity={identity}/>
               </SettingsSection>
             )}
             {getAccess(identity)==="admin" && (
@@ -67196,7 +67543,7 @@ function App() {
                 const backupJobs=JSON.parse(b);
                 if(!backupJobs||!backupJobs.length){toast.warn('Backup is empty');return 0;}
                 for(const job of backupJobs){
-                  await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
+                  await setDoc(doc(db,"jobs",job.id),stampWrite({data:sanitize(job),updated_at:new Date().toISOString()}));
                 }
                 return backupJobs.length;
               }catch(e){console.error('Restore failed:',e);toast.error('Restore failed: '+e.message);return 0;}
@@ -67209,7 +67556,7 @@ function App() {
                   if(job.foreman) job.foreman = normalizeName(job.foreman);
                   if(job.lead) job.lead = normalizeName(job.lead);
                   const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
-                  await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:ts});
+                  await setDoc(doc(db,"jobs",job.id),stampWrite({data:clean,updated_at:ts}));
                 }
                 // Bump version to force ALL other clients to reload (picks up new code + fresh data)
                 await setDoc(doc(db,"config","app"),{version:"restore-"+Date.now()});

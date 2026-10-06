@@ -69,6 +69,32 @@ async function requireAdmin(data) {
   return user;
 }
 
+// ─── Version lock (08-Specs/Version Lock Spec.md) ────────────────────────────
+// appGate/version { minBuild, setBy, setAt, note } is the ONLY input to the
+// Phase 2 rules' stampOk(): a client write whose app_build is below minBuild
+// is refused. The doc is client-readable, never client-writable (rules), so it
+// can only move through this callable — requireAdmin = the live admin PIN, the
+// same gate as the GC-portal office callables. minBuild 0 is the kill switch.
+// NEVER raise it automatically on deploy: a Vercel rollback would put the
+// whole fleet below the minimum (rollback = lower this FIRST, then roll back).
+const VL = require("./versionLock");
+exports.setMinBuild = functions.https.onCall(async (data) => {
+  const user = await requireAdmin(data);
+  const minBuild = Number(data && data.minBuild);
+  if (!Number.isInteger(minBuild) || minBuild < 0 || minBuild > 999999) {
+    throw new functions.https.HttpsError("invalid-argument", "minBuild must be a whole number (0 turns the lock off).");
+  }
+  const note = String((data && data.note) || "").trim().slice(0, 200);
+  const ref = db.doc("appGate/version");
+  const prevSnap = await ref.get();
+  const prev = prevSnap.exists ? (prevSnap.data() || {}) : {};
+  const setAt = new Date().toISOString();
+  const next = { minBuild, setBy: user.name, setAt, note, prevMinBuild: Number.isInteger(prev.minBuild) ? prev.minBuild : null };
+  await ref.set(next, { merge: false });
+  functions.logger.info("[versionLock] minBuild set", { minBuild, prevMinBuild: next.prevMinBuild, by: user.name, note });
+  return { ok: true, minBuild, setBy: user.name, setAt };
+});
+
 // ─── Timezone for scheduled functions ────────────────────────
 const TZ = "America/Denver"; // Mountain Time
 
@@ -1049,6 +1075,13 @@ exports.onJobUpdate = functions.firestore
     });
 
     const tasks = [];
+
+    // ── Version lock telemetry (Phase 1, functions/versionLock.js) ──────────
+    // Counts writes that landed WITHOUT a fresh app_build + w stamp in
+    // settings/versionLockStats (shown in Settings → Devices). Non-fatal.
+    tasks.push(VL.noteUnstampedJobWrite(db, functions.logger, {
+      jobId, rawBefore: change.before.data() || {}, rawAfter: change.after.data() || {}, tz: TZ,
+    }).catch((e) => functions.logger.warn("[versionLock] telemetry failed (non-fatal)", { jobId, error: e.message })));
 
     // ── 1. Foreman assigned / changed ─────────────────────────
     // Honest routing (2026-07-10): assignee + their book's coordinator, both

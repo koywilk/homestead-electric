@@ -1,0 +1,297 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VERSION LOCK — PHASE 2 RULES (08-Specs/Version Lock Spec.md). NOT LIVE.
+//
+// This is the COMPLETE rules file for Phase 2 ("enforce on jobs"), kept beside
+// the live `firestore.rules` on purpose: firebase.json points at
+// `firestore.rules`, so a plain `firebase deploy` can never ship this by
+// accident before the soak. Phase 2 ship = `cp firestore.phase2.rules
+// firestore.rules` → diff against the console → deploy, in Koy's quiet window
+// (see the ship steps in docs/version-lock-p1-features-draft.md).
+//
+// What changes vs. the live file (everything else is byte-for-byte):
+//   1. match /appGate/{docId}: read open, write DENIED (Admin SDK only — the
+//      setMinBuild callable). Never in settings/config: those are
+//      client-writable, so an old client could lower the bar.
+//   2. stampOk() on /jobs create + update: app_build is int ≥ minBuild and `w`
+//      is a string that CHANGED. Delete is untouched (a delete carries no
+//      data). needs / redlineWalks / manualTasks / quoteWalks are Phase 3.
+//
+// DELIBERATE DEVIATION from the spec, flagged in the P1 report: gateMin()
+// FAILS OPEN when appGate/version does not exist (treated as minBuild 0, lock
+// off), instead of refusing every write. The spec's fail-closed version turns
+// a forgotten "create the doc first" step into a total save outage for the
+// whole crew; fail-open just means the lock is off until the first "Require
+// v___" tap creates the doc — which the Settings card shows loudly. Flip to
+// fail-closed by replacing gateMin() with the one-liner in its comment.
+// Cost: one document read per jobs write (exists + get are deduped).
+// ═══════════════════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── VERSION GATE ──────────────────────────────────────────────────────────
+    function gateMin() {
+      // fail-closed alternative (spec): return get(/databases/$(database)/documents/appGate/version).data.minBuild;
+      return exists(/databases/$(database)/documents/appGate/version)
+        ? get(/databases/$(database)/documents/appGate/version).data.minBuild
+        : 0;
+    }
+    function stampOk() {
+      return request.resource.data.app_build is int
+        && request.resource.data.app_build >= gateMin()
+        && request.resource.data.w is string
+        && request.resource.data.w.size() > 0
+        && (resource == null || request.resource.data.w != resource.data.w);
+    }
+    match /appGate/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── JOBS ──────────────────────────────────────────────────────────────────
+    // Reads are open so share links (punch, home runs, questions, lighting)
+    // work without login. Writes are validated lightly to prevent garbage data,
+    // but we accept the actual shape the client sends: updated_at is an ISO
+    // string (new Date().toISOString()), NOT a Firestore Timestamp — the app
+    // has always written it that way. If a write lands without data/updated_at
+    // that's almost certainly a bug or an attack, so we still require them.
+    //
+    // Version lock (Phase 2): every create/update must also carry a fresh
+    // stamp (stampOk). The client sees a refusal as permission-denied, keeps
+    // the write in its own queue, and shows the Update now popup.
+    match /jobs/{jobId} {
+      allow read: if true;
+
+      allow create, update: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string
+                   && stampOk();
+      // Delete passes a null resource and carries no data — unchanged by the
+      // version lock. Allowed explicitly so the app's job-archive path keeps
+      // working.
+      allow delete: if true;
+    }
+
+    // ── MANUAL TASKS ──────────────────────────────────────────────────────────
+    // Ad-hoc task list outside the job records. Same shape as /jobs (data map
+    // + ISO updated_at string), so we apply the same light validation.
+    match /manualTasks/{taskId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
+    // ── QUOTE WALKS ───────────────────────────────────────────────────────────
+    // Pre-job site walk notes (replaces Apple Notes capture). Same shape as
+    // /jobs and /manualTasks — data map + ISO updated_at string. UI-level
+    // permission checks handle who sees walks (admin + foreman roles).
+    match /quoteWalks/{walkId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
+    // Redline walks — same envelope + validation as /quoteWalks (data map + ISO
+    // updated_at string). UI-level permission controls who edits.
+    match /redlineWalks/{walkId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
+    // ── HOMEOWNER REQUESTS ────────────────────────────────────────────────────
+    // Share link recipients submit answers here — allow creates from anyone.
+    // Only the app reads these back, so reads are also open for now.
+    match /homeowner_requests/{docId} {
+      // Share-link recipients submit AND resubmit answers here; the app also
+      // writes gen-load + lighting-collab requests to the same doc. Validate
+      // lightly (jobId must be a string, consistent with /jobs) and allow
+      // updates so resubmits/edits work. Never allow deletes.
+      allow read: if true;
+      allow create: if request.resource.data.jobId is string;
+      allow update: if request.resource.data.jobId is string;
+      allow delete: if false;
+
+      // ── VERSION SNAPSHOTS (Kweller hardening Layer 4, 2026-07-09) ────────
+      // Point-in-time copies stashed by saveHomeownerRequest() before every
+      // write (public share pages AND internal app), so a bad merge or
+      // overwrite is a 2-minute restore instead of a loss. Same open posture
+      // as the parent doc — no auth model to gate on. Immutable once written
+      // (no update); delete allowed so the client can prune to the last 10.
+      match /versions/{versionId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if true;
+      }
+    }
+
+    // ── QUESTION SHARES ───────────────────────────────────────────────────────
+    // Stores live share sessions for the Questions share feature.
+    // Reads are open so recipients can see which questions are included.
+    // Creates are open so the app can generate new sessions.
+    // Updates allowed so the sender can add/remove questions after the fact.
+    match /question_shares/{shareId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['jobId', 'questionIds', 'createdAt'])
+                    && request.resource.data.jobId is string
+                    && request.resource.data.questionIds is list;
+      allow update: if request.resource.data.keys().hasAll(['questionIds', 'updatedAt'])
+                    && request.resource.data.questionIds is list;
+      allow delete: if false;
+    }
+
+    // ── SETTINGS ──────────────────────────────────────────────────────────────
+    // Shared app settings (user list, scoreboard weight defaults, etc).
+    // Reads are open so the app can bootstrap without login. Writes are open
+    // in the same spirit as /jobs — the app protects these with UI-level
+    // permission checks rather than Firestore auth (consistent with how the
+    // rest of the app works today).
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── CONFIG ────────────────────────────────────────────────────────────────
+    // App-wide config flags (e.g. force-update version). Same read/write
+    // posture as /settings.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── SUGGESTIONS ───────────────────────────────────────────────────────────
+    // Crew-submitted feature requests / bug reports / improvements, surfaced
+    // on the App Map tab. Creates accepted from anyone (anonymous OK so the
+    // share URL can also collect — though current UI only shows the form
+    // when logged in). Reads open so admin/manager can see the inbox.
+    // Updates allowed (Koy changes status + notes during triage). Deletes
+    // allowed so cleared / spammy entries can be removed.
+    match /suggestions/{id} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['text', 'submittedAt', 'status'])
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() > 0
+                    && request.resource.data.text.size() < 5000;
+      allow update: if true;
+      allow delete: if true;
+    }
+
+    // ── NEEDS BOARD ───────────────────────────────────────────────────────────
+    // Coordinator board for deadline-bound contractor call-in needs. Same shape
+    // as /manualTasks and /quoteWalks (data map + ISO updated_at string), so the
+    // same light validation applies. UI-level board.add permission controls who
+    // can write; reads open to match the rest of the app.
+    match /needs/{needId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
+    // ── NOTIFICATION INBOX ────────────────────────────────────────────────────
+    // Per-user in-app notification inbox: notifications/{userKey}/items/{id}.
+    // ONLY Cloud Functions create these (admin SDK bypasses rules), so client
+    // creates are denied. Clients may read, flip the read flag (and nothing
+    // else — enforced via affectedKeys), and delete (clear) their items.
+    // Reads open to match the rest of the app's posture (UI scopes by user).
+    match /notifications/{userKey}/items/{itemId} {
+      allow read: if true;
+      allow create: if false;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if true;
+    }
+
+    // ── GC PORTAL (outside-facing; 08-Specs/GC Portal Link Spec.md) ──────────
+    // gc_links/{token}: the token IS the secret → direct get only, NEVER list
+    // (list would enumerate every contractor's token). Client writes DENIED —
+    // an outsider holding a token must not be able to alter exposure (gcKey,
+    // revoked, contacts). The office manages links via the gcPortal* callables
+    // (admin SDK bypasses rules).
+    match /gc_links/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+    }
+
+    // gc_portal/{portalId}: the WHITELISTED per-job mirror the portal page
+    // reads. portalId is unguessable (capability, like the token). Written
+    // ONLY by Cloud Functions; jobs/{id} rules are untouched by this feature.
+    match /gc_portal/{portalId} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+      match /jobs/{jobId} {
+        allow get, list: if true;
+        allow write: if false;
+      }
+    }
+
+    // gc_requests/{reqId}: the GC-side funnel (dates, threads, punch, answers).
+    // FULLY function-managed (Piece 4): every write goes through the
+    // gcPortalSubmit callable, which validates the link token server-side and
+    // writes via the admin SDK. So NO client access at all — create/read/update/
+    // delete all denied. This is the strongest posture: the stored token can't
+    // be enumerated (no read), the queue can't be spammed/tampered/wiped (no
+    // client write), and the office reads via gcPortalListRequests (admin SDK).
+    match /gc_requests/{reqId} {
+      allow read, write: if false;
+    }
+
+    // gc_config/{docId}: server-only config for the notification engine — most
+    // importantly gc_config/mail holds the email PROVIDER KEY. NEVER client-
+    // readable (a leaked key = spam/abuse) or writable. Only Cloud Functions
+    // (admin SDK) touch it; Koy sets it via the console or an admin callable.
+    match /gc_config/{docId} {
+      allow read, write: if false;
+    }
+
+    // gc_notify_queue/{id}: the outbound email queue (quiet-hours instants wait
+    // here for their morning sendAt). Written and drained ONLY by Cloud Functions;
+    // the HTML bodies could contain contractor data, so no client access at all.
+    match /gc_notify_queue/{id} {
+      allow read, write: if false;
+    }
+
+    // gc_rate/{token}: Phase 0 fixed-window rate-limit counters for
+    // gcPortalSubmit (gcCheckRateLimit). Function-only — a client that could
+    // read or reset its own counter would defeat the whole point of the limit.
+    match /gc_rate/{token} {
+      allow read, write: if false;
+    }
+
+    // gc_bounces/{id}: Phase 0 SendGrid bounce/complaint webhook records
+    // (gcSendGridWebhook). Function-only — written by the webhook handler via
+    // admin SDK, read only by future admin tooling (also via admin SDK).
+    match /gc_bounces/{id} {
+      allow read, write: if false;
+    }
+
+    // ── PLAN INTAKE FINDINGS (PLAN_INTAKE_SPEC.md Phase 4, 2026-10-04) ────────
+    // agentFindings/{id}: what the plan-intake functions did (folders made,
+    // plans filed, plans the Routine wasn't sure of). Written ONLY by Cloud
+    // Functions (admin SDK). The Today → Plans card reads them and may stamp
+    // seen / seenAt / seenBy — nothing else (same pattern as notifications).
+    // agentQueue and planIntakeState stay function-only via the catch-all below.
+    match /agentFindings/{id} {
+      allow read: if true;
+      allow create, delete: if false;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen', 'seenAt', 'seenBy']);
+    }
+
+    // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
+    // Deny all access to any other collection by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
