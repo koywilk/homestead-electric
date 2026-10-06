@@ -90,11 +90,20 @@ function extractAddress(text) {
   return { number: m[1], tokens, raw: s.slice(m.index, m.index + m[0].length).trim() };
 }
 
+// "Whitaker Farm Way" (calendar) vs "Whitaker Farms Way" (Simpro) is the same street —
+// a trailing "s" on a word of 4+ letters is ignored. Grid numbers ("2200") compare exactly.
+function _same(t, u) {
+  if (t === u) return true;
+  if (/^\d+$/.test(String(t)) || /^\d+$/.test(String(u))) return false;
+  const stem = w => (w || "").length > 3 ? w.replace(/s$/, "") : w;
+  return stem(t) === stem(u);
+}
+
 function sameAddress(a, b) {
   if (!a || !b || a.number !== b.number) return false;
   // the shorter token list must be a prefix of the longer ("old ranch" vs "old ranch")
   const [x, y] = a.tokens.length <= b.tokens.length ? [a.tokens, b.tokens] : [b.tokens, a.tokens];
-  return x.length > 0 && x.every((t, i) => t === y[i]);
+  return x.length > 0 && x.every((t, i) => _same(t, y[i]));
 }
 
 // ── Which quote? ─────────────────────────────────────────────────────────
