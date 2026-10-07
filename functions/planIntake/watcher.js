@@ -166,6 +166,20 @@ module.exports = function makePlanIntake(deps) {
     } while (pageToken);
     return out;
   }
+  // Quote folders read like the office's own: "Quote #2443 - Whitaker Farms 27"
+  // (Koy 2026-10-06). The Simpro quote name is the job's name; the site name is
+  // the fallback; bare "Quote #N" only when Simpro has neither.
+  function quoteFolderName(quoteNo, label) {
+    const l = String(label || "").replace(/\s+/g, " ").trim();
+    return l ? `Quote #${quoteNo} - ${l}` : `Quote #${quoteNo}`;
+  }
+  // Finds this quote's folder under _Quotes whether it carries the name or is the
+  // bare "Quote #N" made before 2026-10-06 — never a second folder for one quote.
+  async function findQuoteFolder(drive, quotesId, quoteNo) {
+    const bare = `Quote #${quoteNo}`;
+    return (await listChildren(drive, quotesId)).find(f => f.mimeType === FOLDER_MIME
+      && (String(f.name).trim() === bare || String(f.name).trim().startsWith(`${bare} - `))) || null;
+  }
   async function findOrMakeFolder(drive, parentId, name, { create }) {
     const hit = (await listChildren(drive, parentId)).find(f => f.mimeType === FOLDER_MIME && String(f.name).trim() === name);
     if (hit) return { id: hit.id, made: false };
@@ -308,13 +322,23 @@ module.exports = function makePlanIntake(deps) {
       const home = homeParent(cfg);
       const create = cfg.mode !== "dry";
       const qf = await findOrMakeFolder(drive, home, QUOTES_FOLDER, { create });
-      const name = `Quote #${quoteNo}`;
+      const name = quoteFolderName(quoteNo, why.quoteName || why.siteName);
+      folderName = name;
       if (qf.id) {
-        const f = await findOrMakeFolder(drive, qf.id, name, { create });
-        folderId = f.id; made = f.made;
+        const hit = await findQuoteFolder(drive, qf.id, quoteNo);
+        if (hit) {
+          folderId = hit.id; folderName = String(hit.name).trim();
+          if (create && folderName === `Quote #${quoteNo}` && name !== folderName) {
+            await drive.files.update({ fileId: folderId, requestBody: { name }, supportsAllDrives: true });
+            folderName = name;
+          }
+        } else if (create) {
+          folderId = (await drive.files.create({ requestBody: { name, parents: [qf.id], mimeType: FOLDER_MIME }, fields: "id", supportsAllDrives: true })).data.id;
+          made = true;
+        }
         if (folderId && create) await ensureSkeleton(drive, folderId, { create });
       }
-      folderName = name; inQuotes = true;
+      inQuotes = true;
     }
     const st = {
       type: "quote", mode: cfg.mode, quoteNo: String(quoteNo), quoteName: why.quoteName || "", siteName: why.siteName || "",
@@ -325,7 +349,7 @@ module.exports = function makePlanIntake(deps) {
     const verb = cfg.mode === "dry" ? "Would create" : adoptedFrom ? "Using the app's folder for" : made ? "Created" : "Found";
     await finding(cfg.mode, `folder_${quoteNo}`, {
       number: `Q${quoteNo}`, type: adoptedFrom ? "folder_adopted" : "folder_created",
-      summary: `${verb} ${adoptedFrom ? `Quote #${quoteNo} (${folderName})` : `folder "Quote #${quoteNo}"`}${why.quoteName ? ` — ${why.quoteName}` : ""}${why.walkTitle ? ` · walk: ${why.walkTitle} (${why.walkDate})` : ""}`,
+      summary: `${verb} ${adoptedFrom ? `Quote #${quoteNo} (${folderName})` : `folder "${folderName}"`}${why.walkTitle ? ` · walk: ${why.walkTitle} (${why.walkDate})` : ""}`,
       links: folderId ? [{ label: "Folder", url: folderUrl(folderId) }] : [],
     });
     return st;
@@ -460,10 +484,19 @@ module.exports = function makePlanIntake(deps) {
         links: [{ label: "Quote folder", url: folderUrl(st.folderId) }, { label: "App folder", url: folderUrl(stamp.current) }] });
     }
   }
+  // Quote folders made before 2026-10-06 are named bare "Quote #N" — give them the job name once.
+  async function nameBareQuoteFolder(ctx, ref, st) {
+    const want = quoteFolderName(st.quoteNo, st.quoteName || st.siteName);
+    if (ctx.cfg.mode === "dry" || !st.folderId || !st.inQuotesFolder || st.folderName !== `Quote #${st.quoteNo}` || want === st.folderName) return;
+    await ctx.drive.files.update({ fileId: st.folderId, requestBody: { name: want }, supportsAllDrives: true });
+    await ref.update({ folderName: want, updatedAt: nowIso() });
+    st.folderName = want;
+  }
   async function processConversions(ctx, tracked, counts) {
     for (const { ref, st } of tracked) {
       if (st.jobNo || ctx.deadline() < 90 * 1000) continue;
       try {
+        await nameBareQuoteFolder(ctx, ref, st);
         const q = await sget(`/quotes/${encodeURIComponent(st.quoteNo)}?columns=ID,Name,Stage,IsClosed,JobNo`);
         if (q.JobNo) {
           const job = await sget(`/jobs/${encodeURIComponent(q.JobNo)}?columns=ID,Name,Site,Stage,ConvertedFrom`);

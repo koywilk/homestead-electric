@@ -15,7 +15,7 @@ const { planDocPull } = require("../functions/docPull.js");
 const PARENT = "PARENT";
 const eq = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), m);
 
-function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], groups = {} } = {}) {
+function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], groups = {}, unconverted = false } = {}) {
   // ── Firestore ──
   const store = new Map();               // "coll/id" → object
   const writes = [];
@@ -89,6 +89,9 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], 
     const p = path.split("?")[0];
     const ok = (data) => ({ ok: true, status: 200, data });
     if (p === "/sites/") return ok([{ ID: 6488, Name: "Tolbert Residence", Address: { Address: "1326 S 5360 E" } }]);
+    if (unconverted && p === "/quotes/") return ok([{ ID: 2299, Name: "Tolbert Residence - Wasatch County", Stage: "Approved", DateIssued: "2025-11-21", IsClosed: false, JobNo: null, LinkedJobID: null }]);
+    if (unconverted && p === "/jobs/") return ok([]);
+    if (unconverted && p === "/quotes/2299") return ok({ ID: 2299, Name: "Tolbert Residence - Wasatch County", Stage: "Approved", IsClosed: false, JobNo: null });
     if (p === "/quotes/" ) return ok([{ ID: 2299, Name: "Tolbert Residence - Wasatch County", Stage: "Complete", DateIssued: "2025-11-21", IsClosed: true, JobNo: 1407, LinkedJobID: null },
                                       { ID: 3074, Name: "7/20 Additional Items", Stage: "Approved", DateIssued: "2026-07-21", IsClosed: true, JobNo: 1407, LinkedJobID: null }]);
     if (p === "/jobs/") return ok([{ ID: 1407, Name: "Tolbert Residence - Wasatch County", Stage: "Progress", DateIssued: "2026-07-15", ConvertedFrom: { ID: 2299, Type: "Quote", Date: "2026-07-15T08:04:33-06:00" } }]);
@@ -155,7 +158,7 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   eq(jobWrites(w), [], "dry: no job writes");
   eq(outsideAllowed(w), [], "dry: writes only to planIntakeState / agentQueue / agentFindings");
   assert(w.docs("agentFindings").every(f => f.mode === "dry" && f.id.startsWith("dry_")), "dry findings are tagged + prefixed");
-  assert(w.docs("agentFindings").some(f => /Would create folder "Quote #2299"/.test(f.summary)), "dry says what it would create");
+  assert(w.docs("agentFindings").some(f => /Would create folder "Quote #2299 - Tolbert Residence - Wasatch County"/.test(f.summary)), "dry says what it would create");
   assert(w.docs("agentFindings").some(f => /Would rename Quote #2299 → "#1407 - Tolbert Residence"/.test(f.summary)), "dry says what it would rename");
   assert(w.docs("agentQueue").some(q => q.type === "walk_unmatched" && q.title === "Lot 91 - Redline Walk"), "Lot 91 queued for the Routine");
   assert(!w.docs("planIntakeState").some(d => d.id === "quote_2299"), "dry never writes un-prefixed (live) state");
@@ -231,7 +234,7 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   w.setMode("live");
   await (w.pi._runOnce());
   eq(w.get("planIntakeState/quote_2299").folderId, "1AppQuoteFolder_abcdefghijkl", "the app quote's own folder is reused");
-  assert(![...w.files.values()].some(f => f.name === "Quote #2299"), "no second folder made");
+  assert(![...w.files.values()].some(f => /^Quote #2299/.test(f.name)), "no second folder made");
 }
 
 // 7 ── calendar sign-in missing: run still tracks quotes, Koy gets ONE push a day, an error finding is logged
@@ -409,5 +412,22 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   assert(cand && cand.resiOnly === true, "candidates rebuilt residential-only");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only scenarios passed");
+// 13 ── quote folders carry the job name (Koy 2026-10-06: "quote number and then job name")
+{
+  const w = world({ unconverted: true });
+  w.setMode("live");
+  await (w.pi._runOnce());
+  const st = w.get("planIntakeState/quote_2299");
+  eq(w.files.get(st.folderId).name, "Quote #2299 - Tolbert Residence - Wasatch County", "new quote folder = Quote #N - job name");
+  eq(st.folderName, "Quote #2299 - Tolbert Residence - Wasatch County", "state records the named folder");
+  // a folder made bare before the change (Whitaker #2443) is renamed once, same id, nothing duplicated
+  w.files.get(st.folderId).name = "Quote #2299";
+  await w.get("planIntakeState/quote_2299") && w.store.set("planIntakeState/quote_2299", { ...st, folderName: "Quote #2299" });
+  w.store.set("planIntakeState/config", { ...w.get("planIntakeState/config"), runLockAt: "" });
+  await (w.pi._runOnce());
+  eq(w.files.get(st.folderId).name, "Quote #2299 - Tolbert Residence - Wasatch County", "bare legacy folder renamed in place");
+  eq([...w.files.values()].filter(f => /^Quote #2299/.test(f.name)).length, 1, "still exactly one folder for the quote");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only / quote-folder-name scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });
