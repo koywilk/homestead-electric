@@ -91,6 +91,13 @@ const CSS = `
 .he-shake{animation:he-m-shake calc(380ms*var(--he-t))}
 @keyframes he-m-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}40%{transform:translateX(4px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px)}}
 
+/* save HUD: one quiet pill above everything (job card, sheets) so a save is visible wherever you are */
+.he-savehud{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);z-index:99996;
+  padding:5px 12px;border-radius:99px;background:rgba(27,31,36,.92);font:500 12px/1.3 'DM Sans',system-ui,sans-serif;
+  white-space:nowrap;pointer-events:none;animation:he-m-hud calc(180ms*var(--he-t)) var(--he-ease) backwards}
+.he-savehud.he-hud-err{pointer-events:auto}
+@keyframes he-m-hud{from{opacity:0;transform:translate(-50%,-6px)}}
+
 /* tab highlight */
 .he-tab-ink{position:absolute;left:0;border-radius:8px 8px 0 0;pointer-events:none;z-index:0}
 .he-tab-ink-anim{transition:transform calc(320ms*var(--he-t)) var(--he-ease),width calc(320ms*var(--he-t)) var(--he-ease)}
@@ -161,6 +168,18 @@ export function HeSyncChip({ status, label, color, onRetry, style }) {
     onClick: tappable ? onRetry : undefined,
     style: Object.assign({ display: "inline-flex", alignItems: "center", gap: 4, color, cursor: tappable ? "pointer" : "default" }, style),
   }, icon, label);
+}
+
+/* ─────────────────── Save HUD: the save state, visible everywhere ─────────────────── */
+// The header chips live in the Job Board headers, which a job card (a full-screen overlay) covers. This one pill is
+// mounted once at the App root above every overlay. Text only; hidden when idle. A failed save stays up and is tappable.
+export function HeSaveHud({ status, onRetry }) {
+  if (!status || status === "idle") return null;
+  const label = { saving: "Saving…", saved: "Saved", error: "Save failed · tap to retry" }[status];
+  const color = { saving: "#8DBDFF", saved: "#E6EAF1", error: "#FF9B9B" }[status];
+  if (!label) return null;
+  return h("div", { className: "he-savehud" + (status === "error" ? " he-hud-err" : ""), role: "status", "aria-live": "polite" },
+    h(HeSyncChip, { status, label, color, onRetry, style: { fontSize: 12, fontWeight: 500 } }));
 }
 
 /* ─────────────────── 2. Remote change flash ─────────────────── */
