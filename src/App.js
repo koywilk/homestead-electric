@@ -14010,9 +14010,85 @@ function MaterialTally({items, onChange, onAddToPO}) {
   );
 }
 
+// ── Pulled-by-day derivations (Daily Job Updates) ────────────────────────────
+// Koy, 2026-10-06: "on daily job updates it shows closed punch items, can it show homeruns pulled and switch legs if
+// applicable?" Same rule as closed punch: an item is placed on the day of its OWN who + when stamp (Home Runs:
+// statusBy/statusAt, lighting loads and legs: pulledBy/pulledAt, both M/D/YYYY). One with no readable stamp date
+// cannot be placed on a day and is skipped: pulled before the stamps existed, ticked with "Pull all" or a pasted list,
+// or a Savant leg (none of those write the stamp). Pure: extracted verbatim by scripts/pulleddaily-test.js.
+function pulledDayKey(raw) {
+  // only the stamp formats the app writes (M/D/YYYY, or an ISO date / date-time) and a sane year, so a stray value
+  // such as 12345 can never become a bar dated thousands of years out
+  const t = String(raw || "").trim();
+  const dm = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/), iso = t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/);
+  if(!dm && !iso) return "";
+  const d = parseAnyDate(t);
+  if(!d || d.getFullYear() < 2000 || d.getFullYear() > 2100) return "";
+  // a date that rolled over (13/45/2026, 2026-02-31) was never a real stamp
+  if(dm && (d.getMonth()+1 !== +dm[1] || d.getDate() !== +dm[2])) return "";
+  if(iso && t.length === 10 && (d.getMonth()+1 !== +iso[2] || d.getDate() !== +iso[3])) return "";
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function pulledHomeRunsByDay(homeRuns) {
+  const map = new Map();
+  const hr = homeRuns || {};
+  const floors = [["main","Main Level"],["basement","Basement"],["upper","Upper Level"],
+    ...((Array.isArray(hr.extraFloors) ? hr.extraFloors : []).filter(ef => ef && ef.key).map(ef => [ef.key, ef.label||ef.key]))];
+  const seenFloor = new Set();
+  floors.filter(([k]) => !seenFloor.has(k) && seenFloor.add(k)).forEach(([k, label]) => (Array.isArray(hr[k]) ? hr[k] : []).forEach(r => {
+    if(!r || r.status !== "Pulled" || !String(r.name||"").trim()) return;
+    const ymd = pulledDayKey(r.statusAt);
+    if(!ymd) return;
+    if(!map.has(ymd)) map.set(ymd, []);
+    map.get(ymd).push({ key:"hr:"+k+":"+(r.id||r.name), name:String(r.name).trim(),
+      meta:[r.panel, label, r.wire].filter(Boolean).join(" · "), by:String(r.statusBy||"") });
+  }));
+  return map;
+}
+// `labels` = job.plSectionLabels: the Panelized tab names its panel schedules with it (default Panel A / B / C for
+// upper / main / basement), so a leg's "where" reads the same here as on the tab.
+function pulledLegsByDay(pl, labels) {
+  const map = new Map(), loadsListSeen = new Map();   // name|day -> how many Loads-list legs already cover it
+  const p = pl || {};
+  const lab = (labels && typeof labels === "object") ? labels : {};
+  const push = (ymd, item) => { if(!map.has(ymd)) map.set(ymd, []); map.get(ymd).push(item); };
+  // Loads list (the master list; every Lutron job): each row on its own, by id, so two legs with one name stay two
+  (Array.isArray(p.loads) ? p.loads : []).forEach(l => {
+    if(!l || !l.pulled || !String(l.name||"").trim()) return;
+    const ymd = pulledDayKey(l.pulledAt);
+    if(!ymd) return;
+    const dk = String(l.name).trim().toLowerCase() + "|" + ymd;
+    loadsListSeen.set(dk, (loadsListSeen.get(dk) || 0) + 1);
+    push(ymd, { key:"leg:ls:"+(l.id||l.name), name:String(l.name).trim(),
+      meta:[String(l.room||"").trim(), String(l.location||"").trim(), String(l.panel||"").trim()].filter(Boolean).join(" · "),
+      by:String(l.pulledBy||"") });
+  });
+  // Panel schedules (Control 4 / Crestron / Savant): a row is skipped only while the Loads list still has an unmatched
+  // leg of the same name pulled the same day (it is the same leg ticked in two places); otherwise every row stands alone.
+  // flattenModulesToRows hands back whatever it was given when it is not module blocks, so guard it: this runs in render.
+  const rowsOf = (v) => { try { const r = flattenModulesToRows(Array.isArray(v) ? v.filter(Boolean) : []); return Array.isArray(r) ? r : []; } catch(e) { return []; } };
+  const sched = (rows, where, k) => rows.forEach((l, i) => {
+    if(!l || !l.pulled || !String(l.name||"").trim()) return;
+    const ymd = pulledDayKey(l.pulledAt);
+    if(!ymd) return;
+    const dk = String(l.name).trim().toLowerCase() + "|" + ymd;
+    if((loadsListSeen.get(dk) || 0) > 0) { loadsListSeen.set(dk, loadsListSeen.get(dk) - 1); return; }
+    push(ymd, { key:"leg:ps:"+k+":"+(l.id||(String(l.name)+i)), name:String(l.name).trim(),
+      meta:[where, l.mod ? "Mod "+l.mod : "", String(l.room||l.location||"").trim()].filter(Boolean).join(" · "),
+      by:String(l.pulledBy||"") });
+  });
+  [["upper","Panel A"],["main","Panel B"],["basement","Panel C"]].forEach(([k, def]) =>
+    sched(rowsOf((p.cp4Loads||{})[k]), String(lab[k]||"").trim() || def, k));
+  const seenExtra = new Set(["upper","main","basement"]);
+  (Array.isArray(p.extraFloors) ? p.extraFloors : []).filter(ef => ef && ef.key && !seenExtra.has(ef.key) && seenExtra.add(ef.key)).forEach(ef =>
+    sched(rowsOf(p[ef.key]), ef.label||ef.key, ef.key));
+  return map;
+}
+// ── end Pulled-by-day derivations ────────────────────────────────────────────
+
 // ── Daily Updates ─────────────────────────────────────────────
 
-function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
+function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null,homeRuns=null,panelized=null,plLabels=null}) {
 
   const [d,setD]           = useState({date:"",text:""});
 
@@ -14061,6 +14137,11 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
     return map;
   }, [phasePunch]);
 
+  // Home runs / switch legs pulled, by the day of their own stamp (Rough tab passes them; Finish does not).
+  // The app has no error boundary, so a bad record must never throw during render: it just yields no bars.
+  const pulledHR   = useMemo(() => { try { return pulledHomeRunsByDay(homeRuns); } catch(e) { console.warn("[daily updates] home runs pulled bar skipped:", e && e.message); return new Map(); } }, [homeRuns]);
+  const pulledLegs = useMemo(() => { try { return pulledLegsByDay(panelized, plLabels); } catch(e) { console.warn("[daily updates] switch legs pulled bar skipped:", e && e.message); return new Map(); } }, [panelized, plLabels]);
+
   // Today's YMD — used to label "TODAY" on the matching banner.
   const _todayYMD = useMemo(() => {
     const t = new Date();
@@ -14074,7 +14155,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
   const dailyEntries = useMemo(() => {
     const dateMap = new Map();
     const ensure = (ymd, displayDate) => {
-      if(!dateMap.has(ymd)) dateMap.set(ymd, { ymd, displayDate, updates: [], closed: [] });
+      if(!dateMap.has(ymd)) dateMap.set(ymd, { ymd, displayDate, updates: [], closed: [], hr: [], legs: [] });
       return dateMap.get(ymd);
     };
     // Updates first — preserve their original date text for display
@@ -14104,13 +14185,21 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
       }
       items.forEach(it => dateMap.get(ymd).closed.push(it));
     });
+    // Pulled home runs / switch legs — same placement rule, each into its own list on the day
+    const mergePulled = (map, field) => map.forEach((items, ymd) => {
+      const e = ensure(ymd, ymd);
+      if(e.displayDate === ymd) { const [y,m,d] = ymd.split("-").map(Number); e.displayDate = `${m}/${d}/${y}`; }
+      items.forEach(it => e[field].push(it));
+    });
+    mergePulled(pulledHR, "hr");
+    mergePulled(pulledLegs, "legs");
     // Sort by ymd desc; undated sinks to the bottom.
     return [...dateMap.values()].sort((a, b) => {
       if(a.ymd === "__undated__") return 1;
       if(b.ymd === "__undated__") return -1;
       return b.ymd.localeCompare(a.ymd);
     });
-  }, [updates, closedByDate]);
+  }, [updates, closedByDate, pulledHR, pulledLegs]);
 
   const add = (textArg) => {
     const text = typeof textArg==='string' ? textArg : d.text;
@@ -14252,7 +14341,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
           Days with only closed punches and no typed update still get a row
           so the closed-punch rollup never disappears. */}
       {dailyEntries.map(entry => {
-        const { ymd, displayDate, updates: dayUpdates, closed: dayClosed } = entry;
+        const { ymd, displayDate, updates: dayUpdates, closed: dayClosed, hr: dayHR, legs: dayLegs } = entry;
         const isToday = ymd === _todayYMD;
         const expanded = !!showClosedByDate[ymd];
         return (
@@ -14296,6 +14385,41 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
                 )}
               </div>
             )}
+            {[["hr","HOME RUNS PULLED",dayHR,C.blue],["legs","SWITCH LEGS PULLED",dayLegs,C.purple]].map(([kind,label,list,col]) => list.length > 0 && (
+              <div key={kind} style={{marginBottom:dayUpdates.length>0?6:8,border:`1px solid ${col}44`,
+                borderRadius:8,background:`${col}0c`,overflow:"hidden"}}>
+                <button onClick={()=>toggleClosedDate(kind+":"+ymd)}
+                  style={{width:"100%",display:"flex",alignItems:"center",gap:8,
+                    padding:"7px 12px",background:"none",border:"none",cursor:"pointer",
+                    fontFamily:"inherit",textAlign:"left",color:col}}>
+                  <Icon name="checkCircle" size={13}/>
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em"}}>
+                    {label}{isToday?" · TODAY":` · ${displayDate}`} · {list.length}
+                  </span>
+                  <span style={{marginLeft:"auto",fontSize:10,color:C.dim,fontWeight:500}}>
+                    {showClosedByDate[kind+":"+ymd] ? "hide" : "show"}
+                  </span>
+                </button>
+                {showClosedByDate[kind+":"+ymd] && (
+                  <div style={{padding:"4px 12px 10px",display:"flex",flexDirection:"column",gap:5}}>
+                    {list.map(it => (
+                      <div key={it.key} style={{display:"flex",gap:8,fontSize:11,
+                        background:"var(--card)",borderRadius:6,padding:"5px 8px",
+                        border:`1px solid ${C.border}`}}>
+                        <Icon name="check" size={11} color={col}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:"var(--text)"}}>{it.name}</div>
+                          <div style={{fontSize:9,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {it.meta && <span>{it.meta}</span>}
+                            {it.by && <span>· pulled by {it.by}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
             {dayUpdates.map(u=>(
               <div key={u.id} onClick={()=>showPicker&&toggleSelect(u.id)}
                 style={{display:"flex",gap:10,padding:"8px 12px",background:showPicker&&selected.includes(u.id)?C.blue+"18":C.surface,
@@ -30399,7 +30523,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 <DailyUpdates updates={job.roughUpdates} onChange={v=>u({roughUpdates:v})}
 
-                  jobName={job.name||"This Job"} onEmail={setEmailData} phasePunch={job.roughPunch}/>
+                  jobName={job.name||"This Job"} onEmail={setEmailData} phasePunch={job.roughPunch}
+                  homeRuns={job.homeRuns} panelized={job.panelizedLighting} plLabels={job.plSectionLabels}/>
 
               </Section>
 
@@ -52865,10 +52990,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-07 · App SW version: v518
+**Last manifest update:** 2026-10-07 · App SW version: v520
 
 ---
 
+- **Daily Job Updates: home runs pulled and switch legs pulled, by day** · 'shipped 2026-10-07' · 'SW v520' · Koy: *"on daily job updates it shows closed punch items, can it show homeruns pulled and switch legs if applicable?"* On the Rough tab's Daily Job Updates, each day now also gets two bars next to **PUNCH CLOSED**: **HOME RUNS PULLED** (blue) and **SWITCH LEGS PULLED** (purple), each with a count, collapsed until tapped, newest day first, TODAY labelled. A row shows the name, where it is (panel, floor, wire for a home run; for a leg, room, location and panel from the Loads list, or the panel name and module from a panel schedule) and who pulled it. An item is placed on the day of its own stamp: a home run's 'statusBy' / 'statusAt', a lighting load or leg's 'pulledBy' / 'pulledAt' (both M/D/YYYY), the same stamps the Home Runs Pulled and Loads Ran lists show. Switch legs come from the Loads list and from the panel schedules (every panel and extra floor), named the way the Panelized tab names them (the job's own panel names, default Panel A / B / C). Each Loads-list row stands alone, so two legs with the same name both show; a panel-schedule row is left out only when the Loads list already has a leg of that name pulled the same day (same leg ticked in two places). Something marked pulled with no stamp date cannot be placed on a day, so it is not listed: pulled before the stamps existed, ticked with **Pull all**, brought in with a pasted list, or a Savant leg (none of those write who/when; making Pull all and paste stamp is a separate, later change to the save path). Rough tab only (residential: commercial jobs have no Rough tab); the Finish tab's updates are unchanged. 'pulledHomeRunsByDay' / 'pulledLegsByDay' are pure and gated by scripts/pulleddaily-test.js (wired into prebuild). The bars are for reading on screen; the emailed daily update still carries only the typed updates. The Rough guide (public/sops/rough.html) describes the new bars and what does not show. **Why it won't lose data:** read-only. It only reads 'homeRuns' and 'panelizedLighting' that the job already holds and draws lists; nothing is written, no field is added, and the save call, loader, rules and functions are untouched.
+- **Save pill: bigger, higher contrast, stays up longer** · 'shipped 2026-10-06' · 'SW v519' · Koy: *"want it a little more obvious and easy to see"* and *"saved should be green."* The v518 'HeSaveHud' pill is now 15px semibold text with a solid near-black background, a thin outline (steel blue while saving, green on Saved, red on a failed save) and a soft shadow so it stands out against the dark job-card backdrop, with a slightly bigger spinner and a small spring when it appears. **Saved** is green text, held for 3 seconds inside the pill itself (the app's own 2-second return to idle is untouched), and a new save or a failure replaces it at once. Still text only, with no check or ring.  **Why it won't lose data:** presentational only, one component in src/motion.js. It reads the same 'syncStatus' and calls the same 'flushSaves' as before; the save call, 'setSyncStatus' and the 2-second timer in App.js are not touched. No fields, loader, rules, function or save-path changes.
 - **Save indicator that shows everywhere: a small "Saving… / Saved / Save failed" pill at the top of the screen** · 'shipped 2026-10-06' · 'SW v518' · Koy: *"Now I just don't see the ripple anymore, but I don't see any saving confirmation."* v517 removed the green ripple and left the quiet 'Saved' text in the three Job Board headers, but a job card is a full-screen overlay that covers those headers, so inside a job there was no confirmation at all. 'HeSaveHud' (src/motion.js) is mounted once at the App root, above every overlay (job card, sheets), fixed at the top-center, and driven by the same 'syncStatus' as the header chips: **Saving…** (spinner), **Saved** (plain light text, about 2 seconds), then it disappears; **Save failed · tap to retry** stays up until a save succeeds and calls 'flushSaves' when tapped. Text only: no green, no check, no ring. The header chips stay. **Why it won't lose data:** presentational only. It reads 'syncStatus' and calls the existing 'flushSaves' on tap; the save call, 'setSyncStatus' and the 2-second return to idle are untouched. No fields, loader, rules, function or save-path changes.
 - **Save confirmation: the green ring and check are gone; "Saved" is quiet text** · 'shipped 2026-10-06' · 'SW v517' · Koy: *"i dont like the green circle confirming save"* and *"any time i click anything or type anywhere"*, then chose the quiet-text option. The v496 save ripple (a green ring that grew to about 300px from the field you last touched, plus a solid green circle with a text check) is removed: the 'heSaveRipple' call after a save, the function, its two CSS rules and the 'lastField' tracking that only it used. 'lastTap' and 'inView' stay because the toast-from-the-button and fly-to-tab code use them. The header save chip now reads Saving… (spinner) then **Saved** in plain gray text for about two seconds, then 'All changes saved'; the green check is gone. Save failed keeps its red X, shake and tap-to-retry. **Why it won't lose data:** presentational only. The save call, 'setSyncStatus' and the 2-second return to idle are untouched; this deletes a visual effect and changes one colour in a lookup ('syncColor'). No fields, loader, rules, function or save-path changes.
 - **Version lock, Phase 1 — every save carries its build number, old copies get a full-screen Update now, and a refused save is never thrown away** · 'shipped 2026-10-06' · 'SW v515' · Koy: *"if they're not on the right version of the app (like the latest version), it just pops up with a big pop-up that says, 'Update now' … That way, they can't be making edits and stuff on the old version, and it can't fuck up anything."* and *"I just really need to make sure that this is locked down and bad writes don't happen."* Spec: '08-Specs/Version Lock Spec.md'; rule: '05-Decisions/Server-Enforced Version Lock.md'. **The stamp:** one module helper 'stampWrite(payload)' adds two top-level fields beside 'data' / 'updated_at' on EVERY client write to 'jobs', 'needs' and 'redlineWalks' — 'app_build' (the build as an integer, 'homestead-v514' → '514', dev → '0', derived once from 'REACT_APP_VERSION') and 'w' (a fresh random '<build>.<8 chars>' per write, so an old build's 'updateDoc' can't inherit the stamp the last good save left on the doc). Stamped: 'saveJob' patch + full modes (and both create fallbacks), 'flushJob', 'flushSaves', the reconnect re-merge and startup replay (they re-enter 'saveJob'), the finish-status auto-advance, the public punch page's 'arrayUnion' submit, the Simpro import create, the Settings Restore-from-backup / Restore-from-file writes, every needs write ('saveNeed', 'patchNeed', 'addNeedUpdate', the edit-reply transaction, photos add / remove / undo, the time-off request's need + its done stamp) and both redline-walk writes. 'manualTasks' and 'quoteWalks' have no client writer left (retired), so there is nothing to stamp there. The three console rescue utilities ('__HE_RESTORE', '_hsRescueDataUrlPhotos', '__HE_BULK_ADD_LOADS') stay deliberately unstamped — under a lock they run through the kill switch. **The popup (the face of the lock, not the lock) — hard block only on require** (Koy, 2026-10-06): the full-screen, no-close block (app dimmed and inert) is raised only by the realtime 'appGate/version' listener saying minBuild is above this build (its permission error is ignored until the Phase 2 rules exist), by a 'permission-denied' on a locked write that the gate confirms is a version refusal, or by Settings → **Force Update All Devices** (an explicit office command; it no longer bare-reloads anyone). A plain newer bundle found by the poll (now every **2 min** + on visible, was 10) is NOT a block: idle phones still reload silently; anyone mid-task gets a small bottom card — "A new version is ready", **Update now** / **Later** — that never blocks; Later hides it for 30 minutes or until the next newer build, whichever comes first. A minBuild raise turns an open (or dismissed) card into the hard block within seconds. Typing grace on the hard block: a focused field shows a red top bar instead for up to 5 minutes, measured from the hard raise. **Update now** blurs the field (the punch add box commits on blur), runs 'flushSaves()', waits for 'hasPendingSaves()' (cap 8 s; 1.5 s when the server is refusing this build anyway), hands the durable queue to the next session, and reloads with a cache-busting URL. Loop guard: a reload that still runs the old bundle (CDN edge lag) shows "Updating… one moment" and retries ≤ 3× / 20 s apart, then "Close and reopen the app". The bottom-left pill is gone; idle phones still self-heal silently. **Refused saves survive:** the job funnel keeps a refused patch in 'pendingPatches' + 'he_pending_patches' (it was persisted at enqueue) and skips the 5 s retry loop for a version refusal; a new 'he_pending_handoff' sessionStorage marker lets the session that replaces the tab adopt the slot immediately (the live-sibling 20 s rule used to park it until the NEXT app open). **Office controls** (Settings → Devices — App Versions, admin): each device's build, red **BELOW MINIMUM** flag, lock status + who set it, unstamped-saves count for the last 3 days, **Require v___ (N devices will be asked)** and **Turn off the lock** — both call the new 'setMinBuild' callable ('requireAdmin', Admin SDK write to 'appGate/version', logged, never raised automatically on deploy) — with the rollback rule in the help text. **Functions (deploy needed):** 'setMinBuild'; 'onJobUpdate' gains version-lock telemetry ('functions/versionLock.js') that counts writes landing without a fresh stamp per day in 'settings/versionLockStats', split client-shaped vs server-shaped (Admin SDK writers never stamp). **No rules change in this ship** — the complete Phase 2 rules are prepared beside the live file as 'firestore.phase2.rules' (appGate read-only + 'stampOk()' on jobs only; deliberately fails OPEN when the gate doc is missing) with emulator tests in 'scripts/rules-test/', to deploy only after the soak. Harness: 'scripts/version-lock-test.js' (prebuild) — build parse, stamp, refusal detection, THE funnel proof (a 'permission-denied' keeps the patch in both queues and the next build replays it exactly once, stamped '600.…'), flushJob / flushSaves refusals, non-version denials keep today's retry, a static sweep that every write to the locked collections is stamped, the telemetry classifier. New guide 'settings.html' behind a "?" on the Settings screen. **Why it won't lose data:** the stamp is two additive top-level meta fields the loader never spreads into the job ('{...raw.data, …}'), so nothing changes inside 'data', in the merge, the baseline, or the rules; every stamped write goes through the exact same funnel and transaction as before; no rules deploy, so nothing is refused yet and the gate doc is only ever written by the Admin SDK; the popup can only ADD a flush before a reload the app already did (and now waits for typing); a refused save is kept where it already was and replayed by the same merge, proven by the harness.
