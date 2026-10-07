@@ -274,7 +274,10 @@ function session({ tabId, version, gate, local, sess, pending = {}, txMode = "ok
     check("every jobs/needs transaction write is stamped", txUnstamped.length === 0, txUnstamped);
     const loaderLine = lines.find(l => /const loaded = migrate\(snap\.docs\.map/.test(l)) || "";
     check("jobs loader builds from raw.data (stamp never reaches the in-memory job)", /\{\.\.\.raw\.data,/.test(loaderLine) && !/\{\.\.\.raw,/.test(loaderLine));
-    check("manualTasks / quoteWalks have no client writer (nothing to stamp)", !lines.some(l => /(updateDoc|setDoc|runTransaction)[^\n]*["'](manualTasks|quoteWalks)["']/.test(l) && !/^\s*\/\//.test(l)));
+    check("manualTasks / quoteWalks have no client writer (nothing to stamp)", !lines.some(l => /(updateDoc|setDoc|runTransaction)[^\n]*["'](manualTasks|quoteWalks)["']/.test(l) && !/^\s*\/\//.test(l)
+      // FEATURES.md is inlined into App.js as markdown bullets ("- **…"), and an entry can
+      // NAME these collections next to "updateDoc" — documentation, not a write.
+      && !/^\s*-\s/.test(l)));
   }
 
   console.log("\n7. functions/versionLock.js — classifier + stats fold");
