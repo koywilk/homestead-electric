@@ -11,18 +11,25 @@
 // the Wednesday 6:30 meeting. Every Tuesday evening the orchestrator
 // (index.js exports.foremanMeetingPrep) reads the doc, carries forward the
 // unchecked action items from the newest section, and inserts the coming
-// meeting's section at the top. Sections (Koy, 2026-09-21, matches the Meetings
-// agenda): carried action items · needs · this week's Simpro schedule · hours vs
-// bid · inspections since last meeting · crew out · action items.
+// meeting's section at the top. This is the ONE prefill (the standalone Tuesday
+// 6am Lead Meeting Prep doc was retired 2026-10-07 — two prefills was the
+// problem). Sections follow Koy's Oct 7 notes doc (2026-10-07): Notes (+ Crew
+// out) · Highlight · Lowlight · Training · Schedule Look Ahead (Rough / Finish /
+// Upcoming) · Hours vs bid (only jobs whose margin moved since last week) ·
+// Action items (last week's unchecked items carried in, then a blank one).
 //
 // Every section degrades independently: a thrown section renders one grey line
 // and never kills the run. Kept pure so scripts can dry-run byte-identical output.
 // ─────────────────────────────────────────────────────────────
 
 const TZ = "America/Denver";
-const SECTION_TAG = "| Foreman + Lead Meeting";  // heading suffix — parseLastActions keys on it
+const SECTION_TAG = "| Weekly Lead Meeting";  // heading suffix — parseLastActions / parseLastMargins key on it
+const LEGACY_TAGS = ["| Foreman + Lead Meeting"];   // sections written before 2026-10-07
+const isSectionHeading = (t) => [SECTION_TAG, ...LEGACY_TAGS].some(tag => String(t || "").endsWith(tag));
+const stripTag = (t) => [SECTION_TAG, ...LEGACY_TAGS].reduce((x, tag) => x.replace(tag, ""), String(t || "")).trim();
+const RECENT_DONE_DAYS = 6;  // "completed since last meeting": Tuesday run → back to last Wednesday
 const INSPECTION_DAYS = 7;
-const PTO_DAYS = 7;
+const PTO_DAYS = 14;
 const NEEDS_CAP = 30;
 const COMPLETED_DAYS = 30;   // "Completed" hours/margin group looks back this far
 
@@ -117,13 +124,14 @@ function parseLastActions(doc) {
   });
   let section = null;
   for (const p of paras) {
-    if (!p.bullet && p.text.endsWith(SECTION_TAG)) {
+    if (!p.bullet && isSectionHeading(p.text)) {
       if (section) break;                    // second section = last week's; stop
-      section = { label: p.text.replace(SECTION_TAG, "").trim(), open: [], inList: false };
+      section = { label: stripTag(p.text), open: [], inList: false };
       continue;
     }
     if (!section) continue;
     if (!p.bullet && /^(action items?|carried from last week)$/i.test(p.text)) { section.inList = true; continue; }
+    if (section.inList && !p.bullet && /^carried from /i.test(p.text)) continue;   // the grey "Carried from Sep 30" line sits above the checklist
     if (!p.bullet && p.text) { section.inList = false; continue; }
     if (section.inList && p.bullet && p.text) {
       const t = p.text.replace(/^(\[\s*[xX✓]\s*\]|✓|✔)\s*/, "");
@@ -135,6 +143,39 @@ function parseLastActions(doc) {
   return section ? { fromLabel: section.label, open: section.open } : empty;
 }
 
+
+// ── read the notes doc: the newest section's margins, by job name ────────────
+// Fallback baseline for the "moved since last week" filter on the very first run
+// (before settings/meetingPrepMargins has a snapshot). Reads the Hours vs bid
+// section of the newest section: a top-level bullet is "Name   95% done", its
+// nested "margin NN%" line is the margin. Returns { at: Date|null, byName: { key: pct } }.
+const jobKey = (n) => String(n || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function parseLastMargins(doc) {
+  const out = { at: null, byName: {} };
+  const content = doc && doc.body && Array.isArray(doc.body.content) ? doc.body.content : null;
+  if (!content) return out;
+  let inSection = false, inHours = false, cur = null;
+  for (const c of content) {
+    if (!c || !c.paragraph) continue;
+    const text = arr(c.paragraph.elements).map(e => (e && e.textRun && e.textRun.content) || "").join("").replace(/\s+/g, " ").trim();
+    const bullet = c.paragraph.bullet;
+    const style = (c.paragraph.paragraphStyle || {}).namedStyleType || "";
+    if (!bullet && isSectionHeading(text)) {
+      if (inSection) break;
+      inSection = true;
+      const hm = text.match(/^([A-Z][a-z]{2} \d{1,2}, \d{4})/);
+      out.at = hm ? toDateAny(hm[1]) : null;
+      continue;
+    }
+    if (!inSection) continue;
+    if (style === "HEADING_2") { inHours = /^hours vs bid$/i.test(text); cur = null; continue; }
+    if (!inHours || !bullet || !text) continue;
+    if (!bullet.nestingLevel) { cur = jobKey(text.replace(/\s+\d+% done.*$/, "").replace(/\s+done [A-Z][a-z]{2} \d+.*$/, "")); continue; }
+    const mm = text.match(/^margin\s+(-?\d+)%/);
+    if (mm && cur) out.byName[cur] = Number(mm[1]);
+  }
+  return out;
+}
 
 // ── Simpro hours + margin per job (I/O injected — getJson(path) → parsed JSON or null) ──
 // For each Simpro job: /jobs/{id} Totals (net margin) and every cost center's
@@ -205,7 +246,11 @@ function buildModel(inputs) {
   //   and pipeline rows off the job board ({name, kind, who, start, startsIn, note});
   // shipped: rows from leadMeetingPrep.extractShipped() ({title, version, date}) — app trainings.
   const { jobs = [], needs = [], pto = [], scheduleEntries = [], simproTotalsById = {},
-          lastActions = null, upcoming = null, upcomingBoard = null, shipped = null, now, crew = [] } = inputs || {};
+          lastActions = null, upcoming = null, upcomingBoard = null, shipped = null, now, crew = [],
+          lookahead = null, marginBaseline = null } = inputs || {};
+  // lookahead: { rough: [{text, who}], finish: [{text, who}] } — leadMeetingPrep.lookAheadRows().
+  // marginBaseline: { at: Date|null, complete: bool, byJob: { simproNo: {margin, name} }, byName: { jobKey: pct } } —
+  //   last week's margins (settings/meetingPrepMargins snapshot, else parseLastMargins of the notes doc).
   const realNow = now instanceof Date ? now : new Date();
   const mtNow = new Date(realNow.toLocaleString("en-US", { timeZone: TZ }));
   const today = startOfDay(mtNow);
@@ -217,11 +262,14 @@ function buildModel(inputs) {
 
   const m = {
     heading: `${meeting.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} ${SECTION_TAG}`,
+    lookahead: { rough: [], finish: [], error: false },
     generated: realNow.toLocaleString("en-US", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" }),
     carried: { from: "", rows: [], error: false },
     needs: { bodies: [], tasks: [], error: false },
     schedule: { days: [], error: false },      // [{label, rows:[text]}]
-    hours: { rough: [], finish: [], other: [], roughDone: [], completed: [], error: false },   // rows: {name, phase, cur, rough, finish, extras, margin, marginEst}
+    hours: { rough: [], finish: [], other: [], roughDone: [], completed: [], error: false, baseline: { have: false, when: "", complete: false, skipped: 0 } },
+    // rows: {name, sn, phase, cur, rough, finish, extras, margin, marginEst, prev, prevWhen, isNew}
+    marginSnapshot: {},   // { simproNo: {name, margin} } for EVERY job with a margin — next week's baseline
     inspections: { passed: [], failed: [], error: false },   // [text] — feed Highlight / Lowlight
     upcoming: { pastDue: [], soon: [], error: false },        // [text]
     shipped: { rows: [], more: 0, error: false },             // [text] — Training
@@ -308,14 +356,14 @@ function buildModel(inputs) {
       // No "Rough"/"Finish" cost centers at all (small jobs, service calls) ⇒ "Other", whole-job hours.
       if (!rough && !finish) {
         if (!extras || extras.used <= 0) return;
-        m.hours.other.push({ name: j.name, phase: "other", cur: extras, rough: null, finish: null, extras: null,
+        m.hours.other.push({ name: j.name, sn: snOf(j), phase: "other", cur: extras, rough: null, finish: null, extras: null,
           margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate, ratio: extras.ratio });
         return;
       }
       const cur = inFinish ? finish : rough;
       if (!inFinish && rough && rough.used === 0 && !(finish && finish.used > 0)) return;   // not started
       const stage = parseInt(j[(inFinish ? "finish" : "rough") + "Stage"]);   // app's phase % done
-      const row = { name: j.name, phase: inFinish ? "finish" : "rough", cur, rough, finish, extras,
+      const row = { name: j.name, sn: snOf(j), phase: inFinish ? "finish" : "rough", cur, rough, finish, extras,
         stage: Number.isFinite(stage) ? stage : null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate,
         ratio: cur ? cur.ratio : 0 };
@@ -330,7 +378,7 @@ function buildModel(inputs) {
       const t = j.simproNo ? simproTotalsById[snOf(j)] : null;
       if (!t) return;
       const cur = ph(t.rough);
-      m.hours.roughDone.push({ name: j.name, phase: "roughDone", cur, rough: null, finish: null, extras: null,
+      m.hours.roughDone.push({ name: j.name, sn: snOf(j), phase: "roughDone", cur, rough: null, finish: null, extras: null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate, ratio: cur ? cur.ratio : 0, done: roughDoneOn(j) });
     });
     m.hours.roughDone.sort((a, b) => b.done - a.done);
@@ -341,10 +389,51 @@ function buildModel(inputs) {
       const parts = [t.rough, t.finish, t.extras].filter(Boolean);
       const tot = parts.length ? { used: parts.reduce((n, p) => n + (p.used || 0), 0), est: parts.reduce((n, p) => n + (p.est || 0), 0) } : null;
       const cur = ph(tot);
-      m.hours.completed.push({ name: j.name, phase: "completed", cur, rough: ph(t.rough), finish: ph(t.finish), extras: null,
+      m.hours.completed.push({ name: j.name, sn: snOf(j), phase: "completed", cur, rough: ph(t.rough), finish: ph(t.finish), extras: null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate, ratio: cur ? cur.ratio : 0, done: completedOn(j) });
     });
     m.hours.completed.sort((a, b) => b.done - a.done);
+
+    // Snapshot first (EVERY job with a margin — it becomes next week's baseline),
+    // then "moved since last week" (Koy, 2026-10-07): only jobs whose rounded margin
+    // changed vs the baseline, plus jobs the baseline has never seen (tagged "new").
+    // No baseline at all (very first run) ⇒ show everything.
+    ["rough", "finish", "other"].forEach(k => m.hours[k].forEach(r => {
+      if (r.sn && typeof r.margin === "number") m.marginSnapshot[r.sn] = { name: r.name, margin: r.margin };
+    }));
+    const base = marginBaseline || {};
+    const haveBase = !!((base.byJob && Object.keys(base.byJob).length) || (base.byName && Object.keys(base.byName).length));
+    const age = base.at ? daysBetween(today, base.at) : null;
+    const when = age == null ? "last meeting" : age <= 9 ? "last week" : age <= 16 ? "two weeks ago" : `on ${fmtShort(base.at)}`;
+    // complete = the baseline covers EVERY job (the saved snapshot), so a job it has never
+    // seen is genuinely new. A baseline parsed from last week's doc only knows the jobs
+    // that doc printed, so a job missing there is skipped, not called "new".
+    const complete = !!base.complete;
+    m.hours.baseline = { have: haveBase, when, complete, skipped: 0 };
+    if (haveBase) {
+      const prevOf = (r) => {
+        const a = r.sn && base.byJob && base.byJob[r.sn];
+        if (a && typeof a.margin === "number") return a.margin;
+        const b = base.byName && base.byName[jobKey(r.name)];
+        return typeof b === "number" ? b : null;
+      };
+      ["rough", "finish", "other"].forEach(k => {
+        m.hours[k] = m.hours[k].filter(r => {
+          if (typeof r.margin !== "number") return false;
+          const prev = prevOf(r);
+          if (prev == null) {
+            if (!complete) { m.hours.baseline.skipped++; return false; }
+            r.isNew = true; return true;
+          }
+          r.prev = prev; r.prevWhen = when;
+          return Math.round(r.margin) !== Math.round(prev);
+        });
+      });
+    }
+    // Completed groups: only what closed since the last meeting.
+    const recent = (r) => r.done && daysBetween(today, r.done) >= 0 && daysBetween(today, r.done) <= RECENT_DONE_DAYS;
+    m.hours.roughDone = m.hours.roughDone.filter(recent);
+    m.hours.completed = m.hours.completed.filter(recent);
   } catch (e) { m.hours.error = true; }
 
   // Inspections since last meeting — attempts arrays, then the single-field fallback
@@ -408,6 +497,12 @@ function buildModel(inputs) {
     }
   } catch (e) { m.upcoming.error = true; }
 
+  // Schedule Look Ahead — Rough + Finish rows from the job board (leadMeetingPrep.lookAheadRows)
+  try {
+    if (lookahead == null) m.lookahead.error = true;
+    else { m.lookahead.rough = arr(lookahead.rough); m.lookahead.finish = arr(lookahead.finish); }
+  } catch (e) { m.lookahead.error = true; }
+
   // Training — what shipped in the app since last meeting (FEATURES.md)
   try {
     if (shipped == null) m.shipped.error = true;
@@ -424,12 +519,11 @@ function buildModel(inputs) {
     m.pto.rows = arr(pto).map(p => ({ name: (p && p.name) || "", s: toDateAny(p && p.start), e: toDateAny(p && p.end) || toDateAny(p && p.start), note: (p && p.note) || "" }))
       .filter(p => p.name && p.s && p.e && p.e >= meeting && p.s <= winEnd)
       .sort((a, b) => a.s - b.s)
-      .map(p => `${p.name} — ${p.s.getTime() === p.e.getTime() ? fmtShort(p.s) : `${fmtShort(p.s)}–${fmtShort(p.e)}`}${p.note ? `, ${clip(p.note, 60)}` : ""}`);
+      .map(p => `${p.name} — ${p.s.getTime() === p.e.getTime() ? fmtShort(p.s) : `${fmtShort(p.s)}–${fmtShort(p.e)}`}`);   // no reasons (Koy, 2026-10-07)
   } catch (e) { m.pto.error = true; }
 
   m.counts = {
-    carried: m.carried.rows.length, bodies: m.needs.bodies.length, tasks: m.needs.tasks.length,
-    scheduled: m.schedule.days.reduce((n, d) => n + d.rows.length, 0),
+    carried: m.carried.rows.length, rough: m.lookahead.rough.length, finish: m.lookahead.finish.length,
     hours: m.hours.rough.length + m.hours.finish.length + m.hours.other.length, roughDone: m.hours.roughDone.length, completed: m.hours.completed.length,
     inspections: m.inspections.passed.length + m.inspections.failed.length,
     pastDue: m.upcoming.pastDue.length, upcoming: m.upcoming.soon.length, shipped: m.shipped.rows.length, pto: m.pto.rows.length,
@@ -478,12 +572,19 @@ function hoursLines(r) {
   }
   const mg = line(true);
   if (r.margin == null) mg.grey("margin n/a");
-  else { mg.text += "margin "; mg.push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true); }
+  else {
+    mg.text += "margin "; mg.push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true);
+    if (r.prev != null) mg.text += ` (was ${Math.round(r.prev)}% ${r.prevWhen || "last week"})`;
+    else if (r.isNew) mg.text += " (new)";
+  }
   out.forEach(l => { delete l.push; delete l.grey; });
   return out;
 }
 
-// kind: h1 | h2 | h3 | h4 (bold plain line) | p | grey | bullet | check
+// kind: h1 | h2 | h3 | h4 (bold plain line) | p | grey | bullet | check | sub (nested bullet)
+// Section order follows Koy's Oct 7 notes doc (2026-10-07):
+//   Notes (+ Crew out) · Highlight · Lowlight · Training · Schedule Look Ahead
+//   (Rough / Finish / Upcoming) · Hours vs bid · Action items.
 function renderLines(m) {
   const L = [];
   const H1 = (t) => L.push({ text: t, kind: "h1" });
@@ -492,6 +593,7 @@ function renderLines(m) {
   const P = (t) => L.push({ text: t, kind: "p" });
   const G = (t) => L.push({ text: t, kind: "grey" });
   const B = (t) => L.push({ text: t, kind: "bullet" });
+  const SUB = (t) => L.push({ text: "\t" + t, kind: "bullet" });     // leading tab = nested bullet
   const C = (t) => L.push({ text: t, kind: "check" });
   const list = (rows, err, none) => { if (err) G("Could not load this section."); else if (!rows.length) G(none); else rows.forEach(B); };
 
@@ -500,6 +602,8 @@ function renderLines(m) {
 
   H2("Notes");
   B("");
+  H3("Crew out");
+  list(m.pto.rows, m.pto.error, "Nobody out.");
 
   H2("Highlight");
   if (m.inspections.error) G("Could not read inspections.");
@@ -511,63 +615,59 @@ function renderLines(m) {
   else m.inspections.failed.forEach(B);
   B("");
 
-  H2("Carried from last week");
-  if (m.carried.error) G("Could not read last week's section.");
-  else if (!m.carried.rows.length) G(m.carried.from ? `Nothing open from ${m.carried.from}.` : "First meeting — nothing to carry.");
-  else m.carried.rows.forEach(C);
-
-  H2("Needs");
-  H3("Bodies");
-  list(m.needs.bodies, m.needs.error, "No open requests for bodies.");
-  H3("Open tasks");
-  list(m.needs.tasks, m.needs.error, "No open tasks on the needs board.");
-
-  H2("Schedule (Simpro)");
-  if (m.schedule.error) G("Could not load Simpro.");
-  else ["this", "next"].forEach(w => {
-    H3(w === "this" ? "This week" : "Next week");
-    const wk = m.schedule.days.find(d => d.week === w);
-    if (!wk || !wk.rows.length) G(w === "this" ? "Nothing booked in Simpro." : "Not set in Simpro yet.");
-    else wk.rows.forEach(B);
-  });
-
-  H2("Upcoming and past due");
-  H3("Past due");
-  list(m.upcoming.pastDue, m.upcoming.error, "Nothing past its start date.");
-  H3("Upcoming");
-  list(m.upcoming.soon, m.upcoming.error, "Nothing on the Upcoming tab.");
-
-  H2("Hours vs bid");
-  if (m.hours.error) G("Could not load Simpro hours.");
-  else [["rough", "In rough"], ["finish", "In finish"], ["other", "Other"], ["roughDone", "Rough completed in the last 30 days"], ["completed", "Finish completed in the last 30 days"]].forEach(([k, label]) => {
-    const rows = m.hours[k];
-    if (k === "other" && !rows.length) return;
-    H3(label);
-    if (!rows.length) { G(k === "completed" ? "No jobs finished in the last 30 days." : k === "roughDone" ? "No roughs completed in the last 30 days." : `No residential jobs in ${k} with hours in Simpro.`); return; }
-    // Grouped by margin band (Koy, 2026-09-21): on pace / middle ground / bad place / no margin yet.
-    const band = (r) => r.margin == null ? "none" : marginColor(r.margin, r.phase);
-    const bands = k === "completed"
-      ? [["green", "Hit 15%"], ["red", "Missed 15%"], ["none", "No margin in Simpro yet"]]
-      : k === "roughDone"
-      ? [["green", "Hit 50%"], ["red", "Missed 50%"], ["none", "No margin in Simpro yet"]]
-      : [["green", "On pace"], ["amber", "Middle ground"], ["red", "Bad place"], ["none", "No margin in Simpro yet"]];
-    bands.forEach(([b, title]) => {
-      const rs = rows.filter(r => band(r) === b);
-      if (!rs.length) return;
-      L.push({ text: title, kind: "h4", spans: b === "none" ? [] : [{ start: 0, len: title.length, rgb: RGB[b], bold: true }] });
-      rs.forEach(r => hoursLines(r).forEach(l => L.push(l)));
-    });
-  });
-
   H2("Training");
   if (m.shipped.error) G("Could not read what shipped in the app.");
   else { m.shipped.rows.forEach(B); if (m.shipped.more) G(`+${m.shipped.more} more app updates this week.`); }
   B("");
 
-  H2("Crew out");
-  list(m.pto.rows, m.pto.error, "Nobody out.");
+  // Schedule Look Ahead — each job: bullet, then "{lead} update", then one status line.
+  H2("Schedule Look Ahead");
+  [["rough", "Rough"], ["finish", "Finish"]].forEach(([k, label]) => {
+    H3(label);
+    if (m.lookahead.error) { G("Could not read the job board."); return; }
+    if (!m.lookahead[k].length) { G(`Nothing in ${label.toLowerCase()}.`); return; }
+    m.lookahead[k].forEach(r => { B(r.title); SUB(r.who ? `${r.who} update` : "Update?"); if (r.detail) SUB(r.detail); });
+  });
+  H3("Upcoming");
+  if (m.upcoming.error) G("Could not load the Upcoming tab.");
+  else if (!m.upcoming.pastDue.length && !m.upcoming.soon.length) G("Nothing on the Upcoming tab.");
+  else { m.upcoming.pastDue.forEach(B); m.upcoming.soon.forEach(B); }
 
+  // Hours vs bid — ONLY jobs whose margin moved since the last meeting (Koy, 2026-10-07),
+  // grouped by margin band with the band color, each margin showing "(was X% last week)".
+  H2("Hours vs bid");
+  const hb = m.hours.baseline || {};
+  if (m.hours.error) G("Could not load Simpro hours.");
+  else {
+    if (!hb.have) G("No earlier margins to compare against, so every job is shown this week. Next week this section shows only jobs whose margin moved.");
+    else G(`Only jobs whose margin moved since ${hb.when}. "Was" is the margin then.${hb.skipped ? ` ${hb.skipped} jobs had no earlier number to compare, so they are left out until next week.` : ""}`);
+    let any = false;
+    [["rough", "In rough"], ["finish", "In finish"], ["other", "Other"], ["roughDone", "Rough completed since last meeting"], ["completed", "Finish completed since last meeting"]].forEach(([k, label]) => {
+      const rows = m.hours[k];
+      if (!rows.length) return;
+      any = true;
+      H3(label);
+      // Grouped by margin band (Koy, 2026-09-21): on pace / middle ground / bad place / no margin yet.
+      const band = (r) => r.margin == null ? "none" : marginColor(r.margin, r.phase);
+      const bands = k === "completed"
+        ? [["green", "Hit 15%"], ["red", "Missed 15%"], ["none", "No margin in Simpro yet"]]
+        : k === "roughDone"
+        ? [["green", "Hit 50%"], ["red", "Missed 50%"], ["none", "No margin in Simpro yet"]]
+        : [["green", "On pace"], ["amber", "Middle ground"], ["red", "Bad place"], ["none", "No margin in Simpro yet"]];
+      bands.forEach(([b, title]) => {
+        const rs = rows.filter(r => band(r) === b);
+        if (!rs.length) return;
+        L.push({ text: title, kind: "h4", spans: b === "none" ? [] : [{ start: 0, len: title.length, rgb: RGB[b], bold: true }] });
+        rs.forEach(r => hoursLines(r).forEach(l => L.push(l)));
+      });
+    });
+    if (!any && hb.have) G("No margins moved since then.");
+  }
+
+  // Action items — last week's unchecked items carried in, then one blank line to fill.
   H2("Action items");
+  if (m.carried.error) G("Could not read last week's action items.");
+  else if (m.carried.rows.length) { G(`Carried from ${m.carried.from || "last week"}.`); m.carried.rows.forEach(C); }
   C("Owner — what — by when");
   P("");
   return L;
@@ -633,4 +733,4 @@ function docsRequests(lines, at = 1) {
   return [reqs[0], ...rest];
 }
 
-module.exports = { parseLastActions, buildModel, renderLines, docsRequests, collectSimproHours, recentlyCompleted, roughRecentlyDone, toDateAny, isResJob, TZ, SECTION_TAG };
+module.exports = { parseLastActions, parseLastMargins, buildModel, renderLines, docsRequests, collectSimproHours, recentlyCompleted, roughRecentlyDone, toDateAny, isResJob, TZ, SECTION_TAG };

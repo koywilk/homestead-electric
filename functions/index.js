@@ -4998,93 +4998,10 @@ const LEAD_NOTES_DOC_ID = "1gn8CcqImvP2Zra_0gC8xAhUTzV8M8UGOrw44ipLwFKg";
 // GitHub (the function can't see the bundle's inlined copy).
 const FEATURES_MD_RAW_URL = "https://raw.githubusercontent.com/koywilk/homestead-electric/main/FEATURES.md";
 
-async function runLeadMeetingPrep({ testRun = false } = {}) {
-  const now = new Date();
-
-  // 1 · Firestore reads (jobs are wrapped {data:{...}}; settings docs are not).
-  const [snap, upSnap, ptoSnap] = await Promise.all([
-    db.collection("jobs").get(),
-    db.doc("settings/upcoming_jobs").get(),
-    db.doc("settings/crewPTO").get(),
-  ]);
-  const jobs = snap.docs.map(d => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; }).filter(j => !isCommercialJob(j));   // Commercial mode: residential packet
-  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
-  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
-
-  // 2 · FEATURES.md — Training section. Failure ⇒ null ⇒ section degrades.
-  let featuresMd = null;
-  try {
-    const resp = await fetch(FEATURES_MD_RAW_URL, { signal: AbortSignal.timeout(15000) });
-    if (resp.ok) featuresMd = await resp.text();
-    else functions.logger.warn("leadMeetingPrep FEATURES.md fetch failed", { status: resp.status });
-  } catch (e) { functions.logger.warn("leadMeetingPrep FEATURES.md fetch error", { error: e.message }); }
-
-  // 3 · Last week's action items from the notes doc (Docs API, read-only).
-  let notesDoc = null;
-  try {
-    const docsAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
-    const docs = google.docs({ version: "v1", auth: docsAuth });
-    const res = await docs.documents.get({ documentId: LEAD_NOTES_DOC_ID });
-    notesDoc = res.data || null;
-  } catch (e) { functions.logger.warn("leadMeetingPrep notes doc read failed", { error: e.message }); }
-
-  // 4 · Build + render (pure — no I/O inside).
-  const model = leadPrepLib.buildModel({ jobs, upcoming, pto, featuresMd, notesDoc, now });
-  const html = leadPrepLib.renderHtml(model);
-  const docTitle = `Lead Meeting Prep — ${model.docDate}`;
-
-  // 5 · Upload to Drive as a Google Doc (same folder + mechanism as the Friday Packet).
-  let docLink = "", docId = "";
-  try {
-    const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file"] });
-    const drive = google.drive({ version: "v3", auth });
-    const createRes = await drive.files.create({
-      requestBody: { name: docTitle, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" },
-      media: { mimeType: "text/html", body: html },
-      fields: "id, webViewLink",
-      supportsAllDrives: true,
-    });
-    docId = createRes.data.id || "";
-    docLink = createRes.data.webViewLink || "";
-  } catch (e) {
-    functions.logger.error("leadMeetingPrep Drive upload failed", { error: e.message });
-    // Ops alert — intentionally ungated plain sendToName (can't be muted).
-    await sendToName("Koy", {
-      title: "⚠️ Lead Meeting Prep failed",
-      body: `Drive upload error: ${e.message.slice(0, 120)}`,
-    });
-    return { ok: false, error: e.message };
-  }
-
-  // 6 · Announce — Koy only, ungated (personal ops send).
-  await sendToName("Koy", {
-    title: testRun ? "📝 Lead Meeting Prep (test) ready" : "📝 Lead Meeting Prep ready",
-    body: `${docTitle} is in Drive — open it there`,
-    jobId: "",
-    section: "",
-  });
-
-  functions.logger.info("leadMeetingPrep saved to Drive", { docId, docLink, testRun, ...model.counts });
-  return { ok: true, docLink, docId, counts: model.counts };
-}
-
-exports.leadMeetingPrep = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
-  .pubsub.schedule("0 6 * * 2")
-  .timeZone(TZ)
-  .onRun(async () => {
-    await runLeadMeetingPrep();
-    return null;
-  });
-
-// Manual trigger — a full real run any day (Drive doc + push to Koy) so the
-// pipeline can be verified without waiting for a Tuesday.
-exports.sendTestLeadMeetingPrep = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
-  .https.onCall(async (data) => {
-    requireAppKey(data);
-    return await runLeadMeetingPrep({ testRun: true });
-  });
+// RETIRED 2026-10-07: runLeadMeetingPrep / exports.leadMeetingPrep (Tue 6am standalone Drive doc)
+// and exports.sendTestLeadMeetingPrep. Two prefills for one meeting was the problem; the
+// Foreman + Lead run below now carries the lead prep's sections (Schedule Look Ahead,
+// Highlight/Lowlight, Training, Crew out) in the ONE running notes doc.
 
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Tuesday 4:00pm Mountain Time
@@ -5094,8 +5011,9 @@ exports.sendTestLeadMeetingPrep = functions
 // + next week's Simpro schedule, hours vs bid, inspections since last meeting,
 // crew out, blank action items. Content comes from the PURE builder
 // ./foremanMeetingPrep.js so a dry run renders byte-identical output.
-// Data safety: read-only on Firestore (jobs, needs, crewPTO, upcoming_jobs); ZERO Firestore
-// writes. The only write is a Docs API insert at index 1 of the notes doc —
+// Data safety: read-only on Firestore (jobs, needs, crewPTO, upcoming_jobs) with ONE write: a
+// non-test run saves every job's margin to settings/meetingPrepMargins (its own doc, read only
+// by this function) as next week's "moved since last week" baseline. The Docs write is an insert at index 1 of the notes doc —
 // it never deletes or restyles existing text (updates are range-limited to the
 // freshly inserted characters). Koy shares the doc Editor with
 // <project>@appspot.gserviceaccount.com; unreadable ⇒ the carried section
@@ -5140,9 +5058,12 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   // rows the lead prep computes (dated rough/finish starts, pipeline); the pure
   // builder de-dups by job name.
   const upcoming = upcomingRaw;
-  let upcomingBoard = null, shipped = null;
-  try { upcomingBoard = leadPrepLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now }).upcoming; }
-  catch (e) { functions.logger.warn("foremanMeetingPrep board upcoming build failed", { error: e.message }); }
+  let upcomingBoard = null, shipped = null, lookahead = null;
+  try {
+    const board = leadPrepLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now });
+    upcomingBoard = board.upcoming;
+    lookahead = leadPrepLib.lookAheadRows(board);      // Schedule Look Ahead: Rough + Finish rows
+  } catch (e) { functions.logger.warn("foremanMeetingPrep board build failed", { error: e.message }); }
   try { if (featuresMd) shipped = leadPrepLib.extractShipped(featuresMd, new Date(now.toLocaleString("en-US", { timeZone: TZ }))); }
   catch (e) { functions.logger.warn("foremanMeetingPrep shipped parse failed", { error: e.message }); }
 
@@ -5202,14 +5123,29 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   // 4 · Read the notes doc (last week's unchecked action items). Unreadable ⇒ null ⇒ section degrades.
   const docsAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents"] });
   const docs = google.docs({ version: "v1", auth: docsAuth });
-  let lastActions = null;
+  let lastActions = null, docMargins = null;
   try {
     const res = await docs.documents.get({ documentId: FOREMAN_NOTES_DOC_ID });
     lastActions = foremanPrepLib.parseLastActions(res.data || null);
+    docMargins = foremanPrepLib.parseLastMargins(res.data || null);
   } catch (e) { functions.logger.warn("foremanMeetingPrep notes doc read failed", { error: e.message }); }
 
+  // 4b · Margin baseline for "only jobs whose margin moved since last week". Preferred: the
+  //      snapshot the previous run saved (EVERY job). Fallback: the margins printed in the
+  //      newest section of the notes doc (only the jobs that doc showed).
+  let marginBaseline = null;
+  try {
+    const mSnap = await db.doc("settings/meetingPrepMargins").get();
+    const md = mSnap.exists ? mSnap.data() : null;
+    if (md && md.jobs && Object.keys(md.jobs).length) {
+      marginBaseline = { at: md.at ? new Date(md.at) : null, complete: true, byJob: md.jobs, byName: {} };
+    } else if (docMargins && Object.keys(docMargins.byName).length) {
+      marginBaseline = { at: docMargins.at, complete: false, byJob: {}, byName: docMargins.byName };
+    }
+  } catch (e) { functions.logger.warn("foremanMeetingPrep margin baseline read failed", { error: e.message }); }
+
   // 5 · Build + render (pure — no I/O inside).
-  const model = foremanPrepLib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming, upcomingBoard, shipped, now, crew: RES_CREW });
+  const model = foremanPrepLib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming, upcomingBoard, shipped, now, crew: RES_CREW, lookahead, marginBaseline });
   const lines = foremanPrepLib.renderLines(model);
   const requests = foremanPrepLib.docsRequests(lines, 1);
 
@@ -5218,13 +5154,22 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
     await docs.documents.batchUpdate({ documentId: FOREMAN_NOTES_DOC_ID, requestBody: { requests } });
   } catch (e) {
     functions.logger.error("foremanMeetingPrep docs insert failed", { error: e.message });
-    await sendToName("Koy", { title: "⚠️ Foreman + Lead prep failed", body: `Docs write error: ${e.message.slice(0, 120)}` });
+    await sendToName("Koy", { title: "⚠️ Weekly Lead prep failed", body: `Docs write error: ${e.message.slice(0, 120)}` });
     return { ok: false, error: e.message };
+  }
+
+  // 7 · Save this week's margins (every job) as next week's baseline. The ONE Firestore write
+  //     of this run, into its own doc that nothing else reads. Test runs skip it so a mid-week
+  //     test can't move the baseline. A failed save only means next week falls back to the doc.
+  if (!testRun && Object.keys(model.marginSnapshot).length) {
+    try {
+      await db.doc("settings/meetingPrepMargins").set({ at: today.toISOString(), jobs: model.marginSnapshot, savedBy: "foremanMeetingPrep" });
+    } catch (e) { functions.logger.warn("foremanMeetingPrep margin snapshot save failed", { error: e.message }); }
   }
 
   const docLink = `https://docs.google.com/document/d/${FOREMAN_NOTES_DOC_ID}/edit`;
   await sendToName("Koy", {
-    title: testRun ? "📝 Foreman + Lead notes (test) ready" : "📝 Foreman + Lead notes ready",
+    title: testRun ? "📝 Weekly Lead notes (test) ready" : "📝 Weekly Lead notes ready",
     body: `${model.heading} is at the top of the meeting doc`,
     jobId: "", section: "",
   });

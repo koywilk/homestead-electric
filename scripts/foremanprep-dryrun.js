@@ -87,12 +87,26 @@ const TZ = "America/Denver";
 
   const auth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"] });
   const docs = google.docs({ version: "v1", auth });
-  let lastActions = null;
-  try { lastActions = lib.parseLastActions((await docs.documents.get({ documentId: FOREMAN_NOTES_DOC_ID })).data); }
+  let lastActions = null, docMargins = null;
+  try {
+    const nd = (await docs.documents.get({ documentId: FOREMAN_NOTES_DOC_ID })).data;
+    lastActions = lib.parseLastActions(nd); docMargins = lib.parseLastMargins(nd);
+  }
   catch (e) { console.log("Notes doc read failed (share it Editor with the service account):", String(e.message).slice(0, 160)); }
 
+  // Same baseline choice as the deployed run: the saved snapshot, else the margins in the notes doc.
+  let marginBaseline = null;
+  try {
+    const mSnap = await db.doc("settings/meetingPrepMargins").get(); const md = mSnap.exists ? mSnap.data() : null;
+    if (md && md.jobs && Object.keys(md.jobs).length) marginBaseline = { at: md.at ? new Date(md.at) : null, complete: true, byJob: md.jobs, byName: {} };
+    else if (docMargins && Object.keys(docMargins.byName).length) marginBaseline = { at: docMargins.at, complete: false, byJob: {}, byName: docMargins.byName };
+  } catch (e) { console.log("margin baseline read failed:", e.message); }
+  console.log("margin baseline:", marginBaseline ? (marginBaseline.complete ? "saved snapshot" : "from notes doc") : "none (every job will show)");
+
+  const board = leadLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now });
+  const lookahead = leadLib.lookAheadRows(board);
   const shipped = featuresMd ? leadLib.extractShipped(featuresMd, new Date(now.toLocaleString("en-US", { timeZone: TZ }))) : null;
-  const model = lib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming: upcomingRaw, upcomingBoard: leadLib.buildModel({ jobs, upcoming: upcomingRaw, pto: [], featuresMd: null, notesDoc: null, now }).upcoming, shipped, now, crew: RES_CREW });
+  const model = lib.buildModel({ jobs, needs, pto, scheduleEntries, simproTotalsById, lastActions, upcoming: upcomingRaw, upcomingBoard: board.upcoming, shipped, now, crew: RES_CREW, lookahead, marginBaseline });
   const lines = lib.renderLines(model);
   console.log("counts", model.counts);
   console.log("\n--- section text ---");

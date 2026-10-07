@@ -211,6 +211,7 @@ function buildModel(inputs) {
     const stage = j[p + "Stage"] && /\d/.test(String(j[p + "Stage"])) ? String(j[p + "Stage"]).replace(/%?$/, "%") : "";
     return {
       name: String(j.name).trim(),
+      sn: String(j.simproNo || "").trim(),
       foreman: hasForeman(j) ? j.foreman : "",
       lead: j.lead && !/unassigned|tbd/i.test(String(j.lead)) ? j.lead : "",
       status: STATUS_LABEL[st] || st, stage,
@@ -358,6 +359,17 @@ function blurb(r) {
   return "";
 }
 const jobLi = (r) => { const b = blurb(r); return li(`${esc(r.name)}${b ? ` — ${esc(b)}` : ""}`); };
+// Schedule Look Ahead rows for the combined prep (foremanMeetingPrep): one entry per job —
+// title "#1419 Skyridge Lot 208", who gives the update (the job's lead, else the foreman),
+// and one plain status phrase (a real start date, else the freshest crew/office update).
+function lookAheadRows(m) {
+  const one = (r) => ({
+    title: `${r.sn ? `#${r.sn} ` : ""}${r.name}`,
+    who: String(r.lead || r.foreman || "").trim().split(/\s+/)[0] || "",
+    detail: blurb(r),
+  });
+  return { rough: m.rough.rows.map(one), finish: m.finish.moving.map(one) };
+}
 function upLi(u) {
   const when = u.start ? (u.startsIn >= 0 ? fmtShort(u.start) : `${fmtShort(u.start)} (past)`) : "";
   const name = /\(finish\)$/.test(u.name) ? u.name.replace(/\s*\(finish\)$/, " finish") : u.name;
@@ -387,4 +399,4 @@ function renderHtml(m) {
   </div>`;
 }
 
-module.exports = { buildModel, renderHtml, extractShipped, parseActionItems, toDateAny, TZ };
+module.exports = { buildModel, renderHtml, lookAheadRows, extractShipped, parseActionItems, toDateAny, TZ };
