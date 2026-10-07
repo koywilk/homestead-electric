@@ -109,6 +109,12 @@ function sameAddress(a, b) {
 //       | { result: "existing_job", jobId } | { result: "none" }
 const LOOKAHEAD_DAYS = 14;   // a quote walk often happens before the quote exists
 const TEMP_RE = /\btemp(orary)?\.?\s*(ped|pedestal|power)\b/i;
+// Floor boxes / floor outlets are poured into the slab long before the redline
+// walk, so their job is often in Progress when the walk happens (Whitaker Farms
+// 27, #1348 "Concrete Floor Boxes", missed 2026-10-06). Koy: disregard them —
+// like temp peds they are never the house's job or the walk's quote.
+const FLOOR_RE = /\bfloor\s*(box|boxes|outlets?|plugs?|receptacles?)\b/i;
+const _sideJob = name => TEMP_RE.test(name || "") || FLOOR_RE.test(name || "");
 
 function _day(s) { return String(s || "").slice(0, 10); }
 function _addDays(day, n) {
@@ -131,7 +137,7 @@ function pickQuote({ walkDate, quotes = [], jobs = [], now } = {}) {
     return !!(j && j.ConvertedFrom && String(j.ConvertedFrom.ID) !== String(q.ID));
   };
   const eligible = quotes.filter(q => {
-    if (!q || q.Stage === "Archived" || TEMP_RE.test(q.Name || "") || isCO(q)) return false;
+    if (!q || q.Stage === "Archived" || _sideJob(q.Name) || isCO(q)) return false;
     if (_day(q.DateIssued) > horizon) return false;
     const conv = convertedAt.get(String(q.ID));
     if (conv) return conv >= T;            // converted on/after the walk → it was open at the walk
@@ -146,7 +152,7 @@ function pickQuote({ walkDate, quotes = [], jobs = [], now } = {}) {
   // that job (Pierce #1277 + "Lutron Ra3 Lighting Control"), and a separate
   // quote folder would split the house's plans in two. The open quotes ride
   // along so the finding can name them.
-  const active = jobs.find(j => j && (j.Stage === "Progress" || j.Stage === "Pending") && !TEMP_RE.test(j.Name || "")
+  const active = jobs.find(j => j && (j.Stage === "Progress" || j.Stage === "Pending") && !_sideJob(j.Name)
     && _day(j.DateIssued) <= T);
   if (active) return { result: "existing_job", jobId: active.ID, openQuoteIds: open.map(q => q.ID) };
   if (open.length === 1) return { result: "quote", quoteId: open[0].ID };

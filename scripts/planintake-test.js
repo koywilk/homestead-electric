@@ -95,6 +95,28 @@ eq(W.pickQuote({ walkDate: "2026-08-18", quotes: brandtQuotes, jobs: brandtJobs 
   "Brandt walk 8/18 → 2642 (heaters quote issued 8/31 is past the 14-day lookahead)");
 eq(W.pickQuote({ walkDate: "2026-09-20", quotes: brandtQuotes, jobs: brandtJobs }), { result: "existing_job", jobId: 1430, openQuoteIds: [3198] },
   "a later walk at a house with an active job lands on the job; the open add-on quote rides along (Pierce #1277 rule)");
+// Whitaker Farms 27 (missed 2026-10-06): the floor box pre-job #1348 is in
+// Progress before the redline walk. Koy: floor outlet jobs done before a
+// redline walk are disregarded — the walk belongs to main quote 2443.
+const whitakerQuotes = [
+  { ID: 2698, Name: "3/26/26 - Concrete Floor Boxes", Stage: "Approved", DateIssued: "2026-03-26", IsClosed: true, JobNo: 1348, LinkedJobID: null },
+  { ID: 2618, Name: "Temp Pedestal - Whitaker Farms 27", Stage: "Approved", DateIssued: "2026-02-27", IsClosed: true, JobNo: 1283, LinkedJobID: null },
+  { ID: 2443, Name: "Whitaker Farms 27", Stage: "Approved", DateIssued: "2026-01-07", IsClosed: false, JobNo: null, LinkedJobID: null },
+];
+const whitakerJobs = [
+  { ID: 1348, Name: "3/26/26 - Concrete Floor Boxes", Stage: "Progress", DateIssued: "2026-04-13", ConvertedFrom: { ID: 2698, Type: "Quote", Date: "2026-04-13T11:30:55-06:00" } },
+  { ID: 1283, Name: "Temp Pedestal - Whitaker Farms 27", Stage: "Invoiced", DateIssued: "2026-03-02", ConvertedFrom: { ID: 2618, Type: "Quote", Date: "2026-03-02T08:13:19-07:00" } },
+];
+eq(W.pickQuote({ walkDate: "2026-10-09", quotes: whitakerQuotes, jobs: whitakerJobs, now: "2026-10-06" }), { result: "quote", quoteId: 2443 },
+  "Whitaker walk 10/9 → 2443 (the in-progress floor box job is not the house's job)");
+eq(W.pickQuote({ walkDate: "2026-05-01", quotes: [
+  { ID: 5, Name: "Smith Residence", Stage: "Approved", DateIssued: "2026-03-01", IsClosed: false },
+  { ID: 6, Name: "Floor Outlets", Stage: "Approved", DateIssued: "2026-04-01", IsClosed: false }], jobs: [] }),
+  { result: "quote", quoteId: 5 }, "an open floor outlet quote is not a rival to the main quote");
+eq(W.pickQuote({ walkDate: "2026-05-01", quotes: [], jobs: [
+  { ID: 7, Name: "Whitaker farms 27 floor boxes", Stage: "Progress", DateIssued: "2026-04-01" }] }),
+  { result: "none" }, "a floor box job alone is not an existing job");
+
 eq(W.pickQuote({ walkDate: "2026-08-18", quotes: brandtQuotes, jobs: brandtJobs, now: "2026-08-18" }).quoteId, 2642,
   "live mode: now caps the lookahead");
 eq(W.pickQuote({ walkDate: "2026-09-01", quotes: [
