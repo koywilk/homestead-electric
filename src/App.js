@@ -35488,6 +35488,36 @@ function commercialTasks(job, tasks) {
     open.forEach(r => { const ps = parseAnyDate(r.promisedShip); if (ps && ps.getTime() < Date.now()) tasks.push({ ...base, id: `${job.id}_comm_gearlate_${r.id || r.item}`, route: "commstart", color: C.red, title: `Gear late: ${r.item || "item"} on ${job.name || "Untitled"}`, desc: `Promised ${r.promisedShip}, not delivered`, dueDate: r.promisedShip }); });
   }
 }
+// v517 (Koy, 2026-10-07: "scheduling and job start POs need to be more accurate and visible …
+// it would be nice to see the date it needs"): the scheduling / Start PO rows used to read
+// roughNeedsByStart / roughNeedsHardDate, which no screen writes — the crew-needs modal and the
+// Crew Planner keep the target start in roughStatusDate, the window end in roughNeedsByEnd and
+// the hard flag in roughNeedsSchedHard. Read those, and say the date in plain words.
+const _schedDow = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function schedDateWords(str) { const d = str ? parseAnyDate(str) : null; if (!d) return ""; return `${_schedDow[d.getDay()]} ${d.getMonth()+1}/${d.getDate()}`; }
+function schedDaysWords(str) {
+  const d = str ? parseAnyDate(str) : null; if (!d) return "";
+  d.setHours(0,0,0,0); const t = new Date(); t.setHours(0,0,0,0);
+  const n = Math.round((d - t) / 86400000);
+  if (n === 0) return "today"; if (n === 1) return "tomorrow"; if (n === -1) return "yesterday";
+  return n > 0 ? `in ${n} days` : `${-n} days past`;
+}
+function schedWindow(job, phase) {
+  const hard = !!(job[phase+"NeedsSchedHard"] || job[phase+"NeedsHardDate"]);
+  const start = job[phase+"StatusDate"] || job[phase+"NeedsByStart"] || "";
+  const end = hard ? "" : (job[phase+"NeedsByEnd"] || "");
+  const sw = schedDateWords(start), ew = schedDateWords(end), dw = schedDaysWords(start);
+  const tail = dw ? ` · ${dw}` : "";
+  const label = hard && start ? `Hard date ${sw}${tail}`
+    : start && end ? `Window ${sw} – ${ew}${tail}`
+    : start ? `Target start ${sw}${tail}`
+    : "";
+  const P = phase === "rough" ? "Rough" : "Finish";
+  return { hard, start, end, label,
+    schedDesc: label ? `Needs a crew — ${label}` : `${P} start date confirmed — no date on the job yet, set it on the job card`,
+    poDesc: start ? `Materials for ${phase} start ${sw}${tail}` : `Materials for ${phase} start — no date on the job yet`,
+    titleDate: sw ? ` · ${sw}` : "" };
+}
 function computeTasks(jobs, opts) {
   const unassignedOwner = (opts && opts.unassignedOwner !== undefined) ? opts.unassignedOwner : _taskOwnerFallback;
   const tasks = [];
@@ -35537,32 +35567,27 @@ function computeTasks(jobs, opts) {
       });
     }
     if(rs === "date_confirmed") {
-      const rHard = job.roughNeedsHardDate;
-      const rStart = job.roughNeedsByStart||"";
-      const rEnd   = job.roughNeedsByEnd||"";
-      const rWindowLabel = rHard
-        ? (rStart ? `Hard date: ${rStart}` : "")
-        : (rStart||rEnd) ? `Window: ${rStart}${rEnd?" – "+rEnd:""}` : "";
-      // Use start of window as dueDate for sorting
+      const rW = schedWindow(job, "rough");
+      const rHard = rW.hard, rStart = rW.start, rEnd = rW.end, rWindowLabel = rW.label;
       const rDueDate = rStart || "";
       tasks.push({
         id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "rough", foreman,
-        title: "Schedule Rough",
+        title: "Schedule Rough" + rW.titleDate,
         needsHardDate: rHard, needsByStart: rStart, needsByEnd: rEnd,
         windowLabel: rWindowLabel,
         dueDate: rDueDate,
-        desc: rWindowLabel || "Start date confirmed — needs to be scheduled",
+        desc: rW.schedDesc,
         color: C.rough, cleared: false,
       });
       tasks.push({
         id: job.id+"_rough_po", jobId: job.id, jobName: job.name,
         type: "auto", category: "po", foreman,
-        title: "Order Job Start PO",
+        title: "Order Job Start PO — Rough" + rW.titleDate,
         needsHardDate: rHard, needsByStart: rStart, needsByEnd: rEnd,
         windowLabel: rWindowLabel,
         dueDate: rDueDate,
-        desc: rWindowLabel || "Order materials PO for rough start",
+        desc: rW.poDesc,
         color: "#6A5E97", cleared: false,
       });
     }
@@ -35599,31 +35624,27 @@ function computeTasks(jobs, opts) {
     }
     // v429: removed — Koy gets finish dates when they come (no nag).
     if(fs === "date_confirmed") {
-      const fHard = job.finishNeedsHardDate;
-      const fStart = job.finishNeedsByStart||"";
-      const fEnd   = job.finishNeedsByEnd||"";
-      const fWindowLabel = fHard
-        ? (fStart ? `Hard date: ${fStart}` : "")
-        : (fStart||fEnd) ? `Window: ${fStart}${fEnd?" – "+fEnd:""}` : "";
+      const fW = schedWindow(job, "finish");
+      const fHard = fW.hard, fStart = fW.start, fEnd = fW.end, fWindowLabel = fW.label;
       const fDueDate = fStart || "";
       tasks.push({
         id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "finish", foreman,
-        title: "Schedule Finish",
+        title: "Schedule Finish" + fW.titleDate,
         needsHardDate: fHard, needsByStart: fStart, needsByEnd: fEnd,
         windowLabel: fWindowLabel,
         dueDate: fDueDate,
-        desc: fWindowLabel || "Start date confirmed — needs to be scheduled",
+        desc: fW.schedDesc,
         color: C.finish, cleared: false,
       });
       tasks.push({
         id: job.id+"_finish_po", jobId: job.id, jobName: job.name,
         type: "auto", category: "po", foreman,
-        title: "Order Job Start PO",
+        title: "Order Job Start PO — Finish" + fW.titleDate,
         needsHardDate: fHard, needsByStart: fStart, needsByEnd: fEnd,
         windowLabel: fWindowLabel,
         dueDate: fDueDate,
-        desc: fWindowLabel || "Order materials PO for finish start",
+        desc: fW.poDesc,
         color: "#6A5E97", cleared: false,
       });
     }
@@ -52865,7 +52886,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-07 · App SW version: v516
+**Last manifest update:** 2026-10-07 · App SW version: v517
 
 ---
 
@@ -52910,6 +52931,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Panelized Lighting — a stale copy on another device can no longer roll the loads list back** · 'shipped 2026-09-30' · 'SW v471' · Miller Residence #1438, twice: 26 loads snapped back to their import names and lost their LCP / Mod / Zone, a removed load came back, a load just imported and placed vanished, one landed in the wrong zone, and the inbox then offered *Update 26 from FieldInk*. Not FieldInk, not new load ids (imports keep 'fieldLoadId' and 'Update from FieldInk' patches rows in place; zones live on the load as 'assign', not on modules): it was a whole-object rollback. Every Panelized Lighting write ships the ENTIRE 'panelizedLighting' object through 'saveJob''s three-way merge, and that merge's fast path ("the server still equals my baseline → write my copy verbatim") is only safe while the merge baseline is never fresher than the copy on screen (the v312 invariant). Two paths broke it: JobDetail skipped its own "clean" save echo even when that echo carried another device's work that landed during the in-flight window (the jobs listener holds the selected job still while a save is pending, so the tab's own echo is the first snapshot that gets through), and the listener's 2026-08-09 own-echo exception advanced the whole baseline while a second save was already pending. One tap from that copy then wrote the old list verbatim: renames reverted, the removed load counted as "added here", the load imported elsewhere counted as "deleted here". **Fix (all copies, not just panels):** (1) a clean own echo is skipped only when it is content-identical to the local copy ('jobContentEquals'; meta stamps ignored) — otherwise it is adopted; (2) while a save is in flight the baseline takes from a snapshot only the keys the local copy already holds ('baselineAdvanceKeys'), so it can never describe content the screen lacks; (3) after a write that rescued another device's changes, 'saveJob' re-seeds the local copy from what it actually wrote as soon as nothing is pending ('_merged' echo the tab adopts), so convergence no longer depends on echo timing; (4) a tripwire: 'panelizedLighting.plRev' is bumped by the client on every panel write (JobDetail 'u()', the Lutron hub toggle) and 'plWriteIsStale' refuses a write whose rev is not past the baseline's (or, with no baseline, the server's) — the server's copy stands, the screen refreshes, a toast asks to redo the one change, and 'console.error' says so. New prebuild gate 'scripts/panel-loads-merge-test.js' runs the real merge and the helpers (28 checks, including the Miller rollback mechanism and the invariant that prevents it). Guide 'panelizedlighting.html' gained a Quick answer. **Why it won't lose data:** no write path, field shape or loader changed for any job field — the merge, the baseline bookkeeping and the echo adoption only ever move the local copy and its baseline TOGETHER; a rescued write is re-seeded locally from the value the server confirmed; 'plRev' is one additive integer inside 'panelizedLighting' (legacy docs with no rev never trip the guard), and a tripped guard leaves the server's 'panelizedLighting' untouched rather than writing anything.
 
 ## Top-Level Views (Nav Tabs)
+
+- **My Day — Scheduling and Start PO rows say the date they need** · 'shipped 2026-10-07' · 'SW v517' · Koy: *"i need the scheduling and job start pos to be more accurate and visible. i see schedule finish but it would be nice to see the date it needs etc."* **Accuracy:** the Schedule Rough / Schedule Finish and Order Job Start PO auto tasks read 'roughNeedsByStart' / 'roughNeedsHardDate', fields no screen has written — the crew-needs modal and the Crew Planner keep the target start in 'roughStatusDate', the window end in 'roughNeedsByEnd' and the hard flag in 'roughNeedsSchedHard' (same for finish). The task builder now reads those (new 'schedWindow(job, phase)' helper beside 'computeTasks'), so the rows finally carry a due date and sort into Today / This week instead of Later. **Visible:** the title carries the date ('Schedule Finish · Tue 10/14', 'Order Job Start PO — Finish · Tue 10/14'; the PO row says which phase it is for), the sub line says it in words ('Needs a crew — Hard date Tue 10/14 · in 7 days', 'Window Tue 10/14 – Tue 10/21 · in 7 days', 'Target start …', or *no date on the job yet, set it on the job card*; the PO row says 'Materials for finish start Tue 10/14 · in 7 days'), and every auto row on My Day wears a dated chip (DUE OCT 14 / DUE IN 3 DAYS / DUE TODAY / OVERDUE) from the same URGENCY scale the Tasks view uses. The Tasks view's window pill shows the same words. **Why it won't lose data:** read-side only — the task builder reads three fields the job already has and writes nothing; no Firestore write path changed.
 
 - **My Day — New-for-you row no longer crushed; auto tasks take notes** · 'shipped 2026-10-07' · 'SW v516' · Koy, screenshot: *"this needs to be fixed its really hard to read, also need to be able to clear or comment on the return trips etc that are auto added."* The row's narrow / wide layout now follows the My Day column's own width (ResizeObserver on the page root, 820 px) instead of the window, the box itself now spans the full width above the two columns, and any row in the right-hand column wraps like a phone row (text first, buttons underneath) — Koy's second screenshot showed the box living in that 2fr column; the blue chip just says NEW since the row already says who it's from. Auto rows (return trip needs a date, invoice, etc.) gain the same Note button as needs: notes are stored on the job at 'autoNotes[taskId]' (additive map, written through the normal job save) and the latest shows under the row; the ✓ Clear they already had is unchanged. **Why it won't lose data:** one new additive job map; no existing field changed.
 
@@ -60129,7 +60152,9 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             {r.prio === "urgent" && <span title="Marked urgent" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: C.red }}><Icon name="flag" size={9} stroke={2.5} />Urgent</span>}
             {r.prio === "low" && <span title="Low priority" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.muted, border: `1px solid ${C.border}` }}>Low</span>}
             {r.sub.map((s, i) => <span key={i}>{s}</span>)}
-            {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
+            {/* v517: auto rows (scheduling, Start POs, deposits…) wear their date — DUE OCT 14 / DUE IN 3 DAYS / OVERDUE. */}
+            {r.kind === "auto" && r.dueYmd && (() => { const u = URGENCY(r.dueYmd); return u ? <span title={`Due ${r.dueYmd}`} style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.04em", borderRadius: 4, padding: "1px 6px", color: u.color, background: u.bg === "transparent" ? `${u.color}14` : u.bg, border: `1px solid ${u.color}55`, whiteSpace: "nowrap" }}>{u.label}</span> : null; })()}
+            {(r.bucket === "overdue") && !(r.kind === "auto" && r.dueYmd) && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
             {/* v446: who it's on, as a visible control when the viewer can change it. */}
             {r.canReassign && r.onTogglePick && !selectMode && (
               <button onClick={e => { e.stopPropagation(); r.onTogglePick(); }} title="Change who this is on" aria-expanded={!!r.pushOpen}
