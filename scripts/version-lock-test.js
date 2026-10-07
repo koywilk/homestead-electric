@@ -118,7 +118,8 @@ function session({ tabId, version, gate, local, sess, pending = {}, txMode = "ok
     `${helpersSrc}\n${refusalSrc}\n_versionLock.onRefusal = (m) => out.refusal.push(m);\n` +
     `${persistSrc}\n${adoptSrc}\n${saveJobSrc}\n${flushJobSrc}\n${flushSavesSrc}\n` +
     `out.saveJob = saveJob; out.flushJob = flushJob; out.flushSaves = flushSaves; out.adopt = adoptPersistedPending; out.persist = persistPending;` +
-    `out.parseAppBuild = parseAppBuild; out.stampWrite = stampWrite; out.isVersionRefusal = isVersionRefusal; out.isPermissionDenied = isPermissionDenied; out.reportWriteDenied = reportWriteDenied; out.APP_BUILD = APP_BUILD;`,
+    `out.parseAppBuild = parseAppBuild; out.stampWrite = stampWrite; out.isVersionRefusal = isVersionRefusal; out.isPermissionDenied = isPermissionDenied; out.reportWriteDenied = reportWriteDenied; out.APP_BUILD = APP_BUILD;` +
+    `out.lockReduce = lockReduce; out.isHardLock = isHardLock; out.isSoftNewer = isSoftNewer; out.laterFor = laterFor; out.LOCK_LATER_MS = LOCK_LATER_MS;`,
     sandbox
   );
   sandbox.out.refusal = events.refusal;
@@ -308,6 +309,45 @@ function session({ tabId, version, gate, local, sess, pending = {}, txMode = "ok
     check("telemetry logs a warning for a client-shaped write", logs[0] && logs[0][0] === "warn" && logs[0][1].jobId === "j9");
     const none = await VL.noteUnstampedJobWrite(fakeDb, logger, { jobId: "j9", rawBefore: base, rawAfter: { ...base, updated_at: "t6", w: "600.eeeeeeee" } });
     check("stamped write → no telemetry write", none === null && stored["settings/versionLockStats"].days["2026-10-07"].client === 1);
+  }
+
+  console.log("\n8. Popup policy — hard block only on require (Koy 2026-10-06); plain newer is dismissible");
+  {
+    const s = session({ tabId: "t", version: "homestead-v514", gate: 0, local: makeStore(), sess: makeStore() });
+    const T = 1_000_000;
+    // plain newer → soft card, never hard
+    let lock = s.lockReduce(null, "newer", { latest: "homestead-v515" }, T);
+    check("newer → NOT a hard lock", s.isHardLock(lock) === false, lock);
+    check("newer → soft card shown", s.isSoftNewer(lock, null, T) === true);
+    check("newer records since, no hardSince", lock.since === T && !lock.hardSince, lock);
+    // Later hides it…
+    const later = s.laterFor(lock, T);
+    check("Later = 30 minutes, keyed to the dismissed latest", later.until === T + s.LOCK_LATER_MS && later.latest === "homestead-v515", later);
+    check("…card hidden right after Later", s.isSoftNewer(lock, later, T + 1) === false);
+    check("…still hidden at 29 min", s.isSoftNewer(lock, later, T + 29 * 60 * 1000) === false);
+    check("…shows again after 30 min (same build)", s.isSoftNewer(lock, later, T + s.LOCK_LATER_MS) === true);
+    // …or until the next newer build is detected, whichever first
+    const lock2 = s.lockReduce(lock, "newer", { latest: "homestead-v516" }, T + 60 * 1000);
+    check("…shows again at once when a NEWER build (v516) is detected, inside the 30 min", s.isSoftNewer(lock2, later, T + 61 * 1000) === true);
+    check("newer never becomes hard on its own", s.isHardLock(lock2) === false);
+    // escalation: minBuild raised while the card is up (or dismissed)
+    const esc = s.lockReduce(lock2, "gate", { minBuild: 600 }, T + 120 * 1000);
+    check("newer → gate (minBuild 600 > build 514) → HARD, even after Later", s.isHardLock(esc) === true && s.isSoftNewer(esc, later, T + 121 * 1000) === false, esc);
+    check("escalation stamps hardSince at the raise (typing grace runs from here, not from the soft raise)", esc.hardSince === T + 120 * 1000 && esc.since === T, esc);
+    const notBelow = s.lockReduce(lock2, "gate", { minBuild: 514 }, T);
+    check("gate at or below this build is not hard (lock stays soft)", s.isHardLock(notBelow) === false && s.isSoftNewer(notBelow, null, T) === true);
+    const killed = s.lockReduce(esc, "gate", { minBuild: 0 }, T + 200 * 1000);
+    check("kill switch (minBuild 0) after a gate raise → hard lock released", s.isHardLock(killed) === false, killed);
+    // the three hard reasons
+    check("refused → HARD", s.isHardLock(s.lockReduce(null, "refused", { minBuild: 600 }, T)) === true);
+    check("forced (Force Update All Devices) → HARD", s.isHardLock(s.lockReduce(null, "forced", {}, T)) === true);
+    check("gate above build → HARD", s.isHardLock(s.lockReduce(null, "gate", { minBuild: 515 }, T)) === true);
+    check("hard reasons stay hard regardless of Later", s.isSoftNewer(s.lockReduce(lock, "forced", {}, T), later, T) === false);
+    check("hardSince is set once, at the first hard raise", (() => { const a = s.lockReduce(null, "refused", {}, 5); const b = s.lockReduce(a, "forced", {}, 9); return a.hardSince === 5 && b.hardSince === 5; })());
+    check("dev build (0) is never gate-locked by the helper's default, only by an explicit build", s.isHardLock({ gate: 600 }, 0) === true && s.isHardLock({ gate: 600 }, 700) === false);
+    // the App wires the policy, not a bespoke condition
+    check("App renders the soft card from isSoftNewer and the hard overlay from isHardLock", /const hardLock = isHardLock\(lock\)/.test(src) && /const softNewer = isSoftNewer\(lock, lockLater\)/.test(src) && /data-he-lock="newer"/.test(src));
+    check("the grace effect is keyed to the HARD lock (not the soft card)", /if \(!hardLock\) \{ setLockGraceBar\(false\); return; \}/.test(src) && /\}, \[hardLock\]\);/.test(src));
   }
 
   console.log("");

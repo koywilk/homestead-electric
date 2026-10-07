@@ -239,6 +239,33 @@ const isPermissionDenied = (e) => !!e && (
   /permission[-_ ]denied|insufficient permissions/i.test(String((e && e.message) || "")));
 const isVersionRefusal = (e, minBuild, appBuild = APP_BUILD) =>
   isPermissionDenied(e) && Number.isFinite(Number(minBuild)) && Number(minBuild) > appBuild;
+// Popup policy (Koy, 2026-10-06: "hard block only on require"). The lock
+// object collects every raise: { newer, latest, gate, refused, forced, since,
+// hardSince }. Pure so scripts/version-lock-test.js can drive the sequences.
+//   HARD (full screen, no close, typing grace, flush, reload, loop guard):
+//     gate     this build is below appGate/version.minBuild
+//     refused  a save came back as a version refusal
+//     forced   Settings → Force Update All Devices (an explicit office command)
+//   SOFT (dismissible card, never blocks): newer — a newer bundle exists but
+//     nothing is required. Idle phones still reload silently; mid-task gets
+//     "Update now / Later". Later hides it until the next newer build is
+//     detected or 30 minutes pass, whichever comes first.
+//   A minBuild raise turns an open soft card into the hard block at once.
+const LOCK_LATER_MS = 30 * 60 * 1000;
+const LOCK_HARD_REASONS = ["gate", "refused", "forced"];
+const isHardLock = (lock, appBuild = APP_BUILD) =>
+  !!lock && (!!lock.refused || !!lock.forced || (lock.gate != null && Number(lock.gate) > appBuild));
+const lockReduce = (prev, reason, extra = {}, now = Date.now()) => {
+  const next = { ...(prev || { since: now }), ...extra };
+  if (reason === "gate") next.gate = Number.isFinite(Number(extra.minBuild)) ? Number(extra.minBuild) : 0;
+  else next[reason] = true;
+  if (LOCK_HARD_REASONS.includes(reason) && !next.hardSince && isHardLock(next)) next.hardSince = now;
+  return next;
+};
+const isSoftNewer = (lock, later, now = Date.now(), appBuild = APP_BUILD) =>
+  !!lock && !!lock.newer && !isHardLock(lock, appBuild) &&
+  !(later && later.latest === (lock.latest || null) && now < later.until);
+const laterFor = (lock, now = Date.now()) => ({ latest: (lock && lock.latest) || null, until: now + LOCK_LATER_MS });
 // VERSION_LOCK_HELPERS_END
 // App() registers the popup here; write paths outside App (public punch page,
 // time-off requests) report through the same funnel.
@@ -64263,13 +64290,21 @@ function App() {
   const LOCK_RETRY_KEY = "he_update_retries";
   const LOCK_HANDOFF_KEY = "he_pending_handoff";
   const LOCK_TYPING_GRACE_MS = 5 * 60 * 1000;
-  const [lock, setLock] = useState(null);           // null | { newer, gate, refused, forced, minBuild, since }
+  const [lock, setLock] = useState(null);           // null | { newer, latest, gate, refused, forced, minBuild, since, hardSince }
   const [lockPhase, setLockPhase] = useState("wait"); // wait | block | saving | retry | stuck
   const [lockGraceBar, setLockGraceBar] = useState(false);
+  const [lockLater, setLockLater] = useState(null);   // { latest, until } — "Later" on the soft card
   const lockRef = useRef(null); lockRef.current = lock;
-  const lockNeeded = !!lock && (lock.newer || lock.refused || lock.forced || (lock.gate != null && lock.gate > APP_BUILD));
-  const requireUpdate = (reason, extra = {}) => {
-    setLock(prev => ({ ...(prev || { since: Date.now() }), ...extra, [reason]: reason === "gate" ? (extra.minBuild ?? 0) : true }));
+  // Koy 2026-10-06, "hard block only on require": gate / refused / forced are
+  // the hard block; a plain newer build is a dismissible card (isSoftNewer).
+  const hardLock = isHardLock(lock);
+  const softNewer = isSoftNewer(lock, lockLater);
+  const requireUpdate = (reason, extra = {}) => { setLock(prev => lockReduce(prev, reason, extra)); };
+  const lockLaterTap = () => {
+    const l = laterFor(lockRef.current);
+    setLockLater(l);
+    // Re-evaluate when the 30 minutes are up (a newer `latest` re-shows it sooner).
+    setTimeout(() => setLockLater(cur => (cur && cur.until <= Date.now()) ? null : cur), LOCK_LATER_MS + 100);
   };
   const cacheBustReload = () => {
     try {
@@ -64442,15 +64477,22 @@ function App() {
     } catch (e) {}
     _versionLock.onRefusal = (minBuild) => requireUpdate("refused", { minBuild });
     forceUpdateRef.current = () => requireUpdate("forced");
-    return () => { try { unsub && unsub(); } catch (e) {} _versionLock.onRefusal = null; forceUpdateRef.current = null; };
+    // Console / headless-check hook (same trust level as __HE_RESTORE: anyone
+    // with DevTools could call setState anyway). Drives the raise paths that
+    // need Firestore (gate, refused, forced) in the offline render check.
+    try { window.__HE_VERSION_LOCK = { require: (reason, extra) => requireUpdate(reason, extra || {}), state: () => lockRef.current, build: APP_BUILD }; } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} _versionLock.onRefusal = null; forceUpdateRef.current = null; try { delete window.__HE_VERSION_LOCK; } catch (e) {} };
   }, []); // eslint-disable-line
 
   // Typing grace: while a field is focused (and for at most 5 minutes) the
   // lock shows as a red bar instead of the full block, so a form that only
   // saves on its own Save button (new CO, new task…) can be finished first.
   useEffect(() => {
-    if (!lockNeeded) { setLockGraceBar(false); return; }
-    const since = (lockRef.current && lockRef.current.since) || Date.now();
+    if (!hardLock) { setLockGraceBar(false); return; }
+    // Grace is measured from when the HARD lock began (hardSince), not from an
+    // earlier soft "newer" raise — escalation from the card must still give
+    // the typist their five minutes.
+    const since = (lockRef.current && (lockRef.current.hardSince || lockRef.current.since)) || Date.now();
     const tick = () => {
       const typing = isTypingFocused() && (Date.now() - since) < LOCK_TYPING_GRACE_MS;
       setLockGraceBar(typing);
@@ -64463,7 +64505,7 @@ function App() {
     const id = setInterval(tick, 1000);
     document.addEventListener("focusout", tick);
     return () => { clearInterval(id); document.removeEventListener("focusout", tick); };
-  }, [lockNeeded]); // eslint-disable-line
+  }, [hardLock]); // eslint-disable-line
 
 
   // Update a job everywhere it lives: jobs list, selected (if open), Firestore.
@@ -65475,14 +65517,60 @@ function App() {
           field, ≤ 5 min) a red top bar shows instead so a half-filled form
           can be finished and saved first. Phases: block / saving / retry /
           stuck — see the Always-current block. */}
-      {lockNeeded && lockGraceBar && lockPhase === "wait" && (
+      {/* SOFT: a newer build exists but nothing is required (Koy 2026-10-06:
+          "hard block only on require"). Bottom card, never blocks, Later hides
+          it ≤ 30 min or until the next newer build. Idle phones still reload
+          silently. A minBuild raise swaps this for the hard block at once. */}
+      {softNewer && !hardLock && (
+        <div data-he-lock="newer" data-he-phase={lockPhase} role="status"
+          style={{position:"fixed", left:12, right:12, bottom:"calc(16px + env(safe-area-inset-bottom, 0px))", zIndex:9000,
+            background:"#fff", color:C.text, borderRadius:14, padding:"14px 16px", margin:"0 auto", maxWidth:420,
+            boxShadow:"0 12px 36px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12)", border:`1px solid ${C.border}`,
+            display:"flex", alignItems:"center", gap:12, fontFamily:"inherit"}}>
+          <div style={{width:38, height:38, borderRadius:"50%", background:"#EAEEF6", color:C.blue, display:"inline-flex",
+            alignItems:"center", justifyContent:"center", flexShrink:0}}>
+            <Icon name="rotateCw" size={18} stroke={2.25}/>
+          </div>
+          <div style={{flex:1, minWidth:0}}>
+            {(lockPhase === "wait" || lockPhase === "block") && (<>
+              <div style={{fontWeight:800, fontSize:14}}>A new version is ready</div>
+              <div style={{fontSize:11, color:C.dim, marginTop:2}}>Update when you're at a good stopping point. Your edits are saved first.</div>
+            </>)}
+            {lockPhase === "saving" && <div style={{fontWeight:800, fontSize:14}}>Saving your changes…</div>}
+            {lockPhase === "retry" && (<>
+              <div style={{fontWeight:800, fontSize:14}}>Updating… one moment</div>
+              <div style={{fontSize:11, color:C.dim, marginTop:2}}>The new version is still arriving. Trying again shortly.</div>
+            </>)}
+            {lockPhase === "stuck" && (<>
+              <div style={{fontWeight:800, fontSize:14}}>Close and reopen the app to update</div>
+              <div style={{fontSize:11, color:C.dim, marginTop:2}}>This copy would not update on its own. You can keep working until then.</div>
+            </>)}
+          </div>
+          {(lockPhase === "wait" || lockPhase === "block") && (
+            <div style={{display:"flex", flexDirection:"column", gap:6, flexShrink:0}}>
+              <button type="button" onClick={() => updateNowRef.current()}
+                style={{padding:"9px 14px", borderRadius:10, border:"none", cursor:"pointer", background:C.blue, color:"#fff",
+                  fontFamily:"inherit", fontWeight:800, fontSize:13, boxShadow:"0 4px 14px rgba(59,91,165,0.35)"}}>
+                Update now
+              </button>
+              <button type="button" onClick={lockLaterTap}
+                style={{padding:"7px 14px", borderRadius:10, border:`1px solid ${C.border}`, cursor:"pointer", background:"transparent",
+                  color:C.dim, fontFamily:"inherit", fontWeight:700, fontSize:12}}>
+                Later
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* HARD: gate / refused / forced. */}
+      {hardLock && lockGraceBar && lockPhase === "wait" && (
         <div data-he-lock="grace" style={{position:"fixed", top:0, left:0, right:0, zIndex:99990,
           background:C.red, color:"#fff", padding:"10px 16px", fontSize:13, fontWeight:700,
           textAlign:"center", boxShadow:"0 2px 10px rgba(0,0,0,0.25)", paddingTop:"calc(10px + env(safe-area-inset-top, 0px))"}}>
           Update needed. Finish what you're typing and save.
         </div>
       )}
-      {lockNeeded && !(lockGraceBar && lockPhase === "wait") && (
+      {hardLock && !(lockGraceBar && lockPhase === "wait") && (
         <div data-he-lock={lockPhase === "wait" ? "block" : lockPhase} role="dialog" aria-modal="true"
           style={{position:"fixed", inset:0, zIndex:99990, background:"rgba(20,24,33,0.78)",
             backdropFilter:"blur(3px)", WebkitBackdropFilter:"blur(3px)",
@@ -65498,7 +65586,9 @@ function App() {
               <div style={{fontSize:13, color:C.dim, marginTop:10, lineHeight:1.5}}>
                 {lock && lock.refused
                   ? "This copy of the app is too old to save. Your edits are kept on this device and will be sent after the update."
-                  : "Everyone needs to be on the same version so saves can't collide. Your edits are saved first."}
+                  : lock && lock.gate != null && lock.gate > APP_BUILD
+                    ? `The office now requires v${lock.gate} or newer. This copy can't save until it updates — your edits are saved first.`
+                    : "The office asked every device to update now so saves can't collide. Your edits are saved first."}
               </div>
               <button type="button" onClick={() => updateNowRef.current()}
                 style={{marginTop:20, width:"100%", padding:"14px 18px", borderRadius:12, border:"none", cursor:"pointer",

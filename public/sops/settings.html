@@ -19,12 +19,19 @@
 <h1>Settings</h1>
 <p>The office screen. Most sections start collapsed; tap a title to open it. Admin-only sections (Fleet Notification Health, Devices, App Usage, backups) only show for admins.</p>
 
-<h2>The "Update now" popup (everyone sees this one)</h2>
-<p>When a new version of the app is deployed, phones that are sitting idle reload themselves quietly. Anyone in the middle of something sees a full-screen <b>Update now</b> popup instead. It cannot be closed: everyone has to be on the same version so saves can't collide, and an old copy of the app is not allowed to save once the lock is on.</p>
+<h2>"A new version is ready" (everyone sees this one)</h2>
+<p>When a new version of the app is deployed, phones that are sitting idle reload themselves quietly. Anyone in the middle of something sees a small card at the bottom — <b>A new version is ready</b> — with <b>Update now</b> and <b>Later</b>. It never blocks you.</p>
 <ul>
-  <li>If you are typing in a box, you get a red bar at the top — <i>"Update needed. Finish what you're typing and save."</i> — instead of the popup, for up to 5 minutes. Finish, save, and the popup appears when you leave the box.</li>
-  <li>Tapping <b>Update now</b> first saves everything you changed ("Saving your changes…"), then reloads. A half-typed punch item is saved too.</li>
-  <li>If the popup says <b>"This copy of the app is too old to save"</b>, your edits were kept on the phone and are sent automatically after the update. Nothing is thrown away.</li>
+  <li><b>Update now</b> first saves everything you changed ("Saving your changes…"), then reloads. A half-typed punch item is saved too.</li>
+  <li><b>Later</b> hides the card for 30 minutes, or until the next new version comes out, whichever is first. Then it shows again. If the phone goes idle in the meantime it reloads on its own.</li>
+</ul>
+
+<h2>The full-screen "Update now" block (only when the office requires it)</h2>
+<p>This one cannot be closed. It appears in three cases only: the office tapped <b>Require v___</b> and this copy is older than that version; a save was refused because this copy is too old; or the office tapped <b>Force Update All Devices</b>.</p>
+<ul>
+  <li>If you are typing in a box, you get a red bar at the top — <i>"Update needed. Finish what you're typing and save."</i> — instead of the block, for up to 5 minutes. Finish, save, and the block appears when you leave the box.</li>
+  <li>Tapping <b>Update now</b> saves first, then reloads — same as the card.</li>
+  <li>If it says <b>"This copy of the app is too old to save"</b>, your edits were kept on the phone and are sent automatically after the update. Nothing is thrown away.</li>
   <li>If it says <b>"Close and reopen the app"</b>, the phone could not pick up the new version on its own — close it fully (swipe it away) and open it again.</li>
 </ul>
 
