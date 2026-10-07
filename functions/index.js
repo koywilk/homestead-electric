@@ -1991,8 +1991,9 @@ exports.restoreFromLedger = functions.https.onCall(async (data) => {
 // SCHEDULED — Daily 7am Mountain Time
 // ─────────────────────────────────────────────────────────────
 
-exports.dailyMorningChecks = functions.pubsub
-  .schedule("0 7 * * *")
+exports.dailyMorningChecks = functions
+  .runWith({ memory: "512MB" })
+  .pubsub.schedule("0 7 * * *")
   .timeZone(TZ)
   .onRun(async () => {
     const snap = await db.collection("jobs").get();
@@ -2181,8 +2182,9 @@ exports.sendTestHuddleNotification = functions.https.onCall(async (data) => {
 // CO tracker. Read-only scan; the new-CO nudge above handles the immediate
 // "just created" case. ADDITIVE: new export only.
 // ─────────────────────────────────────────────────────────────
-exports.dailyCoChase = functions.pubsub
-  .schedule("0 8 * * 1-5")
+exports.dailyCoChase = functions
+  .runWith({ memory: "512MB" })
+  .pubsub.schedule("0 8 * * 1-5")
   .timeZone(TZ)
   .onRun(async () => {
     const snap = await db.collection("jobs").get();
@@ -2371,8 +2373,9 @@ exports.dailyStaleJobChase = functions.pubsub
 
 // 2) Daily-update missing — active job with a foreman but no daily update logged
 // TODAY → that foreman. 4:45pm weekdays (after the 4:30 lead reminder). Digest.
-exports.dailyUpdateMissing = functions.pubsub
-  .schedule("45 16 * * 1-5")
+exports.dailyUpdateMissing = functions
+  .runWith({ memory: "512MB" })
+  .pubsub.schedule("45 16 * * 1-5")
   .timeZone(TZ)
   .onRun(async () => {
     const users = await getUsers();
