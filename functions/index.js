@@ -69,6 +69,32 @@ async function requireAdmin(data) {
   return user;
 }
 
+// ─── Version lock (08-Specs/Version Lock Spec.md) ────────────────────────────
+// appGate/version { minBuild, setBy, setAt, note } is the ONLY input to the
+// Phase 2 rules' stampOk(): a client write whose app_build is below minBuild
+// is refused. The doc is client-readable, never client-writable (rules), so it
+// can only move through this callable — requireAdmin = the live admin PIN, the
+// same gate as the GC-portal office callables. minBuild 0 is the kill switch.
+// NEVER raise it automatically on deploy: a Vercel rollback would put the
+// whole fleet below the minimum (rollback = lower this FIRST, then roll back).
+const VL = require("./versionLock");
+exports.setMinBuild = functions.https.onCall(async (data) => {
+  const user = await requireAdmin(data);
+  const minBuild = Number(data && data.minBuild);
+  if (!Number.isInteger(minBuild) || minBuild < 0 || minBuild > 999999) {
+    throw new functions.https.HttpsError("invalid-argument", "minBuild must be a whole number (0 turns the lock off).");
+  }
+  const note = String((data && data.note) || "").trim().slice(0, 200);
+  const ref = db.doc("appGate/version");
+  const prevSnap = await ref.get();
+  const prev = prevSnap.exists ? (prevSnap.data() || {}) : {};
+  const setAt = new Date().toISOString();
+  const next = { minBuild, setBy: user.name, setAt, note, prevMinBuild: Number.isInteger(prev.minBuild) ? prev.minBuild : null };
+  await ref.set(next, { merge: false });
+  functions.logger.info("[versionLock] minBuild set", { minBuild, prevMinBuild: next.prevMinBuild, by: user.name, note });
+  return { ok: true, minBuild, setBy: user.name, setAt };
+});
+
 // ─── Timezone for scheduled functions ────────────────────────
 const TZ = "America/Denver"; // Mountain Time
 
@@ -137,58 +163,58 @@ function coordUserOf(users, foremanName) {
   return (users || []).find(u => (u.name || "").toLowerCase() === String(fm.coordinator).toLowerCase()) || null;
 }
 
-// ── In-app notification inbox ────────────────────────────────────────────────
-// Every nudge is ALSO written to notifications/{userKey}/items so the app can
-// show a bell inbox that never depends on FCM tokens. Push stays best-effort;
-// the inbox is the guarantee. userKey = user.id, falling back to a name slug
-// for legacy users without ids (the client derives the same key from identity).
+// ── Notification delivery: inbox first, push on top ─────────────────────────
+// FCM reliability pass (2026-10-04). The inbox record in
+// notifications/{userKey}/items IS the notification; push is only the attention
+// layer. The pure half (ids, payload, error classes, retry math) lives in
+// functions/notifyDelivery.js and is unit-tested in the prebuild chain.
+//
+// What changed vs the old deliver():
+//  - The inbox write used to run IN PARALLEL with the push and its failure was a
+//    warn log. Now the record (plus a pushQueue lease) is committed FIRST, with
+//    retries; only then is the push attempted.
+//  - Every push outcome is written back onto the record (delivery.*) and logged
+//    as one structured "[notify] delivery" line — no more swallowed errors.
+//  - Transient FCM failures go back on pushQueue and pushRetrySweep re-sends
+//    them with backoff, instead of being dropped after one try.
+//  - One notification = one banner. The old tag (job+section, renotify:false)
+//    made a second event on the same job silently replace the first.
+//  - The inbox doc id is an idempotency key, so a re-fired trigger can't
+//    double-ping anyone.
+// userKey = user.id, falling back to a name slug for legacy users without ids
+// (the client derives the same key from identity).
+const ND = require("./notifyDelivery.js");
+
 const inboxKeyOf = (user) =>
   (user && (user.id || String(user.name || "").trim().toLowerCase().replace(/\s+/g, "_"))) || null;
 
-async function logInboxNotif(user, { title, body, jobId, section, view, needId }) {
-  const key = inboxKeyOf(user);
-  if (!key) return;
-  try {
-    await db.collection("notifications").doc(key).collection("items").add({
-      title:   title   || "",
-      body:    body    || "",
-      jobId:   jobId   || "",
-      section: section || "",
-      view:    view    || "",
-      needId:  needId  || "",   // v446: task-loop items open My Day ON this task
-      createdAt: new Date().toISOString(),
-      read: false,
-    });
-  } catch (e) {
-    functions.logger.warn("[inbox] write failed", { user: user && user.name, error: e.message });
+const inboxRef = (userKey, nid) =>
+  db.collection("notifications").doc(userKey).collection("items").doc(nid);
+const queueRef = (userKey, nid) => db.collection("pushQueue").doc(`${userKey}__${nid}`);
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Retry a Firestore write a few times on transient errors. ALREADY_EXISTS (6)
+// and other non-retryable codes are thrown straight back to the caller.
+async function withWriteRetry(fn, label) {
+  const RETRYABLE = new Set([4, 8, 10, 13, 14]); // DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, INTERNAL, UNAVAILABLE
+  let lastErr;
+  for (let i = 0; i < 3; i++) {
+    try { return await fn(); } catch (e) {
+      lastErr = e;
+      if (!RETRYABLE.has(e && e.code)) throw e;
+      functions.logger.warn(`[notify] ${label} write retry`, { attempt: i + 1, code: e.code, error: e.message });
+      await sleep(250 * Math.pow(3, i));
+    }
   }
+  throw lastErr;
 }
 
-// Single delivery chokepoint: inbox write + every device token. Use this for
-// any user-level send so push and inbox can never drift apart.
-async function deliver(user, notif) {
-  if (!user) return;
-  const sends = getTokens(user).map(t => sendFCM(t, notif));
-  sends.push(logInboxNotif(user, notif));
-  await Promise.all(sends);
-}
-
-// deliver() but gated on the recipient's per-person toggle. Used by the wave-2
-// nudges so anyone can mute a category without losing the rest.
-async function deliverIfWanted(user, key, notif) {
-  if (!user || !wantsNotif(user, key)) return;
-  await deliver(user, notif);
-}
-
-// Token error codes that mean the token is permanently dead and should be purged.
-const STALE_TOKEN_CODES = [
-  "messaging/registration-token-not-registered",
-  "messaging/invalid-registration-token",
-  "messaging/mismatched-credential",
-];
-
-/** Remove a single bad token from every user record in settings/users. */
-async function removeStaleToken(token) {
+// Remove dead tokens from settings/users in ONE transaction (the old path ran
+// one transaction per token, in parallel, all contending on the same doc).
+async function removeStaleTokens(tokens) {
+  const dead = Array.from(new Set((tokens || []).filter(Boolean)));
+  if (!dead.length) return;
   try {
     const ref = db.doc("settings/users");
     await db.runTransaction(async (tx) => {
@@ -197,13 +223,13 @@ async function removeStaleToken(token) {
       const cur = snap.data().list || [];
       let changed = false;
       const list = cur.map(u => {
-        const inArray   = (u.fcmTokens || []).includes(token);
-        const isPrimary = u.fcmToken === token;
+        const inArray   = (u.fcmTokens || []).some(t => dead.includes(t));
+        const isPrimary = dead.includes(u.fcmToken);
         if (!inArray && !isPrimary) return u;
         changed = true;
         return {
           ...u,
-          fcmTokens: (u.fcmTokens || []).filter(t => t !== token),
+          fcmTokens: (u.fcmTokens || []).filter(t => !dead.includes(t)),
           fcmToken:  isPrimary ? "" : (u.fcmToken || ""),
         };
       });
@@ -212,99 +238,573 @@ async function removeStaleToken(token) {
       // dropped updated_at/saved_by/device, which silently disarmed the
       // client's saveUsers stale-write guard (remoteTs went null → guard
       // fails open → blind team-list overwrite). tx.update leaves those audit
-      // fields untouched. The transaction also re-reads under lock, so two
-      // concurrent prunes (deliver()'s Promise.all over many dead tokens)
-      // can't clobber each other's removal, and a concurrent team-list save
-      // is merged against rather than lost. Purely additive/removal-only on
-      // the token fields — no team data touched.
+      // fields untouched, and the transaction re-reads under lock so a
+      // concurrent team-list save is merged against rather than lost.
+      // Removal-only on the token fields — no team data touched.
       tx.update(ref, { list });
     });
-    functions.logger.info("Removed stale FCM token", { token: token.slice(0, 20) });
+    functions.logger.info("[notify] removed stale FCM tokens", { count: dead.length, tokens: dead.map(ND.tokenTag) });
   } catch (e) {
-    functions.logger.warn("Failed to remove stale token", { error: e.message });
+    functions.logger.error("[notify] stale-token prune FAILED", { error: e.message, tokens: dead.map(ND.tokenTag) });
   }
 }
 
-async function sendFCM(token, { title, body, jobId, section, view, needId }) {
-  if (!token) return;
-  // Stable tag used for OS-level dedup (Android collapses dup notifications with
-  // the same tag; web push uses it the same way). Without this, the iOS->Android
-  // bridge or a re-fired SW could surface the same notification twice.
-  const tag = jobId ? `job-${jobId}-${section || "general"}` : `homestead-${Date.now()}`;
-  // Deep-link target for the click handler — opens the app at the specific job.
-  const linkPath = jobId
-    ? `/?jobId=${encodeURIComponent(jobId)}${section ? `&section=${encodeURIComponent(section)}` : ""}`
-    : "/";
+// Send one normalized notification to a list of tokens. Never throws.
+async function pushToTokens(tokens, n, meta) {
+  if (!tokens.length) return [];
+  const messages = tokens.map(t => ND.buildMessage(t, n, meta));
   try {
-    // DATA-ONLY payload to prevent duplicate notifications on every device.
-    //
-    // Why: when a payload contains BOTH a top-level `notification` field AND
-    // a `webpush.notification` field (the previous shape), the FCM JS SDK
-    // running inside firebase-messaging-sw.js auto-displays the system-level
-    // notification AND our own `onBackgroundMessage` handler ALSO calls
-    // `self.registration.showNotification(...)`. That's where "two of the
-    // same notification per push" was coming from.
-    //
-    // Going data-only routes ALL display through the SW's onBackgroundMessage
-    // handler, which reads payload.data.{title,body,jobId,section} and shows
-    // exactly one notification. The test-push helper (which already worked
-    // without dupes) uses the same shape — this just brings real pushes in
-    // line. The `tag` we set in the SW (`he-${jobId}-${section}`) still
-    // dedupes back-to-back pushes for the same job+section.
-    //
-    // iOS Safari PWA still works: Apple's web-push gateway routes to the SW
-    // via APNS transport, and `apns-push-type: alert` keeps Apple's gateway
-    // from silently dropping it. The SW renders on iOS too.
-    await messaging.send({
-      token,
-      data: {
-        title:   title   || "",
-        body:    body    || "",
-        jobId:   jobId   || "",
-        section: section || "",
-        view:    view    || "",
-        needId:  needId  || "",   // v446: the SW appends &need=<id> to the ?view=myday deep-link
-        tag,
-        link:    linkPath,
-      },
-      webpush: {
-        headers: { Urgency: "high" },
-      },
-      android: {
-        priority: "high",
-        // collapseKey makes Android replace any pending notification with the
-        // same key instead of stacking — fixes the "2-3 per notification" bug.
-        collapseKey: tag,
-      },
-      apns: {
-        headers: {
-          // REQUIRED for iOS Safari PWA push — without "apns-push-type: alert"
-          // Apple's gateway silently drops the notification. This was the
-          // root cause of "Apple users don't get them anymore."
-          "apns-push-type": "alert",
-          "apns-priority":  "10",
-        },
-        payload: { aps: { contentAvailable: true } },
-      },
-    });
-    functions.logger.info("[sendFCM] sent OK", {
-      token: token.slice(0, 20), title, jobId, section,
-    });
+    const res = await messaging.sendEach(messages);
+    return ND.summarizeResults(tokens, res, null);
   } catch (e) {
-    const isStale = STALE_TOKEN_CODES.some(
-      code => e.code === code || (e.message || "").includes(code)
-    );
-    if (isStale) {
-      functions.logger.warn("[sendFCM] stale token pruned", { token: token.slice(0, 20), code: e.code });
-      await removeStaleToken(token);
-    } else {
-      functions.logger.warn("[sendFCM] send failed", {
-        token: token.slice(0, 20), title, jobId, section,
-        error: e.message, code: e.code,
-      });
-    }
+    // Whole-batch failure (auth, network, quota) — nothing was sent.
+    return ND.summarizeResults(tokens, null, e);
   }
 }
+
+// Push + record for an inbox item that is already persisted. Shared by
+// deliver() (first attempt) and pushRetrySweep (later attempts).
+async function attemptPush({ userKey, nid, n, tokens, attempts, persisted, firstAttemptAt, to, prior = null }) {
+  const t0 = Date.now();
+  const rows = await pushToTokens(tokens, n, { nid, userKey });
+  const roll = ND.rollup(rows, attempts);
+  // A retry only re-sends to the devices that failed transiently. Devices an
+  // earlier attempt already reached still count, so a record never slides from
+  // "partial" to "failed" just because the leftover device stayed down.
+  const priorOk = (prior && Number(prior.okCount)) || 0;
+  if (priorOk > 0 && (roll.status === "failed" || roll.status === "retrying")) roll.status = "partial";
+  const now = new Date();
+
+  const staleTokens = rows.filter(r => !r.ok && r.kind === "stale").map(r => r.token);
+  if (staleTokens.length) await removeStaleTokens(staleTokens);
+
+  const logFields = {
+    to, userKey, nid, category: n.category || "", priority: n.priority,
+    title: n.title.slice(0, 80), jobId: n.jobId, view: n.view,
+    status: roll.status, attempt: attempts, tokens: rows.length, ok: roll.ok,
+    stale: roll.stale, transient: roll.transient, permanent: roll.permanent,
+    errors: rows.filter(r => !r.ok).map(r => `${r.tk}:${r.code}`),
+    persisted, ms: Date.now() - t0,
+  };
+  // One line per send attempt. Severity tracks outcome: ERROR only when no
+  // device was reached and nothing is left to retry (a real push loss — the
+  // inbox still has it); WARN for partial/retrying; INFO for clean sends. A
+  // log-based alert on severity>=ERROR therefore fires on losses, not on a
+  // routine dead token alongside a live one.
+  if (roll.status === "failed") functions.logger.error("[notify] delivery", logFields);
+  else if (roll.status === "sent" || roll.status === "no_tokens") functions.logger.info("[notify] delivery", logFields);
+  else functions.logger.warn("[notify] delivery", logFields);
+
+  if (!persisted) return roll;   // inbox write failed — nothing to record on
+
+  const delivery = {
+    status: roll.status,
+    priority: n.priority,
+    attempts,
+    tokenCount: Math.max(rows.length, (prior && Number(prior.tokenCount)) || 0),
+    okCount: priorOk + roll.ok,
+    failedCount: roll.failed,
+    lastAttemptAt: now.toISOString(),
+    firstAttemptAt: firstAttemptAt || now.toISOString(),
+    // Latest row per device: this attempt's rows replace that device's older row.
+    results: [
+      ...((prior && Array.isArray(prior.results)) ? prior.results.filter(p => !rows.some(r => r.tk === p.tk)) : []),
+      ...ND.publicResults(rows),
+    ].slice(-12),
+  };
+  if (roll.ok > 0) delivery.sentAt = now.toISOString();
+  else if (prior && prior.sentAt) delivery.sentAt = prior.sentAt;
+  try {
+    // A WriteBatch can only be committed once, so each retry builds a fresh one.
+    await withWriteRetry(() => {
+      const batch = db.batch();
+      // Merge-update ONLY the delivery map — read/title/receipts are never
+      // touched, so a "mark read" from the app or a device receipt that lands
+      // a moment earlier can't be overwritten by this record write.
+      batch.set(inboxRef(userKey, nid), { delivery }, { mergeFields: ["delivery"] });
+      if (roll.retryTokens.length) {
+        batch.set(queueRef(userKey, nid), {
+          userKey, nid, attempts, notif: n, tokens: roll.retryTokens,
+          nextAttemptAt: new Date(now.getTime() + roll.nextAttemptMs).toISOString(),
+          createdAt: firstAttemptAt || now.toISOString(),
+          lastError: rows.filter(r => !r.ok).map(r => r.code).join(",").slice(0, 300),
+        });
+      } else {
+        batch.delete(queueRef(userKey, nid));
+      }
+      return batch.commit();
+    }, "delivery-record");
+  } catch (e) {
+    // The push itself already happened; only the bookkeeping failed. The queue
+    // lease (if still there) makes the sweep look at it again.
+    functions.logger.error("[notify] delivery record write FAILED", { userKey, nid, error: e.message });
+  }
+  return roll;
+}
+
+// Single delivery chokepoint for every user-level notification. Returns a small
+// summary ({status, nid, ...}) that callers may ignore.
+// `extra` (announcements, 2026-10-06): additional fields stored on the inbox
+// record only (kind, broadcastId, headline, from, attachments…). Spread FIRST
+// so it can never override the record's own fields (read, delivery, title…).
+async function deliver(user, notif, extra = null) {
+  if (!user) {
+    functions.logger.warn("[notify] no recipient — not delivered", { title: notif && notif.title });
+    return { status: "no_recipient" };
+  }
+  const userKey = inboxKeyOf(user);
+  const n = ND.normalizeNotif(notif);
+  const to = user.name || userKey || "?";
+  if (!userKey) {
+    functions.logger.error("[notify] recipient has no inbox key — not delivered", { title: n.title });
+    return { status: "no_recipient" };
+  }
+  const nowMs = Date.now();
+  const nid = ND.notifDocId(userKey, n, nowMs);
+  const createdAt = new Date(nowMs).toISOString();
+  const tokens = getTokens(user);
+
+  // 1. Persist — the record, plus a push lease, in one atomic batch.
+  let persisted = false;
+  try {
+    await withWriteRetry(() => {
+      const batch = db.batch();
+      batch.create(inboxRef(userKey, nid), {
+        ...(extra && typeof extra === "object" ? extra : {}),
+        // Same fields the bell has always read (title/body/jobId/section/view/
+        // needId/createdAt/read) — additive only.
+        title: n.title, body: n.body, jobId: n.jobId, section: n.section,
+        view: n.view, needId: n.needId,
+        category: n.category, priority: n.priority,
+        link: ND.deepLinkOf(n, nid),
+        createdAt,
+        read: false,
+        delivery: { status: tokens.length ? "pending" : "no_tokens", priority: n.priority,
+          attempts: 0, tokenCount: tokens.length },
+      });
+      if (tokens.length) {
+        batch.set(queueRef(userKey, nid), {
+          userKey, nid, attempts: 0, notif: n, tokens: null,   // null = "all current tokens"
+          nextAttemptAt: new Date(nowMs + ND.LEASE_MS).toISOString(),
+          createdAt, lastError: "",
+        });
+      }
+      return batch.commit();
+    }, "inbox");
+    persisted = true;
+  } catch (e) {
+    if (e && (e.code === 6 || /already exists/i.test(e.message || ""))) {
+      functions.logger.info("[notify] duplicate suppressed (same event already delivered)", { to, userKey, nid, title: n.title.slice(0, 80) });
+      return { status: "duplicate", nid };
+    }
+    // Could not store the record. Still push — a banner is better than nothing —
+    // but this is a real loss of the durable copy, so it logs at ERROR.
+    functions.logger.error("[notify] INBOX WRITE FAILED — push only", { to, userKey, nid, title: n.title, error: e.message, code: e.code });
+  }
+
+  if (!tokens.length) {
+    functions.logger.warn("[notify] delivery", { to, userKey, nid, category: n.category || "", priority: n.priority,
+      title: n.title.slice(0, 80), status: "no_tokens", tokens: 0, persisted });
+    return { status: "no_tokens", nid, persisted };
+  }
+
+  // 2 + 3. Push to every device and record the outcome.
+  const roll = await attemptPush({ userKey, nid, n, tokens, attempts: 1, persisted, firstAttemptAt: createdAt, to });
+  return { ...roll, nid, persisted, retryTokens: undefined };
+}
+
+// deliver() but gated on the recipient's per-person toggle. Used by the wave-2
+// nudges so anyone can mute a category without losing the rest.
+async function deliverIfWanted(user, key, notif) {
+  if (!user) return deliver(null, notif);
+  if (!wantsNotif(user, key)) {
+    functions.logger.info("[notify] muted by recipient pref", { to: user.name, category: key, title: notif && notif.title });
+    return { status: "muted" };
+  }
+  return deliver(user, { category: key, ...notif });
+}
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — pushRetrySweep (every 5 minutes)
+// Re-sends pushes that failed transiently, and pushes whose function died
+// between "record persisted" and "push recorded" (expired lease). The inbox
+// record already exists in both cases; this only retries the attention layer.
+// Gives up after ND.MAX_ATTEMPTS, or once the notification is older than
+// ND.PUSH_STALE_MS (the bell still has it). Single-field query on
+// nextAttemptAt — no composite index needed.
+// ─────────────────────────────────────────────────────────────
+exports.pushRetrySweep = functions.pubsub
+  .schedule("every 5 minutes")
+  .onRun(async () => {
+    const nowIso = new Date().toISOString();
+    const snap = await db.collection("pushQueue").where("nextAttemptAt", "<=", nowIso).limit(100).get();
+    if (snap.empty) return null;
+    const users = await getUsers();
+    let retried = 0, expired = 0, gone = 0;
+    for (const qd of snap.docs) {
+      const q = qd.data() || {};
+      const { userKey, nid } = q;
+      const n = ND.normalizeNotif(q.notif || {});
+      const age = Date.now() - new Date(q.createdAt || 0).getTime();
+      const attemptsDone = Number(q.attempts) || 0;
+      const user = users.find(u => inboxKeyOf(u) === userKey) || null;
+      const itemSnap = await inboxRef(userKey, nid).get().catch(() => null);
+      const markGaveUp = async (status, reason) => {
+        functions.logger.error("[notify] delivery", { to: user && user.name, userKey, nid, title: n.title.slice(0, 80),
+          status, attempt: attemptsDone, reason, lastError: q.lastError || "" });
+        const batch = db.batch();
+        if (itemSnap && itemSnap.exists) {
+          batch.set(inboxRef(userKey, nid), { delivery: { ...(itemSnap.data().delivery || {}), status,
+            gaveUpAt: nowIso, gaveUpReason: reason } }, { mergeFields: ["delivery"] });
+        }
+        batch.delete(qd.ref);
+        await batch.commit().catch(e => functions.logger.error("[notify] sweep record FAILED", { nid, error: e.message }));
+      };
+      if (!itemSnap || !itemSnap.exists) { await qd.ref.delete().catch(() => {}); gone++; continue; }
+      if (itemSnap.data().read) {
+        // They already saw it in the app — ringing the phone now is just noise.
+        await qd.ref.delete().catch(() => {});
+        await inboxRef(userKey, nid).set({ delivery: { ...(itemSnap.data().delivery || {}), status: "read_before_push" } },
+          { mergeFields: ["delivery"] }).catch(() => {});
+        gone++; continue;
+      }
+      if (age > ND.PUSH_STALE_MS) { await markGaveUp("expired", "older than push window — inbox only"); expired++; continue; }
+      if (attemptsDone >= ND.MAX_ATTEMPTS) { await markGaveUp("failed", "max attempts"); expired++; continue; }
+      if (!user) { await markGaveUp("failed", "recipient no longer in team list"); expired++; continue; }
+      if (user.active === false) { await markGaveUp("failed", "recipient deactivated"); expired++; continue; }
+      const current = getTokens(user);
+      // tokens === null → lease expired before the first attempt was recorded: all devices.
+      const tokens = Array.isArray(q.tokens) ? q.tokens.filter(t => current.includes(t)) : current;
+      if (!tokens.length) { await markGaveUp(current.length ? "failed" : "no_tokens", "no live tokens left to retry"); expired++; continue; }
+      await attemptPush({ userKey, nid, n, tokens, attempts: attemptsDone + 1, persisted: true,
+        firstAttemptAt: q.createdAt, to: user.name, prior: itemSnap.data().delivery || null });
+      retried++;
+    }
+    functions.logger.info("[pushRetrySweep] ran", { due: snap.size, retried, expired, gone });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// CALLABLE — pushReceipt
+// The service worker calls this after it shows a notification, so a record can
+// say "FCM accepted it" AND "the device actually displayed it". That is the
+// difference between a push-service problem and a device problem. Best-effort:
+// the SW never retries, and nothing depends on a receipt arriving. Writes only
+// `receipts` + `displayedAt` on an EXISTING inbox item (never creates one).
+// ─────────────────────────────────────────────────────────────
+exports.pushReceipt = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const userKey = String((data && data.uk) || "").slice(0, 120);
+  const nid = String((data && data.nid) || "").slice(0, 80);
+  if (!userKey || !nid || userKey.includes("/") || nid.includes("/")) return { ok: false };
+  const ref = inboxRef(userKey, nid);
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+      const cur = snap.data() || {};
+      const receipts = Array.isArray(cur.receipts) ? cur.receipts.slice(-9) : [];
+      const at = new Date().toISOString();
+      receipts.push({
+        tk: String((data && data.tk) || "").slice(0, 12),
+        at,
+        shown: !!(data && data.shown),
+        visible: !!(data && data.visible),   // an app window was open + visible
+      });
+      // Top-level fields, NOT inside `delivery`: the server's delivery-record
+      // write replaces that whole map and could race a fast phone's receipt.
+      tx.set(ref, { receipts, displayedAt: cur.displayedAt || at }, { mergeFields: ["receipts", "displayedAt"] });
+    });
+  } catch (e) {
+    functions.logger.warn("[pushReceipt] write failed", { userKey, nid, error: e.message });
+    return { ok: false };
+  }
+  return { ok: true };
+});
+
+// ─────────────────────────────────────────────────────────────
+// CALLABLES — office messages: broadcasts → announcements
+// v511 (Koy, 2026-10-05): "send out a notification to either everyone or select
+// people with a custom message". v513 (2026-10-06, approved mockup): three kinds —
+// "announcement" (one-way), "important" (each person taps Got it; pinned on My
+// Day until they do; weekday-morning reminder), "discussion" (a group thread;
+// every reply notifies everyone in it) — plus photo / file attachments.
+// Sending, history, the seen list and Remind are office only: requireBroadcaster
+// = the live-PIN gate (requireAdmin) + ND.isBroadcaster. Opening a message, Got
+// it and replying are for the people it was sent to: requireMember (their own
+// live PIN) + ND.isParticipant. Every message and reply goes through deliver()
+// (bell first, push, pushRetrySweep retries), with the kind / headline / sender /
+// attachments stored on the bell copy via deliver's `extra`. deliver(), NOT
+// deliverIfWanted — office messages have no mute toggle. Ids are client-minted
+// and become eventKeys, so a double tap or a retried call never pings twice.
+// broadcasts/{id} (+ /replies) is function-only: the rules' deny-all catch-all
+// covers it, no rules change. Test sends go to the sender and aren't recorded.
+// ─────────────────────────────────────────────────────────────
+async function requireBroadcaster(data) {
+  const user = await requireAdmin(data);
+  if (!ND.isBroadcaster(user)) {
+    throw new functions.https.HttpsError("permission-denied", "Only the office can send team notifications.");
+  }
+  return user;
+}
+
+// Any active team member, proven by their own live PIN. Matched by id first
+// (the app sends identity.id), then by name — and among same-name records
+// (Justin is listed twice) the one whose PIN matches, so the right record wins.
+async function requireMember(data) {
+  requireAppKey(data);
+  const by = String((data && data.by) || "").trim().toLowerCase();
+  const pin = String((data && data.pin) || "");
+  const uid = String((data && data.uid) || "");
+  if ((!by && !uid) || !pin) throw new functions.https.HttpsError("permission-denied", "Sign in again to open this.");
+  const users = await getUsers();
+  const live = users.filter(u => u && u.active !== false && u.pin && String(u.pin) === pin);
+  const user = (uid && live.find(u => u.id === uid)) || live.find(u => String(u.name || "").trim().toLowerCase() === by) || null;
+  if (!user) throw new functions.https.HttpsError("permission-denied", "Sign in again to open this.");
+  return user;
+}
+
+const broadcastRef = (id) => db.collection("broadcasts").doc(id);
+const cleanId = (v, re, what) => {
+  const id = String(v || "").trim();
+  if (!re.test(id)) throw new functions.https.HttpsError("invalid-argument", `Bad ${what} id.`);
+  return id;
+};
+// The bell-copy fields every message / reply / reminder carries (deliver extra).
+const announceExtra = (b, more = {}) => ({
+  kind: ND.normalizeKind(b.kind), broadcastId: b.id, headline: String(b.title || "").slice(0, 80),
+  from: String(b.by || "").slice(0, 80), attachments: Array.isArray(b.attachments) ? b.attachments : [],
+  label: String(b.label || "").slice(0, 80), ...more,
+});
+// Deliver to many users, 10 at a time, never throwing.
+async function deliverMany(users, notif, extra, tag) {
+  const out = [];
+  for (let i = 0; i < users.length; i += 10) {
+    const chunk = users.slice(i, i + 10);
+    const rs = await Promise.all(chunk.map(u => deliver(u, notif, extra).catch(e => {
+      functions.logger.error(`[${tag}] deliver threw`, { to: u.name, error: e.message });
+      return { status: "error" };
+    })));
+    chunk.forEach((u, k) => out.push({ user: u, status: (rs[k] && rs[k].status) || "unknown", persisted: rs[k] && rs[k].persisted }));
+  }
+  return out;
+}
+
+exports.sendBroadcast = functions.https.onCall(async (data) => {
+  const sender = await requireBroadcaster(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "broadcast");
+  const body = String((data && data.body) || "").trim().slice(0, 1000);
+  if (!body) throw new functions.https.HttpsError("invalid-argument", "Write a message first.");
+  const title = String((data && data.title) || "").trim().slice(0, 80) || `Message from ${sender.name}`;
+  const label = String((data && data.label) || "").trim().slice(0, 80);
+  const kind = ND.normalizeKind(data && data.kind);
+  const attachments = ND.cleanAttachments(data && data.attachments);
+  const test = !!(data && data.test);
+  const users = await getUsers();
+  const picked = ND.resolveBroadcastRecipients(users, data && data.to, sender, test, inboxKeyOf);
+  if (!picked.length) throw new functions.https.HttpsError("invalid-argument", "Pick at least one person.");
+  const at = new Date().toISOString();
+  const b = { id, by: sender.name, at, title, body, label, kind, attachments };
+  const notif = { title: ND.broadcastPushTitle(kind, title), body, category: "broadcast",
+    view: "announce", needId: id, eventKey: test ? `${id}_test` : id };
+  const delivered = await deliverMany(picked, notif, announceExtra(b, { test }), "broadcast");
+  // key + nid make each person's bell copy findable later (seen list, Got it,
+  // My Day pin). Deterministic from the eventKey, so right even for a resend.
+  const results = delivered.map(r => ({ name: r.user.name, status: r.status, persisted: r.persisted,
+    key: inboxKeyOf(r.user), nid: ND.notifDocId(inboxKeyOf(r.user), ND.normalizeNotif(notif), 0) }));
+  const summary = ND.summarizeBroadcast(results);
+  functions.logger.info("[broadcast] sent", { id, by: sender.name, kind, test, label, title: title.slice(0, 80),
+    attachments: attachments.length, total: summary.total, phone: summary.phone, retrying: summary.retrying.length,
+    bellOnly: summary.bellOnly.length, notSaved: summary.notSaved.length });
+  if (!test) {
+    await broadcastRef(id).set({
+      ...b, to: results.map(r => r.name), summary, replyCount: 0,
+      recipients: results.map(r => ({ name: r.name, key: r.key, nid: r.nid })),
+    }).catch(e => functions.logger.error("[broadcast] record write FAILED", { id, error: e.message }));
+  }
+  return { ok: true, id, test, kind, title, summary };
+});
+
+// Read every recipient's bell copy of one broadcast record → seen states.
+async function broadcastSeenRows(b) {
+  const recips = Array.isArray(b && b.recipients) ? b.recipients : [];
+  return Promise.all(recips.map(async (r) => {
+    if (!r || !r.key || !r.nid) return { name: (r && r.name) || "?", key: (r && r.key) || "", ...ND.seenStateOf(null) };
+    const snap = await inboxRef(r.key, r.nid).get().catch(() => null);
+    const item = snap && snap.exists ? snap.data() : null;
+    const updated = snap && snap.updateTime && typeof snap.updateTime.toDate === "function" ? snap.updateTime.toDate().toISOString() : "";
+    return { name: r.name, key: r.key, ...ND.seenStateOf(item, updated) };
+  }));
+}
+
+exports.listBroadcasts = functions.https.onCall(async (data) => {
+  await requireBroadcaster(data);
+  // 12 for Bell → Send → Recently sent; My Day → Sent asks for more (v514), capped.
+  const n = Math.min(30, Math.max(1, parseInt(data && data.limit, 10) || 12));
+  const snap = await db.collection("broadcasts").orderBy("at", "desc").limit(n).get();
+  const items = await Promise.all(snap.docs.map(async (d) => {
+    const b = d.data() || {};
+    const seen = Array.isArray(b.recipients) ? ND.summarizeSeen(await broadcastSeenRows(b)) : null;
+    return { id: b.id || d.id, by: b.by || "", at: b.at || "", title: b.title || "", body: b.body || "",
+      label: b.label || "", count: Array.isArray(b.to) ? b.to.length : 0, summary: b.summary || null,
+      kind: ND.normalizeKind(b.kind), attachments: Array.isArray(b.attachments) ? b.attachments.length : 0,
+      replyCount: Number(b.replyCount) || 0,
+      opened: seen ? seen.opened : null, acked: seen ? seen.acked : null };
+  }));
+  return { items };
+});
+
+// Who has seen one broadcast, person by person (bell → Send → Recently sent).
+exports.broadcastSeen = functions.https.onCall(async (data) => {
+  await requireBroadcaster(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "broadcast");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record.");
+  const b = snap.data() || {};
+  const seen = ND.summarizeSeen(await broadcastSeenRows(b));
+  return { id, title: b.title || "", at: b.at || "", kind: ND.normalizeKind(b.kind),
+    replyCount: Number(b.replyCount) || 0, ...seen, people: seen.people.map(p => ({ name: p.name, state: p.state, at: p.at })) };
+});
+
+// Open one message (the people it was sent to, the sender, or the office): the
+// full message, its attachments, my Got it, and — for a discussion — the thread.
+exports.broadcastOpen = functions.https.onCall(async (data) => {
+  const me = await requireMember(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record any more.");
+  const b = snap.data() || {};
+  const myKey = inboxKeyOf(me);
+  if (!ND.isParticipant(b, myKey, me.name) && !ND.isBroadcaster(me)) {
+    throw new functions.https.HttpsError("permission-denied", "This message wasn't sent to you.");
+  }
+  const mine = (Array.isArray(b.recipients) ? b.recipients : []).find(r => r && r.key === myKey) || null;
+  let myAckAt = "";
+  if (mine && mine.nid) {
+    const it = await inboxRef(myKey, mine.nid).get().catch(() => null);
+    myAckAt = (it && it.exists && it.data().ackAt) || "";
+  }
+  let replies = [];
+  if (ND.normalizeKind(b.kind) === "discussion") {
+    const rs = await broadcastRef(id).collection("replies").orderBy("at", "asc").limit(300).get();
+    replies = rs.docs.map(d => { const r = d.data() || {}; return { id: d.id, by: r.by || "", at: r.at || "", text: r.text || "",
+      attachments: Array.isArray(r.attachments) ? r.attachments : [] }; });
+  }
+  return { id, kind: ND.normalizeKind(b.kind), title: b.title || "", body: b.body || "", by: b.by || "", at: b.at || "",
+    label: b.label || "", count: Array.isArray(b.to) ? b.to.length : 0, attachments: Array.isArray(b.attachments) ? b.attachments : [],
+    isRecipient: !!mine, myAckAt, replies };
+});
+
+// Got it on an Important message. Stamps the person's own bell copy (ackAt +
+// read) server-side — the rules only let the app flip `read`, so a Got it can't
+// be faked by editing the bell. Idempotent: a second tap keeps the first time.
+exports.ackBroadcast = functions.https.onCall(async (data) => {
+  const me = await requireMember(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record any more.");
+  const b = snap.data() || {};
+  const myKey = inboxKeyOf(me);
+  const mine = (Array.isArray(b.recipients) ? b.recipients : []).find(r => r && r.key === myKey);
+  if (!mine || !mine.nid) throw new functions.https.HttpsError("permission-denied", "This message wasn't sent to you.");
+  const ref = inboxRef(myKey, mine.nid);
+  let ackAt = new Date().toISOString();
+  await db.runTransaction(async (tx) => {
+    const it = await tx.get(ref);
+    if (it.exists && it.data().ackAt) { ackAt = it.data().ackAt; return; }
+    tx.set(ref, { ackAt, read: true }, { mergeFields: ["ackAt", "read"] });
+  });
+  functions.logger.info("[broadcast] got it", { id, by: me.name, ackAt });
+  return { ok: true, ackAt };
+});
+
+// A reply in a Discussion. Stored under the message; every OTHER person in it
+// (the recipients + the sender) gets a notification — Koy: "Everyone in it".
+exports.replyBroadcast = functions.https.onCall(async (data) => {
+  const me = await requireMember(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const rid = cleanId(data && data.rid, ND.REPLY_ID_RE, "reply");
+  const text = String((data && data.text) || "").trim().slice(0, 1000);
+  const attachments = ND.cleanAttachments(data && data.attachments, 6);
+  if (!text && !attachments.length) throw new functions.https.HttpsError("invalid-argument", "Write a reply first.");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That discussion isn't on record any more.");
+  const b = snap.data() || {};
+  if (ND.normalizeKind(b.kind) !== "discussion") throw new functions.https.HttpsError("failed-precondition", "Replies are only for discussions.");
+  const myKey = inboxKeyOf(me);
+  if (!ND.isParticipant(b, myKey, me.name)) throw new functions.https.HttpsError("permission-denied", "You're not in this discussion.");
+  const at = new Date().toISOString();
+  try {
+    await broadcastRef(id).collection("replies").doc(rid).create({ by: me.name, byKey: myKey, at, text, attachments });
+  } catch (e) {
+    if (e && (e.code === 6 || /already exists/i.test(e.message || ""))) return { ok: true, duplicate: true };
+    throw e;
+  }
+  await broadcastRef(id).set({ replyCount: admin.firestore.FieldValue.increment(1), lastReplyAt: at, lastReplyBy: me.name },
+    { merge: true }).catch(e => functions.logger.warn("[broadcast] reply count write failed", { id, error: e.message }));
+  const users = await getUsers();
+  const keys = new Set((Array.isArray(b.recipients) ? b.recipients : []).map(r => r && r.key).filter(Boolean));
+  const senderUser = users.find(u => String(u.name || "").trim().toLowerCase() === String(b.by || "").trim().toLowerCase());
+  if (senderUser) keys.add(inboxKeyOf(senderUser));
+  keys.delete(myKey);
+  const others = users.filter(u => u && u.active !== false && keys.has(inboxKeyOf(u)));
+  const first = String(me.name || "").split(/\s+/)[0] || me.name;
+  const notif = { title: ND.broadcastPushTitle("discussion", b.title), body: `${first}: ${text || "sent a photo"}`.slice(0, 1000),
+    category: "broadcast_reply", view: "announce", needId: id, eventKey: `${id}_${rid}` };
+  const out = await deliverMany(others, notif, announceExtra(b, { replyBy: me.name }), "broadcast-reply");
+  functions.logger.info("[broadcast] reply", { id, by: me.name, notified: out.length });
+  return { ok: true, at, notified: out.length };
+});
+
+// Office "Remind the ones who haven't": Important → everyone without Got it;
+// Announcement / Discussion → everyone who hasn't opened it.
+async function remindUnconfirmed(b, nonce, users) {
+  const rows = await broadcastSeenRows(b);
+  const kind = ND.normalizeKind(b.kind);
+  const pending = rows.filter(r => kind === "important" ? r.state !== "acked" : !["acked", "opened"].includes(r.state));
+  const byKey = new Map((users || []).filter(u => u && u.active !== false).map(u => [inboxKeyOf(u), u]));
+  const targets = pending.map(r => byKey.get(r.key)).filter(Boolean);
+  const notif = { title: `Reminder · ${ND.broadcastPushTitle(kind, b.title)}`.slice(0, 120),
+    body: kind === "important" ? "Still needs your Got it." : String(b.body || "").slice(0, 300),
+    category: "broadcast_reminder", view: "announce", needId: b.id, eventKey: `${b.id}_rem_${nonce}` };
+  await deliverMany(targets, notif, announceExtra(b, { reminder: true }), "broadcast-remind");
+  return targets.map(u => u.name);
+}
+
+exports.remindBroadcast = functions.https.onCall(async (data) => {
+  const me = await requireBroadcaster(data);
+  const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "message");
+  const nonce = cleanId(data && data.nonce, ND.REPLY_ID_RE, "reminder");
+  const snap = await broadcastRef(id).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "That message isn't on record.");
+  const names = await remindUnconfirmed(snap.data() || {}, nonce, await getUsers());
+  functions.logger.info("[broadcast] remind", { id, by: me.name, count: names.length });
+  return { ok: true, reminded: names };
+});
+
+// Weekday mornings: anyone still missing Got it on an Important message sent at
+// least 12 h ago gets one reminder per day, for up to 3 mornings (Koy: pinned on
+// My Day until Got it, plus a reminder the next morning). The eventKey is the
+// date, so a re-run the same morning can't double-ping.
+exports.importantGotItReminder = functions.pubsub
+  .schedule("35 6 * * 1-5").timeZone(TZ)
+  .onRun(async () => {
+    const snap = await db.collection("broadcasts").where("kind", "==", "important").limit(50).get();
+    if (snap.empty) return null;
+    const users = await getUsers();
+    const now = Date.now();
+    const ymd = new Date().toLocaleDateString("en-CA", { timeZone: TZ }).replace(/-/g, "");
+    let msgs = 0, people = 0;
+    for (const d of snap.docs) {
+      const b = d.data() || {};
+      const age = now - new Date(b.at || 0).getTime();
+      if (!(age >= 12 * 3600e3 && age <= 4 * 86400e3)) continue;
+      const names = await remindUnconfirmed(b, `r_auto${ymd}`, users);
+      if (names.length) { msgs++; people += names.length; }
+    }
+    functions.logger.info("[importantGotItReminder] ran", { messages: msgs, people });
+    return null;
+  });
 
 // ─── Notification Doctor — test push to a single user ───────────────────────
 // Lets the in-app diagnostic page send a push to a specific user and see
@@ -323,47 +823,31 @@ exports.sendTestPush = functions.https.onCall(async (data) => {
   }
   const title = "Test push from Command Center";
   const body  = `If you see this, your notifications are working. ${new Date().toLocaleTimeString()}`;
-  const results = [];
-  for (const token of tokens) {
-    const tokenPreview = token.slice(0, 20) + "…";
-    try {
-      // Test push is DATA-ONLY (no `notification` field at top level) so the
-      // browser's onMessage handler reliably fires when foregrounded. With
-      // a `notification` field present, some FCM SDK versions suppress
-      // onMessage and let the OS handle display — which silently does
-      // nothing on macOS Chrome if site notifications are blocked at OS
-      // level. Data-only forces the app to surface the toast itself.
-      await messaging.send({
-        token,
-        data: {
-          title, body, jobId: "", section: "",
-          // marker so the client knows this is a doctor test push
-          __test: "1",
-        },
-        webpush: {
-          headers: { Urgency: "high" },
-        },
-        android: { priority: "high" },
-        apns: {
-          headers: { "apns-push-type": "alert", "apns-priority": "10" },
-          payload: { aps: { contentAvailable: true } },
-        },
-      });
-      results.push({ token: tokenPreview, ok: true });
-    } catch (e) {
-      const isStale = STALE_TOKEN_CODES.some(
-        code => e.code === code || (e.message || "").includes(code)
-      );
-      results.push({
-        token: tokenPreview,
-        ok: false,
-        error: e.message,
-        code: e.code || "",
-        stale: isStale,
-      });
-      if (isStale) await removeStaleToken(token);
-    }
+  // Same message builder as every real push (functions/notifyDelivery.js), so
+  // a passing test proves the production payload shape — not a lookalike.
+  // No inbox record: a test should not clutter the bell.
+  const n = ND.normalizeNotif({ title, body, category: "test", priority: "high" });
+  const nid = `test-${Date.now().toString(36)}`;
+  const messages = tokens.map(t => {
+    const m = ND.buildMessage(t, n, { nid, userKey: "" });
+    m.data.__test = "1";   // marker so the client knows this is a doctor test push
+    return m;
+  });
+  let rows;
+  try {
+    rows = ND.summarizeResults(tokens, await messaging.sendEach(messages), null);
+  } catch (e) {
+    rows = ND.summarizeResults(tokens, null, e);
   }
+  const results = rows.map(r => ({
+    token: r.token.slice(0, 20) + "…",
+    ok: r.ok,
+    ...(r.ok ? { messageId: r.messageId } : { error: r.error, code: r.code, stale: r.kind === "stale", kind: r.kind }),
+  }));
+  const dead = rows.filter(r => !r.ok && r.kind === "stale").map(r => r.token);
+  if (dead.length) await removeStaleTokens(dead);
+  functions.logger.info("[sendTestPush]", { to: user.name, tokens: rows.length, ok: rows.filter(r => r.ok).length,
+    errors: rows.filter(r => !r.ok).map(r => `${r.tk}:${r.code}`) });
   return {
     ok: results.some(r => r.ok),
     user: user.name,
@@ -449,7 +933,10 @@ async function sendToName(name, notification) {
   const users = await getUsers();
   const n = name.toLowerCase().trim();
   const user = userByName(users, n);
-  if (!user) return;
+  if (!user) {
+    functions.logger.warn("[notify] recipient name not in team list — not delivered", { name, title: notification && notification.title });
+    return;
+  }
   await deliver(user, notification);
 }
 
@@ -462,7 +949,7 @@ async function sendToRoles(roles, notification, excludeTokens = [], prefKey = nu
     // whole user (push AND inbox) so nobody gets the same nudge twice.
     if (getTokens(u).some(t => excludeTokens.includes(t))) continue;
     if (prefKey && !wantsNotif(u, prefKey)) continue;
-    sends.push(deliver(u, notification));
+    sends.push(deliver(u, prefKey ? { category: prefKey, ...notification } : notification));
   }
   await Promise.all(sends);
 }
@@ -477,7 +964,10 @@ async function sendToNameIfWanted(name, key, notification) {
   const users = await getUsers();
   const n = name.toLowerCase().trim();
   const user = userByName(users, n);
-  if (!user) return;
+  if (!user) {
+    functions.logger.warn("[notify] recipient name not in team list — not delivered", { name, category: key, title: notification && notification.title });
+    return;
+  }
   await deliverIfWanted(user, key, notification);
 }
 
@@ -585,6 +1075,13 @@ exports.onJobUpdate = functions.firestore
     });
 
     const tasks = [];
+
+    // ── Version lock telemetry (Phase 1, functions/versionLock.js) ──────────
+    // Counts writes that landed WITHOUT a fresh app_build + w stamp in
+    // settings/versionLockStats (shown in Settings → Devices). Non-fatal.
+    tasks.push(VL.noteUnstampedJobWrite(db, functions.logger, {
+      jobId, rawBefore: change.before.data() || {}, rawAfter: change.after.data() || {}, tz: TZ,
+    }).catch((e) => functions.logger.warn("[versionLock] telemetry failed (non-fatal)", { jobId, error: e.message })));
 
     // ── 1. Foreman assigned / changed ─────────────────────────
     // Honest routing (2026-07-10): assignee + their book's coordinator, both
@@ -5247,10 +5744,10 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
     section: "",
   };
 
-  // Send to every current token. sendFCM prunes dead tokens automatically
-  // via removeStaleToken when the messaging error indicates registration
-  // is invalid, so we re-fetch tokens after to compute what's left.
-  await Promise.all(before.map(t => sendFCM(t, notif)));
+  // Full production path: inbox record first, then push to every device, then
+  // the outcome recorded on the record. deliver() prunes dead tokens itself,
+  // so we re-fetch tokens after to compute what's left.
+  const result = await deliver(user, { ...notif, category: "test", priority: "high" });
 
   // Re-read the user record to find out what survived.
   const afterUsers = await getUsers();
@@ -5264,6 +5761,8 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
     remaining: after.length,
     jobId,
     jobName,
+    status: result && result.status,
+    nid: result && result.nid,
   };
 });
 
@@ -6049,28 +6548,43 @@ exports.scheduledSimproCoStatusSync = functions
 // Deletes inbox items older than 30 days so the notifications
 // collection can't grow unbounded. Iterates the team list and
 // queries each user's items subcollection directly (collection-
-// scope query — no collection-group index needed). ADDITIVE:
-// new export only; touches nothing but old inbox docs.
+// scope query — no collection-group index needed).
+// v514: office messages (broadcastId) are the My Day → Messages
+// history, so they're kept a year (ND.isPrunable). The query
+// pages past them in createdAt order, so kept items can never
+// fill the 400-doc window and stall the cleanup behind them.
 // ─────────────────────────────────────────────────────────────
 exports.notifInboxPrune = functions.pubsub
   .schedule("0 3 * * 0")
   .timeZone(TZ)
   .onRun(async () => {
     const users = await getUsers();
-    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-    let deleted = 0;
+    const now = Date.now();
+    const cutoff = new Date(now - ND.INBOX_KEEP_DAYS * 86400000).toISOString();
+    let deleted = 0, kept = 0;
     for (const u of users) {
       const key = inboxKeyOf(u);
       if (!key) continue;
-      const snap = await db.collection("notifications").doc(key).collection("items")
-        .where("createdAt", "<", cutoff).limit(400).get();
-      if (snap.empty) continue;
-      const batch = db.batch();
-      snap.docs.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      deleted += snap.size;
+      const col = db.collection("notifications").doc(key).collection("items");
+      let last = null;
+      for (let page = 0; page < 25; page++) {
+        let qy = col.where("createdAt", "<", cutoff).orderBy("createdAt").limit(400);
+        if (last) qy = qy.startAfter(last);
+        const snap = await qy.get();
+        if (snap.empty) break;
+        const gone = snap.docs.filter(d => ND.isPrunable(d.data(), now));
+        if (gone.length) {
+          const batch = db.batch();
+          gone.forEach(d => batch.delete(d.ref));
+          await batch.commit();
+          deleted += gone.length;
+        }
+        kept += snap.size - gone.length;
+        if (snap.size < 400) break;
+        last = snap.docs[snap.docs.length - 1];
+      }
     }
-    functions.logger.info("[notifInboxPrune] ran", { deleted });
+    functions.logger.info("[notifInboxPrune] ran", { deleted, keptOfficeMessages: kept });
     return null;
   });
 
@@ -7407,3 +7921,37 @@ exports.gcPortalDrainQueue = functions.pubsub
     if (due.docs.length) functions.logger.info("[gcPortalDrainQueue] ran", { due: due.docs.length, sent });
     return null;
   });
+
+// ─── Plan intake (PLAN_INTAKE_SPEC.md Phase 1, 2026-10-03) ───────────────────
+// Calendar walk → Simpro quote → Drive folder "_Quotes/Quote #N" → renamed to
+// "#<job> - <name>" and moved up on conversion → new Simpro attachments filed.
+// All logic lives in functions/planIntake/ (pure rules prebuild-tested by
+// scripts/planintake-test.js). This block only hands it existing helpers — no
+// function above is changed. Mode lives on planIntakeState/config (dry → test →
+// live; missing = dry). Calendar is read as Koy via the PLAN_INTAKE_GOOGLE_OAUTH
+// secret (scripts/plan-intake-google-auth.js) — set it BEFORE the first deploy.
+// Deploy ONLY these two:
+//   firebase deploy --only functions:planIntakeWatcher,functions:linkQuoteFolder
+const _planIntake = require("./planIntake/watcher.js")({
+  functions, db, google, TZ, FieldValue: admin.firestore.FieldValue,
+  simproReqWithRetry,
+  driveFullClient: _driveFullClient,
+  driveUploadResumable: _driveUploadResumable,
+  planDocPull,
+  jobFolderName: _jobFolderName,
+  JOBS_PARENT_FOLDER_ID,
+  requireAppKey,
+  sendToName,   // ops alert to Koy if the calendar sign-in dies (once a day)
+  sendGcMail,   // Phase 4: the 5 pm plan summary email (Resend)
+  requireAdmin, // Phase 4: "file it from the Plans card" (name + PIN, admin/manager)
+  gcAccessOf: gcAdminAccessOf,
+  commercialGroups: _commercialGroups,   // residential only: same Commercial / Multi Family setting as commercial mode
+});
+exports.planIntakeWatcher = _planIntake.planIntakeWatcher;
+exports.linkQuoteFolder   = _planIntake.linkQuoteFolder;
+// Phase 2: the Claude Code Routine's only door in (bearer token PLAN_ROUTINE_TOKEN).
+exports.planRoutineApi    = _planIntake.planRoutineApi;
+// Phase 4: 5 pm summary email, 6:30 am walk push, file-from-the-card.
+exports.planIntakeDigest   = _planIntake.planIntakeDigest;
+exports.planIntakeWalkPush = _planIntake.planIntakeWalkPush;
+exports.planFileByHand     = _planIntake.planFileByHand;

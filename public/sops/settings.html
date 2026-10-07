@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!-- Homestead Electric · in-app SOP · drafted 2026-10-06 by Claude for the Settings
+     screen (Version Lock Phase 1). Replace by dropping a SOP Recorder export over
+     this file, same filename (settings.html = the "?" on the Settings screen). -->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Settings — Devices, App Versions &amp; the Version Lock</title>
+<style>
+  body{font-family:-apple-system,'DM Sans',sans-serif;color:#1B1F24;background:#F4F6F8;margin:0;padding:24px;line-height:1.55;}
+  .wrap{max-width:720px;margin:0 auto;background:#fff;border:1px solid #E1E4E9;border-radius:12px;padding:22px 26px;}
+  h1{font-size:22px;margin:0 0 4px;} h2{font-size:15px;margin:20px 0 6px;color:#3B5BA5;}
+  p,li{font-size:14px;color:#333;} .warn{background:#FBECEC;border:1px solid #E7B4B4;border-radius:8px;padding:10px 12px;}
+  code{background:#EEF0F3;padding:1px 5px;border-radius:4px;font-size:13px;}
+</style>
+</head>
+<body><div class="wrap">
+<h1>Settings</h1>
+<p>The office screen. Most sections start collapsed; tap a title to open it. Admin-only sections (Fleet Notification Health, Devices, App Usage, backups) only show for admins.</p>
+
+<h2>"A new version is ready" (everyone sees this one)</h2>
+<p>When a new version of the app is deployed, phones that are sitting idle reload themselves quietly. Anyone in the middle of something sees a small card at the bottom — <b>A new version is ready</b> — with <b>Update now</b> and <b>Later</b>. It never blocks you.</p>
+<ul>
+  <li><b>Update now</b> first saves everything you changed ("Saving your changes…"), then reloads. A half-typed punch item is saved too.</li>
+  <li><b>Later</b> hides the card for 30 minutes, or until the next new version comes out, whichever is first. Then it shows again. If the phone goes idle in the meantime it reloads on its own.</li>
+</ul>
+
+<h2>The full-screen "Update now" block (only when the office requires it)</h2>
+<p>This one cannot be closed. It appears in three cases only: the office tapped <b>Require v___</b> and this copy is older than that version; a save was refused because this copy is too old; or the office tapped <b>Force Update All Devices</b>.</p>
+<ul>
+  <li>If you are typing in a box, you get a red bar at the top — <i>"Update needed. Finish what you're typing and save."</i> — instead of the block, for up to 5 minutes. Finish, save, and the block appears when you leave the box.</li>
+  <li>Tapping <b>Update now</b> saves first, then reloads — same as the card.</li>
+  <li>If it says <b>"This copy of the app is too old to save"</b>, your edits were kept on the phone and are sent automatically after the update. Nothing is thrown away.</li>
+  <li>If it says <b>"Close and reopen the app"</b>, the phone could not pick up the new version on its own — close it fully (swipe it away) and open it again.</li>
+</ul>
+
+<h2>Devices — App Versions (admin)</h2>
+<p>Every phone and computer that opens the app reports its name, version and last-seen time here. The latest deployed version is at the top. A <b>red row</b> is a device that was active in the last 7 days and is still on an older version, or one marked <b>BELOW MINIMUM</b> (it cannot save until it updates).</p>
+<p>The box above the list shows whether the <b>version lock</b> is ON (and which version it requires) or OFF, who set it, and the count of <b>unstamped saves</b> in the last 3 days. An unstamped save is one that arrived without its version tag — an old copy of the app, or a save path that was missed. That number must sit at <b>0 for three working days</b> before the lock is turned on.</p>
+
+<h2>Require v___ (turning the lock on)</h2>
+<p>Type a version number (it prefills with the latest deployed one) and tap <b>Require v___</b>. The button tells you how many recently-active devices will be asked to update. Confirm, and within seconds every open copy of the app on an older version shows the Update now popup; from then on a copy older than that version cannot save at all — its edits wait on the phone until it updates.</p>
+<p>Do this <b>after</b> a deploy is live and your own device has loaded it, never during. It is manual on purpose: the minimum is never raised automatically.</p>
+<p><b>Turn off the lock</b> sets the minimum back to 0 — any version can save again. Use it if something goes wrong; it takes effect instantly, no deploy needed.</p>
+
+<div class="warn">
+<p style="margin:0"><b>Rolling a deploy back?</b> Lower the required version (or turn the lock off) <b>first</b>, then roll back on Vercel. If you roll back first, the rolled-back build is below the minimum and every save in the company is refused until you fix it here.</p>
+</div>
+
+<h2>Force Update All Devices (admin)</h2>
+<p>In the backup section. Makes every open copy of the app show the Update now popup right away (it used to reload them cold, which could lose text someone was typing). People mid-typing get the red bar and their 5 minutes; everyone else is asked to update immediately.</p>
+
+<h2>Other sections</h2>
+<p><b>Activity log</b> — who changed what, newest first. <b>Notification Doctor</b> — check and fix this device's push notifications. <b>Animations</b> — turn the app's motion on or off for this device. <b>App Help</b> — ask the built-in help about any feature. <b>Fleet Notification Health</b> (admin) — every person's notification status, with a test push. <b>App Usage</b> (admin) — which screens and tabs people actually open. <b>Backup / Restore</b> (admin) — download a backup of every job, or restore from one; a restore from file forces every device to update afterwards.</p>
+</div></body>
+</html>

@@ -1,120 +1,160 @@
-// Homestead Electric — FCM Background Service Worker
-// Handles push notifications when the app is closed or backgrounded.
-// Firebase compat SDK is used here because importScripts is the only way
-// to load modules in a service worker context.
+// Homestead Electric — push service worker (scope /firebase-cloud-messaging-push-scope)
+//
+// FCM reliability pass (2026-10-04). THIS worker now renders every push itself,
+// in its own `push` listener, whether or not the app is open:
+//
+//  - The Firebase SW SDK only calls onBackgroundMessage when NO app window is
+//    visible. With a window visible it hands the payload to the page and shows
+//    nothing. The page then tried `new Notification(...)`, which throws on
+//    Android Chrome ("Illegal constructor") and does not exist in an iOS
+//    Home-Screen app. So a push that arrived while the app was open showed no
+//    banner on phones — and on iOS, Safari counts a push that shows nothing as
+//    a "silent push" and REVOKES the site's push permission after a few. That
+//    is the "Apple users stop getting them" pattern.
+//  - Showing the notification here, inside the push event, satisfies Chrome's
+//    userVisibleOnly rule and Safari's no-silent-push rule on every push.
+//
+// The Firebase SDK is still loaded (after our listener) for two jobs only:
+// forwarding the payload to a visible app window (the in-app toast + the
+// Notification Doctor's "received" check, via onMessage in App.js) and
+// handling pushsubscriptionchange. No onBackgroundMessage handler is set, and
+// every server payload is data-only, so the SDK never displays a second copy.
 
-importScripts("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js");
-importScripts("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js");
-
-firebase.initializeApp({
-  apiKey:            "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
-  authDomain:        "homestead-electric.firebaseapp.com",
-  projectId:         "homestead-electric",
-  storageBucket:     "homestead-electric.firebasestorage.app",
-  messagingSenderId: "318598172684",
-  appId:             "1:318598172684:web:b2ef548d952faabccd9e29",
-});
-
-const messaging = firebase.messaging();
+const APP_CALL_KEY = "hs-app-9f3c1e7a2b6d4085";   // same public key as src/App.js / functions/index.js
+const RECEIPT_URL  = "https://us-central1-homestead-electric.cloudfunctions.net/pushReceipt";
 
 // ─── SW lifecycle: skipWaiting + clients.claim ──────────────────────────────
-// Without these, a freshly deployed firebase-messaging-sw.js sits in "waiting"
-// state until ALL open tabs of the app close — which for a PWA the crew keeps
-// open all day means new SW logic NEVER takes effect. That's exactly how the
-// old SW could keep mishandling new server payloads silently. Calling
-// skipWaiting() on install + clients.claim() on activate makes every future
-// SW deploy take over existing tabs immediately. The first deploy of THIS
-// version still has to be fetched once (browser checks /firebase-messaging-sw.js
-// on each register() call, which the app does on every page load), but after
-// that initial fetch, activation is immediate. Also expose a SKIP_WAITING
-// message handler so the page can yell at any waiting SW from JS.
+// Without these, a freshly deployed worker sits in "waiting" until ALL open
+// tabs of the app close — for a PWA the crew keeps open all day, new push
+// logic would never take effect. The page also calls reg.update() on load.
 self.addEventListener("install", () => { self.skipWaiting(); });
 self.addEventListener("activate", e => { e.waitUntil(self.clients.claim()); });
 self.addEventListener("message", e => {
   if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-// Background message handler — shows a system notification.
-// The `data` payload includes title, body, jobId, section, and tag.
-//
-// All real pushes are now data-only (the server stopped sending top-level
-// `notification` payloads to fix the "two notifications per push" bug). That
-// means EVERY push lands in this handler — there's no FCM SDK auto-display
-// happening anymore. We render exactly one notification here.
-messaging.onBackgroundMessage(payload => {
-  // Diagnostic — visible in DevTools → Application → Service Workers → console.
-  // If pushes arrive but no banner shows, this log proves whether the SW even
-  // received them (vs. push subscription dead, app foregrounded path, etc.).
-  console.log("[HE bgsw] onBackgroundMessage", {
-    hasData: !!payload.data,
-    hasNotification: !!payload.notification,
-    title: payload.data?.title,
-    section: payload.data?.section,
-  });
-  const title   = payload.data?.title || payload.notification?.title || "Homestead Electric";
-  const body    = payload.data?.body  || payload.notification?.body  || "";
-  const jobId   = payload.data?.jobId   || "";
-  const section = payload.data?.section || "";
-  const view    = payload.data?.view    || "";
-  const needId  = payload.data?.needId  || "";   // v446: task-loop pushes open My Day on this task
-  // Server-supplied tag wins (stable across pushes for the same job+section);
-  // fall back to a derived tag for older clients.
-  const tag     = payload.data?.tag || `he-${jobId}-${section}`;
+// FCM web payload: { data: {...our fields}, from, fcmMessageId, priority, notification? }
+function readPayload(event) {
+  if (!event.data) return null;
+  try { return event.data.json(); } catch (e) {
+    try { return { data: { body: event.data.text() } }; } catch (e2) { return null; }
+  }
+}
 
-  // Store the deep-link target so the notificationclick handler can use it.
-  // We encode it in the notification's data tag so it survives the click event.
-  return self.registration.showNotification(title, {
-    body,
-    icon:  "/icon-192.png",
-    badge: "/icon-192.png",
-    tag,                                // dedupes notifications for the same job+section
-    renotify: false,                    // don't pop a fresh banner if the tag matches
-    data:  { jobId, section, view, needId },
-  });
+function deepLinkUrl(d) {
+  const origin = self.location.origin;
+  if (d.link && d.link.charAt(0) === "/") return origin + d.link;   // server-built, includes nid
+  if (d.view) return `${origin}/?view=${encodeURIComponent(d.view)}${d.needId ? `&need=${encodeURIComponent(d.needId)}` : ""}`;
+  if (d.jobId) return `${origin}/?jobId=${encodeURIComponent(d.jobId)}&section=${encodeURIComponent(d.section || "")}`;
+  return origin + "/";
+}
+
+// Best-effort "the device displayed it" ping (callable protocol over fetch).
+// Never retried, never blocks the banner, silently skipped for test pushes.
+function sendReceipt(d, visible) {
+  if (!d.nid || !d.uk) return Promise.resolve();
+  return fetch(RECEIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: { _appKey: APP_CALL_KEY, uk: d.uk, nid: d.nid, tk: d.tk || "", shown: true, visible } }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+// Registered BEFORE firebase.messaging() so it runs first on every push.
+self.addEventListener("push", event => {
+  const payload = readPayload(event) || {};
+  const d = payload.data || {};
+  const n = payload.notification || {};
+  // Diagnostic — DevTools → Application → Service Workers → this worker → console.
+  console.log("[HE sw] push", { nid: d.nid, title: d.title || n.title, jobId: d.jobId, view: d.view, test: d.__test });
+
+  const title = d.title || n.title || "Homestead Electric";
+  const body  = d.body  || n.body  || "";
+  // One banner per notification record (server tag = "he-<record id>"); a
+  // retried send of the same record reuses it, so retries never stack.
+  const tag   = d.tag || (d.nid ? `he-${d.nid}` : `he-${Date.now()}`);
+  const high  = d.pri !== "normal";
+  const data  = {
+    jobId: d.jobId || "", section: d.section || "", view: d.view || "",
+    needId: d.needId || "", nid: d.nid || "", url: deepLinkUrl(d),
+  };
+
+  event.waitUntil((async () => {
+    let visible = false;
+    try {
+      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      visible = wins.some(c => c.visibilityState === "visible");
+    } catch (e) { /* show anyway */ }
+    try {
+      await self.registration.showNotification(title, {
+        body,
+        icon:  "/icon-192.png",
+        badge: "/icon-192.png",
+        tag,
+        renotify: true,             // only matters if the same record arrives twice
+        requireInteraction: false,
+        silent: !high,
+        timestamp: Date.now(),
+        data,
+      });
+    } catch (e) {
+      console.warn("[HE sw] showNotification failed", e && e.message);
+      return;
+    }
+    await sendReceipt(d, visible);
+  })());
 });
 
-// When the user taps a notification, open the app at the right job + section.
+// Firebase SDK — loaded AFTER the push listener above. Wrapped so a CDN
+// failure at install time can never take the push handler down with it.
+try {
+  importScripts("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js");
+  importScripts("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js");
+  firebase.initializeApp({
+    apiKey:            "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
+    authDomain:        "homestead-electric.firebaseapp.com",
+    projectId:         "homestead-electric",
+    storageBucket:     "homestead-electric.firebasestorage.app",
+    messagingSenderId: "318598172684",
+    appId:             "1:318598172684:web:b2ef548d952faabccd9e29",
+  });
+  firebase.messaging();   // forwards to visible windows + handles pushsubscriptionchange
+} catch (e) {
+  console.warn("[HE sw] Firebase SDK unavailable — push display still works", e && e.message);
+}
+
+// Tap → open the app on the exact item.
+//
+// This worker does NOT control the app's pages (they belong to
+// /service-worker.js at scope "/"), and WindowClient.navigate() only works for
+// a client the calling worker controls — so since the scope split (SW v364)
+// navigate() always rejected and taps on My Day / view notifications just
+// focused the app without going anywhere. Now an open window gets a
+// postMessage it handles in place (no reload), and openWindow() covers the
+// app-closed case with the full deep-link URL.
 self.addEventListener("notificationclick", event => {
   event.notification.close();
+  const nd      = event.notification.data || {};
+  const fcmData = (nd.FCM_MSG && nd.FCM_MSG.data) || {};   // older SDK auto-display shape
+  const target = {
+    type:    "HE_NOTIF_CLICK",
+    jobId:   nd.jobId   || fcmData.jobId   || "",
+    section: nd.section || fcmData.section || "",
+    view:    nd.view    || fcmData.view    || "",
+    needId:  nd.needId  || fcmData.needId  || "",
+    nid:     nd.nid     || fcmData.nid     || "",
+  };
+  const url = nd.url || deepLinkUrl(target);
 
-  // Data can live in three places depending on who showed the notification:
-  //  1. Our own onBackgroundMessage handler → .data.{jobId,section}
-  //  2. FCM auto-display (when payload has notification field) → .data.FCM_MSG.data.{jobId,section}
-  //  3. Firebase JS SDK recent versions → .data.FCM_MSG.notification + .data.FCM_MSG.data
-  // Read from whichever one has our jobId — this was the bug where clicks landed on the
-  // homepage instead of the job because we only looked at path 1.
-  const ndata   = event.notification.data || {};
-  const fcm     = ndata.FCM_MSG || {};
-  const fcmData = fcm.data || {};
-  const jobId   = ndata.jobId   || fcmData.jobId   || "";
-  const section = ndata.section || fcmData.section || "";
-  const view    = ndata.view    || fcmData.view    || "";
-  const needId  = ndata.needId  || fcmData.needId  || "";
-
-  // v446: `&need=<id>` makes My Day unfold to, scroll to and flash that task.
-  const url = view
-    ? `${self.location.origin}/?view=${encodeURIComponent(view)}${needId ? `&need=${encodeURIComponent(needId)}` : ""}`
-    : jobId
-    ? `${self.location.origin}/?jobId=${encodeURIComponent(jobId)}&section=${encodeURIComponent(section || "")}`
-    : self.location.origin + "/";
-
-  event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then(windowClients => {
-      const appClient = windowClients.find(c => c.url.startsWith(self.location.origin));
-      if (appClient) {
-        // App already open — navigate to the deep-link URL and focus it.
-        if ((jobId || view) && typeof appClient.navigate === "function") {
-          return appClient.navigate(url).then(c => c && c.focus()).catch(() => {
-            appClient.focus();
-            if (jobId) appClient.postMessage({ type: "HE_NOTIF_CLICK", jobId, section });
-          });
-        }
-        // Fallback — postMessage so the app opens the job without a full reload.
-        if (jobId) appClient.postMessage({ type: "HE_NOTIF_CLICK", jobId, section });
-        return appClient.focus();
-      }
-      // App not open — open a new window at the deep-link URL.
-      return clients.openWindow(url);
-    })
-  );
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const app = wins.find(c => c.url.startsWith(self.location.origin));
+    if (app) {
+      try { await app.focus(); } catch (e) { /* focus can be refused; still deliver the message */ }
+      app.postMessage(target);
+      return;
+    }
+    await self.clients.openWindow(url);
+  })());
 });

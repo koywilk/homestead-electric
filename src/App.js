@@ -191,6 +191,107 @@ function gcAdminCallable(name, identity) {
   const raw = httpsCallable(functions, name);
   return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "" });
 }
+// Same live-PIN proof for ANY team member (announcements: open a message, Got
+// it, reply). Adds the identity id so the server picks the right record even
+// when two people share a name (the server's requireMember).
+function memberCallable(name, identity) {
+  const raw = httpsCallable(functions, name);
+  return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "",
+    uid: (identity && identity.id) || "" });
+}
+
+// ── Version Lock (08-Specs/Version Lock Spec.md) — Phase 1: stamp + popup ───
+// An old copy of the app must not be able to save. Every client write to the
+// funnel collections (jobs, needs, redlineWalks — manualTasks and quoteWalks
+// have no client writer left) carries two TOP-LEVEL fields beside `data` and
+// `updated_at`:
+//   app_build  the build this bundle was compiled from, as an integer
+//              (homestead-v514 → 514; dev server / missing → 0)
+//   w          a fresh random string per write ("<build>.<8 chars>")
+// The Phase 2 rules (firestore.phase2.rules, NOT deployed with this build)
+// refuse a write whose app_build is below appGate/version.minBuild, and
+// require `w` to CHANGE on every write — the rules see the document AFTER the
+// write, so an old build's updateDoc that never touched app_build would
+// otherwise inherit the stamp the last good save left on the doc.
+//
+// The stamp is meta: the jobs loader builds job objects from `raw.data` plus
+// named meta fields, so app_build / w never reach the in-memory job and are
+// never written back inside `data`. Never stamp the console rescue utilities
+// (__HE_RESTORE, _hsRescue*, __HE_BULK_ADD_LOADS): under a lock they run
+// through the kill switch (minBuild 0) by design.
+// VERSION_LOCK_HELPERS_START (scripts/version-lock-test.js extracts this block)
+const parseAppBuild = (v) => {
+  const m = String(v || "").trim().match(/v(\d{1,6})$/i);
+  return m ? parseInt(m[1], 10) : 0;
+};
+const APP_BUILD = parseAppBuild(process.env.REACT_APP_VERSION);
+const newWriteStamp = (build) => {
+  let r = "";
+  while (r.length < 8) r += Math.random().toString(36).slice(2);
+  return `${build}.${r.slice(0, 8)}`;
+};
+const stampWrite = (payload) => ({ ...(payload || {}), app_build: APP_BUILD, w: newWriteStamp(APP_BUILD) });
+// The rules can't return a custom message — a refused write surfaces as
+// permission-denied. It is a VERSION refusal only when the gate says this
+// build is below the minimum; any other denial keeps today's handling.
+const isPermissionDenied = (e) => !!e && (
+  e.code === "permission-denied" ||
+  /permission[-_ ]denied|insufficient permissions/i.test(String((e && e.message) || "")));
+const isVersionRefusal = (e, minBuild, appBuild = APP_BUILD) =>
+  isPermissionDenied(e) && Number.isFinite(Number(minBuild)) && Number(minBuild) > appBuild;
+// Popup policy (Koy, 2026-10-06: "hard block only on require"). The lock
+// object collects every raise: { newer, latest, gate, refused, forced, since,
+// hardSince }. Pure so scripts/version-lock-test.js can drive the sequences.
+//   HARD (full screen, no close, typing grace, flush, reload, loop guard):
+//     gate     this build is below appGate/version.minBuild
+//     refused  a save came back as a version refusal
+//     forced   Settings → Force Update All Devices (an explicit office command)
+//   SOFT (dismissible card, never blocks): newer — a newer bundle exists but
+//     nothing is required. Idle phones still reload silently; mid-task gets
+//     "Update now / Later". Later hides it until the next newer build is
+//     detected or 30 minutes pass, whichever comes first.
+//   A minBuild raise turns an open soft card into the hard block at once.
+const LOCK_LATER_MS = 30 * 60 * 1000;
+const LOCK_HARD_REASONS = ["gate", "refused", "forced"];
+const isHardLock = (lock, appBuild = APP_BUILD) =>
+  !!lock && (!!lock.refused || !!lock.forced || (lock.gate != null && Number(lock.gate) > appBuild));
+const lockReduce = (prev, reason, extra = {}, now = Date.now()) => {
+  const next = { ...(prev || { since: now }), ...extra };
+  if (reason === "gate") next.gate = Number.isFinite(Number(extra.minBuild)) ? Number(extra.minBuild) : 0;
+  else next[reason] = true;
+  if (LOCK_HARD_REASONS.includes(reason) && !next.hardSince && isHardLock(next)) next.hardSince = now;
+  return next;
+};
+const isSoftNewer = (lock, later, now = Date.now(), appBuild = APP_BUILD) =>
+  !!lock && !!lock.newer && !isHardLock(lock, appBuild) &&
+  !(later && later.latest === (lock.latest || null) && now < later.until);
+const laterFor = (lock, now = Date.now()) => ({ latest: (lock && lock.latest) || null, until: now + LOCK_LATER_MS });
+// VERSION_LOCK_HELPERS_END
+// App() registers the popup here; write paths outside App (public punch page,
+// time-off requests) report through the same funnel.
+const _versionLock = { onRefusal: null, minBuild: null };
+const readMinBuild = async () => {
+  // Readable once the Phase 2 rules are live; until then the catch-all deny
+  // answers permission-denied and we return null (unknown) — never throw.
+  try {
+    const snap = await getDoc(doc(db, "appGate", "version"));
+    const v = snap.exists() ? Number(snap.data().minBuild) : 0;
+    return Number.isFinite(v) ? v : 0;
+  } catch (e) { return null; }
+};
+// Call from the catch of any write to a locked collection. Returns true when
+// the denial was a version refusal (the popup is now up); the CALLER keeps the
+// write in its own queue either way — never clear a queued write on a refusal.
+const reportWriteDenied = async (e, coll, id) => {
+  if (!isPermissionDenied(e)) return false;
+  const minBuild = await readMinBuild();
+  if (minBuild === null) return false;
+  _versionLock.minBuild = minBuild;
+  if (!isVersionRefusal(e, minBuild)) return false;
+  console.error(`[HE version-lock] ${coll}/${id} refused: this build is v${APP_BUILD}, minimum is v${minBuild} — write kept, update required`);
+  try { _versionLock.onRefusal && _versionLock.onRefusal(minBuild); } catch (err) {}
+  return true;
+};
 
 // ── FieldInk (TraceVault) read-only link ─────────────────────────────────────
 // The crew's PDF-markup app lives in its OWN Firebase project ("field-ink").
@@ -1654,62 +1755,26 @@ async function validateAndSyncFCMToken(userId) {
 }
 window.__HE_VALIDATE_FCM = validateAndSyncFCMToken;
 
-// Handle foreground messages (app is open) — show a brief alert-style banner.
-// Reads from payload.data since we send data-only messages to prevent double notifications.
-// Also forwards jobId + section so the toast can deep-link on tap.
-//
-// DEBUG: every step of the foreground-push chain logs to console so we can
-// trace where a "delivered but not visible" push is failing. If you sent a
-// test push and saw NOTHING in the console at all, the push didn't reach the
-// device's service worker. If you see "[HE push] onMessage fired" but no
-// "[HE push] toast set", the React listener didn't pick up the custom event
-// (component not mounted yet, etc).
+// Handle foreground messages (app is open) — in-app toast only.
+// FCM reliability pass (2026-10-04): the push service worker now shows the OS
+// banner for EVERY push, app open or not (public/firebase-messaging-sw.js). This
+// handler used to also call `new Notification(...)`, which throws on Android
+// Chrome and does not exist in an iOS Home-Screen app — so phones with the app
+// open got no banner, and iOS counted those pushes as "silent" and revoked
+// permission. The Firebase SDK in the worker still forwards the payload here
+// when a window is visible, which drives the toast and the Notification
+// Doctor's "received by this browser" check (the he-push event).
 if (messaging) {
-  console.log("[HE push] FCM messaging initialized, registering onMessage handler");
   onMessage(messaging, payload => {
     console.log("[HE push] onMessage fired — payload:", payload);
-    const title   = payload.data?.title   || payload.notification?.title;
-    const body    = payload.data?.body    || payload.notification?.body;
-    const jobId   = payload.data?.jobId   || "";
-    const section = payload.data?.section || "";
-    const tag     = payload.data?.tag     || (jobId ? `he-${jobId}-${section}` : `he-${Date.now()}`);
+    const d = payload.data || {};
+    const title = d.title || payload.notification?.title;
+    const body  = d.body  || payload.notification?.body;
     if (title || body) {
-      console.log("[HE push] dispatching he-push custom event:", { title, body, jobId, section });
-      const ev = new CustomEvent("he-push", { detail: { title, body, jobId, section } });
-      window.dispatchEvent(ev);
-
-      // Also show a system notification banner. This is THE fix for "I assigned
-      // myself foreman and saw nothing" — the foreground onMessage path used to
-      // ONLY render an in-app toast (top-right, 5s), which is invisible when
-      // you're focused on a form. The SW's onBackgroundMessage doesn't fire
-      // when the page is foregrounded, so without this call there's no system
-      // banner at all when the app is visible. Now both fire: in-app toast
-      // (instant feedback) AND OS banner (impossible to miss). Tag dedups the
-      // two so the OS doesn't show two banners — the in-app toast comes from
-      // the he-push event listener, the OS banner from this Notification call.
-      try {
-        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-          const n = new Notification(title || "Homestead Electric", {
-            body: body || "",
-            icon: "/icon-192.png",
-            tag,
-            data: { jobId, section },
-          });
-          n.onclick = () => {
-            window.focus();
-            // Reuse the same SW postMessage shape so existing handlers fire.
-            window.dispatchEvent(new MessageEvent("message", {
-              data: { type: "HE_NOTIF_CLICK", jobId, section },
-            }));
-            try { n.close(); } catch {}
-          };
-          // Auto-close after 6s so banners don't pile up if many pushes arrive.
-          setTimeout(() => { try { n.close(); } catch {} }, 6000);
-          console.log("[HE push] foreground system Notification shown");
-        }
-      } catch (e) {
-        console.warn("[HE push] foreground Notification failed:", e.message);
-      }
+      window.dispatchEvent(new CustomEvent("he-push", { detail: {
+        title, body, jobId: d.jobId || "", section: d.section || "",
+        view: d.view || "", needId: d.needId || "", nid: d.nid || "",
+      } }));
     } else {
       console.warn("[HE push] payload had no title/body — skipping toast");
     }
@@ -1717,6 +1782,14 @@ if (messaging) {
 } else {
   console.warn("[HE push] FCM messaging NOT initialized — pushes will not work");
 }
+
+// A notification tapped while the app was CLOSED opens /?…&nid=<record id>.
+// Captured at module load, before the pendingNav / pendingView initializers
+// strip the query string, so App can mark that inbox record read once the
+// identity loads.
+const LAUNCH_NOTIF_ID = (() => {
+  try { return new URLSearchParams(window.location.search).get("nid") || null; } catch { return null; }
+})();
 
 // Force-update the FCM service worker on every app load to kill stale SW
 // issues. A stale firebase-messaging-sw.js can quietly stop firing onMessage
@@ -2312,6 +2385,12 @@ const commPhaseClosed  = (j, n) => commPhaseChecked(j, n) || !!(commStartOf(j).o
 const commPhaseDone    = (j, n) => COMM_PHASE_BY_N[n].items.filter(([k]) => commItemState(j, n, k) !== "todo").length;
 // The ONLY state: first phase not closed. null = all twelve closed (Ready to Start / on site). Residential → null.
 const commPhase = (j) => { if (!j || j.division !== "commercial") return null; if (j.hiddenSections && j.hiddenSections.jobstart) return null; for (const p of COMM_START_STEPS) if (!commPhaseClosed(j, p.n)) return p.n; return null; };
+// v514 (Justin): overall Job Start progress — done + N/A over every item in the
+// 12 phases (owed items count as not done). The checklist / phases view choice
+// is a per-device preference.
+const commStartPct = (j) => { let done = 0, total = 0; COMM_START_STEPS.forEach(p => p.items.forEach(([k]) => { total++; if (commItemState(j, p.n, k) !== "todo") done++; })); return { done, total, pct: total ? Math.round(done / total * 100) : 0 }; };
+const JOBSTART_VIEW_KEY = "he_jobstart_view_v1";
+const readJobStartView = () => { try { return localStorage.getItem(JOBSTART_VIEW_KEY) === "phases" ? "phases" : "list"; } catch (e) { return "list"; } };
 const commOwedItems = (j) => COMM_START_STEPS.flatMap(p => (commStartOf(j).overrides && commStartOf(j).overrides[p.n]) ? p.items.filter(([k]) => commItemState(j, p.n, k) === "todo").map(([k, l]) => ({ n: p.n, k, label: l })) : []);
 const allPrepChecked = (job) => {
   // v388: an item marked Not Needed (prepNA map) counts as handled — some jobs
@@ -4726,6 +4805,12 @@ const PERMISSIONS = {
   // (generator, panelized, tape light, …). Office + foremen (Koy 2026-09-24:
   // "foremen need to have it too"); leads/crew see the list read-only.
   "job.sections":           ["admin","manager","standard"],
+  // Send a notification to everyone / a group / picked people (bell → Send,
+  // 2026-10-05). Koy: "Office only" — decided by canBroadcast() (office =
+  // bcIsOffice), NOT by tier, because five foremen carry Manager access. No
+  // tier gets it here; this key only exists for a per-person caps grant.
+  // The server re-checks the same rule with the live PIN (requireBroadcaster).
+  "notify.broadcast":       [],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -6973,7 +7058,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -7433,6 +7518,172 @@ const toast = {
   // stays up; a later toast with the same key replaces it, dismiss(key) drops it.
   dismiss: (key)=>window.dispatchEvent(new CustomEvent('he-toast-dismiss', { detail: { key } })),
 };
+
+// ── Drop files on any upload spot (Koy, 2026-10-05) ──────────────────────────
+// "can we make it so i can drag and drop files anywhere you can add files or
+// pictures to? instead of having to click upload and find them everytime"
+//
+// ONE window-level layer, not a handler per upload spot. Every place that takes
+// files already has a hidden <input type="file"> behind its button, and every
+// one of them reads e.target.files in onChange. So a drop hands the files to
+// the input it landed on and fires the same `change` event a click-and-pick
+// would: each spot's own upload code (Storage path, limits, toasts) runs
+// unchanged, and any upload spot added later gets drag-and-drop for free.
+//
+// Which input a drop lands on: each visible, enabled input owns the biggest box
+// around it that holds no OTHER input (a punch row, a note card, a whole tab
+// when it is the only one), never reaching past a fixed layer (an open job, a
+// modal). While dragging, that box is outlined and the button that will receive
+// the files gets a ring + its own label, so you see where they go before you
+// let go. Off every box the cursor shows no-drop and nothing happens; the drop
+// is swallowed either way, so a missed drop can never navigate the app away to
+// the file. Skipped: camera-only twins (`capture`, always paired with a
+// pick-files input) and anything inside [data-no-drop] (settings restore).
+// Only OS file drags are touched; the crew board's card drags never carry
+// "Files", so they pass straight through.
+const heDropAccepts = (file, accept) => {
+  const toks = String(accept || "").split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  if (!toks.length) return true;
+  const name = String((file && file.name) || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot) : "";
+  // Desktop browsers leave the type blank for some phone photos (HEIC) — infer it.
+  const type = String((file && file.type) || "").toLowerCase()
+    || (/^\.(heic|heif|jpe?g|png|gif|webp|bmp|tiff?)$/.test(ext) ? "image/" + ext.slice(1) : "");
+  return toks.some(t => t.startsWith(".") ? ext === t
+    : t.endsWith("/*") ? type.startsWith(t.slice(0, -1))
+    : type === t);
+};
+const heDropKind = (accept) => {
+  const toks = String(accept || "").split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  return toks.length && toks.every(t => t === "image/*" || t.startsWith("image/")) ? "photos" : "files";
+};
+function installFileDrop() {
+  if (typeof window === "undefined" || window.__heFileDrop) return;
+  window.__heFileDrop = true;
+  const hasFiles = (e) => { try { return Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files"); } catch (x) { return false; } };
+  const shown = (el) => !!(el && el.getClientRects().length);
+  const candidates = () => Array.from(document.querySelectorAll('input[type="file"]'))
+    .filter(i => !i.disabled && !i.hasAttribute("capture") && !i.closest("[data-no-drop]") && shown(i.parentElement));
+  const regionOf = (input, all) => {
+    let region = input.parentElement;
+    for (let el = region; el && el !== document.body && el.id !== "root"; el = el.parentElement) {
+      if (all.some(o => o !== input && el.contains(o))) break;
+      region = el;
+      if (getComputedStyle(el).position === "fixed") break;
+    }
+    return region;
+  };
+  const labelOf = (input) => {
+    const t = String((input.parentElement && input.parentElement.textContent) || "").replace(/\s+/g, " ").trim();
+    // Only a real button caption ("Upload Files", "Attach photo / file"); an
+    // icon-only button ("+", "📷 3") gives no name and the hint says "here".
+    return t.length <= 40 && /[a-z]{3}/i.test(t) ? t : "";
+  };
+  // `zones` is built lazily on the first dragover/drop of a drag and thrown
+  // away by reset(), so anything that clears it mid-drag (a missed dragleave,
+  // the idle timer) self-heals on the very next event instead of leaving the
+  // rest of the drag with nowhere to drop.
+  let zones = null, depth = 0, active = false, cur = null, raf = 0, idle = 0;
+  const ensureZones = () => {
+    if (zones) return;
+    const all = candidates();
+    zones = all.map(input => ({ input, region: regionOf(input, all), label: labelOf(input) }));
+  };
+  const box = document.createElement("div"), ring = document.createElement("div"), chip = document.createElement("div");
+  box.style.cssText = "position:fixed;pointer-events:none;z-index:2147483000;border:2px dashed #3B5BA5;border-radius:10px;background:rgba(59,91,165,0.08);display:none;box-sizing:border-box";
+  ring.style.cssText = "position:fixed;pointer-events:none;z-index:2147483001;border:2px solid #3B5BA5;border-radius:8px;box-shadow:0 0 0 4px rgba(59,91,165,0.25);display:none;box-sizing:border-box";
+  chip.style.cssText = "position:fixed;pointer-events:none;z-index:2147483002;left:50%;transform:translateX(-50%);background:#3B5BA5;color:#fff;font:600 13px/1.2 system-ui,-apple-system,sans-serif;padding:7px 14px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,0.25);display:none;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis";
+  const mount = () => { if (!box.isConnected) document.body.append(box, ring, chip); };
+  const place = (el, r, pad) => {
+    const top = Math.max(r.top - pad, 2), left = Math.max(r.left - pad, 2);
+    const bottom = Math.min(r.bottom + pad, window.innerHeight - 2), right = Math.min(r.right + pad, window.innerWidth - 2);
+    if (bottom <= top || right <= left) { el.style.display = "none"; return; }
+    Object.assign(el.style, { display: "block", top: top + "px", left: left + "px", width: (right - left) + "px", height: (bottom - top) + "px" });
+  };
+  const paint = () => {
+    raf = 0;
+    if (!active) { box.style.display = ring.style.display = chip.style.display = "none"; return; }
+    mount();
+    if (!cur) {
+      box.style.display = ring.style.display = "none";
+      chip.textContent = "Drop on a spot that takes files or photos";
+      chip.style.background = "#5E6670"; chip.style.top = ""; chip.style.bottom = "24px"; chip.style.display = "block";
+      return;
+    }
+    const rr = cur.region.getBoundingClientRect();
+    place(box, rr, 0);
+    place(ring, cur.input.parentElement.getBoundingClientRect(), 3);
+    const what = heDropKind(cur.input.accept);
+    chip.textContent = cur.label ? `Drop to add ${what} · ${cur.label}` : `Drop to add ${what} here`;
+    chip.style.background = "#3B5BA5";
+    // Sit just above the outlined box so it never covers the button it names;
+    // below it when the box starts at the top; bottom of the screen when the
+    // box fills the screen.
+    if (rr.top - 40 >= 4) { chip.style.top = (rr.top - 40) + "px"; chip.style.bottom = ""; }
+    else if (rr.bottom + 44 <= window.innerHeight) { chip.style.top = (rr.bottom + 8) + "px"; chip.style.bottom = ""; }
+    else { chip.style.top = ""; chip.style.bottom = "24px"; }
+    chip.style.display = "block";
+  };
+  const repaint = () => { if (!raf) raf = requestAnimationFrame(paint); };
+  const zoneAt = (target) => {
+    ensureZones();
+    for (const z of zones) if (z.region.contains(target)) return z;
+    return null;
+  };
+  const reset = () => { clearTimeout(idle); depth = 0; active = false; cur = null; zones = null; repaint(); };
+  window.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    depth++;
+  }, true);
+  window.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    if (--depth <= 0) reset();
+  }, true);
+  window.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();          // also what stops the browser opening the file in place of the app
+    e.stopPropagation();         // file drags belong to this layer, not to any card-drag handler
+    active = true;
+    cur = zoneAt(e.target);
+    try { e.dataTransfer.dropEffect = cur ? "copy" : "none"; } catch (x) { /* read-only in some browsers */ }
+    // dragover keeps firing while a file is over the page, even with the mouse
+    // still (Chrome ~50 ms; the spec allows ~350 ms ± 200). When it stops (Esc,
+    // or the drag left through a spot that never fired dragleave) the outline
+    // would hang; this clears it. Generous on purpose: a late timer only hides
+    // the outline, and the next dragover brings everything back.
+    clearTimeout(idle); idle = setTimeout(reset, 1500);
+    repaint();
+  }, true);
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const z = zoneAt(e.target);
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    reset();
+    if (!z || !files.length) return;
+    const input = z.input;
+    if (input.disabled || !input.isConnected) { toast.info("That spot is busy — drop again in a moment."); return; }
+    const ok = files.filter(f => heDropAccepts(f, input.accept));
+    if (!ok.length) { toast.error(`This spot only takes ${heDropKind(input.accept)} — nothing was added.`); return; }
+    const use = input.multiple ? ok : ok.slice(0, 1);
+    try {
+      const dt = new DataTransfer();
+      use.forEach(f => dt.items.add(f));
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (x) {
+      console.error("[HE] file drop failed", x);
+      toast.error("This browser can't drop files here — use the upload button.");
+      return;
+    }
+    const skipped = files.length - use.length;
+    if (skipped) toast.info(`${skipped} file${skipped !== 1 ? "s" : ""} skipped — ${input.multiple ? `this spot only takes ${heDropKind(input.accept)}` : "this spot takes one file"}.`);
+  }, true);
+  window.addEventListener("dragend", reset, true);
+}
+installFileDrop();
 
 // ── Zoomable photo lightbox (2026-08-10, Koy: "need any pictures uploaded to
 // be zoominable") ─────────────────────────────────────────────────────────────
@@ -14395,8 +14646,10 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
       : { t: "—", bg: "transparent", fg: C.muted };
     const unit = wire ? "FT" : "EA";
     return (
-      <div key={`st-${r.catalogId}-${r.name}`} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 82px 82px 104px",gap:8,padding:"4px 2px",fontSize:11,color:C.text,alignItems:"center",borderTop:`1px solid ${C.surface}`,background:wire?"#3B5BA508":"transparent"}}>
-        <div style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+      <div key={`st-${r.catalogId}-${r.name}`} style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) 82px 82px 104px",gap:8,padding:"4px 2px",fontSize:11,color:C.text,alignItems:"center",borderTop:`1px solid ${C.surface}`,background:wire?"#3B5BA508":"transparent"}}>
+        {/* v512: the full name wraps (it used to cut off with "…" — on a phone the
+            three number columns left the name almost no room). */}
+        <div style={{minWidth:0,whiteSpace:"normal",overflowWrap:"anywhere"}}>
           {r.name}{r.partNo && <span style={{color:C.dim,fontSize:10,marginLeft:6}}>{r.partNo}</span>}
           {from && <span style={{display:"block",fontSize:10,color:C.dim,whiteSpace:"normal"}}>from {from}</span>}
         </div>
@@ -14406,8 +14659,17 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
       </div>
     );
   };
+  // v512 (Koy: "on mobile you should be able to scroll to the right… the wire
+  // section of bid items, you cant see the full names"): every stock table sits
+  // in its own sideways-scroll box, at least wide enough for a readable name
+  // column next to Required / Assigned / badge (150 + 82 + 82 + 104 + gaps).
+  const stockScroll = (kids) => (
+    <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+      <div style={{minWidth:444}}>{kids}</div>
+    </div>
+  );
   const colHead = (
-    <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 82px 82px 104px",gap:8,padding:"2px 2px 4px",fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim}}>
+    <div style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) 82px 82px 104px",gap:8,padding:"2px 2px 4px",fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim}}>
       <span>Item</span><span style={{textAlign:"right"}}>Required</span><span style={{textAlign:"right"}}>Assigned</span><span/>
     </div>
   );
@@ -14641,13 +14903,13 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
                 </div>
 
                 {isOpen && rowsToShow.length > 0 && (
-                  <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
+                  <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>{stockScroll(<>
                     {colHead}
                     {wireRows.length > 0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Wire &amp; cable</div>}
                     {wireRows.map(r => stockRow(r, true))}
                     {otherRows.length > 0 && wireRows.length > 0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Everything else</div>}
                     {otherRows.map(r => stockRow(r, false))}
-                  </div>
+                  </>)}</div>
                 )}
                 {isOpen && srows.length > 0 && itemCount > 0 && !filtering && (
                   <button type="button" onClick={()=>setBidLinesOpen(v=>({...v,[key]:!v[key]}))}
@@ -14713,10 +14975,10 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
             <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:11,color:C.dim,letterSpacing:0}}>{wireRollup.length} items across {stock.costCenters.length} cost centers</span>
           </button>
           {wireOpen && (
-            <div style={{marginTop:6}}>
+            <div style={{marginTop:6}}>{stockScroll(<>
               {colHead}
               {wireRollup.map(w => stockRow({ ...w, name: w.ccCount > 1 ? `${w.name} (${w.ccCount} cost centers)` : w.name }, true))}
-            </div>
+            </>)}</div>
           )}
         </div>
       )}
@@ -25496,11 +25758,30 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
 // at Simpro import (name + Simpro # arrive complete, so the half-typed-name
 // problem that removed auto-create can't happen) and when a hand-made
 // commercial job gets its Simpro #. Progress streams onto job.docPull as today.
+// Plan intake (PLAN_INTAKE_SPEC.md Phase 1, v505): if this job — or this app
+// quote — came from a Simpro quote the plan-intake watcher already made a
+// folder for, link THAT folder (renamed "#<job> - <name>", same id) instead of
+// making a duplicate. Returns "" whenever there's nothing to link, the watcher
+// isn't live yet, or the call fails — callers then carry on exactly as before.
+async function linkQuoteFolderFirst(jobId) {
+  try {
+    const r = await httpsCallable(functions, "linkQuoteFolder")({ jobId });
+    return (r?.data?.linked && r.data.folderId) || "";
+  } catch (e) {
+    console.warn("[HE] linkQuoteFolder skipped:", e?.message || e);
+    return "";
+  }
+}
+
 async function runDriveChain(jobId, by) {
+  const linked = await linkQuoteFolderFirst(jobId);
   const mk = httpsCallable(functions, "createJobDriveFolder");
-  const r1 = await mk({ jobId });
+  const r1 = linked ? { data: { folderId: linked, alreadyLinked: true } } : await mk({ jobId });
   const folderId = r1?.data?.folderId || "";
   if (!folderId) throw new Error("Could not create the Drive folder.");
+  // A plan-intake folder already mirrors Simpro under SIMPRO/ and the watcher
+  // keeps filing there — the v413 pull would dump a second copy at the top.
+  if (linked) return { folderId, created: false, pull: { linkedQuoteFolder: true } };
   const pull = httpsCallable(functions, "pullJobDocsToDrive", { timeout: 540000 });
   const r2 = await pull({ jobId, provider: "simpro", by: by || "" }).catch(e => ({ data: { error: e.message || String(e) } }));
   return { folderId, created: !r1?.data?.alreadyLinked, pull: r2?.data || {} };
@@ -25590,15 +25871,20 @@ function DriveFilesSection({ job, onUpdate }) {
     setCreating(true);
     setError("");
     try {
+      // Plan intake: reuse the quote's folder when there is one (never throws).
+      const linked = await linkQuoteFolderFirst(job.id);
       const fn = httpsCallable(functions, "createJobDriveFolder");
-      const res = await fn({ jobId: job.id });
+      const res = linked ? { data: { folderId: linked } } : await fn({ jobId: job.id });
       const fid = res?.data?.folderId;
+      if (linked) toast.success("Linked the folder already made for this quote");
       if (fid) {
         onUpdate({ driveFolderId: fid });
         setFolderInput(fid);
         setEditingFolder(false);
         // v413: the whole point — bring the Simpro subfolders + plans over now.
-        if (simproJobNoOf(job)) runDocPull(fid);
+        // Not for a plan-intake quote folder: it already mirrors Simpro under
+        // SIMPRO/ and the watcher keeps it filled (a pull would copy it twice).
+        if (simproJobNoOf(job) && !linked) runDocPull(fid);
       } else {
         setError("Could not create the Drive folder.");
       }
@@ -26189,28 +26475,23 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
-function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters, simproStock=null, simproStockErr=null, simproStockRefreshing=false, onRefreshSimproStock=null}) {
+function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
   return (
 
     <div>
 
-      {/* Bid Items — "Is this in the bid?" search at the top of the tab.
-          Lives here because it's the first place the field team checks
-          before scheduling material, pulling wire, or writing a CO. */}
-      <Section label="Bid Items (Simpro)" color={C.blue||"#3B5BA5"} defaultOpen={false}>
-        <BidItemsPanel
-          simproNo={simproJobNoOf(job)}
-          data={simproCostCenters}
-          error={simproCostCentersErr}
-          refreshing={simproCostCentersRefreshing}
-          onRefresh={onRefreshSimproCostCenters}
-          stock={simproStock}
-          stockErr={simproStockErr}
-          stockRefreshing={simproStockRefreshing}
-          onRefreshStock={onRefreshSimproStock}
-        />
-      </Section>
+      {/* Bid Items used to be a folded section right here; it has its own tab
+          now (next one over). This line catches anyone whose thumb still
+          comes here first. */}
+      {onOpenBidItems && (
+        <button type="button" onClick={onOpenBidItems}
+          style={{display:"flex",alignItems:"center",gap:6,width:"100%",marginBottom:14,
+            background:"none",border:`1px dashed ${C.border}`,borderRadius:8,padding:"8px 12px",
+            color:C.blue,fontSize:12,fontWeight:600,fontFamily:"inherit",cursor:"pointer",textAlign:"left"}}>
+          Looking for Bid Items (Simpro)? It has its own tab now — tap to open it →
+        </button>
+      )}
 
       {/* Google Drive Plans */}
       <DriveFilesSection job={job} onUpdate={onUpdate} />
@@ -26448,12 +26729,14 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 
 // Default tab order. Panelized Lighting + Tape Light sit just after Home Runs
 // because on lighting-heavy jobs the foreman hops between Home Runs and the
-// lighting tabs constantly.
-const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
+// lighting tabs constantly. Bid Items got its own tab right after Plans & Links
+// (Koy, 2026-10-05: "people cant remember where it is so it needs to be easier
+// to see") — it used to be a folded section at the top of Plans & Links.
+const TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Rough","Finish","Questions","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","Completed","QC"];
 // ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
 // v467: the on-site commercial phase tabs (Koy: "power, lighting, gear, underground;
 // tabs inside of underground: utility work, building site work, building
 // underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
@@ -27524,6 +27807,13 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                 </select>
               </div>
             </div>
+            {job.quickJobType === "tempped" && job.pickupPedFor && (
+              <div style={{ marginTop: 10, background: `${C.purple}10`, border: `1px solid ${C.purple}44`, borderRadius: 8,
+                padding: "8px 11px", fontSize: 12, color: C.text }}>
+                Picking up <b>{job.pickupPedNumber ? `Ped #${job.pickupPedNumber}` : "the temp ped"}</b>{job.pickupPedJobName ? <> from <b>{job.pickupPedJobName}</b></> : null}.
+                <span style={{ color: C.dim }}> Completing this job marks the ped picked up on Job Prep → Temp Peds Out.</span>
+              </div>
+            )}
             {/* Access Note */}
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Access Note (gate code, keybox, entry instructions)</div>
@@ -27897,7 +28187,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                     color:job.tempPedNumber?C.text:C.dim,padding:"8px 10px",fontSize:13,
                     fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
                   <option value="">Select #</option>
-                  {["1","2","3","4","5","6","7","8","9","10"].map(n=><option key={n} value={n}>{n}</option>)}
+                  {Array.from({length:100},(_,i)=>String(i+1)).map(n=><option key={n} value={n}>{n}</option>)}
                 </select>
               </div>
             </div>
@@ -28126,7 +28416,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[], onUpdateOtherJob=null}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -28140,6 +28430,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   //   • Same job, OUR OWN device's echo → skip (our local copy is the freshest).
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
+  // Temp ped cards that may be this job's ped (ask first — see tpLinkWhy).
+  const pedGroupsAll = useMemo(()=>tempPedGroups(jobs), [jobs]);
+  const pedLinkSuggest = useMemo(()=>(job.type==="quote" ? [] : tpLinkSuggestionsForJob(job, jobs, pedGroupsAll)), [job, jobs, pedGroupsAll]);
   const _lastJobIdRef = useRef(rawJob?.id);
   useEffect(()=>{
     const idChanged = rawJob?.id !== _lastJobIdRef.current;
@@ -28251,7 +28544,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     const t = setTimeout(() => {
       driveChainFiredRef.current = job.id;
       runDriveChain(job.id, getIdentity()?.name || "")
-        .then(r => { if (r.folderId) u({ driveFolderId: r.folderId }); toast.success(`Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`); })
+        .then(r => { if (r.folderId) u({ driveFolderId: r.folderId }); toast.success(r.pull && r.pull.linkedQuoteFolder ? "Linked the folder already made for this quote — its Simpro plans are in SIMPRO" : `Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`); })
         .catch(e => { driveChainFiredRef.current = ""; toast.error(`Drive folder: ${e.message || e}`); });
     }, 2000);
     return () => clearTimeout(t);
@@ -29714,7 +30007,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         {/* Body */}
 
-        <div ref={_bodyRef} style={{flex:1,overflowY:"auto",padding:"20px 22px",touchAction:"pan-y"}}>
+        {/* v512: no touchAction:"pan-y" here — on iPhone it also blocked sideways
+            scrolling of every wide table inside the job (appliance loads, panel
+            schedules, …). useHeTabSwipe now steps aside on its own instead. */}
+        <div ref={_bodyRef} style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
 
           {/* Up Next panel — moved inside the body 2026-05-25 so it
               scrolls with content instead of being pinned above the
@@ -31867,14 +32163,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <PlansTab
               job={job}
               onUpdate={u}
-              simproCostCenters={simproCostCenters}
-              simproCostCentersErr={simproCostCentersErr}
-              simproCostCentersRefreshing={simproCostCentersRefreshing}
-              onRefreshSimproCostCenters={refetchSimproCostCenters}
-              simproStock={simproStock}
-              simproStockErr={simproStockErr}
-              simproStockRefreshing={simproStockRefreshing}
-              onRefreshSimproStock={refetchSimproStock}
+              onOpenBidItems={()=>setTab("Bid Items")}
+            />
+          )}
+
+          {/* Bid Items — "Is this in the bid?" Every cost center and line on the
+              job's Simpro bid, plus Required vs Assigned. Its own tab since
+              v510; the data still loads when the job opens (simproCostCenters /
+              simproStock effects above), so switching here is instant. */}
+          {tab==="Bid Items"&&(
+            <BidItemsPanel
+              simproNo={simproJobNoOf(job)}
+              data={simproCostCenters}
+              error={simproCostCentersErr}
+              refreshing={simproCostCentersRefreshing}
+              onRefresh={refetchSimproCostCenters}
+              stock={simproStock}
+              stockErr={simproStockErr}
+              stockRefreshing={simproStockRefreshing}
+              onRefreshStock={refetchSimproStock}
             />
           )}
 
@@ -32334,6 +32641,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Job Info"&&(
 
             <div>
+              {pedLinkSuggest.length>0&&onUpdateOtherJob&&!isSectionHidden(job,"tempPed")&&pedLinkSuggest.map(s=>(
+                <div key={s.inst.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14,background:`${C.blue}0D`,
+                  border:`1px solid ${C.blue}44`,borderRadius:10,padding:"10px 12px",fontSize:12.5,color:C.text}}>
+                  <span style={{flex:"1 1 240px",minWidth:0}}>
+                    <b>Temp ped{s.num?` #${s.num}`:""}</b> is out on the temp ped card <b>“{s.inst.name||"Untitled"}”</b>
+                    <span style={{color:C.dim}}> · {s.why}. Is it on this job?</span>
+                  </span>
+                  <button type="button" onClick={()=>onUpdateOtherJob(s.inst.id, tpSkipPatch(s.inst, job.id))}
+                    style={{padding:"7px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",color:C.text,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Not this one</button>
+                  <button type="button" onClick={()=>{ const p=tpLinkPatches(s.inst, job); u(p.full); onUpdateOtherJob(s.inst.id, p.install);
+                      toast.success(`Ped ${s.num?`#${s.num} `:""}linked to this job`); }}
+                    style={{padding:"7px 12px",borderRadius:8,border:"none",background:C.blue,color:"#fff",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Link to this job</button>
+                </div>
+              ))}
 
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
@@ -32805,7 +33126,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   {!isSectionHidden(job,"tempPed")&&(
                   <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                     <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                      <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
+                      <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:"",
+                        ...(e.target.checked && !job.hasTempPed ? { tempPedOutAt: tpToday(), tempPedReturnedAt: "", tempPedReturnedBy: "" } : {})})}
                         style={{accentColor:C.blue,width:16,height:16}}/>
                       <span style={{fontSize:13,color:C.text}}>Temp pedestal on site</span>
                     </label>
@@ -32824,6 +33146,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {job.tempPedNumber&&(
                           <span style={{fontSize:12,color:C.blue,fontWeight:700}}>#{job.tempPedNumber}</span>
                         )}
+                        {job.tempPedReturnedAt
+                          ? <span style={{fontSize:12,color:C.green,fontWeight:700}}>Picked up {job.tempPedReturnedAt}{job.tempPedReturnedBy?` · ${job.tempPedReturnedBy}`:""}</span>
+                          : job.tempPedOutAt ? <span style={{fontSize:12,color:C.dim}}>Out since {job.tempPedOutAt}</span> : null}
+                        {job.tempPedInstallId&&(()=>{ const inst=(jobs||[]).find(x=>x.id===job.tempPedInstallId);
+                          return <span style={{fontSize:12,color:C.dim}}>from temp ped card “{inst?inst.name||"Untitled":"removed"}”
+                            {onUpdateOtherJob&&<button type="button" onClick={()=>{ const p=tpUnlinkPatches(inst, job); u(p.full); if(p.install) onUpdateOtherJob(inst.id, p.install);
+                                toast.success("Unlinked from the temp ped card"); }}
+                              style={{marginLeft:6,background:"none",border:"none",padding:0,color:C.blue,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>Unlink</button>}</span>; })()}
                       </div>
                     )}
                   </div>
@@ -44136,6 +44466,148 @@ function CoordinatorWorklist({ allJobs = [], users = [], identity, book = "all",
   );
 }
 
+// ── Plan intake: Today → Plans card (PLAN_INTAKE_SPEC.md Phase 4, v508) ─────
+// Reads agentFindings (written only by the plan-intake functions): folders made
+// from site walks, plans filed from email, and what the Routine wasn't sure of.
+// Head of Residential hat only (live team record — the v465 lesson). Starts
+// folded with counts (Koy's standing rule). The only writes: "seen" stamps
+// (rules allow seen/seenAt/seenBy and nothing else) and "File it", which goes
+// through the planFileByHand callable (name + PIN, server re-checks the hat).
+const PLAN_NEEDS = ["co_candidate", "folder_conflict", "unmatched_plan", "walk_unmatched", "watcher_error"];
+const PLAN_LABEL = {
+  co_candidate: "Possible CO", folder_conflict: "Two folders", unmatched_plan: "Not sure where", walk_unmatched: "Walk not matched",
+  watcher_error: "Error", plans_filed: "Filed", folder_created: "Folder made", folder_adopted: "Folder linked", folder_renamed: "Renamed",
+  folder_linked: "Folder linked", walk_existing_job: "Walk on job", quote_merged: "Folded into job", quote_closed: "Quote closed",
+};
+const PLAN_CATS = [["plans", "Plans"], ["cabinet", "Cabinet"], ["appliance", "Appliance"], ["design", "Design"], ["specs", "Specs"], ["redlines", "Redlines"]];
+const planNum = (n) => { const s = String(n || ""); return !s ? "No number" : /^Q/i.test(s) ? `Quote #${s.slice(1)}` : `#${s.replace(/^#/, "")}`; };
+const planAgo = (iso) => { const t = Date.parse(iso || ""); if (!t) return ""; const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${Math.max(1, m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+
+function PlanFileForm({ f, identity, onDone }) {
+  const guess = String(f.bestGuess || f.number || "");
+  const [kind, setKind] = useState(/^Q/i.test(guess) ? "quote" : "job");
+  const [num, setNum] = useState(guess.replace(/\D/g, ""));
+  const [cat, setCat] = useState("plans");
+  const [busy, setBusy] = useState(false);
+  const file = async () => {
+    if (!/^\d{3,6}$/.test(num)) { toast.error("Enter the job or quote number"); return; }
+    setBusy(true);
+    try {
+      const r = await gcAdminCallable("planFileByHand", identity)({ item: f.item, kind, number: num, category: cat });
+      toast.success(`Filed as ${r?.data?.name || "planned"}`);
+      onDone && onDone();
+    } catch (e) { toast.error(e?.message || "Couldn't file it"); }
+    finally { setBusy(false); }
+  };
+  const inp = { fontSize: 13, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.card, color: C.text, fontFamily: "inherit" };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
+      <select value={kind} onChange={(e) => setKind(e.target.value)} style={inp} aria-label="Job or quote">
+        <option value="job">Job #</option><option value="quote">Quote #</option>
+      </select>
+      <input value={num} onChange={(e) => setNum(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="1430" style={{ ...inp, width: 80 }} aria-label="Number"/>
+      <select value={cat} onChange={(e) => setCat(e.target.value)} style={inp} aria-label="Category">
+        {PLAN_CATS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      <button onClick={file} disabled={busy}
+        style={{ fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 6, border: "none", background: C.accent, color: "#fff", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: "inherit" }}>
+        {busy ? "Filing…" : "File it"}
+      </button>
+    </div>
+  );
+}
+
+function PlansCard({ identity, users = [] }) {
+  const live = (identity && (users || []).find(u => u && (u.id === identity.id || sameName(u.name, identity.name)))) || identity;
+  const allowed = can(live, "resi.head");
+  const [rows, setRows] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [showSeen, setShowSeen] = useState(false);
+  useEffect(() => {
+    if (!allowed) return undefined;
+    const q = query(collection(db, "agentFindings"), orderBy("createdAt", "desc"), limit(250));
+    return onSnapshot(q, (snap) => {
+      const cutoff = Date.now() - 14 * 86400000;
+      setRows(snap.docs.filter(d => !/^(dry|test)_/.test(d.id)).map(d => ({ id: d.id, ...d.data() }))
+        .filter(f => Date.parse(f.createdAt || "") >= cutoff));
+    }, (e) => console.warn("[HE] Plans card listener", e?.message || e));
+  }, [allowed]);
+  if (!allowed) return null;
+  const markSeen = (ids) => ids.forEach(id => updateDoc(doc(db, "agentFindings", id), { seen: true, seenAt: new Date().toISOString(), seenBy: identity?.name || "" })
+    .catch(e => toast.error(`Couldn't mark seen: ${e?.message || e}`)));
+  const visible = rows.filter(f => showSeen || !f.seen);
+  const needs = visible.filter(f => PLAN_NEEDS.includes(f.type));
+  const groups = [];
+  const byNum = new Map();
+  for (const f of visible.filter(f => !PLAN_NEEDS.includes(f.type))) {
+    const k = String(f.number || "");
+    if (!byNum.has(k)) { byNum.set(k, []); groups.push(k); }
+    byNum.get(k).push(f);
+  }
+  const unseen = rows.filter(f => !f.seen);
+  const unseenNeeds = unseen.filter(f => PLAN_NEEDS.includes(f.type)).length;
+  const card = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 12 };
+  const chip = (bg, fg) => ({ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 99, background: bg, color: fg, whiteSpace: "nowrap" });
+  const link = { fontSize: 12, color: C.accent, textDecoration: "none", fontWeight: 600 };
+  // A render function, not a component: a component declared here would be a new
+  // type every render and wipe the File-it form whenever a finding arrives.
+  const renderRow = (f, need) => (
+    <div key={f.id} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.border}`, opacity: f.seen ? 0.55 : 1 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 99, marginTop: 6, flex: "0 0 7px", background: f.seen ? "transparent" : (need ? C.red : C.accent) }}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span style={chip(need ? "#F6E3E3" : "#E6EBF5", need ? C.red : C.accent)}>{PLAN_LABEL[f.type] || f.type}</span>
+          {need && f.number && <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{planNum(f.number)}</span>}
+          <span style={{ fontSize: 11, color: C.dim, marginLeft: "auto" }}>{planAgo(f.createdAt)}</span>
+        </div>
+        <div style={{ fontSize: 13, color: C.text, marginTop: 3, overflowWrap: "anywhere" }}>{f.summary}</div>
+        <div style={{ display: "flex", gap: 12, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+          {(f.links || []).map((l, i) => <a key={i} href={l.url} target="_blank" rel="noreferrer" style={link}>{l.label}</a>)}
+          {!f.seen && <button onClick={() => markSeen([f.id])} style={{ ...link, background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: "inherit" }}>Seen</button>}
+        </div>
+        {need && f.type === "unmatched_plan" && f.canFile && !f.seen && <PlanFileForm f={f} identity={identity}/>}
+      </div>
+    </div>
+  );
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 8, textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setOpen(o => !o)}>
+        <Icon name="folder" size={14} stroke={2}/> Plans
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, textTransform: "none", letterSpacing: 0 }}>
+          {unseenNeeds > 0 && <span style={chip("#F6E3E3", C.red)}>{unseenNeeds} need you</span>}
+          <span style={{ fontSize: 11, fontWeight: 400, color: C.dim }}>{unseen.length} new</span>
+          <span style={{ fontSize: 11, color: C.dim, transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 80ms" }}>▾</span>
+        </span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {visible.length === 0 && <div style={{ fontSize: 13, color: C.dim, padding: "8px 0" }}>{rows.length ? "All caught up." : "Nothing from plan intake in the last two weeks."}</div>}
+          {needs.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.red, letterSpacing: "0.06em", margin: "6px 0 2px" }}>NEEDS YOU</div>
+              {needs.map(f => renderRow(f, true))}
+            </div>
+          )}
+          {groups.map(k => (
+            <div key={k || "none"} style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.dim, letterSpacing: "0.06em", margin: "6px 0 2px" }}>{planNum(k).toUpperCase()}</div>
+              {byNum.get(k).slice(0, 6).map(f => renderRow(f, false))}
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+            {unseen.length > 0 && <button onClick={() => markSeen(unseen.filter(f => !PLAN_NEEDS.includes(f.type)).map(f => f.id))}
+              style={{ fontSize: 12, fontWeight: 600, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.text, cursor: "pointer", fontFamily: "inherit" }}>
+              Mark updates seen</button>}
+            <button onClick={() => setShowSeen(s => !s)} style={{ fontSize: 12, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>
+              {showSeen ? "Hide seen" : "Show seen"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
@@ -44597,6 +45069,9 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
           Auto-refreshing
         </div>
       </div>
+
+      {/* Plan intake — Head of Residential only (renders nothing for anyone else). */}
+      <PlansCard identity={identity} users={users}/>
 
       {/* Coordinator book filter — office only, shows once foremen have a
           coordinator assigned in Settings → Team. "All" = whole company.
@@ -46495,10 +46970,946 @@ function ActivityLog({ jobs, embedded = false }) {
   );
 }
 
+// ── Send a notification (Koy, 2026-10-05) ────────────────────────────────────
+// "i would like the option to send out a notification to either everyone or
+// select people with a custom message. For example i could send a mass
+// notification right now to everyone that says bid items moved to its own tab,
+// or i could send a custom one to just foreman, or whoever i select."
+// Opens from the bell (office only: notify.broadcast). Group chips fill the
+// people list; the list folds open for fine-tuning. The server side is
+// sendBroadcast (requireAdmin, the live-PIN gate), and every recipient gets an
+// ordinary notification: saved to their bell first, pushed, retried for 12 h.
+// One broadcast id per send (kept until it succeeds) = the eventKey, so a
+// retried tap can never buzz anyone twice. listBroadcasts → Recently sent.
+const BC_TITLE_OF = (u) => u.title
+  || (["admin", "justin", "jeromy"].includes(u.role) ? "admin" : (["foreman", "lead", "crew"].includes(u.role) ? u.role : "crew"));
+// Office = title Admin, or Admin/Manager access WITHOUT a field title. Access
+// alone is wrong: five foremen carry Manager access (Keegan, Colby, Abraham,
+// Daegan, Gage — live team list 2026-10-05), and Jeromy is office with a Crew
+// title. So Office = Koy · Josh · Brady · Justin · Jeromy; Crew excludes office.
+const bcIsOffice = (u) => BC_TITLE_OF(u) === "admin"
+  || (["admin", "manager"].includes(getAccess(u)) && !["foreman", "jrforeman", "lead"].includes(BC_TITLE_OF(u)));
+// Bell → Send is office only (Koy, 2026-10-05). Mirrors ND.isBroadcaster.
+const canBroadcast = (identity) => !!identity && identity.active !== false
+  && (bcIsOffice(identity) || can(identity, "notify.broadcast"));
+const BC_GROUPS = [
+  ["everyone", "Everyone",            () => true],
+  ["office",   "Office",              bcIsOffice],
+  ["foremen",  "Foremen",             u => BC_TITLE_OF(u) === "foreman"],
+  ["leads",    "Leads & Jr. Foremen", u => isLeadTitle(BC_TITLE_OF(u))],
+  ["crew",     "Crew",                u => BC_TITLE_OF(u) === "crew" && !bcIsOffice(u)],
+];
+const bcKeyOf = (u) => String(u.id || u.name || "");
+const bcNewId = () => `bc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+const bcErrText = (e) => /permission/i.test(String((e && (e.code || e.message)) || ""))
+  ? "Only the office can send team notifications. If that's you, sign out and back in so your PIN is fresh."
+  : `Couldn't send: ${String((e && e.message) || "unknown error").slice(0, 140)}`;
+
+// ── Announcements (Koy, 2026-10-06 — approved mockup) ───────────────────────
+// Office messages come in three kinds, each with its own color so they never
+// blend into the change-order / return-trip pings: Announcement (one-way),
+// Important (each person taps Got it; pinned on My Day until they do) and
+// Discussion (one thread; every reply notifies everyone in it). No yellow.
+const BC_KINDS = {
+  announcement: { label: "Announcement", color: C.accent, desc: "One-way. Shows who opened it." },
+  important:    { label: "Important",    color: C.red,    desc: "Each person taps Got it. Pinned on their My Day until they do, with a morning reminder." },
+  discussion:   { label: "Discussion",   color: C.purple, desc: "Everyone can reply in one thread. Every reply notifies the whole group." },
+};
+const bcKindOf = (k) => (BC_KINDS[k] ? k : "announcement");
+const bcReplyId = () => `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+const bcIsImage = (a) => /^image\//.test((a && a.type) || "") || /\.(jpe?g|png|gif|webp|heic|heif)(\?|$)/i.test((a && a.name) || "");
+const bcOpenErr = (e) => {
+  const c = String((e && (e.code || e.message)) || "");
+  if (/not-found/i.test(c)) return "This message isn't on record any more.";
+  if (/permission/i.test(c)) return String((e && e.message) || "") || "Sign in again to open this.";
+  return `Couldn't load it: ${String((e && e.message) || "unknown error").slice(0, 140)}`;
+};
+const bcTag = (kind, text) => (
+  <span style={{ display: "inline-flex", alignItems: "center", fontSize: 10, fontWeight: 800, letterSpacing: "0.06em",
+    textTransform: "uppercase", color: "#fff", background: BC_KINDS[bcKindOf(kind)].color, borderRadius: 5, padding: "2px 7px", flexShrink: 0 }}>
+    {text || BC_KINDS[bcKindOf(kind)].label}
+  </span>
+);
+
+// One row per office message (Koy, 2026-10-06 mockup). A message lands in a
+// person's bell as several copies that share broadcastId — the message itself,
+// office reminders, and one per discussion reply — so they're merged here and
+// the bell, the My Day tabs and every count use ONE "needs you" rule:
+// Important until Got it · Announcement until opened · Discussion while it has
+// unread replies (or was never opened). Test sends are sender-only previews
+// and stay out. Newest activity first.
+const bcGroupMessages = (items) => {
+  const by = new Map();
+  (items || []).forEach(i => {
+    if (!i || !i.broadcastId || i.test) return;
+    if (!by.has(i.broadcastId)) by.set(i.broadcastId, []);
+    by.get(i.broadcastId).push(i);
+  });
+  const t = (i) => String((i && i.createdAt) || "");
+  return [...by.entries()].map(([id, list]) => {
+    const copies = list.slice().sort((a, b) => t(b).localeCompare(t(a)));
+    const origs = copies.filter(c => !c.reminder && !c.replyBy);
+    const orig = origs.length ? origs[origs.length - 1] : null;   // the sender gets replies only, no original
+    const base = orig || copies[copies.length - 1];
+    const kind = bcKindOf(base.kind);
+    const replies = copies.filter(c => c.replyBy);
+    const newReplies = replies.filter(c => !c.read).length;
+    const unreadIds = copies.filter(c => !c.read).map(c => c.id);
+    const needs = kind === "important" ? !!(orig && !orig.ackAt)
+      : kind === "discussion" ? (newReplies > 0 || !!(orig && !orig.read))
+      : unreadIds.length > 0;
+    return { id, kind, needs, orig, newReplies, unreadIds, replyCount: replies.length,
+      headline: base.headline || stripEmoji(base.title || "") || "Message from the office",
+      body: orig ? (orig.body || "") : "", from: base.from || "",
+      attachments: Array.isArray(base.attachments) ? base.attachments : [],
+      ackAt: (orig && orig.ackAt) || "", at: t(orig || base), lastAt: t(copies[0]),
+      lastReply: replies.length ? (replies[0].body || "") : "" };
+  }).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+};
+// Tab / pager order: what needs you first, then the rest; newest activity first in each.
+const bcTabOrder = (msgs) => [...(msgs || []).filter(m => m.needs), ...(msgs || []).filter(m => !m.needs)];
+const bcNeedLabel = (m) => m.kind === "important" ? "Tap Got it"
+  : m.kind === "discussion" ? (m.newReplies ? `${m.newReplies} new ${m.newReplies === 1 ? "reply" : "replies"}` : "New") : "New";
+
+// Photos as a tap-to-open grid, other files as named tiles.
+function BcAttachments({ list }) {
+  const all = Array.isArray(list) ? list.filter(a => a && a.url) : [];
+  if (!all.length) return null;
+  const imgs = all.filter(bcIsImage), files = all.filter(a => !bcIsImage(a));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {imgs.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>
+          {imgs.map(a => (
+            <a key={a.url} href={safeUrl(a.url)} target="_blank" rel="noreferrer" title={a.name}
+              style={{ display: "block", aspectRatio: "1 / 1", maxWidth: "100%", borderRadius: 8, overflow: "hidden", border: `1px solid ${C.border}`, background: C.surface }}>
+              <img src={a.url} alt={a.name || "Photo"} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}/>
+            </a>
+          ))}
+        </div>
+      )}
+      {files.map(a => (
+        <a key={a.url} href={safeUrl(a.url)} target="_blank" rel="noreferrer"
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", borderRadius: 8, border: `1px solid ${C.border}`,
+            background: C.surface, color: C.text, textDecoration: "none", fontSize: 13, fontWeight: 600, minWidth: 0 }}>
+          <Icon name="fileText" size={15}/>
+          <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{a.name || "File"}</span>
+          <span style={{ fontSize: 11, color: C.accent, flexShrink: 0 }}>Open ↗</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// The full message, opened from the bell, a push, the My Day pin or a My Day tab.
+// siblings = the same kind's message ids in tab order, so ‹ › steps through them
+// without going back (Koy, 2026-10-06: "click into each one").
+function AnnouncementView({ identity, id, onClose, siblings = [], onStep }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [acking, setAcking] = useState(false);
+  const [reply, setReply] = useState("");
+  const [replyFiles, setReplyFiles] = useState([]);
+  const [posting, setPosting] = useState(false);
+  const replyIdRef = useRef(bcReplyId());
+  const load = useCallback(() => {
+    memberCallable("broadcastOpen", identity)({ id })
+      .then(r => { setD((r && r.data) || null); setErr(""); })
+      .catch(e => setErr(bcOpenErr(e)));
+  }, [identity, id]);
+  useEffect(() => { load(); }, [load]);
+  // A discussion refreshes while it's open, so new replies show up on their own.
+  const isDiscussion = !!(d && d.kind === "discussion");
+  useEffect(() => {
+    if (!isDiscussion) return undefined;
+    const t = setInterval(load, 25000);
+    return () => clearInterval(t);
+  }, [isDiscussion, load]);
+
+  const ack = async () => {
+    setAcking(true);
+    try {
+      const r = await memberCallable("ackBroadcast", identity)({ id });
+      setD(prev => ({ ...(prev || {}), myAckAt: (r && r.data && r.data.ackAt) || new Date().toISOString() }));
+      toast.success("Confirmed — the office can see you've read it.");
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setAcking(false);
+  };
+  const post = async () => {
+    const text = reply.trim();
+    if (!text && !replyFiles.length) return;
+    setPosting(true);
+    try {
+      await memberCallable("replyBroadcast", identity)({ id, rid: replyIdRef.current, text,
+        attachments: replyFiles.map(a => ({ name: a.name, url: a.url, type: a.type || "" })) });
+      replyIdRef.current = bcReplyId(); setReply(""); setReplyFiles([]); load();
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setPosting(false);
+  };
+
+  const k = BC_KINDS[bcKindOf(d && d.kind)];
+  const me = String((identity && identity.name) || "").trim().toLowerCase();
+  const when = (iso) => { try { return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } };
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
+      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 8px 8px", overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Message from the office"
+        style={{ width: "min(600px, 100%)", background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
+          boxShadow: "0 18px 48px rgba(0,0,0,0.25)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ borderTop: `4px solid ${k.color}`, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {bcTag(d && d.kind)}
+            <span style={{ flex: 1 }}/>
+            {onStep && siblings.length > 1 && siblings.indexOf(id) >= 0 && (() => {
+              const at = siblings.indexOf(id);
+              const stepBtn = (to, label, glyph) => (
+                <button type="button" onClick={() => to && onStep(to)} disabled={!to} title={label} aria-label={label}
+                  style={{ border: `1px solid ${C.border}`, background: C.card, borderRadius: 7, padding: "3px 9px", fontSize: 13,
+                    fontWeight: 800, fontFamily: "inherit", color: C.text, cursor: to ? "pointer" : "default", opacity: to ? 1 : 0.35 }}>{glyph}</button>
+              );
+              return (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: C.dim }}>
+                  {stepBtn(siblings[at - 1], "Newer", "‹")}
+                  <span>{at + 1} of {siblings.length}</span>
+                  {stepBtn(siblings[at + 1], "Older", "›")}
+                </span>
+              );
+            })()}
+            <button type="button" onClick={onClose} title="Close"
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
+              <Icon name="x" size={16}/>
+            </button>
+          </div>
+          {err && <div style={{ fontSize: 13, color: C.red }}>{err}</div>}
+          {!d && !err && <div style={{ fontSize: 13, color: C.dim }}>Opening…</div>}
+          {d && (
+            <>
+              <div style={{ fontSize: 18, fontWeight: 800, color: C.text, lineHeight: 1.25, textWrap: "balance" }}>{d.title}</div>
+              <div style={{ fontSize: 11.5, color: C.dim }}>
+                From {d.by}{d.label ? ` · to ${d.label === "Everyone" ? "everyone" : d.label}` : ""}{d.count ? ` (${d.count})` : ""} · {when(d.at)}
+              </div>
+            </>
+          )}
+        </div>
+        {d && (
+          <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 14, color: C.text, whiteSpace: "pre-wrap", lineHeight: 1.45 }}>{d.body}</div>
+            <BcAttachments list={d.attachments}/>
+
+            {d.kind === "important" && d.isRecipient && (
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                {d.myAckAt ? (
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.green }}>✓ You confirmed · {when(d.myAckAt)}
+                    <div style={{ fontSize: 11.5, fontWeight: 500, color: C.dim }}>The office can see you've read it.</div></div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 11.5, color: C.dim }}>{d.by} needs everyone on this to confirm they've read it.</div>
+                    <button type="button" onClick={ack} disabled={acking}
+                      style={{ width: "100%", padding: "12px 14px", borderRadius: 9, border: "none", background: C.red, color: "#fff",
+                        fontSize: 14, fontWeight: 800, fontFamily: "inherit", cursor: acking ? "default" : "pointer", opacity: acking ? 0.7 : 1 }}>
+                      {acking ? "Confirming…" : "Got it"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {d.kind === "discussion" && (
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: C.dim, textTransform: "uppercase", flex: 1 }}>
+                    {d.replies.length} {d.replies.length === 1 ? "reply" : "replies"}
+                  </span>
+                  <button type="button" onClick={load}
+                    style={{ fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", background: "none",
+                      border: `1px solid ${C.border}`, borderRadius: 99, padding: "3px 10px", color: C.accent }}>Refresh</button>
+                </div>
+                {d.replies.map(r => {
+                  const mine = String(r.by || "").trim().toLowerCase() === me;
+                  return (
+                    <div key={r.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "88%", borderRadius: 12, padding: "8px 10px",
+                      background: mine ? `${C.purple}18` : C.surface, border: `1px solid ${mine ? `${C.purple}55` : C.border}`,
+                      display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: C.purple }}>{mine ? "You" : r.by}
+                        <span style={{ fontSize: 10, color: C.dim, fontWeight: 500, marginLeft: 6 }}>{r.at ? timeAgo(r.at) : ""}</span></div>
+                      {r.text && <div style={{ fontSize: 13, color: C.text, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{r.text}</div>}
+                      <BcAttachments list={r.attachments}/>
+                    </div>
+                  );
+                })}
+                <textarea value={reply} onChange={e => setReply(e.target.value)} maxLength={1000} rows={2} placeholder="Reply to the group…"
+                  style={{ width: "100%", boxSizing: "border-box", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                    color: C.text, padding: "9px 11px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }}/>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <PhotoAttacher storagePath={`broadcasts/${id}/replies`} photos={replyFiles} onChange={setReplyFiles}
+                    color={C.purple} label="Add photo"/>
+                  <span style={{ flex: 1 }}/>
+                  <button type="button" onClick={post} disabled={posting || (!reply.trim() && !replyFiles.length)}
+                    style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: C.purple, color: "#fff", fontSize: 13,
+                      fontWeight: 800, fontFamily: "inherit", cursor: "pointer", opacity: posting || (!reply.trim() && !replyFiles.length) ? 0.5 : 1 }}>
+                    {posting ? "Sending…" : "Send reply"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11, color: C.dim }}>Every reply notifies everyone in this discussion.</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// Important messages still waiting on my Got it — pinned at the top of My Day.
+function AnnouncePins({ pins, identity, onOpen }) {
+  const [busy, setBusy] = useState("");
+  const [done, setDone] = useState(() => new Set());
+  const list = (pins || []).filter(p => !done.has(p.broadcastId));
+  if (!list.length) return null;
+  const ack = async (p) => {
+    setBusy(p.broadcastId);
+    try {
+      await memberCallable("ackBroadcast", identity)({ id: p.broadcastId });
+      setDone(prev => new Set(prev).add(p.broadcastId));
+      toast.success("Confirmed — the office can see you've read it.");
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setBusy("");
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+      {list.map(p => (
+        <div key={p.broadcastId} style={{ border: `1px solid ${C.red}66`, background: `${C.red}0D`, borderRadius: 12, padding: 12,
+          display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {bcTag("important")}
+            <span style={{ fontSize: 13.5, fontWeight: 800, color: C.text, flex: 1, minWidth: 0 }}>{p.headline || stripEmoji(p.title)}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.dim }}>From {p.from || "the office"}{p.createdAt ? ` · ${timeAgo(p.createdAt)}` : ""}
+            {Array.isArray(p.attachments) && p.attachments.length ? ` · ${p.attachments.length} attached` : ""}</div>
+          {p.body && <div style={{ fontSize: 13, color: C.text, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{p.body}</div>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" onClick={() => onOpen(p.broadcastId)}
+              style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text,
+                fontSize: 12.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>Read it</button>
+            <button type="button" onClick={() => ack(p)} disabled={busy === p.broadcastId}
+              style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.red, color: "#fff",
+                fontSize: 12.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer", opacity: busy === p.broadcastId ? 0.7 : 1 }}>
+              {busy === p.broadcastId ? "Confirming…" : "Got it"}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// One sent office message with its reach and the who's-seen list — used by
+// Bell → Send → Recently sent and by the My Day Sent tab (office only).
+function BcSentRow({ b, identity, open, onToggle }) {
+  const bs = b.summary || {};
+  return (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "8px 10px", background: C.card }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {bcTag(b.kind)}
+        <span style={{ fontSize: 12, fontWeight: 800, color: C.text, flex: 1, minWidth: 0 }}>{b.title}</span>
+        <span style={{ fontSize: 10, color: C.dim, flexShrink: 0 }}>{b.at ? timeAgo(b.at) : ""}</span>
+      </div>
+      <div style={{ fontSize: 12, color: C.text, marginTop: 2, overflow: "hidden", display: "-webkit-box",
+        WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{b.body}</div>
+      <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>
+        {b.by} · {b.label || "picked"} ({b.count}) · {bs.phone || 0} on phones{Array.isArray(bs.bellOnly) && bs.bellOnly.length ? `, ${bs.bellOnly.length} bell only` : ""}
+      </div>
+      {b.opened != null && (
+        <button type="button" onClick={onToggle}
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6, background: "none", border: "none",
+            padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: C.accent }}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size={12}/>
+          {b.kind === "important" ? `Got it from ${b.acked || 0} of ${b.count}` : `Opened by ${b.opened} of ${b.count}`}
+          {b.kind === "discussion" ? ` · ${b.replyCount || 0} replies` : ""}
+        </button>
+      )}
+      {open && (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+          <BroadcastSeenList identity={identity} id={b.id}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// My Day → Sent (office only): the same history as Recently sent, one tap away.
+function BcSentTab({ identity }) {
+  const [items, setItems] = useState(null);   // null = loading
+  const [err, setErr] = useState("");
+  const [openId, setOpenId] = useState("");
+  useEffect(() => {
+    gcAdminCallable("listBroadcasts", identity)({ limit: 25 })
+      .then(r => setItems((r && r.data && r.data.items) || []))
+      .catch(e => { setItems([]); setErr(bcErrText(e)); });
+  }, [identity]);
+  if (items === null) return <div style={{ fontSize: 12, color: C.dim, padding: "12px 8px" }}>Loading what the office sent…</div>;
+  if (err) return <div style={{ fontSize: 12, color: C.red, padding: "12px 8px" }}>{err}</div>;
+  if (!items.length) return <div style={{ fontSize: 12, color: C.dim, padding: "12px 8px" }}>Nothing sent yet. Send from the bell.</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 2px 2px" }}>
+      {items.map(b => <BcSentRow key={b.id} b={b} identity={identity} open={openId === b.id} onToggle={() => setOpenId(o => o === b.id ? "" : b.id)}/>)}
+    </div>
+  );
+}
+
+// My Day → "Messages from the office" (Koy, 2026-10-06 mockup): every office
+// message this person got, sorted into Important · Announcements · Discussions
+// (+ Sent for the office), what needs them first. Starts folded with counts on
+// the header; the bell's "See all in My Day" opens it (jump = { at }).
+const BC_TABS = [
+  { key: "important",    label: "Important",     needLbl: "Needs your Got it", doneLbl: "Confirmed" },
+  { key: "announcement", label: "Announcements", needLbl: "Not opened yet",    doneLbl: "Read" },
+  { key: "discussion",   label: "Discussions",   needLbl: "New replies",       doneLbl: "Caught up" },
+];
+function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
+  const office = canBroadcast(identity);
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState(null);
+  const [more, setMore] = useState({});
+  const [busy, setBusy] = useState("");
+  useEffect(() => { if (jump) { setOpen(true); setTab(null); } }, [jump]);
+  const counts = {
+    important: msgs.filter(m => m.kind === "important" && m.needs).length,
+    announcement: msgs.filter(m => m.kind === "announcement" && m.needs).length,
+    discussion: msgs.filter(m => m.kind === "discussion").reduce((n, m) => n + (m.needs ? Math.max(1, m.newReplies) : 0), 0),
+  };
+  if (!msgs.length && !office) return null;
+  const cur = tab || (counts.important ? "important" : counts.discussion ? "discussion" : counts.announcement ? "announcement" : "important");
+  const ack = async (m) => {
+    setBusy(m.id);
+    try {
+      await memberCallable("ackBroadcast", identity)({ id: m.id });
+      toast.success("Confirmed — the office can see you've read it.");
+    } catch (e) { toast.error(bcOpenErr(e)); }
+    setBusy("");
+  };
+  const chip = (color, text) => (
+    <span key={text} style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: "2px 8px", color,
+      background: `${color}14`, border: `1px solid ${color}44`, whiteSpace: "nowrap" }}>{text}</span>
+  );
+  const chips = [];
+  if (counts.important) chips.push(chip(C.red, `${counts.important} needs Got it`));
+  if (counts.discussion) chips.push(chip(C.purple, `${counts.discussion} new ${counts.discussion === 1 ? "reply" : "replies"}`));
+  if (counts.announcement) chips.push(chip(C.accent, `${counts.announcement} unread`));
+  if (!chips.length) chips.push(chip(C.green, `✓ All caught up · ${msgs.length} ${msgs.length === 1 ? "message" : "messages"}`));
+  const tabs = [...BC_TABS, ...(office ? [{ key: "sent", label: "Sent" }] : [])];
+  const row = (m) => {
+    const k = BC_KINDS[m.kind];
+    let right;
+    if (m.kind === "important") right = m.needs
+      ? <button type="button" onClick={(e) => { e.stopPropagation(); ack(m); }} disabled={busy === m.id}
+          style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: C.red, color: "#fff", fontSize: 12, fontWeight: 800,
+            fontFamily: "inherit", cursor: "pointer", opacity: busy === m.id ? 0.7 : 1 }}>{busy === m.id ? "Confirming…" : "Got it"}</button>
+      : <span style={{ fontSize: 11, color: C.green, fontWeight: 700, textAlign: "right" }}>✓ Got it<br/><span style={{ color: C.dim, fontWeight: 500 }}>{m.ackAt ? timeAgo(m.ackAt) : ""}</span></span>;
+    else if (m.needs) right = <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: k.color, borderRadius: 99, padding: "2px 8px" }}>{m.kind === "discussion" && m.newReplies ? `${m.newReplies} new` : "New"}</span>;
+    else right = <span style={{ fontSize: 11, color: C.dim }}>{m.kind === "discussion" ? `${m.replyCount} ${m.replyCount === 1 ? "reply" : "replies"}` : timeAgo(m.lastAt)}</span>;
+    const sub = m.kind === "discussion" && m.lastReply ? m.lastReply
+      : `${m.from || "The office"} · ${m.at ? timeAgo(m.at) : ""}${m.attachments.length ? ` · ${m.attachments.length} attached` : ""}`;
+    return (
+      <div key={m.id} role="button" tabIndex={0} onClick={() => onOpen(m.id)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(m.id); }}
+        style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 8px", borderRadius: 9, cursor: "pointer",
+          background: m.needs ? `${k.color}0F` : "transparent" }}>
+        <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: m.needs ? 800 : 600, color: m.needs ? C.text : C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.headline}</span>
+          <span style={{ fontSize: 11, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stripEmoji(sub)}</span>
+        </span>
+        <span style={{ flexShrink: 0 }}>{right}</span>
+      </div>
+    );
+  };
+  const grp = (text) => <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted, padding: "8px 8px 3px" }}>{text}</div>;
+  const list = () => {
+    if (cur === "sent") return <BcSentTab identity={identity}/>;
+    const def = BC_TABS.find(t => t.key === cur);
+    const all = msgs.filter(m => m.kind === cur);
+    if (!all.length) return <div style={{ fontSize: 12, color: C.dim, padding: "14px 8px", textAlign: "center" }}>Nothing here yet.</div>;
+    const need = all.filter(m => m.needs), done = all.filter(m => !m.needs);
+    const shown = more[cur] ? done : done.slice(0, 3);
+    return (
+      <>
+        {need.length > 0 && <>{grp(def.needLbl)}{need.map(row)}</>}
+        {done.length > 0 && <>{grp(`${def.doneLbl} · ${done.length}`)}{shown.map(row)}</>}
+        {done.length > shown.length && (
+          <button type="button" onClick={() => setMore(p => ({ ...p, [cur]: true }))}
+            style={{ alignSelf: "flex-start", background: "none", border: "none", padding: "8px", cursor: "pointer", fontFamily: "inherit",
+              fontSize: 12, fontWeight: 700, color: C.accent }}>Show {done.length - shown.length} older</button>
+        )}
+      </>
+    );
+  };
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginBottom: 12, overflow: "hidden" }}>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: "none", border: "none",
+          padding: 12, cursor: "pointer", fontFamily: "inherit", color: C.text }}>
+        <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 800 }}>Messages from the office</span>
+          <span style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>{chips}</span>
+        </span>
+        <Icon name={open ? "chevronDown" : "chevronRight"} size={15}/>
+      </button>
+      {open && (
+        <>
+          <div role="tablist" style={{ display: "flex", gap: 0, padding: "0 6px", borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
+            {tabs.map(t => {
+              const color = t.key === "sent" ? C.accent : BC_KINDS[t.key].color;
+              const n = counts[t.key] || 0;
+              const on = cur === t.key;
+              return (
+                <button key={t.key} type="button" role="tab" aria-selected={on} onClick={() => setTab(t.key)}
+                  style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 5, background: "none", border: "none",
+                    borderBottom: `2px solid ${on ? color : "transparent"}`, padding: "8px 6px 9px", fontSize: 12, fontWeight: 700,
+                    fontFamily: "inherit", color: on ? C.text : C.dim, cursor: "pointer" }}>
+                  {t.label}
+                  {n > 0 && <span style={{ minWidth: 17, height: 17, borderRadius: 99, background: color, color: "#fff", fontSize: 10, fontWeight: 800,
+                    display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 5px", boxSizing: "border-box" }}>{n}</span>}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", padding: 6, gap: 2 }}>{list()}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// "is there a way to see who has viewed it so i know" (Koy, 2026-10-05).
+// broadcastSeen reads each recipient's bell copy server-side (seenStateOf):
+// Got it (Important) > Opened > Banner showed > on phone > still trying >
+// bell only > didn't save. Remind re-pings everyone not done yet.
+const BC_SEEN_ORDER = ["acked", "opened", "shown", "phone", "trying", "bell", "missing"];
+const BC_SEEN_LABEL = {
+  acked:   "Got it",
+  opened:  "Opened it",
+  shown:   "Banner showed on their phone · not opened",
+  phone:   "On their phone · not opened yet",
+  trying:  "Still trying their phone",
+  bell:    "In their bell only · not opened yet",
+  missing: "Didn't save · send to them again",
+};
+function BroadcastSeenList({ identity, id }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [reminding, setReminding] = useState(false);
+  const load = useCallback(() => {
+    setBusy(true); setErr("");
+    gcAdminCallable("broadcastSeen", identity)({ id })
+      .then(r => setData((r && r.data) || null))
+      .catch(e => setErr(bcErrText(e)))
+      .finally(() => setBusy(false));
+  }, [identity, id]);
+  useEffect(() => { load(); }, [load]);
+  if (err) return <div style={{ fontSize: 12, color: C.red }}>{err}</div>;
+  if (!data) return <div style={{ fontSize: 12, color: C.dim }}>Checking who's seen it…</div>;
+  const important = data.kind === "important";
+  const doneN = important ? (data.acked || 0) : data.opened;
+  const pending = Math.max(0, data.total - doneN);
+  const groups = BC_SEEN_ORDER.map(k => [k, (data.people || []).filter(p => p.state === k)]).filter(([, ps]) => ps.length);
+  const labelFor = (k) => (important && k === "opened") ? "Opened · hasn't tapped Got it" : BC_SEEN_LABEL[k];
+  const remind = async () => {
+    setReminding(true);
+    try {
+      const r = await gcAdminCallable("remindBroadcast", identity)({ id, nonce: bcReplyId() });
+      const n = (r && r.data && r.data.reminded && r.data.reminded.length) || 0;
+      toast.success(n ? `Reminder sent to ${n}` : "Everyone's already done — no reminder needed.");
+      load();
+    } catch (e) { toast.error(bcErrText(e)); }
+    setReminding(false);
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.text, flex: 1 }}>
+          {important ? `Got it from ${data.acked || 0} of ${data.total}` : `Opened by ${data.opened} of ${data.total}`}
+          {important && <span style={{ fontSize: 11, fontWeight: 600, color: C.dim }}> · opened {data.opened}</span>}
+          {data.kind === "discussion" && <span style={{ fontSize: 11, fontWeight: 600, color: C.dim }}> · {data.replyCount || 0} replies</span>}
+        </span>
+        <button type="button" onClick={load} disabled={busy}
+          style={{ fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: busy ? "default" : "pointer", background: "none",
+            border: `1px solid ${C.border}`, borderRadius: 99, padding: "3px 10px", color: C.accent }}>
+          {busy ? "Checking…" : "Refresh"}
+        </button>
+      </div>
+      {data.total > 0 && (
+        <div style={{ height: 7, borderRadius: 99, background: C.surface, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+          <div style={{ width: `${Math.round(100 * doneN / data.total)}%`, height: "100%", background: C.green }}/>
+        </div>
+      )}
+      {groups.map(([k, ps]) => (
+        <div key={k} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: (k === "acked" || (k === "opened" && !important)) ? C.green : k === "missing" ? C.red : C.dim }}>
+            {labelFor(k)} · {ps.length}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {ps.map(p => {
+              const good = k === "acked" || (k === "opened" && !important);
+              return (
+                <span key={p.name} style={{ fontSize: 12, color: C.text, borderRadius: 99, padding: "3px 9px",
+                  border: `1px solid ${good ? `${C.green}66` : C.border}`, background: good ? `${C.green}12` : "transparent" }}>
+                  {p.name}{p.at && (k === "acked" || k === "opened" || k === "shown") ? <span style={{ color: C.dim }}> · {timeAgo(p.at)}</span> : null}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {pending > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={remind} disabled={reminding}
+            style={{ fontSize: 12, fontWeight: 700, fontFamily: "inherit", cursor: reminding ? "default" : "pointer", borderRadius: 8,
+              padding: "7px 12px", border: `1px solid ${C.border}`, background: C.card, color: C.text }}>
+            {reminding ? "Reminding…" : `Remind the ${pending} who haven't`}
+          </button>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: C.dim }}>
+        {important ? "Got it = they tapped it in the app. " : ""}Opened = they tapped it or cleared their bell. Someone who only read the banner on a locked phone shows as "banner showed".
+      </div>
+    </div>
+  );
+}
+
+function BroadcastComposer({ identity, users, onClose }) {
+  const people = useMemo(() => (users || [])
+    .filter(u => u && u.name && u.active !== false && getAccess(u) !== "contractor")
+    .sort((a, b) => String(a.name).localeCompare(String(b.name))), [users]);
+  const [sel, setSel] = useState(() => new Set());
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [listOpen, setListOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [stage, setStage] = useState("edit");   // edit | confirm | sending | done
+  const [result, setResult] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const [recent, setRecent] = useState(null);   // null = loading, [] = none
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [seenFor, setSeenFor] = useState("");      // Recently sent row whose seen list is open
+  const [kind, setKind] = useState("announcement");  // announcement | important | discussion
+  const [attachments, setAttachments] = useState([]);  // uploaded under broadcasts/<id>/ (PhotoAttacher)
+  const idRef = useRef(bcNewId());
+
+  const loadRecent = useCallback(() => {
+    gcAdminCallable("listBroadcasts", identity)({})
+      .then(r => setRecent((r && r.data && r.data.items) || []))
+      .catch(() => setRecent([]));
+  }, [identity]);
+  useEffect(() => { loadRecent(); }, [loadRecent]);
+
+  const membersOf = (g) => people.filter(g[2]);
+  const groupOn = (g) => { const m = membersOf(g); return m.length > 0 && m.every(u => sel.has(bcKeyOf(u))); };
+  const toggleGroup = (g) => {
+    const m = membersOf(g), on = groupOn(g);
+    setSel(prev => { const n = new Set(prev); m.forEach(u => on ? n.delete(bcKeyOf(u)) : n.add(bcKeyOf(u))); return n; });
+  };
+  const togglePerson = (u) => setSel(prev => { const n = new Set(prev); const k = bcKeyOf(u); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const picked = people.filter(u => sel.has(bcKeyOf(u)));
+  // What the record and Recently sent call this audience.
+  const label = (() => {
+    if (!picked.length) return "";
+    if (picked.length === people.length) return "Everyone";
+    const full = BC_GROUPS.slice(1).filter(groupOn);
+    const covered = new Set(full.flatMap(g => membersOf(g).map(bcKeyOf)));
+    return full.length && covered.size === picked.length ? full.map(g => g[1]).join(" + ") : `${picked.length} picked`;
+  })();
+  const shownTitle = title.trim() || `Message from ${(identity && identity.name) || "the office"}`;
+  const canSend = body.trim().length > 0 && picked.length > 0;
+  const shown = q.trim() ? people.filter(u => String(u.name).toLowerCase().includes(q.trim().toLowerCase())) : people;
+  // Type-ahead for "Or pick people": matches not yet added, best 8.
+  const suggest = q.trim() ? shown.filter(u => !sel.has(bcKeyOf(u))).slice(0, 8) : [];
+  const addPerson = (u) => { setSel(prev => new Set(prev).add(bcKeyOf(u))); setQ(""); };
+
+  const send = async (test) => {
+    const payload = { id: test ? bcNewId() : idRef.current, title: title.trim(), body: body.trim(), label, kind,
+      attachments: attachments.map(a => ({ name: a.name, url: a.url, type: a.type || "" })),
+      to: test ? [] : picked.map(u => ({ id: u.id || "", name: u.name })), test };
+    if (test) setTesting(true); else setStage("sending");
+    try {
+      const r = await gcAdminCallable("sendBroadcast", identity)(payload);
+      const d = (r && r.data) || {};
+      if (test) {
+        const bellOnly = d.summary && d.summary.bellOnly && d.summary.bellOnly.length;
+        toast.success(bellOnly ? "Test is in your bell — no phone is set up for you, so it didn't buzz." : "Test sent to you — check your phone and the bell.");
+      } else {
+        setResult(d); setStage("done"); idRef.current = bcNewId(); loadRecent();
+      }
+    } catch (e) {
+      console.error("[HE] broadcast failed", e);
+      toast.error(bcErrText(e));
+      if (!test) setStage("confirm");
+    } finally {
+      if (test) setTesting(false);
+    }
+  };
+
+  const chip = (on) => ({ fontSize: 12, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", borderRadius: 99,
+    padding: "6px 12px", border: `1px solid ${on ? C.accent : C.border}`, background: on ? C.accent : "transparent",
+    color: on ? "#fff" : C.text });
+  const field = { width: "100%", boxSizing: "border-box", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+    color: C.text, padding: "9px 11px", fontSize: 13, fontFamily: "inherit", outline: "none" };
+  const label10 = { fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", color: C.dim, textTransform: "uppercase" };
+  const s = result && result.summary;
+
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
+      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "6vh 8px 8px", overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Send a notification"
+        style={{ width: "min(560px, 100%)", background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
+          boxShadow: "0 18px 48px rgba(0,0,0,0.25)", padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="send" size={15} stroke={2.25}/>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.text, flex: 1 }}>Send a notification</span>
+          <button type="button" onClick={onClose} title="Close"
+            style={{ background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
+            <Icon name="x" size={16}/>
+          </button>
+        </div>
+
+        {stage === "done" && s ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ background: `${C.green}14`, border: `1px solid ${C.green}55`, borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>Sent to {s.total} {s.total === 1 ? "person" : "people"}</div>
+              <div style={{ fontSize: 13, color: C.text, marginTop: 4 }}>
+                {s.phone} got it on their phone now{s.bellOnly.length ? `, ${s.bellOnly.length} will see it in their bell` : ""}{s.retrying.length ? `, ${s.retrying.length} still trying` : ""}.
+              </div>
+            </div>
+            {s.bellOnly.length > 0 && (
+              <div style={{ fontSize: 12, color: C.dim }}>
+                <b style={{ color: C.text }}>Bell only (no phone set up):</b> {s.bellOnly.join(", ")}. They'll see it next time they open the app.
+              </div>
+            )}
+            {s.retrying.length > 0 && (
+              <div style={{ fontSize: 12, color: C.dim }}>
+                <b style={{ color: C.text }}>Still trying:</b> {s.retrying.join(", ")}. The app keeps retrying their phones for 12 hours; it's already in their bell.
+              </div>
+            )}
+            {s.notSaved.length > 0 && (
+              <div style={{ fontSize: 12, color: C.red }}>
+                <b>Didn't go through:</b> {s.notSaved.join(", ")}. Send to them again.
+              </div>
+            )}
+            {result.id && !result.test && (
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 12px" }}>
+                <BroadcastSeenList identity={identity} id={result.id}/>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => { setStage("edit"); setResult(null); setBody(""); setTitle(""); setSel(new Set()); setAttachments([]); setKind("announcement"); }}
+                style={{ ...chip(false), borderRadius: 8 }}>Send another</button>
+              <button type="button" onClick={onClose} style={{ ...chip(true), borderRadius: 8 }}>Done</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={label10}>What kind</div>
+              {Object.entries(BC_KINDS).map(([key, kd]) => {
+                const on = kind === key;
+                return (
+                  <button key={key} type="button" onClick={() => setKind(key)} disabled={stage !== "edit"} aria-pressed={on}
+                    style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", borderRadius: 10, cursor: "pointer",
+                      padding: on ? "9px 10px" : "10px 11px", border: `${on ? 2 : 1}px solid ${on ? kd.color : C.border}`,
+                      background: on ? `${kd.color}0F` : C.card, fontFamily: "inherit", color: C.text }}>
+                    <span style={{ flex: "0 0 12px", height: 12, marginTop: 3, borderRadius: 99, background: kd.color }}/>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 13, fontWeight: 800 }}>{kd.label}</span>
+                      <span style={{ display: "block", fontSize: 11.5, color: C.dim }}>{kd.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={label10}>To</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {BC_GROUPS.map(g => {
+                  const n = membersOf(g).length;
+                  if (!n) return null;
+                  return (
+                    <button key={g[0]} type="button" onClick={() => toggleGroup(g)} disabled={stage !== "edit"} style={chip(groupOn(g))}>
+                      {g[1]} <span style={{ opacity: 0.75, fontWeight: 600 }}>{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Pick individuals (Koy: "i need an option to send to specific
+                  individuals not just titles") — always visible, not folded:
+                  type a name, tap them, they show as a chip. Groups and names
+                  mix freely; the full checklist is one tap below. */}
+              <div style={{ ...label10, marginTop: 4 }}>Or pick people</div>
+              <input value={q} disabled={stage !== "edit"} onChange={e => setQ(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && suggest.length) { e.preventDefault(); addPerson(suggest[0]); } }}
+                placeholder="Type a name to add someone" style={field}/>
+              {q.trim() && (
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 4, display: "flex", flexDirection: "column" }}>
+                  {suggest.map(u => (
+                    <button key={bcKeyOf(u)} type="button" onClick={() => addPerson(u)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 8px", border: "none", borderRadius: 7,
+                        background: "transparent", cursor: "pointer", fontFamily: "inherit", fontSize: 13, color: C.text, textAlign: "left" }}>
+                      <span style={{ color: C.accent, fontWeight: 800 }}>+</span>
+                      <span style={{ flex: 1, minWidth: 0 }}>{u.name}</span>
+                      <span style={{ fontSize: 11, color: C.dim }}>{TITLE_LABELS[BC_TITLE_OF(u)] || ""}</span>
+                    </button>
+                  ))}
+                  {!suggest.length && (
+                    <div style={{ fontSize: 12, color: C.dim, padding: 8 }}>
+                      {shown.length ? "Already added." : "No one by that name."}
+                    </div>
+                  )}
+                </div>
+              )}
+              {picked.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  {picked.length <= 15 ? picked.map(u => (
+                    <span key={bcKeyOf(u)} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600,
+                      color: C.text, borderRadius: 99, padding: "3px 4px 3px 10px", background: `${C.accent}18`, border: `1px solid ${C.accent}55` }}>
+                      {u.name}
+                      <button type="button" onClick={() => togglePerson(u)} disabled={stage !== "edit"} title={`Remove ${u.name}`}
+                        style={{ border: "none", background: "none", cursor: "pointer", color: C.dim, padding: "0 4px", display: "inline-flex" }}>
+                        <Icon name="x" size={11}/>
+                      </button>
+                    </span>
+                  )) : (
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.text }}>{picked.length} people selected</span>
+                  )}
+                  <button type="button" onClick={() => setSel(new Set())} disabled={stage !== "edit"}
+                    style={{ fontSize: 11, fontWeight: 700, fontFamily: "inherit", color: C.dim, background: "none", border: "none",
+                      cursor: "pointer", padding: "2px 4px", textDecoration: "underline" }}>Clear</button>
+                </div>
+              )}
+              <button type="button" onClick={() => setListOpen(o => !o)}
+                style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", padding: "2px 0",
+                  cursor: "pointer", fontFamily: "inherit", color: C.text, fontSize: 12, fontWeight: 700, textAlign: "left" }}>
+                <Icon name={listOpen ? "chevronDown" : "chevronRight"} size={13}/>
+                See everyone
+                <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 99, padding: "1px 8px",
+                  background: picked.length ? `${C.accent}22` : C.surface, color: picked.length ? C.accent : C.dim }}>
+                  {picked.length} of {people.length} selected
+                </span>
+              </button>
+              {listOpen && (
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 8, maxHeight: 240, overflowY: "auto",
+                  display: "flex", flexDirection: "column" }}>
+                  {people.map(u => {
+                    const on = sel.has(bcKeyOf(u));
+                    return (
+                      <label key={bcKeyOf(u)} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 4px",
+                        borderBottom: `1px solid ${C.border}`, cursor: stage === "edit" ? "pointer" : "default", fontSize: 13, color: C.text }}>
+                        <input type="checkbox" checked={on} disabled={stage !== "edit"} onChange={() => togglePerson(u)}/>
+                        <span style={{ flex: 1, minWidth: 0 }}>{u.name}</span>
+                        <span style={{ fontSize: 11, color: C.dim }}>{TITLE_LABELS[BC_TITLE_OF(u)] || ""}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={label10}>Message</div>
+              <input value={title} maxLength={80} disabled={stage !== "edit"} onChange={e => setTitle(e.target.value)}
+                placeholder={`Headline (optional) — e.g. Bid Items moved to its own tab`} style={field}/>
+              <textarea value={body} maxLength={1000} disabled={stage !== "edit"} onChange={e => setBody(e.target.value)} rows={4}
+                placeholder="What do you want everyone to know?" style={{ ...field, resize: "vertical", lineHeight: 1.4 }}/>
+              <div style={{ fontSize: 11, color: C.dim, textAlign: "right" }}>{body.length}/1000</div>
+              <div style={label10}>Photos &amp; files</div>
+              <PhotoAttacher storagePath={`broadcasts/${idRef.current}`} photos={attachments} onChange={setAttachments}
+                label="Add photos or files" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" iconName="paperclip"/>
+              <div style={{ fontSize: 11, color: C.dim }}>On a computer you can also drag files right onto this box.</div>
+            </div>
+
+            {body.trim() && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={label10}>How it shows up</div>
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", background: `${C.accent}10` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>{bcTag(kind)}
+                    {attachments.length > 0 && <span style={{ fontSize: 11, color: C.dim }}>{attachments.length} attached</span>}</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: C.text }}>{shownTitle}</div>
+                  <div style={{ fontSize: 12, color: C.text, marginTop: 3, lineHeight: 1.35, whiteSpace: "pre-wrap" }}>{body.trim()}</div>
+                </div>
+              </div>
+            )}
+
+            {stage === "edit" ? (
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <button type="button" onClick={() => send(true)} disabled={!body.trim() || testing}
+                  style={{ ...chip(false), borderRadius: 8, opacity: !body.trim() || testing ? 0.5 : 1 }}>
+                  {testing ? "Sending test…" : "Send me a test"}
+                </button>
+                <button type="button" onClick={() => setStage("confirm")} disabled={!canSend}
+                  style={{ ...chip(true), borderRadius: 8, opacity: canSend ? 1 : 0.5, cursor: canSend ? "pointer" : "default" }}>
+                  {picked.length ? `Send to ${picked.length} ${picked.length === 1 ? "person" : "people"}` : "Pick who gets it"}
+                </button>
+              </div>
+            ) : (
+              <div style={{ background: `${C.accent}12`, border: `1px solid ${C.accent}55`, borderRadius: 10, padding: "12px 14px",
+                display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ fontSize: 13, color: C.text }}>
+                  Send this <b>{BC_KINDS[kind].label}</b> message, <b>{shownTitle}</b>, to <b>{label === "Everyone" ? `everyone (${picked.length})` : `${picked.length} ${picked.length === 1 ? "person" : "people"}`}</b> now? Their phones will buzz.
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => setStage("edit")} disabled={stage === "sending"} style={{ ...chip(false), borderRadius: 8 }}>Back</button>
+                  <button type="button" onClick={() => send(false)} disabled={stage === "sending"} style={{ ...chip(true), borderRadius: 8 }}>
+                    {stage === "sending" ? "Sending…" : "Yes, send it"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+          <button type="button" onClick={() => setRecentOpen(o => !o)}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", padding: 0,
+              cursor: "pointer", fontFamily: "inherit", color: C.text, fontSize: 12, fontWeight: 700 }}>
+            <Icon name={recentOpen ? "chevronDown" : "chevronRight"} size={13}/>
+            Recently sent
+            <span style={{ fontSize: 11, color: C.dim, fontWeight: 600 }}>{recent === null ? "…" : recent.length}</span>
+          </button>
+          {recentOpen && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+              {recent === null && <div style={{ fontSize: 12, color: C.dim }}>Loading…</div>}
+              {recent && !recent.length && <div style={{ fontSize: 12, color: C.dim }}>Nothing sent yet.</div>}
+              {(recent || []).map(b => (
+                <BcSentRow key={b.id} b={b} identity={identity} open={seenFor === b.id}
+                  onToggle={() => setSeenFor(f => f === b.id ? "" : b.id)}/>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function NotifDoctor({ identity }) {
   const [checks, setChecks] = useState(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [recent, setRecent] = useState(null);   // last inbox records + their push outcome
+
+  // Delivery history (FCM reliability pass, 2026-10-04): every notification is
+  // stored first and the server records what happened to its push on the same
+  // record — accepted by FCM, which devices, displayed on a device (receipt),
+  // retried, given up. This reads it back so "I never got it" can be answered
+  // from the app instead of the Cloud Functions log.
+  const loadRecent = async () => {
+    const key = identity ? (identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_")) : null;
+    if (!key) return;
+    try {
+      const snap = await getDocs(query(collection(db, "notifications", key, "items"), orderBy("createdAt", "desc"), limit(10)));
+      setRecent(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (e) { setRecent([]); }
+  };
 
   const runChecks = async () => {
     const out = [];
@@ -46602,6 +48013,7 @@ function NotifDoctor({ identity }) {
                     : (subEndpoint.slice(0, 60) + (subEndpoint.length > 60 ? "…" : "")),
     });
     setChecks(out);
+    loadRecent();
   };
 
   // Bypass FCM entirely — fire a Notification via the local Web Notifications
@@ -46609,7 +48021,7 @@ function NotifDoctor({ identity }) {
   // notifications at the macOS / iOS / Windows system level (regardless of
   // browser permission). If this DOES pop a banner, the OS is fine and the
   // FCM/SW chain is the actual problem.
-  const testOSNotif = () => {
+  const testOSNotif = async () => {
     if (typeof Notification === "undefined") {
       setTestResult({ kind: "err", text: "Notification API not available in this browser." });
       return;
@@ -46619,17 +48031,22 @@ function NotifDoctor({ identity }) {
       return;
     }
     try {
-      const n = new Notification("Direct OS notification test", {
-        body: "If you see this banner, your OS allows notifications. The FCM chain is the problem.",
-        icon: "/icon-192.png",
-        tag: "he-os-test",
-      });
+      // Through the push worker's registration — the same call that shows real
+      // pushes. `new Notification()` throws on Android Chrome and doesn't exist
+      // in an iOS Home-Screen app, so this test used to fail on phones even
+      // when notifications were fine.
+      const opts = { body: "If you see this banner, your OS allows notifications. The FCM chain is the problem.",
+        icon: "/icon-192.png", tag: "he-os-test" };
+      const reg = await getExistingMessagingRegistration();
+      let n = null;
+      if (reg && reg.showNotification) await reg.showNotification("Direct OS notification test", opts);
+      else n = new Notification("Direct OS notification test", opts);
       setTestResult({
         kind: "info",
         text: "✓ Notification was created. If you see a banner pop on screen, your OS allows notifications and the FCM chain is the bug. If you don't see a banner, macOS Chrome notifications are off — System Settings → Notifications → Chrome → Allow Notifications.",
       });
       // Auto-close after 5s so it doesn't pile up
-      setTimeout(() => { try { n.close(); } catch {} }, 5000);
+      setTimeout(() => { try { n && n.close(); } catch {} }, 5000);
     } catch(e) {
       setTestResult({ kind: "err", text: `Failed to create notification: ${e.message}` });
     }
@@ -46793,6 +48210,46 @@ function NotifDoctor({ identity }) {
         <div style={{ fontSize: 11, color: C.dim }}>Checking…</div>
       )}
 
+      {recent && recent.length > 0 && (() => {
+        // Plain-language read of each record's delivery map (functions/notifyDelivery.js rollup).
+        const LABEL = { sent: "Pushed", partial: "Pushed to some devices", pending: "Sending…", retrying: "Retrying push",
+          failed: "Push failed — in-app only", no_tokens: "No device registered — in-app only",
+          expired: "Push gave up — in-app only", read_before_push: "Seen in-app first" };
+        const GOOD = { sent: 1, read_before_push: 1 };
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: C.dim, marginBottom: 6 }}>
+              YOUR LAST {recent.length} NOTIFICATIONS
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {recent.map(it => {
+                const d = it.delivery || {};
+                const st = d.status || "legacy";
+                const shown = Array.isArray(it.receipts) && it.receipts.length > 0;
+                const errs = (d.results || []).filter(r => !r.ok).map(r => `${r.tk}…: ${String(r.code || "").replace("messaging/", "")}`);
+                return (
+                  <div key={it.id} style={{ fontSize: 11, lineHeight: 1.35, padding: "5px 8px", borderRadius: 7, background: C.bg || "transparent" }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                      <span style={{ color: C.text, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {stripEmoji(it.title) || "Notification"}
+                      </span>
+                      <span style={{ color: C.dim, flexShrink: 0 }}>{it.createdAt ? timeAgo(it.createdAt) : ""}</span>
+                    </div>
+                    <div style={{ color: st === "legacy" ? C.dim : (GOOD[st] || (st === "partial" && shown)) ? "#3E7D5A" : (st === "pending" || st === "retrying") ? "#B0892C" : "#B23A3A" }}>
+                      {st === "legacy" ? "Sent before delivery tracking" : LABEL[st] || st}
+                      {d.tokenCount ? ` · ${d.okCount || 0}/${d.tokenCount} devices` : ""}
+                      {d.attempts > 1 ? ` · ${d.attempts} tries` : ""}
+                      {shown ? ` · shown on a device ${timeAgo(it.displayedAt || it.receipts[it.receipts.length - 1].at)}` : (st === "sent" ? " · no device confirmed it yet" : "")}
+                    </div>
+                    {errs.length > 0 && <div style={{ fontSize: 10, color: C.dim }}>{errs.join(" · ")}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={runChecks}
           style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
@@ -46925,9 +48382,19 @@ function UsageReportCard() {
   );
 }
 
-function DeviceVersionsCard() {
+// Version lock (Phase 1): the card also shows each device's BUILD, flags rows
+// below the gate's minimum in red, and carries the two office controls —
+// "Require v___ (N devices will be asked)" and "Turn off the lock" — which call
+// the setMinBuild callable (requireAdmin, Admin SDK write to appGate/version).
+// Inert until the functions are deployed; the gate doc is unreadable until the
+// Phase 2 rules are live (shown honestly as "not readable yet").
+function DeviceVersionsCard({ identity }) {
   const [devices, setDevices] = useState(null);
   const [latest, setLatest] = useState(null);
+  const [gate, setGate] = useState(undefined);      // undefined = loading, null = not readable, {minBuild,…}
+  const [stats, setStats] = useState(null);         // settings/versionLockStats.days
+  const [req, setReq] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -46939,30 +48406,94 @@ function DeviceVersionsCard() {
       const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/);
       setLatest(m ? m[1] : null);
     } catch(e) {}
+    try {
+      const g = await getDoc(doc(db, "appGate", "version"));
+      setGate(g.exists() ? { minBuild: Number(g.data().minBuild) || 0, setBy: g.data().setBy || "", setAt: g.data().setAt || "", note: g.data().note || "" } : { minBuild: 0, missing: true });
+    } catch (e) { setGate(null); }
+    try {
+      const s = await getDoc(doc(db, "settings", "versionLockStats"));
+      setStats(s.exists() ? (s.data().days || {}) : {});
+    } catch (e) {}
   };
 
   useEffect(() => { load(); const id = setInterval(load, 60*1000); return () => clearInterval(id); }, []);
+  const latestBuild = parseAppBuild(latest);
+  useEffect(() => { if (latestBuild && !req) setReq(String(latestBuild)); }, [latestBuild]); // eslint-disable-line
 
-  const list = Object.entries(devices || {}).map(([id, d]) => ({ id, ...d }))
+  const list = Object.entries(devices || {}).map(([id, d]) => ({ id, ...d, build: parseAppBuild(d.version) }))
     .sort((a,b) => new Date(b.lastSeenAt||0) - new Date(a.lastSeenAt||0));
   const sevenDaysAgo = Date.now() - 7*24*60*60*1000;
+  const minBuild = gate && gate.minBuild ? gate.minBuild : 0;
+  const reqN = parseInt(req, 10) || 0;
+  const willAsk = list.filter(d => Date.parse(d.lastSeenAt||0) > sevenDaysAgo && d.build < reqN).length;
+  const recentDays = Object.keys(stats || {}).sort().slice(-3);
+  const unstamped = recentDays.reduce((n, k) => n + ((stats[k] && stats[k].client) || 0), 0);
+
+  const setMin = async (value, why) => {
+    if (!identity) return;
+    if (!await showConfirm(why)) return;
+    setBusy(true);
+    try {
+      const r = await gcAdminCallable("setMinBuild", identity)({ minBuild: value, note: value ? `Required from Settings (latest ${latest || "?"})` : "Lock turned off from Settings" });
+      toast.success(value ? `Lock set: every device must run v${r.data?.minBuild ?? value} or newer to save.` : "Lock turned off — any version can save again.");
+      load();
+    } catch (e) {
+      toast.error("Couldn't set the lock: " + (e?.message || "") + (/not-found|NOT_FOUND|internal/i.test(String(e?.code||e?.message)) ? " — is the setMinBuild function deployed?" : ""));
+    }
+    setBusy(false);
+  };
 
   return (
     <div style={{padding:"12px 14px"}}>
       <div style={{fontSize:11,color:C.dim,marginBottom:12}}>
-        Latest deployed version: <strong>{latest || "…"}</strong> — devices on an older version reload themselves within minutes of coming back into view; red rows are recently-active devices still behind.
+        Latest deployed version: <strong>{latest || "…"}</strong> — devices on an older version reload themselves within minutes of coming back into view, or see the <b>Update now</b> popup if they are mid-task; red rows are recently-active devices still behind.
       </div>
+      <div style={{fontSize:11,marginBottom:12,padding:"8px 10px",borderRadius:8,
+        background: minBuild ? "rgba(59,91,165,0.08)" : "rgba(94,102,112,0.08)", border:`1px solid ${minBuild ? "rgba(59,91,165,0.25)" : C.border}`}}>
+        <div style={{fontWeight:700,color:C.text}}>
+          {gate === undefined ? "Version lock: checking…"
+            : gate === null ? "Version lock: not readable yet (the lock rules are not deployed — stamping only)"
+            : minBuild ? `Version lock ON — saves need v${minBuild} or newer` : "Version lock OFF — any version can save"}
+        </div>
+        {gate && gate.setBy && <div style={{color:C.dim,marginTop:2}}>Set by {gate.setBy}{gate.setAt ? " · " + new Date(gate.setAt).toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : ""}{gate.note ? " · " + gate.note : ""}</div>}
+        {stats && <div style={{color:C.dim,marginTop:2}}>Unstamped saves, last {recentDays.length || 0} day{recentDays.length===1?"":"s"}: <b style={{color: unstamped ? C.red : C.green}}>{unstamped}</b> {unstamped ? "(an old copy, or a save path that is not stamped yet — do not turn the lock on until this is 0 for 3 working days)" : "(every save carries its build — safe to require a version)"}</div>}
+      </div>
+      {identity && (
+        <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,marginBottom:12}}>
+          <span style={{fontSize:11,color:C.dim}}>Require v</span>
+          <input type="number" min={0} value={req} onChange={e => setReq(e.target.value.replace(/\D/g,"").slice(0,6))}
+            style={{width:80,padding:"7px 8px",borderRadius:8,border:`1px solid ${C.border}`,fontFamily:"inherit",fontSize:13,fontWeight:700}}/>
+          <button type="button" disabled={busy || !reqN}
+            onClick={() => setMin(reqN, `Require v${reqN}? ${willAsk} recently-active device${willAsk===1?"":"s"} will be asked to update, and an older copy can no longer save. Your own device runs v${APP_BUILD || "dev"}.`)}
+            style={{padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+              background:busy?"#99A0AA":C.blue,color:"#fff",border:"none"}}>
+            Require v{reqN || "___"} ({willAsk} device{willAsk===1?"":"s"} will be asked)
+          </button>
+          <button type="button" disabled={busy || !minBuild}
+            onClick={() => setMin(0, "Turn the version lock off? Any version of the app will be able to save until you require one again.")}
+            style={{padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:minBuild?"pointer":"default",fontFamily:"inherit",
+              background:"transparent",color:minBuild?C.red:C.dim,border:`1px solid ${minBuild?C.red:C.border}`}}>
+            Turn off the lock
+          </button>
+          <div style={{flexBasis:"100%",fontSize:10,color:C.dim,lineHeight:1.5}}>
+            Rolling a deploy back? <b>Lower the required version (or turn the lock off) FIRST, then roll back</b> — otherwise the rolled-back build is below the minimum and every save is refused. The minimum is never raised automatically.
+          </div>
+        </div>
+      )}
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         {list.map(d => {
-          const stale = latest && d.version !== latest && Date.parse(d.lastSeenAt||0) > sevenDaysAgo;
+          const recent = Date.parse(d.lastSeenAt||0) > sevenDaysAgo;
+          const stale = latest && d.version !== latest && recent;
+          const below = minBuild > 0 && d.build < minBuild;
           return (
             <div key={d.id} style={{display:"flex",alignItems:"center",gap:10,fontSize:12,
               padding:"6px 8px",borderRadius:6,
-              background:stale?"rgba(178,58,58,0.06)":"transparent",
-              border:`1px solid ${stale?"rgba(178,58,58,0.20)":"transparent"}`}}>
+              background:(stale||below)?"rgba(178,58,58,0.06)":"transparent",
+              border:`1px solid ${(stale||below)?"rgba(178,58,58,0.20)":"transparent"}`}}>
               <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-                color:C.text,fontWeight:stale?700:500}}>{d.name||d.id}</span>
-              <span style={{fontSize:10,fontWeight:700,color:stale?"#B23A3A":C.dim,flexShrink:0}}>{d.version}</span>
+                color:C.text,fontWeight:(stale||below)?700:500}}>{d.name||d.id}</span>
+              {below && <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:C.red,borderRadius:4,padding:"2px 5px",flexShrink:0}}>BELOW MINIMUM</span>}
+              <span style={{fontSize:10,fontWeight:700,color:(stale||below)?"#B23A3A":C.dim,flexShrink:0}}>{d.version}{d.build ? "" : " (no build)"}</span>
               <span style={{fontSize:10,color:C.dim,minWidth:110,textAlign:"right",flexShrink:0}}>
                 {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : ""}
               </span>
@@ -48290,7 +49821,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           )}
           {onRestoreFromFile&&(
             <>
-              <input type="file" accept=".json" ref={fileInputRef} style={{display:"none"}} onChange={async(e)=>{
+              <input type="file" accept=".json" ref={fileInputRef} data-no-drop="" style={{display:"none"}} onChange={async(e)=>{
                 const file=e.target.files[0];
                 if(!file) return;
                 try {
@@ -50471,14 +52002,18 @@ function PunchSharePage({ jobId, stage }) {
               ...punchStamp(), // was toLocaleDateString — same format bug as the job-note paths
               done: false, checkedBy: '', checkedAt: '',
             };
-            await updateDoc(doc(db,'jobs',jobId), {
+            await updateDoc(doc(db,'jobs',jobId), stampWrite({
               [`data.${externalKey}`]: arrayUnion(newItem),
               lastActivityAt: serverTimestamp(),
-            });
+            }));
             setNewItemText('');
             setAddedCount(c=>c+1);
           } catch(e) {
-            toast.error('Failed to submit. Check your connection and try again.');
+            // Version lock: this page is the same bundle as the app — an old copy
+            // left open gets refused once the rules are live. The text stays in
+            // the box; a reload picks up the current build.
+            if (await reportWriteDenied(e, 'jobs', jobId)) toast.error('This page is out of date — reload it and submit again. Your text is still in the box.');
+            else toast.error('Failed to submit. Check your connection and try again.');
           }
           setAddingItem(false);
         };
@@ -51330,10 +52865,26 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-03 · App SW version: v505
+**Last manifest update:** 2026-10-07 · App SW version: v516
 
 ---
 
+- **Version lock, Phase 1 — every save carries its build number, old copies get a full-screen Update now, and a refused save is never thrown away** · 'shipped 2026-10-06' · 'SW v515' · Koy: *"if they're not on the right version of the app (like the latest version), it just pops up with a big pop-up that says, 'Update now' … That way, they can't be making edits and stuff on the old version, and it can't fuck up anything."* and *"I just really need to make sure that this is locked down and bad writes don't happen."* Spec: '08-Specs/Version Lock Spec.md'; rule: '05-Decisions/Server-Enforced Version Lock.md'. **The stamp:** one module helper 'stampWrite(payload)' adds two top-level fields beside 'data' / 'updated_at' on EVERY client write to 'jobs', 'needs' and 'redlineWalks' — 'app_build' (the build as an integer, 'homestead-v514' → '514', dev → '0', derived once from 'REACT_APP_VERSION') and 'w' (a fresh random '<build>.<8 chars>' per write, so an old build's 'updateDoc' can't inherit the stamp the last good save left on the doc). Stamped: 'saveJob' patch + full modes (and both create fallbacks), 'flushJob', 'flushSaves', the reconnect re-merge and startup replay (they re-enter 'saveJob'), the finish-status auto-advance, the public punch page's 'arrayUnion' submit, the Simpro import create, the Settings Restore-from-backup / Restore-from-file writes, every needs write ('saveNeed', 'patchNeed', 'addNeedUpdate', the edit-reply transaction, photos add / remove / undo, the time-off request's need + its done stamp) and both redline-walk writes. 'manualTasks' and 'quoteWalks' have no client writer left (retired), so there is nothing to stamp there. The three console rescue utilities ('__HE_RESTORE', '_hsRescueDataUrlPhotos', '__HE_BULK_ADD_LOADS') stay deliberately unstamped — under a lock they run through the kill switch. **The popup (the face of the lock, not the lock) — hard block only on require** (Koy, 2026-10-06): the full-screen, no-close block (app dimmed and inert) is raised only by the realtime 'appGate/version' listener saying minBuild is above this build (its permission error is ignored until the Phase 2 rules exist), by a 'permission-denied' on a locked write that the gate confirms is a version refusal, or by Settings → **Force Update All Devices** (an explicit office command; it no longer bare-reloads anyone). A plain newer bundle found by the poll (now every **2 min** + on visible, was 10) is NOT a block: idle phones still reload silently; anyone mid-task gets a small bottom card — "A new version is ready", **Update now** / **Later** — that never blocks; Later hides it for 30 minutes or until the next newer build, whichever comes first. A minBuild raise turns an open (or dismissed) card into the hard block within seconds. Typing grace on the hard block: a focused field shows a red top bar instead for up to 5 minutes, measured from the hard raise. **Update now** blurs the field (the punch add box commits on blur), runs 'flushSaves()', waits for 'hasPendingSaves()' (cap 8 s; 1.5 s when the server is refusing this build anyway), hands the durable queue to the next session, and reloads with a cache-busting URL. Loop guard: a reload that still runs the old bundle (CDN edge lag) shows "Updating… one moment" and retries ≤ 3× / 20 s apart, then "Close and reopen the app". The bottom-left pill is gone; idle phones still self-heal silently. **Refused saves survive:** the job funnel keeps a refused patch in 'pendingPatches' + 'he_pending_patches' (it was persisted at enqueue) and skips the 5 s retry loop for a version refusal; a new 'he_pending_handoff' sessionStorage marker lets the session that replaces the tab adopt the slot immediately (the live-sibling 20 s rule used to park it until the NEXT app open). **Office controls** (Settings → Devices — App Versions, admin): each device's build, red **BELOW MINIMUM** flag, lock status + who set it, unstamped-saves count for the last 3 days, **Require v___ (N devices will be asked)** and **Turn off the lock** — both call the new 'setMinBuild' callable ('requireAdmin', Admin SDK write to 'appGate/version', logged, never raised automatically on deploy) — with the rollback rule in the help text. **Functions (deploy needed):** 'setMinBuild'; 'onJobUpdate' gains version-lock telemetry ('functions/versionLock.js') that counts writes landing without a fresh stamp per day in 'settings/versionLockStats', split client-shaped vs server-shaped (Admin SDK writers never stamp). **No rules change in this ship** — the complete Phase 2 rules are prepared beside the live file as 'firestore.phase2.rules' (appGate read-only + 'stampOk()' on jobs only; deliberately fails OPEN when the gate doc is missing) with emulator tests in 'scripts/rules-test/', to deploy only after the soak. Harness: 'scripts/version-lock-test.js' (prebuild) — build parse, stamp, refusal detection, THE funnel proof (a 'permission-denied' keeps the patch in both queues and the next build replays it exactly once, stamped '600.…'), flushJob / flushSaves refusals, non-version denials keep today's retry, a static sweep that every write to the locked collections is stamped, the telemetry classifier. New guide 'settings.html' behind a "?" on the Settings screen. **Why it won't lose data:** the stamp is two additive top-level meta fields the loader never spreads into the job ('{...raw.data, …}'), so nothing changes inside 'data', in the merge, the baseline, or the rules; every stamped write goes through the exact same funnel and transaction as before; no rules deploy, so nothing is refused yet and the gate doc is only ever written by the Admin SDK; the popup can only ADD a flush before a reload the app already did (and now waits for typing); a refused save is kept where it already was and replayed by the same merge, proven by the harness.
+- **Office messages fold in the bell when they're done, and My Day keeps them all in tabs (Important · Announcements · Discussions · Sent)** · 'shipped 2026-10-06' · 'SW v514' · Koy: *"when a important message is sent and receieved it should like collapse or somethin in the bell. i think we should have an important message and announcement, chat tabs in the my day area… somewhere to keep track of all of these"*, then *"office only, add the sent tab"* and *"can i click into each one to open all of them for each section"*. Built to the approved clickable mockup (artifact LB7Cv49y…; "Chat" became **Discussions**, since only the office starts one). **One rule, one place:** 'bcGroupMessages' merges each message's bell copies (the message, office reminders, one per discussion reply, all sharing 'broadcastId'; test sends excluded) into one row, and the bell, the badge-free tab counts and the Important pins all read the same **needs you** rule — Important until **Got it**, Announcement until opened (an unread reminder brings it back), Discussion while it has unread replies or was never opened. The app listens to one single-field 'kind in [announcement, important, discussion]' query on the person's own inbox (no index, limit 400), replacing the v513 'kind == important' listener, so office messages no longer fall off the 50-item bell list. **The bell:** FROM THE OFFICE shows one card per message that still needs you (kind tag, headline, newest activity time, last reply on a discussion, *Tap Got it* / *N new replies* / *New*); everything finished folds into one dashed **✓ N done** line (starts folded) that opens the newest 5 plus **See all N in My Day →**. Opening a message (bell, push, pin, tab, arrows) marks every unread copy of it read, so it folds on its own. **My Day → Messages from the office** ('OfficeMessages', under the red Got it pins, starts folded): header chips (*N needs Got it · N new replies · N unread*, or *✓ All caught up · N messages*), tabs **Important · Announcements · Discussions** with counts, each tab listing what needs you first then the finished ones (newest 3 + **Show N older**); Important rows carry a **Got it** button; Discussion rows show the last reply. **Sent** (office only, 'canBroadcast') lists what the office sent with the same reach + who's-seen + Remind as Bell → Send → Recently sent (both now render the shared 'BcSentRow'; 'listBroadcasts' takes an optional 'limit', 12 by default, 25 for the tab, capped at 30). **Reading:** 'AnnouncementView' gets **‹ N of M ›** by the tag, stepping through that kind's messages in tab order without going back. **Server:** the Sunday inbox cleanup 'notifInboxPrune' keeps office messages (anything with a 'broadcastId') a year instead of 30 days ('ND.isPrunable'), and pages in 'createdAt' order so kept items can't fill the 400-doc window and stall it. Tests: 'scripts/office-msgs-peds-test.js' (grouping, needs rule, sender-only reply copies, tab order — helpers extracted live from App.js; wired into prebuild) + a cleanup case in 'scripts/broadcast-test.js'. Guide 'myday.html' updated. **Why it won't lose data:** read-only grouping of bell items the app already reads; the only write is the existing 'read: true' flip on the person's own bell copies (the rules already allow it, and Opened is what the office's seen list already counts); no job / need / user data, loader or Firestore rules touched. The cleanup change only deletes LESS (office messages kept longer); every other bell item still goes at 30 days. Functions to deploy: 'notifInboxPrune', 'listBroadcasts'.
+- **Job Prep: Temp Peds Out — every temp ped on a job, how long it's been out, pickups, and Picked up (Justin's lane)** · 'shipped 2026-10-06' · 'SW v514' · Koy: *"is there anywhere in the app that lists all the temp peds that are out being used?"*, then *"probably in justins job prep section? hes asking for it"* and *"auto clear is fine"*. Built to the approved mockup (artifact Q1KBDYfE…). Before this, a ped lived only as a checkbox + Ped # inside each job, install jobs left the board once Completed, and nothing cleared a ped when it was picked up. **New folded lane TEMP PEDS OUT** between Office Admin and Pre-Job Prep ('TempPedsLane', labelled Justin's lane): 'tempPedGroups' builds one row per physical ped from EVERY live job in any stage (not 'jobPrepIncluded', which drops finished jobs; deleted / archived / quotes excluded) — out = a full job with **Temp pedestal on site** ticked, or a temp ped install job ('tempPed') with status Completed; an install job and a full job at the same address (normalized) with the same Ped # are one ped, the full job leading. Header pills: *N out · N need a look · N out 90+ days · N pickups scheduled*; the Job Prep subtitle adds *· N temp peds out*. Rows: big **Ped #**, job (tap to open), Simpro #, foreman, address, *On the job* / *Temp ped install*, **days out** (red past 90), pickup status (tap opens the pickup job). **Needs a look** on top: no Ped # (set it on the row) or the same Ped # on two different jobs. Sort **Longest out** / **Ped #**; the Job Prep search (also *14*, *#14*, *ped 14*) and foreman filter apply. **Out since:** new 'tempPedOutAt' (M/D/YYYY) stamped when the Job Info checkbox or the Office Admin TEMP PED chip goes on; install jobs use their sign-off date; older peds show *Out since not recorded* with a date picker on the row. **Schedule pickup** creates a **Temp Ped Pickup** quick job ('blankQuickJob("tempped")', job's address / GC / foreman / lead, scope filled) linked by 'pickupPedFor' (+ 'pickupPedNumber', 'pickupPedJobName' shown as a banner in the quick job) and opens it. **Auto-clear (Koy's pick):** when that pickup job is signed off / complete / ready to invoice, the ped moves to **Returned recently** on its own (tagged *auto*) — derived at render, so every path that completes a quick job counts. **Picked up** (inline confirm) stamps 'tempPedReturnedAt' + 'tempPedReturnedBy' on every job in the row; the checkbox and Ped # stay as history (unticking would flip Justin's TEMP PED chip back to "no ped"), and Job Info shows *Picked up date · name* / *Out since date*. **Returned recently** (last 30 days, folded) has **Undo**: clears the stamps, or for an auto return adds the pickup to 'tempPedPickupIgnore'. Ticking the box again on a returned job starts a new out-date and clears the old return. Tests: 'scripts/office-msgs-peds-test.js' (who's out, one ped per install + full job, duplicates, no number, days out, Picked up, auto-clear, Undo, unlinked pickups never clear). Guide 'jobprep.html' updated. **Why it won't lose data:** additive only — new optional job fields ('tempPedOutAt', 'tempPedReturnedAt', 'tempPedReturnedBy', 'tempPedPickupIgnore' on jobs; 'pickupPedFor', 'pickupPedNumber', 'pickupPedJobName' on new pickup quick jobs) written through the existing 'updateJob' / 'saveJob' funnel inside 'data', which the loader already spreads; no existing field is renamed, cleared or rewritten (the checkbox and Ped # are never touched by Picked up); Schedule pickup only creates a new quick job doc; no rules, function or loader change.
+- **Temp Peds Out: a temp ped card links to its job card once the job card exists (ask first)** · 'shipped 2026-10-06' · 'SW v514' · Koy: *"a temp ped card is made before we have a job card for that job, becuase the quote usually hasnt been signed yet … when we make or import that job from simpro to a job card, can it auto detect the name from temp ped cards and link it to that job card.?"* — then picked **Ask first** over auto-linking (a name-only match like two Smiths would silently tick a ped on the wrong job; an import often has no address yet, since a site name equal to the job name imports blank). 'tpLinkWhy(install, job)' says why a live full job may be an out install card's job: same Simpro #, same address (normalized), or a shared name word ('tpNameWords' drops filler like Residence / Temp / Ped / Lot and bare numbers); never a quick job, quote, the install itself, a job already linked ('tempPedInstallId'), a job with a DIFFERENT Ped # out, a job in the install's 'tempPedLinkSkip', or a job card made 30+ days before the ped card (job ids are 'Date.now()'-seeded 'uid()'s, so they read as creation time — keeps old same-name jobs from being asked about). **Where it asks:** on the Temp Peds Out row of a ped that is only an install card (*Job card found: name · #Simpro · why. Is this ped on that job?* — up to 3), and at the top of the matching job card's **Job Info** tab (so whoever imports the job sees it right away; hidden when the job hides the Temp Pedestal section). **Link to this job** ('tpLinkPatches') writes on the job card 'hasTempPed: true', the Ped # (the job card's own if it has one), 'tempPedOutAt' = the earlier of the install's out date / sign-off and the job card's own live out date, clears an old pickup stamp, sets 'tempPedInstallId', and keeps 'tempPedLinkPrev' (what the job card had); on the install card 'tempPedLinkedJobId'. 'tempPedGroups' now groups a linked pair by the link ('link|<installId>') whatever the addresses say, so it's one row with the job card leading and no duplicate-# flag. **Not this one** adds the job to 'tempPedLinkSkip'. **Unlink** (lane row, or next to the Ped # in Job Info: *from temp ped card “X” · Unlink*) restores the job card from 'tempPedLinkPrev', clears both link fields and skips that pair from then on. JobDetail gets 'onUpdateOtherJob' (writes another job through 'updateJob', never the open one — the open card writes through its own 'u'). Tests: 'scripts/office-msgs-peds-test.js' §3 (name words, who's suggested and who isn't, lane + Job Info suggestions, Link merges the rows and carries # + date, Unlink restores and never re-suggests, deleted install card still unlinks). Guides 'jobprep.html' + 'jobinfo.html' updated. **Why it won't lose data:** nothing writes until someone taps Link / Not this one / Unlink; every write is a patch through the existing 'updateJob' / 'saveJob' funnel inside 'data'; new optional fields only ('tempPedInstallId', 'tempPedLinkPrev' on job cards; 'tempPedLinkedJobId', 'tempPedLinkSkip' on temp ped cards); Link only adds the ped fields the checkbox already writes, and Unlink puts back exactly what Link saved; no rules, function or loader change.
+- **Temp ped card: Temp Ped # picker goes to 100 (was 1–10)** · 'shipped 2026-10-06' · 'SW v514' · Koy: *"on a temp ped job card, the number only goes to 10, needs to go to say 99 for now."* The temp ped job card's **Temp Ped #** dropdown was a hard-coded 1–10 list; it now offers 1–100, the same range as the Job Info **Ped #** picker, the Office Admin chip and the Temp Peds Out row (so any number set on a job card can be set on its temp ped card, and a link never carries a # the card can't show). **Why it won't lose data:** display-only change to the option list; the field ('tempPedNumber', a string) and its write are unchanged, and every existing value 1–10 is still in the list.
+- **Job Start: checklist view, any order, a percentage, and a folded board** · 'shipped 2026-10-06' · 'SW v514' · Justin: *"Wondering if we can change the format of the job start items in commercial. It'd be helpful to see more of them at once, even if it's a checklist style format. It's not going to happen in the perfect sequence and being able to see all of them would be helpful. A percentage would be nice too."* 'JobStartCard' gains a **Checklist | Phases** switch above the 12-segment bar (per-device pref 'he_jobstart_view_v1' in localStorage, default Checklist). **Checklist** renders all 12 phases ('listPhase' / 'listRow') as row lists: tap a row = the same ○ → ✓ → N/A cycle as a chip ('tapChip'); tracker rows still open their log; each row shows who / when when done, photo / date / owed / "from …" tags, and the note mark (same item panel). Phases with open items start open, finished phases fold to one line with DONE and n/n ('phOpen' overrides per card); tapping a bar number opens that phase. **Any order:** the 'locked' gate on later-phase chips is gone in both views, and date / photo inputs show on later phases too. 'commPhase' (first phase not closed) is unchanged, so the board grouping, Move On, owed items and the My Day "Phase n" rows behave as before. The dates / photos / phase note / Move On block is now one 'phaseExtras(n)' shared by both views. **Folded board (Koy):** on the Job Start board ('ctx="board"') each card starts as one line ('open' state): ▶ name, foreman, n OWED / GEAR LATE pills, mini bar + %; tap to open the full card, ▼ by the name folds it; the drawer's Job Start tab always renders the full card; the board's intro text now explains the first-open-phase grouping and any-order checking. **Percentage:** 'commStartPct' = done + N/A over every item in the 12 phases (owed = not done), shown under the job name as "62%" + bar + "58 of 94". Guide 'jobstart.html' updated (current phase = first with open items; Checklist / Phases; the percentage). **Why it won't lose data:** writes are unchanged. Every check, N/A, note, doc, date and photo goes through the same 'patchStart' → 'commPatch' paths as before; unlocking later phases only lets the existing writes reach more keys under 'commercial.start'; the view choice lives in the device's localStorage, never on the job; no loader, rules or function change.
+- **Office announcements: Announcement · Important (Got it) · Discussion, with photos and files** · 'shipped 2026-10-06' · 'SW v513' · Koy: *"the send one needs to be like an announcement or important message, something to seperate it from the other notifications. I want to be able to attach files and photos, and also have the option to start a group discussion or have it strictly an announcment or important message."* Built to the approved clickable mockup (artifact JKFJ9XiX…; Koy: *"I like the mock up"*, *"Build it and deploy"*). **Send (bell → Send, office only):** a **What kind** picker — **Announcement** (one-way; shows who opened it), **Important** (each person taps **Got it**; pinned at the top of their My Day until they do; weekday-morning reminder), **Discussion** (one thread; every reply notifies everyone in it — Koy's pick) — plus **Photos & files** (the existing 'PhotoAttacher', uploads to Storage under 'broadcasts/<id>/'; drag-and-drop works by the v510 drop layer); the preview and the confirm name the kind. **The bell:** office messages get their own **FROM THE OFFICE** group at the top — colored strip + tag (Announcement steel blue, Important red, Discussion purple; no yellow), headline, who sent it, attachment count, and on Important *Tap to confirm* / *✓ Got it*; reminders and replies carry their own tag; everything else sits under **EVERYTHING ELSE**. The phone banner's title carries the kind (*IMPORTANT · New PPE rule*). **Reading it ('AnnouncementView'):** opens from the bell, a push tap (view 'announce' + the broadcast id; works from a cold open too) or the My Day pin — the full message, who sent it, to whom, photos as a tap-to-open grid and files as named tiles; **Important** has a big red **Got it** (then *✓ You confirmed · time*); **Discussion** shows the thread with a reply box (text + photo), refreshes itself every 25 s, and says every reply notifies everyone. **My Day:** each Important message still waiting on this person's Got it is a red pinned card under the title with **Read it** / **Got it** ('AnnouncePins', from a single-field 'kind == important' inbox listener; reminders, tests and replies never pin). **Who's confirmed (Recently sent):** every row carries its kind tag; Important rows read **Got it from X of N**, Discussion adds the reply count; the per-person list adds **Got it** (with time) above Opened, a progress bar, and **Remind the N who haven't** (Important: everyone without Got it; others: everyone who hasn't opened it). **Server:** 'sendBroadcast' takes 'kind' + 'attachments' ('cleanAttachments': Firebase Storage download URLs only, names cleaned, 10 max) and stores kind / broadcastId / headline / from / attachments on each bell copy through a new optional 'extra' argument on 'deliver()' (spread first so it can never override the record's own fields). New callables: 'broadcastOpen' (the message + my Got it + the thread), 'ackBroadcast' (stamps 'ackAt' + 'read' on the person's own copy in a transaction — the rules only let the app flip 'read', so a Got it can't be faked; idempotent), 'replyBroadcast' (reply stored under 'broadcasts/<id>/replies/<rid>', 'replyCount' incremented, every other participant notified — recipients + sender, never the replier; client-minted rid = eventKey, a retried reply never re-pings), 'remindBroadcast' (office; nonce = eventKey) and the scheduled 'importantGotItReminder' (6:35 am weekdays, Mountain: anyone still missing Got it on an Important message 12 h–4 days old, one reminder per day keyed by date). Open / Got it / reply are for the people it was sent to, proven by their own live PIN ('requireMember': matched by id, then name among PIN-matching records — so Justin's duplicate record can't block him); send / history / seen / remind stay office-only ('requireBroadcaster'). 'seenStateOf' gains **acked** (strongest; counts as opened). Tests: 'scripts/broadcast-test.js' 16 checks (+kinds, push titles, attachment cleaning, participants, Got it state) and scenario **K** in 'scripts/notify-delivery-test.js' (kind + attachments on the bell copy and a non-Storage URL dropped; open allowed for recipients / office, refused for outsiders and bad PINs; Got it stamped, idempotent, refused for outsiders, shows in the seen list and history; Remind reaches only the unconfirmed and never double-pings; the morning sweep reminds once a day and skips Got it; a discussion reply notifies the sender + other recipients but not the replier, a retried reply never re-pings, outsiders and Important can't take replies, the thread reads back in order). Guide 'myday.html' updated. **Why it won't lose data:** additive only — new optional fields on new bell copies ('kind', 'broadcastId', 'headline', 'from', 'attachments', 'label', 'ackAt', …) and on new 'broadcasts' docs (+ a 'replies' subcollection), all in the function-only 'broadcasts' collection or written by the server; 'deliver()''s new 'extra' defaults to nothing, so every existing notification is byte-identical; Storage uploads go to a new 'broadcasts/' folder; no existing field, loader, job / need / user data or Firestore rules touched. Functions deployed 2026-10-06 BEFORE the app push (created 'broadcastOpen', 'ackBroadcast', 'replyBroadcast', 'remindBroadcast', 'importantGotItReminder'; updated 'sendBroadcast', 'listBroadcasts', 'broadcastSeen'; us-central1, Node 22).
+- **Mobile: wide lists scroll sideways again, and Bid Items shows full names** · 'shipped 2026-10-06' · 'SW v512' · Koy: *"there are a bunch of spots on mobile you should be able to scrol to the righ to see all info, specific ones ive noticed are the wire section of bid items, you cant see the full names there either, and the home runs you cant scroll to right, the appliance pulled list you cant scroll to see the info."* **Root cause:** v496's swipe-between-tabs put 'touchAction:"pan-y"' on the job body so the swipe could own sideways drags. That told the phone the job page only scrolls up and down: content wider than the screen could no longer be dragged into view, and on iPhone it also froze the sideways scroll of the wide tables INSIDE the job (Appliance loads, panel schedules) even though each has its own scroll box. **Fix:** the body keeps normal touch behaviour (no 'touchAction'), and 'useHeTabSwipe' (src/motion.js) moved from pointer events to touch events with a new guard, 'heSwipeBlocked': a swipe never starts on something that scrolls sideways itself, on a tab whose content is wider than the screen, inside a pop-up (anything 'position:fixed' over the tab), or on a form control; once a drag is clearly sideways it calls 'preventDefault' on 'touchmove' (non-passive) so the page holds still while the tab follows the thumb — the old job pan-y did that globally. **Bid Items:** the stock rows (each cost center and the **Wire & cable — whole job** box) cut names off with "…" because the three number columns left the name almost no room on a phone. Names now wrap in full, the name column keeps at least 150 px, and each table sits in its own sideways-scroll box (min 444 px) so Required / Assigned / badge are a swipe away. Verified in the in-app browser at 375 px with the real 'motion.js' and synthetic touch gestures: swipe on plain content changes tab both ways and holds the page; swipe on a wide table, inside a pop-up, on a text box, or on a tab wider than the screen does not; a vertical drag just scrolls; swipe works again once the content fits. **Why it won't lose data:** layout and touch handling only — no Firestore read or write, no field, loader, rules or functions change.
+- **Send a notification to everyone, a group, or picked people** · 'shipped 2026-10-06' · 'SW v511' · Koy: *"I think i would like the option to send out a notificiation to either everyone or select peiople with a custom message. For example i could send a mass notification right now to everyone that says bid items moved to its own tab, or i could send a custom one to just foreman, or whoever i select etc."* **Where:** the bell → **Send**. **Who can send — Office only** (Koy, asked *"who has acess to send these"*, picked Office only): 'canBroadcast' / server 'ND.isBroadcaster' = title Admin, or Admin/Manager access without a field title, plus an optional per-person 'caps: ["notify.broadcast"]' grant — live list Koy, Josh, Brady, Justin, Jeromy. Tier alone was rejected because five foremen carry Manager access (Keegan, Colby, Abraham, Daegan, Gage) and would have been able to message the whole company; 'PERMISSIONS["notify.broadcast"]' is '[]' (grant-only). Opens 'BroadcastComposer': **To** = group chips with live counts (Everyone · Office · Foremen · Leads & Jr. Foremen · Crew — active internal people only, never contractors or deactivated members; **Office** uses the same office rule, so Manager-access foremen sit under Foremen and Jeromy under Office, and **Crew** excludes office) plus **Or pick people** (Koy: *"i need an option to send to specific individuals not just titles"*) — an always-visible *Type a name to add someone* box with type-ahead (tap a match or press Enter), each pick a removable chip (a count past 15), **Clear**, and **See everyone** (folded checklist of the whole team). Groups and individual names mix freely; **Message** = optional headline (defaults to *Message from <name>*) + the message (1000 max); **How it shows up** preview; **Send me a test** (to you only, not recorded); **Send to N people** → one in-page confirm (*Their phones will buzz*) → result: *N got it on their phone now, N will see it in their bell, N still trying*, with the bell-only and still-trying names listed. **Recently sent** (folded) shows the last 12 with who sent them, the audience and the reach. **Who's seen it** (Koy: *"is there a way to see who has viewed it so i know"*): each Recently sent row says **Opened by X of N** and opens a per-person list, and the result screen shows the same list right after sending, with **Refresh**. Grouped strongest first: **Opened it** (with when) · **Banner showed on their phone · not opened** · **On their phone · not opened yet** · **Still trying their phone** · **In their bell only · not opened yet** · **Didn't save**. Read server-side by new callable 'broadcastSeen' (+ an 'opened' count per row in 'listBroadcasts') from each recipient's own bell copy ('seenStateOf'): Opened = 'read' (they tapped the push or the bell line, or cleared the bell), its time = the record's last-change time (the rules only let the app flip 'read', so there is no separate readAt and no rules change); Banner showed = the push worker's display receipt ('displayedAt'). Someone who reads the banner on a locked phone without tapping shows as banner-showed, and the list says so. Each broadcast record keeps every recipient's bell key + id (deterministic from the eventKey). **Server:** new callables 'sendBroadcast' + 'listBroadcasts' (+ 'broadcastSeen'), all behind 'requireBroadcaster' = 'requireAdmin' (the live PIN, the GC-portal gate — the public app key alone can't buzz the company) + 'ND.isBroadcaster' (office only). Each recipient goes through the same 'deliver()' every notification uses (bell first, then push, 'pushRetrySweep' retries for 12 h), not 'deliverIfWanted' — a company announcement has no mute toggle; category 'broadcast', high priority. The client mints one broadcast id per send (kept until it succeeds) and it is the 'eventKey', so a double tap or a retried call can never buzz anyone twice. Recipients are re-resolved server-side against the live team list ('resolveBroadcastRecipients', by id then exact name, deduped by bell key, capped at 200); the record lands in 'broadcasts/{id}' (function-only collection, covered by the rules' deny-all catch-all). Tests: 'scripts/broadcast-test.js' (12 checks on recipient resolution, cap, summary, id format, priority, seen states + ordering, who may send) + a new scenario J in 'scripts/notify-delivery-test.js' that runs 'sendBroadcast' / 'listBroadcasts' against the in-memory Firestore + FCM fake (no PIN / wrong PIN / a foreman / a Manager-access foreman with his real PIN all refused, history too; deactivated + contractor dropped; no-phone person bell-only; re-sent id pings nobody; test goes to the sender only and isn't recorded; the record's ids = the real bell copies; a foreman opening it moves to Opened in 'broadcastSeen' and the row count; the seen list needs the PIN too). The composer was clicked through in a React harness with the real component (group counts, People list, preview, confirm, result). Guide 'myday.html' (*Messages from the office*). **Why it won't lose data:** additive only — two new callables, a new function-only 'broadcasts' collection, inbox items written by the unchanged 'deliver()' with the same fields every notification has; no existing field, loader, job / need / user data or rules touched. Functions 'sendBroadcast', 'listBroadcasts', 'broadcastSeen' deployed 2026-10-06 (created, us-central1, Node 22) BEFORE the app push, so the Send button never appeared without its backend.
+- **Bid Items is its own job tab, right after Plans & Links** · 'shipped 2026-10-05' · 'SW v510' · Koy: *"bid items from simpro needs to be its own tab right next to the plans and links tab, people cant remember where it is so it needs to be easier to see."* The Simpro bid (every cost center and line, Required vs Assigned, the whole-job wire box, Over only / Wire only, Refresh stock) used to be a folded **Bid Items (Simpro)** section at the top of Plans & Links; it is now the **Bid Items** tab, fifth in the bar on residential AND commercial jobs ('TABS' / 'COMM_TABS', right after Plans & Links), rendering the same 'BidItemsPanel' with the same props. Plans & Links keeps a one-line *"Looking for Bid Items (Simpro)? It has its own tab now"* button at the top that jumps there, for anyone whose thumb still goes to the old spot. The data still loads when the job opens (the 'simproCostCenters' / 'simproStock' effects in 'JobDetail' were never tied to the tab), so the tab opens instantly from the 12-hour cache. New in-app guide 'public/sops/biditems.html' (the "?" on the tab turns on by itself — the SOP scan reads the tab list); 'planslinks.html', 'changeorders.html' point to the new tab. **Why it won't lose data:** display-only move — no Firestore read or write added, removed or changed; 'simproCostCentersCache' / 'simproStockCache' are written exactly as before; no field, loader, rules or functions change.
+- **Drag and drop files onto any upload spot** · 'shipped 2026-10-05' · 'SW v510' · Koy: *"can we make it so i can drag and drop files anywhere you can add files or pictures to? instead of having to click upload and find them everytime."* One window-level drop layer ('installFileDrop', next to 'toast') instead of a handler per spot: every place that takes files already has a hidden '<input type="file">' behind its button and reads 'e.target.files' in 'onChange', so a drop hands the files to the input it landed on and fires the same 'change' event a click-and-pick does. Each spot's own upload code (Storage path, limits, toasts) runs unchanged, and any upload spot added later gets drag-and-drop for free — today that is all 15 pick-files inputs: Plans & Links files, punch / QC rows, job notes, return trips, My Day tasks, Need quick-add, quick jobs, temp peds, every 'PhotoAttacher', and the GC portal's send box. **Which spot gets the drop:** each visible, enabled input owns the biggest box around it that holds no other input (a punch row, a note card, a whole tab when it is the only one), never past a fixed layer (an open job). While dragging, that box gets a dashed blue outline, the receiving button gets a ring, and a pill above it says *Drop to add photos · Attach photo / file* (or *files*). Off every box the cursor shows no-drop with *Drop on a spot that takes files or photos*; the drop is swallowed either way so a missed drop can never navigate the app away to the file. **Guards:** files are matched against the input's own 'accept' ('heDropAccepts', with HEIC photos the desktop browser leaves untyped counted as photos) — a PDF on a photos-only spot is refused with a toast, mixed drops add what fits and say how many were skipped, a one-file spot takes the first; disabled (mid-upload) inputs are skipped; camera-only twins ('capture') are skipped in favour of their pick-files partner; the settings **Restore from file** input carries 'data-no-drop' and can never take a dropped file. Zones are rebuilt lazily so a stalled drag self-heals (found in testing: a 700 ms idle timer cleared the targets mid-drag; now the timer only hides the outline). Card drags on the crew board carry no "Files" and pass straight through. Verified in a real browser against React 18 with the live code (10 drops: right spot, refused types, busy / restore skipped, one-file spot, off-zone, a 2 s pause mid-drag, repeat drops) + 'scripts/file-drop-test.js' (10 checks, 'prebuild'). Not available inside the Tools tab calculators (separate pages in their own frame). Guides 'planslinks.html', 'myday.html' mention it. **Why it won't lose data:** no Firestore code touched — a drop only fills the same file input a person would and fires the same event, so every write still goes through that spot's existing, unchanged upload path; restore-from-file is excluded outright.
+- **Notifications you can't miss — every notification is saved to the bell first, the push is tracked, retried, and shows on every phone whether the app is open or not** · 'shipped 2026-10-05' · 'SW v509' · app half live via Vercel; server half needs 'firebase deploy --only functions' (until then pushes still come from the old server path) · Koy: browser notifications were inconsistent; keep FCM, but make missing a push never mean missing the notification. **Server ('functions/notifyDelivery.js' + 'deliver()' in 'functions/index.js'):** the inbox record in 'notifications/{userKey}/items' is now committed (with retries) BEFORE any push, in one batch with a 'pushQueue' lease; the push goes out with 'messaging.sendEach' (one message per device); the per-device outcome is written back on the record as 'delivery' (status sent / partial / retrying / failed / no_tokens / expired / read_before_push, attempts, devices reached, error codes, token tags only — never full tokens) and logged as one '[notify] delivery' line (ERROR on a real loss). Transient FCM errors re-queue and the new **'pushRetrySweep'** (every 5 min) re-sends to only the failed devices with backoff (1/3/10/30/60 min, 5 tries, 12 h push window; skipped if already read in-app). Dead tokens prune in one transaction (list-only 'tx.update', audit fields untouched). The record id is an idempotency key (same recipient + content in the same minute, or an explicit 'eventKey'), so a re-fired trigger can't double-ping. Priority: digests/routine reminders/quotes go 'Urgency: normal' + quiet banner + 6 h TTL; everything else 'high' + 24 h TTL. Push body trimmed under FCM's 4 KB cap (inbox keeps the full text) — long notes used to fail outright. Unknown recipient names and muted categories now log instead of vanishing. New callable **'pushReceipt'**: the phone reports "I displayed it", so the record separates "FCM accepted" from "the device showed it". 'sendTestPush' / 'sendTestNotification' use the same message builder (the Settings test now runs the full inbox-first path). **Push worker ('public/firebase-messaging-sw.js'):** shows the banner itself on every push, app open or not — the Firebase SDK only showed it when no window was visible and the page fallback ('new Notification') throws on Android and doesn't exist on an iOS Home-Screen app, so phones with the app open got nothing and iOS revoked push permission for "silent" pushes. One banner per notification (tag = record id; the old job+section tag with 'renotify:false' made a second event on the same job silently replace the first). Firebase SDK load is wrapped so a CDN hiccup can't kill the push handler. Tap: the push worker doesn't control the page, so 'navigate()' always failed since v364 — it now posts the target to the open app (job, My Day task, Huddle… all routed like a bell tap) or opens the deep link when closed. **App:** foreground push = in-app toast only (the worker owns the OS banner); toast and push taps route view/task notifications, not just jobs; tapping marks that bell item read (also on a cold open via '&nid='); unread badge comes from its own 'read == false' query (no longer capped by the 50-item list) and sets the Home-Screen icon badge; Mark all read clears every unread; Notification Doctor gains **YOUR LAST 10 NOTIFICATIONS** (pushed / to how many devices / shown on a device / retried / failed + FCM codes) and its OS test uses the worker's 'showNotification' so it works on phones. Guide 'public/sops/myday.html' step 3 updated. Test 'scripts/notify-delivery-test.js' (pure helpers + the full pipeline against an in-memory Firestore/FCM fake; in the prebuild chain). **Why it won't lose data:** inbox items keep every field the bell already reads (title/body/jobId/section/view/needId/createdAt/read) and only ADD 'category', 'priority', 'link', 'delivery', 'receipts', 'displayedAt'; the server's later writes merge only the 'delivery' map (receipts live beside it so they can't be clobbered), so a "mark read" is never overwritten; 'pushQueue' is a new function-only collection (covered by the existing deny-all catch-all — no rules change); token pruning is the same removal-only list update as before, now in one transaction; jobs/needs/users data and the jobs loader are untouched. Needs 'firebase deploy --only functions' (deliver path + new 'pushRetrySweep' + 'pushReceipt') alongside the Vercel push.
+- **Plan intake, Phase 4 — Today → Plans card, 5 pm summary email, 6:30 am walk push, file an unsure plan from the card** · 'shipped 2026-10-04' · 'SW v508' · Koy: *"start phase 4"*; decisions: summary by email to his Gmail, walk push to him only, *file it from the card*, card gated on the **Head of Residential** hat. **Plans card** (top of Today, folded with counts — *N need you* · *N new*): reads 'agentFindings' live (last 14 days, live mode only); **Needs you** first (two folders, a plan the Routine wasn't sure of, a walk it couldn't match, errors), then one group per job / quote number (folder made, renamed on conversion, plans filed, walk on a job); every row links to its folder / file / email, **Seen** per row, **Mark updates seen**, **Show seen**. A plan the Routine wasn't sure of gets an inline **File it** form (Job # / Quote #, number pre-filled from its best guess, Plans · Cabinet · Appliance · Design · Specs · Redlines) that calls the new 'planFileByHand' callable — same move, rename and logging as the Routine, name + PIN checked server-side (admin/manager tier) and the hat (or admin tier) re-checked there. Gate reads the live team record (the v465 lesson). **5 pm email** ('planIntakeDigest', 17:00 MT): that day's findings, *Needs you* first then by job number, via the existing Resend sender to koywilkinson@gmail.com ('planIntakeState/config.digestTo' switches it once the homesteadelectric.net DNS is verified); skipped on an empty day; a failed send pushes Koy. **Walk push** ('planIntakeWalkPush', 06:30 MT): one push to Koy listing today's walks — *Brandt Walk: Quote #2642 folder ready · 11 plans in SIMPRO*, *existing job #1277*, or *not matched yet*; opens Today. **Rules:** new 'agentFindings' block — read open like the rest of the app, update limited to 'seen' / 'seenAt' / 'seenBy' (affectedKeys), no client create/delete; 'agentQueue' and 'planIntakeState' stay closed by the catch-all; deployed rules were compared to the repo first (identical). Gates: 'scripts/planintake-digest-test.js' + a Phase 4 scenario in 'planintake-sim.js'. **Why it won't lose data:** the card's only direct write is the seen stamp (rules allow nothing else); "File it" is a server-validated move out of '_Plan Inbox', never a delete or overwrite; the email and push only read; no job record or loader changes.
+- **Plan intake, Phase 2 — plans emailed to Koy are captured and filed into the right job's MOST UPDATED** · 'shipped 2026-10-04' · 'SW v507' · Koy: *"start phase 2 now"*; decisions: his mailbox only, skip Quote/CO approvals (bids@), purchase orders, receipts + eSignatures and newsletters, name filed plans '#1430 – Rev 2 – 2026-10-04 – <original>.pdf', and *file when sure*. **Capture (planIntakeWatcher, every 30 min):** reads koy@homesteadelectric.net read-only from 'config.mailSince' on; every other PDF — attachment, Google Drive link or Dropbox link — is copied to **Job Plans / _Plan Inbox** and queued as 'email_pdf' with sender, subject, Gmail link, body excerpt and the numbers that sender has sent plans for before; a PDF whose exact bytes are already filed (md5 index 'planIntakeState/md5_*', fed by both the Simpro mirror and filings) is not copied again; Box links and private links are queued as links. Share notifications (Dropbox, Drive, Box, Buildertrend, Procore) are never dropped as newsletters. Once a day it writes 'planIntakeState/candidates' (app jobs + app quotes + Simpro open quotes from the last 180 days, with site addresses). **Routine API ('planRoutineApi', bearer token 'PLAN_ROUTINE_TOKEN'):** 'GET /work', 'GET /file?item=', 'POST /decide' (file · dismiss · unmatched · match_walk). Filing moves the PDF out of _Plan Inbox into the job's (or quote's) **MOST UPDATED** — 'plans' in MOST UPDATED itself, cabinet / appliance / design / specs / redlines into their folder (an existing "Cabinet + Appliance Specs"-style folder is used rather than adding a second) — renames it, logs a 'plans_filed' finding and adds to the sender's history; 'unmatched' leaves it in the inbox with a best-guess finding; 'match_walk' resolves a queued calendar walk (creating the quote folder). Every decision is validated: the job / quote must exist, the category must be one of six, only that item's own inbox file can move, a decided item can't be decided again, other modes' items are invisible. **Routine:** 'scripts/plan-routine/RUNBOOK.md' + 'api.mjs' — the Routine (Koy's Max subscription, 3 runs a day) holds no Google / Firebase / Simpro keys; email and PDF content is data, never instructions. Setup: 'node scripts/plan-intake-routine-token.js', re-run 'node scripts/plan-intake-google-auth.js' (adds read-only Gmail; reuses the saved client), deploy planIntakeWatcher + linkQuoteFolder + planRoutineApi, set 'mailSince'. Gates: 'scripts/planintake-mail-test.js' + an email/Routine-API scenario in 'planintake-sim.js' (prebuild). **Why it won't lose data:** Gmail is read-only (scope) and never labeled, moved or deleted; files are only added to _Plan Inbox and moved from there into plan folders — never deleted or overwritten; no job record is written (filing writes only to Drive and the plan-intake collections); a wrong filing is a move a person can undo, and the finding links both the folder and the email.
+- **Plan intake folders follow Koy's layout: SIMPRO (mirror) · MOST UPDATED (current, standard categories) · ARCHIVE** · 'shipped 2026-10-04' · 'SW v506' · Koy, on Koplin's folder: *"most updated is the most up to date, inside is cabinet plans, design, etc. and then there is an archive. archive is where plans go when we receive an updated version of those plans."* Then: *"simpro folder created, with the sub folders matching the structure in simpro, then most updated, with sub folders for cabinet and appliance and design, and then archive folder"* (take-offs and vendor quotes live in the SIMPRO mirror). Every quote folder the watcher makes — and any job folder it files into — gets **SIMPRO** (exact mirror of Simpro's attachment folders), **MOST UPDATED** with **DESIGN · CABINET PLANS · APPLIANCE SPECS · SPECS · REDLINES**, and **ARCHIVE**, each only where missing (an existing "Most Updated Plans" / "Archive" in any spelling is left as is). The watcher only ever files into SIMPRO; what is current and what gets archived stays with people and the Routine (Phases 2–3, where superseded sets move to ARCHIVE). New Simpro files are skipped when the same bytes already sit anywhere in the job folder (md5 across the whole tree), so a plan someone already filed into MOST UPDATED is never copied again. **App:** when Create Drive folder (or the commercial import chain) links a plan-intake quote folder it no longer runs the v413 Pull from Simpro — that would drop a second copy of Simpro's folders at the top; the toast says the plans are in SIMPRO. Audit + one-time sweep the same day: 93 of 108 linked job folders already carried their job #; the 5 that never got one were prefixed '#N - ' (Bennett Garage, Housley - Tuyahe Hollow, 23 Vista Meadows, Argyle Residence Sconces, Car Lift Power); add-on jobs that share their main job's folder and jobs deliberately linked to a MOST UPDATED subfolder (Koplin) were left alone. **Why it won't lose data:** folder creation is additive and only where a folder is missing; files are added to SIMPRO only, never moved, renamed, replaced or deleted; the App.js change only skips a copy step; the sweep renamed 5 folders (same ids, before/after ledger kept).
+- **Plan intake, Phase 1 — site walks on the calendar get a Simpro quote folder that becomes the job's folder** · 'shipped 2026-10-03' · 'SW v505' · Koy (PLAN_INTAKE_SPEC.md): *"Automate plan intake, folder management, and revision checking so Koy never creates, fills, renames, or checks plan folders by hand."* A new scheduled function **'planIntakeWatcher'** (every 30 min, America/Denver) reads Koy's calendar for walks Josh / Brady / Justin schedule (walk / redline / walkthrough in the title, or a site address — meetings, Zoom / Meet calls, recurring events and events naming a job # are skipped; every event carries an auto Meet link, so "virtual" is read from the title), finds the Simpro site by address and the ONE open main quote there (change-order quotes, temp peds and quotes on a house with an active job are ruled out; a quote written up to 14 days after a quote walk still counts), and makes **Job Plans / _Quotes / Quote #N** with the quote's Simpro attachments copied in. When Simpro converts the quote (the job's 'ConvertedFrom'), the folder is renamed **#<job> - <name>** and moved up into Job Plans — same folder id, so every link keeps working — and linked to the app job if it has no folder. New Simpro attachments on the quote and the job it became are filed every 2 h (filename + MD5 dedupe, ledger of Simpro file ids). Anything it can't match (no address, two open quotes, no quote 14 days on) goes to 'agentQueue' as 'walk_unmatched' for the Routine (Phase 2); every action is logged to 'agentFindings'. **App:** Create Drive folder (Job Info) and the commercial import chain first call the new **'linkQuoteFolder'** callable — if the job came from a quote that already has a folder, that folder is linked (toast "Linked the folder already made for this quote") instead of making a duplicate; any failure falls through to the old path. **Mode** lives on 'planIntakeState/config.mode': 'dry' (default — findings only, no Drive or job writes, linkQuoteFolder returns nothing) → 'test' (Drive writes under 'testParentId') → 'live'. Rules: pure walk rules 'functions/planIntake/walks.js' (scripts/planintake-test.js — 29 real calendar cases + Tolbert / Brandt Simpro shapes) and an end-to-end fake-world run of the watcher (scripts/planintake-sim.js), both in the prebuild chain; read-only replay 'node scripts/plan-intake-replay.js <calendar.json>'. **Calendar access:** Workspace only lets outside accounts see free/busy, so the watcher reads Koy's calendar through a one-time read-only Google sign-in ('node scripts/plan-intake-google-auth.js <client file>' → secret 'PLAN_INTAKE_GOOGLE_OAUTH'; OAuth app "Homestead Plan Intake" is In production on the homestead-electric project, privacy page 'public/privacy.html'); if that sign-in ever stops working the watcher pushes Koy once a day and logs a 'watcher_error' finding. Deploy: **'firebase deploy --only functions:planIntakeWatcher,functions:linkQuoteFolder'** after the secret is set. **Why it won't lose data:** Drive is create / upload / rename / move only — never delete, trash or overwrite; Simpro and Calendar are read-only; the only job write is 'data.driveFolderId', inside a transaction that re-reads it and writes only when the field is completely empty (any existing value, even a non-ID paste, is left alone and reported as a conflict); everything else goes to three new server-only collections ('planIntakeState', 'agentQueue', 'agentFindings') that the existing catch-all rule already closes to the app; no existing function is changed (index.js only appends the wiring).
 - **Commercial phase tabs get a punch list by building (Power · Lighting · Underground)** · 'shipped 2026-10-02' · 'SW v503' · Brady: *"Inside the tabs for power, lighting, underground etc: Can we make it like the residential punch list where you can make a building, or area and then make punchlist items underneath that? For now it would be good to work it as a punchlist that we build as we go, but if we can take the history of those punch lists after we get through a job or two and make it more of a pre built task list."* The flat checklist on Power, Lighting and the three Underground sub-tabs becomes a building punch list ('COMM_PHASE_TABS[*].punch'); Gear keeps its checklist. **Buildings once per job**: 'commercial.buildings = [{key, label, by, at}]', shared by every punch tab; each tab keeps its own items at 'commercial.phases[key].punch[bkey]' in the residential floor shape, drawn by the existing 'PunchFloor'. So it's the same UI (items, done, assignee, waiting, photos, rooms → "areas"; folded, with open / waiting / for-you counts on the header). It gets new optional 'roomPlaceholder' / 'roomBtnLabel' props with the residential defaults unchanged. Every tab has a **General** area first. **+ Add Building / Area** (duplicate names refused), **Rename** and **Remove** under each building; Remove confirms with the open count across tabs and drops that building's data from every phase. Sub-tab badges and the "Punch list · N open" label count across General + buildings ('commPhaseOpenCount'). Phase 2 (a template built from finished jobs' items) is not built yet; the item shape is the shared punch shape so it can be mined later. Guides 'power.html', 'lighting.html', 'underground.html' updated. **Why it won't lose data:** v467 checklist items aren't dropped. 'commPunchFloor' shows them as General's items until General is first written; that write stores them in 'punch.general' and clears 'items' in the same patch. All writes go through 'commPatch' → the save funnel's structural merge, like every commercial field. New fields are additive inside 'data.commercial'. No loader, rules or function change.
 - **Service Size — printing works from a phone: the sheet opens in its own browser tab with the job carried in the link** · 'shipped 2026-10-02' · 'SW v502' · Koy: *"It's not pulling anything up when I click print on my phone. It works in my desktop tho."* Two causes: inside the Tools tab the tool runs in a frame and phone browsers ignore a print request from a frame; the installed app has no print dialog at all, and it does not share the handoff drawer with Safari, so *Open full screen* would open the tool empty. Fix: on a phone (coarse pointer inside the frame) or in the installed app, **Print customer copy / Print office copy** open '/tools/service-size/#s=<state>&print=<mode>' in a new tab, in the same tap so the popup is not blocked; the state travels gzip + base64url in the link ('src/share.js', CompressionStream when the browser has it, plain base64url otherwise; a compressed copy is kept ready as the state changes, with a synchronous fallback). The opened page shows an *Opened for printing* bar with both print buttons and says changes there do not go back to the app; there, and on desktop, printing is now synchronous in the click (both sheets stay mounted and 'html[data-print]' picks the one that prints, cleared on 'afterprint'; the browser's own Print menu prints the office copy). Tests: 'test/share.test.mjs' (round trips compressed and plain, garbage → null, hash parsing). Guide and training updated: the phone rule is no longer "Open full screen first". **Why it won't lose data:** nothing is sent anywhere; the link is opened on the same device and carries the same numbers already on screen; no storage, job field, loader, rules or function change.
 - **Service Size — printable customer copy and office copy (Print / Save as PDF)** · 'shipped 2026-10-02' · 'SW v501' · Koy: *"is there no PDF download or anything of that info?"* then *"I probably want a customer copy side that just shows them the numbers and why we need to have that amperage, and then another office side with all of the info on it … keep price off it."* Two buttons next to Copy bid note. **Print customer copy** (one page, no price): Homestead header, job and site address, the recommended service big, the calculated load (and the confirmed-only figure when the size covers maybes), the method in one plain sentence, *What is in the calculation* in homeowner words (range, 2 electric dryers, EV charger, sauna, heating and cooling with tonnage), *Allowances included in this size*, *Choices that would need a larger service* (up to five what-ifs), the confirmation sentence and the planning-figures disclaimer; no VA figures, code ids, flags or sources. **Print office copy** (two pages): inputs (area, finish level, circuits, heating / cooling, tonnage and whether estimated, strips, sized-for and target, solar, what it was filled from), the full 220.82(B)+(C) table, every counted item with VA / qty / status / source ('plans', 'loads · nameplate', 'loads · typical', 'loads · confirm spec', 'typed', 'needs VA') and Adds, a *Still estimates* line, the covered list and lighting-circuit count, the what-ifs, the bid flags and the bid note. **Guard:** printing the customer copy while anything is still an estimate (typical value, spec to confirm, needs VA) first says which items and asks *Print anyway?* — the customer sheet never names them. New **Site address** field in The house (filled from the handoff when the job has one; tagged like the rest). **The look (Koy: "make it a cool-looking dashboard … with HOMESTEAD's logo on it"):** both sheets are laid out as a dashboard in the app's own language — slate header band with a schematic grid and the white longhorn logo, the job name big, address and date on an angled steel-blue block; the service size as the hero number in steel blue (Barlow Condensed); a size-ladder gauge with the standard sizes as breaker rungs, the chosen one lit, the confirmed and with-allowances loads as bars and a flag on the load; stat tiles; *What's driving it* as bars (contributors listed one by one — space heaters, floor heat and mini-splits stay inside the heating / cooling bar so nothing is counted twice, tested equal to B + hvac); allowance chips; mono eyebrow labels (JetBrains Mono joins Barlow Condensed and DM Sans as the tool's web fonts); no yellow, the only warm color is the ember *still estimates* strip on the office copy. Tables flow across pages on the office copy. Preview harness for the real '@media print' output: a scratch page that seeds a job, fills, and clicks the print button with 'window.print' stubbed, printed by headless Chrome. Pure sheet logic in 'tools-src/service-size/src/sheet.js', tested ('test/sheet.test.mjs', 5 checks: drivers in plain words with no VA or ids, allowances only when sized for maybes, the three kinds of estimate, a source on every office row, address normalizes). Phone rule unchanged: Open full screen first, then print. **Why it won't lose data:** print-only; nothing new is read or written anywhere (the sheets render the numbers already on screen); 'address' is one additive state key that old states normalize to ""; no job field, loader, rules or function change.
@@ -51360,7 +52911,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ## Top-Level Views (Nav Tabs)
 
-- **My Day — New-for-you row no longer crushed; auto tasks take notes** · 'on branch 2026-10-06, awaiting Koy's go-ahead' · 'SW v505' · Koy, screenshot: *"this needs to be fixed its really hard to read, also need to be able to clear or comment on the return trips etc that are auto added."* The row's narrow / wide layout now follows the My Day column's own width (ResizeObserver on the page root, 820 px) instead of the window, so a split view wraps the buttons under the text like a phone does; the blue chip just says NEW since the row already says who it's from. Auto rows (return trip needs a date, invoice, etc.) gain the same Note button as needs: notes are stored on the job at 'autoNotes[taskId]' (additive map, written through the normal job save) and the latest shows under the row; the ✓ Clear they already had is unchanged. **Why it won't lose data:** one new additive job map; no existing field changed.
+- **My Day — New-for-you row no longer crushed; auto tasks take notes** · 'shipped 2026-10-07' · 'SW v516' · Koy, screenshot: *"this needs to be fixed its really hard to read, also need to be able to clear or comment on the return trips etc that are auto added."* The row's narrow / wide layout now follows the My Day column's own width (ResizeObserver on the page root, 820 px) instead of the window, the box itself now spans the full width above the two columns, and any row in the right-hand column wraps like a phone row (text first, buttons underneath) — Koy's second screenshot showed the box living in that 2fr column; the blue chip just says NEW since the row already says who it's from. Auto rows (return trip needs a date, invoice, etc.) gain the same Note button as needs: notes are stored on the job at 'autoNotes[taskId]' (additive map, written through the normal job save) and the latest shows under the row; the ✓ Clear they already had is unchanged. **Why it won't lose data:** one new additive job map; no existing field changed.
 
 - **My Day — NEW FOR YOU: anything sent to you by someone else stays pinned at the very top until you've seen it** · 'shipped 2026-10-03' · 'SW v504' · Koy: *"needs, tasks, anything assigned to me specifically by another person should always be at the top and be easily visible if i havent seen it yet."* A boxed, always-open **New for you** group above Focus today holds every Mine row sent by someone other than you (needs by assignedBy / createdBy, questions by addedBy, punch items assigned to you) that this device hasn't acknowledged. A row counts as seen only when you tap it (Koy: *"only when i click on and view it, it should clear"*); sitting on screen does nothing. Each row wears a blue **from Josh** chip and the header shows **N new for you**. Acknowledgements live in localStorage per user per device, like the New markers; the older "New since" group keeps everything else that's new and no longer repeats these rows. **Why it won't lose data:** read-only over the rows; the only write is a localStorage map on the device.
 
@@ -52037,7 +53588,7 @@ function TimeOffPage({ identity = null, users = [] }) {
             dueDate: entry.start, dueBucket: dueBucketFromDate(entry.start) || "week",
             status: "open",
           };
-          await setDoc(doc(db,"needs",need.id), { data:need, updated_at:nowIso, saved_by:me });
+          await setDoc(doc(db,"needs",need.id), stampWrite({ data:need, updated_at:nowIso, saved_by:me }));
         }
       } catch(_) {}
     } catch(e) { toast.error("Couldn't submit: "+(e?.message||"")); }
@@ -52051,7 +53602,7 @@ function TimeOffPage({ identity = null, users = [] }) {
       // surgical (never a full-doc overwrite); silent (doneBy=head, createdBy
       // empty → onNeedWrite branch 2 can't fire). Older requests predating this
       // routing have no such doc → updateDoc 404s, caught and ignored.
-      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), { "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me }); } catch(_) {}
+      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), stampWrite({ "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me })); } catch(_) {}
       if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
         const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off", usePaid:r.usePaid!==false };
         await mergeSaveSettingsFields("crewPTO", { list:[...(ptoList||[]), entry] });
@@ -53667,6 +55218,143 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
 // ── Job Prep tab — cross-job board for office admin items + pre-job prep ──
 // Spec: docs/superpowers/specs/2026-08-28-job-prep-tab-design.md
 // Visual reference: jobprep-mockup.html (approved 2026-08-28)
+// ── Temp Peds Out (Justin, 2026-10-06 mockup) ─────────────────────────────
+// Every temp ped sitting on a job right now, in any stage — a ped often outlives
+// the finish, so this does NOT use jobPrepIncluded. A ped is on a job when a full
+// job has "Temp pedestal on site" ticked, or a temp ped install job is Completed.
+// An install job and a full job at the same address with the same Ped # are one
+// ped (one row). It's back when someone taps Picked up (tempPedReturnedAt/By), or
+// automatically when a Temp Ped Pickup quick job made from the row (pickupPedFor)
+// is completed (Koy: "auto clear is fine"); Undo on an auto return lists that
+// pickup in tempPedPickupIgnore. Dates are M/D/YYYY like every DateInp field.
+const tpToday = () => new Date().toLocaleDateString("en-US");
+const tpAddrKey = (a) => String(a || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const tpLive = (j) => !!j && !j.deleted && !j.archived && !j.archivedAt && j.type !== "quote";
+const tpOnJob = (j) => tpLive(j) && !j.quickJob && (j.tempPed ? j.tempPedStatus === "completed" : !!j.hasTempPed);
+const tpPickupDone = (q) => !!q && (!!q.signedOff || q.quickJobStatus === "complete" || q.quickJobStatus === "invoice");
+const tempPedGroups = (jobs, nowMs) => {
+  const now = nowMs || Date.now();
+  const live = (jobs || []).filter(tpLive);
+  const pickupsFor = new Map();
+  live.forEach(q => {
+    if (!q.quickJob || q.quickJobType !== "tempped" || !q.pickupPedFor) return;
+    if (!pickupsFor.has(q.pickupPedFor)) pickupsFor.set(q.pickupPedFor, []);
+    pickupsFor.get(q.pickupPedFor).push(q);
+  });
+  // A full job linked to its install card (tempPedInstallId, set by Link) is one
+  // ped with it whatever the addresses say — the install card often carries just
+  // a last name where the job card has the street address.
+  const onJob = live.filter(tpOnJob);
+  const onIds = new Set(onJob.map(j => j.id));
+  const linkOf = new Map();
+  onJob.forEach(j => { if (!j.tempPed && j.tempPedInstallId && onIds.has(j.tempPedInstallId)) linkOf.set(j.id, j.tempPedInstallId); });
+  const linkedInstalls = new Set(linkOf.values());
+  const byKey = new Map();
+  onJob.forEach(j => {
+    const num = String(j.tempPedNumber || "").trim(), addr = tpAddrKey(j.address);
+    const key = linkOf.has(j.id) ? `link|${linkOf.get(j.id)}`
+      : linkedInstalls.has(j.id) ? `link|${j.id}`
+      : num && addr ? `${num}|${addr}` : `job|${j.id}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(j);
+  });
+  const groups = [...byKey.entries()].map(([key, members]) => {
+    const primary = members.find(j => !j.tempPed) || members[0];
+    const num = String(members.map(j => j.tempPedNumber).find(n => String(n || "").trim()) || "").trim();
+    const ignore = new Set(members.flatMap(j => Array.isArray(j.tempPedPickupIgnore) ? j.tempPedPickupIgnore : []));
+    const pickups = members.flatMap(j => pickupsFor.get(j.id) || []).filter(q => !ignore.has(q.id));
+    const stamped = members.find(j => j.tempPedReturnedAt);
+    const done = pickups.find(tpPickupDone);
+    const returned = stamped ? { at: stamped.tempPedReturnedAt, by: stamped.tempPedReturnedBy || "", auto: false }
+      : done ? { at: done.signedOffDate || done.quickJobDate || "", by: done.signedOffBy || done.lead || done.foreman || "", auto: true, pickupId: done.id }
+      : null;
+    const dates = members.map(j => parseAnyDate(j.tempPedOutAt || (j.tempPed ? j.tempPedSignedOffDate : "") || "")).filter(Boolean);
+    const outSince = dates.length ? new Date(Math.min(...dates.map(d => d.getTime()))) : null;
+    const days = outSince ? Math.max(0, Math.floor((now - outSince.getTime()) / 86400000)) : null;
+    return { key, num, members, primary, returned, outSince, days, dupWith: [],
+      openPickup: returned ? null : (pickups.find(q => !tpPickupDone(q)) || null) };
+  });
+  const out = groups.filter(g => !g.returned);
+  out.forEach(g => { if (g.num) g.dupWith = out.filter(o => o !== g && o.num === g.num).map(o => o.primary.name || "another job"); });
+  return groups;
+};
+const tpNeedsLook = (g) => !g.num || g.dupWith.length > 0;
+
+// ── Temp ped → job card link (Koy 2026-10-06: the ped goes in before the quote is
+// signed, so its card exists before the job card; "can it auto detect the name
+// from temp ped cards and link it to that job card"). Koy's pick: ASK FIRST —
+// a match is only a suggestion (lane row + Job Info); one tap links. Link ticks
+// the job card's Temp pedestal on site, carries the Ped # and out-since date, and
+// stores tempPedInstallId (job) / tempPedLinkedJobId (install). tempPedLinkPrev
+// keeps what the job card had so Unlink puts it back; "Not this one" and Unlink
+// add the job to the install's tempPedLinkSkip so it isn't suggested again.
+const TP_NAME_SKIP = new Set(("temp ped peds pedestal power pole install residence res home homes house new build builders building " +
+  "construction custom remodel addition basement shop garage barn lot the and job electric electrical service upgrade project phase " +
+  "unit pickup rough finish llc inc street road lane drive court way east west north south").split(" "));
+const tpNameWords = (name) => String(name || "").toLowerCase().split(/[^a-z0-9]+/)
+  .filter(w => w.length >= 3 && !/^\d+$/.test(w) && !TP_NAME_SKIP.has(w));
+// Job ids are uid() = Date.now()-seeded, so they read as creation time.
+const tpIdMs = (id) => (/^\d{12,14}$/.test(String(id || "")) ? Number(id) : null);
+// Why this full job might be the install's job card, or null.
+const tpLinkWhy = (inst, full) => {
+  if (!inst || !full || inst.id === full.id || !tpLive(full) || full.tempPed || full.quickJob) return null;
+  if ((Array.isArray(inst.tempPedLinkSkip) ? inst.tempPedLinkSkip : []).includes(full.id)) return null;
+  if (full.tempPedInstallId) return null;                       // already linked (to this or another install)
+  const iNum = String(inst.tempPedNumber || "").trim(), fNum = String(full.tempPedNumber || "").trim();
+  if (full.hasTempPed && !full.tempPedReturnedAt && iNum && fNum && iNum !== fNum) return null;  // has a different ped out
+  const iMs = tpIdMs(inst.id), fMs = tpIdMs(full.id);
+  if (iMs && fMs && fMs < iMs - 30 * 86400000) return null;      // card made a month+ before the ped: not its job
+  if (inst.simproNo && String(inst.simproNo) === String(full.simproNo || "")) return "same Simpro #";
+  const a = tpAddrKey(inst.address);
+  if (a && a === tpAddrKey(full.address)) return "same address";
+  const fw = new Set(tpNameWords(full.name));
+  const hit = tpNameWords(inst.name).find(w => fw.has(w));
+  return hit ? `name matches “${hit}”` : null;
+};
+// Ped rows that are only an install card (no job card yet) → job cards that may be theirs.
+const tpLinkSuggestions = (groups, jobs) => {
+  const out = new Map();
+  (groups || []).forEach(g => {
+    if (g.returned || g.members.some(m => !m.tempPed)) return;
+    const list = [];
+    g.members.forEach(inst => (jobs || []).forEach(f => { const why = tpLinkWhy(inst, f); if (why) list.push({ inst, job: f, why }); }));
+    if (list.length) out.set(g.key, list.slice(0, 3));
+  });
+  return out;
+};
+// Same, from the job card's side (Job Info prompt).
+const tpLinkSuggestionsForJob = (job, jobs, groups) => {
+  if (!job || job.tempPed || job.quickJob || job.tempPedInstallId) return [];
+  const list = [];
+  (groups || tempPedGroups(jobs)).forEach(g => {
+    if (g.returned || g.members.some(m => !m.tempPed)) return;
+    g.members.forEach(inst => { const why = tpLinkWhy(inst, job); if (why) list.push({ inst, num: g.num, why }); });
+  });
+  return list;
+};
+const tpLinkPatches = (inst, full) => {
+  const iNum = String(inst.tempPedNumber || "").trim();
+  const iOut = inst.tempPedOutAt || inst.tempPedSignedOffDate || tpToday();
+  const fOut = full.hasTempPed && !full.tempPedReturnedAt ? full.tempPedOutAt : "";
+  const earliest = [iOut, fOut].filter(Boolean).sort((x, y) => ((parseAnyDate(x) || 0) - (parseAnyDate(y) || 0)))[0] || iOut;
+  return {
+    full: { hasTempPed: true, tempPedNumber: String(full.tempPedNumber || "").trim() || iNum, tempPedOutAt: earliest,
+      tempPedReturnedAt: "", tempPedReturnedBy: "", tempPedInstallId: inst.id,
+      tempPedLinkPrev: { hasTempPed: !!full.hasTempPed, tempPedNumber: full.tempPedNumber || "", tempPedOutAt: full.tempPedOutAt || "",
+        tempPedReturnedAt: full.tempPedReturnedAt || "", tempPedReturnedBy: full.tempPedReturnedBy || "" } },
+    install: { tempPedLinkedJobId: full.id },
+  };
+};
+const tpUnlinkPatches = (inst, full) => {
+  const prev = full.tempPedLinkPrev || {};
+  return {
+    full: { hasTempPed: !!prev.hasTempPed, tempPedNumber: prev.tempPedNumber || "", tempPedOutAt: prev.tempPedOutAt || "",
+      tempPedReturnedAt: prev.tempPedReturnedAt || "", tempPedReturnedBy: prev.tempPedReturnedBy || "", tempPedInstallId: "", tempPedLinkPrev: null },
+    install: inst ? { tempPedLinkedJobId: "", tempPedLinkSkip: [...new Set([...(Array.isArray(inst.tempPedLinkSkip) ? inst.tempPedLinkSkip : []), full.id])] } : null,
+  };
+};
+const tpSkipPatch = (inst, fullId) => ({ tempPedLinkSkip: [...new Set([...(Array.isArray(inst.tempPedLinkSkip) ? inst.tempPedLinkSkip : []), fullId])] });
+
 const JOBPREP_ADMIN_ITEMS = [
   { key:"jobAccount", boolKey:"jobAccount",  chip:"ACCOUNT",  label:"Job account created" },
   { key:"preLien",    boolKey:"preLien",     chip:"PRE-LIEN", label:"Pre-lien filed" },
@@ -53700,6 +55388,8 @@ const adminItemPatch = (job, item, target) => {
     [item.boolKey]: target === "done",
     adminNA: na,
     ...(item.key === "tempPed" && target !== "done" ? { tempPedNumber: "" } : {}),
+    // v514: a ped going out starts its Temp Peds Out clock (and clears an old return).
+    ...(item.key === "tempPed" && target === "done" && !job.hasTempPed ? { tempPedOutAt: tpToday(), tempPedReturnedAt: "", tempPedReturnedBy: "" } : {}),
   };
 };
 
@@ -54057,6 +55747,171 @@ function JobPrepDrawerOverride({ job, identity, u }) {
   );
 }
 
+// Job Prep → TEMP PEDS OUT (Justin's lane, v514). One row per ped on a job;
+// what needs a look (no Ped #, same # on two jobs) first, then longest out.
+function TempPedsLane({ groups, suggest, filterFn, filtered, open, onToggle, identity, onSelectJob, onUpdateJob, onSchedulePickup }) {
+  const [sort, setSort] = useState("long");     // long | num
+  const [confirm, setConfirm] = useState("");   // group key awaiting "Yes, picked up"
+  const [backOpen, setBackOpen] = useState(false);
+  const outAll = groups.filter(g => !g.returned);
+  const out = outAll.filter(filterFn);
+  const look = out.filter(tpNeedsLook), ok = out.filter(g => !tpNeedsLook(g));
+  const order = sort === "num"
+    ? (a, b) => (parseInt(a.num, 10) || 9999) - (parseInt(b.num, 10) || 9999)
+    : (a, b) => (b.days == null ? -1 : b.days) - (a.days == null ? -1 : a.days);
+  const recentCut = Date.now() - 30 * 86400000;
+  const back = groups.filter(g => g.returned && filterFn(g) && ((parseAnyDate(g.returned.at) || new Date(0)).getTime() >= recentCut))
+    .sort((a, b) => (parseAnyDate(b.returned.at) || 0) - (parseAnyDate(a.returned.at) || 0));
+  const nLook = outAll.filter(tpNeedsLook).length, nLong = outAll.filter(g => g.days != null && g.days >= 90).length;
+  const nPick = outAll.filter(g => g.openPickup).length;
+  const show = open || (filtered && out.length > 0);
+  const who = (identity && identity.name) || "";
+  const pickedUp = (g) => {
+    g.members.forEach(j => onUpdateJob(j.id, { tempPedReturnedAt: tpToday(), tempPedReturnedBy: who }));
+    setConfirm(""); setBackOpen(true);
+    toast.success(`Ped ${g.num ? `#${g.num} ` : ""}marked picked up from ${g.primary.name || "the job"}`);
+  };
+  const undo = (g) => {
+    if (g.returned.auto) onUpdateJob(g.primary.id, { tempPedPickupIgnore: [...(Array.isArray(g.primary.tempPedPickupIgnore) ? g.primary.tempPedPickupIgnore : []), g.returned.pickupId] });
+    else g.members.filter(j => j.tempPedReturnedAt).forEach(j => onUpdateJob(j.id, { tempPedReturnedAt: "", tempPedReturnedBy: "" }));
+    toast.success(`Ped ${g.num ? `#${g.num} ` : ""}is back on the list`);
+  };
+  const link = (s, num) => {
+    const p = tpLinkPatches(s.inst, s.job);
+    onUpdateJob(s.job.id, p.full); onUpdateJob(s.inst.id, p.install);
+    toast.success(`Ped ${num ? `#${num} ` : ""}linked to ${s.job.name || "the job card"}`);
+  };
+  const unlink = (inst, full) => {
+    const p = tpUnlinkPatches(inst, full);
+    onUpdateJob(full.id, p.full); if (p.install) onUpdateJob(inst.id, p.install);
+    toast.success(`Unlinked ${full.name || "the job card"} from the temp ped card`);
+  };
+  const pill = (color, text) => (
+    <span key={text} style={{ borderRadius: 99, padding: "2px 10px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+      background: `${color}14`, border: `1px solid ${color}33`, color }}>{text}</span>
+  );
+  const btn = (primary) => ({ padding: "7px 12px", borderRadius: 8, border: primary ? "none" : `1px solid ${C.border}`,
+    background: primary ? C.purple : "#fff", color: primary ? "#fff" : C.text, fontSize: 12, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" });
+  const row = (g) => {
+    const j = g.primary, warn = tpNeedsLook(g);
+    const install = g.members.find(m => m.tempPed && m.id !== j.id);
+    const badge = g.num ? C.purple : C.red;
+    return (
+      <div key={g.key} style={jobPrepRowStyle(warn ? C.red : C.purple)}>
+        <div style={{ minWidth: 64, textAlign: "center", fontFamily: "'Bebas Neue',sans-serif", fontSize: g.num ? 26 : 15, lineHeight: 1,
+          letterSpacing: "0.04em", color: badge, background: `${badge}12`, border: `1px solid ${badge}44`, borderRadius: 9,
+          padding: g.num ? "7px 8px 5px" : "12px 8px 9px" }}>
+          {g.num ? `#${g.num}` : "NO #"}
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", color: C.dim, marginTop: 2, fontFamily: "inherit" }}>PED</div>
+        </div>
+        <div style={{ flex: "1 1 230px", minWidth: 0 }}>
+          <div onClick={() => onSelectJob(j)} style={{ fontWeight: 700, fontSize: 14, color: C.text, cursor: "pointer" }}>{j.name || "Untitled Job"}</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 11, color: C.dim, marginTop: 3 }}>
+            {j.simproNo && <span>#{j.simproNo}</span>}
+            {j.foreman && <span>{j.foreman}</span>}
+            {j.address && <span>{j.address}</span>}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11, color: C.dim, marginTop: 3 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 6px" }}>
+              {j.tempPed ? "Temp ped install" : "On the job"}</span>
+            {install && <span>also on temp ped install “{install.name}”</span>}
+            {install && j.tempPedInstallId === install.id && (
+              <button type="button" onClick={() => unlink(install, j)}
+                style={{ background: "none", border: "none", padding: 0, color: C.blue, fontSize: 11, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>Unlink</button>)}
+          </div>
+          {!g.num && <div style={{ marginTop: 5, fontSize: 11.5, fontWeight: 700, color: C.red }}>No Ped # set. Pick the number on the ped.</div>}
+          {g.dupWith.length > 0 && <div style={{ marginTop: 5, fontSize: 11.5, fontWeight: 700, color: C.red }}>Ped #{g.num} is also on {g.dupWith.join(", ")}. One of them is wrong.</div>}
+        </div>
+        <div style={{ flex: "0 0 128px", fontSize: 11, color: C.dim }}>
+          {g.days != null
+            ? <><div style={{ fontSize: 15, fontWeight: 800, color: g.days >= 90 ? C.red : C.text }}>{g.days} {g.days === 1 ? "day" : "days"}</div>out</>
+            : <><div style={{ fontSize: 11.5, fontWeight: 700, color: C.dim, marginBottom: 3 }}>Out since not recorded</div>
+                <DateInp value="" onChange={e => onUpdateJob(j.id, { tempPedOutAt: e.target.value })} style={{ fontSize: 11, padding: "3px 6px", width: "100%", maxWidth: 124, boxSizing: "border-box" }}/></>}
+        </div>
+        <div style={{ flex: "0 1 170px", fontSize: 11.5 }}>
+          {g.openPickup
+            ? <span onClick={() => onSelectJob(g.openPickup)} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>
+                Pickup {g.openPickup.quickJobDate ? `set ${g.openPickup.quickJobDate}` : (getStatusDef(QUICK_JOB_STATUSES, g.openPickup.quickJobStatus || "new").label || "created").toLowerCase()} ›</span>
+            : <span style={{ color: C.dim }}>No pickup scheduled</span>}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: "auto", alignItems: "center" }}>
+          {!g.num && (
+            <select value="" onChange={e => e.target.value && onUpdateJob(j.id, { tempPedNumber: e.target.value })}
+              style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${C.border}`, fontSize: 12, fontFamily: "inherit", background: C.surface, color: C.dim, cursor: "pointer" }}>
+              <option value="">Set Ped #…</option>
+              {Array.from({ length: 100 }, (_, i) => String(i + 1)).map(n => <option key={n} value={n}>Ped #{n}</option>)}
+            </select>
+          )}
+          {!g.openPickup && onSchedulePickup && <button type="button" onClick={() => onSchedulePickup(g)} style={btn(false)}>Schedule pickup</button>}
+          <button type="button" onClick={() => setConfirm(c => c === g.key ? "" : g.key)} style={btn(true)}>Picked up</button>
+        </div>
+        {confirm === g.key && (
+          <div style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: `${C.purple}0D`,
+            border: `1px solid ${C.purple}44`, borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: C.text }}>
+            <span style={{ flex: "1 1 220px" }}>Ped {g.num ? `#${g.num} ` : ""}is back in the yard from <b>{j.name || "this job"}</b>? It moves to Returned recently with your name and today's date.</span>
+            <button type="button" onClick={() => setConfirm("")} style={btn(false)}>Cancel</button>
+            <button type="button" onClick={() => pickedUp(g)} style={btn(true)}>Yes, picked up</button>
+          </div>
+        )}
+        {(suggest && suggest.get(g.key) || []).map(s => (
+          <div key={s.inst.id + "|" + s.job.id} style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+            background: `${C.blue}0D`, border: `1px solid ${C.blue}44`, borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: C.text }}>
+            <span style={{ flex: "1 1 240px", minWidth: 0 }}>
+              Job card found: <b onClick={() => onSelectJob(s.job)} style={{ cursor: "pointer" }}>{s.job.name || "Untitled Job"}</b>
+              <span style={{ color: C.dim }}>{s.job.simproNo ? ` · #${s.job.simproNo}` : ""} · {s.why}. Is this ped on that job?</span>
+            </span>
+            <button type="button" onClick={() => onUpdateJob(s.inst.id, tpSkipPatch(s.inst, s.job.id))} style={btn(false)}>Not this one</button>
+            <button type="button" onClick={() => link(s, g.num)} style={{ ...btn(true), background: C.blue }}>Link to this job</button>
+          </div>
+        ))}
+      </div>
+    );
+  };
+  const grp = (text, color) => <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color, margin: "12px 0 6px" }}>{text}</div>;
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div onClick={onToggle}
+        style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, paddingBottom: 10,
+          borderBottom: `2px solid ${C.purple}22`, flexWrap: "wrap", cursor: "pointer", userSelect: "none" }}>
+        <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.08em", color: C.purple }}>TEMP PEDS OUT</div>
+        {pill(C.purple, `${outAll.length} out`)}
+        {nLook > 0 && pill(C.red, `${nLook} need${nLook === 1 ? "s" : ""} a look`)}
+        {nLong > 0 && pill(C.red, `${nLong} out 90+ days`)}
+        {nPick > 0 && pill(C.blue, `${nPick} pickup${nPick === 1 ? "" : "s"} scheduled`)}
+        <div style={{ marginLeft: "auto", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: C.dim, textTransform: "uppercase" }}>Justin's lane</div>
+        <span style={{ fontSize: 11, color: C.purple, opacity: 0.6 }}>{show ? "▾" : "▸"}</span>
+      </div>
+      {show && (<>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 11, color: C.dim, marginBottom: 6 }}>
+          <span>Sort</span>
+          {[["long", "Longest out"], ["num", "Ped #"]].map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setSort(k)}
+              style={{ padding: "5px 10px", borderRadius: 7, border: `1px solid ${sort === k ? C.purple : C.border}`, fontSize: 11.5, fontWeight: 700,
+                fontFamily: "inherit", cursor: "pointer", background: sort === k ? C.purple : "#fff", color: sort === k ? "#fff" : C.dim }}>{l}</button>
+          ))}
+        </div>
+        {out.length === 0 && <div style={{ fontSize: 12, color: C.dim, textAlign: "center", padding: "18px 0" }}>
+          {filtered ? "No temp peds match the search / filter" : "✓ No temp peds out on jobs"}</div>}
+        {look.length > 0 && <>{grp(`Needs a look · ${look.length}`, C.red)}{look.slice().sort(order).map(row)}</>}
+        {ok.length > 0 && <>{grp(`Out on jobs · ${ok.length}`, C.muted)}{ok.slice().sort(order).map(row)}</>}
+        <JobPrepCompleteStrip open={backOpen} onToggle={() => setBackOpen(v => !v)} count={back.length} label={`✓ Returned recently · ${back.length}`}>
+          {back.map(g => (
+            <div key={g.key} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "8px 4px", borderTop: `1px solid ${C.border}`, fontSize: 12 }}>
+              <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, color: C.green, minWidth: 44 }}>{g.num ? `#${g.num}` : "—"}</span>
+              <span style={{ flex: "1 1 220px", minWidth: 0, color: C.dim }}>
+                <b style={{ color: C.text }}>{g.primary.name || "Untitled Job"}</b> · picked up{g.returned.by ? ` by ${g.returned.by}` : ""}{g.returned.at ? ` · ${g.returned.at}` : ""}
+                {g.returned.auto && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: C.teal, border: `1px solid ${C.teal}55`, borderRadius: 5, padding: "1px 6px" }}>auto · pickup job completed</span>}
+              </span>
+              <button type="button" onClick={() => undo(g)}
+                style={{ background: "none", border: "none", color: C.blue, fontSize: 12, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>Undo</button>
+            </div>
+          ))}
+        </JobPrepCompleteStrip>
+      </>)}
+    </div>
+  );
+}
+
 function JobPrepCompleteStrip({ open, onToggle, count, children, color = "#46916A", label }) {
   if (count === 0) return null;
   return (
@@ -54305,8 +56160,13 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
   const [peek, setPeek] = useState(null);           // phase number expanded on the bar (look-back / preview)
   const [ov, setOv] = useState(null);               // { n, note } while the move-on modal is open
   const [openItem, setOpenItem] = useState(null);   // v462: item key ("n.key") whose note / docs panel is open
+  const [view, setView] = useState(readJobStartView); // v514: "list" (all 12 phases as checklists) | "phases" (bar + current phase)
+  const [phOpen, setPhOpen] = useState({});          // v514: checklist folds the user changed — { n: bool }; default = open while items are left
+  const [open, setOpen] = useState(ctx !== "board");  // v514 (Koy): on the board each job starts folded to one line
+  const setViewPref = (v) => { setView(v); setPeek(null); try { localStorage.setItem(JOBSTART_VIEW_KEY, v); } catch (e) {} };
   const canEdit = canEditJobStart(identity);
   const cur = commPhase(job); const st = commStartOf(job); const owed = commOwedItems(job); const g = commGearSummary(job);
+  const prog = commStartPct(job);
   const todayYmd = localYmd();
   const ownerLabel = (n) => { const ph = COMM_PHASE_BY_N[n]; const rk = ph.owner === "site" ? "commsite" : "commstart"; const o = ownersForRoute(rk, users, todayYmd); return o.length ? o.map(x => String(x).split(" ")[0]).join(" · ") : COMM_OWNER_LABEL[ph.owner]; };
   const patchStart = (fn) => onPatch(commPatch(job, c => ({ ...c, start: fn({ items:{}, na:{}, notes:{}, overrides:{}, photos:{}, dates:{}, itemNotes:{}, itemNotesBy:{}, docs:{}, ...(c.start || {}) }) })));
@@ -54344,15 +56204,14 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
   const chip = (n, k, label, kind) => {
     const state = commItemState(job, n, k); const K = commItemKey(n, k);
     const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
-    const locked = cur !== null && n > cur;
-    const col = locked ? C.muted : isOwed ? "#B0892C" : state === "done" ? "#46916A" : state === "na" ? C.dim : C.red;
+    const col = isOwed ? "#B0892C" : state === "done" ? "#46916A" : state === "na" ? C.dim : C.red;
     const title = kind === "trk" ? "Derived from the Gear & Submittals / RFI logs — fill the log and this checks itself" : kind === "photo" ? "Photo item — tap to check, add photos below" : kind === "date" ? "Check + date" : (canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only");
     return (
-      <span key={K} onClick={(e) => { e.stopPropagation(); if (locked) return; if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }} title={title}
-        style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em", cursor: locked || !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
+      <span key={K} onClick={(e) => { e.stopPropagation(); if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }} title={title}
+        style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em", cursor: !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
           border:`1px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${col}`, color: col, background: state === "done" ? "#46916A0F" : isOwed ? "#B0892C0F" : state === "na" ? C.surface : "#fff" }}>
         <span>{state === "done" ? "✓" : state === "na" ? "—" : "○"}</span>{label}{state === "na" ? " · N/A" : ""}{isOwed ? " · OWED" : ""}{kind === "photo" ? " · PHOTO" : ""}
-        {!locked && (() => { const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K; const lit = hasNote || nDocs > 0 || on;
+        {(() => { const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K; const lit = hasNote || nDocs > 0 || on;
           return (
             <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? `${hasNote ? "Has a note" : ""}${hasNote && nDocs ? " · " : ""}${nDocs ? `${nDocs} doc${nDocs === 1 ? "" : "s"}` : ""} — tap to open` : "Add a note or attach a doc to this item"}
               style={{ display:"inline-flex", alignItems:"center", gap:2, marginLeft:2, paddingLeft:6, borderLeft:`1px solid ${col}55`, color: lit ? col : `${col}77`, cursor:"pointer" }}>
@@ -54385,24 +56244,15 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       </div>
     );
   };
-  const phaseBlock = (n) => {
+  // v514: dates, photos, the phase note, Move On and its stamp — shared by the
+  // phases view and the checklist view.
+  const phaseExtras = (n) => {
     const ph = COMM_PHASE_BY_N[n]; const done = commPhaseDone(job, n); const o = st.overrides && st.overrides[n];
-    const kind = cur === null || n < cur ? "past" : n === cur ? "cur" : "future";
-    const owedHere = o ? ph.items.filter(([k]) => commItemState(job, n, k) === "todo") : [];
     const nxt = ph.items.find(([k]) => commItemState(job, n, k) === "todo");
     const photoItems = ph.items.filter(([k, , kd]) => kd === "photo"); const dateItems = ph.items.filter(([k, , kd]) => kd === "date");
     return (
-      <div key={n} style={{ marginTop: 10 }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
-          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:"0.08em", color: kind === "cur" ? C.blue : kind === "past" ? C.teal : C.dim }}>PHASE {n} · {ph.label.toUpperCase()}</span>
-          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? "#B0892C" : C.green, background: owedHere.length ? "#B0892C15" : "#3E7D5A15", border:`1px solid ${owedHere.length ? "#B0892C40" : "#3E7D5A40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
-            : kind === "future" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
-            : <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#3B5BA515", border:"1px solid #3B5BA540" }}>CURRENT</span>}
-          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
-        </div>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>{ph.items.map(([k, l, kd]) => chip(n, k, l, kd))}</div>
-        {itemPanel(n)}
-        {kind !== "future" && (photoItems.length > 0 || dateItems.length > 0) && (
+      <>
+        {(photoItems.length > 0 || dateItems.length > 0) && (
           <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8 }}>
             {dateItems.map(([k, l]) => (
               <div key={k} style={{ minWidth:180 }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l} — DATE</div>
@@ -54415,7 +56265,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
             ))}
           </div>
         )}
-        {kind === "cur" && (
+        {n === cur && (
           <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:10 }}>
             <span style={{ fontSize:11, color:C.dim, fontWeight:600 }}><b style={{ color:C.text }}>{done}/{ph.items.length}</b></span>
             {nxt && <span style={{ fontSize:11, color:C.orange, fontWeight:600 }}>NEXT: {nxt[1]}</span>}
@@ -54430,20 +56280,117 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
             {canEdit && <button onClick={(e) => { e.stopPropagation(); undoMoveOn(n); }} style={{ padding:"3px 8px", borderRadius:7, fontSize:10, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit" }}>↩ Undo</button>}
           </div>
         )}
+      </>
+    );
+  };
+  // v514 (Justin): checklist view — every phase as a list, open while it has
+  // items left, folded once done; tap a row to check it (same cycle as a chip).
+  const trkLabel = (K) => K.startsWith("4.rfis") ? "from RFIs" : K === "2.folders" ? "from Plans & Links" : "from Gear & Submittals";
+  const listRow = (n, k, label, kind) => {
+    const state = commItemState(job, n, k); const K = commItemKey(n, k);
+    const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
+    const rec = (st.items || {})[K];
+    const ring = state === "done" ? "#46916A" : isOwed ? "#B0892C" : state === "na" ? C.muted : "#9AA3AE";
+    const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K;
+    const sub = [kind === "trk" ? trkLabel(K) : null, kind === "photo" ? "photo" : null, kind === "date" ? "date" : null,
+      state === "done" && rec && rec.by ? `done ${rec.at || ""} by ${String(rec.by).split(" ")[0]}`.replace("  ", " ") : null,
+      state === "na" ? "N/A" : null, isOwed ? "owed" : null].filter(Boolean).join(" · ");
+    return (
+      <div key={K} onClick={(e) => { e.stopPropagation(); if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }}
+        title={kind === "trk" ? "Checks itself from the log — tap to open it" : canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only"}
+        style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderTop:`1px solid ${C.border}`, cursor: canEdit || kind === "trk" ? "pointer" : "default", userSelect:"none", background: isOwed ? "#B0892C08" : "transparent" }}>
+        <span style={{ width:22, height:22, borderRadius:6, flexShrink:0, display:"grid", placeItems:"center", fontSize:12, fontWeight:800, border:`2px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${ring}`, background: state === "done" ? "#46916A" : "#fff", color: state === "done" ? "#fff" : C.dim }}>{state === "done" ? "✓" : state === "na" ? "—" : ""}</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:12, fontWeight:700, letterSpacing:"0.03em", color: state === "todo" ? (isOwed ? "#B0892C" : C.text) : C.dim, textDecoration: state === "na" ? "line-through" : "none", overflowWrap:"anywhere" }}>{label}</div>
+          {sub && <div style={{ fontSize:10, color:C.muted, marginTop:1 }}>{sub}</div>}
+        </div>
+        <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? "Has a note / docs — tap to open" : "Add a note or attach a doc to this item"}
+          style={{ display:"inline-flex", alignItems:"center", gap:2, padding:"4px 6px", borderRadius:6, color: hasNote || nDocs || on ? C.blue : C.muted, cursor:"pointer" }}>
+          <Icon name="note" size={13} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:9 }}>{nDocs}</span>}
+        </span>
+      </div>
+    );
+  };
+  const listPhase = (ph) => {
+    const n = ph.n; const done = commPhaseDone(job, n); const total = ph.items.length;
+    const left = ph.items.some(([k]) => commItemState(job, n, k) === "todo");
+    const isOpen = phOpen[n] !== undefined ? phOpen[n] : left;
+    const o = st.overrides && st.overrides[n];
+    const owedHere = o ? ph.items.filter(([k]) => commItemState(job, n, k) === "todo").length : 0;
+    const pill = !left ? ["DONE", C.green] : owedHere ? [`${owedHere} OWED`, "#B0892C"] : n === cur ? ["CURRENT", C.blue] : null;
+    const head = !left ? C.teal : n === cur ? C.blue : C.text;
+    return (
+      <div key={n} style={{ border:`1px solid ${n === cur ? "#3B5BA555" : C.border}`, borderRadius:9, overflow:"hidden", background:"#fff" }}>
+        <div onClick={(e) => { e.stopPropagation(); setPhOpen(p => ({ ...p, [n]: !isOpen })); }}
+          style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", padding:"8px 10px", cursor:"pointer", userSelect:"none", background: n === cur ? "#3B5BA50A" : !left ? "#3E7D7A08" : C.surface }}>
+          <span style={{ fontSize:11, color:C.dim, width:10, display:"inline-block", transform: isOpen ? "rotate(90deg)" : "none", transition:"transform .15s" }}>▶</span>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:15, letterSpacing:"0.08em", color: head }}>{n} · {ph.label.toUpperCase()}</span>
+          {pill && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 8px", color: pill[1], background:`${pill[1]}15`, border:`1px solid ${pill[1]}40` }}>{pill[0]}</span>}
+          <span style={{ fontSize:11, fontWeight:700, color: left ? C.dim : C.green, fontVariantNumeric:"tabular-nums" }}>{done}/{total}</span>
+          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
+        </div>
+        {isOpen && (
+          <div onClick={(e) => e.stopPropagation()}>
+            {ph.items.map(([k, l, kd]) => listRow(n, k, l, kd))}
+            <div style={{ padding:"0 10px 10px" }}>{itemPanel(n)}{phaseExtras(n)}</div>
+          </div>
+        )}
+      </div>
+    );
+  };
+  const phaseBlock = (n) => {
+    const ph = COMM_PHASE_BY_N[n]; const o = st.overrides && st.overrides[n];
+    const kind = cur === null || n < cur ? "past" : n === cur ? "cur" : "future";
+    const owedHere = o ? ph.items.filter(([k]) => commItemState(job, n, k) === "todo") : [];
+    return (
+      <div key={n} style={{ marginTop: 10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:"0.08em", color: kind === "cur" ? C.blue : kind === "past" ? C.teal : C.dim }}>PHASE {n} · {ph.label.toUpperCase()}</span>
+          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? "#B0892C" : C.green, background: owedHere.length ? "#B0892C15" : "#3E7D5A15", border:`1px solid ${owedHere.length ? "#B0892C40" : "#3E7D5A40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
+            : kind === "future" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
+            : <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#3B5BA515", border:"1px solid #3B5BA540" }}>CURRENT</span>}
+          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>{ph.items.map(([k, l, kd]) => chip(n, k, l, kd))}</div>
+        {itemPanel(n)}
+        {phaseExtras(n)}
       </div>
     );
   };
   const show = []; if (peek && peek !== cur) show.push(peek); if (cur !== null) show.push(cur); show.sort((a, b) => a - b);
   const ms = commOf(job).milestones || {};
+  const edge = owed.length ? "#B0892C" : cur !== null ? C.blue : C.green;
+  if (!open) return (
+    <div role="button" tabIndex={0} onClick={() => setOpen(true)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(true); } }} title="Open this job's checklist"
+      style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${edge}`, borderRadius:10, padding:"9px 12px", marginBottom:6, cursor:"pointer", userSelect:"none" }}>
+      <span style={{ fontSize:10, color:C.dim, width:10 }}>▶</span>
+      <span style={{ fontWeight:700, fontSize:13, color:C.text, flex:"1 1 160px", minWidth:0, overflowWrap:"anywhere" }}>{job.name || "Untitled"}</span>
+      {job.foreman && job.foreman !== "Unassigned" && <span style={{ fontSize:11, color:C.dim, fontWeight:600 }}>{job.foreman}</span>}
+      {owed.length > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:"#B0892C", background:"#B0892C15", border:"1px solid #B0892C40" }}>{owed.length} OWED</span>}
+      {g.late > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.red, background:"#B23A3A15", border:"1px solid #B23A3A40" }}>GEAR LATE</span>}
+      <span style={{ display:"inline-flex", alignItems:"center", gap:6 }} title={`${prog.done} of ${prog.total} items done or N/A`}>
+        <span style={{ width:64, height:5, borderRadius:99, background:C.border, overflow:"hidden", display:"inline-block" }}><span style={{ display:"block", width:`${prog.pct}%`, height:"100%", background: prog.pct === 100 ? C.green : C.blue }}/></span>
+        <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:17, lineHeight:1, color: prog.pct === 100 ? C.green : C.blue, minWidth:34, textAlign:"right", fontVariantNumeric:"tabular-nums" }}>{prog.pct}%</span>
+      </span>
+    </div>
+  );
   return (
-    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${owed.length ? "#B0892C" : cur !== null ? C.blue : C.green}`, borderRadius:12, padding:"14px 16px", marginBottom:12, boxShadow:"0 4px 16px rgba(15,31,61,0.08)" }}>
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${edge}`, borderRadius:12, padding:"14px 16px", marginBottom:12, boxShadow:"0 4px 16px rgba(15,31,61,0.08)" }}>
       <div style={{ display:"flex", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
         <div style={{ minWidth:200, flex:"1 1 200px" }}>
-          <div onClick={() => onSelectJob && onSelectJob(job)} style={{ fontWeight:700, fontSize:14, color:C.text, cursor: onSelectJob ? "pointer" : "default" }}>{job.name || "Untitled"}</div>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {ctx === "board" && <button onClick={(e) => { e.stopPropagation(); setOpen(false); }} title="Fold to one line" style={{ border:"none", background:"transparent", color:C.dim, cursor:"pointer", fontSize:10, padding:"2px 0", width:10, fontFamily:"inherit" }}>▼</button>}
+            <div onClick={() => onSelectJob && onSelectJob(job)} style={{ fontWeight:700, fontSize:14, color:C.text, cursor: onSelectJob ? "pointer" : "default" }}>{job.name || "Untitled"}</div>
+          </div>
           <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:11, color:C.dim, flexWrap:"wrap" }}>
             {job.foreman && job.foreman !== "Unassigned" && <span style={{ fontWeight:600 }}>{job.foreman}</span>}
             {job.gc && <span style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px", fontSize:10, fontWeight:700 }}>{job.gc}</span>}
             {job.simproNo && <span>Simpro #{job.simproNo}</span>}{commOf(job).projectNo && <span>Proj {commOf(job).projectNo}</span>}
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:6 }} title={`${prog.done} of ${prog.total} Job Start items done or N/A`}>
+            <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, lineHeight:1, letterSpacing:"0.03em", color: prog.pct === 100 ? C.green : C.blue, fontVariantNumeric:"tabular-nums" }}>{prog.pct}%</span>
+            <div style={{ flex:"0 1 160px", height:6, borderRadius:99, background:C.border, overflow:"hidden" }}><div style={{ width:`${prog.pct}%`, height:"100%", background: prog.pct === 100 ? C.green : C.blue, borderRadius:99 }}/></div>
+            <span style={{ fontSize:11, color:C.dim }}>{prog.done} of {prog.total}</span>
           </div>
           <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:6 }}>
             {[["footing","FOOTING"],["underground","UNDERGROUND"],["slab","SLAB"]].map(([k, l]) => ms[k] ? <span key={k} style={{ fontSize:10, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:6, padding:"2px 7px" }}>{l} <b style={{ color: commSoon(ms[k]) ? C.orange : C.text }}>{ms[k]}</b></span> : null)}
@@ -54454,14 +56401,23 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
           {owed.length > 0 && <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", color:"#B0892C", background:"#B0892C15", border:"1px solid #B0892C40" }}>{owed.length} OWED IN EARLIER PHASES</span>}
         </div>
       </div>
-      <div style={{ display:"flex", gap:3, margin:"12px 0 4px" }}>
+      <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
+        <div style={{ display:"inline-flex", border:`1px solid ${C.border}`, borderRadius:7, overflow:"hidden" }}>
+          {[["list","Checklist"],["phases","Phases"]].map(([v, l]) => (
+            <button key={v} onClick={(e) => { e.stopPropagation(); setViewPref(v); }} style={{ border:"none", padding:"5px 11px", fontSize:10.5, fontWeight:700, letterSpacing:"0.04em", cursor:"pointer", fontFamily:"inherit", background: view === v ? C.blue : "#fff", color: view === v ? "#fff" : C.dim }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:3, margin:"8px 0 4px" }}>
         {COMM_START_STEPS.map(ph => { const n = ph.n; const cls = cur === null || n < cur ? ((st.overrides && st.overrides[n] && !commPhaseChecked(job, n)) ? "owed" : "done") : n === cur ? "cur" : "up";
           const bg = cls === "done" ? C.teal : cls === "cur" ? C.blue : cls === "owed" ? "#B0892C" : C.muted;
-          return <div key={n} onClick={(e) => { e.stopPropagation(); setPeek(peek === n ? null : n); }} title={`Phase ${n}: ${ph.label}`}
+          return <div key={n} onClick={(e) => { e.stopPropagation(); if (view === "list") { setPhOpen(p => ({ ...p, [n]: true })); return; } setPeek(peek === n ? null : n); }} title={`Phase ${n}: ${ph.label}`}
             style={{ flex:1, height:22, borderRadius:5, background:bg, color:"#fff", fontSize:10, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", opacity: cls === "up" ? .55 : 1, outline: peek === n ? `2px solid ${C.text}` : "none", boxShadow: cls === "cur" ? "0 0 0 2px #3B5BA540" : "none" }}>{n}</div>; })}
       </div>
-      {cur === null && !peek && <div style={{ border:"1px dashed #46916A", borderRadius:10, padding:"10px 14px", fontSize:12, color:C.green, fontWeight:600, background:"#46916A08", marginTop:8 }}>✓ All 12 pre-con phases closed — Ready to Start. Assign the foreman + crew; set In Progress on Job Info when they mobilize.</div>}
-      {show.map(phaseBlock)}
+      {cur === null && (view === "list" || !peek) && <div style={{ border:"1px dashed #46916A", borderRadius:10, padding:"10px 14px", fontSize:12, color:C.green, fontWeight:600, background:"#46916A08", marginTop:8 }}>✓ All 12 pre-con phases closed — Ready to Start. Assign the foreman + crew; set In Progress on Job Info when they mobilize.</div>}
+      {view === "list"
+        ? <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:10 }}>{COMM_START_STEPS.map(listPhase)}</div>
+        : show.map(phaseBlock)}
       {ov && (
         <div style={{ marginTop:10, border:"1px solid #B0892C55", borderRadius:9, padding:"10px 12px", background:"#B0892C08" }} onClick={e => e.stopPropagation()}>
           <div style={{ fontSize:9.5, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5 }}>Move on from Phase {ov.n} — still owed, stays tracked</div>
@@ -54509,7 +56465,7 @@ function JobStartBoard({ jobs = [], identity, users = [], onSelectJob, onUpdateJ
         </div>
       </div>
       <div style={{ background:"#fff", border:`1px dashed ${C.muted}`, borderRadius:10, padding:"10px 14px", fontSize:12, color:C.dim, marginBottom:14 }}>
-        Each of the 12 steps is a <b style={{ color:C.text }}>phase</b>, all pre-construction. A job is in one phase at a time and its checklist is open on the card. Check the last item and the card rolls into the next phase. Tap a number on the bar to look back (owed items stay tappable) or peek ahead. <b style={{ color:C.text }}>Move on with items owed</b> closes a phase early — the items stay red until checked.
+        Each of the 12 steps is a <b style={{ color:C.text }}>phase</b>, all pre-construction. Jobs sit under the first phase that still has open items; tap a job to open its checklist. Items can be checked in any order, and the % is how much of all 12 phases is done. <b style={{ color:C.text }}>Move on with items owed</b> closes a phase early — the items stay red until checked.
       </div>
       {groups.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:18, textAlign:"center", border:`1px dashed ${C.muted}`, borderRadius:10 }}>{live.length ? "No jobs match the filter." : "No commercial jobs in pre-con. Import one from Simpro or make one with + New Job while in Commercial mode."}</div>}
       {groups.map(([ph, rows]) => (
@@ -54618,12 +56574,12 @@ function CommRfisTab({ job, u, identity }) {
   );
 }
 
-function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
+function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSchedulePickup, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
   const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
   // Lanes start collapsed (Koy 2026-08-28) — header pills keep the counts visible;
   // an active search/foreman filter force-shows both lanes so results never hide.
-  const [laneOpen, setLaneOpen] = useState({ admin:false, prep:false });
+  const [laneOpen, setLaneOpen] = useState({ admin:false, prep:false, peds:false });
   // Sub-dropdown inside Pre-Job Prep for override-cleared jobs (Koy 2026-08-28:
   // "different drop downs for cleared to start w/outstanding items ... to organize better")
   const [ovrOpen, setOvrOpen] = useState(false);
@@ -54668,6 +56624,9 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redline
   };
 
   const included = useMemo(() => jobPrepIncluded(jobs), [jobs]);
+  const pedGroups = useMemo(() => tempPedGroups(jobs), [jobs]);
+  const pedSuggest = useMemo(() => tpLinkSuggestions(pedGroups, jobs), [pedGroups, jobs]);
+  const pedsOut = pedGroups.filter(g => !g.returned).length;
 
   const [search, setSearch] = useState("");
   const [foremanFilter, setForemanFilter] = useState("");
@@ -54708,6 +56667,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redline
             {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
             {onOvr > 0 && <span style={{color:"#B0892C",fontWeight:700}}> · {onOvr} started on override</span>}
             <span style={{color:"#3E7D5A",fontWeight:700}}> · {cleared} cleared to start</span>
+            {pedsOut > 0 && <span style={{color:C.purple,fontWeight:700}}> · {pedsOut} temp ped{pedsOut===1?"":"s"} out</span>}
             {filtered && <span> · totals are all jobs — lanes below are filtered</span>}
           </div>
         </div>
@@ -54755,6 +56715,13 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, redline
         </JobPrepCompleteStrip>
         </>)}
       </div>
+
+      {/* ══ TEMP PEDS OUT (v514) — every ped on a job, any stage ══ */}
+      <TempPedsLane groups={pedGroups} suggest={pedSuggest} filtered={filtered} open={laneOpen.peds} onToggle={()=>setLaneOpen(o=>({...o,peds:!o.peds}))}
+        filterFn={(g)=>(!q || g.members.some(j=>`${j.name||""} ${j.gc||""} ${j.simproNo||""} ${j.foreman||""} ${j.address||""}`.toLowerCase().includes(q))
+            || (!!g.num && [`#${g.num}`, `ped ${g.num}`, `ped #${g.num}`, g.num].includes(q)))
+          && (!foremanFilter || g.members.some(j=>j.foreman===foremanFilter))}
+        identity={identity} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onSchedulePickup={onSchedulePickup}/>
 
       {/* ══ LANE 2 — PRE-JOB PREP ══ */}
       <div style={{marginBottom:28}}>
@@ -57342,7 +59309,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -58692,6 +60659,8 @@ function MyDay({ qcTracker = null, prioMap = {}, onSetPrio, identity, users = []
           )}
         </div>
       </div>
+      {/* Important office messages waiting on this person's Got it (announcements, v513). */}
+      {topSlot}
       {/* v429 toolbar: search · Category | Job | Person · Select (stacks when narrow) */}
       <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", alignItems: narrow ? "stretch" : "center", gap: 8, marginBottom: 10 }}>
         <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs…"
@@ -60772,6 +62741,12 @@ function App() {
 
   const isDirty   = useRef(false);
 
+  // Version lock: Settings → "Force Update All Devices" (config/app watcher,
+  // below) used to window.location.reload() every open app at once, flushing
+  // nothing and ignoring anyone typing. It now raises the Update now popup;
+  // the popup flushes saves and honours typing grace before reloading.
+  const forceUpdateRef = useRef(null);
+
   const saveTimers = useRef({});
 
   // Trailing-debounce for the Upcoming pipeline's single-doc save (mirrors
@@ -60987,7 +62962,7 @@ function App() {
               if(!d) return;
               const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
               if(daysBetween >= 60) {
-                updateDoc(doc(db,"jobs",job.id),{"data.finishStatus":"waiting_date",updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()}).catch(()=>{});
+                updateDoc(doc(db,"jobs",job.id),stampWrite({"data.finishStatus":"waiting_date",updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()})).catch(()=>{});
                 advancedCount++;
               }
             });
@@ -61177,8 +63152,11 @@ function App() {
       if(!v) return;
       if(firstVersionSeen === null) { firstVersionSeen = v; return; } // first load — just record it
       if(v !== firstVersionSeen) {
-        console.log(`[HE] App version changed (${firstVersionSeen} → ${v}) — reloading...`);
-        window.location.reload();
+        // Version lock: through the Update now popup (flush + typing grace),
+        // never a bare reload — the old reload lost typed-but-unsaved text.
+        console.log(`[HE] App version changed (${firstVersionSeen} → ${v}) — update required`);
+        if (forceUpdateRef.current) forceUpdateRef.current();
+        else window.location.reload();
       }
     }, ()=>{});
 
@@ -61331,6 +63309,14 @@ function App() {
       const merged = {};
       const now = Date.now();
       let changed = false;
+      // Version lock: "Update now" hands this tab's queue to the session that
+      // replaces it. The reload keeps sessionStorage, so the marker names the
+      // slot the previous page load owned — adopt it regardless of age (it is
+      // ours, not a live sibling's), then clear the marker. Without this a
+      // refused save flushed seconds before the reload would sit in storage
+      // until the NEXT app open (the 20 s live-sibling rule below).
+      let handoff = null;
+      try { handoff = sessionStorage.getItem("he_pending_handoff") || null; if (handoff) sessionStorage.removeItem("he_pending_handoff"); } catch (e) { handoff = null; }
       Object.keys(all).forEach(tab => {
         const slot = all[tab] || {};
         const age = slot.at ? (now - slot.at) : Infinity;
@@ -61339,7 +63325,7 @@ function App() {
         if (age > PENDING_MAX_AGE_MS) { delete all[tab]; changed = true; return; }
         // A LIVE other tab refreshes its slot on every save, so a recent foreign
         // slot is still being worked on — leave it alone.
-        if (tab !== TAB_ID && age <= 20000) return;
+        if (tab !== TAB_ID && tab !== handoff && age <= 20000) return;
         Object.keys(slot.patches || {}).forEach(jid => {
           merged[jid] = { ...(merged[jid] || {}), ...slot.patches[jid] };
         });
@@ -61631,7 +63617,8 @@ function App() {
           // (baseline vs ours vs server) before writing. Items added by
           // someone else since we loaded are preserved; this user's explicit
           // deletes still go through. Scalars behave exactly as before.
-          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
+          // Version-lock stamp (app_build + w) rides in meta so every branch below carries it.
+          const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID});
           const cleanPatch = sanitize(toWrite);
           let _writtenPatch = null;
           const _rescued = [];
@@ -61641,7 +63628,7 @@ function App() {
             const snap = await tx.get(jref);
             if(!snap.exists()) {
               // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
-              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device, tab:TAB_ID});
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device, tab:TAB_ID, app_build:meta.app_build, w:meta.w});
               return;
             }
             const serverData = snap.data()?.data || {};
@@ -61712,7 +63699,7 @@ function App() {
               return;
             }
           }
-          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
+          const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID});
           // MODE-B FIX (Cougar Moon, 2026-07-06): this branch used to rewrite
           // EVERY field of the job from this device's local snapshot. The old
           // dot-notation write protected fields this device had never seen,
@@ -61777,6 +63764,14 @@ function App() {
           console.error(`[HE] Save failed (size). Run: ${cmd}`);
         } else {
           setSyncStatus("error");
+          // Version lock: a permission-denied from a build below the gate's
+          // minimum KEEPS the patch exactly where it is — pendingPatches, and
+          // he_pending_patches which was persisted at enqueue — and raises the
+          // Update now popup. The 5 s retry below is skipped for that case
+          // (it would be refused again every 5 s); the new build replays the
+          // queue through this same merge after the reload. Any other failure
+          // keeps today's retry.
+          const refused = await reportWriteDenied(e, "jobs", job.id);
           // Transactions (unlike the old updateDoc) fail immediately when
           // offline instead of queueing — so re-arm a retry while this job's
           // patch is still pending. The patch was NOT cleared above, so no
@@ -61784,7 +63779,7 @@ function App() {
           // Guard: only retry if patches are actually still pending (the
           // reconnect flush may have already drained them), so this can never
           // route a job through the no-patch full-save branch.
-          if(!saveTimers.current[job.id]) {
+          if(!refused && !saveTimers.current[job.id]) {
             setTimeout(() => {
               const p = pendingPatches.current[job.id];
               if (p && Object.keys(p).length > 0 && !saveTimers.current[job.id]) saveJob(job);
@@ -61905,7 +63900,7 @@ function App() {
       const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
       const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
       if(toWrite && Object.keys(toWrite).length > 0) {
-        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
+        const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID});
         const cleanPatch = sanitize(toWrite);
         try {
           // Same transactional three-way merge as saveJob — a close-flush
@@ -61917,7 +63912,7 @@ function App() {
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
             if(!snap.exists()) {
-              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID});
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID, app_build:meta.app_build, w:meta.w});
               return;
             }
             const serverData = snap.data()?.data || {};
@@ -61936,6 +63931,7 @@ function App() {
           // Put the patch back so the retry / reconnect paths can deliver it.
           pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
           persistPending();
+          reportWriteDenied(e, "jobs", job.id);   // version refusal → popup; the patch is already back in the queue
         }
       }
       // No else — never do a full overwrite from flushJob, it can wipe other users' data
@@ -61973,7 +63969,7 @@ function App() {
     setNeeds(prev => { const i=(prev||[]).findIndex(x=>x.id===n.id); if(i>=0){ const nx=[...prev]; nx[i]=n; return nx; } return [...(prev||[]), n]; });
     // `saved_by` is envelope meta — only the server ledger reads it (it logged
     // "?" for every need before); the loader returns `data` and ignores it.
-    try { await setDoc(doc(db,"needs",n.id),{data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""}); } catch(e){ console.error("saveNeed error:",e); }
+    try { await setDoc(doc(db,"needs",n.id),stampWrite({data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""})); } catch(e){ console.error("saveNeed error:",e); reportWriteDenied(e, "needs", n.id); }
   };
   // Field-surgical update: dotted `data.<field>` paths so two devices editing
   // different fields of one need can't last-write-wins each other. `current`
@@ -61993,8 +63989,8 @@ function App() {
     const upd = { updated_at: nowIso, saved_by: identity?.name || "" };
     Object.keys(p).forEach(k => { upd["data."+k] = p[k]; });
     if (entry) upd["data.updates"] = arrayUnion(entry);
-    try { await updateDoc(doc(db,"needs",id), upd); }
-    catch(e){ if (current) { await saveNeed({ ...current, ...p, ...(entry ? { updates: [...needUpdates(current), entry] } : {}) }); } else { console.error("patchNeed error:",e); } }
+    try { await updateDoc(doc(db,"needs",id), stampWrite(upd)); }
+    catch(e){ if (current && !(await reportWriteDenied(e, "needs", id))) { await saveNeed({ ...current, ...p, ...(entry ? { updates: [...needUpdates(current), entry] } : {}) }); } else { console.error("patchNeed error:",e); } }
   };
   // v421: append one update entry. arrayUnion (never a whole-array write) so
   // two phones posting at once can't clobber each other. Assignee's "waiting"
@@ -62010,8 +64006,8 @@ function App() {
     setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, updates: [...needUpdates(n), entry], ...extra } : n));
     const upd = { updated_at: nowIso, saved_by: entry.by, "data.updates": arrayUnion(entry) };
     Object.keys(extra).forEach(k => { upd["data."+k] = extra[k]; });
-    try { await updateDoc(doc(db,"needs",id), upd); }
-    catch(e){ if (current) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
+    try { await updateDoc(doc(db,"needs",id), stampWrite(upd)); }
+    catch(e){ if (current && !(await reportWriteDenied(e, "needs", id))) { await saveNeed({ ...current, updates: [...needUpdates(current), entry], ...extra }); } else { console.error("addNeedUpdate error:",e); } }
   };
   // v434: edit your own reply. A transaction on needs/<id> re-reads the doc,
   // swaps ONLY the matching entry's text (matched by by + at) and writes
@@ -62033,11 +64029,12 @@ function App() {
         const cur = (snap.data() || {}).data || {};
         const list = Array.isArray(cur.updates) ? cur.updates : [];
         if (!list.some(match)) throw new Error("reply not found");
-        tx.update(ref, { "data.updates": swap(list, u => ({ ...u, text, editedAt })), updated_at: editedAt, saved_by: identity?.name || "" });
+        tx.update(ref, stampWrite({ "data.updates": swap(list, u => ({ ...u, text, editedAt })), updated_at: editedAt, saved_by: identity?.name || "" }));
       });
     } catch(e) {
       console.error("editNeedUpdate error:", e);
       toast.error("Couldn't save your edit — check connection.");
+      reportWriteDenied(e, "needs", needId);
       setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, updates: swap(n.updates, u => { const r = { ...u, text: entry.text }; if (entry.editedAt) r.editedAt = entry.editedAt; else delete r.editedAt; return r; }) } : n));
     }
   };
@@ -62079,10 +64076,11 @@ function App() {
       const nowIso = new Date().toISOString();
       setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: [...((n && n.photos) || []), ...entries] } : n));
       try {
-        await updateDoc(doc(db,"needs",needId), { updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) });
+        await updateDoc(doc(db,"needs",needId), stampWrite({ updated_at: nowIso, saved_by: by, "data.photos": arrayUnion(...entries) }));
         toast.success(entries.length === 1 ? "Photo added" : `${entries.length} photos added`);
       } catch(e) {
         console.error("addNeedPhotos error:", e);
+        reportWriteDenied(e, "needs", needId);
         const ids = new Set(entries.map(p => p.id));
         setNeeds(prev => (prev||[]).map(n => n.id===needId ? { ...n, photos: ((n && n.photos) || []).filter(p => !(p && ids.has(p.id))) } : n));
         toast.error("Photo uploaded but couldn't attach to the task — try again.");
@@ -62116,13 +64114,13 @@ function App() {
         deleteObject(ref(storage, sp)).catch(() => {});
       }, 11000));
     }
-    updateDoc(doc(db,"needs",needId), { updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayRemove(photo) })
-      .catch(e => { console.error("removeNeedPhoto error:", e); cancelDelete(); addLocal(); toast.error("Couldn't remove the photo — try again."); });
+    updateDoc(doc(db,"needs",needId), stampWrite({ updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayRemove(photo) }))
+      .catch(e => { console.error("removeNeedPhoto error:", e); cancelDelete(); addLocal(); toast.error("Couldn't remove the photo — try again."); reportWriteDenied(e, "needs", needId); });
     return () => {
       cancelDelete();
       addLocal();
-      updateDoc(doc(db,"needs",needId), { updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayUnion(photo) })
-        .catch(e => { console.error("restore photo error:", e); toast.error("Couldn't restore the photo."); });
+      updateDoc(doc(db,"needs",needId), stampWrite({ updated_at: new Date().toISOString(), saved_by: by, "data.photos": arrayUnion(photo) }))
+        .catch(e => { console.error("restore photo error:", e); toast.error("Couldn't restore the photo."); reportWriteDenied(e, "needs", needId); });
     };
   };
   const deleteNeed = async (id) => {
@@ -62212,7 +64210,7 @@ function App() {
       const plIntent = (accumulated && accumulated[PL_INTENT_KEY]) || null;   // panel-loads intent → the merge, never written
       const toWrite = accumulated ? (() => { const t = { ...accumulated }; delete t[PL_INTENT_KEY]; return t; })() : null;
       if(toWrite && Object.keys(toWrite).length > 0) {
-        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
+        const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID});
         const cleanPatch = sanitize(toWrite);
         // Transactional three-way merge -- NEVER a raw updateDoc on a structural
         // field (data.roughPunch etc.). Firestore has no partial-array update,
@@ -62228,7 +64226,7 @@ function App() {
           const jref = doc(db,"jobs",job.id);
           const snap = await tx.get(jref);
           if(!snap.exists()) {
-            tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID});
+            tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID, app_build:meta.app_build, w:meta.w});
             return;
           }
           const serverData = snap.data()?.data || {};
@@ -62248,6 +64246,7 @@ function App() {
           console.error('[HE] flushSaves merge error:',e?.message);
           pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
           persistPending();
+          reportWriteDenied(e, "jobs", job.id);   // version refusal → popup; the patch is already back in the queue
         });
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
@@ -62303,6 +64302,48 @@ function App() {
   const [updateReady, setUpdateReady] = useState(false);
   const latestVersionRef = useRef(null);
   const RELOAD_GUARD = "he_sw_reload_pending";
+  // ── Version lock (Phase 1) — the Update now popup is the FACE of the lock ──
+  // The lock itself is the Phase 2 rules (firestore.phase2.rules): a write
+  // stamped with a build below appGate/version.minBuild is refused. Four
+  // things raise the popup; any one of them is enough:
+  //   newer    the poll (2 min / on visible) found a newer bundle and the
+  //            silent idle reload could not fire (mid-task: pending saves or
+  //            a focused field)
+  //   gate     the realtime appGate/version listener says minBuild > APP_BUILD
+  //   refused  a write to a locked collection came back permission-denied and
+  //            the gate confirms this build is below the minimum (the write
+  //            stays queued — reportWriteDenied, module scope)
+  //   forced   Settings → Force Update All Devices (config/app watcher)
+  // Phases: wait → block (or a red "finish typing" bar during the 5-minute
+  // typing grace) → saving (flushSaves, wait for the queue, ≤ 8 s) → reload.
+  // After a reload that STILL runs the old bundle (CDN edge lag): retry a
+  // cache-busted reload ≤ 3× / 20 s apart, then "close and reopen".
+  const LOCK_RETRY_KEY = "he_update_retries";
+  const LOCK_HANDOFF_KEY = "he_pending_handoff";
+  const LOCK_TYPING_GRACE_MS = 5 * 60 * 1000;
+  const [lock, setLock] = useState(null);           // null | { newer, latest, gate, refused, forced, minBuild, since, hardSince }
+  const [lockPhase, setLockPhase] = useState("wait"); // wait | block | saving | retry | stuck
+  const [lockGraceBar, setLockGraceBar] = useState(false);
+  const [lockLater, setLockLater] = useState(null);   // { latest, until } — "Later" on the soft card
+  const lockRef = useRef(null); lockRef.current = lock;
+  // Koy 2026-10-06, "hard block only on require": gate / refused / forced are
+  // the hard block; a plain newer build is a dismissible card (isSoftNewer).
+  const hardLock = isHardLock(lock);
+  const softNewer = isSoftNewer(lock, lockLater);
+  const requireUpdate = (reason, extra = {}) => { setLock(prev => lockReduce(prev, reason, extra)); };
+  const lockLaterTap = () => {
+    const l = laterFor(lockRef.current);
+    setLockLater(l);
+    // Re-evaluate when the 30 minutes are up (a newer `latest` re-shows it sooner).
+    setTimeout(() => setLockLater(cur => (cur && cur.until <= Date.now()) ? null : cur), LOCK_LATER_MS + 100);
+  };
+  const cacheBustReload = () => {
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("he_v", String(Date.now()));   // cache-busting; stripped again on load
+      window.location.replace(u.toString());
+    } catch (e) { window.location.reload(); }
+  };
 
   const getLatestVersion = async () => {
     try {
@@ -62323,16 +64364,37 @@ function App() {
     return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
   };
 
+  // Silent reload for IDLE phones (kept): visible tab, nothing pending, no
+  // focused field. Anyone mid-task meets the Update now popup instead of the
+  // old bottom-left pill. Returns true when a reload was started.
   const tryAutoReload = () => {
-    if (document.visibilityState !== "visible") return;
-    if (hasPendingSaves() || isTypingFocused()) return;
-    if (sessionStorage.getItem(RELOAD_GUARD)) return;
+    if (document.visibilityState !== "visible") return false;
+    if (hasPendingSaves() || isTypingFocused()) return false;
+    if (sessionStorage.getItem(RELOAD_GUARD)) return false;
     try { sessionStorage.setItem(RELOAD_GUARD, "1"); } catch(e){}
     flushSaves();
     // flushSaves is fire-and-forget (same accepted race as beforeunload) —
     // give in-flight writes a beat before tearing the page down.
     setTimeout(() => window.location.reload(), 700);
+    return true;
   };
+  // Update now: flush, wait for the queue (cap 8 s; 1.5 s when the server is
+  // refusing this build anyway, since the flush is refused too), hand the
+  // durable queue to the next session (he_pending_handoff → adoptPersistedPending),
+  // then reload with a cache-busting URL. The punch "Add punch item…" box
+  // commits on blur, so tapping the button saves a half-typed item too.
+  const updateNow = async () => {
+    setLockPhase("saving");
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) {}
+    try { flushSaves(); } catch (e) {}
+    const cap = (lockRef.current && lockRef.current.refused) ? 1500 : 8000;
+    const t0 = Date.now();
+    while (hasPendingSaves() && Date.now() - t0 < cap) await new Promise(r => setTimeout(r, 250));
+    try { sessionStorage.setItem(LOCK_HANDOFF_KEY, TAB_ID); } catch (e) {}
+    try { sessionStorage.setItem(RELOAD_GUARD, "1"); } catch (e) {}
+    cacheBustReload();
+  };
+  const updateNowRef = useRef(updateNow); updateNowRef.current = updateNow;
 
   // Device-version ping — Koy's observability into who runs what (Settings →
   // Devices). settings/deviceVersions map keyed by he_device_id; transaction
@@ -62367,6 +64429,11 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     const running = process.env.REACT_APP_VERSION || "";
+    // Strip the cache-busting ?he_v= an Update now reload added.
+    try {
+      const u = new URL(window.location.href);
+      if (u.searchParams.has("he_v")) { u.searchParams.delete("he_v"); window.history.replaceState(null, "", u.pathname + u.search + u.hash); }
+    } catch (e) {}
     const checkForUpdate = async () => {
       const latest = await getLatestVersion();
       if (cancelled || !latest) return;
@@ -62374,26 +64441,102 @@ function App() {
       pingRef.current(running || latest);
       if (!running) return; // dev server / env missing — observe only, never reload
       if (running === latest) {
-        try { sessionStorage.removeItem(RELOAD_GUARD); } catch(e){}
+        try { sessionStorage.removeItem(RELOAD_GUARD); sessionStorage.removeItem(LOCK_RETRY_KEY); } catch(e){}
         setUpdateReady(false);
+        setLock(prev => (prev && prev.newer) ? { ...prev, newer: false } : prev);
         return;
       }
       setUpdateReady(true);
       try { const reg = await getAppRegistration(); reg?.update().catch(()=>{}); } catch(e){}
-      tryAutoReload();
+      // Loop guard: we already reloaded for this version and STILL run the old
+      // bundle (CDN edge lag). Retry a cache-busted reload ≤ 3×, 20 s apart,
+      // then tell the user to close and reopen the app.
+      let guarded = false; try { guarded = !!sessionStorage.getItem(RELOAD_GUARD); } catch (e) {}
+      if (guarded) {
+        let n = 0; try { n = parseInt(sessionStorage.getItem(LOCK_RETRY_KEY) || "0", 10) || 0; } catch (e) {}
+        requireUpdate("newer", { latest });
+        if (n < 3) {
+          // One retry per PAGE LOAD, however many times App mounts (the PIN
+          // gate remounts it) — the module flag survives remounts, the
+          // sessionStorage count survives reloads.
+          if (!_versionLock.retryCounted) {
+            _versionLock.retryCounted = true;
+            try { sessionStorage.setItem(LOCK_RETRY_KEY, String(n + 1)); } catch (e) {}
+            // Page-level timer on purpose — NOT gated on `cancelled`: a remount
+            // would cancel it and the flag above would stop a second one.
+            setTimeout(cacheBustReload, 20 * 1000);
+          }
+          setLockPhase("retry");
+        } else {
+          setLockPhase("stuck");
+        }
+        return;
+      }
+      if (!tryAutoReload()) requireUpdate("newer", { latest });   // mid-task → the popup
     };
     checkForUpdate();
     const onVis = () => { if (document.visibilityState === "visible") checkForUpdate(); };
     document.addEventListener("visibilitychange", onVis);
-    const poll = setInterval(checkForUpdate, 10 * 60 * 1000);
+    const poll = setInterval(checkForUpdate, 2 * 60 * 1000);   // was 10 min (Version Lock Spec: faster detection)
     return () => { cancelled = true; document.removeEventListener("visibilitychange", onVis); clearInterval(poll); };
   }, []);
 
+  // Idle phones still self-heal silently while the popup is up for anyone mid-task.
   useEffect(() => {
     if (!updateReady) return;
     const retry = setInterval(tryAutoReload, 60 * 1000);
     return () => clearInterval(retry);
   }, [updateReady]);
+
+  // Realtime gate listener + the two other raise paths (refusal, forced).
+  // appGate/version is readable only once the Phase 2 rules are live; until
+  // then the catch-all deny answers permission-denied, which is ignored.
+  useEffect(() => {
+    let unsub = null;
+    try {
+      unsub = onSnapshot(doc(db, "appGate", "version"), (snap) => {
+        const v = snap.exists() ? Number(snap.data().minBuild) : 0;
+        const minBuild = Number.isFinite(v) ? v : 0;
+        _versionLock.minBuild = minBuild;
+        if (APP_BUILD > 0) {
+          if (minBuild > APP_BUILD) requireUpdate("gate", { minBuild });
+          else setLock(prev => (prev && prev.gate != null) ? { ...prev, gate: minBuild } : prev);
+        } else if (minBuild > 0) {
+          console.warn(`[HE version-lock] dev build (0) is below minBuild ${minBuild} — writes to locked collections will be refused`);
+        }
+      }, () => {});
+    } catch (e) {}
+    _versionLock.onRefusal = (minBuild) => requireUpdate("refused", { minBuild });
+    forceUpdateRef.current = () => requireUpdate("forced");
+    // Console / headless-check hook (same trust level as __HE_RESTORE: anyone
+    // with DevTools could call setState anyway). Drives the raise paths that
+    // need Firestore (gate, refused, forced) in the offline render check.
+    try { window.__HE_VERSION_LOCK = { require: (reason, extra) => requireUpdate(reason, extra || {}), state: () => lockRef.current, build: APP_BUILD }; } catch (e) {}
+    return () => { try { unsub && unsub(); } catch (e) {} _versionLock.onRefusal = null; forceUpdateRef.current = null; try { delete window.__HE_VERSION_LOCK; } catch (e) {} };
+  }, []); // eslint-disable-line
+
+  // Typing grace: while a field is focused (and for at most 5 minutes) the
+  // lock shows as a red bar instead of the full block, so a form that only
+  // saves on its own Save button (new CO, new task…) can be finished first.
+  useEffect(() => {
+    if (!hardLock) { setLockGraceBar(false); return; }
+    // Grace is measured from when the HARD lock began (hardSince), not from an
+    // earlier soft "newer" raise — escalation from the card must still give
+    // the typist their five minutes.
+    const since = (lockRef.current && (lockRef.current.hardSince || lockRef.current.since)) || Date.now();
+    const tick = () => {
+      const typing = isTypingFocused() && (Date.now() - since) < LOCK_TYPING_GRACE_MS;
+      setLockGraceBar(typing);
+      if (!typing) {
+        setLockPhase(p => (p === "wait" ? "block" : p));
+        try { if (document.activeElement && document.activeElement.blur && isTypingFocused()) document.activeElement.blur(); } catch (e) {}
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    document.addEventListener("focusout", tick);
+    return () => { clearInterval(id); document.removeEventListener("focusout", tick); };
+  }, [hardLock]); // eslint-disable-line
 
 
   // Update a job everywhere it lives: jobs list, selected (if open), Firestore.
@@ -62428,12 +64571,13 @@ function App() {
           n++;
         });
         if (!n) return;
-        try { await updateDoc(doc(db, "redlineWalks", walk.id), upd); return; }
+        try { await updateDoc(doc(db, "redlineWalks", walk.id), stampWrite(upd)); return; }
         catch (e) { if (e?.code !== "not-found") throw e; /* doc gone → create it whole below */ }
       }
-      await setDoc(doc(db, "redlineWalks", walk.id), { data: next, updated_at: next.updatedAt });
+      await setDoc(doc(db, "redlineWalks", walk.id), stampWrite({ data: next, updated_at: next.updatedAt }));
     } catch (e) {
       console.error("[HE] saveRedlineWalk failed:", e?.message);
+      reportWriteDenied(e, "redlineWalks", walk.id);
       try { toast.error("Redline walk didn't save — check the connection and try again."); } catch {}
     }
   };
@@ -62514,10 +64658,10 @@ function App() {
     j._importedFromSimpro = true;
     j.imported_at = new Date().toISOString();
     try {
-      await setDoc(doc(db,"jobs",j.id), {
+      await setDoc(doc(db,"jobs",j.id), stampWrite({
         data: j,
         updated_at: new Date().toISOString(),
-      });
+      }));
       setAllJobs(js => [j, ...js]);
       // Remove from candidates doc — pull the freshest list from state, drop
       // this one, write back. Real-time listener will pick up the change.
@@ -62532,7 +64676,7 @@ function App() {
       // the Drive section shows the progress off job.docPull like the button does.
       if (isCommercial(j) && j.simproNo && String(j.name||"").trim().length >= 3) {
         runDriveChain(j.id, identity?.name || "")
-          .then(r => toast.success(`Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`))
+          .then(r => toast.success(r.pull && r.pull.linkedQuoteFolder ? "Linked the folder already made for this quote — its Simpro plans are in SIMPRO" : `Drive folder ${r.created ? "created" : "linked"} — pulling plans from Simpro`))
           .catch(e => toast.error(`Drive folder: ${e.message || e}`));
       }
       toast.success(kind === "tempped" ? `Imported "${j.name}" as a temp ped — set foreman/lead to make it live` : kind === "quick" ? `Imported "${j.name}" as a quick job — set foreman/lead to make it live` : `Imported "${j.name}" — set foreman/lead to make it live`);
@@ -63211,7 +65355,8 @@ function App() {
   });
   useEffect(() => {
     if (!pendingView || !identity) return;
-    if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
+    if (pendingView === "announce" && pendingNeed) { setAnnounceOpen(pendingNeed); setPendingNeed(null); }
+    else if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (pendingView === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop deep-links (need_assigned / need_done → My Day; bodies → Forecast).
     else if (pendingView === "myday" && can(identity, "myday.view")) { setView("myday"); if (pendingNeed) { setMydayJump(pendingNeed); setPendingNeed(null); } }
@@ -63227,6 +65372,27 @@ function App() {
   const inboxKey = identity ? (identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_")) : null;
   const [inboxItems, setInboxItems] = useState([]);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);   // bell → Send (notify.broadcast)
+  const [announceOpen, setAnnounceOpen] = useState(null);       // broadcast id of the office message being read
+  // Every office message copy in MY bell (announcements, v513 → grouped v514):
+  // one single-field `kind in [...]` listener (no composite index), its own
+  // query so office messages never fall off the 50-item bell list. Grouped per
+  // message by bcGroupMessages — the bell, the My Day tabs and the Important
+  // pins all read the same "needs you" rule. The original copy carries ackAt
+  // once Got it is tapped (reminders / tests / replies never pin).
+  const [officeItems, setOfficeItems] = useState([]);
+  useEffect(() => {
+    if (!inboxKey) { setOfficeItems([]); return; }
+    const qy = query(collection(db, "notifications", inboxKey, "items"),
+      where("kind", "in", ["announcement", "important", "discussion"]), limit(400));
+    return onSnapshot(qy,
+      snap => setOfficeItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => console.warn("[inbox] office messages listener error", err));
+  }, [inboxKey]);
+  const officeMsgs = useMemo(() => bcGroupMessages(officeItems), [officeItems]);
+  const announcePins = useMemo(() => officeMsgs.filter(m => m.kind === "important" && m.needs && m.orig).map(m => m.orig), [officeMsgs]);
+  const [bellDoneOpen, setBellDoneOpen] = useState(false);   // bell: finished office messages start folded
+  const [officeJump, setOfficeJump] = useState(null);         // bell "See all in My Day" → open the My Day section
   useEffect(() => {
     if (!inboxKey) { setInboxItems([]); return; }
     const qy = query(collection(db, "notifications", inboxKey, "items"), orderBy("createdAt", "desc"), limit(50));
@@ -63234,15 +65400,41 @@ function App() {
       snap => setInboxItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
       err => console.warn("[inbox] listener error", err));
   }, [inboxKey]);
-  const inboxUnread = inboxItems.filter(i => !i.read).length;
+  // Unread count comes from its own query so it isn't capped by the 50-item
+  // list above (an unread item older than the newest 50 used to vanish from
+  // the badge). Single-field equality — no composite index needed.
+  const [inboxUnreadIds, setInboxUnreadIds] = useState([]);
+  useEffect(() => {
+    if (!inboxKey) { setInboxUnreadIds([]); return; }
+    const qy = query(collection(db, "notifications", inboxKey, "items"), where("read", "==", false), limit(200));
+    return onSnapshot(qy,
+      snap => setInboxUnreadIds(snap.docs.map(d => d.id)),
+      err => console.warn("[inbox] unread listener error", err));
+  }, [inboxKey]);
+  const inboxUnread = inboxUnreadIds.length;
+  // Home-Screen / installed-app icon badge (iOS 16.4+, Android, desktop PWA).
+  useEffect(() => {
+    try {
+      if (inboxUnread > 0) navigator.setAppBadge?.(inboxUnread)?.catch?.(() => {});
+      else navigator.clearAppBadge?.()?.catch?.(() => {});
+    } catch {}
+  }, [inboxUnread]);
   const markInboxRead = useCallback((ids) => {
     if (!inboxKey) return;
-    ids.forEach(id => updateDoc(doc(db, "notifications", inboxKey, "items", id), { read: true }).catch(() => {}));
+    ids.filter(Boolean).forEach(id => updateDoc(doc(db, "notifications", inboxKey, "items", id), { read: true }).catch(() => {}));
   }, [inboxKey]);
+  // Tapped a notification while the app was closed → that record is seen.
+  const launchNidDone = useRef(false);
+  useEffect(() => {
+    if (!inboxKey || !LAUNCH_NOTIF_ID || launchNidDone.current) return;
+    launchNidDone.current = true;
+    markInboxRead([LAUNCH_NOTIF_ID]);
+  }, [inboxKey, markInboxRead]);
   const openInboxItem = useCallback((item) => {
     if (!item.read) markInboxRead([item.id]);
     setInboxOpen(false);
     if (item.jobId) { openJobById(item.jobId, item.section); return; }
+    if (item.view === "announce" && item.needId) { setAnnounceOpen(item.needId); return; }   // office message
     if (item.view === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (item.view === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop items carry `view`, never jobId (so they land on the list, not a job).
@@ -63251,17 +65443,31 @@ function App() {
     else if (item.view === "needs" && can(identity, "board.view")) setView("needs");
     else if (item.view === "schedule" && can(identity, "schedule.view")) setView("schedule");
   }, [identity, openJobById, markInboxRead]);
+  // Opening an office message (bell, push, My Day pin or tab, ‹ ›) marks every
+  // unread copy of it read — its reminders and discussion replies too — so it
+  // folds into Done in the bell. Got it still needs its own tap.
+  useEffect(() => {
+    if (!announceOpen) return;
+    const m = officeMsgs.find(x => x.id === announceOpen);
+    if (m && m.unreadIds.length) markInboxRead(m.unreadIds);
+  }, [announceOpen, officeMsgs, markInboxRead]);
 
   // ── Listen for postMessage from SW (app was already open when notif tapped) ─
+  // The push worker doesn't control this page, so it can't navigate() it — it
+  // posts the target instead. Routed exactly like a bell tap (job, My Day task,
+  // Huddle, …) and marks the inbox record read. Before 2026-10-04 only jobId
+  // was handled, so task / view notifications just focused the app.
   useEffect(() => {
     const handler = e => {
-      if (e.data?.type === "HE_NOTIF_CLICK" && e.data.jobId) {
-        openJobById(e.data.jobId, e.data.section);
-      }
+      const d = e.data;
+      if (d?.type !== "HE_NOTIF_CLICK") return;
+      if (!d.jobId && !d.view) { if (d.nid) markInboxRead([d.nid]); return; }
+      openInboxItem({ id: d.nid || "", read: !d.nid, jobId: d.jobId || "", section: d.section || "",
+        view: d.view || "", needId: d.needId || "" });
     };
     navigator.serviceWorker?.addEventListener("message", handler);
     return () => navigator.serviceWorker?.removeEventListener("message", handler);
-  }, [openJobById]);
+  }, [openInboxItem, markInboxRead]);
 
   // ── Foreground push notification toast ───────────────────────────────────
   const [pushToast, setPushToast] = useState(null);
@@ -63336,23 +65542,109 @@ function App() {
         <NeedQuickAdd identity={identity} users={users} jobs={jobs} preset={quickAdd} onSave={saveNeed} onAddNeedPhotos={addNeedPhotos} onClose={()=>setQuickAdd(null)}/>
       )}
 
-      {/* Update pill — bottom-left (SIMPRO owns bottom-right). Shows when a
-          newer bundle is deployed and the safe auto-reload couldn't fire yet
-          (unsaved work or a focused input). Tap = flush + reload. The 60s
-          retry in the update effect clears it automatically once idle. */}
-      {updateReady && (
-        <button onClick={() => { try{sessionStorage.removeItem(RELOAD_GUARD);}catch(e){} flushSaves(); setTimeout(()=>window.location.reload(),300); }}
-          style={{
-            position:"fixed", bottom:"calc(24px + env(safe-area-inset-bottom, 0px))", left:24, zIndex:9000,
-            background:C.blue, color:"#fff", border:"none", borderRadius:99,
-            padding:"12px 18px", cursor:"pointer", fontFamily:"inherit",
-            fontWeight:700, fontSize:13,
-            boxShadow:"0 6px 20px rgba(59,91,165,0.4), 0 2px 6px rgba(0,0,0,0.15)",
-            display:"inline-flex", alignItems:"center", gap:8,
-          }}>
-          <Icon name="rotateCw" size={16} stroke={2.25}/>
-          New version ready — tap to update
-        </button>
+      {/* Version lock — the Update now popup (replaces the old bottom-left
+          pill, which could be ignored). Hard block: full screen, no close,
+          the app dimmed and inert behind it. During typing grace (a focused
+          field, ≤ 5 min) a red top bar shows instead so a half-filled form
+          can be finished and saved first. Phases: block / saving / retry /
+          stuck — see the Always-current block. */}
+      {/* SOFT: a newer build exists but nothing is required (Koy 2026-10-06:
+          "hard block only on require"). Bottom card, never blocks, Later hides
+          it ≤ 30 min or until the next newer build. Idle phones still reload
+          silently. A minBuild raise swaps this for the hard block at once. */}
+      {softNewer && !hardLock && (
+        <div data-he-lock="newer" data-he-phase={lockPhase} role="status"
+          style={{position:"fixed", left:12, right:12, bottom:"calc(16px + env(safe-area-inset-bottom, 0px))", zIndex:9000,
+            background:"#fff", color:C.text, borderRadius:14, padding:"14px 16px", margin:"0 auto", maxWidth:420,
+            boxShadow:"0 12px 36px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12)", border:`1px solid ${C.border}`,
+            display:"flex", alignItems:"center", gap:12, fontFamily:"inherit"}}>
+          <div style={{width:38, height:38, borderRadius:"50%", background:"#EAEEF6", color:C.blue, display:"inline-flex",
+            alignItems:"center", justifyContent:"center", flexShrink:0}}>
+            <Icon name="rotateCw" size={18} stroke={2.25}/>
+          </div>
+          <div style={{flex:1, minWidth:0}}>
+            {(lockPhase === "wait" || lockPhase === "block") && (<>
+              <div style={{fontWeight:800, fontSize:14}}>A new version is ready</div>
+              <div style={{fontSize:11, color:C.dim, marginTop:2}}>Update when you're at a good stopping point. Your edits are saved first.</div>
+            </>)}
+            {lockPhase === "saving" && <div style={{fontWeight:800, fontSize:14}}>Saving your changes…</div>}
+            {lockPhase === "retry" && (<>
+              <div style={{fontWeight:800, fontSize:14}}>Updating… one moment</div>
+              <div style={{fontSize:11, color:C.dim, marginTop:2}}>The new version is still arriving. Trying again shortly.</div>
+            </>)}
+            {lockPhase === "stuck" && (<>
+              <div style={{fontWeight:800, fontSize:14}}>Close and reopen the app to update</div>
+              <div style={{fontSize:11, color:C.dim, marginTop:2}}>This copy would not update on its own. You can keep working until then.</div>
+            </>)}
+          </div>
+          {(lockPhase === "wait" || lockPhase === "block") && (
+            <div style={{display:"flex", flexDirection:"column", gap:6, flexShrink:0}}>
+              <button type="button" onClick={() => updateNowRef.current()}
+                style={{padding:"9px 14px", borderRadius:10, border:"none", cursor:"pointer", background:C.blue, color:"#fff",
+                  fontFamily:"inherit", fontWeight:800, fontSize:13, boxShadow:"0 4px 14px rgba(59,91,165,0.35)"}}>
+                Update now
+              </button>
+              <button type="button" onClick={lockLaterTap}
+                style={{padding:"7px 14px", borderRadius:10, border:`1px solid ${C.border}`, cursor:"pointer", background:"transparent",
+                  color:C.dim, fontFamily:"inherit", fontWeight:700, fontSize:12}}>
+                Later
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* HARD: gate / refused / forced. */}
+      {hardLock && lockGraceBar && lockPhase === "wait" && (
+        <div data-he-lock="grace" style={{position:"fixed", top:0, left:0, right:0, zIndex:99990,
+          background:C.red, color:"#fff", padding:"10px 16px", fontSize:13, fontWeight:700,
+          textAlign:"center", boxShadow:"0 2px 10px rgba(0,0,0,0.25)", paddingTop:"calc(10px + env(safe-area-inset-top, 0px))"}}>
+          Update needed. Finish what you're typing and save.
+        </div>
+      )}
+      {hardLock && !(lockGraceBar && lockPhase === "wait") && (
+        <div data-he-lock={lockPhase === "wait" ? "block" : lockPhase} role="dialog" aria-modal="true"
+          style={{position:"fixed", inset:0, zIndex:99990, background:"rgba(20,24,33,0.78)",
+            backdropFilter:"blur(3px)", WebkitBackdropFilter:"blur(3px)",
+            display:"flex", alignItems:"center", justifyContent:"center", padding:24}}>
+          <div style={{background:"#fff", color:C.text, borderRadius:16, padding:"28px 26px", width:"100%", maxWidth:380,
+            boxShadow:"0 24px 60px rgba(0,0,0,0.45)", textAlign:"center", fontFamily:"inherit"}}>
+            <div style={{width:56, height:56, borderRadius:"50%", background:"#EAEEF6", color:C.blue, display:"inline-flex",
+              alignItems:"center", justifyContent:"center", marginBottom:14}}>
+              <Icon name="rotateCw" size={26} stroke={2.25}/>
+            </div>
+            {(lockPhase === "wait" || lockPhase === "block") && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:30, letterSpacing:"0.04em", lineHeight:1.05}}>A new version is ready</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:10, lineHeight:1.5}}>
+                {lock && lock.refused
+                  ? "This copy of the app is too old to save. Your edits are kept on this device and will be sent after the update."
+                  : lock && lock.gate != null && lock.gate > APP_BUILD
+                    ? `The office now requires v${lock.gate} or newer. This copy can't save until it updates — your edits are saved first.`
+                    : "The office asked every device to update now so saves can't collide. Your edits are saved first."}
+              </div>
+              <button type="button" onClick={() => updateNowRef.current()}
+                style={{marginTop:20, width:"100%", padding:"14px 18px", borderRadius:12, border:"none", cursor:"pointer",
+                  background:C.blue, color:"#fff", fontFamily:"inherit", fontWeight:800, fontSize:16, letterSpacing:"0.02em",
+                  boxShadow:"0 6px 20px rgba(59,91,165,0.4)"}}>
+                Update now
+              </button>
+              <div style={{fontSize:10, color:C.dim, marginTop:12}}>
+                This device: v{APP_BUILD || "dev"}{lock && lock.latest ? ` · latest ${lock.latest}` : ""}{lock && lock.minBuild ? ` · minimum v${lock.minBuild}` : ""}
+              </div>
+            </>)}
+            {lockPhase === "saving" && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:26, letterSpacing:"0.04em"}}>Saving your changes…</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:8}}>The app reloads as soon as they're on the server.</div>
+            </>)}
+            {lockPhase === "retry" && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:26, letterSpacing:"0.04em"}}>Updating… one moment</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:8}}>The new version is still arriving. Trying again shortly.</div>
+            </>)}
+            {lockPhase === "stuck" && (<>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:26, letterSpacing:"0.04em"}}>Close and reopen the app</div>
+              <div style={{fontSize:13, color:C.dim, marginTop:8}}>This copy would not update on its own. Close it fully, then open it again. Your edits are kept on this device.</div>
+            </>)}
+          </div>
+        </div>
       )}
 
       {/* Simpro Inbox — floating button + modal. Admin-only: the badge is
@@ -63540,7 +65832,10 @@ function App() {
       {/* Push notification foreground toast — tap to open the relevant job */}
       {pushToast && (
         <div onClick={() => {
-          if (pushToast.jobId) openJobById(pushToast.jobId, pushToast.section);
+          if (pushToast.jobId || pushToast.view) {
+            openInboxItem({ id: pushToast.nid || "", read: !pushToast.nid, jobId: pushToast.jobId || "",
+              section: pushToast.section || "", view: pushToast.view || "", needId: pushToast.needId || "" });
+          }
           setPushToast(null);
         }} style={{
           position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
@@ -63551,7 +65846,7 @@ function App() {
         }}>
           <div style={{fontWeight:700, fontSize:14}}>{stripEmoji(pushToast.title)}</div>
           {pushToast.body && <div style={{fontSize:13, color:"#CDD3DB"}}>{stripEmoji(pushToast.body)}</div>}
-          {pushToast.jobId && <div style={{fontSize:11, color:"#8A929D", marginTop:2}}>Tap to open →</div>}
+          {(pushToast.jobId || pushToast.view) && <div style={{fontSize:11, color:"#8A929D", marginTop:2}}>Tap to open →</div>}
         </div>
       )}
 
@@ -63702,6 +65997,15 @@ function App() {
               </span>
             )}
           </button>
+          {broadcastOpen && canBroadcast(identity) && (
+            <BroadcastComposer identity={identity} users={users} onClose={()=>setBroadcastOpen(false)}/>
+          )}
+          {announceOpen && identity && (
+            <AnnouncementView key={announceOpen} identity={identity} id={announceOpen} onClose={()=>setAnnounceOpen(null)}
+              onStep={(bid)=>setAnnounceOpen(bid)}
+              siblings={(() => { const m = officeMsgs.find(x => x.id === announceOpen);
+                return m ? bcTabOrder(officeMsgs.filter(x => x.kind === m.kind)).map(x => x.id) : []; })()}/>
+          )}
           {inboxOpen && (
             <>
               <div onClick={()=>setInboxOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
@@ -63713,20 +66017,109 @@ function App() {
                     display:"inline-flex",alignItems:"center",gap:6}}>
                     <Icon name="bell" size={12} stroke={2.5}/> NOTIFICATIONS
                   </span>
-                  {inboxUnread>0 && (
-                    <button onClick={()=>markInboxRead(inboxItems.filter(i=>!i.read).map(i=>i.id))}
-                      style={{fontSize:11,color:C.accent,background:"none",border:"none",cursor:"pointer",
-                        fontFamily:"inherit",fontWeight:700,padding:"2px 4px"}}>
-                      Mark all read
-                    </button>
-                  )}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                    {canBroadcast(identity) && (
+                      <button onClick={()=>{setInboxOpen(false);setBroadcastOpen(true);}} title="Send a notification to everyone, a group, or picked people"
+                        style={{fontSize:11,color:C.accent,background:"none",border:`1px solid ${C.accent}55`,borderRadius:99,cursor:"pointer",
+                          fontFamily:"inherit",fontWeight:700,padding:"2px 9px",display:"inline-flex",alignItems:"center",gap:4}}>
+                        <Icon name="send" size={10} stroke={2.5}/> Send
+                      </button>
+                    )}
+                    {inboxUnread>0 && (
+                      <button onClick={()=>markInboxRead(inboxUnreadIds)}
+                        style={{fontSize:11,color:C.accent,background:"none",border:"none",cursor:"pointer",
+                          fontFamily:"inherit",fontWeight:700,padding:"2px 4px"}}>
+                        Mark all read
+                      </button>
+                    )}
+                  </span>
                 </div>
                 {inboxItems.length===0 && (
                   <div style={{padding:"22px 12px",textAlign:"center",fontSize:12,color:C.dim}}>
                     No notifications yet — nudges and reminders will land here.
                   </div>
                 )}
-                {inboxItems.map(item=>(
+                {/* Office messages (announcements) sit in their own group at the top
+                    with a colored strip + tag, so they never get lost between change
+                    orders and return trips (Koy, 2026-10-06 mockup). v514: one card per
+                    message, and only what still needs you stays open — the rest fold
+                    into one "✓ N done" line (newest 5 + See all in My Day). */}
+                {officeMsgs.length > 0 && (() => {
+                  const need = officeMsgs.filter(m=>m.needs), done = officeMsgs.filter(m=>!m.needs);
+                  const openMsg = (id) => { setInboxOpen(false); setAnnounceOpen(id); };
+                  return (
+                    <>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"4px 8px 4px",display:"flex"}}>
+                        <span style={{flex:1}}>FROM THE OFFICE</span>{need.length>0 && <span>{need.length} need{need.length===1?"s":""} you</span>}
+                      </div>
+                      {need.length===0 && <div style={{fontSize:12,color:C.dim,padding:"2px 10px 6px"}}>Nothing from the office needs you right now.</div>}
+                      {need.map(m=>{
+                        const kd = BC_KINDS[m.kind];
+                        const preview = m.kind==="discussion" && m.lastReply ? m.lastReply : m.body;
+                        return (
+                          <button key={m.id} onClick={()=>openMsg(m.id)}
+                            style={{display:"flex",width:"100%",textAlign:"left",padding:0,marginBottom:4,border:`1px solid ${kd.color}55`,
+                              borderRadius:9,cursor:"pointer",fontFamily:"inherit",background:"transparent",overflow:"hidden"}}>
+                            <span style={{width:4,background:kd.color,flexShrink:0}}/>
+                            <span style={{flex:1,minWidth:0,padding:"8px 10px",background:`${C.accent}14`,display:"block"}}>
+                              <span style={{display:"flex",alignItems:"center",gap:6}}>
+                                {bcTag(m.kind)}
+                                <span style={{fontSize:12,fontWeight:800,color:C.text,flex:1,minWidth:0,
+                                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.headline}</span>
+                                <span style={{fontSize:10,color:C.dim,flexShrink:0}}>{m.lastAt?timeAgo(m.lastAt):""}</span>
+                              </span>
+                              {preview && (
+                                <span style={{fontSize:11.5,color:C.text,marginTop:3,lineHeight:1.35,
+                                  overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{stripEmoji(preview)}</span>
+                              )}
+                              <span style={{display:"flex",gap:8,marginTop:4,fontSize:10.5,color:C.dim,flexWrap:"wrap"}}>
+                                {m.from && <span>{m.from}</span>}
+                                {m.attachments.length>0 && <span>{m.attachments.length} attached</span>}
+                                <span style={{color:kd.color,fontWeight:700}}>{bcNeedLabel(m)}</span>
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {done.length>0 && (
+                        <button onClick={()=>setBellDoneOpen(o=>!o)} aria-expanded={bellDoneOpen}
+                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:`1px dashed ${C.border}`,
+                            background:C.surface,borderRadius:9,padding:"8px 10px",cursor:"pointer",fontFamily:"inherit",
+                            fontSize:12,fontWeight:600,color:C.dim,marginBottom:4}}>
+                          <span style={{color:C.green,fontWeight:800}}>✓</span>
+                          <span style={{flex:1}}>{done.length} done</span>
+                          <Icon name={bellDoneOpen?"chevronDown":"chevronRight"} size={12}/>
+                        </button>
+                      )}
+                      {done.length>0 && bellDoneOpen && (
+                        <div style={{display:"flex",flexDirection:"column",gap:1,marginBottom:4}}>
+                          {done.slice(0,5).map(m=>(
+                            <button key={m.id} onClick={()=>openMsg(m.id)}
+                              style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:"none",background:"none",
+                                borderRadius:8,padding:"7px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:C.dim}}>
+                              <span style={{width:8,height:8,borderRadius:99,background:BC_KINDS[m.kind].color,flexShrink:0}}/>
+                              <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.text}}>{m.headline}</span>
+                              <span style={{fontSize:10.5,flexShrink:0,color:m.kind==="important"?C.green:C.dim,fontWeight:m.kind==="important"?700:400}}>
+                                {m.kind==="important" ? "✓ Got it" : (m.lastAt?timeAgo(m.lastAt):"")}
+                              </span>
+                            </button>
+                          ))}
+                          {can(identity,"myday.view") && (
+                            <button onClick={()=>{setInboxOpen(false);setView("myday");setOfficeJump({at:Date.now()});}}
+                              style={{fontSize:12,fontWeight:700,color:C.accent,background:"none",border:"none",cursor:"pointer",
+                                padding:"6px 10px",textAlign:"left",fontFamily:"inherit"}}>
+                              See all {done.length} in My Day →
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+                {officeMsgs.length > 0 && inboxItems.some(i=>!i.kind) && (
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
+                )}
+                {inboxItems.filter(i=>!i.kind).map(item=>(
                   <button key={item.id} onClick={()=>openInboxItem(item)}
                     style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",marginBottom:2,
                       border:"none",borderRadius:9,cursor:"pointer",fontFamily:"inherit",
@@ -64830,6 +67223,7 @@ function App() {
             canConvertQuote={can(identity,"quotes.convert")}
             initialTab={openTab} users={users} identity={identity} needs={needs}
             jobs={jobs}
+            onUpdateOtherJob={(jobId,patch)=>{ const other=allJobs.find(j=>j.id===jobId); if(other && jobId!==selected.id) updateJob({...other,...patch},patch); }}
             onQuickAdd={(preset)=>setQuickAdd(preset||{})}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
@@ -65115,7 +67509,11 @@ function App() {
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
-          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}/>
+          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}
+          topSlot={<>
+            {announcePins.length > 0 && <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/>}
+            <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/>
+          </>}/>
       )}
 
       {view==="today"&&can(identity,"today.view")&&(
@@ -65165,6 +67563,17 @@ function App() {
           onDeleteRedline={deleteRedlineWalk}
           onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
           onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
+          onSchedulePickup={(g)=>{
+            // A Temp Ped Pickup quick job linked to this ped (pickupPedFor): completing
+            // it marks the ped picked up on its own (tempPedGroups). New doc only.
+            const src = g.primary, j = stampDivision(blankQuickJob("tempped"));
+            j.name = `Temp Ped Pickup · ${src.name||"job"}`; j.address = src.address||""; j.gc = src.gc||"";
+            j.foreman = src.foreman||"Unassigned"; j.lead = src.lead||"";
+            j.pickupPedFor = src.id; j.pickupPedNumber = g.num||""; j.pickupPedJobName = src.name||"";
+            j.scope = `Pick up temp ped${g.num?` #${g.num}`:""} from ${src.name||"the job"}.`;
+            setAllJobs(js=>[j,...js]); saveJob(j); setSelected(j);
+            toast.success(`Pickup job created for ${src.name||"the job"}. Set the date and crew.`);
+          }}
         />
       )}
 
@@ -65202,6 +67611,11 @@ function App() {
           {/* Activity log collapsed by default — most days nobody needs to
               look at it, but it's still one click away. */}
           <div style={{padding:"20px 26px 0"}}>
+            {/* "?" → public/sops/settings.html (version lock, Devices, Force Update, backups). */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.dim}}>SETTINGS</span>
+              <HelpDot section="settings"/>
+            </div>
             <SettingsSection title="ACTIVITY LOG" defaultOpen={false}>
               <ActivityLog jobs={jobs} embedded={true}/>
             </SettingsSection>
@@ -65222,7 +67636,7 @@ function App() {
             )}
             {getAccess(identity)==="admin" && (
               <SettingsSection title="DEVICES — APP VERSIONS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
-                <DeviceVersionsCard/>
+                <DeviceVersionsCard identity={identity}/>
               </SettingsSection>
             )}
             {getAccess(identity)==="admin" && (
@@ -65250,7 +67664,7 @@ function App() {
                 const backupJobs=JSON.parse(b);
                 if(!backupJobs||!backupJobs.length){toast.warn('Backup is empty');return 0;}
                 for(const job of backupJobs){
-                  await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
+                  await setDoc(doc(db,"jobs",job.id),stampWrite({data:sanitize(job),updated_at:new Date().toISOString()}));
                 }
                 return backupJobs.length;
               }catch(e){console.error('Restore failed:',e);toast.error('Restore failed: '+e.message);return 0;}
@@ -65263,7 +67677,7 @@ function App() {
                   if(job.foreman) job.foreman = normalizeName(job.foreman);
                   if(job.lead) job.lead = normalizeName(job.lead);
                   const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
-                  await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:ts});
+                  await setDoc(doc(db,"jobs",job.id),stampWrite({data:clean,updated_at:ts}));
                 }
                 // Bump version to force ALL other clients to reload (picks up new code + fresh data)
                 await setDoc(doc(db,"config","app"),{version:"restore-"+Date.now()});

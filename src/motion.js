@@ -549,6 +549,26 @@ export function heZoomFrom(el, title) {
 // bodyRef: the scrolling tab body. order: tab names in bar order. setTab: the real setter. Touch only:
 // a horizontal drag follows the thumb (resisted at the ends), a release past a third of the width or a
 // quick flick changes tab; the existing pane ease then plays from the direction of travel.
+//
+// v512 (Koy: "a bunch of spots on mobile you should be able to scroll to the right"): v496 put
+// touch-action: pan-y on the body so this could own sideways drags. On iPhone that also froze sideways
+// scrolling of every wide table INSIDE the body (appliance loads, panel schedules, bid items), and of
+// the tab itself when its content is wider than the screen. Now the body keeps normal touch behaviour
+// and this listens to touch events instead: it never starts on something that scrolls sideways (or on
+// a tab that is itself wider than the screen), inside a pop-up, or on a form control; once a drag is
+// clearly sideways it calls preventDefault on touchmove so the page holds still while the tab follows.
+export function heSwipeBlocked(target, el) {
+  try {
+    if (!target || !target.closest) return true;
+    if (target.closest("input,textarea,select,[contenteditable=true],[data-he-noswipe],canvas")) return true;
+    for (let n = target; n && n !== el; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.position === "fixed") return true;                                   // a pop-up over the tab
+      if (/(auto|scroll)/.test(cs.overflowX) && n.scrollWidth > n.clientWidth + 1) return true;   // scrolls sideways itself
+    }
+    return el.scrollWidth > el.clientWidth + 1;                                    // the tab itself is wider than the screen
+  } catch (e) { return true; }
+}
 export function useHeTabSwipe(bodyRef, tab, order, setTab) {
   const st = useRef({ on: false, x0: 0, y0: 0, dx: 0, t0: 0, dir: 0 });
   const cur = useRef({ tab, order, setTab });
@@ -556,21 +576,30 @@ export function useHeTabSwipe(bodyRef, tab, order, setTab) {
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return undefined;
-    const down = (e) => {
-      if (e.pointerType !== "touch" || heReduced()) return;
-      if (e.target && e.target.closest && e.target.closest("input[type=range],[data-he-noswipe],canvas")) return;
-      st.current = { on: true, x0: e.clientX, y0: e.clientY, dx: 0, t0: performance.now(), dir: 0 };
+    const settle = () => {
+      el.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
+      el.style.transform = ""; el.style.opacity = "";
+      setTimeout(() => { el.style.transition = ""; el.style.willChange = ""; }, 180);
+    };
+    const start = (e) => {
+      st.current.on = false;
+      if (heReduced() || !e.touches || e.touches.length !== 1 || heSwipeBlocked(e.target, el)) return;
+      const t = e.touches[0];
+      st.current = { on: true, x0: t.clientX, y0: t.clientY, dx: 0, t0: performance.now(), dir: 0 };
     };
     const move = (e) => {
       const s = st.current; if (!s.on) return;
-      const dx = e.clientX - s.x0, dy = e.clientY - s.y0;
+      if (!e.touches || e.touches.length !== 1) { s.on = false; if (s.dir === 1) settle(); return; }
+      const t = e.touches[0];
+      const dx = t.clientX - s.x0, dy = t.clientY - s.y0;
       if (s.dir === 0) {
-        if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
+        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
         s.dir = Math.abs(dx) > Math.abs(dy) * 1.4 ? 1 : -1;        // 1 = ours, -1 = vertical scroll
         if (s.dir === 1) { el.style.transition = "none"; el.style.willChange = "transform"; }
       }
       if (s.dir !== 1) return;
-      const { tab: t, order: o } = cur.current, i = o.indexOf(t);
+      if (e.cancelable) e.preventDefault();                          // hold the page still while the tab follows
+      const { tab: tb, order: o } = cur.current, i = o.indexOf(tb);
       const atEnd = (dx > 0 && i <= 0) || (dx < 0 && i >= o.length - 1);
       s.dx = dx;
       el.style.transform = "translateX(" + (atEnd ? dx * 0.25 : dx * 0.9) + "px)";
@@ -580,20 +609,18 @@ export function useHeTabSwipe(bodyRef, tab, order, setTab) {
       const s = st.current; if (!s.on) return;
       s.on = false;
       if (s.dir !== 1) return;
-      const { tab: t, order: o, setTab: set } = cur.current, i = o.indexOf(t), w = el.clientWidth || 1;
+      const { tab: tb, order: o, setTab: set } = cur.current, i = o.indexOf(tb), w = el.clientWidth || 1;
       const v = s.dx / Math.max(1, performance.now() - s.t0);
       let n = i;
       if ((s.dx < -w * 0.3 || v < -0.6) && i < o.length - 1) n = i + 1;
       else if ((s.dx > w * 0.3 || v > 0.6) && i > 0) n = i - 1;
-      el.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
-      el.style.transform = ""; el.style.opacity = "";
-      setTimeout(() => { el.style.transition = ""; el.style.willChange = ""; }, 180);
+      settle();
       if (n !== i) { heBuzz(8); set(o[n]); }
     };
-    el.addEventListener("pointerdown", down, { passive: true });
-    el.addEventListener("pointermove", move, { passive: true });
-    el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
-    return () => { el.removeEventListener("pointerdown", down); el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", end); el.removeEventListener("pointercancel", end); };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", end); el.addEventListener("touchcancel", end);
+    return () => { el.removeEventListener("touchstart", start); el.removeEventListener("touchmove", move); el.removeEventListener("touchend", end); el.removeEventListener("touchcancel", end); };
   }, [bodyRef]);
 }
 

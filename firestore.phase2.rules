@@ -1,7 +1,54 @@
 rules_version = '2';
 
+// ═══════════════════════════════════════════════════════════════════════════
+// VERSION LOCK — PHASE 2 RULES (08-Specs/Version Lock Spec.md). NOT LIVE.
+//
+// This is the COMPLETE rules file for Phase 2 ("enforce on jobs"), kept beside
+// the live `firestore.rules` on purpose: firebase.json points at
+// `firestore.rules`, so a plain `firebase deploy` can never ship this by
+// accident before the soak. Phase 2 ship = `cp firestore.phase2.rules
+// firestore.rules` → diff against the console → deploy, in Koy's quiet window
+// (see the ship steps in docs/version-lock-p1-features-draft.md).
+//
+// What changes vs. the live file (everything else is byte-for-byte):
+//   1. match /appGate/{docId}: read open, write DENIED (Admin SDK only — the
+//      setMinBuild callable). Never in settings/config: those are
+//      client-writable, so an old client could lower the bar.
+//   2. stampOk() on /jobs create + update: app_build is int ≥ minBuild and `w`
+//      is a string that CHANGED. Delete is untouched (a delete carries no
+//      data). needs / redlineWalks / manualTasks / quoteWalks are Phase 3.
+//
+// DELIBERATE DEVIATION from the spec, flagged in the P1 report: gateMin()
+// FAILS OPEN when appGate/version does not exist (treated as minBuild 0, lock
+// off), instead of refusing every write. The spec's fail-closed version turns
+// a forgotten "create the doc first" step into a total save outage for the
+// whole crew; fail-open just means the lock is off until the first "Require
+// v___" tap creates the doc — which the Settings card shows loudly. Flip to
+// fail-closed by replacing gateMin() with the one-liner in its comment.
+// Cost: one document read per jobs write (exists + get are deduped).
+// ═══════════════════════════════════════════════════════════════════════════
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ── VERSION GATE ──────────────────────────────────────────────────────────
+    function gateMin() {
+      // fail-closed alternative (spec): return get(/databases/$(database)/documents/appGate/version).data.minBuild;
+      return exists(/databases/$(database)/documents/appGate/version)
+        ? get(/databases/$(database)/documents/appGate/version).data.minBuild
+        : 0;
+    }
+    function stampOk() {
+      return request.resource.data.app_build is int
+        && request.resource.data.app_build >= gateMin()
+        && request.resource.data.w is string
+        && request.resource.data.w.size() > 0
+        && (resource == null || request.resource.data.w != resource.data.w);
+    }
+    match /appGate/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
 
     // ── JOBS ──────────────────────────────────────────────────────────────────
     // Reads are open so share links (punch, home runs, questions, lighting)
@@ -10,15 +57,20 @@ service cloud.firestore {
     // string (new Date().toISOString()), NOT a Firestore Timestamp — the app
     // has always written it that way. If a write lands without data/updated_at
     // that's almost certainly a bug or an attack, so we still require them.
+    //
+    // Version lock (Phase 2): every create/update must also carry a fresh
+    // stamp (stampOk). The client sees a refusal as permission-denied, keeps
+    // the write in its own queue, and shows the Update now popup.
     match /jobs/{jobId} {
       allow read: if true;
 
-      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+      allow create, update: if request.resource.data.keys().hasAll(['data', 'updated_at'])
                    && request.resource.data.data is map
-                   && request.resource.data.updated_at is string;
-      // The write rule only fires for create/update — delete passes a null
-      // resource and would otherwise fail the key check. Allow it explicitly
-      // so the app's job-archive path keeps working.
+                   && request.resource.data.updated_at is string
+                   && stampOk();
+      // Delete passes a null resource and carries no data — unchanged by the
+      // version lock. Allowed explicitly so the app's job-archive path keeps
+      // working.
       allow delete: if true;
     }
 
