@@ -92,11 +92,14 @@ const CSS = `
 @keyframes he-m-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}40%{transform:translateX(4px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px)}}
 
 /* save HUD: one quiet pill above everything (job card, sheets) so a save is visible wherever you are */
-.he-savehud{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translateX(-50%);z-index:99996;
-  padding:5px 12px;border-radius:99px;background:rgba(27,31,36,.92);font:500 12px/1.3 'DM Sans',system-ui,sans-serif;
-  white-space:nowrap;pointer-events:none;animation:he-m-hud calc(180ms*var(--he-t)) var(--he-ease) backwards}
-.he-savehud.he-hud-err{pointer-events:auto}
-@keyframes he-m-hud{from{opacity:0;transform:translate(-50%,-6px)}}
+.he-savehud{position:fixed;top:calc(env(safe-area-inset-top,0px) + 14px);left:50%;transform:translateX(-50%);z-index:99996;
+  padding:9px 18px;border-radius:99px;background:#111827;border:1.5px solid rgba(141,189,255,.6);
+  box-shadow:0 6px 24px rgba(0,0,0,.4);font:600 15px/1.3 'DM Sans',system-ui,sans-serif;
+  white-space:nowrap;pointer-events:none;animation:he-m-hud calc(220ms*var(--he-t)) var(--he-spring) backwards}
+.he-savehud .he-ico{width:16px;height:16px}
+.he-savehud.he-hud-ok{border-color:rgba(95,227,156,.6)}
+.he-savehud.he-hud-err{pointer-events:auto;border-color:rgba(255,155,155,.75)}
+@keyframes he-m-hud{from{opacity:0;transform:translate(-50%,-10px) scale(.92)}}
 
 /* tab highlight */
 .he-tab-ink{position:absolute;left:0;border-radius:8px 8px 0 0;pointer-events:none;z-index:0}
@@ -174,12 +177,20 @@ export function HeSyncChip({ status, label, color, onRetry, style }) {
 // The header chips live in the Job Board headers, which a job card (a full-screen overlay) covers. This one pill is
 // mounted once at the App root above every overlay. Text only; hidden when idle. A failed save stays up and is tappable.
 export function HeSaveHud({ status, onRetry }) {
-  if (!status || status === "idle") return null;
-  const label = { saving: "Saving…", saved: "Saved", error: "Save failed · tap to retry" }[status];
-  const color = { saving: "#8DBDFF", saved: "#E6EAF1", error: "#FF9B9B" }[status];
+  // "Saved" is held for 3 s here, independent of the app's own 2 s return to idle, so it is easy to catch.
+  // A new save or a failure replaces it at once.
+  const [hold, setHold] = useState(false), timer = useRef(null);
+  useEffect(() => {
+    if (status === "saved") { setHold(true); clearTimeout(timer.current); timer.current = setTimeout(() => setHold(false), 3000); }
+    else if (status === "saving" || status === "error") { setHold(false); clearTimeout(timer.current); }
+  }, [status]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const eff = status === "idle" && hold ? "saved" : status;
+  const label = { saving: "Saving…", saved: "Saved", error: "Save failed · tap to retry" }[eff];
   if (!label) return null;
-  return h("div", { className: "he-savehud" + (status === "error" ? " he-hud-err" : ""), role: "status", "aria-live": "polite" },
-    h(HeSyncChip, { status, label, color, onRetry, style: { fontSize: 12, fontWeight: 500 } }));
+  const color = { saving: "#8DBDFF", saved: "#5FE39C", error: "#FF9B9B" }[eff];
+  return h("div", { className: "he-savehud" + (eff === "error" ? " he-hud-err" : eff === "saved" ? " he-hud-ok" : ""), role: "status", "aria-live": "polite" },
+    h(HeSyncChip, { status: eff, label, color, onRetry, style: { fontSize: 15, fontWeight: 600, gap: 7 } }));
 }
 
 /* ─────────────────── 2. Remote change flash ─────────────────── */
