@@ -108,11 +108,6 @@ const CSS = `
 .he-sheen::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.55) 50%,transparent 75%);transform:translateX(-100%);animation:he-m-sheen calc(2200ms*var(--he-t)) ease-in-out infinite}
 @keyframes he-m-sheen{to{transform:translateX(100%)}}
 :root.he-still .he-sheen::after{animation:none}
-/* save ripple from the field you just edited */
-.he-ripple{position:fixed;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:3px solid #3E7D5A;pointer-events:none;z-index:2147483000;animation:he-m-ripple calc(700ms*var(--he-t)) ease-out forwards}
-@keyframes he-m-ripple{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(14)}}
-.he-ripple-ck{position:fixed;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:#3E7D5A;color:#fff;font:800 12px/20px system-ui;text-align:center;pointer-events:none;z-index:2147483000;animation:he-m-ck calc(1100ms*var(--he-t)) var(--he-spring) forwards}
-@keyframes he-m-ck{0%{transform:scale(0);opacity:1}25%{transform:scale(1);opacity:1}75%{transform:scale(1);opacity:1}100%{transform:scale(.6);opacity:0}}
 /* fly-to-tab chip */
 .he-flyer{position:fixed;z-index:2147483000;pointer-events:none;font:600 12px/1.2 system-ui;background:#fff;color:#1B1F24;border:1px solid #3B5BA5;border-radius:6px;padding:4px 8px;box-shadow:0 6px 24px rgba(27,31,36,.18);white-space:nowrap;will-change:transform}
 .he-bump{animation:he-m-bump calc(420ms*var(--he-t)) var(--he-spring)}
@@ -155,7 +150,6 @@ export function HeSyncChip({ status, label, color, onRetry, style }) {
   const svg = (key, cls, kids) => h("svg", { key, className: cls, viewBox: "0 0 16 16", "aria-hidden": true }, kids);
   const icon =
     status === "saving" ? svg("s", "he-ico he-ico-spin", h("circle", { cx: 8, cy: 8, r: 6, strokeDasharray: "22 40" })) :
-    status === "saved"  ? svg("ok", "he-ico he-ico-in he-ico-draw", h("path", { d: "M3.5 8.5l3 3 6-7", pathLength: 1 })) :
     status === "error"  ? svg("err", "he-ico he-ico-in", h("path", { d: "M4.5 4.5l7 7M11.5 4.5l-7 7" })) :
     null;
   const tappable = status === "error" && typeof onRetry === "function";
@@ -437,43 +431,15 @@ export function heBuzz(pattern) {
 // The element the user last pressed, and when. Lets a toast rise from the button that caused it and
 // lets a "fly to tab" start from the button that was tapped, with no call-site plumbing.
 const lastTap = { el: null, t: 0 };
-const lastField = { el: null, t: 0 };
 if (typeof document !== "undefined") {
   document.addEventListener("pointerdown", (e) => {
     const t = e.target;
     lastTap.el = (t && t.closest && t.closest("button,[role=button],a,label,input,select")) || t;
     lastTap.t = Date.now();
   }, true);
-  document.addEventListener("focusin", (e) => {
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) { lastField.el = t; lastField.t = Date.now(); }
-  }, true);
-  document.addEventListener("input", (e) => { const t = e.target; if (t && t.nodeType === 1) { lastField.el = t; lastField.t = Date.now(); } }, true);
 }
 export function heLastTap() { return { el: lastTap.el, age: Date.now() - lastTap.t }; }
 const inView = (r) => r && r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
-
-/* ─────────────────── v496: save ripple ─────────────────── */
-// Call when a save lands. If a field was edited in the last few seconds and is on screen, a green ring
-// spreads from it and a check pops in its right end. Otherwise nothing (the sync chip still shows).
-export function heSaveRipple() {
-  try {
-    if (heReduced()) return;
-    const el = lastField.el;
-    if (!el || !el.isConnected || Date.now() - lastField.t > 6000) return;
-    const r = el.getBoundingClientRect();
-    if (!inView(r)) return;
-    lastField.t = 0;   // one ripple per edit burst
-    const ring = document.createElement("span");
-    ring.className = "he-ripple"; ring.setAttribute("aria-hidden", "true");
-    ring.style.left = (r.left + Math.min(r.width / 2, 120)) + "px"; ring.style.top = (r.top + r.height / 2) + "px";
-    const ck = document.createElement("span");
-    ck.className = "he-ripple-ck"; ck.setAttribute("aria-hidden", "true"); ck.textContent = "✓";
-    ck.style.left = (r.right - 16) + "px"; ck.style.top = (r.top + r.height / 2) + "px";
-    document.body.appendChild(ring); document.body.appendChild(ck);
-    setTimeout(() => { [ring, ck].forEach((x) => { if (x.parentNode) x.parentNode.removeChild(x); }); }, 1300);
-  } catch (e) { /* presentation only */ }
-}
 
 /* ─────────────────── v496: fly a chip from the pressed button to a job tab ─────────────────── */
 // tabName: the data-hetab value ("Return Trips"). label: chip text. Source defaults to the last tap.
