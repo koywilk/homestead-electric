@@ -4722,6 +4722,9 @@ const ROLE_OPTIONS = ["admin","foreman","lead","crew"];
 // had zero can() call sites. Every key below is verified wired.)
 const PERMISSIONS = {
   "tasks.view":      ["admin","manager","standard"],
+  // v523 Crew POs: Send on a Material Tracking card. Admins only while the server
+  // is in test mode (gc_config/material_po); widen this when it goes live.
+  "materials.sendPO": ["admin"],
   "schedule.view":   ["admin","manager","standard"],
   "schedule.edit":   ["admin","manager"],
   "pipeline.view":   ["admin","manager","standard"],
@@ -13556,8 +13559,24 @@ function poItemsPreview(items) {
   return lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0];
 }
 
-function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
+// v523 Crew POs from the app (vault: 03-Roadmap/Crew POs from the App.md).
+// Send on a card creates the PO in Simpro on this phase's cost center and emails
+// it (CED) or hands back the number (store runs) — sendMaterialPO callable.
+// MATERIAL_PO_TEST mirrors the server's test mode: the email goes ONLY to the
+// test inbox, never the supplier. Flip together with gc_config/material_po.mode.
+const MATERIAL_PO_TEST = true;
+const PO_SEND_KIND = { "ced":"email", "home depot":"number", "amazon":"number", "ace hardware":"number", "ace":"number" };
+const poSendKind = (source) => PO_SEND_KIND[String(source||"").trim().toLowerCase()] || "";
+const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").replace(/<\/(p|div|li)>/gi,"\n")
+  .replace(/<[^>]+>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+  .replace(/&quot;/g,'"').replace(/&#39;|&rsquo;|&lsquo;/g,"'").split("\n").map(l=>l.trim()).filter(Boolean);
+const poTodayMDY = () => new Date().toLocaleDateString("en-US");
+const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
+
+function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}) {
   const safeOrders = Array.isArray(orders) ? orders : [];
+  // v523: the Send sheet — {id, get, date, busy, error, done}
+  const [sendSheet, setSendSheet] = useState(null);
 
   const [collapsed, setCollapsed] = useState(() => {
     const m = {};
@@ -13684,6 +13703,29 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                 <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
                   draftKey={`po_${jobId||'nojob'}_${phase||'nophase'}_${o.id}`}
                   placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
+
+                {/* v523: Send from the app. Shows for CED (email) and store runs
+                    (number only) until the card is ordered/picked up; a send
+                    whose email failed offers a resend of the same PO. */}
+                {(() => {
+                  const kind = poSendKind(o.source);
+                  if (!kind || !onPatchOrder || !can(getIdentity(), "materials.sendPO")) return null;
+                  if (o.pickedUp || o.deliveredToShop) return null;
+                  const testLeftover = o.poSentMode === "test" && !MATERIAL_PO_TEST;
+                  const emailRetry = !testLeftover && o.poSentVia === "app" && kind === "email" && !o.poEmailOk;
+                  if (!testLeftover && (o.poSentVia === "app" || o.ordered) && !emailRetry) return null;
+                  const hint = (t) => <div style={{marginTop:8,fontSize:11,color:C.dim}}>{t}</div>;
+                  if (!simproNo) return hint("Add the Simpro Job # to this job to send this PO from here.");
+                  if (kind === "email" && !poPlainLines(o.items).length) return hint(`Type the material list, then Send to ${o.source}.`);
+                  const label = emailRetry ? `Resend email for PO ${o.po}` : kind === "email" ? `Send to ${o.source}` : "Get a PO number";
+                  return (
+                    <button onClick={()=>setSendSheet({id:o.id, get:"willcall", date:o.pickupDate||poTomorrowMDY(), busy:false, error:"", done:null})}
+                      style={{marginTop:8,width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:9,
+                        padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      {label}
+                    </button>
+                  );
+                })()}
 
                 {/* Copy-for-Simpro helper. The TA stores items as HTML
                     (<br> separators + entities) but Simpro's PO line entry
@@ -13901,6 +13943,129 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
       })}
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add PO</Btn>
+
+      {/* v523: Send sheet — check the order, then send it from the app. */}
+      {sendSheet && (() => {
+        const o = safeOrders.find(x => x.id === sendSheet.id);
+        if (!o) return null;
+        const kind = poSendKind(o.source);
+        const lines = poPlainLines(o.items);
+        const busy = !!sendSheet.busy, done = sendSheet.done;
+        const close = () => { if (!busy) setSendSheet(null); };
+        const phaseLabel = phase === "finish" ? "Finish" : "Rough-In";
+        const chip = (val, label) => (
+          <button key={val} type="button" disabled={busy} onClick={()=>setSendSheet(s=>({...s, get:val}))}
+            style={{fontFamily:"inherit",fontSize:13,borderRadius:99,padding:"6px 12px",cursor:"pointer",
+              border:`1px solid ${sendSheet.get===val?C.accent:C.border}`,background:sendSheet.get===val?"rgba(59,91,165,0.10)":C.surface,
+              color:sendSheet.get===val?C.accent:C.text,fontWeight:sendSheet.get===val?700:500}}>{label}</button>
+        );
+        const send = async () => {
+          const me = getIdentity();
+          if (!me) { setSendSheet(s=>({...s, error:"Sign in again, then send."})); return; }
+          setSendSheet(s=>({...s, busy:true, error:""}));
+          try {
+            const r = await memberCallable("sendMaterialPO", me)({ jobId, phase, orderId:o.id, source:o.source,
+              items:o.items||"", get:sendSheet.get, date:sendSheet.date||"", clientTest:MATERIAL_PO_TEST });
+            const res = (r && r.data) || {};
+            if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
+            const patch = { po:String(res.poNo), simproPoId:String(res.poNo), poSentVia:"app", poSentMode:res.mode||"",
+              poSentBy:me.name||"", poSentAt:poTodayMDY(), poCostCenter:res.costCenter||"",
+              poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", ") };
+            if (res.kind !== "email" || res.emailOk) Object.assign(patch, { ordered:true, orderedBy:me.name||"", orderedAt:poTodayMDY() });
+            // Dates fill only if still empty on the LIVE card (someone may have typed one meanwhile).
+            const pickDate = sendSheet.date;
+            onPatchOrder(o.id, (cur) => ({ ...patch,
+              ...(cur.date ? {} : { date: poTodayMDY() }),
+              ...(cur.pickupDate || !pickDate ? {} : { pickupDate: pickDate }) }));
+            setSendSheet(s=>({...s, busy:false, done:res}));
+          } catch (e) {
+            setSendSheet(s=>({...s, busy:false, error:String((e && e.message) || e || "Something went wrong.")}));
+          }
+        };
+        return (
+          <div onClick={close} style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(10,14,22,0.45)",
+            display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()} role="dialog" aria-label="Send PO"
+              style={{background:C.card,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",
+                borderRadius:"16px 16px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
+                boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:14}}>
+              {done ? (<>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <span style={{width:34,height:34,borderRadius:"50%",background:"rgba(62,125,90,0.12)",color:"#3E7D5A",
+                    display:"grid",placeItems:"center",fontWeight:800,flexShrink:0}}>✓</span>
+                  <div>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1}}>
+                      {done.kind === "email" ? (done.emailOk ? `PO ${done.poNo} sent` : `PO ${done.poNo} made`) : `PO ${done.poNo}`}
+                    </div>
+                    <div style={{fontSize:12,color:C.dim,marginTop:2}}>In Simpro on {done.costCenter || phaseLabel}{done.again ? " (already sent from this card)" : ""}.</div>
+                  </div>
+                </div>
+                {done.kind === "email" && done.emailOk && (
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                    {done.mode === "test"
+                      ? <>Test send: the email went only to <b>{(done.emailedTo||[]).join(", ")}</b>. {done.supplier} did not get it. Void PO {done.poNo} in Simpro when you're done looking.</>
+                      : <>Emailed to {done.supplier}. bids@ and you are copied, and their reply comes to you.</>}
+                  </div>
+                )}
+                {done.kind === "email" && !done.emailOk && (
+                  <div style={{fontSize:13,color:"#B23A3A",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>
+                    The PO is in Simpro, but the email didn't go out: {done.emailError || "unknown error"}. Tap Resend email on the card to try again. It won't make a second PO.
+                  </div>
+                )}
+                {done.kind !== "email" && (
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                    Give PO <b>{done.poNo}</b> at the {done.supplier} counter. It's saved on this card.
+                  </div>
+                )}
+                <button onClick={()=>setSendSheet(null)} style={{fontFamily:"inherit",fontWeight:700,fontSize:15,border:"none",
+                  borderRadius:12,padding:13,background:C.accent,color:"#fff",cursor:"pointer"}}>Done</button>
+              </>) : (<>
+                <div>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1}}>
+                    {kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? `Resend PO ${o.po}` : `Send to ${o.source}`) : "Get a PO number"}
+                  </div>
+                  <div style={{fontSize:12,color:C.dim,marginTop:3}}>{phaseLabel} · charged to this job's {phaseLabel} in Simpro</div>
+                </div>
+                {MATERIAL_PO_TEST && (
+                  <div style={{fontSize:12,color:C.accent,background:"rgba(59,91,165,0.08)",border:"1px solid rgba(59,91,165,0.3)",borderRadius:10,padding:"8px 10px"}}>
+                    Test mode: the PO is really made in Simpro, but the email goes only to the test inbox, never to {o.source}.
+                  </div>
+                )}
+                {kind === "email" && (<>
+                  <div style={{display:"grid",gap:6}}>
+                    <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</span>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{chip("willcall","Will call")}{chip("deliver","Deliver to job")}</div>
+                  </div>
+                  <div style={{display:"grid",gap:6}}>
+                    <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>{sendSheet.get==="deliver"?"Deliver on":"Pick up on"}</span>
+                    <DateInp value={sendSheet.date} onChange={e=>setSendSheet(s=>({...s, date:e.target.value}))}/>
+                  </div>
+                  <div style={{display:"grid",gap:6}}>
+                    <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Material list · {lines.length} line{lines.length===1?"":"s"}</span>
+                    <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",
+                      whiteSpace:"pre-wrap",maxHeight:200,overflowY:"auto"}}>{lines.join("\n")}</div>
+                    <span style={{fontSize:11,color:C.muted}}>To change the list, close this and edit it on the card.</span>
+                  </div>
+                </>)}
+                {kind !== "email" && (
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                    No email for store runs. You get a PO number to give at the {o.source} counter, saved on this card.
+                  </div>
+                )}
+                {sendSheet.error && (
+                  <div style={{fontSize:13,color:"#B23A3A",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>{sendSheet.error}</div>
+                )}
+                <button onClick={send} disabled={busy} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
+                  padding:14,background:busy?C.border:C.accent,color:"#fff",cursor:busy?"default":"pointer"}}>
+                  {busy ? "Sending…" : kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? "Resend email" : `Send to ${o.source}`) : "Get a PO number"}
+                </button>
+                <button onClick={close} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,
+                  borderRadius:12,padding:11,background:C.card,color:C.text,cursor:busy?"default":"pointer"}}>Cancel</button>
+              </>)}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -14634,6 +14799,64 @@ function bidWireRollup(costCenters) {
   return [...agg.values()].sort((x, y) => (y.required - x.required) || String(x.name).localeCompare(String(y.name)));
 }
 // ── end Bid stock derivations ────────────────────────────────────────────────
+
+// ── Orders (v523) ─────────────────────────────────────────────
+// Whole-job view of every PO card from Rough + Finish Material Tracking, on the
+// Bid Items tab next to what the bid calls for. Read-only; "Order material"
+// adds a card to the phase's Material Tracking so every order lives in one place.
+function JobOrdersSummary({job, onOrder}) {
+  const [picking, setPicking] = useState(false);
+  const tag = (list, ph) => (Array.isArray(list) ? list : []).filter(Boolean).map(o => ({...o, _ph: ph}));
+  const rows = [...tag(job.roughMaterials, "Rough-In"), ...tag(job.finishMaterials, "Finish")]
+    .filter(o => o.po || o.source || poPlainLines(o.items).length);
+  const state = (o) => o.pickedUp ? ["Picked Up","done",2] : o.deliveredToShop ? ["Delivered to Shop","done",2]
+    : o.ordered ? ["Order Sent","inprogress",1] : o.needsOrder ? [o.source==="Shop"?"Needs to be Picked Up":"Need to Order","needs",0] : ["Saved","neutral",1];
+  rows.sort((a,b) => (state(a)[2]-state(b)[2]) || ((Number(b.po)||0)-(Number(a.po)||0)));
+  const open = rows.filter(o => !o.pickedUp && !o.deliveredToShop).length;
+  return (
+    <Section label={`Orders · ${rows.length}${open ? ` · ${open} open` : ""}`} color={C.accent}>
+      <div style={{fontSize:12,color:C.dim,marginBottom:10}}>Every PO card from Rough and Finish Material Tracking on this job.</div>
+      {picking ? (
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+          {["rough","finish"].map(ph => (
+            <button key={ph} onClick={()=>{ setPicking(false); onOrder(ph); }}
+              style={{flex:1,minWidth:120,background:C.accent,color:"#fff",border:"none",borderRadius:9,padding:"10px 12px",
+                fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{ph==="rough"?"For Rough-In":"For Finish"}</button>
+          ))}
+          <button onClick={()=>setPicking(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:9,
+            padding:"10px 12px",fontSize:13,color:C.dim,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+        </div>
+      ) : (
+        <button onClick={()=>setPicking(true)} style={{width:"100%",background:C.accent,color:"#fff",border:"none",borderRadius:9,
+          padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:12}}>Order material</button>
+      )}
+      {!rows.length && <div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No PO cards on this job yet.</div>}
+      {rows.map(o => {
+        const [label, variant] = state(o);
+        const lines = poPlainLines(o.items);
+        const who = o.poSentBy || o.orderedBy || o.pickedUpBy || "";
+        const when = o.poSentAt || o.orderedAt || o.date || "";
+        return (
+          <div key={`${o._ph}-${o.id}`} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:"2px 10px",
+            padding:"9px 0",borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.text}}>
+              {o.po ? `PO ${o.po}` : "No PO # yet"}{o.source ? ` · ${o.source}` : ""}
+            </span>
+            <StatusPill variant={variant}>{label}</StatusPill>
+            <span style={{gridColumn:"1/-1",fontSize:11,color:C.dim}}>
+              {o._ph}{who ? ` · ${who}` : ""}{when ? ` · ${when}` : ""}{o.poSentVia==="app" ? (o.poSentMode==="test" ? " · test send from the app" : " · sent from the app") : ""}
+            </span>
+            {lines.length > 0 && (
+              <span style={{gridColumn:"1/-1",fontSize:11,color:C.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0]}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </Section>
+  );
+}
 
 // ── Bid Items (Simpro Cost Centers) ───────────────────────────
 // "Is this in the bid?" panel. Reads the job's Simpro cost centers plus
@@ -30509,7 +30732,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {!isSectionHidden(job,"materials")&&(<>
               <Section label="Material Tracking" color={C.rough}>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}
-                  simproNo={job.simproNo} jobId={job.id} phase="rough"/>
+                  simproNo={job.simproNo} jobId={job.id} phase="rough"
+                  onPatchOrder={(id,p)=>{ /* v523: reconcile against the live job copy, never this render's list */
+                    const cur = Array.isArray(jobRef.current.roughMaterials) ? jobRef.current.roughMaterials : [];
+                    if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
+                    u({roughMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}/>
               </Section>
 
               <Section label="Material Count List" color={C.rough} defaultOpen={false}>
@@ -30822,7 +31049,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 <Section label="Finish Material Tracking" color={C.finish}>
                   <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}
-                    simproNo={job.simproNo} jobId={job.id} phase="finish"/>
+                    simproNo={job.simproNo} jobId={job.id} phase="finish"
+                    onPatchOrder={(id,p)=>{ /* v523: reconcile against the live job copy, never this render's list */
+                      const cur = Array.isArray(jobRef.current.finishMaterials) ? jobRef.current.finishMaterials : [];
+                      if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
+                      u({finishMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}/>
                 </Section>
 
                 <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
@@ -32306,6 +32537,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               job's Simpro bid, plus Required vs Assigned. Its own tab since
               v510; the data still loads when the job opens (simproCostCenters /
               simproStock effects above), so switching here is instant. */}
+          {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&tabsFor(job).includes("Rough")&&(
+            <JobOrdersSummary job={job} onOrder={(ph)=>{
+              // v523: a fresh card on the right phase, reconciled against the live job copy.
+              const key = ph==="finish" ? "finishMaterials" : "roughMaterials";
+              const cur = Array.isArray(jobRef.current[key]) ? jobRef.current[key] : [];
+              u({[key]:[...cur,{id:uid(),date:"",po:"",pickupDate:"",source:"CED",items:"",pickedUp:false,needsOrder:true}]});
+              setTab(ph==="finish" ? "Finish" : "Rough");
+              if (typeof toast !== "undefined" && toast.success) toast.success(`New PO card added under ${ph==="finish"?"Finish":"Rough"} → Material Tracking`);
+            }}/>
+          )}
           {tab==="Bid Items"&&(
             <BidItemsPanel
               simproNo={simproJobNoOf(job)}
@@ -53020,10 +53261,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-07 · App SW version: v522
+**Last manifest update:** 2026-10-08 · App SW version: v523
 
 ---
 
+- **Crew POs from the app: Send to CED from the Material Tracking card, and an Orders list on Bid Items** · 'shipped 2026-10-08' · 'SW v523' · Koy: *"have the crews create and send a PO from the Command Center app. Right now, they have to use Simpro Mobile to do that and email the supplier"* + *"I would want this in the material tracking section as well of the finish and rough… it makes a lot of sense on the bid items page as well"* + *"i want the test po to be from me to me only so i see exactly how it looks"*. Crews already build each order on a Material Tracking PO card (Rough and Finish) and used **COPY FOR SIMPRO** to paste it into Simpro Mobile. The card now has **Send to CED** (or **Get a PO number** for Home Depot / ACE / Amazon store runs) above Copy for Simpro. A sheet confirms will call or delivery, the pick-up date and the list (read-only; edit on the card), then the new callable **'sendMaterialPO'** checks the sender's name + live PIN ('requireMember'), creates the PO in Simpro ('POST /vendorOrders/', Stage Approved, charged to the job's first Base-section cost center whose company cost center is Rough In or Finish, storage Shop, Reference "Job No. N - name", the list in VendorNotes like crews paste today, DueDate = pick-up date), emails it (CED) through Resend modeled on Simpro's own PO email with the sender's signature from their Simpro employee record, marks it Sent to Supplier, and logs it in function-only **'material_po_log/{job_phase_card}'** so a double tap or a retry returns the same PO instead of a second one (a failed email offers **Resend email**, never a new PO). The card gets the PO #, Ordered with who/when, and 'simproPoId' / 'poSentVia' / 'poSentMode' / 'poSentBy' / 'poSentAt' / 'poCostCenter' / 'poEmailOk' / 'poEmailedTo', written through the job's live copy ('jobRef.current'), not the render's list. **Bid Items → Orders** (folded, residential tabs only, hidden with Material Tracking): every PO card from both phases with status, who, when; **Order material** asks Rough-In or Finish and adds a card there. **Test mode (shipping state):** server mode on 'gc_config/material_po' (missing = test): only admins can send ('materials.sendPO' = admin, and the server refuses others), the email goes ONLY to the test inbox (default 'gc_config/mail.soakTo'), nobody is copied, the subject starts '[TEST]' with a banner naming where it would have gone, and the Simpro PO is real with a TEST private note, so it gets voided. Live = set 'mode:"live"' + a verified sender ('from: bids@homesteadelectric.net' after the Resend DNS records), widen 'materials.sendPO', and flip 'MATERIAL_PO_TEST'. Simpro's API has no send/email/PDF action (route probe 2026-10-08), so the app sends its own email; no PDF yet. **Duplicate safety (independent review, 9 findings fixed):** the card is claimed in a Firestore transaction; everything needed to finish is logged BEFORE the Simpro POST with a claim id that also goes in the PO's private notes, so a lost or unclear Simpro answer (timeout, 5xx) is marked unknown and the next try searches Simpro's newest POs for that id and adopts the PO instead of making a second; the email is claimed too ('emailingAt'); test always wins for the email ('emailMode': a live PO retried while the switch is on test goes only to the test inbox); a test send is archived ('…__test_<ts>') and doesn't block the real send once live; when live, a copy of the app that still says test ('clientTest') is refused; card dates fill only if still empty on the live card. Gates 'scripts/materialpo-test.js' (rules) + 'scripts/materialpo-sim.js' (the real handler vs fake Firestore/Simpro/email: one PO for three simultaneous taps, test inbox only, email retry, lost-answer recovery, refusal, live routing, test-wins, archive, store run, bad input; mutation-checked) in prebuild. Guide updated: biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO'.** **Why it won't lose data:** no new top-level job field; the new fields live inside each existing order object in 'roughMaterials' / 'finishMaterials', which the loader passes through whole; every card write reconciles against the live job copy through the normal save; nothing is deleted; the only new collection is server-written and client-denied by the catch-all; no rules change.
 - **Job Start Phase 4: the three log-linked items can be checked by hand** · 'shipped 2026-10-07' · 'SW v522' · Justin: *"Can you remove that requirement on those submittal steps? Section 4."* RFI LIST, SENT TO GC and ALL APPROVED were '"trk"' items (no tap; they only checked themselves from the RFI / Gear & Submittals logs, and tapping jumped to the log). They are now kind '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so either the hand check or the log closes the item. The checklist row shows "or from RFIs / Gear & Submittals"; the chip is solid-bordered (the double border stays for true tracker items in phases 2, 3 and 5, unchanged). RFIs tab help text and 'jobstart.html' updated. **Why it won't lose data:** hand checks go through the existing 'patchStart' write into 'commercial.start.items["4.rfis" | "4.toGc" | "4.approved"]', the same shape every other item uses; nothing existing is rewritten. A job whose logs already closed these items stays closed. No loader, rules or function change.
 - **Link opens: see whether a share link was opened, and how often** · 'shipped 2026-10-07' · 'SW v521' · needs 'firebase deploy --only firestore:rules' for counting to start (until then writes are refused harmlessly) · Koy: *"I mostly want to see if they have even opened it, or how many times they have opened it."* Every share page now counts its own opens, and the office sees one small line next to each link: **Opened 6× · 2 devices · last today 9:12 am**, or *Not opened yet · sent today*, *Not opened · sent 4 days ago* (red) or *No opens since Oct 7* (links made before today). Tap a line with opens to unfold first opened, last opened and one row per device (*iPhone · Safari · 4× · last today 9:12 am*). Green = opened in the last 3 days, blue = opened but not lately, red = never opened and sent 3+ days ago. Shows under: Share Questions and Share Punch (rough and finish) SAVED LINKS (each named link, plus a *Base link (Share all)* row when it has opens or the job still carries a legacy filter), Home Runs Share, the Homeowner generator link, Lighting collab Share, Share loads, the Plan Changes (Lutron) page under the hub link, and each Job Note's share link. Counted kinds: questions, roughpunch, finishpunch, qcpunch, homeowner, homeruns, loads, lighting, lutronshare, jobnote; not counted: the Lutron hub ('?lightinghub='), the App Map and the GC Portal. **One recorder at the router:** 'recordLinkOpen()' runs once at the top of 'App()' before any share route, skips staff devices (raw 'he_identity' present or the durable 'he_staff_device' flag that '_setUsageUser' sets) and 'preview=1', throttles the same device and link to once per 30 minutes ('he_lo_<jobId>_<linkKey>'), and stores a rough device label only (iPhone/iPad/Android/Mac/Windows/Other + Safari/Chrome/Edge/Firefox/Browser; no IP, location or name). Link key = '<kind>:<shareId|base>'; job notes use 'jobnote:<noteId>' and the token is never stored. The office reads with 'useLinkOpens(jobId)' (one 'onSnapshot' only while a surface is mounted); 'linkOpenState' / 'formatOpenWhen' / 'linkOpenTarget' / 'deviceLabel' / 'shouldRecordOpen' are pure and gated by scripts/linkopens-test.js (wired into prebuild). 'LINK_OPENS_SINCE' = 2026-10-07 decides *No opens since*. Display only: no pushes, no emails, no roll-up page. New 'link_opens/{jobId}' rule: read open, create/update only with keys 'links' + 'updated_at', no delete. In-app guides updated: questionlinks, questions, rough, homeruns, liveviewlink, generatorlink, lightinglinks. **Why it won't lose data:** additive only. A new 'link_opens' collection written solely by public share pages; no 'jobs/{id}' field, loader, or existing write path touched; the office only reads it; the recorder can't break a share page (try/catch, no await on render).
 - **Daily Job Updates: home runs pulled and switch legs pulled, by day** · 'shipped 2026-10-07' · 'SW v520' · Koy: *"on daily job updates it shows closed punch items, can it show homeruns pulled and switch legs if applicable?"* On the Rough tab's Daily Job Updates, each day now also gets two bars next to **PUNCH CLOSED**: **HOME RUNS PULLED** (blue) and **SWITCH LEGS PULLED** (purple), each with a count, collapsed until tapped, newest day first, TODAY labelled. A row shows the name, where it is (panel, floor, wire for a home run; for a leg, room, location and panel from the Loads list, or the panel name and module from a panel schedule) and who pulled it. An item is placed on the day of its own stamp: a home run's 'statusBy' / 'statusAt', a lighting load or leg's 'pulledBy' / 'pulledAt' (both M/D/YYYY), the same stamps the Home Runs Pulled and Loads Ran lists show. Switch legs come from the Loads list and from the panel schedules (every panel and extra floor), named the way the Panelized tab names them (the job's own panel names, default Panel A / B / C). Each Loads-list row stands alone, so two legs with the same name both show; a panel-schedule row is left out only when the Loads list already has a leg of that name pulled the same day (same leg ticked in two places). Something marked pulled with no stamp date cannot be placed on a day, so it is not listed: pulled before the stamps existed, ticked with **Pull all**, brought in with a pasted list, or a Savant leg (none of those write who/when; making Pull all and paste stamp is a separate, later change to the save path). Rough tab only (residential: commercial jobs have no Rough tab); the Finish tab's updates are unchanged. 'pulledHomeRunsByDay' / 'pulledLegsByDay' are pure and gated by scripts/pulleddaily-test.js (wired into prebuild). The bars are for reading on screen; the emailed daily update still carries only the typed updates. The Rough guide (public/sops/rough.html) describes the new bars and what does not show. **Why it won't lose data:** read-only. It only reads 'homeRuns' and 'panelizedLighting' that the job already holds and draws lists; nothing is written, no field is added, and the save call, loader, rules and functions are untouched.

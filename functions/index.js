@@ -7955,3 +7955,18 @@ exports.planRoutineApi    = _planIntake.planRoutineApi;
 exports.planIntakeDigest   = _planIntake.planIntakeDigest;
 exports.planIntakeWalkPush = _planIntake.planIntakeWalkPush;
 exports.planFileByHand     = _planIntake.planFileByHand;
+
+// ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
+// Send on a Material Tracking card creates the PO in Simpro and emails it
+// (functions/materialPO/, rules tested by scripts/materialpo-test.js). Mode on
+// gc_config/material_po; missing = test (admins only, email only to the test
+// inbox). Vault: 03-Roadmap/Crew POs from the App.md. Deploy ONLY this:
+//   firebase deploy --only functions:sendMaterialPO
+const _materialPO = require("./materialPO/send.js")({
+  functions, db, TZ,
+  simproReqWithRetry,
+  requireMember,
+  accessOf: gcAdminAccessOf,
+  loadMailConfig: gcLoadMailConfig,
+});
+exports.sendMaterialPO = _materialPO.sendMaterialPO;
