@@ -26,6 +26,10 @@
 "use strict";
 const crypto = require("crypto");
 const R = require("./rules.js");
+// pdf.js needs pdf-lib (functions/package.json). Loaded on first use so the rules +
+// simulation gates still load in the root build (Vercel), which has no functions deps.
+let _pdf = null;
+const buildPoPdf = (o) => { if (!_pdf) _pdf = require("./pdf.js"); return _pdf.buildPoPdf(o); };
 
 const CREATE_STALE_MS = 3 * 60e3;   // a "creating" claim older than this was killed mid-send
 const UNKNOWN_WAIT_MS = 60e3;       // after an unanswered POST, wait this long before checking Simpro
@@ -119,12 +123,13 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     return r.data.find(o => String(o.PrivateNotes || "").includes(claimId)) || null;
   }
 
-  async function sendMail(cfg, { to, cc, replyTo, subject, html, text }) {
+  async function sendMail(cfg, { to, cc, replyTo, subject, html, text, attachments }) {
     if (!cfg.key) return { ok: false, error: "The email sender isn't set up (gc_config/mail has no key)." };
     if (!cfg.from) return { ok: false, error: "No sender address set." };
     const payload = { from: `Homestead Electric <${cfg.from}>`, to, subject: String(subject).slice(0, 200), html, text };
     if (cc && cc.length) payload.cc = cc;
     if (replyTo) payload.reply_to = replyTo;
+    if (attachments && attachments.length) payload.attachments = attachments;
     try {
       const resp = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -137,6 +142,22 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     } catch (e) { return { ok: false, error: `Email didn't go out: ${e.message}` }; }
   }
 
+  const company = () => cached("company", 60 * 60e3, async () => {
+    const r = await simproReqWithRetry("GET", "");
+    const d = (r && r.ok && r.data) || {};
+    return { name: T(d.Name) || "Homestead Electric", addressLine: T(d.Address && (d.Address.Line1 || d.Address.Address)), phone: T(d.Phone), email: T(d.Email) };
+  });
+
+  // The PO form PDF, rebuilt from the log every time it's emailed (so a retry attaches it too).
+  async function pdfFor(log) {
+    const lines = log.pickup ? [log.pickup, "", ...(log.lines || [])] : (log.lines || []);
+    return buildPoPdf({
+      poNo: log.poNo, vendorName: log.supplierName, vendorBranch: "-", vendorAddress: log.vendorAddress || [],
+      dateOrdered: R.formDate(log.dateIssued), dateRequired: R.formDate(log.dueIso), jobName: log.jobName,
+      siteAddress: log.siteAddress || [], reference: log.reference, orderedBy: log.by, lines, company: log.company || {},
+    });
+  }
+
   // Test wins: if EITHER the config now or the PO when it was made says test,
   // the email goes only to the test inbox. A live PO is never emailed to the
   // supplier while the switch is on test.
@@ -145,10 +166,13 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     const live = { to: log.vendorEmail, cc: [cfg.bids, log.sender && log.sender.email].filter(Boolean).join(", ") };
     const rcpt = R.recipients({ mode, testTo: cfg.testTo, vendorEmail: log.vendorEmail, bids: cfg.bids, senderEmail: log.sender && log.sender.email });
     if (!rcpt) return { ok: false, error: mode === "test" ? "No test inbox set (gc_config/material_po.testTo)." : "This supplier has no email address in Simpro." };
+    let pdf = null, pdfError = "";
+    try { pdf = await pdfFor(log); } catch (e) { pdfError = String(e.message || e).slice(0, 200); functions.logger.warn("[materialPO] PDF failed, sending the list in the email instead", { po: log.poNo, error: pdfError }); }
     const mail = R.buildPoEmail({ mode, poNo: log.poNo, jobName: log.jobName, supplierName: log.supplierName,
-      lines: log.lines, pickup: log.pickup, sender: log.sender, intended: live });
-    const res = await sendMail(cfg, { ...rcpt, ...mail });
-    return { ...res, to: rcpt.to, cc: rcpt.cc, mode };
+      lines: log.lines, pickup: log.pickup, sender: log.sender, intended: live, attached: !!pdf });
+    const attachments = pdf ? [{ filename: `Purchase_Order_No_${log.poNo}.pdf`, content: pdf.toString("base64") }] : null;
+    const res = await sendMail(cfg, { ...rcpt, ...mail, attachments });
+    return { ...res, to: rcpt.to, cc: rcpt.cc, mode, pdf: !!pdf, pdfError };
   }
 
   async function markSent(simproPoId) {
@@ -180,6 +204,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     const em = await emailFor(cfg, log);
     const sent = em.ok ? await markSent(log.simproPoId) : false;
     const upd = { status: "done", emailOk: !!em.ok, emailError: em.ok ? "" : (em.error || ""), emailedTo: em.to || [], emailMode: em.mode || "",
+      pdfAttached: !!em.pdf, pdfError: em.pdfError || "",
       emailId: em.id || "", statusMarked: sent, emailingAt: null, doneAt: nowIso() };
     await ref.set(upd, { merge: true });
     if (!em.ok) functions.logger.warn("[materialPO] email failed", { po: log.poNo, error: em.error });
@@ -266,8 +291,14 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
         if (!vendor) throw new HttpsError("failed-precondition", `Couldn't find ${rule.simproName} in Simpro's suppliers.`);
         const cc = await costCenterFor(jobNo, phase);
         if (!cc) throw new HttpsError("failed-precondition", `Couldn't find a ${phase === "rough" ? "Rough In" : "Finish"} cost center on Simpro job ${jobNo}.`);
-        const jr = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(jobNo)}?columns=ID,Name`);
+        const jr = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(jobNo)}?columns=ID,Name,Site`);
         const jobName = T(jr && jr.ok && jr.data && jr.data.Name) || T(job.name) || `Job ${jobNo}`;
+        // For the PO form: the job's site address, the supplier's branch address, our company block.
+        // None of these block a send if Simpro won't give them up.
+        let siteAddress = [], vendorAddress = [], companyBlock = {};
+        try { const sid = jr && jr.ok && jr.data && jr.data.Site && jr.data.Site.ID; if (sid) { const sr = await simproReqWithRetry("GET", `/sites/${sid}`); if (sr.ok) siteAddress = R.addressLines(sr.data && sr.data.Address); } } catch (e) {}
+        try { const vr = await simproReqWithRetry("GET", `/vendors/${vendor.ID}`); if (vr.ok) vendorAddress = R.addressLines(vr.data && vr.data.Address); } catch (e) {}
+        try { companyBlock = await company(); } catch (e) {}
         const shop = (await storage()).find(s => /^shop$/i.test(T(s.Name)));
         const sender = await senderFor(user.name);
         const pickup = rule.kind === "email" ? R.pickupLine({ get, date: dueIso }) : "";
@@ -275,6 +306,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
         const log = {
           kind: rule.kind, mode: cfg.mode, claimId, supplierName: rule.simproName, vendorId: vendor.ID, vendorEmail: T(vendor.Email),
           costCenter: cc.name, costCenterId: cc.id, jobNo, jobName, lines, pickup, get, dueIso, sender, by: user.name,
+          reference: `Job No. ${jobNo} - ${jobName}`, dateIssued: today(), siteAddress, vendorAddress, company: companyBlock,
         };
         await ref.set(log, { merge: true });   // so a lost answer can be finished later
 
@@ -282,8 +314,8 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
           Vendor: vendor.ID,
           AssignedTo: cc.id,
           Stage: "Approved",
-          DateIssued: today(),
-          Reference: `Job No. ${jobNo} - ${jobName}`,
+          DateIssued: log.dateIssued,
+          Reference: log.reference,
           VendorNotes: R.vendorNotesHtml(lines, pickup),
           PrivateNotes: cfg.mode === "test"
             ? `<div><b>TEST from the Command Center</b> (${R.esc(user.name)}). Void this PO.</div><div>${claimId}</div>`

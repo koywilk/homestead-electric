@@ -7,6 +7,10 @@
 "use strict";
 const assert = require("assert");
 const path = require("path");
+// The PDF needs pdf-lib from functions/node_modules. The root build (Vercel) doesn't
+// install those, so there the sim checks the fallback (list in the email) instead.
+let HAS_PDF = true;
+try { require.resolve("pdf-lib", { paths: [path.join(__dirname, "../functions")] }); } catch (e) { HAS_PDF = false; }
 
 // ── clock ──
 const realNow = Date.now;
@@ -61,7 +65,10 @@ function makeSimpro() {
     if (method === "GET" && /^\/jobs\/1438\/sections\/$/.test(p)) return { ok: true, status: 200, data: [{ ID: 25087, Name: "Base", DisplayOrder: 1 }] };
     if (method === "GET" && /costCenters/.test(p)) return { ok: true, status: 200, data: [
       { ID: 18864, Name: "Rough In ", CostCenter: { Name: "Residential (Rough In)" } }, { ID: 18865, Name: "Finish", CostCenter: { Name: "Residential (Finish)" } }] };
-    if (method === "GET" && /^\/jobs\/1438\?/.test(p)) return { ok: true, status: 200, data: { ID: 1438, Name: "Miller Residence - Alpine" } };
+    if (method === "GET" && /^\/jobs\/1438\?/.test(p)) return { ok: true, status: 200, data: { ID: 1438, Name: "Miller Residence - Alpine", Site: { ID: 6576 } } };
+    if (method === "GET" && p === "/sites/6576") return { ok: true, status: 200, data: { Address: { Address: "1732 East Elk Ridge Lane", City: "Alpine", State: "UT", PostalCode: "84004" } } };
+    if (method === "GET" && /^\/vendors\/\d+$/.test(p)) return { ok: true, status: 200, data: { Address: { Address: "698 East 1300 South", City: "American Fork", State: "UT", PostalCode: "84003" } } };
+    if (method === "GET" && p === "") return { ok: true, status: 200, data: { Name: "Homestead Electric", Phone: "(801) 992-1588", Email: "bids@homesteadelectric.net", Address: { Line1: "974 S Main St, Pleasant Grove UT 84062" } } };
     if (method === "GET" && p.startsWith("/vendorOrders/?")) return { ok: true, status: 200, data: [...s.pos].reverse().map(o => ({ ID: o.ID, PrivateNotes: o.PrivateNotes })) };
     if (method === "POST" && p === "/vendorOrders/") {
       if (s.refuseNext) { s.refuseNext = false; return { ok: false, status: 422, data: { errors: [{ message: "Vendor is required" }] } }; }
@@ -114,6 +121,16 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     assert.strictEqual(simpro.pos[0].AssignedTo, 18864, "rough cost center"); assert.strictEqual(simpro.pos[0].Vendor, 13);
     assert.strictEqual(simpro.pos[0].DueDate, "2026-10-09");
     assert.strictEqual(simpro.patches.length, 1, "marked Sent to Supplier");
+    const att = mails[0].attachments || [];
+    if (HAS_PDF) {
+      assert.strictEqual(att.length, 1, "the PO form PDF is attached");
+      assert.strictEqual(att[0].filename, "Purchase_Order_No_7300.pdf", "named like Simpro's");
+      assert(Buffer.from(att[0].content, "base64").slice(0, 5).toString() === "%PDF-", "a real PDF");
+      assert(/is attached/.test(mails[0].html) && !/<li/.test(mails[0].html), "Simpro wording; the list lives in the PDF");
+    } else {
+      assert.strictEqual(att.length, 0, "no PDF library here: nothing attached");
+      assert(/<li/.test(mails[0].html) && !/is attached/.test(mails[0].html), "fallback: the list is in the email");
+    }
   });
 
   await t("test mode: non-admins are refused before anything happens", async () => {
@@ -216,6 +233,6 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     assert.strictEqual(simpro.pos.length, 0);
   });
 
-  console.log(`materialpo-sim: ${n} scenarios passed`);
+  console.log(`materialpo-sim: ${n} scenarios passed (${HAS_PDF ? "with" : "without"} the PDF library)`);
   process.exit(0);
 })().catch((e) => { console.error("materialpo-sim FAILED:", e.message); process.exit(1); });

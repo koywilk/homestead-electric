@@ -104,6 +104,21 @@ t("test always wins for the email", () => {
   eq(R.emailMode(undefined, undefined), "test", "missing → test");
 });
 
+t("PO form helpers + attached wording", () => {
+  eq(R.formDate("2026-10-09"), "10/09/2026", "form date");
+  eq(R.formDate("2026-02-31"), "", "impossible date");
+  eq(R.formDate(""), "", "empty");
+  eq(R.addressLines({ Address: "698 East 1300 South", City: "American Fork", State: "UT", PostalCode: "84003", Country: "" }),
+    ["698 East 1300 South", "American Fork UT 84003"], "Simpro address → two lines");
+  eq(R.addressLines({ Address: "", City: "", State: "", PostalCode: "" }), [], "blank address");
+  eq(R.addressLines(null), [], "missing address");
+  const a = R.buildPoEmail({ mode: "live", poNo: "7241", jobName: "Miller Residence", supplierName: "CED", lines: ["10x spanners"], pickup: "For will call please.", sender: { name: "K" }, attached: true });
+  assert(a.html.includes("is attached") && !a.html.includes("<li"), "attached: Simpro wording, list lives in the PDF");
+  assert(a.html.includes("For will call please.") && !a.text.includes("- 10x spanners"), "pickup kept, list dropped");
+  const b = R.buildPoEmail({ mode: "live", poNo: "7241", jobName: "Miller Residence", supplierName: "CED", lines: ["10x spanners"], pickup: "", sender: { name: "K" } });
+  assert(!b.html.includes("is attached") && b.html.includes("<li"), "no PDF: list goes in the email");
+});
+
 t("one key per card", () => {
   eq(R.logKey("job_abc", "rough", "1791484665123"), "job-abc_rough_1791484665123", "underscore in job id can't break the key");
   eq(R.logKey("J1", "finish", "17"), "J1_finish_17", "finish");

@@ -74,6 +74,20 @@ function cardDateToIso(s) {
   return m ? `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}` : "";
 }
 
+// "2026-10-09" → "10/09/2026" (Simpro's PO form format). Bad input → "".
+function formDate(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m && shortDate(iso) ? `${m[2]}/${m[3]}/${m[1]}` : "";
+}
+// Simpro address object → the two lines the form prints.
+function addressLines(a) {
+  if (!a) return [];
+  const T = (v) => String(v == null ? "" : v).trim();
+  const street = T(a.Address || a.Line1);
+  const city = [T(a.City), [T(a.State), T(a.PostalCode)].filter(Boolean).join(" ")].filter(Boolean).join(" ");
+  return [street, city].filter(Boolean);
+}
+
 function pickupLine({ get, date }) {
   const when = shortDate(date);
   if (get === "deliver") return when ? `Please deliver to the job on ${when}.` : "Please deliver to the job.";
@@ -99,7 +113,7 @@ function recipients({ mode, testTo, vendorEmail, bids, senderEmail }) {
 }
 
 // The email, modeled on Simpro's own PO email (2026-10-07 template).
-function buildPoEmail({ mode, poNo, jobName, supplierName, lines, pickup, sender, intended }) {
+function buildPoEmail({ mode, poNo, jobName, supplierName, lines, pickup, sender, intended, attached = false }) {
   const s = sender || {};
   const subject = `${mode === "test" ? "[TEST] " : ""}PO ${poNo} – ${jobName} – Homestead Electric`;
   const list = (lines || []).map(l => `<li style="margin:0 0 2px">${esc(l)}</li>`).join("");
@@ -111,18 +125,18 @@ function buildPoEmail({ mode, poNo, jobName, supplierName, lines, pickup, sender
 </div>` : "";
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1B1F24;max-width:600px">${testBanner}
 <p style="margin:0 0 12px">Hi ${esc(supplierName)},</p>
-<p style="margin:0 0 12px">Here is purchase order <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b>. Please reference this PO number on your invoice, packing slip and delivery ticket.</p>
+<p style="margin:0 0 12px">${attached ? `Purchase order <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b> is attached.` : `Here is purchase order <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b>.`} Please reference this PO number on your invoice, packing slip and delivery ticket.</p>
 ${pickup ? `<p style="margin:0 0 12px"><b>${esc(pickup)}</b></p>` : ""}
-<ul style="margin:0 0 12px;padding-left:20px">${list}</ul>
+${attached ? "" : `<ul style="margin:0 0 12px;padding-left:20px">${list}</ul>`}
 <p style="margin:0 0 12px">Reply to this email with any part number corrections, substitutions or backorders before the order ships.</p>
 <p style="margin:0">Thank you,<br>${sig}</p>
 </div>`;
   const text = [
     mode === "test" ? "TEST from the Command Center. Only you got this.\n" : "",
     `Hi ${supplierName},`, "",
-    `Here is purchase order ${poNo} for ${jobName}. Please reference this PO number on your invoice, packing slip and delivery ticket.`, "",
+    `${attached ? `Purchase order ${poNo} for ${jobName} is attached.` : `Here is purchase order ${poNo} for ${jobName}.`} Please reference this PO number on your invoice, packing slip and delivery ticket.`, "",
     pickup || "", "",
-    ...(lines || []).map(l => `- ${l}`), "",
+    ...(attached ? [] : (lines || []).map(l => `- ${l}`)), "",
     "Reply to this email with any part number corrections, substitutions or backorders before the order ships.", "",
     "Thank you,", s.name || "", s.position || "", s.phone || "", s.email || "", "homesteadelectric.net",
   ].filter((l, i, a) => !(l === "" && a[i - 1] === "")).join("\n");
@@ -146,4 +160,4 @@ function logKey(jobId, phase, orderId) {
 }
 
 module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, itemsToLines, shortDate, cardDateToIso,
-  pickupLine, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc };
+  pickupLine, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines };
