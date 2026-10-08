@@ -20,6 +20,9 @@ function skipReason(msg) {
   const subject = header(msg, "Subject");
   if (from === "bids@homesteadelectric.net" && /quote\s*\/\s*change order approved|^quote no\.|quote no\. \d+/i.test(subject)) return "quote/CO approval";
   if (/\bpurchase order no\.?\s*\d+/i.test(subject)) return "purchase order";
+  // Simpro's PO email template changed 2026-10-07 (from PO 7234): sent from bids@ as
+  // "PO 7236 – Miller Residence – Homestead Electric", and CED replies "RE: PO 7236 – …".
+  if (/^(?:(?:re|fw|fwd)\s*:\s*)*po\s*#?\s*\d{3,}\s*[-–—]/i.test(subject)) return "purchase order";
   if (/esignature-noreply@google\.com$/.test(from) || /^esigned document/i.test(subject)) return "eSignature";
   if (/(^|\.)homedepot\.com$|(^|\.)lowes\.com$|(^|\.)amazon\.com$/.test(from.split("@")[1] || "")
     || /\b(your (electronic )?receipt|order confirmation|your order)\b/i.test(subject)) return "receipt";
@@ -44,7 +47,9 @@ function pdfParts(msg) {
     if (!p) return;
     const name = String(p.filename || "");
     const id = p.body && p.body.attachmentId;
-    if (id && (/\.pdf$/i.test(name) || /application\/pdf/i.test(p.mimeType || ""))) {
+    // Simpro's own PO PDF is never a plan, whatever the subject says.
+    const simproPo = /^purchase_order_no_\d+\.pdf$/i.test(name);
+    if (id && !simproPo && (/\.pdf$/i.test(name) || /application\/pdf/i.test(p.mimeType || ""))) {
       out.push({ attachmentId: id, filename: name || "attachment.pdf", size: Number(p.body.size) || 0 });
     }
     (p.parts || []).forEach(walk);
