@@ -150,11 +150,13 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
 
   // The PO form PDF, rebuilt from the log every time it's emailed (so a retry attaches it too).
   async function pdfFor(log) {
-    const lines = log.pickup ? [log.pickup, "", ...(log.lines || [])] : (log.lines || []);
+    // New Homestead PO form (PO 7224 layout), no prices for crew orders.
+    const items = (log.items && log.items.length ? log.items : (log.lines || []).map(n => ({ part: "", name: n, qty: "" })));
     return buildPoPdf({
-      poNo: log.poNo, vendorName: log.supplierName, vendorBranch: "-", vendorAddress: log.vendorAddress || [],
-      dateOrdered: R.formDate(log.dateIssued), dateRequired: R.formDate(log.dueIso), jobName: log.jobName,
-      siteAddress: log.siteAddress || [], reference: log.reference, orderedBy: log.by, lines, company: log.company || {},
+      poNo: log.poNo, vendorName: log.supplierName, vendorAddress: log.vendorAddress || [],
+      dateOrdered: R.formDate(log.dateIssued), dateRequired: R.formDate(log.dueIso),
+      jobNo: log.jobNo, jobSite: log.siteName || log.jobName, reference: log.reference, orderedBy: log.by,
+      items, instructions: log.pickup ? [log.pickup] : [], company: log.company || {},
     });
   }
 
@@ -296,6 +298,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
         // For the PO form: the job's site address, the supplier's branch address, our company block.
         // None of these block a send if Simpro won't give them up.
         let siteAddress = [], vendorAddress = [], companyBlock = {};
+        const siteName = T(jr && jr.ok && jr.data && jr.data.Site && jr.data.Site.Name);
         try { const sid = jr && jr.ok && jr.data && jr.data.Site && jr.data.Site.ID; if (sid) { const sr = await simproReqWithRetry("GET", `/sites/${sid}`); if (sr.ok) siteAddress = R.addressLines(sr.data && sr.data.Address); } } catch (e) {}
         try { const vr = await simproReqWithRetry("GET", `/vendors/${vendor.ID}`); if (vr.ok) vendorAddress = R.addressLines(vr.data && vr.data.Address); } catch (e) {}
         try { companyBlock = await company(); } catch (e) {}
@@ -306,7 +309,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
         const log = {
           kind: rule.kind, mode: cfg.mode, claimId, supplierName: rule.simproName, vendorId: vendor.ID, vendorEmail: T(vendor.Email),
           costCenter: cc.name, costCenterId: cc.id, jobNo, jobName, lines, pickup, get, dueIso, sender, by: user.name,
-          reference: `Job No. ${jobNo} - ${jobName}`, dateIssued: today(), siteAddress, vendorAddress, company: companyBlock,
+          reference: `Job No. ${jobNo} - ${jobName}`, dateIssued: today(), siteName, siteAddress, vendorAddress, company: companyBlock,
         };
         await ref.set(log, { merge: true });   // so a lost answer can be finished later
 
