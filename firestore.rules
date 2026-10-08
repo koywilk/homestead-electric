@@ -55,6 +55,20 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // ── LINK OPENS ────────────────────────────────────────────────────────────
+    // Share-link open counters, one doc per job (spec 2026-10-07-link-opens).
+    // Public share pages bump them; the office reads them. Never on jobs/{id}.
+    // Nothing sensitive and nothing decides on it, so writes are open like the
+    // rest of the share surface — but the shape is fixed and nobody can delete.
+    match /link_opens/{jobId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasOnly(['links', 'updated_at'])
+                            && request.resource.data.links is map
+                            && request.resource.data.updated_at is string
+                            && request.resource.data.links.size() <= 300;
+      allow delete: if false;
+    }
+
     // ── HOMEOWNER REQUESTS ────────────────────────────────────────────────────
     // Share link recipients submit answers here — allow creates from anyone.
     // Only the app reads these back, so reads are also open for now.

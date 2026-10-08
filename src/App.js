@@ -11022,6 +11022,7 @@ function JobNoteCard({
                 <span style={{ fontSize:10, color: C.dim }}>
                   Created {note.sharedAt ? new Date(note.sharedAt).toLocaleString() : '—'}
                 </span>
+                <LinkOpens jobId={jobId} linkKey={`jobnote:${note.id}`} createdAt={note.sharedAt||null} style={{marginTop:0}}/>
                 <button onClick={revokeShareLink}
                   style={{
                     marginLeft:'auto',
@@ -19189,7 +19190,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
             <Icon name="link" size={11}/> Copy link
           </button>
-          <button onClick={()=>openUrl(hoLink)}
+          <button onClick={()=>openUrl(hoLink+"&preview=1")}
             style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
             Preview
@@ -19202,6 +19203,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
               Check for response
             </button>
           )}
+          <div style={{flexBasis:'100%',marginTop:-4}}><LinkOpens jobId={jobId} linkKey="homeowner:base"/></div>
         </div>
       </Section>
       )}
@@ -19285,6 +19287,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
         </button>
         <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
         <HelpDot section="liveviewlink"/>
+        <div style={{flexBasis:'100%',marginTop:-4}}><LinkOpens jobId={jobId} linkKey="homeruns:base"/></div>
       </div>
       )}
 
@@ -30934,10 +30937,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
                 <HelpDot section="lightinglinks"/>
+                <div style={{flexBasis:'100%',marginTop:-4}}><LinkOpens jobId={job.id} linkKey="lighting:base"/></div>
                 </>)}
                 {(job.lightingSystem||"Control 4")==="Lutron" && !offTechLightingLink(job) && (
                   <>
-                    {!isSectionHidden(job,"lvCollab") && <span style={{width:1,height:16,background:C.border}}/>}
                     <button onClick={()=>{
                       const link=`${window.location.origin}/?lightinghub=1`;
                       navigator.clipboard.writeText(link).then(()=>toast.success('Hub link copied! One link for the plans company — lists every Lutron job, no re-sending needed as new jobs start.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
@@ -30946,6 +30949,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       Copy hub link ↗
                     </button>
                     <span style={{fontSize:11,color:C.dim}}>One-time link — lists every Lutron job for them</span>
+                    <div style={{flexBasis:'100%',marginTop:-4,display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontSize:10.5,color:C.dim}}>This job's Plan Changes page:</span>
+                      <LinkOpens jobId={job.id} linkKey="lutronshare:base" style={{marginTop:0}}/>
+                    </div>
                   </>
                 )}
               </div>
@@ -31492,7 +31499,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     the opposite of useful. Still shown for Control4/Savant/
                     Crestron, where Homestead does the engineering and an AV
                     programmer genuinely needs this list. */}
-                {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (
+                {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (<>
                   <button title="Copy a read-only link to send the AV programmer"
                     onClick={()=>{
                       const link = `${window.location.origin}/?loads=${job.id}`;
@@ -31502,7 +31509,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:C.purple,color:"#fff",border:"none",display:"inline-flex",alignItems:"center",gap:5}}>
                     Share loads
                   </button>
-                )}
+                  <div style={{display:'inline-flex',marginLeft:4}}><LinkOpens jobId={job.id} linkKey="loads:base" style={{marginTop:0}}/></div>
+                </>)}
                 {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (
                   <HelpDot section="lightinglinks"/>
                 )}
@@ -51417,6 +51425,9 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
   const [shareLabel, setShareLabel] = useState("");
   const [editingId, setEditingId] = useState(null); // saved-share being edited, or null for a new one
   const [previewId, setPreviewId] = useState(null); // saved-share id shown in the read-only preview iframe, or null
+  // Link opens for the SAVED LINKS rows — listener only while the modal is open.
+  const linkOpens = useLinkOpens(open ? jobId : null);
+  const showBaseOpens = filter != null || !!(linkOpens && linkOpens["questions:base"]);
 
   const flatQs = (qs, phase) => {
     if(!qs || typeof qs !== 'object') return [];
@@ -51566,7 +51577,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
             <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
 
               {/* Saved links — track each person's link */}
-              {totalShares>0 && (
+              {(totalShares>0 || showBaseOpens) && (
                 <div style={{marginBottom:18,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
                   <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
                   {shares.map(s=>{
@@ -51583,6 +51594,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color:color,marginLeft:6}}>editing</span>}</div>
                           <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:'#B0892C'}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
+                          <LinkOpensLine opens={linkOpens} linkKey={`questions:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>setPreviewId(s.id)} style={{fontSize:10.5,fontWeight:600,color:'#1e3a5f',background:'#fff',border:'1px solid #C3D0E0',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Preview</button>
@@ -51591,6 +51603,12 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                       </div>
                     );
                   })}
+                  {showBaseOpens && (
+                    <div style={{padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
+                      <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24'}}>Base link (Share all)</div>
+                      <LinkOpensLine opens={linkOpens} linkKey="questions:base"/>
+                    </div>
+                  )}
                   {editingId && <button onClick={startNew} style={{marginTop:8,fontSize:11,fontWeight:700,color:color,background:'none',border:`1px dashed ${color}66`,borderRadius:6,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>+ Start a new link</button>}
                 </div>
               )}
@@ -51672,6 +51690,9 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
   ];
 
   const stageParam = stage.toLowerCase() + 'punch';
+  // Link opens for the SAVED LINKS rows — listener only while the modal is open.
+  const linkOpens = useLinkOpens(open ? jobId : null);
+  const showBaseOpens = filter != null || !!(linkOpens && linkOpens[`${stageParam}:base`]);
 
   // Flatten every item with its floor + section labels
   const getAllItems = () => {
@@ -51794,7 +51815,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
 
             {/* Item list */}
             <div style={{overflowY:'auto',flex:1,padding:'14px 22px'}}>
-              {shareList.length>0 && (
+              {(shareList.length>0 || showBaseOpens) && (
                 <div style={{marginBottom:16,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
                   <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
                   {shareList.map(s=>{
@@ -51804,6 +51825,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color,marginLeft:6}}>editing</span>}</div>
                           <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} item{cnt!==1?'s':''}</div>
+                          <LinkOpensLine opens={linkOpens} linkKey={`${stageParam}:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>copyLink(s.id)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
@@ -51811,6 +51833,12 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                       </div>
                     );
                   })}
+                  {showBaseOpens && (
+                    <div style={{padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
+                      <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24'}}>Base link (Share all)</div>
+                      <LinkOpensLine opens={linkOpens} linkKey={`${stageParam}:base`}/>
+                    </div>
+                  )}
                   {editingId && <button onClick={startNew} style={{marginTop:8,fontSize:11,fontWeight:700,color,background:'none',border:`1px dashed ${color}66`,borderRadius:6,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>+ Start a new link</button>}
                 </div>
               )}
@@ -52990,10 +53018,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-07 · App SW version: v520
+**Last manifest update:** 2026-10-07 · App SW version: v521
 
 ---
 
+- **Link opens: see whether a share link was opened, and how often** · 'shipped 2026-10-07' · 'SW v521' · needs 'firebase deploy --only firestore:rules' for counting to start (until then writes are refused harmlessly) · Koy: *"I mostly want to see if they have even opened it, or how many times they have opened it."* Every share page now counts its own opens, and the office sees one small line next to each link: **Opened 6× · 2 devices · last today 9:12 am**, or *Not opened yet · sent today*, *Not opened · sent 4 days ago* (red) or *No opens since Oct 7* (links made before today). Tap a line with opens to unfold first opened, last opened and one row per device (*iPhone · Safari · 4× · last today 9:12 am*). Green = opened in the last 3 days, blue = opened but not lately, red = never opened and sent 3+ days ago. Shows under: Share Questions and Share Punch (rough and finish) SAVED LINKS (each named link, plus a *Base link (Share all)* row when it has opens or the job still carries a legacy filter), Home Runs Share, the Homeowner generator link, Lighting collab Share, Share loads, the Plan Changes (Lutron) page under the hub link, and each Job Note's share link. Counted kinds: questions, roughpunch, finishpunch, qcpunch, homeowner, homeruns, loads, lighting, lutronshare, jobnote; not counted: the Lutron hub ('?lightinghub='), the App Map and the GC Portal. **One recorder at the router:** 'recordLinkOpen()' runs once at the top of 'App()' before any share route, skips staff devices (raw 'he_identity' present or the durable 'he_staff_device' flag that '_setUsageUser' sets) and 'preview=1', throttles the same device and link to once per 30 minutes ('he_lo_<jobId>_<linkKey>'), and stores a rough device label only (iPhone/iPad/Android/Mac/Windows/Other + Safari/Chrome/Edge/Firefox/Browser; no IP, location or name). Link key = '<kind>:<shareId|base>'; job notes use 'jobnote:<noteId>' and the token is never stored. The office reads with 'useLinkOpens(jobId)' (one 'onSnapshot' only while a surface is mounted); 'linkOpenState' / 'formatOpenWhen' / 'linkOpenTarget' / 'deviceLabel' / 'shouldRecordOpen' are pure and gated by scripts/linkopens-test.js (wired into prebuild). 'LINK_OPENS_SINCE' = 2026-10-07 decides *No opens since*. Display only: no pushes, no emails, no roll-up page. New 'link_opens/{jobId}' rule: read open, create/update only with keys 'links' + 'updated_at', no delete. In-app guides updated: questionlinks, questions, rough, homeruns, liveviewlink, generatorlink, lightinglinks. **Why it won't lose data:** additive only. A new 'link_opens' collection written solely by public share pages; no 'jobs/{id}' field, loader, or existing write path touched; the office only reads it; the recorder can't break a share page (try/catch, no await on render).
 - **Daily Job Updates: home runs pulled and switch legs pulled, by day** · 'shipped 2026-10-07' · 'SW v520' · Koy: *"on daily job updates it shows closed punch items, can it show homeruns pulled and switch legs if applicable?"* On the Rough tab's Daily Job Updates, each day now also gets two bars next to **PUNCH CLOSED**: **HOME RUNS PULLED** (blue) and **SWITCH LEGS PULLED** (purple), each with a count, collapsed until tapped, newest day first, TODAY labelled. A row shows the name, where it is (panel, floor, wire for a home run; for a leg, room, location and panel from the Loads list, or the panel name and module from a panel schedule) and who pulled it. An item is placed on the day of its own stamp: a home run's 'statusBy' / 'statusAt', a lighting load or leg's 'pulledBy' / 'pulledAt' (both M/D/YYYY), the same stamps the Home Runs Pulled and Loads Ran lists show. Switch legs come from the Loads list and from the panel schedules (every panel and extra floor), named the way the Panelized tab names them (the job's own panel names, default Panel A / B / C). Each Loads-list row stands alone, so two legs with the same name both show; a panel-schedule row is left out only when the Loads list already has a leg of that name pulled the same day (same leg ticked in two places). Something marked pulled with no stamp date cannot be placed on a day, so it is not listed: pulled before the stamps existed, ticked with **Pull all**, brought in with a pasted list, or a Savant leg (none of those write who/when; making Pull all and paste stamp is a separate, later change to the save path). Rough tab only (residential: commercial jobs have no Rough tab); the Finish tab's updates are unchanged. 'pulledHomeRunsByDay' / 'pulledLegsByDay' are pure and gated by scripts/pulleddaily-test.js (wired into prebuild). The bars are for reading on screen; the emailed daily update still carries only the typed updates. The Rough guide (public/sops/rough.html) describes the new bars and what does not show. **Why it won't lose data:** read-only. It only reads 'homeRuns' and 'panelizedLighting' that the job already holds and draws lists; nothing is written, no field is added, and the save call, loader, rules and functions are untouched.
 - **Save pill: bigger, higher contrast, stays up longer** · 'shipped 2026-10-06' · 'SW v519' · Koy: *"want it a little more obvious and easy to see"* and *"saved should be green."* The v518 'HeSaveHud' pill is now 15px semibold text with a solid near-black background, a thin outline (steel blue while saving, green on Saved, red on a failed save) and a soft shadow so it stands out against the dark job-card backdrop, with a slightly bigger spinner and a small spring when it appears. **Saved** is green text, held for 3 seconds inside the pill itself (the app's own 2-second return to idle is untouched), and a new save or a failure replaces it at once. Still text only, with no check or ring.  **Why it won't lose data:** presentational only, one component in src/motion.js. It reads the same 'syncStatus' and calls the same 'flushSaves' as before; the save call, 'setSyncStatus' and the 2-second timer in App.js are not touched. No fields, loader, rules, function or save-path changes.
 - **Save indicator that shows everywhere: a small "Saving… / Saved / Save failed" pill at the top of the screen** · 'shipped 2026-10-06' · 'SW v518' · Koy: *"Now I just don't see the ripple anymore, but I don't see any saving confirmation."* v517 removed the green ripple and left the quiet 'Saved' text in the three Job Board headers, but a job card is a full-screen overlay that covers those headers, so inside a job there was no confirmation at all. 'HeSaveHud' (src/motion.js) is mounted once at the App root, above every overlay (job card, sheets), fixed at the top-center, and driven by the same 'syncStatus' as the header chips: **Saving…** (spinner), **Saved** (plain light text, about 2 seconds), then it disappears; **Save failed · tap to retry** stays up until a save succeeds and calls 'flushSaves' when tapped. Text only: no green, no check, no ring. The header chips stay. **Why it won't lose data:** presentational only. It reads 'syncStatus' and calls the existing 'flushSaves' on tap; the save call, 'setSyncStatus' and the 2-second return to idle are untouched. No fields, loader, rules, function or save-path changes.
@@ -58983,6 +59012,217 @@ function ToolsView({ jobs, onUpdateJob, who }) {
   );
 }
 
+// ── Link opens helpers ─────────────────────────────────────────────────────
+// Share-link open tracking (spec: docs/superpowers/specs/2026-10-07-link-opens-design.md).
+// Pure — tested verbatim by scripts/linkopens-test.js. The recorder and the
+// office line below use these; nothing here touches Firestore.
+const LINK_OPENS_SINCE = "2026-10-07T00:00:00";      // local; tracking start (set to ship day)
+const LINK_OPEN_THROTTLE_MS = 30 * 60 * 1000;          // same device + link counts again after 30 min
+const LINK_OPEN_FRESH_MS = 3 * 24 * 60 * 60 * 1000;    // green under 3 days; red when unopened 3+ days
+const LINK_KEY_SAFE = /^[A-Za-z0-9_-]{1,64}$/;
+// Same order as the routes at the top of App() — the first match is the page shown.
+const LINK_OPEN_ROUTES = ["homeowner", "questions", "homeruns", "loads", "lighting", "lightinghub",
+  "lutronshare", "roughpunch", "finishpunch", "qcpunch", "jobnote"];
+const LINK_OPEN_NAMED = { questions: 1, roughpunch: 1, finishpunch: 1, qcpunch: 1 };
+const linkOpenTarget = (search) => {
+  let p;
+  try { p = new URLSearchParams(search || ""); } catch (e) { return null; }
+  if (p.get("preview") === "1") return null;
+  for (const kind of LINK_OPEN_ROUTES) {
+    const raw = p.get(kind);
+    if (raw == null) continue;
+    if (kind === "lightinghub") return null;
+    if (kind === "jobnote") {
+      const parts = String(raw).split(":");
+      const jobId = (parts[0] || "").trim(), noteId = (parts[1] || "").trim();
+      if (!jobId || jobId.length > 128 || jobId.includes("/") || !LINK_KEY_SAFE.test(noteId)) return null;
+      return { jobId, key: "jobnote:" + noteId };
+    }
+    const jobId = String(raw).trim();
+    if (!jobId || jobId.length > 128 || jobId.includes("/")) return null;
+    const s = (p.get("s") || "").trim();
+    const shareId = LINK_OPEN_NAMED[kind] && LINK_KEY_SAFE.test(s) ? s : "base";
+    return { jobId, key: kind + ":" + shareId };
+  }
+  return null;
+};
+// A device that has ever been signed into the app is staff. Reads the raw
+// identity key (IDENTITY_KEY) on purpose — getIdentity() deletes an expired one.
+const isStaffDevice = (getItem) => {
+  try { return !!(getItem("he_identity") || getItem("he_staff_device") === "1"); }
+  catch (e) { return false; }
+};
+const isBotAgent = (ua, webdriver) => !!webdriver || /HeadlessChrome|bot|crawl|spider|preview/i.test(String(ua || ""));
+const shouldRecordOpen = (lastIso, nowMs) => {
+  const t = Date.parse(lastIso || "");
+  if (!isFinite(t)) return true;
+  return nowMs - t >= LINK_OPEN_THROTTLE_MS || nowMs < t;
+};
+const deviceLabel = (ua) => {
+  const s = String(ua || "");
+  const dev = /iPad/.test(s) ? "iPad" : /iPhone|iPod/.test(s) ? "iPhone" : /Android/.test(s) ? "Android"
+    : /Macintosh|Mac OS X/.test(s) ? "Mac" : /Windows/.test(s) ? "Windows" : "Other";
+  const br = /Edg(e|A|iOS)?\//.test(s) ? "Edge" : /Firefox\/|FxiOS\//.test(s) ? "Firefox"
+    : /Chrome\/|CriOS\//.test(s) ? "Chrome" : /Safari\//.test(s) ? "Safari" : "Browser";
+  return dev + " · " + br;
+};
+const linkOpenDayDiff = (fromMs, nowMs) => {
+  const f = new Date(fromMs), n = new Date(nowMs);
+  const a = new Date(f.getFullYear(), f.getMonth(), f.getDate()).getTime();
+  const b = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  return Math.round((b - a) / 86400000);
+};
+const formatOpenWhen = (iso, nowMs) => {
+  const ms = Date.parse(iso || "");
+  if (!isFinite(ms)) return "";
+  const d = new Date(ms);
+  const t = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/\s+/g, " ").toLowerCase();
+  const days = linkOpenDayDiff(ms, nowMs);
+  if (days === 0) return "today " + t;
+  if (days === 1) return "yesterday " + t;
+  if (days > 1 && days < 7) return d.toLocaleDateString("en-US", { weekday: "short" }) + " " + t;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", " + t;
+};
+const linkOpenState = (entry, createdAt, nowMs, sinceIso) => {
+  const opens = (entry && Number(entry.opens)) || 0;
+  if (opens > 0) {
+    const devs = entry.devices && typeof entry.devices === "object" ? Object.keys(entry.devices).length : 0;
+    const devices = Math.max(devs, 1);
+    const lastMs = Date.parse(entry.lastAt || "");
+    const when = formatOpenWhen(entry.lastAt, nowMs);
+    const fresh = isFinite(lastMs) && nowMs - lastMs < LINK_OPEN_FRESH_MS;
+    const label = opens === 1
+      ? "Opened once" + (when ? " · " + when : "")
+      : "Opened " + opens + "× · " + devices + " device" + (devices === 1 ? "" : "s") + (when ? " · last " + when : "");
+    return { state: fresh ? "on" : "once", label, opens, devices };
+  }
+  const sinceMs = Date.parse(sinceIso || "");
+  const madeMs = Date.parse(createdAt || "");
+  if (!isFinite(madeMs) || !isFinite(sinceMs) || madeMs < sinceMs) {
+    const since = isFinite(sinceMs) ? new Date(sinceMs).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "tracking started";
+    return { state: "pre", label: "No opens since " + since, opens: 0, devices: 0 };
+  }
+  const days = Math.max(0, linkOpenDayDiff(madeMs, nowMs));
+  if (nowMs - madeMs >= LINK_OPEN_FRESH_MS) return { state: "late", label: "Not opened · sent " + days + " days ago", opens: 0, devices: 0 };
+  const ago = days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
+  return { state: "none", label: "Not opened yet · sent " + ago, opens: 0, devices: 0 };
+};
+// ── end Link opens helpers ─────────────────────────────────────────────────
+
+// Fire-and-forget: count this page load as one open of the share link in the
+// URL. Runs once per page load (called at the top of App(), before the share
+// routes). Never throws, never blocks, never toasts. Writes ONLY
+// link_opens/{jobId} — never jobs/{id}.
+let _linkOpenDone = false;
+function recordLinkOpen() {
+  if (_linkOpenDone) return;
+  _linkOpenDone = true;
+  try {
+    const target = linkOpenTarget(window.location.search);
+    if (!target) return;
+    let ls = null;
+    try { ls = window.localStorage; } catch (e) {}
+    const get = (k) => (ls ? ls.getItem(k) : null);
+    const put = (k, v) => { try { if (ls) ls.setItem(k, v); } catch (e) {} };
+    if (isStaffDevice(get)) return;
+    if (typeof navigator !== "undefined" && isBotAgent(navigator.userAgent, navigator.webdriver)) return;
+    const nowMs = Date.now(), nowIso = new Date(nowMs).toISOString();
+    const throttleKey = "he_lo_" + target.jobId + "_" + target.key;
+    let last = null;
+    try { last = get(throttleKey); } catch (e) {}
+    if (!shouldRecordOpen(last, nowMs)) return;
+    put(throttleKey, nowIso);
+    let deviceId = null;
+    try { deviceId = get("he_link_device"); } catch (e) {}
+    if (!deviceId || !LINK_KEY_SAFE.test(deviceId)) {
+      deviceId = "d_" + Math.random().toString(36).slice(2, 12);
+      put("he_link_device", deviceId);
+    }
+    const label = deviceLabel(typeof navigator !== "undefined" ? navigator.userAgent : "");
+    const ref = doc(db, "link_opens", target.jobId);
+    getDoc(ref).catch(() => null).then((snap) => {
+      const prev = snap && snap.exists() ? ((((snap.data() || {}).links) || {})[target.key] || {}) : {};
+      const entry = {
+        opens: increment(1),
+        lastAt: nowIso,
+        devices: { [deviceId]: { label, opens: increment(1), lastAt: nowIso } },
+      };
+      if (snap && !prev.firstAt) entry.firstAt = nowIso;
+      return setDoc(ref, { links: { [target.key]: entry }, updated_at: nowIso }, { merge: true });
+    }).catch((e) => console.warn("[HE link-opens] write failed:", e && e.message));
+  } catch (e) {
+    console.warn("[HE link-opens] skipped:", e && e.message);
+  }
+}
+
+// Office side: live read of link_opens/{jobId}. null = loading / failed / off
+// (callers render nothing — never a wrong "Not opened"); {} = no opens yet.
+function useLinkOpens(jobId) {
+  const [links, setLinks] = useState(null);
+  useEffect(() => {
+    if (!jobId) { setLinks(null); return; }
+    let alive = true;
+    const unsub = onSnapshot(doc(db, "link_opens", String(jobId)),
+      (snap) => { if (alive) setLinks(snap.exists() ? (((snap.data() || {}).links) || {}) : {}); },
+      (e) => { console.warn("[HE link-opens] read failed:", e && e.message); if (alive) setLinks(null); });
+    return () => { alive = false; unsub(); };
+  }, [jobId]);
+  return links;
+}
+const LINK_OPEN_DOT = { on: C.green, once: C.blue, late: C.red };
+function LinkOpensLine({ opens, linkKey, createdAt = null, style }) {
+  const [open, setOpen] = useState(false);
+  if (!opens || !linkKey) return null;
+  const entry = opens[linkKey] || null;
+  const nowMs = Date.now();
+  const st = linkOpenState(entry, createdAt, nowMs, LINK_OPENS_SINCE);
+  const solid = LINK_OPEN_DOT[st.state];
+  const dot = (
+    <span style={{ width: 8, height: 8, borderRadius: "50%", flex: "none", display: "inline-block", boxSizing: "border-box",
+      background: solid || "transparent", border: solid ? "none" : `1.5px ${st.state === "pre" ? "dashed" : "solid"} ${C.muted}` }}/>
+  );
+  const color = st.state === "on" ? C.green : st.state === "late" ? C.red : C.dim;
+  const base = { display: "inline-flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 10.5, fontWeight: 600, color,
+    fontFamily: "inherit", background: "none", border: "none", padding: "2px 0", textAlign: "left", ...(style || {}) };
+  if (st.opens === 0) return <span style={base}>{dot}{st.label}</span>;
+  const devs = Object.entries((entry && entry.devices) || {})
+    .map(([id, d]) => ({ id, ...(d || {}) }))
+    .sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
+  const kv = (k, v) => (
+    <div style={{ display: "flex", gap: 10 }}>
+      <span style={{ width: 92, flex: "none" }}>{k}</span>
+      <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>{v || "—"}</span>
+    </div>
+  );
+  return (
+    <div>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ ...base, cursor: "pointer" }}>
+        {dot}{st.label}
+        <span style={{ color: C.muted, fontSize: 9, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+      </button>
+      {open && (
+        <div style={{ margin: "6px 0 2px 14px", padding: "8px 10px", background: "#fff", border: `1px solid ${C.border}`,
+          borderRadius: 8, fontSize: 11, color: C.dim, display: "grid", gap: 4, maxWidth: 420 }}>
+          {kv("First opened", formatOpenWhen(entry.firstAt, nowMs))}
+          {kv("Last opened", formatOpenWhen(entry.lastAt, nowMs))}
+          <div style={{ borderTop: "1px solid #E7EAEF", margin: "3px 0" }}/>
+          {devs.map(d => (
+            <div key={d.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", fontVariantNumeric: "tabular-nums" }}>
+              <b style={{ fontWeight: 600, color: C.text }}>{String(d.label || "Unknown device")}</b>
+              <span>{(Number(d.opens) || 0)}× · last {formatOpenWhen(d.lastAt, nowMs)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+// Self-subscribing variant for spots that show one link (Task 4).
+function LinkOpens({ jobId, linkKey, createdAt = null, style }) {
+  const opens = useLinkOpens(jobId);
+  return <LinkOpensLine opens={opens} linkKey={linkKey} createdAt={createdAt} style={style}/>;
+}
+
 // Who usage is counted for: set from the internal app shell's render (never
 // from a share-link / GC-portal / homeowner page — those return before App's
 // hooks), and null for contractors. Same module-level pattern as
@@ -58990,8 +59230,16 @@ function ToolsView({ jobs, onUpdateJob, who }) {
 let _usageUser = null;
 const _usageMemSeen = new Set();   // session fallback when localStorage throws
 let _usagePruned = false;
+let _staffMarked = false;
 function _setUsageUser(identity) {
   _usageUser = (identity && identity.id && getAccess(identity) !== "contractor") ? identity : null;
+  // Link opens: any device that has rendered the app shell signed in (contractors
+  // included) is staff forever, so its share-link opens never count — even
+  // after the PIN expires and he_identity is cleared.
+  if (!_staffMarked && identity && identity.id) {
+    _staffMarked = true;
+    try { localStorage.setItem("he_staff_device", "1"); } catch (e) {}
+  }
 }
 // Fire-and-forget: count one open of <kind>/<key> for today, at most once per
 // device per user per day. Never throws, never blocks, never toasts.
@@ -62347,6 +62595,9 @@ function GCPortalDetail({ job, link, P, livePlans, initialSection, onClose }) {
 }
 
 function App() {
+  // Link opens: count this load if it's a share link (no-op for the app itself).
+  recordLinkOpen();
+
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
