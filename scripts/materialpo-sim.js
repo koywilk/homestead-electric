@@ -130,6 +130,7 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     assert.strictEqual(simpro.pos[0].AssignedTo, 18864, "rough cost center"); assert.strictEqual(simpro.pos[0].Vendor, 13);
     assert.strictEqual(simpro.pos[0].DueDate, "2026-10-09");
     assert.strictEqual(simpro.patches.length, 1, "marked Sent to Supplier");
+    assert.strictEqual(simpro.patches[0].body.StatusAutoAdjust, true, "auto-adjust stays on, like a Simpro Mobile PO, so receipting completes it");
     const att = mails[0].attachments || [];
     if (HAS_PDF) {
       assert.strictEqual(att.length, 1, "the PO form PDF is attached");

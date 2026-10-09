@@ -181,7 +181,9 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     try {
       const st = (await statuses()).find(s => /sent to supplier/i.test(String(s.Name || "")));
       if (!st) { functions.logger.warn("[materialPO] no 'Sent to Supplier' status in Simpro", { simproPoId }); return false; }
-      const r = await simproReqWithRetry("PATCH", `/vendorOrders/${simproPoId}`, { Status: st.ID, StatusAutoAdjust: false });
+      // Auto-adjust stays ON like a Simpro Mobile PO, so receipting moves it to Completed on its own
+      // (verified on test PO 7249: Status 24 + auto true keeps "Sent to Supplier").
+      const r = await simproReqWithRetry("PATCH", `/vendorOrders/${simproPoId}`, { Status: st.ID, StatusAutoAdjust: true });
       if (!r.ok) { functions.logger.warn("[materialPO] couldn't mark Sent to Supplier", { simproPoId, status: r.status, data: r.data }); return false; }
       return true;
     } catch (e) { functions.logger.warn("[materialPO] couldn't mark Sent to Supplier", { simproPoId, error: e.message }); return false; }
