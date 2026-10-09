@@ -40,6 +40,14 @@ t("cost center: Base section first, phase by company cost center", () => {
   eq(R.pickCostCenter([{ ID: 1, DisplayOrder: 1, ccs: [{ ID: 9, Name: "Gear", CostCenter: { Name: "Commercial (Rough In)" } }] }], "rough").id, 9, "commercial rough");
   eq(R.pickCostCenter([{ ID: 1, ccs: [{ ID: 9, CostCenter: { Name: "Residential (Generators)" } }] }], "rough"), null, "no match → null");
   eq(R.pickCostCenter(sections, "gear"), null, "unknown phase → null");
+  // v527: commercial Materials tab — the card names the cost center by ID
+  const comm = [{ ID: 20104, DisplayOrder: 1, ccs: [{ ID: 18144, Name: "Rough In ", CostCenter: { Name: "Commercial (Rough In)" } }] },
+                { ID: 20106, DisplayOrder: 3, ccs: [{ ID: 18148, Name: "Site Underground", CostCenter: { Name: "Commercial (Site Work)" } }, { ID: 18149, Name: "Power Feeds" }] }];
+  eq(R.pickCostCenterById(comm, 18148).name, "Site Underground", "by id → Site Underground");
+  eq(R.pickCostCenterById(comm, "18148").sectionId, 20106, "string id works, section kept");
+  eq(R.pickCostCenterById(comm, 18149).costCenter, "Power Feeds", "no company CC → falls back to the job CC name");
+  eq(R.pickCostCenterById(comm, 99999), null, "unknown id → null (caller asks to pick again)");
+  eq(R.pickCostCenterById(comm, ""), null, "blank id → null");
 });
 
 t("card list → clean lines", () => {

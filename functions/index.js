@@ -5770,7 +5770,8 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
 // ─── Sync Simpro POs into a job's material orders ─────────────────────────
 // Read-only from Simpro. Writes ONLY to the app's Firestore job document.
 // Pulls the open POs Simpro has for one job, matches them to existing
-// roughMaterials / finishMaterials entries by supplier source, and fills
+// roughMaterials / finishMaterials / commMaterials (v527, commercial
+// Materials tab) entries by supplier source, and fills
 // in fields the user hasn't manually set yet:
 //   • po           — the Simpro PO number (only if empty)
 //   • ordered      — flipped true only if false (preserves manual override)
@@ -6177,12 +6178,16 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
 
     const roughResult = reconcilePhase(jobData?.roughMaterials);
     const finishResult = reconcilePhase(jobData?.finishMaterials);
+    // v527: commercial Materials tab cards. Same claimed-PO set, so one Simpro
+    // PO never lands on two cards. Only written when the job already has the list.
+    const commResult = Array.isArray(jobData?.commMaterials) ? reconcilePhase(jobData.commMaterials) : { changed: false, next: [] };
 
     // ── 6. Write only if something actually changed ─────────────────────
-    if (roughResult.changed || finishResult.changed) {
+    if (roughResult.changed || finishResult.changed || commResult.changed) {
       const payload = {};
       if (roughResult.changed) payload["data.roughMaterials"] = roughResult.next;
       if (finishResult.changed) payload["data.finishMaterials"] = finishResult.next;
+      if (commResult.changed) payload["data.commMaterials"] = commResult.next;
       payload["data.simproPOsLastSyncedAt"] = nowIso;
       await jobRef.update(payload);
     }
@@ -6264,7 +6269,8 @@ exports.scheduledSimproPOSync = functions
       if (status === "completed" || status === "archived" || job.archived) return;
       const rough = Array.isArray(job.roughMaterials) ? job.roughMaterials : [];
       const finish = Array.isArray(job.finishMaterials) ? job.finishMaterials : [];
-      const all = [...rough, ...finish];
+      const comm = Array.isArray(job.commMaterials) ? job.commMaterials : []; // v527
+      const all = [...rough, ...finish, ...comm];
       // Has any order not yet linked to a Simpro PO?
       const hasPending = all.some(o => o && !o.simproPoId && o.source && o.source !== "Shop");
       if (!hasPending && all.length > 0) return;

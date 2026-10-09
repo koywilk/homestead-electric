@@ -44,6 +44,22 @@ function pickCostCenter(sections, phase) {
   return null;
 }
 
+// v527: the commercial Materials tab names the cost center on the card (the Simpro
+// job cost center ID, picked from the job's own list), so there is no guessing.
+function pickCostCenterById(sections, ccId) {
+  const want = String(ccId == null ? "" : ccId).trim();
+  if (!want) return null;
+  for (const s of sections || []) {
+    for (const cc of (s && s.ccs) || []) {
+      if (cc && String(cc.ID) === want) {
+        const company = cc.CostCenter && cc.CostCenter.Name;
+        return { id: cc.ID, name: String(cc.Name || "").trim(), costCenter: company || String(cc.Name || "").trim(), sectionId: s.ID };
+      }
+    }
+  }
+  return null;
+}
+
 // The card stores the list as HTML (<br>, <div>, entities). One clean line per item.
 function itemsToLines(items) {
   return String(items || "")
@@ -204,6 +220,6 @@ function logKey(jobId, phase, orderId) {
   return /^[A-Za-z0-9-]+_(rough|finish)_[A-Za-z0-9_-]+$/.test(k) ? k : "";
 }
 
-module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, itemsToLines, shortDate, cardDateToIso,
+module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
   pickupLine, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
   poList, cleanOrderGroups, orderLine, groupKey };

@@ -7066,7 +7066,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"materials","title":"Materials — Commercial Ordering Guide","file":"/sops/materials.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -8070,6 +8070,8 @@ function NeedsAttention({jobs, onSelectJob}) {
     const finPOs   = matsHidden ? [] : (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
     if(roughPOs.length) unsentPOs.push({job, name, count:roughPOs.length, phase:'Rough', orders:roughPOs});
     if(finPOs.length)   unsentPOs.push({job, name, count:finPOs.length, phase:'Finish', orders:finPOs});
+    const commPOs = matsHidden ? [] : (job.commMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp); // v527
+    if(commPOs.length)    unsentPOs.push({job, name, count:commPOs.length, phase:'Materials', orders:commPOs});
 
     // Waiting punch items
     const rw = flatPunchWaiting(job.roughPunch);
@@ -13578,6 +13580,10 @@ const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").r
 const poTodayMDY = () => new Date().toLocaleDateString("en-US");
 const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
 
+// v527: Material Tracking runs in three places — residential Rough / Finish and the
+// commercial Materials tab (job.commMaterials, phase "comm"; each card picks the
+// Simpro cost center it is charged to, sent to sendMaterialPO as ccId).
+const matPhaseLabel = (ph) => ph === "finish" ? "Finish" : ph === "comm" ? "Materials" : "Rough-In";
 function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,bid=null,onRefreshBid=null,onUpsertCards=null,openBuilder=false,onBuilderClosed=null}) {
   const safeOrders = Array.isArray(orders) ? orders : [];
   // v523: the Send sheet — {id, get, date, busy, error, done}
@@ -13762,7 +13768,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                   if (kind === "email" && !poPlainLines(o.items).length) return hint(`Type the material list, then Send to ${o.source}.`);
                   const label = emailRetry ? `Resend email for PO ${o.po}` : kind === "email" ? `Send to ${o.source}` : "Get a PO number";
                   return (
-                    <button onClick={()=>setSendSheet({id:o.id, get:"willcall", date:o.pickupDate||poTomorrowMDY(), busy:false, error:"", done:null})}
+                    <button onClick={()=>setSendSheet({id:o.id, get:"willcall", date:o.pickupDate||poTomorrowMDY(), busy:false, error:"", done:null, cc:String(o.chargeCcId||o.poCcId||"")})}
                       style={{marginTop:8,width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:9,
                         padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                       {label}
@@ -14001,7 +14007,13 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
         const lines = poPlainLines(o.items);
         const busy = !!sendSheet.busy, done = sendSheet.done;
         const close = () => { if (!busy) setSendSheet(null); };
-        const phaseLabel = phase === "finish" ? "Finish" : "Rough-In";
+        const phaseLabel = matPhaseLabel(phase);
+        // v527: commercial Materials tab — each card picks the Simpro cost center it's charged to.
+        const isComm = phase === "comm";
+        const ccOpts = (bid && Array.isArray(bid.costCenters) ? bid.costCenters : []).filter(c => c && c.ccId != null)
+          .map(c => ({ id: String(c.ccId), label: [c.sectionName, String(c.ccName || "").trim()].filter(Boolean).join(" · ") }));
+        const ccPick = ccOpts.find(c => c.id === String(sendSheet.cc || "")) || null;
+        const needCc = isComm && !ccPick;
         const chip = (val, label) => (
           <button key={val} type="button" disabled={busy} onClick={()=>setSendSheet(s=>({...s, get:val}))}
             style={{fontFamily:"inherit",fontSize:13,borderRadius:99,padding:"6px 12px",cursor:"pointer",
@@ -14011,15 +14023,18 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
         const send = async () => {
           const me = getIdentity();
           if (!me) { setSendSheet(s=>({...s, error:"Sign in again, then send."})); return; }
+          if (needCc) { setSendSheet(s=>({...s, error:"Pick which cost center this order is charged to."})); return; }
           setSendSheet(s=>({...s, busy:true, error:""}));
           try {
             const r = await memberCallable("sendMaterialPO", me)({ jobId, phase, orderId:o.id, source:o.source,
-              items:o.items||"", get:sendSheet.get, date:sendSheet.date||"", clientTest:MATERIAL_PO_TEST });
+              items:o.items||"", get:sendSheet.get, date:sendSheet.date||"", clientTest:MATERIAL_PO_TEST,
+              ...(isComm ? { ccId: ccPick.id } : {}) });
             const res = (r && r.data) || {};
             if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
             const patch = { po:String(res.poNo), simproPoId:String(res.poNo), poSentVia:"app", poSentMode:res.mode||"",
               poSentBy:me.name||"", poSentAt:poTodayMDY(), poCostCenter:res.costCenter||"",
-              poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", ") };
+              poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", "),
+              ...(isComm ? { chargeCcId: ccPick.id, chargeCcName: ccPick.label } : {}) };
             if (res.kind !== "email" || res.emailOk) Object.assign(patch, { ordered:true, orderedBy:me.name||"", orderedAt:poTodayMDY() });
             // Dates fill only if still empty on the LIVE card (someone may have typed one meanwhile).
             const pickDate = sendSheet.date;
@@ -14069,8 +14084,26 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1}}>
                     {kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? `Resend PO ${o.po}` : `Send to ${o.source}`) : "Get a PO number"}
                   </div>
-                  <div style={{fontSize:12,color:C.dim,marginTop:3}}>{phaseLabel} · charged to this job's {phaseLabel} in Simpro</div>
+                  <div style={{fontSize:12,color:C.dim,marginTop:3}}>{isComm ? (ccPick ? `Charged to ${ccPick.label} in Simpro` : "Pick the cost center it's charged to") : `${phaseLabel} · charged to this job's ${phaseLabel} in Simpro`}</div>
                 </div>
+                {isComm && (
+                  <div style={{display:"grid",gap:6}}>
+                    <label htmlFor={`po-cc-${o.id}`} style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Charge to</label>
+                    {ccOpts.length ? (
+                      <select id={`po-cc-${o.id}`} value={ccPick ? ccPick.id : ""} disabled={busy}
+                        onChange={e=>{ const v = e.target.value; const c = ccOpts.find(x => x.id === v); setSendSheet(s=>({...s, cc:v, error:""}));
+                          if (c && onPatchOrder) onPatchOrder(o.id, { chargeCcId: c.id, chargeCcName: c.label }); }}
+                        style={{fontFamily:"inherit",fontSize:14,padding:"9px 10px",borderRadius:10,border:`1px solid ${needCc?"#B23A3A":C.border}`,background:C.card,color:C.text}}>
+                        <option value="">Pick a cost center…</option>
+                        {ccOpts.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                      </select>
+                    ) : (
+                      <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                        This job's Simpro cost centers aren't loaded yet. {onRefreshBid ? <button type="button" onClick={onRefreshBid} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,color:C.accent,background:"none",border:"none",padding:0,cursor:"pointer",textDecoration:"underline"}}>Load them</button> : "Open Bid Items to load them."}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {MATERIAL_PO_TEST && (
                   <div style={{fontSize:12,color:C.accent,background:"rgba(59,91,165,0.08)",border:"1px solid rgba(59,91,165,0.3)",borderRadius:10,padding:"8px 10px"}}>
                     Test mode: the PO is really made in Simpro, but the email goes only to the test inbox, never to {o.source}.
@@ -14100,8 +14133,8 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 {sendSheet.error && (
                   <div style={{fontSize:13,color:"#B23A3A",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>{sendSheet.error}</div>
                 )}
-                <button onClick={send} disabled={busy} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
-                  padding:14,background:busy?C.border:C.accent,color:"#fff",cursor:busy?"default":"pointer"}}>
+                <button onClick={send} disabled={busy || needCc} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
+                  padding:14,background:(busy || needCc)?C.border:C.accent,color:"#fff",cursor:(busy || needCc)?"default":"pointer"}}>
                   {busy ? "Sending…" : kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? "Resend email" : `Send to ${o.source}`) : "Get a PO number"}
                 </button>
                 <button onClick={close} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,
@@ -14269,7 +14302,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
   const setLine = (id, catalogId, qty) => setDraft(d => ({ ...d, lines: { ...d.lines, [id]: { ...(d.lines[id] || {}), [catalogId]: Math.max(0, Math.round((Number(qty) || 0) * 100) / 100) } } }));
   const addTyped = (id, t) => { const v = String(t || "").trim(); if (!v) return; setDraft(d => ({ ...d, typed: { ...d.typed, [id]: [...(d.typed[id] || []), v] } })); };
   const delTyped = (id, i) => setDraft(d => ({ ...d, typed: { ...d.typed, [id]: (d.typed[id] || []).filter((_, k) => k !== i) } }));
-  const phaseLabel = phase === "finish" ? "Finish" : "Rough-In";
+  const phaseLabel = matPhaseLabel(phase);
   const goCount = (c) => (c.rows || []).filter(r => poIsMaterialRow(r) && poToGo(r) > 0).length;
   const madePo = (id) => { const m = (draft.made || []).find(x => Number(x.ccId) === Number(id)); return m ? m.poNo : null; };
   const madeNote = (id) => madePo(id) && box(<span style={{color:"#B06A2C"}}>PO {madePo(id)} is already made for this cost center. Changes here won't change it. Put anything new on another cost center, or on a new order after this one is sent.</span>);
@@ -15191,10 +15224,10 @@ function bidWireRollup(costCenters) {
 // Whole-job view of every PO card from Rough + Finish Material Tracking, on the
 // Bid Items tab next to what the bid calls for. Read-only; "Order material"
 // adds a card to the phase's Material Tracking so every order lives in one place.
-function JobOrdersSummary({job, onOrder}) {
+function JobOrdersSummary({job, onOrder, phases = ["rough","finish"]}) {
   const [picking, setPicking] = useState(false);
   const tag = (list, ph) => (Array.isArray(list) ? list : []).filter(Boolean).map(o => ({...o, _ph: ph}));
-  const rows = [...tag(job.roughMaterials, "Rough-In"), ...tag(job.finishMaterials, "Finish")]
+  const rows = [...tag(job.roughMaterials, "Rough-In"), ...tag(job.finishMaterials, "Finish"), ...tag(job.commMaterials, "Materials")]
     .filter(o => o.po || o.source || poPlainLines(o.items).length);
   const state = (o) => o.pickedUp ? ["Picked Up","done",2] : o.deliveredToShop ? ["Delivered to Shop","done",2]
     : o.ordered ? ["Order Sent","inprogress",1] : o.needsOrder ? [o.source==="Shop"?"Needs to be Picked Up":"Need to Order","needs",0] : ["Saved","neutral",1];
@@ -15202,13 +15235,13 @@ function JobOrdersSummary({job, onOrder}) {
   const open = rows.filter(o => !o.pickedUp && !o.deliveredToShop).length;
   return (
     <Section label={`Orders · ${rows.length}${open ? ` · ${open} open` : ""}`} color={C.accent}>
-      <div style={{fontSize:12,color:C.dim,marginBottom:10}}>Every PO card from Rough and Finish Material Tracking on this job.</div>
+      <div style={{fontSize:12,color:C.dim,marginBottom:10}}>Every PO card from Material Tracking on this job.</div>
       {picking ? (
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
-          {["rough","finish"].map(ph => (
+          {phases.map(ph => (
             <button key={ph} onClick={()=>{ setPicking(false); onOrder(ph); }}
               style={{flex:1,minWidth:120,background:C.accent,color:"#fff",border:"none",borderRadius:9,padding:"10px 12px",
-                fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{ph==="rough"?"For Rough-In":"For Finish"}</button>
+                fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{`For ${matPhaseLabel(ph)}`}</button>
           ))}
           <button onClick={()=>setPicking(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:9,
             padding:"10px 12px",fontSize:13,color:C.dim,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
@@ -27475,7 +27508,7 @@ const TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Rough"
 
               "Change Orders","Return Trips","Open Items","Completed","QC"];
 // ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Materials","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
 // v467: the on-site commercial phase tabs (Koy: "power, lighting, gear, underground;
 // tabs inside of underground: utility work, building site work, building
 // underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
@@ -27633,7 +27666,7 @@ const JOB_SECTIONS = [
     hasData:(j)=>!!j.hasTempPed },
   { key:"materials", label:"Material Tracking",
     where:"Rough + Finish · Material Tracking + Count List · PO buttons on notes, punch, panels",
-    hasData:(j)=>(j.roughMaterials||[]).length>0 || (j.finishMaterials||[]).length>0 ||
+    hasData:(j)=>(j.roughMaterials||[]).length>0 || (j.finishMaterials||[]).length>0 || (j.commMaterials||[]).length>0 ||
       (j.roughTally||[]).length>0 || (j.finishTally||[]).length>0 },
 ];
 const JOB_SECTION_BY_KEY = Object.fromEntries(JOB_SECTIONS.map(s => [s.key, s]));
@@ -28308,7 +28341,7 @@ function getAllActiveNotes(notes) {
 
 const normalizeJob = (raw) => ({
   changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
-  roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
+  roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[], commMaterials:[],
   homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
   roughQuestions:{upper:[],main:[],basement:[]},
   finishQuestions:{upper:[],main:[],basement:[]},
@@ -28332,6 +28365,7 @@ const normalizeJob = (raw) => ({
   roughMaterials: raw?.roughMaterials || [],
   roughUpdates:   raw?.roughUpdates   || [],
   finishMaterials:raw?.finishMaterials|| [],
+  commMaterials: raw?.commMaterials || [], // v527: commercial Underground tab
   finishUpdates:  raw?.finishUpdates  || [],
   roughPunch:  raw?.roughPunch  || {},
   finishPunch: raw?.finishPunch || {},
@@ -32858,6 +32892,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
+          {/* v527 (Braden, Koy): a Materials tab on commercial job cards — the residential
+              Material Tracking, one list for the job (job.commMaterials). Each card picks the
+              Simpro cost center it's charged to; Order from the bid charges each line's own. */}
+          {tab==="Materials" && isCommercial(job) && (
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>MATERIALS</div><HelpDot section="materials"/></div>
+              <MaterialOrders orders={job.commMaterials} onChange={v=>u({commMaterials:v})}
+                simproNo={job.simproNo} jobId={job.id} phase="comm"
+                onPatchOrder={(id,p)=>{ /* reconcile against the live job copy, never this render's list (v523 rule) */
+                  const cur = Array.isArray(jobRef.current.commMaterials) ? jobRef.current.commMaterials : [];
+                  if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
+                  u({commMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}
+                bid={simproStock} onRefreshBid={refetchSimproStock}
+                openBuilder={builderPhase==="comm"} onBuilderClosed={()=>setBuilderPhase(null)}
+                onUpsertCards={!simproJobNoOf(job) ? null : (cards)=>{ /* v524 dedupe by order + cost center, on the live copy */
+                  const cur = Array.isArray(jobRef.current.commMaterials) ? jobRef.current.commMaterials : [];
+                  const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                  const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                  for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                  u({commMaterials:next}); }}/>
+            </div>
+          )}
           {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab} assigneeOptions={punchAssigneeOptions}/>)}
           {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
           {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
@@ -32941,16 +32997,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               job's Simpro bid, plus Required vs Assigned. Its own tab since
               v510; the data still loads when the job opens (simproCostCenters /
               simproStock effects above), so switching here is instant. */}
-          {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&tabsFor(job).includes("Rough")&&(
-            <JobOrdersSummary job={job} onOrder={(ph)=>{
+          {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&(tabsFor(job).includes("Rough")||isCommercial(job))&&(
+            <JobOrdersSummary job={job} phases={isCommercial(job) ? ["comm"] : ["rough","finish"]} onOrder={(ph)=>{
               // v523: a fresh card on the right phase, reconciled against the live job copy.
-              const key = ph==="finish" ? "finishMaterials" : "roughMaterials";
+              // v527: commercial jobs order onto their Materials tab.
+              const key = ph==="finish" ? "finishMaterials" : ph==="comm" ? "commMaterials" : "roughMaterials";
               const cur = Array.isArray(jobRef.current[key]) ? jobRef.current[key] : [];
-              setTab(ph==="finish" ? "Finish" : "Rough");
+              setTab(ph==="finish" ? "Finish" : ph==="comm" ? "Materials" : "Rough");
               // v524: admins (test) / senders (live) get the order screen; everyone else a blank card, as before.
               if (simproJobNoOf(job) && can(getIdentity(), "materials.sendPO")) { setBuilderPhase(ph); return; }
               u({[key]:[...cur,{id:uid(),date:"",po:"",pickupDate:"",source:"CED",items:"",pickedUp:false,needsOrder:true}]});
-              if (typeof toast !== "undefined" && toast.success) toast.success(`New PO card added under ${ph==="finish"?"Finish":"Rough"} → Material Tracking`);
+              if (typeof toast !== "undefined" && toast.success) toast.success(ph==="comm" ? "New PO card added on the Materials tab" : `New PO card added under ${ph==="finish"?"Finish":"Rough"} → Material Tracking`);
             }}/>
           )}
           {tab==="Bid Items"&&(
@@ -37142,10 +37199,10 @@ function buildJobActivity(job, cfg) {
     return {
       label: `${phase} · ${o.source || "Materials"} · ${status}`,
       detail: cleanText(o.items).slice(0,80),
-      sourceTab: phase === "Rough" ? "Rough" : "Finish",
+      sourceTab: phase === "Rough" ? "Rough" : phase === "Materials" ? "Materials" : "Finish",
     };
   });
-  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish")];
+  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish"), ...matsBucket(job.commMaterials,"Materials")];
   if (matsAll.length && !isSectionHidden(job, "materials")) groups.push({ key:"materials", label:"Materials & POs", items: matsAll }); // v440
 
   // ── QUESTIONS ─────────────────────────────────────────────────────
@@ -53667,10 +53724,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-08 · App SW version: v527
+**Last manifest update:** 2026-10-08 · App SW version: v528
 
 ---
 
+- **Commercial job cards get a Materials tab: the residential Material Tracking, one list per job, each order charged to a cost center you pick** · 'shipped 2026-10-09' · 'SW v528' · Braden (a Need on Riverton & Laundromat): *"Material tracking section for this job. Underground portion."* Koy: *"i mean like material tracking in residential"*, *"yes full"*, then *"i think the job cards should just have a material ordering tab instead of just in the undergrouhd section"* (commercial only; pick the cost center on each card). 'COMM_TABS' gains **Materials** after Bid Items; the tab renders the residential 'MaterialOrders' with phase '"comm"', stored in a new job list 'commMaterials' (loader + defaults; written through 'u()' with the v523 live-copy reconcile for Send and the v524 order-by-cost-center upsert). **Charge to:** on a commercial card the Send sheet lists the job's Simpro cost centers from the stock cache ('Section · Cost center'); Send stays disabled until one is picked; the pick is saved on the card ('chargeCcId' / 'chargeCcName') and sent as 'ccId'. **Server:** 'sendMaterialPO' requires 'ccId' for phase 'comm' and charges exactly that job cost center ('pickCostCenterById' in 'materialPO/rules.js'); Rough / Finish still match by phase, unchanged. Order from the bid ('sendMaterialOrder') already charges each line's own cost center, unchanged. **Simpro PO sync** ('syncSimproPOsForJob' + 'scheduledSimproPOSync') reconciles 'commMaterials' as a third pass sharing the claimed-PO set and counts its cards when picking candidate jobs. Commercial orders also show in the unsent-PO list and Open Items ("Materials"), the Bid Items order summary (commercial jobs now get it; Order material opens the Materials tab) and the Material Tracking job-section check. New guide 'materials.html' (registered in 'SOP_FILES_INLINE'). Tests: 'scripts/materialpo-test.js' gains 5 by-id cases. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:syncSimproPOsForJob,functions:scheduledSimproPOSync' (deployed 2026-10-09 before the app push).** **Why it won't lose data:** the new list is additive on the job ('data.commMaterials'), written through the same 'u()' funnel (version stamp kept) and live-copy reconciles as Rough / Finish; the PO sync writes 'commMaterials' only on jobs that already have it, and only the fields it already fills on the other two lists; Rough / Finish code paths and cost-center rules are unchanged; no rules change.
 - **Job Start: every log-linked item can be checked by hand (Phases 2, 3 and 5 too)** · 'shipped 2026-10-09' · 'SW v527' · Justin, on Phase 5 RELEASED + PO: *"This is still forcing me to upload something that I don't want to have to upload to check the box."* v522 only unlocked Phase 4. The remaining seven '"trk"' items (2 PROJECT FOLDERS; 3 LONG-LEAD REQUESTED, LEAD TIMES + PRICING; 5 RELEASED + PO, SHIP DATES IN WRITING, PROCUREMENT LOG, SHIP COMPLETE / SPLIT) become '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so a job the logs already closed never slides back. No Job Start step is '"trk"' any more (the code path stays). Guide 'jobstart.html' lists every log-linked item. **Why it won't lose data:** hand checks use the existing 'patchStart' write into 'commercial.start.items', the same shape as every item; nothing existing is rewritten; no loader, rules or function change.
 - **Easier to read and use: the axe accessibility pass** · 'shipped 2026-10-08' · 'SW v526' · Koy: *"go ahead, fix all"* after an axe-core scan of the live app (10 tabs + a job card). **Zoom:** the viewport no longer sets 'user-scalable=no'; desktop and Android can pinch-zoom again, and iOS keeps 'maximum-scale=1' (set by a tiny inline script in 'public/index.html') only to stop Safari's tap-a-text-box zoom jump — iOS still pinch-zooms with it. **Contrast:** new 'src/a11y.js' 'readableInk(color, bg)' darkens a color just enough for 4.5:1 on a light background, same hue (lime '#84cc16' → readable green, bright blue/green/red foreman colors likewise); applied in 'getPersonColor' (so every crew name, schedule tile and foreman header), the Job Board lane headers ('StageSectionList'), 'Pill', the My Day message chips and the Matterport scan-status select. New token 'C.faint' '#666E79' replaces 'C.muted' ('#CDD3DB', 1.4:1) as a TEXT color at 352 sites; 'C.muted' stays for borders. Buttons with black text on the blue accent (left from the old yellow accent) are white now (21 sites). The 'View →' dim opacity is gone. **Touch:** job card tabs, Close and Refresh are at least 40px tall on touch screens ('.he-tap' / '.he-tap-sq', 'pointer:coarse' only, desktop unchanged); the Job Info Simpro **Pull** link got a 24px hit area. **Keyboard + screen reader:** 'installA11y()' (called once from 'src/index.js') gives every inline 'cursor:pointer' box that holds no controls of its own 'role=button' + 'tabindex=0' with Enter/Space to click, names unlabeled '<select>'s from the label drawn next to them, and draws a blue ':focus-visible' ring for keyboard users only. The job card is a 'role=dialog' with a name; the page has one '<main>' and a hidden '<h1>'. **Why it won't lose data:** display-only — no save path, loader, rules or functions touched; 'a11y.js' only sets DOM attributes React does not manage, and stored 'colorOverrides' are untouched (darkening happens on read).
 - **Crew POs from the app go LIVE: everyone but contractors can send POs to CED** · 'shipped 2026-10-08' · 'SW v525' · Koy: *"okay do those 5 steps and lets do it"* (after the v524 test runs worked and every test PO was archived). 'MATERIAL_PO_TEST' = **false** and 'PERMISSIONS["materials.sendPO"]' = admin, manager, standard, limited (Koy: everyone but contractors — leads and foremen send POs from Simpro Mobile today). Both send paths go live together: **New order from the bid** (v524, one PO per cost center, one email) and the card's **Send to CED** / **Get a PO number** (v523, the phase's Rough or Finish cost center). Live email: to CED's address on its Simpro vendor record ('homestead@cedaf.com', the same one Simpro Mobile pre-fills; Koy confirmed), CC bids@homesteadelectric.net + the sender's Simpro email, reply-to the sender (bids@ if they have none), from 'orders@homesteadelectric.cc', no '[TEST]'. The test notes on both send screens disappear with the flag. **Turn-on order:** this app version first, then 'gc_config/material_po.mode' = 'live' (Koy, Firestore console) — while the server is still on test, non-admins get "still being tested"; once live, any copy of the app still on v523/v524 is refused with "Update the app first" ('clientTest'). Test-send cards left on job 1444 show Send again once live (a test log never blocks a real send), so they get deleted rather than tapped. Guide 'rough.html' now covers both send paths and drops the office-only line. Training video [[Order from the Bid]] re-rendered without the testing line. **PO email moves to Google Workspace as bids@ (2026-10-09, functions only, no app version change):** the first live order (Keegan, PO 7250) was "delivered" to CED by Resend but never seen — 'cedaf.com' runs Mimecast, which held mail from the brand-new lookalike 'orders@homesteadelectric.cc'. PO emails now go out through Google from **bids@homesteadelectric.net**: new 'functions/materialPO/gmail.js' — service account 'po-mailer@homestead-electric.iam.gserviceaccount.com' (no roles; client ID 101108296202486355073) authorized by the Workspace admin (Josh) for domain-wide delegation with only 'gmail.send'; the functions' own account (Token Creator on po-mailer) signs a 1-hour JWT acting for 'gc_config/material_po.gmailUser' (default koy@homesteadelectric.net, whose Gmail has bids@ under "Send mail as") and sends 'From: Homestead Electric <bids@homesteadelectric.net>' via the Gmail upload endpoint; no password or long-lived token is stored. 'material_po.sender' = 'gmail' (default) or 'resend' (old path, kept as a switch). A Google failure is a visible failure (Send again), never a quiet fall back to .cc. New public 'poMailerTest' link sends one test email from bids@ to the gmailUser only, at most once a minute. Gates: materialpo-test 13 groups (+ MIME: headers, encoded subject, attachments, no header injection), materialpo-sim 26 scenarios (+ live order via Google with both PO forms and no Resend, Google failure → retry once with no .cc fallback, 'sender: resend' switch, test mode via Google → test inbox only; mutation-checked). **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder,functions:poMailerTest'.** **Why it won't lose data:** a constant and a permission list change; no field, loader, rules or function code touched (the server already had live mode, tested by 'materialpo-sim.js' live-routing scenarios).

@@ -109,13 +109,15 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     } catch (e) { return fallback; }
   }
 
-  async function costCenterFor(jobNo, phase) {
+  // v527: ccId (commercial Materials tab) picks that exact job cost center instead of matching the phase.
+  async function costCenterFor(jobNo, phase, ccId) {
     const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(jobNo)}/sections/`);
     if (!okList(r)) throw new HttpsError("unavailable", `Couldn't read job ${jobNo} from Simpro. ${simproErr(r)}`);
     const sections = [...r.data].sort((a, b) => (Number(a.DisplayOrder) || 0) - (Number(b.DisplayOrder) || 0));
     for (const s of sections) {
       const c = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(jobNo)}/sections/${s.ID}/costCenters/?columns=ID,Name,CostCenter`);
-      const hit = R.pickCostCenter([{ ...s, ccs: okList(c) ? c.data : [] }], phase);
+      const sec = [{ ...s, ccs: okList(c) ? c.data : [] }];
+      const hit = ccId ? R.pickCostCenterById(sec, ccId) : R.pickCostCenter(sec, phase);
       if (hit) return hit;
     }
     return null;
@@ -385,6 +387,8 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       const jobId = T(data.jobId), phase = T(data.phase), orderId = T(data.orderId);
       const key = R.logKey(jobId, phase, orderId);
       if (!key) throw new HttpsError("invalid-argument", "Missing job, phase or card.");
+      const ccId = phase === "comm" ? T(data.ccId) : ""; // v527: commercial Materials tab
+      if (phase === "comm" && !ccId) throw new HttpsError("invalid-argument", "Pick which cost center to charge first.");
       const rule = R.supplierRule(data.source);
       if (!rule) throw new HttpsError("invalid-argument", `The app can't send to ${T(data.source) || "that supplier"} yet. Pick CED, Home Depot, ACE or Amazon.`);
       const lines = R.itemsToLines(data.items);
@@ -393,8 +397,8 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       const { log, again } = await ensurePo({
         ref, key, cfg, user, base: { jobId, phase, orderId }, rule, lines, items: null,
         get: data.get === "deliver" ? "deliver" : "willcall", dueIso: R.cardDateToIso(data.date),
-        pickCc: (jobNo) => costCenterFor(jobNo, phase),
-        ccMissing: (jobNo) => `Couldn't find a ${phase === "rough" ? "Rough In" : "Finish"} cost center on Simpro job ${jobNo}.`,
+        pickCc: (jobNo) => costCenterFor(jobNo, phase, ccId),
+        ccMissing: (jobNo) => ccId ? `That cost center isn't on Simpro job ${jobNo} any more. Refresh Bid Items and pick it again.` : `Couldn't find a ${phase === "rough" ? "Rough In" : "Finish"} cost center on Simpro job ${jobNo}.`,
       });
       if (log.kind === "email" && !log.emailOk) {
         const r = await finishEmail(ref, cfg, log);
