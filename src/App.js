@@ -9,6 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
+import { readableInk } from "./a11y";
 import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
@@ -1910,6 +1911,7 @@ const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":3
 const C = {
   bg:"#EEF0F3", surface:"#F4F6F8", card:"#FFFFFF", border:"#E1E4E9",
   muted:"#CDD3DB", text:"#1B1F24", dim:"#5E6670", accent:"#3B5BA5",
+  faint:"#666E79", // text that used C.muted (1.4:1) — 4.5:1 on every page background
   blue:"#3B5BA5", green:"#3E7D5A", red:"#B23A3A", purple:"#6A5E97",
   orange:"#B06A2C", teal:"#3E7D7A", rough:"#3B5BA5", finish:"#6A7BAA",
 };
@@ -5125,7 +5127,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
           </div>
         )}
         <button onClick={newUser}
-          style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
+          style={{background:C.accent,border:"none",borderRadius:9,color:"#fff",
             fontWeight:700,padding:"8px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
           + Add Person
         </button>
@@ -5166,7 +5168,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
                         {TITLE_OPTIONS.map(t=><option key={t} value={t}>{TITLE_LABELS[t]}</option>)}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Field role — which card group they appear in</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Field role — which card group they appear in</div>
                     </div>
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>ACCESS LEVEL</div>
@@ -5176,7 +5178,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           fontWeight:700,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
                         {ACCESS_OPTIONS.map(a=><option key={a} value={a} style={{color:C.text,fontWeight:400}}>{ACCESS_LABELS[a]}</option>)}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>What they can see and do</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>What they can see and do</div>
                     </div>
                   </div>
                   {/* Access description */}
@@ -5195,7 +5197,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         <option value="">Residential (default)</option>
                         <option value="commercial">Commercial</option>
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which division they land in at login — for people who mostly work commercial</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Which division they land in at login — for people who mostly work commercial</div>
                     </div>
                   )}
                   {/* Company hats — per-user grants for centralized duties (job
@@ -5215,12 +5217,12 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                               <input type="checkbox" checked={on}
                                 onChange={e=>{ const cur=Array.isArray(u.caps)?u.caps:[]; const next=e.target.checked?[...new Set([...cur,cap])]:cur.filter(c=>c!==cap); upd(u.id,{caps:next}); }}
                                 style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
-                              <span style={{fontSize:12,color:on?C.text:C.muted}}>{label}</span>
+                              <span style={{fontSize:12,color:on?C.text:C.faint}}>{label}</span>
                             </label>
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
                     </div>
                   )}
                   {/* Tool access (v484) — per-user grants for Tools tab calculators that
@@ -5237,12 +5239,12 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                               <input type="checkbox" checked={on}
                                 onChange={e=>{ const cur=Array.isArray(u.caps)?u.caps:[]; const next=e.target.checked?[...new Set([...cur,t.perm])]:cur.filter(c=>c!==t.perm); upd(u.id,{caps:next}); }}
                                 style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
-                              <span style={{fontSize:12,color:on?C.text:C.muted}}>{t.label}</span>
+                              <span style={{fontSize:12,color:on?C.text:C.faint}}>{t.label}</span>
                             </label>
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -5259,7 +5261,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         <input type="date" value={u.coverUntil||""} onChange={e=>upd(u.id,{coverUntil:e.target.value})}
                           style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"3px 6px",fontSize:12,fontFamily:"inherit"}}/>
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Routes their My Day rows and personal tasks until the date passes, then routes back on its own.</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Routes their My Day rows and personal tasks until the date passes, then routes back on its own.</div>
                     </div>
                   )}
                   {/* Foreman assignment — for crew/lead */}
@@ -5275,7 +5277,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           <option key={f.id} value={f.id}>{f.name}</option>
                         ))}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which foreman's crew they belong to</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Which foreman's crew they belong to</div>
                     </div>
                   )}
                   {/* Coordinator — office scheduler who owns this foreman's book.
@@ -5293,7 +5295,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         {list.filter(o=>{const a=getAccess(o); return a==="admin"||a==="manager";})
                              .map(o=>(<option key={o.id} value={o.name}>{o.name}</option>))}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which office scheduler runs this foreman's book</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Which office scheduler runs this foreman's book</div>
                     </div>
                   )}
                   {/* PIN */}
@@ -5314,7 +5316,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         {showPin[u.id]?"Hide":"Show"}
                       </button>
                     </div>
-                    <div style={{fontSize:10,color:C.muted,marginTop:4}}>Leave blank for no PIN required</div>
+                    <div style={{fontSize:10,color:C.faint,marginTop:4}}>Leave blank for no PIN required</div>
                   </div>
                   {/* Notification Preferences */}
                   {(()=>{
@@ -5358,7 +5360,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                                     <label key={item.key} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                                       <input type="checkbox" checked={on} onChange={e=>setKey(item.key,e.target.checked)}
                                         style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
-                                      <span style={{fontSize:11,color:on?C.text:C.muted}}>{item.label}</span>
+                                      <span style={{fontSize:11,color:on?C.text:C.faint}}>{item.label}</span>
                                       {!isDefault&&on&&<span style={{fontSize:9,color:C.orange,fontWeight:700}}>custom</span>}
                                       {isDefault&&!on&&<span style={{fontSize:9,color:C.dim,fontWeight:700}}>off</span>}
                                     </label>
@@ -5374,7 +5376,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
 
                   <div style={{display:"flex",gap:8,marginTop:4}}>
                     <button onClick={save}
-                      style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                      style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
                         fontWeight:700,padding:"8px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                       Save
                     </button>
@@ -5455,7 +5457,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                             </span>
                           );
                         })()}
-                        <span style={{color:C.muted}}>PIN: {u.pin?"••••":"not set"}</span>
+                        <span style={{color:C.faint}}>PIN: {u.pin?"••••":"not set"}</span>
                       </div>
                     </div>
                   </div>
@@ -5680,7 +5682,7 @@ function EmailModal({ subject, body, onClose }) {
 
                 flexShrink:0,transition:"all 0.15s"}}>
 
-                {selected.includes(t.email)&&<span style={{color:"#000",fontSize:11,fontWeight:700}}>✓</span>}
+                {selected.includes(t.email)&&<span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
 
               </div>
 
@@ -5727,7 +5729,7 @@ function EmailModal({ subject, body, onClose }) {
 
             <button onClick={addCustom}
 
-              style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,
+              style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontWeight:700,
 
                 padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
 
@@ -5749,7 +5751,7 @@ function EmailModal({ subject, body, onClose }) {
 
               <button onClick={()=>removeCustom(email)}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
 
             </div>
 
@@ -5802,7 +5804,7 @@ function EmailModal({ subject, body, onClose }) {
 
             style={{background:allRecipients.length?C.blue:"#1e2030",border:"none",borderRadius:8,
 
-              color:allRecipients.length?C.text:C.muted,padding:"8px 20px",fontSize:12,fontWeight:700,
+              color:allRecipients.length?C.text:C.faint,padding:"8px 20px",fontSize:12,fontWeight:700,
 
               cursor:allRecipients.length?"pointer":"not-allowed",fontFamily:"inherit",transition:"all 0.15s"}}>
 
@@ -5843,7 +5845,7 @@ const Pill = ({label, color, onClick, onHold, title}) => {
       onPointerLeave={onHold ? clearHold : undefined}
       title={title || (onHold ? "Tap to open · hold to filter the board" : (onClick ? "Tap to open" : undefined))}
       style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,
-        background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap",
+        background:`${color}22`,color:readableInk(color,"#E9ECF0"),border:`1px solid ${color}44`,whiteSpace:"nowrap",
         cursor: interactive ? "pointer" : "default", userSelect:"none"}}>{label}</span>
   );
 };
@@ -6231,7 +6233,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
             ))}
           </div>
         )}
-        <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Tap a field to change it.</div>
+        <div style={{ fontSize: 11, color: C.faint, marginTop: 6 }}>Tap a field to change it.</div>
         {open === "kind" && (
           <div>
             {sub("Type")}
@@ -6262,7 +6264,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
               {chip("Normal", !prio, () => setPrio(""))}
               {chip("Low", prio === "low", () => setPrio("low"))}
             </div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Urgent sorts to the top of their list and shows a red flag. Low sinks to the bottom.</div>
+            <div style={{ fontSize: 12, color: C.faint, marginTop: 8 }}>Urgent sorts to the top of their list and shows a red flag. Low sinks to the bottom.</div>
           </div>
         )}
         {open === "job" && (
@@ -6289,7 +6291,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
             <input type="date" value={due.date} onChange={e => setDue({ bucket: due.bucket, date: e.target.value })} style={sel} />
           </div>
         )}
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>{goes}</div>
+        <div style={{ fontSize: 12, color: C.faint, marginTop: 12 }}>{goes}</div>
       </div>
     </SheetShell>
   );
@@ -6922,7 +6924,7 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
     ghost:  {background:"none",border:`1px solid ${C.border}`,color:C.dim},
 
-    primary:{background:C.accent,border:"none",color:"#000",fontWeight:700},
+    primary:{background:C.accent,border:"none",color:"#fff",fontWeight:700},
 
     add:    {background:`${C.green}15`,border:`1px dashed ${C.green}55`,color:C.green},
 
@@ -7350,7 +7352,7 @@ function RemindButton({ to = "", title, body, jobId, section, label = "Remind", 
             </select>
             <button onClick={send} disabled={state==="sending"}
               style={{ width:"100%", padding:"7px 10px", fontSize:12, fontWeight:700, fontFamily:"inherit",
-                border:"none", borderRadius:7, background:C.accent, color:"#000", cursor:"pointer" }}>
+                border:"none", borderRadius:7, background:C.accent, color:"#fff", cursor:"pointer" }}>
               {state==="sending" ? "Sending…" : "Send reminder"}
             </button>
           </div>
@@ -11975,7 +11977,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 style={{background:selectedIds.size===0?'var(--surface)':'#F4ECE2',
                   border:`1px solid ${selectedIds.size===0?C.border:'#D9BC9B'}`,
                   borderRadius:99,padding:'2px 8px',fontSize:10,fontWeight:700,
-                  color:selectedIds.size===0?C.muted:'#c2410c',
+                  color:selectedIds.size===0?C.faint:'#c2410c',
                   fontFamily:'inherit',outline:'none',
                   cursor:selectedIds.size===0?'not-allowed':'pointer'}}>
                 <option value="">Assign {selectedIds.size||'…'} to…</option>
@@ -11984,7 +11986,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               </select>
               {selectedIds.size > 0 && (
                 <button onClick={clearSelection}
-                  style={{background:'none',border:'none',color:C.muted,
+                  style={{background:'none',border:'none',color:C.faint,
                     fontSize:10,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
                     textDecoration:'underline'}}>
                   unselect all
@@ -12077,7 +12079,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <Btn onClick={() => commitEdit(item.id, editHtml, editMaterial)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
                   <button onClick={() => { setEditingId(null); setEditMaterial(''); }}
-                    style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+                    style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
                 </div>
               </div>
             ) : (
@@ -12087,7 +12089,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text, material: item.materialNeeded||'' }); }
                   else           { setEditingId(item.id); setEditHtml(item.text); setEditMaterial(item.materialNeeded||''); }
                 }}
-                  style={{ fontSize: 12, color: item.done ? C.muted : C.text,
+                  style={{ fontSize: 12, color: item.done ? C.faint : C.text,
                     textDecoration: item.done ? 'line-through' : 'none',
                     cursor: item.done ? 'default' : 'text',
                     borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
@@ -12137,7 +12139,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   cursor: "pointer", userSelect: "none", flexShrink: 0,
                   border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
                   background: item.severity === "serious" ? "#B23A3A14" : C.bg,
-                  color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
+                  color: item.severity === "serious" ? "#B23A3A" : C.faint }}>
                 {item.severity === "serious" ? "QC miss or bigger item" : "Minor QC item"}
               </span>
             )}
@@ -12150,7 +12152,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 style={{ background: item.waiting ? '#F3E9CF' : 'none',
                   border: item.waiting ? '1px solid #D9BC6B' : '1px solid transparent',
                   borderRadius: 4, cursor:'pointer', fontSize:10, flexShrink:0,
-                  padding:'1px 6px', color: item.waiting ? '#6E5212' : C.muted,
+                  padding:'1px 6px', color: item.waiting ? '#6E5212' : C.faint,
                   fontFamily:'inherit', fontWeight: item.waiting ? 700 : 400 }}>
                 {item.waiting ? 'Waiting ×' : 'Wait'}
               </button>
@@ -12174,7 +12176,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
             )}
 
             <button onClick={async () => { if(!await showConfirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
-              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
+              style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
           </div>
 
@@ -12200,7 +12202,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                     padding: "2px 8px",
                     fontSize: 10,
                     fontWeight: item.assignedTo ? 700 : 500,
-                    color: item.assignedTo ? C.accent : C.muted,
+                    color: item.assignedTo ? C.accent : C.faint,
                     fontFamily: "inherit",
                     cursor: "pointer",
                     outline: "none",
@@ -12236,7 +12238,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
               </span>
               <button onClick={()=>{setWaitingEditId(item.id);setWaitingText(item.waitingOn||'');}}
-                style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                style={{fontSize:9,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
             </div>
@@ -12254,7 +12256,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 </span>
               )}
               <button onClick={()=>{setMaterialEditId(item.id);setMaterialText(item.materialNeeded||'');}}
-                style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                style={{fontSize:9,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
             </div>
@@ -12296,7 +12298,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   style={{fontSize:11,background:'#3B5BA5',color:'#fff',border:'none',borderRadius:5,
                     padding:'3px 12px',cursor:'pointer',fontFamily:'inherit'}}>Save</button>
                 <button onClick={()=>setMaterialEditId(null)}
-                  style={{fontSize:11,background:'none',border:'none',color:C.muted,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
+                  style={{fontSize:11,background:'none',border:'none',color:C.faint,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
               </div>
             </div>
           )}
@@ -12394,8 +12396,8 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems:'center' }}>
             <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
             <button onClick={() => { setAddOpen(false); setAddHtml(''); setAddMaterial(''); setAddMatSource(''); }}
-              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-            <span style={{fontSize:10,color:C.muted,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
+              style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+            <span style={{fontSize:10,color:C.faint,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
           </div>
         </div>
       ) : !addOpen && (
@@ -12700,7 +12702,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                       onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
                     <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                       style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
-                        color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
+                        color: C.faint, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
                       Remove {room.name}
                     </button>
                   </>
@@ -12825,7 +12827,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {filterIds!=null && (
-            <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.muted}}>
+            <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.faint}}>
               {sharedCount} of {allItemIds.length} shared
             </span>
           )}
@@ -12872,7 +12874,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             removeFloor(e.key);
           }}
             style={{display:"block",margin:"2px 0 6px auto",background:"none",border:"none",
-              color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:"inherit",
+              color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:"inherit",
               textDecoration:"underline"}}>
             Remove {e.label}
           </button>
@@ -12888,7 +12890,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
               fontSize:12,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
           <Btn onClick={addFloor} variant="add" style={{fontSize:11,padding:"5px 12px"}}>Add</Btn>
           <button onClick={()=>setAddingFloor(false)}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
         </div>
       ) : (
         <Btn onClick={()=>setAddingFloor(true)} variant="add"
@@ -13212,7 +13214,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         ) : (
           <HeStrikeSpan done={!!item.done} onClick={()=>{setEditingItem({fk,roomId,itemId:item.id});setEditText(item.text);}}
             title="Click to edit"
-            style={{flex:1,minWidth:0,fontSize:12,color:item.done?C.muted:C.text,
+            style={{flex:1,minWidth:0,fontSize:12,color:item.done?C.faint:C.text,
               textDecoration:item.done?'line-through':'none',lineHeight:1.4,
               cursor:'text',borderRadius:4,padding:'2px 4px',
               transition:'background 0.1s'}}
@@ -13232,7 +13234,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
               cursor: "pointer", userSelect: "none", flexShrink: 0,
               border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
               background: item.severity === "serious" ? "#B23A3A14" : C.bg,
-              color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
+              color: item.severity === "serious" ? "#B23A3A" : C.faint }}>
             {item.severity === "serious" ? "QC miss or bigger item" : "Minor QC item"}
           </span>
         )}
@@ -13262,14 +13264,14 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         {!item.done && (
           <button onClick={()=>openVoidModal(fk, roomId, item.id, item.text)}
             title="Not actually a QC item — void with reason"
-            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.faint,
               borderRadius:5,cursor:'pointer',fontSize:10,flexShrink:0,
               padding:'2px 7px',fontFamily:'inherit',fontWeight:600,lineHeight:1.4}}>
             Void
           </button>
         )}
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
-          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
+          style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
       {(item.addedBy||item.checkedBy)&&(
         <div style={{fontSize:9,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
@@ -13300,7 +13302,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
     <div key={item.id} style={{marginBottom:6,border:`1px dashed ${C.border}`,
       borderRadius:8,padding:'6px 10px',background:C.surface,opacity:0.85}}>
       <div style={{display:'flex',alignItems:'center',gap:8}}>
-        <span style={{flex:1,fontSize:12,color:C.muted,lineHeight:1.4,
+        <span style={{flex:1,fontSize:12,color:C.faint,lineHeight:1.4,
           textDecoration:'line-through'}}>
           {item.text}
         </span>
@@ -13314,7 +13316,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
       </div>
       <div style={{fontSize:10,color:C.dim,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
         <span style={{fontWeight:700,color:'#6E7682'}}>Void reason:</span>
-        <span style={{color:C.muted}}>{item.voidReason || '(no reason recorded)'}</span>
+        <span style={{color:C.faint}}>{item.voidReason || '(no reason recorded)'}</span>
         {(item.voidedBy||item.voidedAt) && (
           <span>· by {item.voidedBy || '—'}{item.voidedAt ? ` · ${item.voidedAt}` : ''}</span>
         )}
@@ -13376,14 +13378,14 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
             <Btn onClick={commitAdd} variant="primary" style={{fontSize:11,padding:'4px 14px'}}>Add</Btn>
             <button onClick={()=>{setAddOpen(false);setAddText('');setNewRoomName('');}}
-              style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Cancel</button>
-            <span style={{fontSize:10,color:C.muted}}>↵ Enter to add</span>
+              style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Cancel</button>
+            <span style={{fontSize:10,color:C.faint}}>↵ Enter to add</span>
           </div>
         </div>
       )}
 
       {qcGroups.length===0&&voidedGroups.length===0&&!addOpen&&(
-        <div style={{textAlign:'center',padding:'20px 12px',color:C.muted,fontSize:12,
+        <div style={{textAlign:'center',padding:'20px 12px',color:C.faint,fontSize:12,
           border:`1px dashed ${C.border}`,borderRadius:8}}>
           No {phase.toLowerCase()} QC items yet — tap "+ Add QC Item" to log issues.
         </div>
@@ -13408,7 +13410,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
               <div style={{marginTop:6}}>
                 <button onClick={()=>setVoidedCollapsed(c=>({...c,[voidKey]:!c[voidKey]}))}
                   style={{background:'none',border:`1px dashed ${C.border}`,borderRadius:7,
-                    color:C.muted,cursor:'pointer',fontSize:10,fontWeight:700,
+                    color:C.faint,cursor:'pointer',fontSize:10,fontWeight:700,
                     padding:'4px 10px',fontFamily:'inherit',letterSpacing:'0.04em',
                     display:'inline-flex',alignItems:'center',gap:6}}>
                   <span>Voided ({voidedItems.length})</span>
@@ -13441,7 +13443,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
             </div>
             <button onClick={()=>setVoidedCollapsed(c=>({...c,[voidKey]:!c[voidKey]}))}
               style={{background:'none',border:`1px dashed ${C.border}`,borderRadius:7,
-                color:C.muted,cursor:'pointer',fontSize:10,fontWeight:700,
+                color:C.faint,cursor:'pointer',fontSize:10,fontWeight:700,
                 padding:'4px 10px',fontFamily:'inherit',letterSpacing:'0.04em',
                 display:'inline-flex',alignItems:'center',gap:6}}>
               <span>Voided ({items.length})</span>
@@ -13673,7 +13675,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
             <div onClick={()=>toggle(o.id)}
               style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer",userSelect:"none"}}>
               <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
-              {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
+              {o.po && <span style={{fontSize:11,color:C.faint}}>#{o.po}</span>}
               {o.needsOrder && !o.ordered && !o.pickedUp && !o.deliveredToShop && (
                 <StatusPill variant="needs">{o.source==="Shop" ? "Needs to be Picked Up" : "Need to Order"}</StatusPill>
               )}
@@ -13690,13 +13692,13 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 <StatusPill variant="accent">{o.source}</StatusPill>
               )}
               {isCollapsed && o.items && (
-                <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
+                <span style={{fontSize:11,color:C.faint,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
                   {poItemsPreview(o.items)}
                 </span>
               )}
-              <span style={{marginLeft:"auto",color:C.muted,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
+              <span style={{marginLeft:"auto",color:C.faint,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
               <button onClick={e=>{e.stopPropagation();del(o.id);}}
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px"}}>Remove</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"0 2px"}}>Remove</button>
             </div>
 
             {/* ── Expanded body ── */}
@@ -13726,7 +13728,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                   </div>
                 </div>
 
-                <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.muted}}>(copy & paste into Simpro)</span></div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.faint}}>(copy & paste into Simpro)</span></div>
                 {/* draftKey ties this textarea's localStorage draft to the
                     specific PO row — survives page reloads on mobile so a
                     coworker can never lose a typed list mid-edit again
@@ -13890,7 +13892,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                               <input type="checkbox" checked={checked} onChange={()=>toggleLine(txt)}
                                 style={{accentColor:"#3E7D5A",width:14,height:14,cursor:"pointer",marginTop:2,flexShrink:0}}/>
                               <span style={{
-                                fontSize:12,color: checked ? C.muted : C.text,
+                                fontSize:12,color: checked ? C.faint : C.text,
                                 textDecoration: checked ? "line-through" : "none",
                                 wordBreak:"break-word",lineHeight:1.35,
                               }}>{txt}</span>
@@ -14086,7 +14088,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                     <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Material list · {lines.length} line{lines.length===1?"":"s"}</span>
                     <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",
                       whiteSpace:"pre-wrap",maxHeight:200,overflowY:"auto"}}>{lines.join("\n")}</div>
-                    <span style={{fontSize:11,color:C.muted}}>To change the list, close this and edit it on the card.</span>
+                    <span style={{fontSize:11,color:C.faint}}>To change the list, close this and edit it on the card.</span>
                   </div>
                 </>)}
                 {kind !== "email" && (
@@ -14195,7 +14197,7 @@ function PoSendMotion({ phase = "sending", steps = [], title = "", sub = "" }) {
       )}
       {title && <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1,color:phase === "sent" ? GREEN : phase === "warn" ? RED : C.text}}>{title}</div>}
       {phase === "sending" && steps.length > 0 && <div key={i} className="he-po-cap" style={{fontSize:14,color:C.dim}}>{steps[i]}…</div>}
-      {phase === "sending" && slow && <div style={{fontSize:12,color:C.muted}}>Simpro can be slow. Keep this open; it won't send twice.</div>}
+      {phase === "sending" && slow && <div style={{fontSize:12,color:C.faint}}>Simpro can be slow. Keep this open; it won't send twice.</div>}
       {sub && <div style={{fontSize:13,color:C.dim}}>{sub}</div>}
     </div>
   );
@@ -14366,7 +14368,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     let lastSection = null;
     return shell("New order", `${phaseLabel} · pick a cost center`, null, <>
       {testNote}
-      <div style={{fontSize:12,color:C.muted}}>From the job's bid in Simpro. Orange = items still to go. Pick as many as the order needs.</div>
+      <div style={{fontSize:12,color:C.faint}}>From the job's bid in Simpro. Orange = items still to go. Pick as many as the order needs.</div>
       {lineCount > 0 && !(draft.made && draft.made.length) && (
         <button onClick={() => { if (window.confirm("Clear this order and start over? Nothing has been sent.")) setDraft(blank()); }}
           style={{alignSelf:"flex-start",fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.dim,borderRadius:99,padding:"4px 12px",cursor:"pointer"}}>Start over</button>
@@ -14405,7 +14407,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
             </span>) : (
             <button onClick={() => setLine(ccId, r.catalogId, Math.max(1, g))} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,border:`1px solid ${C.accent}`,color:C.accent,background:C.card,borderRadius:8,padding:"6px 12px",cursor:"pointer"}}>Add</button>)}
           </span>
-          <span style={{fontSize:11,color:C.muted}}>{r.partNo}</span>
+          <span style={{fontSize:11,color:C.faint}}>{r.partNo}</span>
           <span style={{fontSize:12,color:C.dim}}>Bid {Number(r.required).toLocaleString()} · Assigned {Number(r.assigned).toLocaleString()} · <b style={{color:g ? "#B06A2C" : "#3E7D5A"}}>{g ? `${g.toLocaleString()} to go` : "all assigned"}</b></span>
         </div>); })}</div>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",display:"flex",flexDirection:"column",gap:8}}>
@@ -14419,7 +14421,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
             style={{flex:1,minWidth:0,fontFamily:"inherit",fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",background:C.surface,color:C.text}}/>
           <button onClick={() => { addTyped(ccId, extra); setExtra(""); }} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,border:`1px solid ${C.border}`,background:C.card,color:C.text,borderRadius:10,padding:"0 12px",cursor:"pointer"}}>Add</button>
         </div>
-        <span style={{fontSize:11,color:C.muted}}>Anything not in the bid, or the whole order typed. Goes on this cost center's PO.</span>
+        <span style={{fontSize:11,color:C.faint}}>Anything not in the bid, or the whole order typed. Goes on this cost center's PO.</span>
       </div>
     </>, <>{secondary("Add from another cost center", () => setStep("cc"))}{reviewBtn}</>);
   }
@@ -14443,9 +14445,9 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
           <span style={{flexBasis:"100%",fontSize:12,color:C.dim}}>{g.cc.sectionName}</span>
         </div>
         {g.items.map(it => <div key={it.catalogId} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"5px 0",borderTop:`1px solid ${C.border}`,fontSize:13}}>
-          <span>{it.name}<br /><span style={{fontSize:11,color:C.muted}}>{it.part}</span></span><b style={{fontVariantNumeric:"tabular-nums"}}>{Number(it.qty).toLocaleString()}</b></div>)}
+          <span>{it.name}<br /><span style={{fontSize:11,color:C.faint}}>{it.part}</span></span><b style={{fontVariantNumeric:"tabular-nums"}}>{Number(it.qty).toLocaleString()}</b></div>)}
         {g.typed.map((t, k) => <div key={"t" + k} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"5px 0",borderTop:`1px solid ${C.border}`,fontSize:13}}>
-          <span>{t}</span><span style={{fontSize:11,color:C.muted}}>typed</span></div>)}
+          <span>{t}</span><span style={{fontSize:11,color:C.faint}}>typed</span></div>)}
       </div>))}
     {!groups.length && box("Nothing in the order yet.")}
     {groups.length > 10 && box(<span style={{color:"#B23A3A"}}>One order can have up to 10 cost centers. Send this one with 10, then start a new order for the rest.</span>)}
@@ -14517,7 +14519,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
           <button onClick={()=>updCount(item.id,1)}
             style={{...btnBase,border:`1px solid ${C.accent}`,background:`${C.accent}18`,color:C.accent}}>+</button>
           <button onClick={()=>del(item.id)}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
               fontSize:16,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
         </div>
       ))}
@@ -14552,7 +14554,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
           <button onClick={async ()=>{ if(!await showConfirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
             style={{padding:"10px 14px",borderRadius:8,
               border:`1px solid ${C.border}`,background:C.surface,
-              color:C.muted,fontSize:12,fontWeight:700,
+              color:C.faint,fontSize:12,fontWeight:700,
               cursor:"pointer",fontFamily:"inherit"}}>
             Clear
           </button>
@@ -14990,7 +14992,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null,homeRuns
                 </div>
                 <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
                 {!showPicker&&<button onClick={async ()=>{ if(!await showConfirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
+                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
               </div>
             ))}
           </div>
@@ -15214,7 +15216,7 @@ function JobOrdersSummary({job, onOrder}) {
         <button onClick={()=>setPicking(true)} style={{width:"100%",background:C.accent,color:"#fff",border:"none",borderRadius:9,
           padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:12}}>Order material</button>
       )}
-      {!rows.length && <div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No PO cards on this job yet.</div>}
+      {!rows.length && <div style={{fontSize:12,color:C.faint,fontStyle:"italic"}}>No PO cards on this job yet.</div>}
       {rows.map(o => {
         const [label, variant] = state(o);
         const lines = poPlainLines(o.items);
@@ -15231,7 +15233,7 @@ function JobOrdersSummary({job, onOrder}) {
               {o._ph}{who ? ` · ${who}` : ""}{when ? ` · ${when}` : ""}{o.poSentVia==="app" ? (o.poSentMode==="test" ? " · test send from the app" : " · sent from the app") : ""}
             </span>
             {lines.length > 0 && (
-              <span style={{gridColumn:"1/-1",fontSize:11,color:C.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+              <span style={{gridColumn:"1/-1",fontSize:11,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                 {lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0]}
               </span>
             )}
@@ -16389,7 +16391,7 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
           </label>
         </div>
         {flatItems.length===0 && (
-          <div style={{textAlign:"center",padding:"30px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>
+          <div style={{textAlign:"center",padding:"30px 0",color:C.faint,fontSize:12,fontStyle:"italic"}}>
             No punch items exist on this job yet. Add items on the Rough or Finish tabs first.
           </div>
         )}
@@ -16749,7 +16751,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
               <button onClick={async ()=>{ if(!await showConfirm("Delete this return trip?")) return; del(t.id); }}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11}}>Remove</button>
 
             </div>
 
@@ -17013,7 +17015,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
                     border:`1px solid ${(!t.signedOffBy||!t.signedOffDate)?C.border:C.green}`,
 
-                    borderRadius:8,color:(!t.signedOffBy||!t.signedOffDate)?C.muted:"#000",
+                    borderRadius:8,color:(!t.signedOffBy||!t.signedOffDate)?C.faint:"#000",
 
                     padding:"7px 14px",fontSize:12,fontWeight:700,cursor:(!t.signedOffBy||!t.signedOffDate)?"not-allowed":"pointer",
 
@@ -17041,7 +17043,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
 
-                    color:C.muted,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                    color:C.faint,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
 
                   Undo
 
@@ -17145,7 +17147,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
         border:r.status==="Pulled"?`1px solid rgba(62,125,90,0.3)`:r.status==="Need Specs"?`1px solid rgba(239,68,68,0.3)`:`1px solid transparent`}}>
       {/* Row 1: drag handle, number, panel, wire, delete */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
-        <span style={{fontSize:10,color:C.muted,textAlign:"right"}}>{r.num}.</span>
+        <span style={{fontSize:10,color:C.faint,textAlign:"right"}}>{r.num}.</span>
         <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
           style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",outline:"none",width:"100%"}}>
@@ -17163,7 +17165,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
           </option>)}
         </select>
         <button onClick={()=>del(r.id)}
-          style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
+          style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
       </div>
       {/* Row 2: load name + status */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
@@ -17200,7 +17202,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
           </>
         ) : (
           <button type="button" onClick={()=>setNoteOpen(true)} title="Add a note — location, or anything useful"
-            style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:10,color:C.muted,display:"inline-flex",alignItems:"center",gap:4}}>
+            style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:10,color:C.faint,display:"inline-flex",alignItems:"center",gap:4}}>
             <Icon name="note" size={11} stroke={2}/>+ note
           </button>
         )}
@@ -17280,7 +17282,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
               {pulled.map((r,i)=>renderRow(r,i))}
             </>
           )}
-          {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
+          {rows.length===0&&<div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No rows yet</div>}
         </>);
       })()}
       <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
@@ -17343,7 +17345,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
   };
   const delIn = (fk) => (id) => onHRChange({...homeRuns, [fk]: sortHRRows((homeRuns[fk]||[]).filter(r=>r.id!==id))});
 
-  if(!flat.length) return <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:12}}>No loads yet — switch to the floor view to add rows.</div>;
+  if(!flat.length) return <div style={{fontSize:11,color:C.faint,fontStyle:"italic",marginBottom:12}}>No loads yet — switch to the floor view to add rows.</div>;
 
   return (
     <div style={{marginBottom:12}}>
@@ -17363,7 +17365,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
               style={{display:"flex",width:"100%",alignItems:"baseline",gap:8,marginBottom:gOpen?8:0,
                 background:"none",border:"none",borderRadius:0,padding:"0 0 4px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
                 borderBottom:`1px solid ${p?C.accent+"44":C.border}`}}>
-              <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.muted}}>
+              <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.faint}}>
                 {p||"No Panel Assigned"}{gOpen?" ▴":" ▾"}
               </span>
               <span style={{fontSize:10,color:pulled===rows.length?C.green:C.dim}}>
@@ -17480,7 +17482,7 @@ function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
             color:C.text,fontSize:12,fontFamily:"'SF Mono', Menlo, monospace",
             resize:"vertical",outline:"none",lineHeight:1.5}}/>
         <div style={{marginTop:12,marginBottom:12,fontSize:11,color:C.dim}}>
-          <strong style={{color:parsed.length>0?C.green:C.muted}}>{parsed.length} rows detected</strong>
+          <strong style={{color:parsed.length>0?C.green:C.faint}}>{parsed.length} rows detected</strong>
         </div>
         {parsed.length > 0 && (
           <div style={{maxHeight:180,overflowY:"auto",border:`1px solid ${C.border}`,
@@ -17488,9 +17490,9 @@ function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
             {parsed.map((p,i)=>(
               <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"3px 6px",
                 borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
-                <span style={{minWidth:42,color:C.muted,fontFamily:"monospace"}}>{p.wire}</span>
+                <span style={{minWidth:42,color:C.faint,fontFamily:"monospace"}}>{p.wire}</span>
                 <span style={{flex:1,color:C.text}}>{p.name}</span>
-                <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.muted,
+                <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.faint,
                   background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                   padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>
               </div>
@@ -17639,7 +17641,7 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, ampOvr, 
         {!loading && err && <div style={{fontSize:12,color:"#B23A3A",padding:"10px 12px",border:"1px solid #B23A3A55",borderRadius:8,marginBottom:12,lineHeight:1.5}}>{err}</div>}
         {!loading && !err && (<>
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
-            <strong style={{color:items.length>0?C.green:C.muted}}>{items.length} to add</strong>
+            <strong style={{color:items.length>0?C.green:C.faint}}>{items.length} to add</strong>
             {items.length>0 && ` (${items.filter(p=>p.level==="green").length} ready · ${items.filter(p=>p.level==="yellow").length} to confirm · ${items.filter(p=>p.level==="red").length} need specs)`}
             {` · ${inCC} already in Home Runs`}{skippedDup>0?` · ${skippedDup} skipped (same name already here)`:""}
             {totalForJob===0 && " · no rows for this job number in the sheet yet"}
@@ -17648,10 +17650,10 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, ampOvr, 
             <div style={{maxHeight:260,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:7,padding:6,marginBottom:14,background:C.surface}}>
               {items.map((p,i)=>(
                 <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"4px 6px",borderBottom:i<items.length-1?`0.5px solid ${C.border}`:"none"}}>
-                  <span style={{minWidth:54,color:C.muted,fontSize:10}}>{FL[p.fk]}</span>
+                  <span style={{minWidth:54,color:C.faint,fontSize:10}}>{FL[p.fk]}</span>
                   <span style={{minWidth:64,fontSize:9,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:"#B7791F"}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
                   <span style={{minWidth:36,fontSize:10,color:C.dim,fontFamily:"monospace"}}>{p.wire||"—"}</span>
-                  <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:10,color:C.muted}}>{p.note}</span></span>
+                  <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:10,color:C.faint}}>{p.note}</span></span>
                 </div>
               ))}
             </div>
@@ -17699,7 +17701,7 @@ function HRAddFloor({homeRuns, onHRChange}) {
           fontSize:12,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
       <Btn onClick={add} variant="add" style={{fontSize:11,padding:"5px 12px"}}>Add</Btn>
       <button onClick={()=>setAdding(false)}
-        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
     </div>
   );
 }
@@ -18028,7 +18030,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
         {loads.length>0&&(
           <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
-              color:C.muted,fontSize:11,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+              color:C.faint,fontSize:11,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
             Clear All
           </button>
         )}
@@ -18039,7 +18041,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
         padding:'11px 14px',borderRadius:11,background:`${C.accent}0f`,border:`1px solid ${C.accent}`}}>
         <span style={{fontSize:22,fontWeight:800,color:C.text,fontVariantNumeric:'tabular-nums'}}>{usage.circuits}</span>
         <span style={{fontSize:12,color:C.dim,margin:'0 8px 0 4px'}}>circuits on generator</span>
-        <span style={{color:C.muted,margin:'0 8px'}}>·</span>
+        <span style={{color:C.faint,margin:'0 8px'}}>·</span>
         <span style={{fontSize:22,fontWeight:800,color:C.text,fontVariantNumeric:'tabular-nums'}}>{usage.slotsUsed}</span>
         <span style={{fontSize:12,color:C.dim,margin:'0 4px'}}>panel slots (2-pole = 2)</span>
         {usage.provisional>0 && (
@@ -18050,7 +18052,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
       </div>
 
       {loads.length===0&&(
-        <div style={{textAlign:'center',padding:'24px',color:C.muted,fontSize:12,fontStyle:'italic',
+        <div style={{textAlign:'center',padding:'24px',color:C.faint,fontSize:12,fontStyle:'italic',
           border:`1px dashed ${C.border}`,borderRadius:10,marginBottom:12}}>
           No loads yet — add them in Home Runs (they sync here), or add one manually
         </div>
@@ -18071,7 +18073,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
             borderLeft:`3px solid ${load.recommended?C.accent:load.included?C.blue:C.muted}`,
             opacity:load.included?1:0.45,transition:'border-color 0.1s,background 0.1s',
           }}>
-          <span style={{fontSize:13,color:C.muted,cursor:'grab',userSelect:'none',flexShrink:0}}>⠿</span>
+          <span style={{fontSize:13,color:C.faint,cursor:'grab',userSelect:'none',flexShrink:0}}>⠿</span>
           <span style={{fontSize:10,fontWeight:700,color:C.dim,minWidth:14,textAlign:'center',flexShrink:0}}>{i+1}</span>
           <input type="checkbox" checked={!!load.included} onChange={()=>toggle(load.id,'included')}
             style={{accentColor:C.blue,width:13,height:13,flexShrink:0,cursor:'pointer'}}/>
@@ -18108,12 +18110,12 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
             style={{
               background:load.recommended?`${C.accent}22`:'none',
               border:`1px solid ${load.recommended?C.accent:C.border}`,
-              borderRadius:6,color:load.recommended?C.accent:C.muted,
+              borderRadius:6,color:load.recommended?C.accent:C.faint,
               fontSize:13,padding:'2px 7px',cursor:'pointer',flexShrink:0,
               fontWeight:load.recommended?800:400,transition:'all 0.15s',
             }}>★</button>
           <button onClick={()=>del(load.id)}
-            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',
+            style={{background:'none',border:'none',color:C.faint,cursor:'pointer',
               fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
         </div>
       ))}
@@ -18323,7 +18325,7 @@ function GenPanelGrid({ circuits, slotCount }) {
     const base = { border:`1px solid ${C.border}`, height:24, padding:'0 6px', fontSize:11,
       whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', position:'relative',
       borderTop: isBottom ? `1px dashed ${C.border}` : `1px solid ${C.border}` };
-    if (!c || !c.name) return <td style={{...base, color:C.muted}}/>;
+    if (!c || !c.name) return <td style={{...base, color:C.faint}}/>;
     const isSplit = !!c.splitTandem;
     const isQuad = !!c.quadOuter || (c.notes||'').includes('quad inner');
     const num = parseInt(key, 10);
@@ -18551,7 +18553,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       {/* Header comes from the collapsible <Section> wrapper at the mount
           (2026-07-20, Koy: every Home Runs tab section starts collapsed). */}
       {list.length === 0 && (
-        <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>
+        <div style={{fontSize:11,color:C.faint,fontStyle:"italic",marginBottom:8}}>
           No panel schedules yet — add one to print breaker assignments.
         </div>
       )}
@@ -18599,7 +18601,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                   style={{width:60,fontSize:11,padding:"3px 7px",borderRadius:5,
                     background:C.surface,border:`1px solid ${C.border}`,color:C.text,outline:"none",fontFamily:"inherit"}}/>
               )}
-              <span style={{fontSize:10,color:C.muted,fontWeight:600,marginLeft:"auto"}}>
+              <span style={{fontSize:10,color:C.faint,fontWeight:600,marginLeft:"auto"}}>
                 {filledCount} filled
               </span>
               {/* Fill from home runs — looks at the home-run rows assigned to
@@ -18675,7 +18677,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                 DOWNLOAD
               </button>
               <button onClick={()=>delPanel(p.id)}
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>×</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,flexShrink:0}}>×</button>
             </div>
             {isOpen && (
               <div style={{padding:"8px 12px",overflowX:"auto"}}>
@@ -18791,7 +18793,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                     })}
                   </tbody>
                 </table>
-                <div style={{fontSize:10,color:C.muted,marginTop:6,fontStyle:"italic"}}>
+                <div style={{fontSize:10,color:C.faint,marginTop:6,fontStyle:"italic"}}>
                   Each slot has two rows for tandem breakers. Top row = primary, bottom row = tandem.
                 </div>
               </div>
@@ -19633,7 +19635,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   {l}
                 </button>
               ))}
-              {hrViewEff==='panel'&&<span style={{fontSize:10,color:C.muted}}>panel → floor → A-Z · add rows in By Floor</span>}
+              {hrViewEff==='panel'&&<span style={{fontSize:10,color:C.faint}}>panel → floor → A-Z · add rows in By Floor</span>}
               <button type="button" onClick={()=>setApplImportOpen(true)}
                 style={{marginLeft:"auto",fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
                   border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>
@@ -19691,7 +19693,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
                 <button onClick={()=>{ const ne=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key); const u={...homeRuns,extraFloors:ne}; delete u[ef.key]; onHRChange(u); }}
                   style={{position:'absolute',top:0,right:0,background:'none',border:'none',
-                    color:C.muted,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
+                    color:C.faint,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
                   Remove
                 </button>
               </div>
@@ -19869,7 +19871,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
             ))}
             {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
               <>
-                <div style={{fontSize:10,fontWeight:600,color:'#CDD3DB',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
+                <div style={{fontSize:10,fontWeight:600,color:'#666E79',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
                   NOT ON GENERATOR · {(hoResponse.items||[]).filter(i=>!i.included).length}
                 </div>
                 {(hoResponse.items||[]).filter(i=>!i.included).map((it,idx)=>(
@@ -19960,7 +19962,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                 style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
                   padding:'7px 12px',fontSize:11,color:C.dim,cursor:'pointer'}}>Reset</button>
             </div>
-            <div style={{fontSize:11,color:C.muted,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
+            <div style={{fontSize:11,color:C.faint,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
           </Section>
         );
       })()}
@@ -20092,14 +20094,14 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
           </div>
         ) : (
           <div style={{marginTop:12,marginBottom:12,fontSize:11,color:C.dim}}>
-            <strong style={{color:fresh.length>0?C.green:C.muted}}>{fresh.length} rows detected</strong>
+            <strong style={{color:fresh.length>0?C.green:C.faint}}>{fresh.length} rows detected</strong>
             {dupes > 0 && (
               <span style={{marginLeft:8,color:"#B0892C",fontWeight:700}}>
                 · {dupes} already on this list — skipped
               </span>
             )}
             {!isKeypad && anyMod && (
-              <span style={{marginLeft:8,color:C.muted}}>
+              <span style={{marginLeft:8,color:C.faint}}>
                 · module #s shown below aren&apos;t stored on a load — use “Assign to module” after adding
               </span>
             )}
@@ -20113,11 +20115,11 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
               <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:11,padding:"3px 6px",
                 opacity:p.dupe?0.45:1,
                 borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
-                <span style={{minWidth:26,color:C.muted,fontFamily:"monospace"}}>{p.num||"·"}</span>
+                <span style={{minWidth:26,color:C.faint,fontFamily:"monospace"}}>{p.num||"·"}</span>
                 <span style={{flex:1,color:C.text,textDecoration:p.dupe?"line-through":"none"}}>{p.name}</span>
                 {p.dupe
                   ? <span style={{fontSize:9,color:"#B0892C",fontWeight:700,padding:"1px 6px"}}>already added</span>
-                  : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.muted,
+                  : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.faint,
                       background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                       padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>}
               </div>
@@ -20254,7 +20256,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
       </span>) : null;
     const parked = !!(parkedIds && parkedIds.has(l.id));
     const has = !!assignedLabels;
-    const col = parked ? C.orange : has ? color : C.muted;
+    const col = parked ? C.orange : has ? color : C.faint;
     return (
       <button onClick={()=>onAssignLoad(l.id)} title={has ? `${assignedLabels[0]} — tap to move, park or clear` : "Tap to put this load on a panel or zone"}
         style={{fontSize:9,fontWeight:800,color:col,background:has?`${col}15`:"transparent",border:`1px ${has?"solid":"dashed"} ${col}${has?"33":"88"}`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"pointer",fontFamily:"inherit",flexShrink:0,...extra}}>
@@ -20349,7 +20351,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
             </button>
           )}
           <button onClick={exitSelect}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
+            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
             Clear
           </button>
         </div>
@@ -20450,7 +20452,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                             <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,loadPulledPatch(e.target.checked))}
                               title={l.pulled ? `Ran${(l.pulledBy||l.pulledAt)?" — "+[l.pulledBy,l.pulledAt].filter(Boolean).join(" · "):""}` : "Mark as ran"}
                               style={{width:18,height:18,accentColor:C.green,cursor:"pointer",flexShrink:0}}/>
-                            <span style={{fontSize:11,color:C.muted,flexShrink:0}}>{li+1}.</span>
+                            <span style={{fontSize:11,color:C.faint,flexShrink:0}}>{li+1}.</span>
                             <input
                               ref={li===flatSorted.length-1?lastRef:null}
                               value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
@@ -20458,7 +20460,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               style={{background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,borderRadius:0,
                                 color:C.text,padding:"4px 2px",fontSize:14,fontFamily:"inherit",outline:"none",
                                 flex:1,minWidth:0,fontWeight:600}}/>
-                            <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                            <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                           </div>
                           {/* Row 2: location + panel + type + watts + assigned badge.
                               Floor/area is where the load physically lives.
@@ -20506,7 +20508,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,loadPulledPatch(e.target.checked))}
                             title={l.pulled ? `Ran${(l.pulledBy||l.pulledAt)?" — "+[l.pulledBy,l.pulledAt].filter(Boolean).join(" · "):""}` : "Mark as ran"}
                             style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
-                          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
+                          <span style={{fontSize:11,color:C.faint,textAlign:"right",paddingRight:2}}>{li+1}.</span>
                           <div style={{display:"flex",alignItems:"center",gap:4}}>
                             <input
                               ref={li===flatSorted.length-1?lastRef:null}
@@ -20539,7 +20541,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           ); })()}
                           <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
                           <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
-                          <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                          <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
                         </div>
                       );
                     })}
@@ -20960,7 +20962,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
               </span>
             </div>
             <button onClick={()=>deleteRoom(room)} title="Delete room"
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+              style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
               <Icon name="trash" size={12} stroke={2}/>
             </button>
           </div>
@@ -21029,11 +21031,11 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                   )}
                 </div>
                 <button onClick={()=>startEditItem(room.id,item)} title="Edit item"
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
                   <Icon name="pencil" size={12} stroke={2}/>
                 </button>
                 <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
                   <Icon name="x" size={12} stroke={2}/>
                 </button>
               </div>
@@ -21373,7 +21375,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                       style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>
                     <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",
                       textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{job.name||"(unnamed job)"}</span>
-                    <span style={{fontSize:10,color:rooms.length?C.dim:C.muted}}>
+                    <span style={{fontSize:10,color:rooms.length?C.dim:C.faint}}>
                       {rooms.length ? `${rooms.length} room${rooms.length===1?"":"s"} · ${itemCount} item${itemCount===1?"":"s"}` : "No changes logged yet"}
                     </span>
                     {unprocessed>0 && (
@@ -21401,7 +21403,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                     {onUpdateJob && can(identity,"lutron.manage") && (
                       <button onClick={(e)=>{e.stopPropagation(); setExcluded(job, true);}}
                         title="Not this LV company's job — hide it from their tracking link"
-                        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
                           padding:2,display:"flex"}}>
                         <Icon name="x" size={13} stroke={2}/>
                       </button>
@@ -21613,7 +21615,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
                 background: statusBg,
                 borderTop: i>0 ? `1px solid ${C.border}` : "none",
               }}>
-                <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0,width:22}}>{r.num}.</span>
+                <span style={{fontSize:11,color:C.faint,fontWeight:700,flexShrink:0,width:22}}>{r.num}.</span>
                 <span style={{fontSize:12,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                   {r.name}
                 </span>
@@ -21644,7 +21646,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
               borderRadius:6,padding:"3px 0",
               background:r.status==="Pulled"?"rgba(62,125,90,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.08)":"transparent"}}>
 
-              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
+              <span style={{fontSize:11,color:C.faint,textAlign:"right",paddingRight:6}}>{r.num}.</span>
 
               <input ref={ri===loads.length-1?lastRef:null}
                 list={allLoads.length>0?dlId:undefined}
@@ -21658,7 +21660,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
 
               <button onClick={()=>delRow(r.id)}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
 
             </div>
 
@@ -22218,7 +22220,7 @@ function SavantPanelSchedule({
           style={{
             minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
             justifyContent:"center", fontSize:11,
-            color: isMoveTarget ? "#3B5BA5" : (armed ? C.green : (isAddingHere ? C.accent : C.muted)),
+            color: isMoveTarget ? "#3B5BA5" : (armed ? C.green : (isAddingHere ? C.accent : C.faint)),
             fontStyle:"italic", cursor:"pointer",
             background: isMoveTarget ? "#E0E8F3" : (armed
               ? "#DEEFE6"
@@ -22315,7 +22317,7 @@ function SavantPanelSchedule({
               title="Delete"
               style={{
                 position:"absolute", right:2, top:"50%", transform:"translateY(-50%)",
-                background:"none", border:"none", color:C.muted, cursor:"pointer",
+                background:"none", border:"none", color:C.faint, cursor:"pointer",
                 fontSize:14, lineHeight:1, padding:"0 4px",
               }}>×</button>
           )}
@@ -22496,7 +22498,7 @@ function SavantPanelSchedule({
             title="Delete tandem"
             style={{
               position:"absolute", right:2, top:2, zIndex:2,
-              background:"none", border:"none", color:C.muted, cursor:"pointer",
+              background:"none", border:"none", color:C.faint, cursor:"pointer",
               fontSize:14, lineHeight:1, padding:"0 4px",
             }}>×</button>
           <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
@@ -22575,7 +22577,7 @@ function SavantPanelSchedule({
       <div>
         <span style={{flex:1, color:C.text, overflow:"hidden", textOverflow:"ellipsis",
           whiteSpace:"nowrap", minWidth:0}}>
-          {r.description || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
+          {r.description || <span style={{color:C.faint,fontStyle:"italic"}}>(unnamed)</span>}
         </span>
         {r.amp && <span style={{
           fontSize:9, fontWeight:700, color:C.dim, background:"#F4F6F8",
@@ -22591,7 +22593,7 @@ function SavantPanelSchedule({
             }
           }}
           title="Delete this regular breaker"
-          style={{background:"none",border:"none",color:C.muted,fontSize:14,
+          style={{background:"none",border:"none",color:C.faint,fontSize:14,
             cursor:"pointer",padding:"0 2px",flexShrink:0,lineHeight:1}}>
           ✕
         </button>
@@ -22853,7 +22855,7 @@ function SavantPanelSchedule({
                         style={{
                           padding:"3px 9px",fontSize:11,fontWeight:600,
                           background: isUsed ? "#EEF0F3" : "#fff",
-                          color: isUsed ? C.muted : C.purple,
+                          color: isUsed ? C.faint : C.purple,
                           border:`1px solid ${isUsed ? C.border : C.purple+"55"}`,
                           borderRadius:99,cursor:isUsed?"not-allowed":"pointer",
                           fontFamily:"inherit",
@@ -22898,7 +22900,7 @@ function SavantPanelSchedule({
                 {(load.name||"").trim() && (
                   <button onClick={()=>updSmartLoad(m.id,load.id,{name:"",loadType:"",watts:""})}
                     title="Clear this leg"
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
                       fontSize:14,padding:"0 4px",flexShrink:0}}>✕</button>
                 )}
               </div>
@@ -23110,16 +23112,16 @@ function SavantPanelSchedule({
         {_total > 0 && (
           <span style={{fontSize:11,color:C.dim,fontWeight:600,
             display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-            <span style={{color:C.muted}}>·</span>
+            <span style={{color:C.faint}}>·</span>
             <b style={{color:C.text}}>{_total}</b> load{_total===1?"":"s"}
-            <span style={{color:C.muted}}>(</span>
+            <span style={{color:C.faint}}>(</span>
             {_orderedKeys.map((k,i) => (
               <Fragment key={k}>
-                {i > 0 && <span style={{color:C.muted}}>·</span>}
+                {i > 0 && <span style={{color:C.faint}}>·</span>}
                 <span><b style={{color:C.text}}>{_byType[k]}</b> {k.toLowerCase()}</span>
               </Fragment>
             ))}
-            <span style={{color:C.muted}}>)</span>
+            <span style={{color:C.faint}}>)</span>
           </span>
         )}
         <button onClick={()=>{
@@ -23307,7 +23309,7 @@ function SavantPanelSchedule({
                           if (window.confirm(msg)) delSmart(m.id);
                         }}
                         title="Delete this module"
-                        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
                           fontSize:14,padding:0,lineHeight:1}}>×</button>
                     </div>
                   );
@@ -23545,7 +23547,7 @@ function SavantPanelSchedule({
                           <button onClick={()=>{
                               if (window.confirm(`Delete feeder at slot ${r.slot}?`)) delReg(r.id);
                             }}
-                            style={{background:"none",border:"none",color:C.muted,
+                            style={{background:"none",border:"none",color:C.faint,
                               cursor:"pointer",fontSize:14,padding:"0 4px",lineHeight:1}}>×</button>
                         </div>
                       );
@@ -23601,7 +23603,7 @@ function SavantPanelSchedule({
                             const msg = named>0 ? `Delete this module? ${named} load assignments will be lost.` : "Delete this module?";
                             if (window.confirm(msg)) delSmart(m.id);
                           }}
-                          style={{marginLeft:"auto",background:"none",border:"none",color:C.muted,
+                          style={{marginLeft:"auto",background:"none",border:"none",color:C.faint,
                             fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
                       </div>
                       {/* Input A row */}
@@ -24395,7 +24397,7 @@ function SavantSlotFirstTab({ job, u }) {
       borderBottom:`1px solid ${C.border}`,minHeight:46,cursor:"pointer"};
     const slotN = (
       <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",
-        padding:"0 9px",color:C.muted,fontSize:11,fontVariantNumeric:"tabular-nums",
+        padding:"0 9px",color:C.faint,fontSize:11,fontVariantNumeric:"tabular-nums",
         background:C.surface,borderRight:`1px solid ${C.border}`}}>{slot}</div>
     );
     if (!cell) {
@@ -24404,7 +24406,7 @@ function SavantSlotFirstTab({ job, u }) {
           onClick={()=>setSheet({kind:"add", slot})}>
           {slotN}
           <div style={{padding:"8px 11px",display:"flex",alignItems:"center",gap:8,
-            color:C.muted,fontStyle:"italic",fontSize:13}}>+ Tap to add</div>
+            color:C.faint,fontStyle:"italic",fontSize:13}}>+ Tap to add</div>
         </div>
       );
     }
@@ -24478,7 +24480,7 @@ function SavantSlotFirstTab({ job, u }) {
               border:"1px solid #6A5E9733",textTransform:"uppercase",flexShrink:0}}>
               M{m.modNum||"?"}{ch ? `·${ch}` : ""}
             </span>
-            <span style={{fontSize:13,fontWeight:600,color:out?.name?C.text:C.muted,
+            <span style={{fontSize:13,fontWeight:600,color:out?.name?C.text:C.faint,
               flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
               fontStyle:out?.name?"normal":"italic"}}>
               {isContCh
@@ -24668,7 +24670,7 @@ function SheetField({ label, children, hint }) {
       {label && <div style={{fontSize:10,fontWeight:800,color:C.dim,
         letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:5}}>{label}</div>}
       {children}
-      {hint && <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>{hint}</div>}
+      {hint && <div style={{fontSize:10,color:C.faint,marginTop:4,fontStyle:"italic"}}>{hint}</div>}
     </div>
   );
 }
@@ -25220,11 +25222,11 @@ function LutronPanelBuilder({ job, u }) {
   const btn = (primary, extra = {}) => ({ padding: "6px 10px", borderRadius: 8, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 5,
     background: primary ? accent : "transparent", color: primary ? "#fff" : accent, border: `1px solid ${primary ? accent : accent + "66"}`, ...extra });
   const chip = (on, disabled = false, extra = {}) => ({ fontFamily: "inherit", fontSize: 12, fontWeight: on ? 700 : 600, padding: "7px 11px", minHeight: 40, borderRadius: 999, cursor: disabled ? "default" : "pointer", textAlign: "left",
-    background: on ? accent : C.card, color: on ? "#fff" : disabled ? C.muted : C.text, border: `1px solid ${on ? accent : C.border}`, opacity: disabled ? 0.55 : 1, display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15, ...extra });
+    background: on ? accent : C.card, color: on ? "#fff" : disabled ? C.faint : C.text, border: `1px solid ${on ? accent : C.border}`, opacity: disabled ? 0.55 : 1, display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15, ...extra });
   const small = (on) => ({ fontSize: 10, fontWeight: 500, color: on ? "rgba(255,255,255,0.85)" : C.dim });
   const lbl = { fontSize: 10, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: C.dim, margin: "12px 0 6px" };
   const chips = { display: "flex", gap: 6, flexWrap: "wrap" };
-  const zoneRow = (dashed, over) => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", fontFamily: "inherit", background: C.card, border: `1px ${dashed ? "dashed" : "solid"} ${over ? C.red : dashed ? "#CDD3DB" : C.border}`, borderRadius: 7, padding: "5px 7px", marginBottom: 4, minHeight: 34, color: dashed ? C.muted : C.text, cursor: "pointer" });
+  const zoneRow = (dashed, over) => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", fontFamily: "inherit", background: C.card, border: `1px ${dashed ? "dashed" : "solid"} ${over ? C.red : dashed ? "#CDD3DB" : C.border}`, borderRadius: 7, padding: "5px 7px", marginBottom: 4, minHeight: 34, color: dashed ? C.faint : C.text, cursor: "pointer" });
 
   const tile = (k, v, s, warn) => (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", flex: "1 1 130px", minWidth: 120 }}>
@@ -25473,12 +25475,12 @@ function LutronPanelBuilder({ job, u }) {
                 const rows = [];
                 if (t.bus) {
                   on.slice().sort((a, b) => (Number(a.assign.zone) || 0) - (Number(b.assign.zone) || 0)).forEach(l => rows.push(
-                    <button key={l.id} onClick={() => openAssign(l.id)} style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18, color: C.muted }}>{l.assign.zone}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}</span></button>));
+                    <button key={l.id} onClick={() => openAssign(l.id)} style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18, color: C.faint }}>{l.assign.zone}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}</span></button>));
                   if (on.length < t.zones) rows.push(<button key="open" onClick={() => openFill(p.id, m.id, (on.reduce((mx, l) => Math.max(mx, Number(l.assign.zone) || 0), 0) + 1))} style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18 }}>{on.length + 1}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open address</span><span style={{ fontSize: 10.5 }}>tap to fill</span></button>);
                 } else {
                   for (let z = 1; z <= t.zones; z++) { const l = zoneLoad(p.id, m.id, z); const over = l && lutronOverWatt(l, panels); const cap = lutronZoneCap(m.type, z);
                     rows.push(l
-                      ? <button key={z} onClick={() => openAssign(l.id)} title="Move or clear" style={zoneRow(false, over)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>{z}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: over ? C.red : C.dim, whiteSpace: "nowrap", fontWeight: over ? 700 : 400 }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}{over ? ` · over ${cap}W` : ""}</span></button>
+                      ? <button key={z} onClick={() => openAssign(l.id)} title="Move or clear" style={zoneRow(false, over)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.faint }}>{z}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: over ? C.red : C.dim, whiteSpace: "nowrap", fontWeight: over ? 700 : 400 }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}{over ? ` · over ${cap}W` : ""}</span></button>
                       : <button key={z} onClick={() => openFill(p.id, m.id, z)} title="Put a load here" style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16 }}>{z}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open zone</span><span style={{ fontSize: 10.5 }}>{cap ? `≤${cap}W` : "tap to fill"}</span></button>); }
                 }
                 return (
@@ -25490,10 +25492,10 @@ function LutronPanelBuilder({ job, u }) {
                         options={["", ...Object.keys(LUTRON_MODULES).filter(k => !LUTRON_MODULES[k].legacy || k === lutronNormalizeType(m.type)), ...(t.custom ? [lutronNormalizeType(m.type)] : [])]}
                         style={{ fontSize: 10, fontWeight: 700, color: accent, padding: "3px 6px", maxWidth: 150 }}/>
                       <span style={{ marginLeft: "auto", fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{on.length}/{t.zones} {t.bus ? "loads" : "zones"}{Array.isArray(t.maxW) ? ` · ≤${t.maxW[0]}/${t.maxW[1]}W` : t.maxA ? ` · ≤${t.maxA}A` : ""}</span>
-                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
+                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
                     </div>
                     {rows}
-                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>{t.label}</div>
+                    <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>{t.label}</div>
                   </div>
                 );
               })}
@@ -25507,7 +25509,7 @@ function LutronPanelBuilder({ job, u }) {
               <div style={{ marginTop: 8, border: `1px dashed ${C.orange}`, borderRadius: 10, padding: "8px 9px" }}>
                 <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.orange, marginBottom: 4 }}>On this panel, no module yet · {parked.length}</div>
                 {parked.slice().sort((a, b) => String(a.room || "").localeCompare(String(b.room || "")) || String(a.name || "").localeCompare(String(b.name || ""))).map(l => (
-                  <button key={l.id} onClick={() => openAssign(l.id)} title="Pick a module and zone" style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>·</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")} · pick a module</span></button>
+                  <button key={l.id} onClick={() => openAssign(l.id)} title="Pick a module and zone" style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.faint }}>·</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")} · pick a module</span></button>
                 ))}
               </div>
             )}
@@ -25774,7 +25776,7 @@ function PanelModulesSection({
                   {isConfirmed ? '✓ EDIT' : 'CONFIRM'}
                 </button>
               )}
-              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
+              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
             </div>
 
             {/* ── Load rows ── */}
@@ -25793,13 +25795,13 @@ function PanelModulesSection({
                       background: load.pulled ? "rgba(62,125,90,0.08)" : "transparent",
                       borderTop: i>0 ? `1px solid ${C.border}` : "none",
                     }}>
-                      <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0,width:22}}>{load.num}.</span>
+                      <span style={{fontSize:11,color:C.faint,fontWeight:700,flexShrink:0,width:22}}>{load.num}.</span>
                       <span style={{fontSize:12,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                         {load.name}
                       </span>
-                      {load.ch && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>Ch {load.ch}</span>}
-                      {load.loadType && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.loadType}</span>}
-                      {load.watts && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.watts}W</span>}
+                      {load.ch && <span style={{fontSize:10,color:C.faint,flexShrink:0}}>Ch {load.ch}</span>}
+                      {load.loadType && <span style={{fontSize:10,color:C.faint,flexShrink:0}}>{load.loadType}</span>}
+                      {load.watts && <span style={{fontSize:10,color:C.faint,flexShrink:0}}>{load.watts}W</span>}
                       {showKeypad && load.keypad && <span style={{fontSize:10,color:`${accentColor}`,fontWeight:600,flexShrink:0}}>KP {load.keypad}</span>}
                       {load.pulled && <span style={{fontSize:10,fontWeight:700,color:C.green,letterSpacing:"0.04em",flexShrink:0}}>✓ PULLED</span>}
                     </div>
@@ -25819,7 +25821,7 @@ function PanelModulesSection({
                         const who=getIdentity();
                         updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
                       }} style={{width:18,height:18,accentColor:accentColor,cursor:"pointer",margin:0,flexShrink:0}}/>
-                      <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0}}>#{load.num}</span>
+                      <span style={{fontSize:11,color:C.faint,fontWeight:700,flexShrink:0}}>#{load.num}</span>
                       <input
                         ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
                         list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
@@ -25827,7 +25829,7 @@ function PanelModulesSection({
                         onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
                         style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                           padding:"7px 10px",fontSize:13,fontFamily:"inherit",outline:"none",minWidth:0,boxSizing:"border-box"}}/>
-                      <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                      <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                     </div>
                     {/* Row 2: Ch, Load Type, Watts */}
                     <div style={{display:"grid",gridTemplateColumns:"60px 1fr 60px",gap:6,marginBottom:showKeypad||showMove?6:0}}>
@@ -25885,7 +25887,7 @@ function PanelModulesSection({
                           const who=getIdentity();
                           updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
                         }} style={{width:15,height:15,accentColor:accentColor,cursor:"pointer",margin:0}}/>
-                        <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
+                        <span style={{fontSize:11,color:C.faint,textAlign:"center",fontWeight:700}}>{load.num}</span>
                         <input
                           ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
                           list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
@@ -25901,11 +25903,11 @@ function PanelModulesSection({
                           <select value={moveValueFor(mod)} onChange={e=>handleRowMove(mod.id,load.id,e.target.value)}
                             title="Move to module (across any panel section)"
                             style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
-                              background:"#fff",color:C.muted,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
+                              background:"#fff",color:C.faint,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
                             {renderMoveOptions(mod)}
                           </select>
                         )}
-                        <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                        <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
                       </div>
                       {load.pulled&&load.pulledBy&&(
                         <div style={{paddingLeft:4,marginTop:1}}>
@@ -26056,7 +26058,7 @@ function TapeLightSection({lights,onChange}) {
 
             <button onClick={()=>del(l.id)}
 
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+              style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11}}>Remove</button>
 
           </div>
 
@@ -26868,7 +26870,7 @@ function DriveFilesSection({ job, onUpdate }) {
 
       {/* Empty state */}
       {folderId && !loading && !error && driveFiles.length === 0 && (
-        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+        <div style={{ fontSize: 11, color: C.faint, fontStyle: "italic", padding: "16px",
           textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
           No files found in this Drive folder
         </div>
@@ -26888,7 +26890,7 @@ function DriveFilesSection({ job, onUpdate }) {
             {folderNames.length > 1 && (
               <div onClick={() => toggleFolder(folder)}
                 style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10,
-                  color: isArchive ? C.muted : C.accent,
+                  color: isArchive ? C.faint : C.accent,
                   fontWeight: 700, letterSpacing: "0.06em",
                   marginBottom: isCollapsed ? 0 : 8,
                   paddingBottom: isCollapsed ? 0 : 4,
@@ -26898,11 +26900,11 @@ function DriveFilesSection({ job, onUpdate }) {
                 <span style={{ fontSize: 11, lineHeight: 1, flexShrink: 0 }}>{isCollapsed ? "▸" : "▾"}</span>
                 <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={13}/> {folder === "Root" ? "Top Level" : folder}</span>
                 {isArchive && (
-                  <span style={{ fontStyle: "italic", fontWeight: 400, color: C.muted, letterSpacing: 0 }}>
+                  <span style={{ fontStyle: "italic", fontWeight: 400, color: C.faint, letterSpacing: 0 }}>
                     — archived plans
                   </span>
                 )}
-                <span style={{ marginLeft: "auto", fontWeight: 400, color: C.muted, fontStyle: "normal", letterSpacing: 0 }}>
+                <span style={{ marginLeft: "auto", fontWeight: 400, color: C.faint, fontStyle: "normal", letterSpacing: 0 }}>
                   {fileCount} file{fileCount === 1 ? "" : "s"}
                 </span>
               </div>
@@ -26940,7 +26942,7 @@ function DriveFilesSection({ job, onUpdate }) {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                        <div style={{ fontSize: 10, color: C.muted }}>
+                        <div style={{ fontSize: 10, color: C.faint }}>
                           {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
                         </div>
                       </div>
@@ -27117,7 +27119,7 @@ function FileUploadSection({ jobId, files, onChange }) {
       )}
 
       {(!files || files.length === 0) && !uploading && (
-        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+        <div style={{ fontSize: 11, color: C.faint, fontStyle: "italic", padding: "16px",
           textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
           No files uploaded yet — use the buttons above to upload plans, photos, or documents
         </div>
@@ -27158,7 +27160,7 @@ function FileUploadSection({ jobId, files, onChange }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                <div style={{ fontSize: 10, color: C.muted }}>
+                <div style={{ fontSize: 10, color: C.faint }}>
                   {f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""}
                 </div>
               </div>
@@ -27169,7 +27171,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                 Open ↗
               </a>
               <button onClick={() => handleDelete(f)}
-                style={{ background: "none", border: "none", color: C.muted, cursor: "pointer",
+                style={{ background: "none", border: "none", color: C.faint, cursor: "pointer",
                   fontSize: 13, flexShrink: 0 }}>✕</button>
             </div>
           ))}
@@ -27281,7 +27283,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
             {links.length===0&&(
 
-              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet</div>
+              <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No links yet</div>
 
             )}
 
@@ -27333,7 +27335,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                   <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
 
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
 
                 </div>
 
@@ -27436,7 +27438,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                   <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
 
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
 
                 </div>
 
@@ -27446,7 +27448,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
             {(!cl.urls||cl.urls.length===0)&&(
 
-              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet — hit "+ Add"</div>
+              <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No links yet — hit "+ Add"</div>
 
             )}
 
@@ -27700,7 +27702,7 @@ function HiddenSectionBanner({ job, sectionKey, u, identity }) {
       </span>
       {canEdit && (
         <button type="button" onClick={()=>u(jobSectionPatch(job, sectionKey, false))}
-          style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontSize:11,fontWeight:700,
+          style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontSize:11,fontWeight:700,
             padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>Turn back on</button>
       )}
     </div>
@@ -27781,7 +27783,7 @@ function JobSectionsPanel({ job, u, identity }) {
       </div>
       {open && (
         <div>
-          <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+          <div style={{fontSize:11,color:C.faint,marginBottom:10,lineHeight:1.5}}>
             Turn off anything this job doesn&apos;t have. It disappears everywhere — the job card, share links,
             the GC portal, reminders. Nothing is deleted — turn it back on any time (say a generator gets added
             during rough) and everything comes back.
@@ -27807,7 +27809,7 @@ function JobSectionsPanel({ job, u, identity }) {
                     <span style={{display:"block",fontSize:13,fontWeight:600,color:shownOn?C.text:C.dim}}>
                       {s.label}{parentOff ? ` — off with ${parentLabel}` : (on ? "" : " — hidden")}
                     </span>
-                    <span style={{display:"block",fontSize:10,color:C.muted,marginTop:1}}>
+                    <span style={{display:"block",fontSize:10,color:C.faint,marginTop:1}}>
                       {s.where}{s.perm && canEdit && !can(identity, s.perm) ? " · office only" : ""}
                     </span>
                   </span>
@@ -28512,7 +28514,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                       <button type="button" onClick={() => doPullSimpro({ force: true })} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
                         style={{ background: "none", border: "none", padding: "0 4px", margin: 0,
-                          color: simproPulling ? C.muted : C.accent, fontSize: 9, fontWeight: 700,
+                          color: simproPulling ? C.faint : C.accent, fontSize: 9, fontWeight: 700,
                           cursor: simproPulling ? "wait" : "pointer", fontFamily: "inherit",
                           letterSpacing: "0.05em", textTransform: "uppercase",
                           display: "inline-flex", alignItems: "center", gap: 3 }}>
@@ -28616,7 +28618,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                   }} style={{ cursor: "pointer", fontSize: 14, color: "#B23A3A", padding: "4px", lineHeight: 1, flexShrink: 0 }}>✕</span>
                 </div>
               ))}
-              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
+              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 11, color: C.faint, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
             </div>
           </div>
 
@@ -28898,7 +28900,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                       <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
                         style={{background:"none",border:"none",padding:"0 4px",margin:0,
-                          color: simproPulling?C.muted:C.accent, fontSize:9, fontWeight:700,
+                          color: simproPulling?C.faint:C.accent, fontSize:9, fontWeight:700,
                           cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
                           letterSpacing:"0.05em", textTransform:"uppercase",
                           display:"inline-flex", alignItems:"center", gap:3}}>
@@ -28973,7 +28975,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                   }} style={{cursor:"pointer",fontSize:14,color:"#B23A3A",padding:"4px",lineHeight:1,flexShrink:0}}>✕</span>
                 </div>
               ))}
-              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
+              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
             </div>
           </div>
 
@@ -30448,7 +30450,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
       onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 
-      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
+      <div role="dialog" aria-modal="true" aria-label={`Job ${job.name||""}`} onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
 
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
@@ -30469,7 +30471,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
 
-                {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
+                {job.type==="quote"&&<span style={{fontSize:12,color:"#fff",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
 
                 {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
 
@@ -30634,7 +30636,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <button
                     onClick={()=>{ if(convertJobNo.trim()){ onConvertQuote&&onConvertQuote({...job,simproNo:convertJobNo.trim()}); setConvertPrompt(false); setConvertJobNo(""); } }}
                     disabled={!convertJobNo.trim()}
-                    style={{background:convertJobNo.trim()?C.accent:"#555",color:"#000",border:"none",
+                    style={{background:convertJobNo.trim()?C.accent:"#555",color:"#fff",border:"none",
                       borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,
                       cursor:convertJobNo.trim()?"pointer":"not-allowed",fontFamily:"inherit"}}>
                     Convert
@@ -30644,7 +30646,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               ) : (
                 <button onClick={()=>setConvertPrompt(true)}
-                  style={{background:C.accent,color:"#000",border:"none",borderRadius:8,
+                  style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,
                     padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.03em"}}>
                   Convert to Job
@@ -30688,7 +30690,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <Icon name="plus" size={13} stroke={2.5}/> Need
               </button>
             )}
-            <button onClick={refreshJob} title="Refresh"
+            <button onClick={refreshJob} title="Refresh" aria-label="Refresh job" className="he-tap-sq"
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
 
@@ -30700,7 +30702,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             </button>
 
-            <button onClick={onClose}
+            <button onClick={onClose} aria-label="Close job" className="he-tap-sq"
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
 
@@ -30720,9 +30722,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tabsForJob(job, tab).map(t=>(
 
-            <button key={t} data-hetab={t} onClick={()=>setTab(t)}
+            <button key={t} data-hetab={t} onClick={()=>setTab(t)} className="he-tap"
 
-              style={{background:tab===t&&!_ink?C.accent:"none",color:tab===t?"#000":C.dim,
+              style={{background:tab===t&&!_ink?C.accent:"none",color:tab===t?"#fff":C.dim,
 
                 border:"none",borderRadius:"8px 8px 0 0",padding:"6px 13px",fontSize:11,
 
@@ -31133,7 +31135,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <Section label="Material Count List" color={C.rough} defaultOpen={false}>
-                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
+                <div style={{fontSize:12,color:C.faint,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
                 <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}
                   onAddToPO={text=>{
                     const orders = job.roughMaterials||[];
@@ -31458,7 +31460,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </Section>
 
                 <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
-                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
+                  <div style={{fontSize:12,color:C.faint,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
                   <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}
                     onAddToPO={text=>{
                       const orders = job.finishMaterials||[];
@@ -31672,7 +31674,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                     background: job.lightingSystemLocked ? "#DEEFE6" : "transparent",
 
-                    color: job.lightingSystemLocked ? "#2C5C40" : C.muted,
+                    color: job.lightingSystemLocked ? "#2C5C40" : C.faint,
 
                     border: `1px solid ${job.lightingSystemLocked ? "#86efac" : C.border}`,
 
@@ -31950,7 +31952,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   return (
                     <button key={kind} disabled={!would} onClick={()=>suggestRoom(loads, kind)}
                       title={would ? `Suggest ${KIND_LABEL[kind]} for the ${would} load${would===1?"":"s"} in this room that aren't ${KIND_LABEL[kind]} yet` : `Every load here is already ${KIND_LABEL[kind]} (or suggested)`}
-                      style={{padding:"3px 8px",fontSize:10,fontFamily:"inherit",fontWeight:700,cursor:would?"pointer":"default",background:"transparent",color:would?C.blue:C.muted,border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{KIND_LABEL[kind]}</button>
+                      style={{padding:"3px 8px",fontSize:10,fontFamily:"inherit",fontWeight:700,cursor:would?"pointer":"default",background:"transparent",color:would?C.blue:C.faint,border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{KIND_LABEL[kind]}</button>
                   );
                 };
                 return (
@@ -32124,7 +32126,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     if(pl0.baseline && !window.confirm("Overwrite the current baseline snapshot with today's loads?")) return;
                     u({ panelizedLighting: { ...pl0, baseline: { lockedAt:new Date().toISOString(), lockedBy: identity?.name||"", loads: snap } } });
                   }}
-                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,display:"inline-flex",alignItems:"center",gap:5}}>
+                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.faint,border:`1px solid ${C.border}`,display:"inline-flex",alignItems:"center",gap:5}}>
                   <Icon name="lock" size={11} stroke={2.25}/>{job.panelizedLighting?.baseline ? "Update baseline" : "Set baseline"}
                 </button>
                 {/* Hidden for Lutron — Koy 2026-07-08: "they literally have
@@ -32477,18 +32479,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       textTransform:"none",flexShrink:0,marginLeft:8,
                       display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                       <span>{filledMods.length} mod{filledMods.length===1?"":"s"}</span>
-                      <span style={{color:C.muted}}>·</span>
+                      <span style={{color:C.faint}}>·</span>
                       <span>{total} load{total===1?"":"s"}</span>
                       {orderedKeys.length > 0 && (
                         <>
-                          <span style={{color:C.muted}}>(</span>
+                          <span style={{color:C.faint}}>(</span>
                           {orderedKeys.map((k,i) => (
                             <Fragment key={k}>
-                              {i > 0 && <span style={{color:C.muted}}>·</span>}
+                              {i > 0 && <span style={{color:C.faint}}>·</span>}
                               <span>{byType[k]} {k.toLowerCase()}</span>
                             </Fragment>
                           ))}
-                          <span style={{color:C.muted}}>)</span>
+                          <span style={{color:C.faint}}>)</span>
                         </>
                       )}
                     </span>
@@ -32689,7 +32691,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         const updated={...job.panelizedLighting,extraFloors:newExtras};
                         delete updated[ef.key+"_keypad"];
                         u({panelizedLighting:updated});
-                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
+                      }} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
                     </div>
                     {/* Same Savant branch for extra panels — simple switch-leg
                         list with smart-breaker pairing. Loads live in
@@ -33303,9 +33305,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         color:rqc.done===rqc.total?C.green:C.blue,marginBottom:4}}>ROUGH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
                         color:rqc.done===rqc.total?C.green:C.blue,lineHeight:1}}>
-                        {rqc.done}<span style={{fontSize:12,fontWeight:400,color:C.muted}}>/{rqc.total}</span>
+                        {rqc.done}<span style={{fontSize:12,fontWeight:400,color:C.faint}}>/{rqc.total}</span>
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      <div style={{fontSize:10,color:C.faint,marginTop:2}}>
                         {rqc.done===rqc.total?'all resolved':`${rqc.total-rqc.done} remaining`}
                       </div>
                     </div>
@@ -33324,9 +33326,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         color:fqc.done===fqc.total?C.green:C.purple,marginBottom:4}}>FINISH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
                         color:fqc.done===fqc.total?C.green:C.purple,lineHeight:1}}>
-                        {fqc.done}<span style={{fontSize:12,fontWeight:400,color:C.muted}}>/{fqc.total}</span>
+                        {fqc.done}<span style={{fontSize:12,fontWeight:400,color:C.faint}}>/{fqc.total}</span>
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      <div style={{fontSize:10,color:C.faint,marginTop:2}}>
                         {fqc.done===fqc.total?'all resolved':`${fqc.total-fqc.done} remaining`}
                       </div>
                     </div>
@@ -33380,7 +33382,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               <div style={{fontSize:11,color:C.dim}}>by {job[byKey]||"—"} · {job[dateKey]||"—"}</div>
                             </div>
                           </div>
-                          <button onClick={()=>u({[doneKey]:false,[byKey]:"",[dateKey]:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                          <button onClick={()=>u({[doneKey]:false,[byKey]:"",[dateKey]:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.faint,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
                         </div>
                       ):(
                         <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
@@ -33457,8 +33459,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       {(k==="simproNo"||k==="simproQuoteNo") && String(job[k]||"").trim() && (
                         <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                           title="Fill blank fields from Simpro (Site address + Site Contact)"
-                          style={{background:"none",border:"none",padding:"0 4px",margin:0,
-                            color: simproPulling?C.muted:C.accent, fontSize:9, fontWeight:700,
+                          style={{background:"none",border:"none",padding:"4px 8px",margin:0,minHeight:24,
+                            color: simproPulling?C.faint:C.accent, fontSize:9, fontWeight:700,
                             cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
                             letterSpacing:"0.05em", textTransform:"uppercase",
                             display:"inline-flex", alignItems:"center", gap:3}}>
@@ -33560,7 +33562,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {c.primary && (
                           <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.04em",
                             textTransform:"uppercase",
-                            color: anyLead ? C.muted : "#3E7D5A",
+                            color: anyLead ? C.faint : "#3E7D5A",
                             background: anyLead ? "transparent" : "#E8F1EC",
                             border: anyLead ? `1px solid ${C.border}` : "none",
                             borderRadius:4,padding:"1px 6px"}}>Simpro primary</span>
@@ -33628,14 +33630,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",gap:6,
                   letterSpacing:"0.06em",fontWeight:600}}>
                   STATUS UPDATE
-                  <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>
+                  <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>
                     shows on job cards
                   </span>
                   {job.statusUpdate && (
                     <button onClick={()=>u({statusUpdate:"",statusUpdateBy:"",statusUpdateAt:""})}
                       title="Clear this status update"
                       style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
-                        borderRadius:5,color:C.muted,fontSize:9,fontWeight:600,
+                        borderRadius:5,color:C.faint,fontSize:9,fontWeight:600,
                         padding:"2px 8px",cursor:"pointer",fontFamily:"inherit",
                         letterSpacing:"0.04em",textTransform:"uppercase"}}>Clear</button>
                   )}
@@ -33670,7 +33672,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:5,maxHeight:260,overflowY:"auto"}}>
                         {[...job.statusUpdateHistory].reverse().map((h, i) => (
                           <div key={i} style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,borderLeft:"3px solid #B0892C",background:C.card}}>
-                            <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
+                            <div style={{fontSize:10,color:C.faint,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
                             <div style={{fontSize:12,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{h.text}</div>
                           </div>
                         ))}
@@ -33688,7 +33690,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {/* Access note — gate code, keybox, etc. */}
               <div style={{marginTop:12}}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
-                  ACCESS NOTE <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
+                  ACCESS NOTE <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
                 </div>
                 <textarea
                   value={job.accessNote||""} onChange={e=>u({accessNote:e.target.value})}
@@ -33740,13 +33742,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     }} style={{cursor:"pointer",fontSize:14,color:"#B23A3A",padding:"4px",lineHeight:1,flexShrink:0}}>✕</span>
                   </div>
                 ))}
-                {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
+                {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
                 {/* Scan status */}
                 {(()=>{const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");return(
                   <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:8}}>
                     <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>SCAN STATUS</span>
                     <select value={job.matterportStatus||""} onChange={e=>{const v=e.target.value;const def=getStatusDef(MATTERPORT_STATUSES,v);u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});}}
-                      style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                      style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color?readableInk(mpDef.color,"#E6ECEA"):C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
                       {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                     {mpDef.hasDate&&<DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})} style={{width:120,fontSize:11,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>}
@@ -33826,11 +33828,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {lbl("Blue Stakes (811)")}
                     {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?"#B0892C":bs.state==="active"?C.green:C.dim; return (
                       <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
                         {bs.state!=="none" && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.04em",borderRadius:99,padding:"6px 12px",color:"#fff",background:colr}}>{bs.label}</span>}
-                        {bs.state==="none" && <span style={{fontSize:10,color:C.muted}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
+                        {bs.state==="none" && <span style={{fontSize:10,color:C.faint}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
                       </div>); })()}
                   </div>
                   <div style={{marginTop:14}}>
@@ -33992,7 +33994,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {!needsSchedModal.hard && (
                 <div style={{flex:1,minWidth:120}}>
                   <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>
-                    END <span style={{color:C.muted,fontWeight:500}}>(optional)</span>
+                    END <span style={{color:C.faint,fontWeight:500}}>(optional)</span>
                   </div>
                   <DateInp value={needsSchedModal.endDate||""}
                     onChange={e=>setNeedsSchedModal({...needsSchedModal, endDate: e.target.value})}
@@ -34000,7 +34002,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               )}
             </div>
-            <div style={{fontSize:10,color:C.muted,marginTop:6,fontStyle:"italic"}}>
+            <div style={{fontSize:10,color:C.faint,marginTop:6,fontStyle:"italic"}}>
               {needsSchedModal.hard
                 ? "Hard deadlines pin a single date — no window."
                 : "Leave both blank for flexible. Set END to schedule a window (renders as “May 11–22”)."}
@@ -34501,7 +34503,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRoom(q.id)} title="Set which room this question is about"
                 style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
-                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.muted}}>
+                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.faint}}>
                 {cur||'+ room'}
               </button>
             );
@@ -34515,7 +34517,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   onKeyDown={e=>{ if(e.key==='Enter'){setRoom(q.id,e.currentTarget.value);setEditRoom(null);} else if(e.key==='Escape'){setEditRoom(null);} }}
                   onBlur={e=>{ setRoom(q.id,e.currentTarget.value); setEditRoom(null); }}
                   style={{fontSize:10,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
-                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,'');setEditRoom(null);}} style={{fontSize:9,color:C.muted,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,'');setEditRoom(null);}} style={{fontSize:9,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
               </div>
             );
           })()}
@@ -34523,7 +34525,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRecip(q.id)} title="Set who this question is for"
                 style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
-                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.muted}}>
+                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.faint}}>
                 {cur?`For: ${cur}`:'+ recipient'}
               </button>
             );
@@ -34537,7 +34539,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   onKeyDown={e=>{ if(e.key==='Enter'){upd(q.id,{for:e.currentTarget.value.trim()});setEditRecip(null);} else if(e.key==='Escape'){setEditRecip(null);} }}
                   onBlur={e=>{ upd(q.id,{for:e.currentTarget.value.trim()}); setEditRecip(null); }}
                   style={{fontSize:10,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
-                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:9,color:C.muted,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:9,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
               </div>
             );
           })()}
@@ -34551,7 +34553,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
         <button onClick={async ()=>{ if(!await showConfirm("Delete this question?")) return; del(q.id); }}
 
-          style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+          style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
 
             fontSize:12,flexShrink:0,padding:"0 2px"}}>✕</button>
 
@@ -34563,7 +34565,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
           {more && (
             <div style={{marginBottom:10}}>
-              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.muted,fontWeight:600}}>(GC sees this)</span></div>
+              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.faint,fontWeight:600}}>(GC sees this)</span></div>
               <input type="text" value={q.note||""} onChange={e=>upd(q.id,{note:e.target.value})}
                 placeholder="e.g. We recommend a 200A panel here"
                 style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
@@ -34822,7 +34824,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       {open.length===0&&answered.length===0&&recipFilter==null&&statusFilter==null&&(
 
-        <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
+        <div style={{fontSize:11,color:C.faint,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
 
       )}
 
@@ -35005,7 +35007,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
       )}
 
       {filterIds!=null&&allQIds.length>0&&(
-        <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.muted,marginBottom:8}}>
+        <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.faint,marginBottom:8}}>
           {sharedQCount} of {allQIds.length} shared
         </div>
       )}
@@ -35063,7 +35065,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
           {recipients.map(r=>(
             <button key={r} type="button" disabled={!selectedIds.size} onClick={()=>assignSelectedTo(r)}
               style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:99,fontFamily:"inherit",cursor:selectedIds.size?"pointer":"not-allowed",
-                border:`1px solid ${C.border}`,background:C.card,color:selectedIds.size?color:C.muted,opacity:selectedIds.size?1:0.6}}>{r}</button>
+                border:`1px solid ${C.border}`,background:C.card,color:selectedIds.size?color:C.faint,opacity:selectedIds.size?1:0.6}}>{r}</button>
           ))}
           <input placeholder="New recipient…" disabled={!selectedIds.size}
             onKeyDown={e=>{ if(e.key==="Enter"&&e.currentTarget.value.trim()){ assignSelectedTo(e.currentTarget.value.trim()); e.currentTarget.value=""; } }}
@@ -35675,17 +35677,17 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
 
-                letterSpacing:"0.08em",color:sec.color}}>{sec.label}</div>
+                letterSpacing:"0.08em",color:readableInk(sec.color,"#EEF0F3")}}>{sec.label}</div>
 
               <div style={{background:`${sec.color}18`,border:`1px solid ${sec.color}33`,
 
-                borderRadius:99,padding:"2px 10px",fontSize:11,color:sec.color,fontWeight:700}}>
+                borderRadius:99,padding:"2px 10px",fontSize:11,color:readableInk(sec.color,"#E2E5EC"),fontWeight:700}}>
 
                 {sJobs.length}
 
               </div>
 
-              <div style={{marginLeft:"auto",color:sec.color,fontSize:13,fontWeight:700}}>
+              <div style={{marginLeft:"auto",color:readableInk(sec.color,"#EEF0F3"),fontSize:13,fontWeight:700}}>
 
                 {isCollapsed ? "▸" : "▾"}
 
@@ -35953,10 +35955,10 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
           label="Add progress photo"/>
       </div>
       <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
-        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
         <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
         <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
-        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
+        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
       </div>
     </div>
   );
@@ -36033,14 +36035,14 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
               {signedCount>0&&<span style={{marginLeft:8,color:C.green,fontWeight:700}}>· {signedCount} signed</span>}
             </div>
           </div>
-          {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
+          {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#fff",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
         </div>
       </div>
 
       {/* ── Mobile card layout ── */}
       {narrow ? (
         <div style={{padding:"12px 14px"}}>
-          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.faint,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
           {upcoming.map(u=>{
             const isEditing=editingId===u.id;
             const fc=getFC(u.foreman)||"#6E7682";
@@ -36061,7 +36063,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>
-                          {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                          {u.name||<span style={{color:C.faint,fontStyle:"italic"}}>Untitled</span>}
                         </div>
                         <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                           {isSigned&&<SignedBadge/>}
@@ -36084,14 +36086,14 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                             <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
                           </>
                         ) : (
-                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                         )}
                       </div>
                     </div>
                     {u.address&&(
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
                         <div style={{fontSize:11,color:C.dim,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                          <span style={{color:C.muted,fontSize:10}}>Address </span>{u.address}
+                          <span style={{color:C.faint,fontSize:10}}>Address </span>{u.address}
                         </div>
                         <AddressLink address={u.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#3B5BA5",border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,flexShrink:0,textDecoration:"none"}}>
                           <Icon name="mapPin" size={11} stroke={2.5}/> Maps
@@ -36099,10 +36101,10 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       </div>
                     )}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginBottom:u.notes?6:0}}>
-                      {u.city&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>City </span>{u.city}</div>}
-                      {u.customer&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Customer </span>{u.customer}</div>}
-                      {u.sales&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Sales </span>{u.sales}</div>}
-                      {u.lastFollowUp&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Follow Up </span>{u.lastFollowUp}</div>}
+                      {u.city&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>City </span>{u.city}</div>}
+                      {u.customer&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>Customer </span>{u.customer}</div>}
+                      {u.sales&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>Sales </span>{u.sales}</div>}
+                      {u.lastFollowUp&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>Follow Up </span>{u.lastFollowUp}</div>}
                     </div>
                     {u.notes&&<div style={{fontSize:12,color:C.dim,marginTop:4,lineHeight:1.4}}>{u.notes}</div>}
                     {(u.photos||[]).length>0&&(
@@ -36129,7 +36131,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             ))}
             <div style={{width:200,flexShrink:0}}/>
           </div>
-          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.faint,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
           {upcoming.map(u=>{
             const isEditing=editingId===u.id;
             const isSigned=!!u.signed;
@@ -36151,10 +36153,10 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                   <>
                     <div style={{flex:2.5,paddingRight:12,overflow:"hidden"}}>
                       <div style={{fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                        {u.name||<span style={{color:C.faint,fontStyle:"italic"}}>Untitled</span>}
                         {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6E7682",background:`${getFC(u.foreman)||"#6E7682"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6E7682"}33`}}>{u.foreman}</span>}
                       </div>
-                      {u.address&&<div style={{marginTop:2,fontSize:10,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
+                      {u.address&&<div style={{marginTop:2,fontSize:10,color:C.faint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
                       {isSigned&&<div style={{marginTop:2}}><SignedBadge/></div>}
                       {(u.photos||[]).length>0&&(
                         <div style={{marginTop:3,display:"flex",gap:4,alignItems:"center"}}>
@@ -36163,7 +36165,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                               <img src={safeImageSrc(p.url)} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
                             </a>
                           ))}
-                          {(u.photos||[]).length>4&&<span style={{fontSize:10,color:C.muted,fontWeight:700}}>+{(u.photos||[]).length-4}</span>}
+                          {(u.photos||[]).length>4&&<span style={{fontSize:10,color:C.faint,fontWeight:700}}>+{(u.photos||[]).length-4}</span>}
                         </div>
                       )}
                     </div>
@@ -36189,12 +36191,12 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
                       {confirmDeleteId===u.id ? (
                         <>
-                          <span style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>Remove?</span>
+                          <span style={{fontSize:10,color:C.faint,whiteSpace:"nowrap"}}>Remove?</span>
                           <button onClick={()=>del(u.id)} style={{background:"#B23A3A",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
                           <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
                         </>
                       ) : (
-                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                       )}
                     </div>
                   </>
@@ -36822,7 +36824,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
               />
               <button onClick={saveDate}
                 style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
-                  borderRadius:5,color:"#000",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                  borderRadius:5,color:"#fff",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
                 Set
               </button>
               {task.dueDate&&(
@@ -37374,7 +37376,7 @@ function JobActivity({ job, onSetTab }) {
           color:C.dim, textTransform:"uppercase", marginBottom:8,
           display:"flex", alignItems:"center", gap:8}}>
           <span>To do on this job</span>
-          <span style={{fontSize:10, color:C.muted}}>
+          <span style={{fontSize:10, color:C.faint}}>
             {totalTodos === 0 ? "Nothing open" : `${totalTodos} open`}
           </span>
         </div>
@@ -37482,7 +37484,7 @@ function JobActivity({ job, onSetTab }) {
                   onMouseLeave={ev=>{ ev.currentTarget.style.background="transparent"; }}>
                   <div style={{display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap"}}>
                     <span style={{fontSize:13, color:C.text}}>{e.label}</span>
-                    <span style={{fontSize:11, color:C.muted, marginLeft:"auto"}}>
+                    <span style={{fontSize:11, color:C.faint, marginLeft:"auto"}}>
                       {new Date(e.at).toLocaleDateString("en-US", { month:"short", day:"numeric" })}
                       {e.actor && ` · ${e.actor}`}
                     </span>
@@ -37558,7 +37560,7 @@ function JobPhotos({ job, onSetTab }) {
         color:C.dim, textTransform:"uppercase", marginBottom:8,
         display:"flex", alignItems:"center", gap:8}}>
         <span>All photos & files</span>
-        <span style={{fontSize:10, color:C.muted}}>
+        <span style={{fontSize:10, color:C.faint}}>
           {allPhotos.length === 0 ? "Nothing yet" :
             `${visible.length} of ${allPhotos.length}`}
         </span>
@@ -38670,7 +38672,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                     </div>
                     {/* Job blocks */}
                     {dayJobs.length === 0
-                      ? <div style={{fontSize:10,color:C.muted,textAlign:"center",padding:"8px 0",
+                      ? <div style={{fontSize:10,color:C.faint,textAlign:"center",padding:"8px 0",
                           fontStyle:"italic"}}>—</div>
                       : dayJobs.map(g => {
                           const appJob   = jobBySimproNo[g.projectId];
@@ -38863,7 +38865,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
         {embedded ? (
           <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim}}>All QC walks</span>
-            <span style={{fontSize:12,color:C.muted}}>{rows.length}</span>
+            <span style={{fontSize:12,color:C.faint}}>{rows.length}</span>
             {openCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#B23A3A",background:"#B23A3A18",borderRadius:5,padding:"1px 6px"}}>{openCount} need action</span>}
             {schedCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#3B5BA5",background:"#3B5BA518",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
           </span>
@@ -38924,7 +38926,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
           </div>
         );
       })}
-      {rows.length===0 && <div style={{textAlign:"center",padding:embedded?"14px 0":"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+      {rows.length===0 && <div style={{textAlign:"center",padding:embedded?"14px 0":"60px 0",color:C.faint,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
 }
@@ -38950,7 +38952,7 @@ function NavView({ jobs }) {
           outline:"none",marginBottom:16}}/>
 
       {active.length===0&&(
-        <div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>
+        <div style={{textAlign:"center",padding:"48px 0",color:C.faint,fontSize:13,fontStyle:"italic"}}>
           {search ? "No jobs match that search." : "No jobs with addresses yet."}
         </div>
       )}
@@ -38968,7 +38970,7 @@ function NavView({ jobs }) {
         </div>
       ))}
 
-      <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:16}}>
+      <div style={{textAlign:"center",fontSize:11,color:C.faint,marginTop:16}}>
         {active.length} job{active.length!==1?"s":""} with addresses
       </div>
     </div>
@@ -39150,7 +39152,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
       <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:3,gap:2,marginBottom:14}}>
         {seg("all","All",null)}{seg("proj","Projected",C.orange)}{seg("conf","Confirmed",C.green)}
       </div>
-      {total===0 && gaps.length===0 && <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
+      {total===0 && gaps.length===0 && <div style={{textAlign:"center",color:C.faint,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
       {groups.map(([label,b])=>{
         const arr=byBucket[b]; if(!arr||!arr.length) return null;
         return (
@@ -39158,7 +39160,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
             <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 3px 8px"}}>
               <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.07em",textTransform:"uppercase",color:b===-1?C.red:C.dim}}>{label}</span>
               <span style={{flex:1,height:1,background:C.border}}/>
-              <span style={{fontSize:10.5,fontWeight:700,color:C.muted}}>{arr.length}</span>
+              <span style={{fontSize:10.5,fontWeight:700,color:C.faint}}>{arr.length}</span>
             </div>
             {arr.map(e=>{
               const accent = e.up?C.orange:(e.phase==="Finish"?C.finish:C.rough);
@@ -39197,7 +39199,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
           <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 3px 8px"}}>
             <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.07em",textTransform:"uppercase",color:_STARTS_GOLD}}>Needs date</span>
             <span style={{flex:1,height:1,background:C.border}}/>
-            <span style={{fontSize:10.5,fontWeight:700,color:C.muted}}>{gaps.length}</span>
+            <span style={{fontSize:10.5,fontWeight:700,color:C.faint}}>{gaps.length}</span>
           </div>
           <div style={{fontSize:11,color:C.dim,margin:"0 3px 9px"}}>Rough not started, rough done and finish not scheduled, or still in Upcoming. No date set.</div>
           {gaps.map(e=>{
@@ -39215,7 +39217,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
                   cursor:canOpen(e)?"pointer":"default"}}>
                 <div style={{flex:"0 0 46px",textAlign:"center"}}>
                   <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
-                  <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.muted,
+                  <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.faint,
                     whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{bad?e.date:"—"}</div>
                 </div>
                 <div style={{width:1,alignSelf:"stretch",background:C.border,margin:"1px 0"}}/>
@@ -41725,7 +41727,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     <div style={{display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
                       {matchTeamModal.idx!=null && <button onClick={()=>{ if(window.confirm("Delete this team?")){ teamRemove(matchTeamModal.idx); setMatchTeamModal(null); } }} style={{marginRight:"auto",background:"none",border:"none",color:"#B23A3A",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Delete team</button>}
                       <button onClick={()=>setMatchTeamModal(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,padding:"7px 16px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>Cancel</button>
-                      <button onClick={saveTeamModal} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",padding:"7px 18px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>{matchTeamModal.idx==null?"Create team":"Save"}</button>
+                      <button onClick={saveTeamModal} style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",padding:"7px 18px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>{matchTeamModal.idx==null?"Create team":"Save"}</button>
                     </div>
                   </div>
                 </div>
@@ -41806,7 +41808,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
               borderRadius:10,border:`1px solid ${C.border}`}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>ROSTER</span>
-                <span style={{fontSize:10,color:C.muted,fontWeight:500}}>Click a name to assign their week · drag for single cells</span>
+                <span style={{fontSize:10,color:C.faint,fontWeight:500}}>Click a name to assign their week · drag for single cells</span>
                 <button onClick={()=>setCrewPTOModalOpen(true)}
                   title="Mark people out (PTO, sick days, vacation)"
                   style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:5,
@@ -41838,7 +41840,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       title={ptoThisWeek ? "Has PTO this week" : `Open ${name}'s week assignment grid`}
                       style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",
                         borderRadius:99,cursor:"grab",userSelect:"none",fontSize:11,fontWeight:700,
-                        color:isSel?"#fff":ptoThisWeek?C.muted:col,
+                        color:isSel?"#fff":ptoThisWeek?C.faint:col,
                         background:isSel?col:ptoThisWeek?"#EEF0F3":col+"15",
                         border:`2px ${ptoThisWeek?"dashed":"solid"} ${isSel?col:ptoThisWeek?"#CDD3DB":col+"44"}`,
                         opacity: ptoThisWeek ? 0.7 : 1,
@@ -41956,7 +41958,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           }}>
                           {allNames.length===0?(
                             <div onClick={e=>e.stopPropagation()} style={{minWidth:180}}>
-                              <div style={{fontSize:10,color:C.muted,fontStyle:"italic",marginBottom:6}}>
+                              <div style={{fontSize:10,color:C.faint,fontStyle:"italic",marginBottom:6}}>
                                 Type a name or pick from roster
                               </div>
                               <div style={{display:"flex",gap:4,marginBottom:6}}>
@@ -42009,7 +42011,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                       </span>
                                     );
                                   })}
-                                  {teamUnassigned.length>8&&<span style={{fontSize:9,color:C.muted,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
+                                  {teamUnassigned.length>8&&<span style={{fontSize:9,color:C.faint,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
                                 </div>
                               )}
                             </div>
@@ -42059,7 +42061,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   title="Add helper"
                                   style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                                     marginLeft:3,width:18,height:18,borderRadius:99,
-                                    border:`1px dashed ${C.border}`,color:C.muted,fontSize:11,fontWeight:700,
+                                    border:`1px dashed ${C.border}`,color:C.faint,fontSize:11,fontWeight:700,
                                     cursor:"pointer",userSelect:"none",flexShrink:0,lineHeight:1}}>+</span>
                               );
                             }
@@ -42105,7 +42107,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           {/* Dissolve — small × tucked in the top-right of the card */}
                           <span onClick={e=>{e.stopPropagation();teamRemove(idx);}}
                             title="Dissolve team"
-                            style={{position:"absolute",top:2,right:4,fontSize:12,color:C.muted,cursor:"pointer",
+                            style={{position:"absolute",top:2,right:4,fontSize:12,color:C.faint,cursor:"pointer",
                               fontWeight:400,opacity:0.35,transition:"opacity 0.15s",padding:"0 3px",lineHeight:1}}
                             onMouseEnter={e=>e.currentTarget.style.opacity=0.85}
                             onMouseLeave={e=>e.currentTarget.style.opacity=0.35}>
@@ -42128,7 +42130,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                   {/* Unassigned people */}
                   {teamUnassigned.length>0&&(
                     <div style={{paddingTop:8,borderTop:`1px solid ${C.border}`}}>
-                      <div style={{fontSize:9,fontWeight:700,color:C.muted,letterSpacing:"0.08em",marginBottom:6}}>
+                      <div style={{fontSize:9,fontWeight:700,color:C.faint,letterSpacing:"0.08em",marginBottom:6}}>
                         NOT ON A TEAM
                       </div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -42157,7 +42159,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     </div>
                   )}
 
-                  <div style={{fontSize:10,color:C.muted,marginTop:8,fontStyle:"italic"}}>
+                  <div style={{fontSize:10,color:C.faint,marginTop:8,fontStyle:"italic"}}>
                     Drag names between teams or tap a name then tap a team card to move them.
                     First person in each team is the lead.
                   </div>
@@ -42178,7 +42180,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                 </button>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 10px",minWidth:140}}>
                   <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",
-                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#3B5BA5":crewWeekOff<0?C.muted:C.dim}}>
+                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#3B5BA5":crewWeekOff<0?C.faint:C.dim}}>
                     {crewWeekOff===0?"THIS WEEK":crewWeekOff===1?"NEXT WEEK":crewWeekOff===-1?"LAST WEEK":
                      crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
                   </span>
@@ -42268,7 +42270,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           <div style={{fontSize:12,fontWeight:700,color:isToday3?C.accent:"var(--text)",marginTop:2}}>
                             {d.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
                           </div>
-                          <div style={{fontSize:9,color:isToday3?C.accent:C.muted,fontWeight:700,marginTop:2}}>
+                          <div style={{fontSize:9,color:isToday3?C.accent:C.faint,fontWeight:700,marginTop:2}}>
                             {crewDayTotals[di]} {crewDayTotals[di]===1?"person":"people"}
                           </div>
                         </th>
@@ -42278,7 +42280,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                 </thead>
                 <tbody>
                   {crewPlanJobs.length===0&&(
-                    <tr><td colSpan={6} style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontSize:12}}>
+                    <tr><td colSpan={6} style={{textAlign:"center",padding:"40px 20px",color:C.faint,fontSize:12}}>
                       {crewFocus && crewPinned.length===0 ? (
                         <div>
                           <div style={{fontSize:13,color:"var(--text)",fontWeight:600,marginBottom:6}}>
@@ -42461,7 +42463,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   }}
                                   onDragEnd={()=>{crewRowDragRef.current=null;setCrewRowDragOver(null);crewStopAutoScroll();}}
                                   title="Drag to reorder"
-                                  style={{cursor:"grab",color:C.muted,fontSize:11,lineHeight:1,
+                                  style={{cursor:"grab",color:C.faint,fontSize:11,lineHeight:1,
                                     padding:"2px 2px",userSelect:"none",fontFamily:"monospace",letterSpacing:-2,
                                     opacity:isHover?0.7:0.25,transition:"opacity 0.15s",flexShrink:0}}>
                                   &#8942;&#8942;
@@ -42470,7 +42472,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 <button onClick={e=>{e.stopPropagation();crewTogglePinned(job.id);}}
                                   title={isPinned?"Unpin":"Pin to this week"}
                                   style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",
-                                    color:isPinned?C.accent:C.muted,
+                                    color:isPinned?C.accent:C.faint,
                                     opacity:isPinned?1:(isHover?0.7:0),
                                     transition:"opacity 0.15s,color 0.15s",lineHeight:1,flexShrink:0,
                                     width:isPinned||isHover?"auto":0,overflow:"hidden"}}>
@@ -42684,7 +42686,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                     setCrewExtra(ne); _saveCrewData(crewData,ne);
                                   }}
                                     title="Remove from this week"
-                                    style={{fontSize:11,color:C.muted,cursor:"pointer",fontWeight:700,
+                                    style={{fontSize:11,color:C.faint,cursor:"pointer",fontWeight:700,
                                       padding:"0 3px",opacity:0.6,flexShrink:0}}>
                                     &times;</span>
                                 )}
@@ -42764,7 +42766,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
                                   title={cell.time?.start?"Tap to edit time":"Tap to set time"}
                                   style={{fontSize:9,fontWeight:700,
-                                    color:cell.time?.start?"#3B5BA5":C.muted,
+                                    color:cell.time?.start?"#3B5BA5":C.faint,
                                     background:cell.time?.start?"#3B5BA515":"transparent",
                                     border:`1px ${cell.time?.start?"solid":"dashed"} ${cell.time?.start?"#3B5BA533":C.border}`,
                                     borderRadius:4,padding:"1px 5px",marginBottom:3,cursor:"pointer",
@@ -42971,7 +42973,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       <button onClick={close}
                         title="Close"
                         style={{background:"none",border:"none",cursor:"pointer",
-                          color:C.muted,fontSize:20,lineHeight:1,padding:"4px 8px",fontFamily:"inherit",fontWeight:400}}>
+                          color:C.faint,fontSize:20,lineHeight:1,padding:"4px 8px",fontFamily:"inherit",fontWeight:400}}>
                         &times;
                       </button>
                     </div>
@@ -43158,7 +43160,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 Showing {crewDisplayName(crewForemanFilter)}&#39;s crew only
                               </span>
                               <button onClick={()=>setCrewForemanFilter(null)}
-                                style={{marginLeft:"auto",background:"none",border:"none",color:C.muted,fontSize:10,
+                                style={{marginLeft:"auto",background:"none",border:"none",color:C.faint,fontSize:10,
                                   cursor:"pointer",fontFamily:"inherit",fontWeight:600,textDecoration:"underline"}}>
                                 Show everyone
                               </button>
@@ -43230,7 +43232,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           {byKind.busy.length > 0 && (
                             <div style={{marginBottom:10}}>
                               <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#9A3030",marginBottom:6}}>
-                                BUSY ELSEWHERE · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— still selectable, set times to clarify</span>
+                                BUSY ELSEWHERE · {byKind.busy.length} <span style={{fontWeight:500,color:C.faint,letterSpacing:0,textTransform:"none"}}>— still selectable, set times to clarify</span>
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                                 {byKind.busy.map(renderPersonChip)}
@@ -43240,7 +43242,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
 
                           {byKind.pto.length > 0 && (
                             <div>
-                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.muted,marginBottom:6}}>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.faint,marginBottom:6}}>
                                 PTO · {byKind.pto.length}
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -43431,7 +43433,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             {titleName.toUpperCase()}
                           </div>
                           {wiz.kind === 'team' && team && (
-                            <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                            <div style={{fontSize:11,color:C.faint,marginTop:2}}>
                               {teamNames.map(n => crewDisplayName(n)).join(", ")}
                             </div>
                           )}
@@ -43444,7 +43446,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       <button onClick={applyAndClose}
                         title="Save and close"
                         style={{background:"none",border:"none",cursor:"pointer",
-                          color:C.muted,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
+                          color:C.faint,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
                         &times;
                       </button>
                     </div>
@@ -43465,13 +43467,13 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         onChange={e=>setCrewWizardDefaultTime(t=>({...t, end:e.target.value}))}
                         style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
                           padding:"4px 8px",fontSize:11,fontFamily:"inherit",color:"var(--text)"}}/>
-                      <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>
+                      <span style={{fontSize:10,color:C.faint,marginLeft:"auto"}}>
                         Tap a cell's time to override per-cell
                       </span>
                     </div>
                     {/* Grid header */}
                     {crewPlanJobs.length === 0 ? (
-                      <div style={{padding:"20px 12px",textAlign:"center",color:C.muted,fontSize:12}}>
+                      <div style={{padding:"20px 12px",textAlign:"center",color:C.faint,fontSize:12}}>
                         No jobs in this week's planner. Pin some jobs first.
                       </div>
                     ) : (
@@ -43487,7 +43489,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 background:"var(--surface)",borderBottom:`1px solid ${C.border}`,
                                 position:"sticky",top:0,zIndex:1,minWidth:90}}>
                                 {["MON","TUE","WED","THU","FRI"][i]}
-                                <div style={{fontSize:9,fontWeight:600,color:C.muted,marginTop:2}}>
+                                <div style={{fontSize:9,fontWeight:600,color:C.faint,marginTop:2}}>
                                   {d.toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}
                                 </div>
                               </th>
@@ -43552,7 +43554,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                           {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
                                         </div>
                                         {!checked && anotherCells > 0 && (
-                                          <div style={{fontSize:9,fontWeight:500,color:C.muted,marginTop:2}}>
+                                          <div style={{fontSize:9,fontWeight:500,color:C.faint,marginTop:2}}>
                                             also elsewhere
                                           </div>
                                         )}
@@ -43655,7 +43657,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             onChange={e=>setCrewPTODraft({...crewPTODraft,start:e.target.value})}/>
                         </label>
                         <label style={{flex:1}}>
-                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.muted,fontWeight:400}}>(optional)</span></div>
+                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.faint,fontWeight:400}}>(optional)</span></div>
                           <DateInp value={crewPTODraft.end}
                             onChange={e=>setCrewPTODraft({...crewPTODraft,end:e.target.value})}/>
                         </label>
@@ -43680,7 +43682,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     CURRENT PTO ({crewPTOList.length})
                   </div>
                   {crewPTOList.length===0 ? (
-                    <div style={{fontSize:12,color:C.muted,fontStyle:"italic",textAlign:"center",padding:"20px 0"}}>
+                    <div style={{fontSize:12,color:C.faint,fontStyle:"italic",textAlign:"center",padding:"20px 0"}}>
                       No PTO scheduled. Add some above.
                     </div>
                   ) : (
@@ -43697,7 +43699,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                               <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
                                 {crewDisplayName(p.name)} <span style={{color:C.dim,fontWeight:500,marginLeft:4}}>· {range}</span>
                               </div>
-                              {p.note && <div style={{fontSize:10,color:C.muted,marginTop:1,fontStyle:"italic"}}>{p.note}</div>}
+                              {p.note && <div style={{fontSize:10,color:C.faint,marginTop:1,fontStyle:"italic"}}>{p.note}</div>}
                             </div>
                             <button onClick={()=>removePTO(p.id)}
                               style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:5,
@@ -43752,7 +43754,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         <div style={{fontSize:10,fontWeight:700,color:"#B23A3A",letterSpacing:"0.1em",marginBottom:5}}>HARD DATE</div>
                         <DateInp value={crewNeedsModal.date}
                           onChange={e=>setCrewNeedsModal({...crewNeedsModal, date:e.target.value})}/>
-                        <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                        <div style={{fontSize:10,color:C.faint,marginTop:4,fontStyle:"italic"}}>
                           Must happen on this exact date.
                         </div>
                       </div>
@@ -43771,7 +43773,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       </div>
                     )}
                     {!isHard && (
-                      <div style={{fontSize:10,color:C.muted,marginTop:-8,marginBottom:12,fontStyle:"italic"}}>
+                      <div style={{fontSize:10,color:C.faint,marginTop:-8,marginBottom:12,fontStyle:"italic"}}>
                         Leave both blank to just flag as needing scheduling. Latest drives sort order.
                       </div>
                     )}
@@ -43997,14 +43999,14 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           padding:"4px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit"}}>
                         Suggest urgent
                       </button>
-                      <span style={{fontSize:10,color:C.muted,alignSelf:"center",marginLeft:"auto"}}>
+                      <span style={{fontSize:10,color:C.faint,alignSelf:"center",marginLeft:"auto"}}>
                         {crewPinned.length} pinned &middot; {allActive.length} active
                       </span>
                     </div>
                     <div style={{flex:1,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,
                       padding:6,background:"var(--surface)"}}>
                       {allActive.length===0?(
-                        <div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"24px 0",fontStyle:"italic"}}>
+                        <div style={{fontSize:12,color:C.faint,textAlign:"center",padding:"24px 0",fontStyle:"italic"}}>
                           No active jobs found.
                         </div>
                       ):allActive.map(j=>{
@@ -45883,7 +45885,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Active jobs</div>
           <div style={{fontSize:22,fontWeight:600,color:C.text}}>
-            <HeCount value={activeJobs.length}/> <span style={{fontSize:11,color:C.muted,fontWeight:400}}>of {allJobs.length}</span>
+            <HeCount value={activeJobs.length}/> <span style={{fontSize:11,color:C.faint,fontWeight:400}}>of {allJobs.length}</span>
           </div>
         </div>
         <div style={pulseCard}>
@@ -45983,7 +45985,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                     <div key={`ev-${idx}`} style={{...rowStyle, padding:"6px 8px", borderBottom:`1px solid ${C.border}`}}
                       onClick={() => j && onSelectJob && onSelectJob(j)}>
                       <span style={{width:6,height:6,borderRadius:99,background:e.color||C.muted,flexShrink:0}}/>
-                      <span style={{fontSize:11,color:C.muted,minWidth:54}}>{fmtEvTime(e.at)}</span>
+                      <span style={{fontSize:11,color:C.faint,minWidth:54}}>{fmtEvTime(e.at)}</span>
                       <div style={{flex:1,fontSize:13,color:C.text,lineHeight:1.35}}>
                         {e.who && <b>{(e.who||"").split(/\s+/)[0]}</b>}{e.who?" · ":""}
                         <span style={{color:C.text}}>{e.label}</span>
@@ -46043,7 +46045,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
               <div key={j.id} style={{...rowStyle, padding:"6px 10px", opacity:0.55}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:12,color:C.dim}}>{j.name || j.id}</div>
-                  <div style={{fontSize:11,color:C.muted}}>{d ? `no work since ${fmtDay(d)}` : "no logged work"}</div>
+                  <div style={{fontSize:11,color:C.faint}}>{d ? `no work since ${fmtDay(d)}` : "no logged work"}</div>
                 </div>
               </div>
             );
@@ -46097,11 +46099,11 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                       </span>
                     ))}
                   </div>
-                  <div style={{fontSize:11,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+                  <div style={{fontSize:11,color:C.faint,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
                     {p.events.slice(0,3).map((e,i) => (
                       <div key={i} style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.5}}
                         title={e.label + (e.jobName?` · ${e.jobName}`:"")}>
-                        <span style={{color:C.muted}}>{fmtEvTime(e.at)}</span> · {e.label}
+                        <span style={{color:C.faint}}>{fmtEvTime(e.at)}</span> · {e.label}
                         {e.jobName && <span style={{color:C.blue}}> · {e.jobName}</span>}
                       </div>
                     ))}
@@ -46183,7 +46185,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                       {g.events.map((e,i) => (
                         <div key={i} style={{display:"flex", gap:8, alignItems:"flex-start", fontSize:12, color:C.text, lineHeight:1.45, padding:"3px 0"}}>
                           <span style={{width:6, height:6, borderRadius:99, background:e.color||C.muted, marginTop:6, flexShrink:0}}/>
-                          <span style={{fontSize:11, color:C.muted, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtEvTime(e.at)}</span>
+                          <span style={{fontSize:11, color:C.faint, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtEvTime(e.at)}</span>
                           <div style={{flex:1}}>
                             <span>{e.label}</span>
                             {e.detail && <div style={{fontSize:11, color:C.dim, marginTop:1}}>{e.detail}</div>}
@@ -47710,11 +47712,11 @@ function ActivityLog({ jobs, embedded = false }) {
       {!embedded && (
         <>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:4}}>Activity Log</div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+          <div style={{fontSize:12,color:C.faint,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
         </>
       )}
       {embedded && (
-        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+        <div style={{fontSize:12,color:C.faint,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
       )}
       <input placeholder="Filter by job name or person..." value={filter} onChange={e=>setFilter(e.target.value)}
         style={{width:"100%",maxWidth:400,padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,fontSize:13,fontFamily:"inherit",marginBottom:16,outline:"none"}}/>
@@ -47722,21 +47724,21 @@ function ActivityLog({ jobs, embedded = false }) {
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"inherit"}}>
           <thead>
             <tr style={{background:C.surface,borderBottom:`2px solid ${C.border}`}}>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>Job</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:130}}>Last Edited By</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:100}}>When</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:150}}>Date</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Foreman</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Lead</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>Job</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:130}}>Last Edited By</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:100}}>When</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:150}}>Date</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Foreman</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Lead</th>
             </tr>
           </thead>
           <tbody>
             {filtered.slice(0,100).map(job => (
               <tr key={job.id} style={{borderBottom:`1px solid ${C.border}22`}}>
                 <td style={{padding:"8px 12px",color:C.text,fontWeight:600}}>{job.name||"(untitled)"}</td>
-                <td style={{padding:"8px 12px",color:job._saved_by?C.text:C.muted}}>{job._saved_by||"—"}</td>
-                <td style={{padding:"8px 12px",color:C.muted,fontSize:12}}>{timeAgo(job.updated_at)}</td>
-                <td style={{padding:"8px 12px",color:C.muted,fontSize:11}}>{fmtDate(job.updated_at)}</td>
+                <td style={{padding:"8px 12px",color:job._saved_by?C.text:C.faint}}>{job._saved_by||"—"}</td>
+                <td style={{padding:"8px 12px",color:C.faint,fontSize:12}}>{timeAgo(job.updated_at)}</td>
+                <td style={{padding:"8px 12px",color:C.faint,fontSize:11}}>{fmtDate(job.updated_at)}</td>
                 <td style={{padding:"8px 12px",color:C.text,fontSize:12}}>{job.foreman||"—"}</td>
                 <td style={{padding:"8px 12px",color:C.text,fontSize:12}}>{job.lead||"—"}</td>
               </tr>
@@ -47744,7 +47746,7 @@ function ActivityLog({ jobs, embedded = false }) {
           </tbody>
         </table>
       </div>
-      <div style={{marginTop:10,fontSize:11,color:C.muted}}>{filtered.length} entries — most recent first</div>
+      <div style={{marginTop:10,fontSize:11,color:C.faint}}>{filtered.length} entries — most recent first</div>
     </div>
   );
 }
@@ -48169,7 +48171,7 @@ function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
     setBusy("");
   };
   const chip = (color, text) => (
-    <span key={text} style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: "2px 8px", color,
+    <span key={text} style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: "2px 8px", color: readableInk(color, "#E9ECF0"),
       background: `${color}14`, border: `1px solid ${color}44`, whiteSpace: "nowrap" }}>{text}</span>
   );
   const chips = [];
@@ -48202,7 +48204,7 @@ function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
       </div>
     );
   };
-  const grp = (text) => <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted, padding: "8px 8px 3px" }}>{text}</div>;
+  const grp = (text) => <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.faint, padding: "8px 8px 3px" }}>{text}</div>;
   const list = () => {
     if (cur === "sent") return <BcSentTab identity={identity}/>;
     const def = BC_TABS.find(t => t.key === cur);
@@ -51041,7 +51043,7 @@ function HomeownerPage({ jobId }) {
       <div style={{fontSize:14,color:'#5E6670',maxWidth:320,lineHeight:1.6}}>
         Thank you. Homestead Electric has your generator load selections.
       </div>
-      <div style={{marginTop:40,fontSize:11,color:'#CDD3DB',letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
+      <div style={{marginTop:40,fontSize:11,color:'#666E79',letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
     </div>
   );
 
@@ -51184,7 +51186,7 @@ function HomeownerPage({ jobId }) {
         {/* NOT ON GENERATOR — add-able (removed items land here too) */}
         {offItems.length>0&&(
           <>
-            <div style={{fontSize:10,fontWeight:700,color:'#CDD3DB',letterSpacing:'0.08em',margin:'22px 0 10px'}}>
+            <div style={{fontSize:10,fontWeight:700,color:'#666E79',letterSpacing:'0.08em',margin:'22px 0 10px'}}>
               NOT ON GENERATOR · {offItems.length}
             </div>
             {offItems.map(it=>(
@@ -51244,7 +51246,7 @@ function HomeownerPage({ jobId }) {
               cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit'}}>
             {submitting?'Submitting…':'Submit my selections'}
           </button>
-          <div style={{textAlign:'center',marginTop:14,fontSize:10,color:'#CDD3DB',letterSpacing:'0.06em'}}>
+          <div style={{textAlign:'center',marginTop:14,fontSize:10,color:'#666E79',letterSpacing:'0.06em'}}>
             HOMESTEAD ELECTRIC
           </div>
         </div>
@@ -52600,11 +52602,11 @@ function ExternalPunchSection({ items, label, onChange, color }) {
             {it.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
           </div>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:13,color:it.done?C.muted:C.text,
+            <div style={{fontSize:13,color:it.done?C.faint:C.text,
               textDecoration:it.done?'line-through':'none',lineHeight:1.45,
               wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{it.text}</div>
 
-            <div style={{fontSize:9,color:C.muted,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+            <div style={{fontSize:9,color:C.faint,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
               <span>added by <b>{it.addedBy||label}</b>{it.addedAt?' · '+it.addedAt:''}</span>
               {it.done&&it.checkedBy&&(
                 <span style={{color:C.green}}>✓ checked by {it.checkedBy}{it.checkedAt?' · '+it.checkedAt:''}</span>
@@ -52612,7 +52614,7 @@ function ExternalPunchSection({ items, label, onChange, color }) {
             </div>
           </div>
           <button onClick={()=>remove(it.id)}
-            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:13,
+            style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:13,
               flexShrink:0,padding:'0 2px',lineHeight:1}}>✕</button>
         </div>
       ))}
@@ -53664,10 +53666,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-08 · App SW version: v525
+**Last manifest update:** 2026-10-08 · App SW version: v526
 
 ---
 
+- **Easier to read and use: the axe accessibility pass** · 'shipped 2026-10-08' · 'SW v526' · Koy: *"go ahead, fix all"* after an axe-core scan of the live app (10 tabs + a job card). **Zoom:** the viewport no longer sets 'user-scalable=no'; desktop and Android can pinch-zoom again, and iOS keeps 'maximum-scale=1' (set by a tiny inline script in 'public/index.html') only to stop Safari's tap-a-text-box zoom jump — iOS still pinch-zooms with it. **Contrast:** new 'src/a11y.js' 'readableInk(color, bg)' darkens a color just enough for 4.5:1 on a light background, same hue (lime '#84cc16' → readable green, bright blue/green/red foreman colors likewise); applied in 'getPersonColor' (so every crew name, schedule tile and foreman header), the Job Board lane headers ('StageSectionList'), 'Pill', the My Day message chips and the Matterport scan-status select. New token 'C.faint' '#666E79' replaces 'C.muted' ('#CDD3DB', 1.4:1) as a TEXT color at 352 sites; 'C.muted' stays for borders. Buttons with black text on the blue accent (left from the old yellow accent) are white now (21 sites). The 'View →' dim opacity is gone. **Touch:** job card tabs, Close and Refresh are at least 40px tall on touch screens ('.he-tap' / '.he-tap-sq', 'pointer:coarse' only, desktop unchanged); the Job Info Simpro **Pull** link got a 24px hit area. **Keyboard + screen reader:** 'installA11y()' (called once from 'src/index.js') gives every inline 'cursor:pointer' box that holds no controls of its own 'role=button' + 'tabindex=0' with Enter/Space to click, names unlabeled '<select>'s from the label drawn next to them, and draws a blue ':focus-visible' ring for keyboard users only. The job card is a 'role=dialog' with a name; the page has one '<main>' and a hidden '<h1>'. **Why it won't lose data:** display-only — no save path, loader, rules or functions touched; 'a11y.js' only sets DOM attributes React does not manage, and stored 'colorOverrides' are untouched (darkening happens on read).
 - **Crew POs from the app go LIVE: everyone but contractors can send POs to CED** · 'shipped 2026-10-08' · 'SW v525' · Koy: *"okay do those 5 steps and lets do it"* (after the v524 test runs worked and every test PO was archived). 'MATERIAL_PO_TEST' = **false** and 'PERMISSIONS["materials.sendPO"]' = admin, manager, standard, limited (Koy: everyone but contractors — leads and foremen send POs from Simpro Mobile today). Both send paths go live together: **New order from the bid** (v524, one PO per cost center, one email) and the card's **Send to CED** / **Get a PO number** (v523, the phase's Rough or Finish cost center). Live email: to CED's address on its Simpro vendor record ('homestead@cedaf.com', the same one Simpro Mobile pre-fills; Koy confirmed), CC bids@homesteadelectric.net + the sender's Simpro email, reply-to the sender (bids@ if they have none), from 'orders@homesteadelectric.cc', no '[TEST]'. The test notes on both send screens disappear with the flag. **Turn-on order:** this app version first, then 'gc_config/material_po.mode' = 'live' (Koy, Firestore console) — while the server is still on test, non-admins get "still being tested"; once live, any copy of the app still on v523/v524 is refused with "Update the app first" ('clientTest'). Test-send cards left on job 1444 show Send again once live (a test log never blocks a real send), so they get deleted rather than tapped. Guide 'rough.html' now covers both send paths and drops the office-only line. Training video [[Order from the Bid]] re-rendered without the testing line. **Why it won't lose data:** a constant and a permission list change; no field, loader, rules or function code touched (the server already had live mode, tested by 'materialpo-sim.js' live-routing scenarios).
 - **Order from the bid: pick material from the job's cost centers, one PO per cost center, one email to CED** · 'shipped 2026-10-08' · 'SW v524' · Koy: *"the next big step in this would be to be able to add material from the cost centers to an order. It would also be able to order that material from the cost center that it's in, instead of the Rough or the Finish cost center (the base ones)"* + *"there is also an option for typing in parts as well still right?"* + *"remove the ced invoice change as well"* (approved off the proposal page for the boss and CED, then *"go ahead"*). Material Tracking (Rough and Finish) gets **New order from the bid** above + Add PO (anyone with 'materials.sendPO', real Simpro jobs only — not quotes). A full-screen **'OrderBuilder'** sheet: pick a cost center (grouped by section, from the bid the job already loads for Bid Items — 'simproStock'; orange "N to go", blue "N in this order"), add bid items at the still-to-go quantity with a − / number / + stepper (labour and Simpro deduction lines hidden; search by name or part #), **Type in parts or notes** on every cost center (anything not in the bid, or the whole order typed), add from more cost centers, then **Review**: CED, Will call / Deliver to job, the date, and each cost center as its own "PO n of N" with Edit. **Send to CED** calls the new callable **'sendMaterialOrder'**: the cost centers are checked against the job's bid in Simpro right then, ONE Simpro PO is made per cost center (charged to that cost center, the list in VendorNotes exactly as crews paste it today — no Simpro line items, no prices, so receiving and CED invoices don't change), then ONE email goes to CED with one PO form PDF per PO ("POs 7262 & 7263 – job – Homestead Electric"). Each PO lands as its own Material Tracking card (PO #, the lines, Ordered when the email went, plus 'poOrderId' / 'poCcId' / the v523 'po*' fields), upserted by order + cost center through the job's live copy ('jobRef.current'). **Retry safety:** the unfinished order is kept on the phone ('he_po_order_<job>_<phase>' in localStorage) under ONE order id until the email goes; every PO is claimed at 'material_po_log/<order>-cc<ccId>' (same claim / lost-answer recovery as v523) and the order's email at 'material_po_log/<order>' ('emailingAt'), so three taps, a dropped connection, a refused cost center (the POs already made stay, Send again finishes the rest) or a failed email never make a second PO or a second email. The order doc keeps 'madeKeys', so a Send again that no longer lists a cost center whose PO is already made still emails that PO; the screen marks those cost centers "PO #### made" and says edits there won't change it. A card from an order never shows the card's own Send (that would make a new PO); an unfinished one shows **Finish sending** instead, which works from any phone (the callable with 'resume:true' and no groups emails every PO the order already made, without making any). If more is added to an order whose email already went (a lost answer, then Send again with another cost center), only the new PO is made and it gets its own email; the order doc tracks 'emailedPoNos' so no PO is ever emailed twice. The call waits up to 5 minutes ('memberCallable' takes an options arg). **Sending / sent motion** (Koy: *"we need to make sure theres a motion graphic for when its sending and shows it sent"*): new 'PoSendMotion' — while sending, a paper plane crosses a dashed trail with a caption for the likely step (timed, never past the last step; the server answer is what flips it) and a "Simpro can be slow" line after 9 s; when it lands, a green check draws in with a ring and a small burst (and a 25 ms buzz on Android); a failed or half-finished send gets a still red "!" instead. Used on the order screen and on the v523 card Send sheet; CSS keyframes scoped 'he-po-*', still versions under 'prefers-reduced-motion'. Training video (Remotion, 62 s, vertical) lives outside the repo at '~/homestead-training-videos'. **Fix (2026-10-08, after comparing app POs with crew Simpro Mobile POs):** marking a PO Sent to Supplier now keeps Simpro's **auto-adjust status ON** (was off), so receipting moves an app PO to Completed on its own like every crew PO; checked on test PO 7249 that Status 24 + auto-adjust true holds "Sent to Supplier". Functions only ('sendMaterialPO' + 'sendMaterialOrder' redeploy), no app version change. Over 10 cost centers is blocked on review; **Start over** clears an unsent order (hidden once any PO is made). Independent review: 5 findings fixed (a crash from 'React.Fragment' without a React import, Bid Items → Order material not opening because Material Tracking starts folded — it now opens unfolded when asked, retry errors not shown, the 70 s client timeout, the quantity box vanishing when cleared). **Bid Items → Order material** opens the order screen on the chosen phase for senders (everyone else still gets a blank card). Same test mode as v523 (admins only, email only to the test inbox, '[TEST]'); live sender is 'orders@homesteadelectric.cc'. Gates: 'scripts/materialpo-test.js' ('cleanOrderGroups', 'orderLine', 'groupKey', plural email wording) + 'scripts/materialpo-sim.js' now 23 scenarios (one PO per cost center + one email with every PDF, three taps → 2 POs 1 email, refused cost center then finish, cost center not on the job refused, email retry, two retries racing after a failed email → 1 email, live routing with a typed-only order, non-admin / empty refused, Send again without an already-made cost center still emails its PO, Finish sending from a card emails once, Finish with nothing made refused, an addition after the email gets its own email with only the new PO; mutation-checked). Guides updated: rough, finish, biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder'.** **Why it won't lose data:** no new top-level job field; new cards are added (or the same order's cards updated in place) inside 'roughMaterials' / 'finishMaterials' through the normal save against the live job copy; nothing is deleted; the draft in localStorage only ever holds the unsent order; the only server writes are the function-only 'material_po_log' docs; no rules change.
 - **Crew POs from the app: Send to CED from the Material Tracking card, and an Orders list on Bid Items** · 'shipped 2026-10-08' · 'SW v523' · Koy: *"have the crews create and send a PO from the Command Center app. Right now, they have to use Simpro Mobile to do that and email the supplier"* + *"I would want this in the material tracking section as well of the finish and rough… it makes a lot of sense on the bid items page as well"* + *"i want the test po to be from me to me only so i see exactly how it looks"*. Crews already build each order on a Material Tracking PO card (Rough and Finish) and used **COPY FOR SIMPRO** to paste it into Simpro Mobile. The card now has **Send to CED** (or **Get a PO number** for Home Depot / ACE / Amazon store runs) above Copy for Simpro. A sheet confirms will call or delivery, the pick-up date and the list (read-only; edit on the card), then the new callable **'sendMaterialPO'** checks the sender's name + live PIN ('requireMember'), creates the PO in Simpro ('POST /vendorOrders/', Stage Approved, charged to the job's first Base-section cost center whose company cost center is Rough In or Finish, storage Shop, Reference "Job No. N - name", the list in VendorNotes like crews paste today, DueDate = pick-up date), emails it (CED) through Resend modeled on Simpro's own PO email with the sender's signature from their Simpro employee record, marks it Sent to Supplier, and logs it in function-only **'material_po_log/{job_phase_card}'** so a double tap or a retry returns the same PO instead of a second one (a failed email offers **Resend email**, never a new PO). The card gets the PO #, Ordered with who/when, and 'simproPoId' / 'poSentVia' / 'poSentMode' / 'poSentBy' / 'poSentAt' / 'poCostCenter' / 'poEmailOk' / 'poEmailedTo', written through the job's live copy ('jobRef.current'), not the render's list. **Bid Items → Orders** (folded, residential tabs only, hidden with Material Tracking): every PO card from both phases with status, who, when; **Order material** asks Rough-In or Finish and adds a card there. **Test mode (shipping state):** server mode on 'gc_config/material_po' (missing = test): only admins can send ('materials.sendPO' = admin, and the server refuses others), the email goes ONLY to the test inbox (default 'gc_config/mail.soakTo'), nobody is copied, the subject starts '[TEST]' with a banner naming where it would have gone, and the Simpro PO is real with a TEST private note, so it gets voided. Live = set 'mode:"live"' + a verified sender ('from: bids@homesteadelectric.net' after the Resend DNS records), widen 'materials.sendPO', and flip 'MATERIAL_PO_TEST'. Simpro's API has no send/email/PDF action (route probe 2026-10-08), so the app sends its own email. **PO form PDF (added 2026-10-08 after Koy's first test: "it just sent a list though not the attached pdf form we use from simpro"):** 'functions/materialPO/pdf.js' (pdf-lib, now in functions/package.json) rebuilds Simpro's "Order w/o prices" form — longhorn logo (cropped from a real Simpro PO PDF into 'materialPO/logo.js'), company block from Simpro's company record, PURCHASE ORDER NO., Vendor / Branch Address (vendor record) / Date Ordered / Date Required / Job Name / Site Address (job's site) / Reference / Ordered By, Delivery Address and Special Instructions (pickup line + list), Approved By, Page n/N, flows onto more pages — attached as 'Purchase_Order_No_####.pdf'; the email body then uses Simpro's wording ("…is attached") without the list. If the PDF can't be built the email still goes with the list in the body. **New form (2026-10-08, Koy: "this would be the correct po attachment" + "price would be left off of this for the crews"):** the PDF now matches Homestead's newer Simpro PO form (PO 7224) — cream paper, copper double frame, centered longhorn logo (transparent PNG), serif "Purchase Order" title, Supplier / PO No. / Ordered / Required, Job No. / Job Site (Simpro site name) / Reference / Supplier Quote / Ordered By, ORDER ITEMS table (Part # / Item / Qty; typed lines go in the table with no part # or qty), DELIVERY & SPECIAL INSTRUCTIONS (pickup or delivery line), approval lines, "QUESTIONS ABOUT THIS ORDER? CALL OUR OFFICE." footer, PAGE n OF N. No Unit Price, Total, Freight, Tax or Purchase Order Total. pdf.js loads lazily so the root (Vercel) build's gates don't need functions deps; the sim checks the PDF where pdf-lib exists and the fallback where it doesn't. **Duplicate safety (independent review, 9 findings fixed):** the card is claimed in a Firestore transaction; everything needed to finish is logged BEFORE the Simpro POST with a claim id that also goes in the PO's private notes, so a lost or unclear Simpro answer (timeout, 5xx) is marked unknown and the next try searches Simpro's newest POs for that id and adopts the PO instead of making a second; the email is claimed too ('emailingAt'); test always wins for the email ('emailMode': a live PO retried while the switch is on test goes only to the test inbox); a test send is archived ('…__test_<ts>') and doesn't block the real send once live; when live, a copy of the app that still says test ('clientTest') is refused; card dates fill only if still empty on the live card. Gates 'scripts/materialpo-test.js' (rules) + 'scripts/materialpo-sim.js' (the real handler vs fake Firestore/Simpro/email: one PO for three simultaneous taps, test inbox only, email retry, lost-answer recovery, refusal, live routing, test-wins, archive, store run, bad input; mutation-checked) in prebuild. Guide updated: biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO'.** **Why it won't lose data:** no new top-level job field; the new fields live inside each existing order object in 'roughMaterials' / 'finishMaterials', which the loader passes through whole; every card write reconciles against the live job copy through the normal save; nothing is deleted; the only new collection is server-written and client-denied by the catch-all; no rules change.
@@ -54460,10 +54463,10 @@ function TimeOffPage({ identity = null, users = [] }) {
           <button onClick={()=>decide(r,"approved")} style={{padding:"4px 12px", fontSize:12, fontWeight:700, border:"none", borderRadius:7, background:"#2C5C40", color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>Approve</button>
           <button onClick={()=>decide(r,"denied")} style={{padding:"4px 12px", fontSize:12, fontWeight:600, border:`1px solid ${C.border}`, borderRadius:7, background:"transparent", color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>Deny</button>
         </>)}
-        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{padding:"3px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
+        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{padding:"3px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.faint, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
       </div>
       {r.note && <div style={{fontSize:12, color:C.dim, marginTop:4}}>{r.note}</div>}
-      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:10.5, color:C.muted, marginTop:3}}>{r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
+      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:10.5, color:C.faint, marginTop:3}}>{r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
     </div>
   );
 
@@ -54477,7 +54480,7 @@ function TimeOffPage({ identity = null, users = [] }) {
         <div style={{fontSize:14, fontWeight:600, marginBottom:10}}>Request time off{me?` — ${me}`:""}</div>
         <div style={{display:"flex", gap:12, flexWrap:"wrap", marginBottom:10}}>
           <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Start</div><DateInp value={draft.start} onChange={e=>setDraft({...draft, start:e.target.value})}/></div>
-          <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>End <span style={{color:C.muted}}>(optional)</span></div><DateInp value={draft.end} onChange={e=>setDraft({...draft, end:e.target.value})}/></div>
+          <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>End <span style={{color:C.faint}}>(optional)</span></div><DateInp value={draft.end} onChange={e=>setDraft({...draft, end:e.target.value})}/></div>
         </div>
         <div style={{marginBottom:10}}>
           <div style={{fontSize:10, color:C.dim, marginBottom:4}}>Pay</div>
@@ -54490,12 +54493,12 @@ function TimeOffPage({ identity = null, users = [] }) {
             })}
           </div>
         </div>
-        <div style={{marginBottom:10}}><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Reason / note <span style={{color:C.muted}}>(optional)</span></div>
+        <div style={{marginBottom:10}}><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Reason / note <span style={{color:C.faint}}>(optional)</span></div>
           <input type="text" value={draft.note} onChange={e=>setDraft({...draft, note:e.target.value})} placeholder="e.g. family trip, appointment…"
             style={{width:"100%", padding:"7px 10px", fontSize:13, border:`1px solid ${C.border}`, borderRadius:7, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}/>
         </div>
         <button onClick={submitRequest} disabled={!draft.start||submitting}
-          style={{padding:"8px 18px", fontSize:13, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#000":C.muted, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
+          style={{padding:"8px 18px", fontSize:13, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#000":C.faint, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
           {submitting?"Submitting…":"Submit request"}
         </button>
       </div>
@@ -54506,14 +54509,14 @@ function TimeOffPage({ identity = null, users = [] }) {
           <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:6}}>
             <span style={{fontSize:14, fontWeight:600}}>Pending approvals</span>
             <span style={{fontSize:11, color:"#8A6A1E", background:"#F3E9CF", border:"1px solid #EAD9A6", borderRadius:99, padding:"1px 8px"}}>{pending.length}</span>
-            <span style={{fontSize:11, color:C.muted}}>{isAdmin?"all crew":"your book"}</span>
+            <span style={{fontSize:11, color:C.faint}}>{isAdmin?"all crew":"your book"}</span>
           </div>
           {pending.length===0 ? <div style={{fontSize:13, color:C.dim, padding:"8px 0"}}>Nothing waiting on you.</div> : pending.map(r=>card(r, true))}
           {decided.length>0 && (
             <div style={{marginTop:6}}>
               <div onClick={()=>setShowDecided(o=>!o)} style={{display:"flex", alignItems:"center", gap:8, padding:"8px 0 4px", cursor:"pointer", userSelect:"none"}}>
                 <span style={{fontSize:12, fontWeight:600, color:C.dim}}>Decided</span>
-                <span style={{fontSize:11, color:C.muted}}>{decided.length}</span>
+                <span style={{fontSize:11, color:C.faint}}>{decided.length}</span>
                 <span style={{marginLeft:"auto", color:C.dim, transform:showDecided?"rotate(0)":"rotate(-90deg)", transition:"transform 0.15s"}}>▾</span>
               </div>
               {showDecided && decided.map(r=>card(r, false))}
@@ -54772,7 +54775,7 @@ function AppMapSharePage({ identity = null } = {}) {
                 </button>
               ))}
               <span style={{flex:1}}/>
-              <span style={{fontSize:11, color:C.muted}}>From: {identity?.name || "you"}</span>
+              <span style={{fontSize:11, color:C.faint}}>From: {identity?.name || "you"}</span>
               <button
                 onClick={submitSuggestion}
                 disabled={!suggText.trim() || suggSubmitting}
@@ -54780,7 +54783,7 @@ function AppMapSharePage({ identity = null } = {}) {
                   padding:"6px 14px", fontSize:13, fontWeight:500,
                   border:`1px solid ${C.accent}`, borderRadius:6,
                   background: suggText.trim() && !suggSubmitting ? C.accent : C.bg,
-                  color: suggText.trim() && !suggSubmitting ? "#fff" : C.muted,
+                  color: suggText.trim() && !suggSubmitting ? "#fff" : C.faint,
                   cursor: suggText.trim() && !suggSubmitting ? "pointer" : "not-allowed",
                 }}>
                 {suggSubmitting ? "Saving…" : "Submit"}
@@ -54794,7 +54797,7 @@ function AppMapSharePage({ identity = null } = {}) {
           <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginBottom:12}}>
             <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap"}}>
               <span style={{fontSize:14, fontWeight:600}}>Suggestion inbox</span>
-              <span style={{fontSize:12, color:C.muted}}>{suggestions.length} total</span>
+              <span style={{fontSize:12, color:C.faint}}>{suggestions.length} total</span>
               <span style={{flex:1}}/>
               <span style={{fontSize:12, color:C.dim}}>Filter:</span>
               {["all","new","reviewing","planned","built","declined"].map(s => (
@@ -54856,7 +54859,7 @@ function AppMapSharePage({ identity = null } = {}) {
                   <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
                   <div style={{flex:1, minWidth:0}}>
                     <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? `${n.parent}: ` : ""}{n.name}</span>
-                    <span style={{fontSize:11, color:C.muted, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
+                    <span style={{fontSize:11, color:C.faint, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
                   </div>
                   <span style={{fontSize:11, color:C.dim, flexShrink:0, fontVariantNumeric:"tabular-nums"}}>{n.date}</span>
                 </div>
@@ -54877,7 +54880,7 @@ function AppMapSharePage({ identity = null } = {}) {
             <div key={section.title} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, marginBottom:10, overflow:"hidden"}}>
               <div onClick={() => toggle(section.title)} style={{display:"flex", alignItems:"center", gap:10, padding:"12px 14px", cursor:"pointer", userSelect:"none"}}>
                 <span style={{fontSize:14, fontWeight:600, flex:1, letterSpacing:"-0.005em"}}>{section.title}</span>
-                <span style={{fontSize:12, color:C.muted, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
+                <span style={{fontSize:12, color:C.faint, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
                 <span style={{color:C.dim, transform: isCollapsed ? "rotate(-90deg)" : "rotate(0)", transition:"transform 0.15s"}}>▾</span>
               </div>
               {!isCollapsed && (
@@ -54889,7 +54892,7 @@ function AppMapSharePage({ identity = null } = {}) {
                         <span style={{fontWeight:500}}>{it.name}</span>
                         {isNewDate(it.date) && <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"1px 6px"}}>NEW</span>}
                         {it.status && it.status!=="shipped" && <span style={badgeStyle(it.status)}>{it.status}</span>}
-                        {it.date && <span style={{fontSize:11, color:C.muted, fontVariantNumeric:"tabular-nums"}}>{it.date}</span>}
+                        {it.date && <span style={{fontSize:11, color:C.faint, fontVariantNumeric:"tabular-nums"}}>{it.date}</span>}
                       </div>
                       {it.desc && <div style={{color:C.dim, fontSize:13, marginTop:2}}>{it.desc}</div>}
                       {it.subs && it.subs.length > 0 && (
@@ -54906,7 +54909,7 @@ function AppMapSharePage({ identity = null } = {}) {
         })}
 
 
-        <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"14px 0"}}>
+        <div style={{fontSize:11, color:C.faint, textAlign:"center", padding:"14px 0"}}>
           {isInApp ? "App Map · always current with the live app" : "Share-only page · always current with the live app · no auth required"}
         </div>
       </main>
@@ -55997,7 +56000,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
       <div style={{display:"flex", gap:8, marginBottom:14, flexWrap:"wrap"}}>
         <button onClick={copyToClipboard}
           style={{fontSize:12, fontWeight:700, padding:"9px 18px", borderRadius:8, border:"none",
-            background:C.accent, color:"#000", cursor:"pointer", fontFamily:"inherit"}}>
+            background:C.accent, color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>
           {copied ? "Copied!" : "Copy text"}
         </button>
         <a href={smsHref}
@@ -56846,7 +56849,7 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               <button key={k||"none"} onClick={()=>patch(x=>({...x, status:k, statusAt: commLocalDate(), statusBy: me }))}
                 style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
           </div>
-          {ph.statusAt && <div style={{fontSize:10,color:C.muted,marginTop:3}}>set {ph.statusAt}{ph.statusBy?` by ${ph.statusBy}`:""}</div>}
+          {ph.statusAt && <div style={{fontSize:10,color:C.faint,marginTop:3}}>set {ph.statusAt}{ph.statusBy?` by ${ph.statusBy}`:""}</div>}
         </div>
         <div style={{minWidth:150}}>{lbl("Start")}<DateInp value={ph.start||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, start:v})); }}/></div>
         <div style={{minWidth:150}}>{lbl("Complete")}<DateInp value={ph.end||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, end:v})); }}/></div>
@@ -56871,11 +56874,11 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
                 <input value={renaming.text} autoFocus onChange={e=>setRenaming({ key:b.key, text:e.target.value })} onKeyDown={e=>{ if(e.key==="Enter"){ renameBuilding(b.key, renaming.text); setRenaming(null); } if(e.key==="Escape") setRenaming(null); }}
                   style={{flex:1,maxWidth:260,border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
                 <button onClick={()=>{ renameBuilding(b.key, renaming.text); setRenaming(null); }} style={{background:"none",border:"none",color:col,cursor:"pointer",fontSize:11,fontWeight:700,padding:"2px 4px",fontFamily:"inherit"}}>Save</button>
-                <button onClick={()=>setRenaming(null)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit"}}>Cancel</button>
+                <button onClick={()=>setRenaming(null)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit"}}>Cancel</button>
               </>) : (
-                <button onClick={()=>setRenaming({ key:b.key, text:b.label })} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Rename</button>
+                <button onClick={()=>setRenaming({ key:b.key, text:b.label })} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Rename</button>
               )}
-              <button onClick={() => removeBuilding(b)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Remove {b.label}</button>
+              <button onClick={() => removeBuilding(b)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Remove {b.label}</button>
             </div>
           </div>
         ))}
@@ -56885,12 +56888,12 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               placeholder="Building / area name (e.g. Building A)…"
               style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
             <Btn onClick={addBuilding} variant="add" style={{fontSize:11,padding:"6px 12px"}}>Add</Btn>
-            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
           </div>
         ) : (
           <Btn onClick={()=>setAddingBuilding(true)} variant="add" style={{fontSize:11,padding:"5px 12px",marginTop:2}}>+ Add Building / Area</Btn>
         )}
-        <div style={{fontSize:10,color:C.muted,marginTop:6}}>Buildings are shared by Power, Lighting and Underground on this job — each tab keeps its own items.</div>
+        <div style={{fontSize:10,color:C.faint,marginTop:6}}>Buildings are shared by Power, Lighting and Underground on this job — each tab keeps its own items.</div>
       </div>
       ) : (
       <div style={{marginBottom:12}}>
@@ -56901,15 +56904,15 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               <button onClick={()=>toggleItem(i.id)} title={i.done?"Mark open":"Mark done"} style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${i.done?"#3E7D5A":col}`,background:i.done?"#3E7D5A":"#fff",color:"#fff",fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>{i.done?"✓":""}</button>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,color:i.done?C.dim:C.text,textDecoration:i.done?"line-through":"none",wordBreak:"break-word"}}>{i.text}</div>
-                <div style={{fontSize:10,color:C.muted}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
+                <div style={{fontSize:10,color:C.faint}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
               </div>
-              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.muted,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
+              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.faint,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
             </div>
           ))}
           <div style={{display:"flex",gap:8}}>
             <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addItem(); } }} placeholder="Add an item… (Enter)"
               style={{flex:1,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff"}}/>
-            <button onClick={addItem} disabled={!newItem.trim()} style={{padding:"8px 14px",borderRadius:8,border:"none",background:newItem.trim()?col:C.surface,color:newItem.trim()?"#fff":C.muted,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:newItem.trim()?"pointer":"default"}}>Add</button>
+            <button onClick={addItem} disabled={!newItem.trim()} style={{padding:"8px 14px",borderRadius:8,border:"none",background:newItem.trim()?col:C.surface,color:newItem.trim()?"#fff":C.faint,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:newItem.trim()?"pointer":"default"}}>Add</button>
           </div>
         </div>
       </div>
@@ -56940,7 +56943,7 @@ function JobCompletedTab({ job, needs = [] }) {
         <span style={{fontSize:12,color:C.dim}}>{rows.length} finished on this job</span>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…" style={{marginLeft:"auto",padding:"6px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",width:180}}/>
       </div>
-      {rows.length === 0 && <div style={{padding:"24px 0",textAlign:"center",color:C.muted,fontSize:13}}>Nothing finished on this job yet. Needs and tasks land here when they are marked Done.</div>}
+      {rows.length === 0 && <div style={{padding:"24px 0",textAlign:"center",color:C.faint,fontSize:13}}>Nothing finished on this job yet. Needs and tasks land here when they are marked Done.</div>}
       <div style={{display:"flex",flexDirection:"column",gap:7}}>
         {rows.map(n => { const k = needKind(n); const voided = !!n.voided; const reps = needUpdates(n).length; const photos = needPhotos(n);
           return (
@@ -57039,7 +57042,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       <div onClick={(e) => e.stopPropagation()} style={{ marginTop:8, padding:"10px 12px", border:`1px solid ${C.border}`, borderLeft:`3px solid ${C.blue}`, borderRadius:8, background:C.surface }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
           <span style={{ fontSize:10, fontWeight:800, letterSpacing:"0.1em", color:C.dim, textTransform:"uppercase" }}>{it[1]} — note &amp; docs</span>
-          {meta && meta.by && <span style={{ fontSize:10, color:C.muted }}>note by {meta.by}{meta.at ? ` · ${meta.at}` : ""}</span>}
+          {meta && meta.by && <span style={{ fontSize:10, color:C.faint }}>note by {meta.by}{meta.at ? ` · ${meta.at}` : ""}</span>}
           <button onClick={() => setOpenItem(null)} title="Close" style={{ marginLeft:"auto", border:"none", background:"transparent", color:C.dim, cursor:"pointer", fontSize:16, lineHeight:1, fontFamily:"inherit" }}>×</button>
         </div>
         <textarea value={itemNote(K)} readOnly={!canEdit} placeholder={`Note for ${it[1]}… e.g. "Subcontract 009 sent by Mitch 5/7/26 for $X — signed by Josh"`} rows={2}
@@ -57110,10 +57113,10 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         <span style={{ width:22, height:22, borderRadius:6, flexShrink:0, display:"grid", placeItems:"center", fontSize:12, fontWeight:800, border:`2px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${ring}`, background: state === "done" ? "#46916A" : "#fff", color: state === "done" ? "#fff" : C.dim }}>{state === "done" ? "✓" : state === "na" ? "—" : ""}</span>
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ fontSize:12, fontWeight:700, letterSpacing:"0.03em", color: state === "todo" ? (isOwed ? "#B0892C" : C.text) : C.dim, textDecoration: state === "na" ? "line-through" : "none", overflowWrap:"anywhere" }}>{label}</div>
-          {sub && <div style={{ fontSize:10, color:C.muted, marginTop:1 }}>{sub}</div>}
+          {sub && <div style={{ fontSize:10, color:C.faint, marginTop:1 }}>{sub}</div>}
         </div>
         <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? "Has a note / docs — tap to open" : "Add a note or attach a doc to this item"}
-          style={{ display:"inline-flex", alignItems:"center", gap:2, padding:"4px 6px", borderRadius:6, color: hasNote || nDocs || on ? C.blue : C.muted, cursor:"pointer" }}>
+          style={{ display:"inline-flex", alignItems:"center", gap:2, padding:"4px 6px", borderRadius:6, color: hasNote || nDocs || on ? C.blue : C.faint, cursor:"pointer" }}>
           <Icon name="note" size={13} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:9 }}>{nDocs}</span>}
         </span>
       </div>
@@ -58067,7 +58070,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                 display:"flex", flexDirection:"column", gap:8,
               }}>
                 {items.length === 0 ? (
-                  <div style={{fontSize:11,color:C.muted,textAlign:"center",
+                  <div style={{fontSize:11,color:C.faint,textAlign:"center",
                     padding:"16px 8px",fontStyle:"italic"}}>
                     None
                   </div>
@@ -58118,7 +58121,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             onDeleteRedline && onDeleteRedline(co.redlineId);
                           }}
                           style={{position:"absolute",top:6,right:7,border:"none",background:"none",
-                            color:C.muted,cursor:"pointer",fontSize:15,lineHeight:1,padding:"0 3px",
+                            color:C.faint,cursor:"pointer",fontSize:15,lineHeight:1,padding:"0 3px",
                             fontFamily:"inherit"}}>×</button>
                       )}
 
@@ -58170,7 +58173,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             own status — a scheduled walk has not been walked yet. */}
                         {isWalk && (
                           <label onClick={e=>e.stopPropagation()}
-                            style={{display:"inline-flex",alignItems:"center",gap:3,color:C.muted}}>
+                            style={{display:"inline-flex",alignItems:"center",gap:3,color:C.faint}}>
                             {co.walkStatus === "scheduled" ? "walk" : "walked"}
                             <input
                               type="date"
@@ -58198,7 +58201,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             {(co.jobForeman||"").split(" ")[0]}
                           </span>
                         )}
-                        {co.jobGc && <span style={{color:C.muted}}>· {co.jobGc}</span>}
+                        {co.jobGc && <span style={{color:C.faint}}>· {co.jobGc}</span>}
                       </div>
 
                       {/* Walk note — EDITABLE on every walk card (quoted or
@@ -58315,7 +58318,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                           <span style={{fontSize:9}}>▾</span>
                         </button>
                         {co.coStatusDate && (
-                          <span style={{fontSize:10,color:C.muted,marginLeft:6}}>
+                          <span style={{fontSize:10,color:C.faint,marginLeft:6}}>
                             · {co.coStatusDate}
                           </span>
                         )}
@@ -58364,7 +58367,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
           far more discoverable than the foreman select, and "nothing yet" is
           actively misleading when a query simply didn't match. */}
       {filteredCOs.length === 0 && (
-        <div style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontStyle:"italic"}}>
+        <div style={{textAlign:"center",padding:"40px 20px",color:C.faint,fontStyle:"italic"}}>
           {search.trim()
             ? `Nothing matches “${search.trim()}”${foremanFilter ? ` for ${foremanFilter}` : ""}.`
             : `No change orders or red line walks ${foremanFilter ? `for ${foremanFilter}` : "yet"}.`}
@@ -58403,7 +58406,7 @@ function AppHelpBox() {
           placeholder="e.g. How do I turn a note into a CO?"
           style={{flex:1,minWidth:220,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:"inherit",outline:"none"}}/>
         <button onClick={ask} disabled={loading}
-          style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontWeight:700,padding:"9px 18px",fontSize:13,cursor:loading?"default":"pointer",fontFamily:"inherit"}}>
+          style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",fontWeight:700,padding:"9px 18px",fontSize:13,cursor:loading?"default":"pointer",fontFamily:"inherit"}}>
           {loading ? "Asking…" : "Ask"}
         </button>
       </div>
@@ -59225,7 +59228,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
 
   const font = "'Bebas Neue',sans-serif";
   const GREEN = C.green, RED = C.red;
-  const num = (n, color) => <span style={{fontWeight:n>0?800:400, color:n>0?color:C.muted}}>{n}</span>;
+  const num = (n, color) => <span style={{fontWeight:n>0?800:400, color:n>0?color:C.faint}}>{n}</span>;
   const chip = (txt, color, solid) => <span style={{display:"inline-block",padding:"3px 8px",borderRadius:6,fontSize:10,fontWeight:800,letterSpacing:"0.05em",whiteSpace:"nowrap",
     background:solid?color:color+"22",color:solid?"#fff":color,border:`1px solid ${color}`}}>{txt}</span>;
   const lvColor = (l) => l === "green" ? GREEN : l === "red" ? RED : APPL_YELLOW;
@@ -59293,7 +59296,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
           {summary.map(j => (
             <button key={j.no} onClick={()=>{ setOpenNo(j.no); setFilter("all"); setMsg(""); setOpenRow(null); }}
               style={{display:"grid",gridTemplateColumns:cols,gap:8,alignItems:"center",width:"100%",textAlign:"left",padding:"11px 14px",border:"none",borderBottom:`1px solid ${C.border}`,background:C.card,color:C.text,fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
-              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:9,fontWeight:700,color:C.muted,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
+              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:9,fontWeight:700,color:C.faint,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
               <span>{j.rows.length}</span>
               <span>{applFmt(j.amps)}</span>
               <span style={{display:"flex",height:10,borderRadius:5,overflow:"hidden",background:C.border}}>
@@ -59848,7 +59851,7 @@ function LinkOpensLine({ opens, linkKey, createdAt = null, style }) {
     <div>
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ ...base, cursor: "pointer" }}>
         {dot}{st.label}
-        <span style={{ color: C.muted, fontSize: 9, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+        <span style={{ color: C.faint, fontSize: 9, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
       </button>
       {open && (
         <div style={{ margin: "6px 0 2px 14px", padding: "8px 10px", background: "#fff", border: `1px solid ${C.border}`,
@@ -61154,7 +61157,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
             {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
             {r.prio === "urgent" && <span title="Marked urgent" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: C.red }}><Icon name="flag" size={9} stroke={2.5} />Urgent</span>}
-            {r.prio === "low" && <span title="Low priority" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.muted, border: `1px solid ${C.border}` }}>Low</span>}
+            {r.prio === "low" && <span title="Low priority" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.faint, border: `1px solid ${C.border}` }}>Low</span>}
             {r.sub.map((s, i) => <span key={i}>{s}</span>)}
             {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
             {/* v446: who it's on, as a visible control when the viewer can change it. */}
@@ -61173,7 +61176,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12, marginTop: 4, cursor: "pointer" }}>
               <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
               <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : r.latest.kind === "void" ? C.red : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
-              <span style={{ color: C.muted }}>{timeAgo(r.latest.at)}{r.latest.editedAt ? " (edited)" : ""}</span>
+              <span style={{ color: C.faint }}>{timeAgo(r.latest.at)}{r.latest.editedAt ? " (edited)" : ""}</span>
               {/* v444 (Koy: "its hard to tell that you can click on the '2 updates'"):
                   a real outlined button, not grey text — tap to open/close the thread. */}
               {!selectMode && (
@@ -61201,7 +61204,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <Icon name="note" size={12} stroke={2} />
                     <span style={{ fontWeight: 600, color: last.role === "client" ? C.orange : C.text }}>{who(last)}: {line(last)}</span>
-                    <span style={{ color: C.muted }}>{timeAgo(last.at)}</span>
+                    <span style={{ color: C.faint }}>{timeAgo(last.at)}</span>
                     {!selectMode && <span role="button" aria-expanded={false} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap" }}><Icon name="note" size={11} stroke={2.25} />{t.length} in discussion ▾</span>}
                   </div>
                 )}
@@ -61212,7 +61215,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                       <div key={m.id || i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <span style={{ fontWeight: 600, color: m.role === "client" ? C.orange : C.text }}>{who(m)}:</span> {line(m)}{" "}
-                          <span style={{ color: C.muted }}>· {timeAgo(m.at)}</span>
+                          <span style={{ color: C.faint }}>· {timeAgo(m.at)}</span>
                           {(m.photos || []).filter(p => p && p.url).map((p, j) => <a key={j} href={p.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ marginLeft: 6, color: C.accent, fontWeight: 600 }}>photo</a>)}
                         </span>
                       </div>
@@ -61263,7 +61266,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                   <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontWeight: 600, color: u.kind === "void" ? C.red : C.text }}>{first(u.by)}:</span> {needUpdateLine(u)}{" "}
-                      <span style={{ color: C.muted }}>· {timeAgo(u.at)}{u.editedAt ? " (edited)" : ""}</span>
+                      <span style={{ color: C.faint }}>· {timeAgo(u.at)}{u.editedAt ? " (edited)" : ""}</span>
                     </span>
                     {mine && (
                       <button onClick={() => setReplyEdit({ key: r.key, by: u.by, at: u.at, text: String(u.text || "") })} title="Edit your reply"
@@ -61423,11 +61426,11 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: tight ? "auto" : 0 }}>
         {!selectMode && canMarkUrgent(r) && (
           <button onClick={() => toggleUrgent(r)} title={r.prio === "urgent" ? "Urgent — tap to clear" : "Mark urgent"} aria-pressed={r.prio === "urgent"}
-            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.muted, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
+            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.faint, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
         )}
         {!selectMode && r.sel && onSaveFocus && (
           <button onClick={() => toggleFocus(r.key)} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} aria-pressed={pinned}
-            style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.muted, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
+            style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.faint, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
         )}
         {!selectMode && r.canDone && (
           <button onClick={r.onDone} title="Done" style={{ ...ib, color: C.green }}><Icon name="check" size={20} stroke={2.25} /></button>
@@ -61485,7 +61488,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
           <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
-          <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
+          <span style={{ fontSize: 12, color: C.faint }}>{g.rows.length}</span>
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
           {(() => { const nn = g.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
           {g.badge && <span style={{ fontSize: 10, fontWeight: 700, color: C.orange, background: "#B06A2C1A", borderRadius: 5, padding: "1px 6px" }}>{g.badge}</span>}
@@ -61502,7 +61505,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                     <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
                       <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
-                      <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
+                      <span style={{ fontSize: 12, color: C.faint, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
                       {/* v490 (Koy: "want it to appear on each drop downs header so i can see it easy") */}
                       {(() => { const nn = c.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
                       {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
@@ -61533,7 +61536,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                           ? <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
                           : <>
                               <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{(job && job.name) || "No job"}</span>
-                              <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={n} ms={500}/></span>
+                              <span style={{ fontSize: 12, color: C.faint, fontVariantNumeric: "tabular-nums" }}><HeCount value={n} ms={500}/></span>
                               {(() => { const nn = rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
                               {od > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{od} overdue</span>}
                             </>}
@@ -61620,7 +61623,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       <div onClick={() => toggleGroup("pulse")} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
         <span style={{ display: "inline-flex", transition: "transform .15s", transform: pulseOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
         <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>Team pulse</span>
-        <span style={{ fontSize: 12, color: C.muted }}>{pulse.length} people</span>
+        <span style={{ fontSize: 12, color: C.faint }}>{pulse.length} people</span>
         {pulseOverdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{pulseOverdue} overdue</span>}
         <span style={{ flex: 1, height: 1, background: C.border }} />
       </div>
@@ -61719,7 +61722,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         <div style={{ border: `1px solid #66A8FF`, borderRadius: 12, padding: "10px 10px 12px", marginBottom: 14, background: C.surface }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 8px" }}>
             <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}><span style={{ color: "#66A8FF" }}>★</span> Focus today</span>
-            <span style={{ fontSize: 12, color: C.muted }}>{pinnedRows.length}/3</span>
+            <span style={{ fontSize: 12, color: C.faint }}>{pinnedRows.length}/3</span>
           </div>
           {pinnedRows.length
             ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{pinnedRows.map(Row)}</div>
@@ -61854,7 +61857,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         <div style={{ fontSize: 14, lineHeight: 1.45, color: C.text, marginBottom: 8, wordBreak: "break-word" }}>{n.text}</div>
         {lastNeedUpdate(n) && (
           <div style={{ fontSize: 12, marginTop: -4, marginBottom: 8, color: lastNeedUpdate(n).kind === "waiting" ? C.orange : C.dim, fontWeight: 600 }}>
-            {String(lastNeedUpdate(n).by || "").split(" ")[0]}: {needUpdateLine(lastNeedUpdate(n))} <span style={{ color: C.muted, fontWeight: 400 }}>· {timeAgo(lastNeedUpdate(n).at)}</span>
+            {String(lastNeedUpdate(n).by || "").split(" ")[0]}: {needUpdateLine(lastNeedUpdate(n))} <span style={{ color: C.faint, fontWeight: 400 }}>· {timeAgo(lastNeedUpdate(n).at)}</span>
           </div>
         )}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -61909,7 +61912,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {items.length === 0
-          ? <div style={{ fontSize: 13, color: C.muted, padding: "8px 2px" }}>{emptyMsg}</div>
+          ? <div style={{ fontSize: 13, color: C.faint, padding: "8px 2px" }}>{emptyMsg}</div>
           : items.map(Card)}
       </div>
     </div>
@@ -61963,7 +61966,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
       <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.dim, marginBottom: doneToday.length ? 10 : 0 }}>
           <Icon name="check" size={15} stroke={2.25} />
-          <span style={{ fontSize: 13 }}>Done today{doneToday.length ? ` · ${doneToday.length}` : ""} <span style={{ color: C.muted }}>(clears overnight)</span></span>
+          <span style={{ fontSize: 13 }}>Done today{doneToday.length ? ` · ${doneToday.length}` : ""} <span style={{ color: C.faint }}>(clears overnight)</span></span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {doneToday.map(n => (
@@ -61972,7 +61975,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
                 <span style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.red, border: `1px solid ${C.red}66`, background: `${C.red}14` }}>Voided</span>
                   <span style={{ textDecoration: "line-through" }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
-                  <span style={{ color: C.muted }}>voided by {String(n.voidedBy || n.doneBy || "?").split(" ")[0]}{n.voidReason ? ` · ${n.voidReason}` : ""}</span>
+                  <span style={{ color: C.faint }}>voided by {String(n.voidedBy || n.doneBy || "?").split(" ")[0]}{n.voidReason ? ` · ${n.voidReason}` : ""}</span>
                 </span>
               ) : (
                 <span style={{ textDecoration: "line-through", flex: 1, minWidth: 0 }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
@@ -63645,16 +63648,16 @@ function App() {
         const foreman = users.find(u => u.id === matchedUser.foremanId);
         const fname = foreman && foreman.name;
         if (fname) {
-          if (_colorOverrides[fname]) return _colorOverrides[fname];
+          if (_colorOverrides[fname]) return readableInk(_colorOverrides[fname]);
           const ffirst = fname.split(" ")[0];
-          if (_colorOverrides[ffirst]) return _colorOverrides[ffirst];
+          if (_colorOverrides[ffirst]) return readableInk(_colorOverrides[ffirst]);
         }
       }
     }
-    if(_colorOverrides[name]) return _colorOverrides[name];
+    if(_colorOverrides[name]) return readableInk(_colorOverrides[name]);
     const first = (name||"").split(" ")[0];
-    if(_colorOverrides[first]) return _colorOverrides[first];
-    return "#6E7682";
+    if(_colorOverrides[first]) return readableInk(_colorOverrides[first]);
+    return "#5E6670";
   };
 
   // Sync module-level globals (used by legacy code that reads FOREMEN/LEADS directly)
@@ -66121,7 +66124,7 @@ function App() {
 
             <div style={{display:"flex",alignItems:"center",gap:7}}>
 
-              {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
+              {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#fff",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
               {isCommercial(job)&&(()=>{
                 const p=commPhase(job); const st=commOf(job).stage||"";
                 const lbl = p!==null ? `PHASE ${p} · ${COMM_PHASE_BY_N[p].short} · ${commPhaseDone(job,p)}/${COMM_PHASE_BY_N[p].items.length}` : st==="inprogress"?"IN PROGRESS":st==="hold"?"ON HOLD":st==="closeout"?"CLOSEOUT":st==="complete"?"COMPLETE":"READY TO START";
@@ -66313,7 +66316,7 @@ function App() {
             {can(identity,"job.delete")&&(
               <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
 
                   padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s",display:"inline-flex",alignItems:"center"}}
 
@@ -66739,7 +66742,7 @@ function App() {
                         {simproSyncing ? "Syncing…" : "Refresh"}
                       </button>
                       <button onClick={()=>setSimproInboxOpen(false)}
-                        style={{background:"none",border:"none",color:C.muted,
+                        style={{background:"none",border:"none",color:C.faint,
                           fontSize:18,cursor:"pointer",padding:"4px 8px",lineHeight:1}}>×</button>
                     </div>
                   </div>
@@ -66759,7 +66762,7 @@ function App() {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:13,fontWeight:700,color:C.text,lineHeight:1.3}}>
                               {c.name}
-                              <span style={{fontSize:10,fontWeight:600,color:C.muted,marginLeft:6}}>
+                              <span style={{fontSize:10,fontWeight:600,color:C.faint,marginLeft:6}}>
                                 #{c.simproId}
                               </span>
                               {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
@@ -66774,7 +66777,7 @@ function App() {
                                 <span style={{opacity:0.7}}>Customer:</span> {c.customer}
                               </div>
                             )}
-                            <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                            <div style={{fontSize:10,color:C.faint,marginTop:4,fontStyle:"italic"}}>
                               First seen {(() => {
                                 const t = new Date(c.firstSeenAt||c.lastSeenAt||Date.now());
                                 const days = Math.floor((Date.now()-t.getTime())/(24*3600*1000));
@@ -66818,7 +66821,7 @@ function App() {
                     {/* Ignored — collapsed by default */}
                     {ignoredCount > 0 && (
                       <details style={{marginTop:12}}>
-                        <summary style={{fontSize:11,fontWeight:700,color:C.muted,
+                        <summary style={{fontSize:11,fontWeight:700,color:C.faint,
                           letterSpacing:"0.06em",cursor:"pointer",padding:"6px 4px",
                           textTransform:"uppercase"}}>
                           Ignored ({ignoredCount})
@@ -66831,9 +66834,9 @@ function App() {
                                 display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontSize:12,fontWeight:600,color:C.dim}}>
-                                  {c.name} <span style={{fontSize:10,color:C.muted}}>#{c.simproId}</span>
+                                  {c.name} <span style={{fontSize:10,color:C.faint}}>#{c.simproId}</span>
                                 </div>
-                                {c.customer && <div style={{fontSize:10,color:C.muted}}>{c.customer}</div>}
+                                {c.customer && <div style={{fontSize:10,color:C.faint}}>{c.customer}</div>}
                               </div>
                               <button onClick={()=>unignoreSimproCandidate(c)}
                                 title="Move back to pending"
@@ -66850,7 +66853,7 @@ function App() {
                   </div>
                   {/* Footer */}
                   <div style={{padding:"10px 16px",borderTop:`1px solid ${C.border}`,
-                    background:C.surface,fontSize:10,color:C.muted,textAlign:"center"}}>
+                    background:C.surface,fontSize:10,color:C.faint,textAlign:"center"}}>
                     Auto-refreshes every 4 hours from Simpro · Pending stage only
                   </div>
                 </div>
@@ -67079,7 +67082,7 @@ function App() {
                   const openMsg = (id) => { setInboxOpen(false); setAnnounceOpen(id); };
                   return (
                     <>
-                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"4px 8px 4px",display:"flex"}}>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"4px 8px 4px",display:"flex"}}>
                         <span style={{flex:1}}>FROM THE OFFICE</span>{need.length>0 && <span>{need.length} need{need.length===1?"s":""} you</span>}
                       </div>
                       {need.length===0 && <div style={{fontSize:12,color:C.dim,padding:"2px 10px 6px"}}>Nothing from the office needs you right now.</div>}
@@ -67147,7 +67150,7 @@ function App() {
                   );
                 })()}
                 {officeMsgs.length > 0 && inboxItems.some(i=>!i.kind) && (
-                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
                 )}
                 {inboxItems.filter(i=>!i.kind).map(item=>(
                   <button key={item.id} onClick={()=>openInboxItem(item)}
@@ -67486,7 +67489,7 @@ function App() {
                   + Temp Ped
                 </button>
                 <button onClick={()=>{const j=stampDivision(blankJob());j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
-                  style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                  style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
                   + New Job
@@ -67528,7 +67531,7 @@ function App() {
                       ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                       : <JobRow key={job.id} job={job} fc={_foremanColors[job.foreman]||"#6E7682"} showForeman={true}/>
                   ))}
-                  {hits.length===0 && <div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
+                  {hits.length===0 && <div style={{textAlign:"center",color:C.faint,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
                 </div>
               );
             })()}
@@ -67723,7 +67726,7 @@ function App() {
                       {/* slim crew access */}
                       <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
                         style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
-                        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.muted}}>Crew Access</span>
+                        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.faint}}>Crew Access</span>
                         <span style={{fontSize:10,color:C.dim}}>→</span>
                       </div>
                     </div>
@@ -67753,11 +67756,11 @@ function App() {
                       </div>
                       <div style={{display:"flex",gap:6,marginBottom:10}}>
                         <div style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1}}>
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.muted,lineHeight:1}}>{uCOs}</div>
+                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.faint,lineHeight:1}}>{uCOs}</div>
                           <div style={{fontSize:9,color:C.dim,marginTop:1}}>COs</div>
                         </div>
                       </div>
-                      <div style={{fontSize:10,color:C.dim,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
+                      <div style={{fontSize:10,color:C.dim,fontWeight:600,textAlign:"right"}}>View →</div>
                     </div>
                   </div>
                   </Fragment>
@@ -67942,7 +67945,7 @@ function App() {
 
                 <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
-                  style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
+                  style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#fff",
 
                     fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
 
@@ -68062,10 +68065,10 @@ function App() {
 
               <div style={{padding:"0 26px 14px"}}>
                 {filtered.length===0?(
-                  <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                  <div style={{textAlign:"center",padding:"60px 0",color:C.faint}}>
                     <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
                     <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
-                      style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
+                      style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#fff",
                         fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                       + Add First Job
                     </button>
@@ -68142,7 +68145,7 @@ function App() {
               {(() => {
                 if(assignedToActive.length === 0 && punchLinger.length === 0) {
                   return (
-                    <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                    <div style={{textAlign:"center",padding:"60px 0",color:C.faint}}>
                       <div style={{fontSize:13,marginBottom:6}}>Nothing assigned to {activeForeman} yet.</div>
                       <div style={{fontSize:11}}>Open a job's punch list and pick {activeForeman} from the Assigned dropdown.</div>
                     </div>
@@ -68215,7 +68218,7 @@ function App() {
                                 />
                                 <div style={{flex:1,minWidth:0}}>
                                   <HeStrikeSpan tag="div" done={_lingerIds.has(it.id)}
-                                    style={{color:_lingerIds.has(it.id)?C.muted:"var(--text)",textDecoration:_lingerIds.has(it.id)?"line-through":"none"}}>
+                                    style={{color:_lingerIds.has(it.id)?C.faint:"var(--text)",textDecoration:_lingerIds.has(it.id)?"line-through":"none"}}>
                                     <RichText html={it.text}/>
                                   </HeStrikeSpan>
                                   <div style={{fontSize:9,color:C.dim,marginTop:3,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
@@ -68451,7 +68454,7 @@ function App() {
                 setAllJobs(js=>[j,...js]);
                 setSelected(j);
               }}
-                style={{marginLeft:"auto",background:C.accent,color:"#000",border:"none",borderRadius:8,
+                style={{marginLeft:"auto",background:C.accent,color:"#fff",border:"none",borderRadius:8,
                   padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                   letterSpacing:"0.03em"}}>+ New Quote</button>
             )}
