@@ -194,8 +194,8 @@ function gcAdminCallable(name, identity) {
 // Same live-PIN proof for ANY team member (announcements: open a message, Got
 // it, reply). Adds the identity id so the server picks the right record even
 // when two people share a name (the server's requireMember).
-function memberCallable(name, identity) {
-  const raw = httpsCallable(functions, name);
+function memberCallable(name, identity, opts) {
+  const raw = httpsCallable(functions, name, opts);
   return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "",
     uid: (identity && identity.id) || "" });
 }
@@ -13573,10 +13573,35 @@ const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").r
 const poTodayMDY = () => new Date().toLocaleDateString("en-US");
 const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
 
-function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}) {
+function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,bid=null,onRefreshBid=null,onUpsertCards=null,openBuilder=false,onBuilderClosed=null}) {
   const safeOrders = Array.isArray(orders) ? orders : [];
   // v523: the Send sheet — {id, get, date, busy, error, done}
   const [sendSheet, setSendSheet] = useState(null);
+  // v524: Order from the bid (OrderBuilder). openBuilder lets Bid Items → Order material open it.
+  const [builderOpen, setBuilderOpen] = useState(false);
+  useEffect(() => { if (openBuilder) setBuilderOpen(true); }, [openBuilder]);
+  const canOrderFromBid = !!(onUpsertCards && simproNo && can(getIdentity(), "materials.sendPO"));
+  const [resuming, setResuming] = useState(null);
+  const resumeOrder = async (orderId, date) => {
+    const me = getIdentity(); if (!me || !onUpsertCards) return;
+    setResuming(orderId);
+    try {
+      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId, source: "CED", groups: [], resume: true, clientTest: MATERIAL_PO_TEST });
+      const res = (r && r.data) || {};
+      const cards = poOrderCards(res, orderId, date, me);
+      if (cards.length) onUpsertCards(cards.map(({ date: _d, pickupDate: _p, ...c }) => c)); // keep the cards' own dates
+      if (res.ok && res.emailOk) {
+        try { const k = PO_ORDER_LS(jobId, phase); const d = JSON.parse(localStorage.getItem(k) || "null"); if (d && d.orderId === orderId) localStorage.removeItem(k); } catch {}
+        if (typeof toast !== "undefined" && toast.success) toast.success(res.mode === "test" ? "Order emailed to the test inbox." : "Order emailed to CED.");
+      } else {
+        const why = res.failed ? `${res.failed.costCenter}: ${res.failed.error}` : (res.emailError || "the email didn't go out");
+        if (typeof toast !== "undefined" && toast.error) toast.error(`Not finished: ${why}. Try again in a minute.`); else window.alert(`Not finished: ${why}`);
+      }
+    } catch (e) {
+      const m = String((e && e.message) || e || "Something went wrong.");
+      if (typeof toast !== "undefined" && toast.error) toast.error(m); else window.alert(m);
+    } finally { setResuming(null); }
+  };
 
   const [collapsed, setCollapsed] = useState(() => {
     const m = {};
@@ -13612,6 +13637,10 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}
           to ship. To re-enable in the future: restore the button JSX here
           AND the syncFromSimpro / syncing state declared above. The
           Cloud Function syncSimproPOsForJob is still deployed and callable. */}
+      {canOrderFromBid && (
+        <button onClick={()=>setBuilderOpen(true)} style={{width:"100%",marginBottom:8,background:C.accent,border:"none",color:"#fff",borderRadius:9,
+          padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>New order from the bid</button>
+      )}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add PO</Btn>
 
       {[...safeOrders]
@@ -13711,6 +13740,15 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}
                   const kind = poSendKind(o.source);
                   if (!kind || !onPatchOrder || !can(getIdentity(), "materials.sendPO")) return null;
                   if (o.pickedUp || o.deliveredToShop) return null;
+                  // v524: a PO from an order from the bid is resent from the order screen, never re-sent here
+                  // (this card's own send would make a new PO).
+                  if (o.poOrderId) return (o.poEmailOk || o.ordered || !onUpsertCards) ? null : (
+                    <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:6}}>
+                      <div style={{fontSize:11,color:C.dim}}>Part of an order from the bid that isn't finished. Finish sending emails CED every PO already made for it, without making new ones.</div>
+                      <button disabled={resuming===o.poOrderId} onClick={()=>resumeOrder(o.poOrderId, o.pickupDate)}
+                        style={{alignSelf:"flex-start",background:C.accent,border:"none",color:"#fff",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                        {resuming===o.poOrderId ? <><Spinner size={12}/> Sending…</> : "Finish sending"}</button>
+                    </div>);
                   const testLeftover = o.poSentMode === "test" && !MATERIAL_PO_TEST;
                   const emailRetry = !testLeftover && o.poSentVia === "app" && kind === "email" && !o.poEmailOk;
                   if (!testLeftover && (o.poSentVia === "app" || o.ordered) && !emailRetry) return null;
@@ -13944,6 +13982,12 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add PO</Btn>
 
+      {/* v524: Order from the bid */}
+      {canOrderFromBid && (
+        <OrderBuilder open={builderOpen} onClose={()=>{ setBuilderOpen(false); if (onBuilderClosed) onBuilderClosed(); }}
+          jobId={jobId} phase={phase} bid={bid} onRefreshBid={onRefreshBid} onUpsertCards={onUpsertCards}/>
+      )}
+
       {/* v523: Send sheet — check the order, then send it from the app. */}
       {sendSheet && (() => {
         const o = safeOrders.find(x => x.id === sendSheet.id);
@@ -13989,17 +14033,13 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}
               style={{background:C.card,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",
                 borderRadius:"16px 16px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
                 boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:14}}>
-              {done ? (<>
-                <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                  <span style={{width:34,height:34,borderRadius:"50%",background:"rgba(62,125,90,0.12)",color:"#3E7D5A",
-                    display:"grid",placeItems:"center",fontWeight:800,flexShrink:0}}>✓</span>
-                  <div>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1}}>
-                      {done.kind === "email" ? (done.emailOk ? `PO ${done.poNo} sent` : `PO ${done.poNo} made`) : `PO ${done.poNo}`}
-                    </div>
-                    <div style={{fontSize:12,color:C.dim,marginTop:2}}>In Simpro on {done.costCenter || phaseLabel}{done.again ? " (already sent from this card)" : ""}.</div>
-                  </div>
-                </div>
+              {busy ? (
+                <PoSendMotion phase="sending" title={kind === "email" ? `Sending to ${o.source}` : "Getting a PO number"}
+                  steps={kind === "email" ? ["Making the PO in Simpro", "Building the PO form", MATERIAL_PO_TEST ? "Emailing the test inbox" : `Emailing ${o.source}`] : ["Making the PO in Simpro"]}/>
+              ) : done ? (<>
+                <PoSendMotion phase={done.kind === "email" && !done.emailOk ? "warn" : "sent"}
+                  title={done.kind === "email" ? (done.emailOk ? `PO ${done.poNo} sent` : `PO ${done.poNo} made`) : `PO ${done.poNo}`}
+                  sub={`In Simpro on ${done.costCenter || phaseLabel}${done.again ? " (already sent from this card)" : ""}.`}/>
                 {done.kind === "email" && done.emailOk && (
                   <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
                     {done.mode === "test"
@@ -14070,6 +14110,348 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null}
   );
 }
 
+
+// ── Order from the bid (v524) ─────────────────────────────────────────────
+// One order → one PO per cost center → one email to CED (sendMaterialOrder).
+// Built on the job's bid data (simproStock, already loaded for Bid Items):
+// pick a cost center, add bid items at the still-to-go quantity, type anything
+// else, add from more cost centers, review, send. The unfinished order is kept
+// on this phone (he_po_order_<job>_<phase>) with ONE order id, so Send again
+// after a dropped connection or a half-finished order can never make a second
+// set of POs — the server keys every PO on that id + the cost center.
+// Vault: 03-Roadmap/Crew POs from the App.md · approved proposal page 4ZRXqw62…
+const PO_ORDER_LS = (jobId, phase) => `he_po_order_${jobId || "nojob"}_${phase || "nophase"}`;
+const poIsMaterialRow = (r) => r && Number(r.required) > 0 && !/\blabou?r\b/i.test(String(r.name || ""));
+const poToGo = (r) => Math.max(0, Math.round(((Number(r.required) || 0) - (Number(r.assigned) || 0)) * 100) / 100);
+const poEscLine = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Sending / sent motion for PO sends (v524, Koy: "make sure there's a motion graphic
+// for when it's sending and shows it sent"). Sending = a paper plane crossing a
+// dashed trail with a caption for the step it's probably on (timed, never ahead
+// of the last step; the real answer is what flips it). Sent = a green check that
+// draws in with a small burst. Warn = a still "!" (nothing to celebrate).
+// Reduced-motion users get the still versions.
+const PO_MOTION_CSS = `
+@keyframes he-po-fly{0%{transform:translate(-46px,10px) rotate(-8deg);opacity:0}18%{opacity:1}82%{opacity:1}100%{transform:translate(46px,-10px) rotate(-8deg);opacity:0}}
+@keyframes he-po-dash{to{stroke-dashoffset:-24}}
+@keyframes he-po-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes he-po-pop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.08);opacity:1}100%{transform:scale(1)}}
+@keyframes he-po-draw{to{stroke-dashoffset:0}}
+@keyframes he-po-ring{0%{transform:scale(.8);opacity:.55}100%{transform:scale(1.9);opacity:0}}
+@keyframes he-po-burst{0%{transform:rotate(var(--a)) translateY(0) scale(1);opacity:1}100%{transform:rotate(var(--a)) translateY(-46px) scale(.3);opacity:0}}
+.he-po-plane{animation:he-po-fly 1.5s cubic-bezier(.45,0,.35,1) infinite}
+.he-po-trail{animation:he-po-dash .9s linear infinite}
+.he-po-cap{animation:he-po-cap .35s ease-out}
+.he-po-pop{animation:he-po-pop .45s cubic-bezier(.3,1.4,.5,1) both}
+.he-po-check{stroke-dasharray:30;stroke-dashoffset:30;animation:he-po-draw .4s .3s ease-out forwards}
+.he-po-ring{animation:he-po-ring .9s .2s ease-out both}
+.he-po-dot{animation:he-po-burst .7s .3s ease-out both}
+@media (prefers-reduced-motion: reduce){.he-po-plane,.he-po-trail,.he-po-cap,.he-po-pop,.he-po-ring,.he-po-dot{animation:none}.he-po-plane{opacity:1}.he-po-check{animation:none;stroke-dashoffset:0}.he-po-ring,.he-po-dot{display:none}}
+`;
+function PoSendMotion({ phase = "sending", steps = [], title = "", sub = "" }) {
+  const [i, setI] = useState(0);
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (phase !== "sending") return undefined;
+    setI(0); setSlow(false);
+    const t = setInterval(() => setI(n => Math.min(n + 1, Math.max(0, steps.length - 1))), 1800);
+    const s8 = setTimeout(() => setSlow(true), 9000);
+    return () => { clearInterval(t); clearTimeout(s8); };
+  }, [phase, steps.length]);
+  useEffect(() => { if (phase === "sent") { try { if (navigator.vibrate) navigator.vibrate(25); } catch {} } }, [phase]);
+  const GREEN = "#3E7D5A", RED = "#B23A3A";
+  return (
+    <div role="status" aria-live="polite" style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"18px 8px 10px",textAlign:"center"}}>
+      <style>{PO_MOTION_CSS}</style>
+      {phase === "sending" && (
+        <svg width="150" height="72" viewBox="0 0 150 72" aria-hidden="true">
+          <path className="he-po-trail" d="M10 52 Q75 18 140 30" fill="none" stroke={C.accent} strokeOpacity="0.35" strokeWidth="2" strokeDasharray="4 8" strokeLinecap="round"/>
+          <g transform="translate(75 36)"><g className="he-po-plane">
+            <path d="M-14 2 L14 -10 L4 12 L0 3 Z" fill={C.accent}/>
+            <path d="M0 3 L14 -10 L-2 6 Z" fill="#fff" fillOpacity="0.35"/>
+          </g></g>
+        </svg>
+      )}
+      {phase === "sent" && (
+        <div style={{position:"relative",width:72,height:72}} aria-hidden="true">
+          <span className="he-po-ring" style={{position:"absolute",inset:0,borderRadius:"50%",border:`2px solid ${GREEN}`}}/>
+          {[0,60,120,180,240,300].map(a => (
+            <span key={a} className="he-po-dot" style={{"--a":`${a}deg`,position:"absolute",left:33,top:33,width:6,height:6,borderRadius:"50%",
+              background:a % 120 ? C.accent : GREEN,transformOrigin:"3px 3px"}}/>
+          ))}
+          <svg className="he-po-pop" width="72" height="72" viewBox="0 0 72 72" style={{position:"absolute",inset:0}}>
+            <circle cx="36" cy="36" r="30" fill={GREEN}/>
+            <path className="he-po-check" d="M24 37 L32 45 L48 28" fill="none" stroke="#fff" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      )}
+      {phase === "warn" && (
+        <svg className="he-po-pop" width="60" height="60" viewBox="0 0 60 60" aria-hidden="true">
+          <circle cx="30" cy="30" r="26" fill="rgba(178,58,58,0.10)" stroke={RED} strokeWidth="2"/>
+          <path d="M30 17 V34" stroke={RED} strokeWidth="5" strokeLinecap="round"/><circle cx="30" cy="43" r="3" fill={RED}/>
+        </svg>
+      )}
+      {title && <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1,color:phase === "sent" ? GREEN : phase === "warn" ? RED : C.text}}>{title}</div>}
+      {phase === "sending" && steps.length > 0 && <div key={i} className="he-po-cap" style={{fontSize:14,color:C.dim}}>{steps[i]}…</div>}
+      {phase === "sending" && slow && <div style={{fontSize:12,color:C.muted}}>Simpro can be slow. Keep this open; it won't send twice.</div>}
+      {sub && <div style={{fontSize:13,color:C.dim}}>{sub}</div>}
+    </div>
+  );
+}
+
+// Quantity box that can be cleared while typing (an empty box doesn't drop the line; leaving it at 0 does).
+function PoQtyInput({ value, onCommit, label }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(t => (Number(t) === Number(value) ? t : String(value))); }, [value]);
+  return (
+    <input type="number" inputMode="decimal" min="0" value={text} aria-label={label}
+      onChange={e => { setText(e.target.value); const n = Number(e.target.value); if (e.target.value !== "" && n > 0) onCommit(n); }}
+      onBlur={() => { const n = Number(text); if (!(n > 0)) onCommit(0); }}
+      style={{width:62,textAlign:"center",fontFamily:"inherit",fontSize:14,fontWeight:700,border:`1px solid ${C.accent}`,borderRadius:8,padding:4,background:C.card,color:C.text}}/>
+  );
+}
+
+// Cards for every PO in a sendMaterialOrder answer (shared by the order screen and Finish sending on a card).
+function poOrderCards(res, orderId, date, me) {
+  const today = poTodayMDY(); const sent = !!(res.ok && res.emailOk);
+  return (res.pos || []).map(p => ({
+    id: uid(), date: today, po: String(p.poNo), pickupDate: date || "", source: "CED",
+    items: (p.lines || []).map(poEscLine).join("<br>"), needsOrder: true, pickedUp: false,
+    ordered: sent, orderedBy: sent ? ((me && me.name) || "") : "", orderedAt: sent ? today : "",
+    simproPoId: String(p.poNo), poSentVia: "app", poSentMode: res.mode || "", poSentBy: (me && me.name) || "", poSentAt: today,
+    poCostCenter: p.costCenter || "", poEmailOk: sent, poEmailedTo: (res.emailedTo || []).join(", "),
+    poOrderId: orderId, poCcId: p.ccId,
+  }));
+}
+const PO_ORDER_CALL = { timeout: 300000 }; // one Simpro PO per cost center + PDFs + email can take a while
+
+function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsertCards }) {
+  const ccs = (bid && Array.isArray(bid.costCenters)) ? bid.costCenters : [];
+  const blank = () => ({ orderId: "o" + Date.now() + Math.random().toString(36).slice(2, 6), lines: {}, typed: {}, get: "willcall", date: poTomorrowMDY() });
+  const [draft, setDraft] = useState(() => {
+    try { const d = JSON.parse(localStorage.getItem(PO_ORDER_LS(jobId, phase)) || "null"); if (d && d.orderId) return { ...blank(), ...d }; } catch {}
+    return blank();
+  });
+  const [step, setStep] = useState("cc");
+  const [ccId, setCcId] = useState(null);
+  const [q, setQ] = useState("");
+  const [extra, setExtra] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  useEffect(() => { try { localStorage.setItem(PO_ORDER_LS(jobId, phase), JSON.stringify(draft)); } catch {} }, [draft, jobId, phase]);
+  useEffect(() => {
+    if (!open) return;
+    setStep(prev => prev === "done" ? "cc" : prev); setError("");
+    // Re-read this phone's saved order: Finish sending on a card may have cleared it.
+    try { const d = JSON.parse(localStorage.getItem(PO_ORDER_LS(jobId, phase)) || "null"); setDraft(cur => (d && d.orderId) ? { ...blank(), ...d } : (cur.made && cur.made.length ? blank() : cur)); } catch {}
+  }, [open]); // also reads jobId/phase; reruns only on open
+  if (!open) return null;
+
+  const ccById = new Map(ccs.map(c => [Number(c.ccId), c]));
+  const ccLabel = (c) => [c && c.sectionName, c && String(c.ccName || "").trim()].filter(Boolean).join(" · ");
+  const linesFor = (id) => draft.lines[id] || {};
+  const typedFor = (id) => draft.typed[id] || [];
+  const pickedIn = (id) => {
+    const c = ccById.get(Number(id)); if (!c) return [];
+    const L = linesFor(id);
+    return (c.rows || []).filter(r => (L[r.catalogId] || 0) > 0).map(r => ({ catalogId: r.catalogId, part: r.partNo, name: r.name, qty: L[r.catalogId] }));
+  };
+  // One group per cost center that has anything in it, in the bid's own order.
+  const groups = ccs.map(c => Number(c.ccId)).filter(id => pickedIn(id).length || typedFor(id).length)
+    .map(id => ({ ccId: id, cc: ccById.get(id), items: pickedIn(id), typed: typedFor(id) }));
+  const lineCount = groups.reduce((n, g) => n + g.items.length + g.typed.length, 0);
+  const setLine = (id, catalogId, qty) => setDraft(d => ({ ...d, lines: { ...d.lines, [id]: { ...(d.lines[id] || {}), [catalogId]: Math.max(0, Math.round((Number(qty) || 0) * 100) / 100) } } }));
+  const addTyped = (id, t) => { const v = String(t || "").trim(); if (!v) return; setDraft(d => ({ ...d, typed: { ...d.typed, [id]: [...(d.typed[id] || []), v] } })); };
+  const delTyped = (id, i) => setDraft(d => ({ ...d, typed: { ...d.typed, [id]: (d.typed[id] || []).filter((_, k) => k !== i) } }));
+  const phaseLabel = phase === "finish" ? "Finish" : "Rough-In";
+  const goCount = (c) => (c.rows || []).filter(r => poIsMaterialRow(r) && poToGo(r) > 0).length;
+  const madePo = (id) => { const m = (draft.made || []).find(x => Number(x.ccId) === Number(id)); return m ? m.poNo : null; };
+  const madeNote = (id) => madePo(id) && box(<span style={{color:"#B06A2C"}}>PO {madePo(id)} is already made for this cost center. Changes here won't change it. Put anything new on another cost center, or on a new order after this one is sent.</span>);
+
+  const send = async () => {
+    const me = getIdentity();
+    if (!me) { setError("Sign in again, then send."); return; }
+    setBusy(true); setError("");
+    try {
+      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: draft.date,
+        clientTest: MATERIAL_PO_TEST, groups: groups.map(g => ({ ccId: g.ccId, items: g.items, typed: g.typed })) });
+      const res = (r && r.data) || {};
+      const cards = poOrderCards(res, draft.orderId, draft.date, me);
+      if (cards.length && onUpsertCards) onUpsertCards(cards);
+      setResult(res);
+      if (res.ok && res.emailOk) {
+        try { localStorage.removeItem(PO_ORDER_LS(jobId, phase)); } catch {}
+        setDraft(blank());
+      } else {
+        // Remember which cost centers already have their PO, so the screen can say edits there won't change it.
+        setDraft(d => ({ ...d, made: (res.pos || []).map(p => ({ ccId: Number(p.ccId), poNo: String(p.poNo) })) }));
+      }
+      setStep("done");
+    } catch (e) {
+      setError(String((e && e.message) || e || "Something went wrong."));
+    } finally { setBusy(false); }
+  };
+
+  const shell = (title, sub, back, body, bottom) => (
+    <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(10,14,22,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div role="dialog" aria-label="Order from the bid" style={{background:C.bg,width:"100%",maxWidth:560,height:"94vh",borderRadius:"16px 16px 0 0",
+        display:"flex",flexDirection:"column",boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",overflow:"hidden"}}>
+        <div style={{background:"linear-gradient(#141821,#1B2030)",color:"#E6EAF1",padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={back || onClose} disabled={busy} aria-label={back ? "Back" : "Close"} style={{background:"none",border:"none",color:"#9AA3B2",fontSize:22,cursor:"pointer",padding:0,lineHeight:1}}>{back ? "‹" : "✕"}</button>
+          <div style={{minWidth:0}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.03em",lineHeight:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{title}</div>
+            <div style={{fontSize:12,color:"#9AA3B2"}}>{sub}</div>
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:12,display:"flex",flexDirection:"column",gap:10}}>{body}</div>
+        {bottom && <div style={{background:C.card,borderTop:`1px solid ${C.border}`,padding:"10px 12px calc(10px + env(safe-area-inset-bottom, 0px))",display:"flex",flexDirection:"column",gap:6}}>{bottom}</div>}
+      </div>
+    </div>
+  );
+  const primary = (label, onClick, disabled) => (
+    <button onClick={onClick} disabled={disabled || busy} style={{fontFamily:"inherit",fontWeight:700,fontSize:15,border:"none",borderRadius:10,padding:12,
+      background:(disabled || busy) ? C.border : C.accent,color:"#fff",cursor:(disabled || busy) ? "default" : "pointer"}}>{label}</button>
+  );
+  const secondary = (label, onClick) => (
+    <button onClick={onClick} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:10,
+      background:C.card,color:C.text,cursor:"pointer"}}>{label}</button>
+  );
+  const box = (children, style = {}) => <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",...style}}>{children}</div>;
+  const chip = (on, label, onClick) => (
+    <button type="button" onClick={onClick} style={{fontFamily:"inherit",fontSize:13,borderRadius:99,padding:"6px 12px",cursor:"pointer",
+      border:`1px solid ${on ? C.accent : C.border}`,background:on ? "rgba(59,91,165,0.10)" : C.surface,color:on ? C.accent : C.text,fontWeight:on ? 700 : 500}}>{label}</button>
+  );
+  const reviewBtn = lineCount ? primary(`Review order (${lineCount} line${lineCount === 1 ? "" : "s"} in ${groups.length} cost center${groups.length === 1 ? "" : "s"})`, () => setStep("review")) : null;
+  const testNote = MATERIAL_PO_TEST && box(<span style={{color:C.accent}}>Test mode: the POs are really made in Simpro, but the email goes only to the test inbox, never to CED.</span>, { borderColor: "rgba(59,91,165,0.3)", background: "rgba(59,91,165,0.08)" });
+
+  // ── Sending ──
+  if (busy) {
+    const n = groups.length || ((result && result.pos) || []).length || 1;
+    return shell("Sending", phaseLabel, null, <div style={{margin:"auto 0"}}><PoSendMotion phase="sending" title={n > 1 ? `Sending ${n} POs` : "Sending your PO"}
+      steps={[`Making ${n > 1 ? `${n} POs` : "the PO"} in Simpro`, n > 1 ? `Building ${n} PO forms` : "Building the PO form", MATERIAL_PO_TEST ? "Emailing the test inbox" : "Emailing CED"]}/></div>, null);
+  }
+
+  // ── Done ──
+  if (step === "done" && result) {
+    const ok = result.ok && result.emailOk;
+    const nPo = (result.pos || []).length;
+    return shell(ok ? "Order sent" : "Not finished yet", `${phaseLabel} · ${nPo} PO${nPo === 1 ? "" : "s"}`, null, <>
+      {ok ? <PoSendMotion phase="sent" title={nPo > 1 ? `${nPo} POs sent` : "PO sent"} sub={result.mode === "test" ? "To the test inbox" : "To CED"}/>
+          : <PoSendMotion phase="warn" title="Not finished yet"/>}
+      {(result.pos || []).map(p => <Fragment key={p.poNo}>{box(<><b>PO {p.poNo}</b> · {p.costCenter}<br /><span style={{color:C.dim}}>{(p.lines || []).length} line{(p.lines || []).length === 1 ? "" : "s"}</span></>)}</Fragment>)}
+      {result.ok && result.emailOk && box(result.mode === "test"
+        ? <>Test send: the email went only to <b>{(result.emailedTo || []).join(", ")}</b>. CED did not get it. Void the PO{(result.pos || []).length === 1 ? "" : "s"} in Simpro when you're done looking.</>
+        : <>Emailed to CED in one email with {(result.pos || []).length === 1 ? "the PO form" : "every PO form"} attached. bids@ and you are copied, and their reply comes to you.</>)}
+      {result.ok && !result.emailOk && box(<span style={{color:"#B23A3A"}}>The POs are in Simpro, but the email didn't go out: {result.emailError || "unknown error"}. Tap Send again to retry the email. It won't make new POs.</span>)}
+      {!result.ok && result.failed && box(<span style={{color:"#B23A3A"}}>{result.failed.costCenter} didn't go through: {result.failed.error}. Tap Send again to finish. The PO{(result.pos || []).length === 1 ? "" : "s"} already made won't be made twice, and the email goes once everything is made.</span>)}
+      {box(<>Each PO is on its own card in Material Tracking{ok ? ", marked Ordered" : ""}.</>)}
+      {error && box(<span style={{color:"#B23A3A"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
+    </>, ok ? primary("Done", () => { setResult(null); setStep("cc"); onClose(); })
+        : <>{primary(busy ? "Sending…" : "Send again", send)}{secondary("Close", onClose)}</>);
+  }
+
+  // ── No bid yet ──
+  if (!ccs.length) {
+    return shell("New order", phaseLabel, null, <>
+      {box(bid === "loading" ? "Loading this job's bid from Simpro…" : "This job's bid hasn't loaded from Simpro yet. Refresh it, or type a list on a PO card and use Send to CED.")}
+      {onRefreshBid && secondary("Refresh the bid", onRefreshBid)}
+    </>, null);
+  }
+
+  // ── Pick a cost center ──
+  if (step === "cc" || !ccById.has(Number(ccId)) && step === "items") {
+    let lastSection = null;
+    return shell("New order", `${phaseLabel} · pick a cost center`, null, <>
+      {testNote}
+      <div style={{fontSize:12,color:C.muted}}>From the job's bid in Simpro. Orange = items still to go. Pick as many as the order needs.</div>
+      {lineCount > 0 && !(draft.made && draft.made.length) && (
+        <button onClick={() => { if (window.confirm("Clear this order and start over? Nothing has been sent.")) setDraft(blank()); }}
+          style={{alignSelf:"flex-start",fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.dim,borderRadius:99,padding:"4px 12px",cursor:"pointer"}}>Start over</button>
+      )}
+      {ccs.map(c => {
+        const id = Number(c.ccId); const g = goCount(c); const inOrder = pickedIn(id).length + typedFor(id).length;
+        const head = c.sectionName !== lastSection ? (lastSection = c.sectionName, <div key={"h" + id} style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase",padding:"6px 2px 0"}}>{c.sectionName || "Section"}</div>) : null;
+        return (<Fragment key={id}>{head}
+          <button onClick={() => { setCcId(id); setQ(""); setStep("items"); }} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:"2px 8px",alignItems:"center",textAlign:"left",
+            fontFamily:"inherit",border:`1px solid ${inOrder ? C.accent : C.border}`,background:inOrder ? "rgba(59,91,165,0.08)" : C.card,color:C.text,borderRadius:10,padding:"9px 11px",cursor:"pointer"}}>
+            <span style={{fontSize:14,fontWeight:500}}>{String(c.ccName || "").trim() || "Cost center"}</span>
+            <span style={{fontSize:12,fontWeight:700,color:g ? "#B06A2C" : "#3E7D5A"}}>{c.ok === false ? "" : g ? `${g} item${g === 1 ? "" : "s"} to go` : "all assigned"}</span>
+            {inOrder > 0 && <span style={{gridColumn:"1/-1",fontSize:11,fontWeight:700,color:C.accent}}>{inOrder} in this order</span>}
+          </button></Fragment>);
+      })}
+    </>, reviewBtn);
+  }
+
+  // ── Items for one cost center ──
+  if (step === "items") {
+    const c = ccById.get(Number(ccId)); const L = linesFor(ccId); const X = typedFor(ccId);
+    const rows = (c.rows || []).filter(poIsMaterialRow).filter(r => !q || `${r.partNo} ${r.name}`.toLowerCase().includes(q.toLowerCase()));
+    return shell(String(c.ccName || "").trim() || "Cost center", `${c.sectionName || ""} · ${phaseLabel}`, () => setStep("cc"), <>
+      {madeNote(ccId)}
+      <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search this cost center's bid" aria-label="Search bid items"
+        style={{fontFamily:"inherit",fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.surface,color:C.text}}/>
+      {!rows.length && box(c.ok === false ? "Simpro didn't send this cost center's items. Refresh the bid on the Bid Items tab." : "No bid items match. Type what you need below.")}
+      <div>{rows.map(r => { const g = poToGo(r); const qty = L[r.catalogId] || 0;
+        return (<div key={r.catalogId} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:"2px 10px",alignItems:"center",padding:"9px 0",borderTop:`1px solid ${C.border}`}}>
+          <span style={{fontSize:14,fontWeight:500,overflowWrap:"anywhere"}}>{r.name}</span>
+          <span style={{gridRow:"1/4",gridColumn:2}}>{qty > 0 ? (
+            <span style={{display:"flex",alignItems:"center",gap:4}}>
+              <button onClick={() => setLine(ccId, r.catalogId, qty - 1)} aria-label="Less" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,cursor:"pointer"}}>−</button>
+              <PoQtyInput value={qty} onCommit={n => setLine(ccId, r.catalogId, n)} label={`Quantity for ${r.name}`}/>
+              <button onClick={() => setLine(ccId, r.catalogId, qty + 1)} aria-label="More" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,cursor:"pointer"}}>+</button>
+            </span>) : (
+            <button onClick={() => setLine(ccId, r.catalogId, Math.max(1, g))} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,border:`1px solid ${C.accent}`,color:C.accent,background:C.card,borderRadius:8,padding:"6px 12px",cursor:"pointer"}}>Add</button>)}
+          </span>
+          <span style={{fontSize:11,color:C.muted}}>{r.partNo}</span>
+          <span style={{fontSize:12,color:C.dim}}>Bid {Number(r.required).toLocaleString()} · Assigned {Number(r.assigned).toLocaleString()} · <b style={{color:g ? "#B06A2C" : "#3E7D5A"}}>{g ? `${g.toLocaleString()} to go` : "all assigned"}</b></span>
+        </div>); })}</div>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",display:"flex",flexDirection:"column",gap:8}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.04em",color:C.accent}}>Type in parts or notes</div>
+        {X.map((t, i) => <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:13,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+          <span style={{flex:1,minWidth:0,overflowWrap:"anywhere"}}>{t}</span>
+          <button onClick={() => delTyped(ccId, i)} style={{fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.dim,borderRadius:99,padding:"3px 10px",cursor:"pointer"}}>Remove</button></div>)}
+        <div style={{display:"flex",gap:6}}>
+          <input value={extra} onChange={e => setExtra(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTyped(ccId, extra); setExtra(""); } }}
+            placeholder={'e.g. 2 boxes 1/2" NM connectors, or a part number'} aria-label="Type a part or note"
+            style={{flex:1,minWidth:0,fontFamily:"inherit",fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",background:C.surface,color:C.text}}/>
+          <button onClick={() => { addTyped(ccId, extra); setExtra(""); }} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,border:`1px solid ${C.border}`,background:C.card,color:C.text,borderRadius:10,padding:"0 12px",cursor:"pointer"}}>Add</button>
+        </div>
+        <span style={{fontSize:11,color:C.muted}}>Anything not in the bid, or the whole order typed. Goes on this cost center's PO.</span>
+      </div>
+    </>, <>{secondary("Add from another cost center", () => setStep("cc"))}{reviewBtn}</>);
+  }
+
+  // ── Review ──
+  return shell("Review order", phaseLabel, () => setStep("cc"), <>
+    {testNote}
+    <div><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Supplier</div>
+      <div style={{display:"flex",gap:6,marginTop:6}}>{chip(true, "CED", () => {})}</div></div>
+    <div><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</div>
+      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>{chip(draft.get === "willcall", "Will call", () => setDraft(d => ({ ...d, get: "willcall" })))}{chip(draft.get === "deliver", "Deliver to job", () => setDraft(d => ({ ...d, get: "deliver" })))}</div></div>
+    <div><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",marginBottom:6}}>{draft.get === "deliver" ? "Deliver on" : "Pick up on"}</div>
+      <DateInp value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}/></div>
+    {groups.length > 1 && box(<><b>{groups.length} cost centers = {groups.length} POs.</b> Each PO is charged to its own cost center. CED gets them together in one email.</>)}
+    {groups.map((g, i) => (
+      <div key={g.ccId} style={{border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",background:C.card,display:"flex",flexDirection:"column",gap:4}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontSize:11,fontWeight:700,color:C.accent,background:"rgba(59,91,165,0.10)",borderRadius:99,padding:"2px 8px"}}>{madePo(g.ccId) ? `PO ${madePo(g.ccId)} made` : `PO ${i + 1} of ${groups.length}`}</span>
+          <b style={{fontSize:13}}>{String(g.cc.ccName || "").trim()}</b>
+          <button onClick={() => { setCcId(g.ccId); setStep("items"); }} style={{marginLeft:"auto",fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.text,borderRadius:99,padding:"3px 10px",cursor:"pointer"}}>Edit</button>
+          <span style={{flexBasis:"100%",fontSize:12,color:C.dim}}>{g.cc.sectionName}</span>
+        </div>
+        {g.items.map(it => <div key={it.catalogId} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"5px 0",borderTop:`1px solid ${C.border}`,fontSize:13}}>
+          <span>{it.name}<br /><span style={{fontSize:11,color:C.muted}}>{it.part}</span></span><b style={{fontVariantNumeric:"tabular-nums"}}>{Number(it.qty).toLocaleString()}</b></div>)}
+        {g.typed.map((t, k) => <div key={"t" + k} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"5px 0",borderTop:`1px solid ${C.border}`,fontSize:13}}>
+          <span>{t}</span><span style={{fontSize:11,color:C.muted}}>typed</span></div>)}
+      </div>))}
+    {!groups.length && box("Nothing in the order yet.")}
+    {groups.length > 10 && box(<span style={{color:"#B23A3A"}}>One order can have up to 10 cost centers. Send this one with 10, then start a new order for the rest.</span>)}
+    {secondary("Add from another cost center", () => setStep("cc"))}
+    {box(<>One email to <b>CED's Homestead inbox</b> with {groups.length === 1 ? "the PO form" : `all ${groups.length} PO forms`}. bids@ and you are copied, so CED's reply reaches both.</>)}
+    {error && box(<span style={{color:"#B23A3A"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
+  </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10));
+}
 
 // ── Material Tally ────────────────────────────────────────────
 // Field-use count list: add items by name, tap +/− to count, copy all as "Nx Item"
@@ -29361,6 +29743,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // cache-on-the-job pattern as the cost centers above (simproStockCache,
   // 12h TTL, additive u() write only), same bare deps.
   const [simproStock, setSimproStock] = useState(null);
+  const [builderPhase, setBuilderPhase] = useState(null); // v524: Bid Items → Order material opens the order screen on this phase
   const [simproStockErr, setSimproStockErr] = useState(null);
   const [simproStockRefreshing, setSimproStockRefreshing] = useState(false);
   const [simproStockTick, setSimproStockTick] = useState(0);
@@ -30730,13 +31113,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               )}
 
               {!isSectionHidden(job,"materials")&&(<>
-              <Section label="Material Tracking" color={C.rough}>
+              <Section label="Material Tracking" color={C.rough} defaultOpen={builderPhase==="rough"}>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}
                   simproNo={job.simproNo} jobId={job.id} phase="rough"
                   onPatchOrder={(id,p)=>{ /* v523: reconcile against the live job copy, never this render's list */
                     const cur = Array.isArray(jobRef.current.roughMaterials) ? jobRef.current.roughMaterials : [];
                     if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
-                    u({roughMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}/>
+                    u({roughMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}
+                    bid={simproStock} onRefreshBid={refetchSimproStock}
+                    openBuilder={builderPhase==="rough"} onBuilderClosed={()=>setBuilderPhase(null)}
+                    onUpsertCards={!simproJobNoOf(job) ? null : (cards)=>{ /* v524: add or update order cards on the live job copy (dedupe by order + cost center) */
+                      const cur = Array.isArray(jobRef.current.roughMaterials) ? jobRef.current.roughMaterials : [];
+                      const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                      const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                      for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                      u({roughMaterials:next}); }}/>
               </Section>
 
               <Section label="Material Count List" color={C.rough} defaultOpen={false}>
@@ -31047,13 +31438,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {!isSectionHidden(job,"materials")&&(
               <div style={{marginTop:20}}>
 
-                <Section label="Finish Material Tracking" color={C.finish}>
+                <Section label="Finish Material Tracking" color={C.finish} defaultOpen={builderPhase==="finish"}>
                   <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}
                     simproNo={job.simproNo} jobId={job.id} phase="finish"
                     onPatchOrder={(id,p)=>{ /* v523: reconcile against the live job copy, never this render's list */
                       const cur = Array.isArray(jobRef.current.finishMaterials) ? jobRef.current.finishMaterials : [];
                       if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
-                      u({finishMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}/>
+                      u({finishMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}
+                    bid={simproStock} onRefreshBid={refetchSimproStock}
+                    openBuilder={builderPhase==="finish"} onBuilderClosed={()=>setBuilderPhase(null)}
+                    onUpsertCards={!simproJobNoOf(job) ? null : (cards)=>{ /* v524: add or update order cards on the live job copy (dedupe by order + cost center) */
+                      const cur = Array.isArray(jobRef.current.finishMaterials) ? jobRef.current.finishMaterials : [];
+                      const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                      const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                      for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                      u({finishMaterials:next}); }}/>
                 </Section>
 
                 <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
@@ -32542,8 +32941,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               // v523: a fresh card on the right phase, reconciled against the live job copy.
               const key = ph==="finish" ? "finishMaterials" : "roughMaterials";
               const cur = Array.isArray(jobRef.current[key]) ? jobRef.current[key] : [];
-              u({[key]:[...cur,{id:uid(),date:"",po:"",pickupDate:"",source:"CED",items:"",pickedUp:false,needsOrder:true}]});
               setTab(ph==="finish" ? "Finish" : "Rough");
+              // v524: admins (test) / senders (live) get the order screen; everyone else a blank card, as before.
+              if (simproJobNoOf(job) && can(getIdentity(), "materials.sendPO")) { setBuilderPhase(ph); return; }
+              u({[key]:[...cur,{id:uid(),date:"",po:"",pickupDate:"",source:"CED",items:"",pickedUp:false,needsOrder:true}]});
               if (typeof toast !== "undefined" && toast.success) toast.success(`New PO card added under ${ph==="finish"?"Finish":"Rough"} → Material Tracking`);
             }}/>
           )}
@@ -53261,10 +53662,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-08 · App SW version: v523
+**Last manifest update:** 2026-10-08 · App SW version: v524
 
 ---
 
+- **Order from the bid: pick material from the job's cost centers, one PO per cost center, one email to CED** · 'shipped 2026-10-08' · 'SW v524' · Koy: *"the next big step in this would be to be able to add material from the cost centers to an order. It would also be able to order that material from the cost center that it's in, instead of the Rough or the Finish cost center (the base ones)"* + *"there is also an option for typing in parts as well still right?"* + *"remove the ced invoice change as well"* (approved off the proposal page for the boss and CED, then *"go ahead"*). Material Tracking (Rough and Finish) gets **New order from the bid** above + Add PO (anyone with 'materials.sendPO', real Simpro jobs only — not quotes). A full-screen **'OrderBuilder'** sheet: pick a cost center (grouped by section, from the bid the job already loads for Bid Items — 'simproStock'; orange "N to go", blue "N in this order"), add bid items at the still-to-go quantity with a − / number / + stepper (labour and Simpro deduction lines hidden; search by name or part #), **Type in parts or notes** on every cost center (anything not in the bid, or the whole order typed), add from more cost centers, then **Review**: CED, Will call / Deliver to job, the date, and each cost center as its own "PO n of N" with Edit. **Send to CED** calls the new callable **'sendMaterialOrder'**: the cost centers are checked against the job's bid in Simpro right then, ONE Simpro PO is made per cost center (charged to that cost center, the list in VendorNotes exactly as crews paste it today — no Simpro line items, no prices, so receiving and CED invoices don't change), then ONE email goes to CED with one PO form PDF per PO ("POs 7262 & 7263 – job – Homestead Electric"). Each PO lands as its own Material Tracking card (PO #, the lines, Ordered when the email went, plus 'poOrderId' / 'poCcId' / the v523 'po*' fields), upserted by order + cost center through the job's live copy ('jobRef.current'). **Retry safety:** the unfinished order is kept on the phone ('he_po_order_<job>_<phase>' in localStorage) under ONE order id until the email goes; every PO is claimed at 'material_po_log/<order>-cc<ccId>' (same claim / lost-answer recovery as v523) and the order's email at 'material_po_log/<order>' ('emailingAt'), so three taps, a dropped connection, a refused cost center (the POs already made stay, Send again finishes the rest) or a failed email never make a second PO or a second email. The order doc keeps 'madeKeys', so a Send again that no longer lists a cost center whose PO is already made still emails that PO; the screen marks those cost centers "PO #### made" and says edits there won't change it. A card from an order never shows the card's own Send (that would make a new PO); an unfinished one shows **Finish sending** instead, which works from any phone (the callable with 'resume:true' and no groups emails every PO the order already made, without making any). If more is added to an order whose email already went (a lost answer, then Send again with another cost center), only the new PO is made and it gets its own email; the order doc tracks 'emailedPoNos' so no PO is ever emailed twice. The call waits up to 5 minutes ('memberCallable' takes an options arg). **Sending / sent motion** (Koy: *"we need to make sure theres a motion graphic for when its sending and shows it sent"*): new 'PoSendMotion' — while sending, a paper plane crosses a dashed trail with a caption for the likely step (timed, never past the last step; the server answer is what flips it) and a "Simpro can be slow" line after 9 s; when it lands, a green check draws in with a ring and a small burst (and a 25 ms buzz on Android); a failed or half-finished send gets a still red "!" instead. Used on the order screen and on the v523 card Send sheet; CSS keyframes scoped 'he-po-*', still versions under 'prefers-reduced-motion'. Training video (Remotion, 62 s, vertical) lives outside the repo at '~/homestead-training-videos'. Over 10 cost centers is blocked on review; **Start over** clears an unsent order (hidden once any PO is made). Independent review: 5 findings fixed (a crash from 'React.Fragment' without a React import, Bid Items → Order material not opening because Material Tracking starts folded — it now opens unfolded when asked, retry errors not shown, the 70 s client timeout, the quantity box vanishing when cleared). **Bid Items → Order material** opens the order screen on the chosen phase for senders (everyone else still gets a blank card). Same test mode as v523 (admins only, email only to the test inbox, '[TEST]'); live sender is 'orders@homesteadelectric.cc'. Gates: 'scripts/materialpo-test.js' ('cleanOrderGroups', 'orderLine', 'groupKey', plural email wording) + 'scripts/materialpo-sim.js' now 23 scenarios (one PO per cost center + one email with every PDF, three taps → 2 POs 1 email, refused cost center then finish, cost center not on the job refused, email retry, two retries racing after a failed email → 1 email, live routing with a typed-only order, non-admin / empty refused, Send again without an already-made cost center still emails its PO, Finish sending from a card emails once, Finish with nothing made refused, an addition after the email gets its own email with only the new PO; mutation-checked). Guides updated: rough, finish, biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder'.** **Why it won't lose data:** no new top-level job field; new cards are added (or the same order's cards updated in place) inside 'roughMaterials' / 'finishMaterials' through the normal save against the live job copy; nothing is deleted; the draft in localStorage only ever holds the unsent order; the only server writes are the function-only 'material_po_log' docs; no rules change.
 - **Crew POs from the app: Send to CED from the Material Tracking card, and an Orders list on Bid Items** · 'shipped 2026-10-08' · 'SW v523' · Koy: *"have the crews create and send a PO from the Command Center app. Right now, they have to use Simpro Mobile to do that and email the supplier"* + *"I would want this in the material tracking section as well of the finish and rough… it makes a lot of sense on the bid items page as well"* + *"i want the test po to be from me to me only so i see exactly how it looks"*. Crews already build each order on a Material Tracking PO card (Rough and Finish) and used **COPY FOR SIMPRO** to paste it into Simpro Mobile. The card now has **Send to CED** (or **Get a PO number** for Home Depot / ACE / Amazon store runs) above Copy for Simpro. A sheet confirms will call or delivery, the pick-up date and the list (read-only; edit on the card), then the new callable **'sendMaterialPO'** checks the sender's name + live PIN ('requireMember'), creates the PO in Simpro ('POST /vendorOrders/', Stage Approved, charged to the job's first Base-section cost center whose company cost center is Rough In or Finish, storage Shop, Reference "Job No. N - name", the list in VendorNotes like crews paste today, DueDate = pick-up date), emails it (CED) through Resend modeled on Simpro's own PO email with the sender's signature from their Simpro employee record, marks it Sent to Supplier, and logs it in function-only **'material_po_log/{job_phase_card}'** so a double tap or a retry returns the same PO instead of a second one (a failed email offers **Resend email**, never a new PO). The card gets the PO #, Ordered with who/when, and 'simproPoId' / 'poSentVia' / 'poSentMode' / 'poSentBy' / 'poSentAt' / 'poCostCenter' / 'poEmailOk' / 'poEmailedTo', written through the job's live copy ('jobRef.current'), not the render's list. **Bid Items → Orders** (folded, residential tabs only, hidden with Material Tracking): every PO card from both phases with status, who, when; **Order material** asks Rough-In or Finish and adds a card there. **Test mode (shipping state):** server mode on 'gc_config/material_po' (missing = test): only admins can send ('materials.sendPO' = admin, and the server refuses others), the email goes ONLY to the test inbox (default 'gc_config/mail.soakTo'), nobody is copied, the subject starts '[TEST]' with a banner naming where it would have gone, and the Simpro PO is real with a TEST private note, so it gets voided. Live = set 'mode:"live"' + a verified sender ('from: bids@homesteadelectric.net' after the Resend DNS records), widen 'materials.sendPO', and flip 'MATERIAL_PO_TEST'. Simpro's API has no send/email/PDF action (route probe 2026-10-08), so the app sends its own email. **PO form PDF (added 2026-10-08 after Koy's first test: "it just sent a list though not the attached pdf form we use from simpro"):** 'functions/materialPO/pdf.js' (pdf-lib, now in functions/package.json) rebuilds Simpro's "Order w/o prices" form — longhorn logo (cropped from a real Simpro PO PDF into 'materialPO/logo.js'), company block from Simpro's company record, PURCHASE ORDER NO., Vendor / Branch Address (vendor record) / Date Ordered / Date Required / Job Name / Site Address (job's site) / Reference / Ordered By, Delivery Address and Special Instructions (pickup line + list), Approved By, Page n/N, flows onto more pages — attached as 'Purchase_Order_No_####.pdf'; the email body then uses Simpro's wording ("…is attached") without the list. If the PDF can't be built the email still goes with the list in the body. **New form (2026-10-08, Koy: "this would be the correct po attachment" + "price would be left off of this for the crews"):** the PDF now matches Homestead's newer Simpro PO form (PO 7224) — cream paper, copper double frame, centered longhorn logo (transparent PNG), serif "Purchase Order" title, Supplier / PO No. / Ordered / Required, Job No. / Job Site (Simpro site name) / Reference / Supplier Quote / Ordered By, ORDER ITEMS table (Part # / Item / Qty; typed lines go in the table with no part # or qty), DELIVERY & SPECIAL INSTRUCTIONS (pickup or delivery line), approval lines, "QUESTIONS ABOUT THIS ORDER? CALL OUR OFFICE." footer, PAGE n OF N. No Unit Price, Total, Freight, Tax or Purchase Order Total. pdf.js loads lazily so the root (Vercel) build's gates don't need functions deps; the sim checks the PDF where pdf-lib exists and the fallback where it doesn't. **Duplicate safety (independent review, 9 findings fixed):** the card is claimed in a Firestore transaction; everything needed to finish is logged BEFORE the Simpro POST with a claim id that also goes in the PO's private notes, so a lost or unclear Simpro answer (timeout, 5xx) is marked unknown and the next try searches Simpro's newest POs for that id and adopts the PO instead of making a second; the email is claimed too ('emailingAt'); test always wins for the email ('emailMode': a live PO retried while the switch is on test goes only to the test inbox); a test send is archived ('…__test_<ts>') and doesn't block the real send once live; when live, a copy of the app that still says test ('clientTest') is refused; card dates fill only if still empty on the live card. Gates 'scripts/materialpo-test.js' (rules) + 'scripts/materialpo-sim.js' (the real handler vs fake Firestore/Simpro/email: one PO for three simultaneous taps, test inbox only, email retry, lost-answer recovery, refusal, live routing, test-wins, archive, store run, bad input; mutation-checked) in prebuild. Guide updated: biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO'.** **Why it won't lose data:** no new top-level job field; the new fields live inside each existing order object in 'roughMaterials' / 'finishMaterials', which the loader passes through whole; every card write reconciles against the live job copy through the normal save; nothing is deleted; the only new collection is server-written and client-denied by the catch-all; no rules change.
 - **Job Start Phase 4: the three log-linked items can be checked by hand** · 'shipped 2026-10-07' · 'SW v522' · Justin: *"Can you remove that requirement on those submittal steps? Section 4."* RFI LIST, SENT TO GC and ALL APPROVED were '"trk"' items (no tap; they only checked themselves from the RFI / Gear & Submittals logs, and tapping jumped to the log). They are now kind '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so either the hand check or the log closes the item. The checklist row shows "or from RFIs / Gear & Submittals"; the chip is solid-bordered (the double border stays for true tracker items in phases 2, 3 and 5, unchanged). RFIs tab help text and 'jobstart.html' updated. **Why it won't lose data:** hand checks go through the existing 'patchStart' write into 'commercial.start.items["4.rfis" | "4.toGc" | "4.approved"]', the same shape every other item uses; nothing existing is rewritten. A job whose logs already closed these items stays closed. No loader, rules or function change.
 - **Link opens: see whether a share link was opened, and how often** · 'shipped 2026-10-07' · 'SW v521' · needs 'firebase deploy --only firestore:rules' for counting to start (until then writes are refused harmlessly) · Koy: *"I mostly want to see if they have even opened it, or how many times they have opened it."* Every share page now counts its own opens, and the office sees one small line next to each link: **Opened 6× · 2 devices · last today 9:12 am**, or *Not opened yet · sent today*, *Not opened · sent 4 days ago* (red) or *No opens since Oct 7* (links made before today). Tap a line with opens to unfold first opened, last opened and one row per device (*iPhone · Safari · 4× · last today 9:12 am*). Green = opened in the last 3 days, blue = opened but not lately, red = never opened and sent 3+ days ago. Shows under: Share Questions and Share Punch (rough and finish) SAVED LINKS (each named link, plus a *Base link (Share all)* row when it has opens or the job still carries a legacy filter), Home Runs Share, the Homeowner generator link, Lighting collab Share, Share loads, the Plan Changes (Lutron) page under the hub link, and each Job Note's share link. Counted kinds: questions, roughpunch, finishpunch, qcpunch, homeowner, homeruns, loads, lighting, lutronshare, jobnote; not counted: the Lutron hub ('?lightinghub='), the App Map and the GC Portal. **One recorder at the router:** 'recordLinkOpen()' runs once at the top of 'App()' before any share route, skips staff devices (raw 'he_identity' present or the durable 'he_staff_device' flag that '_setUsageUser' sets) and 'preview=1', throttles the same device and link to once per 30 minutes ('he_lo_<jobId>_<linkKey>'), and stores a rough device label only (iPhone/iPad/Android/Mac/Windows/Other + Safari/Chrome/Edge/Firefox/Browser; no IP, location or name). Link key = '<kind>:<shareId|base>'; job notes use 'jobnote:<noteId>' and the token is never stored. The office reads with 'useLinkOpens(jobId)' (one 'onSnapshot' only while a surface is mounted); 'linkOpenState' / 'formatOpenWhen' / 'linkOpenTarget' / 'deviceLabel' / 'shouldRecordOpen' are pure and gated by scripts/linkopens-test.js (wired into prebuild). 'LINK_OPENS_SINCE' = 2026-10-07 decides *No opens since*. Display only: no pushes, no emails, no roll-up page. New 'link_opens/{jobId}' rule: read open, create/update only with keys 'links' + 'updated_at', no delete. In-app guides updated: questionlinks, questions, rough, homeruns, liveviewlink, generatorlink, lightinglinks. **Why it won't lose data:** additive only. A new 'link_opens' collection written solely by public share pages; no 'jobs/{id}' field, loader, or existing write path touched; the office only reads it; the recorder can't break a share page (try/catch, no await on render).

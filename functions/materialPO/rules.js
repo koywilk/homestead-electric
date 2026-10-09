@@ -113,19 +113,28 @@ function recipients({ mode, testTo, vendorEmail, bids, senderEmail }) {
 }
 
 // The email, modeled on Simpro's own PO email (2026-10-07 template).
-function buildPoEmail({ mode, poNo, jobName, supplierName, lines, pickup, sender, intended, attached = false }) {
+// "7262" / "7262 and 7263" / "7262, 7263 and 7264"
+function poList(nums) {
+  const n = (nums || []).map(String).filter(Boolean);
+  return n.length <= 1 ? (n[0] || "") : `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}`;
+}
+
+function buildPoEmail({ mode, poNo, poNos, jobName, supplierName, lines, pickup, sender, intended, attached = false }) {
   const s = sender || {};
-  const subject = `${mode === "test" ? "[TEST] " : ""}PO ${poNo} – ${jobName} – Homestead Electric`;
+  const nums = (poNos && poNos.length ? poNos : [poNo]).map(String).filter(Boolean);
+  const many = nums.length > 1;
+  poNo = poList(nums);
+  const subject = `${mode === "test" ? "[TEST] " : ""}${many ? `POs ${poList(nums).replace(" and ", " & ")}` : `PO ${poNo}`} – ${jobName} – Homestead Electric`;
   const list = (lines || []).map(l => `<li style="margin:0 0 2px">${esc(l)}</li>`).join("");
   const sig = [esc(s.name), esc(s.position), esc(s.phone), s.email ? esc(s.email) : "", "homesteadelectric.net"].filter(Boolean).join("<br>");
   const testBanner = mode === "test" ? `
 <div style="border:2px solid #3B5BA5;border-radius:8px;padding:10px 12px;margin:0 0 16px;background:#EEF2FA;color:#1B1F24">
   <b>TEST from the Command Center.</b> Only you got this. Live, it would go to ${esc(supplierName)}${intended && intended.to ? ` (${esc(intended.to)})` : ""} with ${esc((intended && intended.cc) || "bids@ and the sender")} copied.
-  Simpro PO ${esc(poNo)} was really created. Void it in Simpro when you're done looking.
+  Simpro PO${many ? "s" : ""} ${esc(poNo)} ${many ? "were" : "was"} really created. Void it in Simpro when you're done looking.
 </div>` : "";
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1B1F24;max-width:600px">${testBanner}
 <p style="margin:0 0 12px">Hi ${esc(supplierName)},</p>
-<p style="margin:0 0 12px">${attached ? `Purchase order <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b> is attached.` : `Here is purchase order <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b>.`} Please reference this PO number on your invoice, packing slip and delivery ticket.</p>
+<p style="margin:0 0 12px">${attached ? `Purchase order${many ? "s" : ""} <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b> ${many ? "are" : "is"} attached.` : `Here ${many ? "are purchase orders" : "is purchase order"} <b>${esc(poNo)}</b> for <b>${esc(jobName)}</b>.`} Please reference ${many ? "each PO number" : "this PO number"} on your invoice, packing slip and delivery ticket.</p>
 ${pickup ? `<p style="margin:0 0 12px"><b>${esc(pickup)}</b></p>` : ""}
 ${attached ? "" : `<ul style="margin:0 0 12px;padding-left:20px">${list}</ul>`}
 <p style="margin:0 0 12px">Reply to this email with any part number corrections, substitutions or backorders before the order ships.</p>
@@ -134,7 +143,7 @@ ${attached ? "" : `<ul style="margin:0 0 12px;padding-left:20px">${list}</ul>`}
   const text = [
     mode === "test" ? "TEST from the Command Center. Only you got this.\n" : "",
     `Hi ${supplierName},`, "",
-    `${attached ? `Purchase order ${poNo} for ${jobName} is attached.` : `Here is purchase order ${poNo} for ${jobName}.`} Please reference this PO number on your invoice, packing slip and delivery ticket.`, "",
+    `${attached ? `Purchase order${many ? "s" : ""} ${poNo} for ${jobName} ${many ? "are" : "is"} attached.` : `Here ${many ? "are purchase orders" : "is purchase order"} ${poNo} for ${jobName}.`} Please reference ${many ? "each PO number" : "this PO number"} on your invoice, packing slip and delivery ticket.`, "",
     pickup || "", "",
     ...(attached ? [] : (lines || []).map(l => `- ${l}`)), "",
     "Reply to this email with any part number corrections, substitutions or backorders before the order ships.", "",
@@ -150,6 +159,42 @@ function emailMode(cfgMode, logMode) {
   return (cfgMode === "test" || logMode === "test") ? "test" : (cfgMode === "live" && logMode === "live" ? "live" : "test");
 }
 
+// ── Orders from the bid (one order → one PO per cost center) ──────────────
+// What the crew sends: [{ccId, items:[{catalogId, part, name, qty}], typed:[...]}].
+// Cleaned hard on the server: whole numbers for ids, quantities rounded to 2
+// places and capped, text trimmed and capped, empty groups dropped, a cost
+// center listed twice merged. Order is kept (it's the job's section order).
+function cleanOrderGroups(groups) {
+  const T = (v, n) => String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, n);
+  const byCc = new Map();
+  for (const g of Array.isArray(groups) ? groups.slice(0, 12) : []) {
+    const ccId = Number(g && g.ccId);
+    if (!Number.isInteger(ccId) || ccId <= 0) continue;
+    const cur = byCc.get(ccId) || { ccId, items: [], typed: [] };
+    for (const it of Array.isArray(g.items) ? g.items.slice(0, 200) : []) {
+      const qty = Math.round(Number(it && it.qty) * 100) / 100;
+      const catalogId = Number(it && it.catalogId);
+      if (!(qty > 0) || qty > 100000 || !Number.isInteger(catalogId) || catalogId <= 0) continue;
+      const name = T(it.name, 160), part = T(it.part, 60);
+      if (!name && !part) continue;
+      const same = cur.items.find(x => x.catalogId === catalogId);
+      if (same) same.qty = Math.round((same.qty + qty) * 100) / 100; else cur.items.push({ catalogId, part, name, qty });
+    }
+    for (const t of Array.isArray(g.typed) ? g.typed.slice(0, 60) : []) { const v = T(t, 200); if (v) cur.typed.push(v); }
+    byCc.set(ccId, cur);
+  }
+  return [...byCc.values()].filter(g => g.items.length || g.typed.length).slice(0, 10);
+}
+// One text line per bid item for the PO's Supplier Notes: "249 x R3-15B RAB R3-15B 2" Wafer".
+function orderLine(it) {
+  return [`${it.qty} x`, it.part, it.name].filter(Boolean).join(" ");
+}
+// PO key for one cost center inside an order.
+function groupKey(orderKey, ccId) {
+  const id = Number(ccId);
+  return orderKey && Number.isInteger(id) && id > 0 ? `${orderKey}-cc${id}` : "";
+}
+
 // One send per card. A double-tap or a retry after a dropped connection finds
 // the same key and gets the same PO back instead of a second PO.
 function logKey(jobId, phase, orderId) {
@@ -160,4 +205,5 @@ function logKey(jobId, phase, orderId) {
 }
 
 module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, itemsToLines, shortDate, cardDateToIso,
-  pickupLine, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines };
+  pickupLine, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
+  poList, cleanOrderGroups, orderLine, groupKey };

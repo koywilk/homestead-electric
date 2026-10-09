@@ -127,4 +127,32 @@ t("one key per card", () => {
   eq(R.logKey("J1", "rough", ""), "", "no card");
 });
 
+t("order from the bid: cleaning, lines, keys, plural wording", () => {
+  const g = R.cleanOrderGroups([
+    { ccId: 18864, items: [{ catalogId: 9958, part: "NMB KS14/2X500", name: "NM-B-14/2", qty: 3750 }, { catalogId: 9958, part: "NMB KS14/2X500", name: "NM-B-14/2", qty: 250 },
+      { catalogId: 1, part: "X", name: "zero", qty: 0 }, { catalogId: 2, part: "X", name: "too many", qty: 100001 }, { catalogId: "abc", part: "X", name: "bad id", qty: 1 },
+      { catalogId: 3, part: "", name: "", qty: 1 }, { catalogId: 4, part: "P", name: "half", qty: 1.234 }], typed: ["  2 boxes   connectors ", "", "   "] },
+    { ccId: "18864", items: [], typed: ["merged in"] },
+    { ccId: 0, items: [{ catalogId: 5, part: "P", name: "no cc", qty: 1 }] },
+    { ccId: 19094, items: [], typed: [] },
+  ]);
+  eq(g.length, 1, "bad cost centers and empty groups dropped, same cost center merged");
+  eq(g[0].items.map(i => [i.catalogId, i.qty]), [[9958, 4000], [4, 1.23]], "same catalog item summed, bad lines dropped, qty to 2 places");
+  eq(g[0].typed, ["2 boxes connectors", "merged in"], "typed lines trimmed, blanks dropped");
+  eq(R.cleanOrderGroups(Array.from({ length: 14 }, (_, i) => ({ ccId: i + 1, typed: ["x"] }))).length, 10, "at most 10 cost centers");
+  eq(R.cleanOrderGroups(null), [], "nothing");
+  eq(R.cleanOrderGroups([{ ccId: 1, typed: ["y".repeat(300)] }])[0].typed[0].length, 200, "typed line capped");
+  eq(R.orderLine({ qty: 249, part: "R3-15B", name: "RAB 3IN CAN" }), "249 x R3-15B RAB 3IN CAN", "one line per bid item");
+  eq(R.orderLine({ qty: 1.5, part: "", name: "Thing" }), "1.5 x Thing", "no part number");
+  eq(R.groupKey("J1_rough_o1", 18864), "J1_rough_o1-cc18864", "PO key per cost center");
+  eq(R.groupKey("J1_rough_o1", null), "", "no cost center, no key");
+  eq(R.groupKey("", 5), "", "no order, no key");
+  eq(R.poList(["7262"]), "7262", "one"); eq(R.poList(["7262", "7263"]), "7262 and 7263", "two"); eq(R.poList([1, 2, 3]), "1, 2 and 3", "three");
+  const m = R.buildPoEmail({ mode: "live", poNos: ["7262", "7263", "7264"], jobName: "Miller Residence", supplierName: "CED", lines: [], pickup: "", sender: { name: "K" }, attached: true });
+  eq(m.subject, "POs 7262, 7263 & 7264 – Miller Residence – Homestead Electric", "plural subject");
+  assert(/Purchase orders 7262, 7263 and 7264 for Miller Residence are attached/.test(m.text) && /each PO number/.test(m.text), "plural body");
+  const one = R.buildPoEmail({ mode: "test", poNos: ["7262"], jobName: "M", supplierName: "CED", lines: [], pickup: "", sender: { name: "K" }, attached: true });
+  assert(one.subject.startsWith("[TEST] PO 7262 – "), one.subject);
+});
+
 console.log(`materialpo-test: ${n} groups passed`);

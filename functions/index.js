@@ -7970,3 +7970,5 @@ const _materialPO = require("./materialPO/send.js")({
   loadMailConfig: gcLoadMailConfig,
 });
 exports.sendMaterialPO = _materialPO.sendMaterialPO;
+// v524: one order from the bid → one PO per cost center, one email (deploy with sendMaterialPO).
+exports.sendMaterialOrder = _materialPO.sendMaterialOrder;
