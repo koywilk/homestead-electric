@@ -155,4 +155,24 @@ t("order from the bid: cleaning, lines, keys, plural wording", () => {
   assert(one.subject.startsWith("[TEST] PO 7262 – "), one.subject);
 });
 
+t("Gmail MIME: headers, attachments, no header injection", () => {
+  const G = require("../functions/materialPO/gmail.js");
+  const pdf = Buffer.from("%PDF-1.4 test").toString("base64");
+  const m = G.buildMime({ from: "Homestead Electric <bids@homesteadelectric.net>", to: ["homestead@cedaf.com"], cc: ["bids@homesteadelectric.net", "keegan@homesteadelectric.net"],
+    replyTo: "keegan@homesteadelectric.net\r\nBcc: evil@x.com", subject: "POs 7262 & 7263 – Miller", html: "<p>Hi</p>", text: "Hi",
+    attachments: [{ filename: "Purchase_Order_No_7262.pdf", content: pdf }, { filename: 'a"b.pdf', content: pdf }], boundarySeed: "s1" });
+  const head = m.split("\r\n\r\n")[0];
+  assert(head.includes("From: Homestead Electric <bids@homesteadelectric.net>") && head.includes("To: homestead@cedaf.com"), "from/to");
+  assert(head.includes("Cc: bids@homesteadelectric.net, keegan@homesteadelectric.net"), "cc");
+  assert(!/\r\nBcc:/i.test(m), "a newline in a header value can't add a Bcc");
+  assert(/Subject: =\?UTF-8\?B\?/.test(head), "non-ASCII subject is encoded");
+  eq(Buffer.from(/Subject: =\?UTF-8\?B\?([^?]+)\?=/.exec(head)[1], "base64").toString("utf8"), "POs 7262 & 7263 – Miller", "subject round-trips");
+  assert(m.includes('Content-Type: multipart/mixed; boundary="=_hePO_m_s1"') && m.includes("--=_hePO_m_s1--"), "mixed boundary opened and closed");
+  assert(m.includes('filename="Purchase_Order_No_7262.pdf"') && m.includes('filename="a_b.pdf"'), "attachment names, quotes made safe");
+  assert(m.includes("Content-Type: application/pdf"), "pdf type");
+  const plain = G.buildMime({ from: "x <a@b.co>", to: "c@d.co", subject: "Plain", html: "<b>x</b>", text: "x", boundarySeed: "s2" });
+  assert(!plain.includes("multipart/mixed") && plain.includes("multipart/alternative"), "no attachments → alternative only");
+  assert(/^Subject: Plain$/m.test(plain.replace(/\r/g, "")), "ASCII subject stays plain");
+});
+
 console.log(`materialpo-test: ${n} groups passed`);

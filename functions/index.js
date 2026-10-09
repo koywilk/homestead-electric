@@ -7962,13 +7962,18 @@ exports.planFileByHand     = _planIntake.planFileByHand;
 // gc_config/material_po; missing = test (admins only, email only to the test
 // inbox). Vault: 03-Roadmap/Crew POs from the App.md. Deploy ONLY this:
 //   firebase deploy --only functions:sendMaterialPO
+// 2026-10-09: PO email goes through Google Workspace as bids@ (po-mailer service
+// account, domain-wide delegation, gmail.send only) — CED's Mimecast held the .cc mail.
+const _poGmail = require("./materialPO/gmail.js")({ functions, db });
 const _materialPO = require("./materialPO/send.js")({
   functions, db, TZ,
   simproReqWithRetry,
   requireMember,
   accessOf: gcAdminAccessOf,
   loadMailConfig: gcLoadMailConfig,
+  gmailSend: _poGmail.send,
 });
+exports.poMailerTest = _poGmail.test;
 exports.sendMaterialPO = _materialPO.sendMaterialPO;
 // v524: one order from the bid → one PO per cost center, one email (deploy with sendMaterialPO).
 exports.sendMaterialOrder = _materialPO.sendMaterialOrder;

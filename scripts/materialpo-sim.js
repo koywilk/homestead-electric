@@ -95,15 +95,16 @@ global.fetch = async (url, opts) => {
 };
 
 const USERS = { koy: { name: "Koy Wilkinson", role: "admin" }, keegan: { name: "Keegan Wilkinson", access: "manager" } };
-function setup(mode) {
+function setup(mode, extraCfg, gmailSend) {
   const db = makeDb(); const simpro = makeSimpro();
-  if (mode) db.store.set("gc_config/material_po", { mode });
+  if (mode || extraCfg) db.store.set("gc_config/material_po", { ...(mode ? { mode } : {}), ...(extraCfg || {}) });
   db.store.set("jobs/J1438", { data: { name: "Miller Residence", simproNo: "1438" } });
   const { sendMaterialPO, sendMaterialOrder } = require(path.join(__dirname, "../functions/materialPO/send.js"))({
     functions, db, TZ: "America/Denver", simproReqWithRetry: simpro.req,
     requireMember: async (d) => { const u = USERS[d.by]; if (!u) throw new HttpsError("permission-denied", "who?"); return u; },
     accessOf: (u) => u.access || (u.role === "admin" ? "admin" : "limited"),
     loadMailConfig: async () => ({ key: "re_test", from: "onboarding@resend.dev", soakTo: "koywilkinson@gmail.example" }),
+    gmailSend: gmailSend || null,
   });
   const ORDER = { by: "koy", jobId: "J1438", phase: "rough", orderId: "o1791500000000", source: "CED", get: "willcall", date: "10/9/2026", clientTest: true,
     groups: [
@@ -333,6 +334,42 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     if (HAS_PDF) assert.strictEqual((mails[1].attachments || []).length, 1, "only the new PO form");
     await order({ groups: [...base, more] });
     assert.strictEqual(mails.length, 2, "tapping again sends nothing new");
+  });
+
+  await t("gmail: live order goes through Google as bids@ with every PO form, never through Resend", async () => {
+    const sent = [];
+    const { simpro, order } = setup("live", null, async (m) => { sent.push(m); return { ok: true, id: "g1", via: "gmail" }; });
+    const r = await order({ clientTest: false });
+    assert(r.ok && r.emailOk, JSON.stringify(r));
+    assert.strictEqual(sent.length, 1, "one Google email"); assert.strictEqual(mails.length, 0, "Resend not used");
+    const m = sent[0];
+    assert.strictEqual(m.user, "koy@homesteadelectric.net"); assert.strictEqual(m.fromAddr, "bids@homesteadelectric.net");
+    assert.deepStrictEqual(m.to, ["homestead@cedaf.example"]);
+    assert(m.cc.includes("bids@homesteadelectric.net"), "bids@ copied");
+    if (HAS_PDF) assert.strictEqual((m.attachments || []).length, 2, "both PO forms");
+    assert.strictEqual(simpro.pos.length, 2);
+  });
+
+  await t("gmail: a Google failure is a visible failure (no .cc fallback); Send again finishes once", async () => {
+    let fail = 1; const sent = [];
+    const { simpro, order } = setup("live", null, async (m) => { if (fail-- > 0) return { ok: false, error: "Google email: refused" }; sent.push(m); return { ok: true, id: "g2" }; });
+    const r1 = await order({ clientTest: false });
+    assert(r1.ok && r1.emailOk === false && /Google/.test(r1.emailError), JSON.stringify(r1));
+    assert.strictEqual(mails.length, 0, "never falls back to Resend");
+    const r2 = await order({ clientTest: false });
+    assert(r2.emailOk); assert.strictEqual(sent.length, 1); assert.strictEqual(simpro.pos.length, 2, "no new POs");
+  });
+
+  await t("gmail: sender 'resend' in the config still uses Resend; test mode via Google goes to the test inbox only", async () => {
+    const sent = [];
+    const a = setup("live", { sender: "resend" }, async (m) => { sent.push(m); return { ok: true }; });
+    const r = await a.order({ clientTest: false });
+    assert(r.emailOk); assert.strictEqual(sent.length, 0); assert.strictEqual(mails.length, 1, "Resend used");
+    mails.length = 0;
+    const b = setup("test", null, async (m) => { sent.push(m); return { ok: true }; });
+    const r2 = await b.order();
+    assert(r2.emailOk); assert.strictEqual(sent.length, 1); assert.deepStrictEqual(sent[0].to, ["koywilkinson@gmail.example"], "test inbox only");
+    assert(!(sent[0].cc || []).length, "nobody copied in test"); assert(/^\[TEST\]/.test(sent[0].subject));
   });
 
   await t("order: a cost center not on the job is refused before anything is made", async () => {

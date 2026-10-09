@@ -13,6 +13,10 @@
 //   from:   sender address (default gc_config/mail.from; live needs bids@ on a verified domain)
 //   bids:   copied on every live send (default bids@homesteadelectric.net)
 //   liveAccess: access tiers that may send when live (default every tier)
+//   sender: "gmail" (default, 2026-10-09) | "resend" — gmail sends through Google
+//           Workspace as gmailFrom (default bids@homesteadelectric.net) via the
+//           po-mailer service account acting for gmailUser (default koy@); see gmail.js.
+//           resend = the old orders@homesteadelectric.cc path (CED's Mimecast held it).
 // Test: only admins can send, the email goes ONLY to testTo, nobody is copied,
 // and the Simpro PO is real (marked TEST in its private notes) so it gets voided.
 //
@@ -36,7 +40,7 @@ const UNKNOWN_WAIT_MS = 60e3;       // after an unanswered POST, wait this long 
 const EMAIL_STALE_MS = 90e3;        // an email claim older than this was killed mid-send
 const POST_TIMEOUT_MS = 45e3;
 
-module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, requireMember, accessOf, loadMailConfig, TZ }) {
+module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, requireMember, accessOf, loadMailConfig, TZ, gmailSend = null }) {
   const HttpsError = functions.https.HttpsError;
   const CFG = () => db.collection("gc_config").doc("material_po");
   const LOG = () => db.collection("material_po_log");
@@ -50,7 +54,9 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     try { const d = await CFG().get(); c = d.exists ? (d.data() || {}) : {}; } catch (e) {}
     const mode = ["off", "test", "live"].includes(T(c.mode)) ? T(c.mode) : "test";
     const liveAccess = Array.isArray(c.liveAccess) && c.liveAccess.length ? c.liveAccess : ["admin", "manager", "standard", "limited"];
-    return { mode, liveAccess, testTo: T(c.testTo) || T(mail.soakTo), from: T(c.from) || T(mail.from), bids: T(c.bids) || "bids@homesteadelectric.net", key: T(mail.key) };
+    const sender = T(c.sender) === "resend" ? "resend" : "gmail";
+    return { mode, liveAccess, testTo: T(c.testTo) || T(mail.soakTo), from: T(c.from) || T(mail.from), bids: T(c.bids) || "bids@homesteadelectric.net", key: T(mail.key),
+      sender, gmailUser: T(c.gmailUser) || "koy@homesteadelectric.net", gmailFrom: T(c.gmailFrom) || "bids@homesteadelectric.net" };
   }
 
   const today = () => new Date().toLocaleDateString("en-CA", { timeZone: TZ });
@@ -124,6 +130,11 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
   }
 
   async function sendMail(cfg, { to, cc, replyTo, subject, html, text, attachments }) {
+    // Google Workspace first (CED's filter trusts homesteadelectric.net). A Google
+    // failure is a visible failure (Send again) — never a quiet fall back to .cc.
+    if (cfg.sender === "gmail" && gmailSend) {
+      return gmailSend({ user: cfg.gmailUser, fromAddr: cfg.gmailFrom, to, cc, replyTo, subject, html, text, attachments });
+    }
     if (!cfg.key) return { ok: false, error: "The email sender isn't set up (gc_config/mail has no key)." };
     if (!cfg.from) return { ok: false, error: "No sender address set." };
     const payload = { from: `Homestead Electric <${cfg.from}>`, to, subject: String(subject).slice(0, 200), html, text };
