@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, Component } from "react";
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
@@ -4819,6 +4819,9 @@ const PERMISSIONS = {
   // tier gets it here; this key only exists for a per-person caps grant.
   // The server re-checks the same rule with the live PIN (requireBroadcaster).
   "notify.broadcast":       [],
+  // Office Dashboard (v529): Koy, "I want to be the only one with the view".
+  // Per-user grant only (Settings → Team → TOOL ACCESS), like tools.view.
+  "office.dash":            [],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -5233,7 +5236,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>TOOL ACCESS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[{ perm:"tools.view", label:"Tools tab (all calculators)" }, ...TOOLS.filter(t=>t.perm)].map(t=>{
+                        {[{ perm:"office.dash", label:"Dashboard tab (live office dashboard)" }, { perm:"tools.view", label:"Tools tab (all calculators)" }, ...TOOLS.filter(t=>t.perm)].map(t=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(t.perm);
                           return (
                             <label key={t.perm} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -5245,7 +5248,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Nobody sees the Dashboard or Tools tab without its box. The boxes under Tools show that tool inside it.</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -7066,7 +7069,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"materials","title":"Materials — Commercial Ordering Guide","file":"/sops/materials.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"dashboard","title":"Dashboard — Live Office Dashboard Guide","file":"/sops/dashboard.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"materials","title":"Materials — Commercial Ordering Guide","file":"/sops/materials.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -45447,6 +45450,783 @@ function PlansCard({ identity, users = [] }) {
   );
 }
 
+// ── Office Dashboard (v529) ──────────────────────────────────────────────────
+// Koy: "I want different views of the live data" + "I want to be the only one
+// with the view". One read-only screen with five tabs (Overview · Activity ·
+// Schedule · Quality · People), built ONLY from what App already holds in
+// memory (jobs for the current mode, users, needs, Upcoming). The one extra
+// read is the People tab's device list (settings/deviceVersions, the same
+// getDoc DeviceVersionsCard does). Nothing here writes to Firestore.
+// Gate: "office.dash" is a per-user grant (Settings → Team → TOOL ACCESS),
+// checked against the live team record like the Tools tab.
+const OD_TABS = [["overview","Overview"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"]];
+const OD_O = "#F2702A", OD_G = "#2FBF71", OD_R = "#E5484D", OD_B = "#3B6FE0", OD_P = "#8F7EE0", OD_GOLD = "#C99A2E";
+const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
+const OD_DAY = 24*60*60*1000;
+
+function odDate(v) {
+  if (!v) return null;
+  if (typeof v.toDate === "function") { const d = v.toDate(); return isNaN(d) ? null : d; }
+  if (typeof v === "number") { const d = new Date(v); return isNaN(d) ? null : d; }
+  if (typeof v === "string") return parseAnyDate(v.trim());
+  return null;
+}
+// A date with no clock time ("10/9/2026", "2026-10-09") — shown without a time.
+const odDateOnly = (v) => typeof v === "string" && /^(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})$/.test(v.trim());
+const odText = (html) => String(html || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/\s+/g, " ").trim();
+const odFirst = (name) => String(name || "").trim().split(/\s+/)[0] || "";
+const odTime = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const odShort = (d) => `${d.getMonth()+1}/${d.getDate()}`;
+const odDow = (d) => d.toLocaleDateString([], { weekday: "short" });
+function odWhen(ev, now) {
+  const today = localYmd(now), y = localYmd(new Date(now.getTime() - OD_DAY)), k = localYmd(ev.at);
+  const day = k === today ? "Today" : k === y ? "Yesterday" : `${odDow(ev.at)} ${odShort(ev.at)}`;
+  return ev.dateOnly ? day : `${day} · ${odTime(ev.at)}`;
+}
+
+// Everything that happened on the jobs, newest first, last 30 days.
+function odBuildEvents(jobs, now) {
+  const out = [], from = now.getTime() - 30*OD_DAY, to = now.getTime() + 5*60*1000;
+  jobs.forEach(j => {
+    const push = (raw, type, who, label, detail, tone) => {
+      const at = odDate(raw);
+      if (!at || at.getTime() < from || at.getTime() > to) return;
+      out.push({ at, dateOnly: odDateOnly(raw), type, who: String(who || "").trim(), label, detail: detail || "", tone: tone || "", job: j });
+    };
+    [["roughPunch","Rough"],["finishPunch","Finish"],["qcPunch","QC"]].forEach(([k, ph]) => sbv2WalkPunch(j[k], it => {
+      if (!it || it.voided) return;
+      if (it.done) push(it.checkedAtTs || it.checkedAt, "punch", it.checkedBy, `${ph} punch closed`, odText(it.text), "good");
+      push(it.addedAtTs || it.addedAt, "punch", it.addedBy, `${ph} punch added`, odText(it.text), "");
+    }));
+    (j.changeOrders || []).forEach(co => {
+      if (!co) return;
+      push(co.createdAt || co.date, "co", co.createdBy, "Change order added", odText(co.desc), "");
+      if (co.coStatus && co.coStatusDate && OD_CO_LABEL[co.coStatus])
+        push(co.coStatusDate, "co", "", `Change order ${OD_CO_LABEL[co.coStatus]}`, odText(co.desc), co.coStatus === "approved" ? "good" : co.coStatus === "denied" ? "bad" : "");
+    });
+    [["roughInspectionAttempts","Rough"],["finalInspectionAttempts","Final"]].forEach(([k, ph]) => (j[k] || []).forEach(a => {
+      if (!a || !a.result) return;
+      const fail = a.result === "fail", n = (a.items || []).length;
+      push(a.date, "insp", a.by, `${ph} inspection ${fail ? "failed" : "passed"}`, fail && n ? `${n} item${n === 1 ? "" : "s"} to fix` : "", fail ? "bad" : "good");
+    }));
+    (j.returnTrips || []).forEach(rt => {
+      if (!rt) return;
+      if (rt.signedOff && rt.signedOffDate) push(rt.signedOffDate, "rt", rt.signedOffBy, "Return trip signed off", odText(rt.scope), "good");
+      else if (rt.rtStatus === "scheduled" && rt.rtStatusDate) push(rt.rtStatusDate, "rt", "", "Return trip scheduled", odText(rt.scope), "");
+    });
+    [["roughUpdates","Rough"],["finishUpdates","Finish"]].forEach(([k, ph]) => (j[k] || []).forEach(u => {
+      if (u) push(u.createdAt || u.date, "update", u.addedBy, `${ph} daily update`, odText(u.text), "");
+    }));
+    if (j.statusUpdateAt) push(j.statusUpdateAt, "update", j.statusUpdateBy, "Status update", odText(j.statusUpdate), "");
+    // Photos: one row per job, person and day so a 40-photo walk is one line.
+    const groups = {};
+    buildJobPhotos(j).forEach(p => {
+      const at = odDate(p.takenAt);
+      if (!at) return;
+      const key = localYmd(at) + "|" + (p.uploadedBy || "");
+      if (!groups[key] || groups[key].at < at) groups[key] = { at, who: p.uploadedBy || "", n: (groups[key] ? groups[key].n : 0) + 1 };
+      else groups[key].n++;
+    });
+    Object.values(groups).forEach(g => push(g.at.getTime(), "photo", g.who, `${g.n} photo${g.n === 1 ? "" : "s"} added`, "", ""));
+  });
+  return out.sort((a, b) => b.at - a.at);
+}
+
+// Dated work coming up (and overdue), from the job fields the Forecast reads.
+function odBuildSchedule(jobs, upcoming) {
+  const out = [];
+  const add = (raw, type, label, job, extra) => { const at = odDate(raw); if (at) out.push({ at, type, label, job, name: job ? job.name : (extra && extra.name) || "", ...(extra || {}) }); };
+  jobs.forEach(j => {
+    const rs = effRS(j), fs = effFS(j);
+    if (j.roughProjectedStart && !["complete","inprogress"].includes(rs))
+      add(j.roughProjectedStart, "start", "Rough start", j, { confirmed: !!j.roughStartConfirmed || ["scheduled","date_confirmed"].includes(rs) });
+    if (j.finishProjectedStart && !["complete","inprogress"].includes(fs))
+      add(j.finishProjectedStart, "start", "Finish start", j, { confirmed: !!j.finishStartConfirmed || ["scheduled","date_confirmed"].includes(fs) });
+    if (j.fourWayTargetDate && !j.roughInspectionResult) add(j.fourWayTargetDate, "insp", "Rough inspection", j);
+    if (j.finalInspectionTargetDate && !j.finalInspectionResult) add(j.finalInspectionTargetDate, "insp", "Final inspection", j);
+    if (j.qcStatus === "scheduled" && j.qcStatusDate) add(j.qcStatusDate, "qc", "Rough QC walk", j);
+    if (j.finishQcStatus === "scheduled" && j.finishQcStatusDate) add(j.finishQcStatusDate, "qc", "Finish QC walk", j);
+    if (j.matterportStatus === "scheduled" && j.matterportStatusDate) add(j.matterportStatusDate, "scan", "Matterport scan", j);
+    (j.returnTrips || []).forEach(rt => {
+      if (rt && !rt.signedOff && rt.rtStatus !== "complete" && (rt.scheduledDate || (rt.rtStatus === "scheduled" && rt.rtStatusDate)))
+        add(rt.scheduledDate || rt.rtStatusDate, "rt", "Return trip", j, { detail: odText(rt.scope) });
+    });
+  });
+  (upcoming || []).forEach(u => { if (u && u.projectedStart) add(u.projectedStart, "start", "Upcoming job start", null, { name: u.name || "Upcoming job", confirmed: !!u.startConfirmed }); });
+  return out.sort((a, b) => a.at - b.at);
+}
+const OD_SCHED_COLOR = { start: OD_O, insp: OD_G, qc: OD_B, scan: OD_P, rt: OD_R };
+const OD_SCHED_ICON = { start: "flag", insp: "checkCircle", qc: "clipboard", scan: "camera", rt: "returntrips" };
+
+function OdBars({ vals, color, hi, label, max }) {
+  const w = 7, gap = 5, h = 34, m = max || Math.max(1, ...vals), W = Math.max(1, vals.length*(w+gap)-gap);
+  return (
+    <svg className="spark" width={W} height={h} viewBox={`0 0 ${W} ${h}`} role="img" aria-label={label}>
+      {vals.map((v, i) => { const bh = Math.max(2, Math.round((v/m)*h)); return <rect key={i} x={i*(w+gap)} y={h-bh} width={w} height={bh} rx="2" fill={color} opacity={i === hi ? 1 : .42}/>; })}
+    </svg>
+  );
+}
+function OdRing({ pct, color, size = 36, label }) {
+  const r = size/2 - 4, C2 = 2*Math.PI*r, p = Math.max(0, Math.min(1, pct || 0));
+  return (
+    <svg className="spark" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#F2EEEA" strokeWidth="5"/>
+      {p > 0 && <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" strokeDasharray={`${(C2*p).toFixed(1)} ${C2.toFixed(1)}`} transform={`rotate(-90 ${size/2} ${size/2})`}/>}
+    </svg>
+  );
+}
+function OdMini({ title, color, icon, value, sub, children }) {
+  return (
+    <div className="od-white od-mini" style={{ "--c": color }}>
+      <div className="t">{title}<i><Icon name={icon} size={12} stroke={2.4}/></i></div>
+      <div className="b"><div className="v">{value}{sub ? <small>{sub}</small> : null}</div>{children}</div>
+    </div>
+  );
+}
+// Area line chart. vals may contain nulls (no data that period).
+function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel, label, hiLabel }) {
+  const W = 560, H = 200, L = 40, R = 14, T = 26, B = 26;
+  const x = (i) => L + (vals.length < 2 ? 0 : i*(W-L-R)/(vals.length-1));
+  const y = (v) => T + (1 - (v-min)/(max-min || 1))*(H-T-B);
+  const pts = vals.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
+  let d = "";
+  pts.forEach((p, i) => {
+    if (!i) { d = `M${p[0].toFixed(1)} ${p[1].toFixed(1)}`; return; }
+    const p0 = pts[i-2] || pts[i-1], p1 = pts[i-1], p2 = p, p3 = pts[i+1] || p;
+    d += ` C${(p1[0]+(p2[0]-p0[0])/6).toFixed(1)} ${(p1[1]+(p2[1]-p0[1])/6).toFixed(1)} ${(p2[0]-(p3[0]-p1[0])/6).toFixed(1)} ${(p2[1]-(p3[1]-p1[1])/6).toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  });
+  let hi = -1; vals.forEach((v, i) => { if (v != null && (hi < 0 || v >= vals[hi])) hi = i; });
+  const gid = "odg" + String(color).replace(/[^a-z0-9]/gi, "");
+  return (
+    <svg className="od-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} fontFamily="inherit">
+      <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".26"/><stop offset="1" stopColor={color} stopOpacity="0"/></linearGradient></defs>
+      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="#EFEAE5"/><text x={L-8} y={y(t)+3.5} textAnchor="end" fontSize="10" fill="#9A918A">{fmt(t)}</text></g>)}
+      {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="10" fill={OD_B}>{targetLabel}</text></g>}
+      {pts.length > 1 && <path d={`${d} L${pts[pts.length-1][0]} ${y(min)} L${pts[0][0]} ${y(min)}Z`} fill={`url(#${gid})`}/>}
+      {pts.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>}
+      {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#fff" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
+      {hi >= 0 && hiLabel && <g><rect x={x(hi)-38} y={y(vals[hi])-27} width="76" height="18" rx="9" fill="#FFF3EA" stroke={color}/><text x={x(hi)} y={y(vals[hi])-14.5} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1E1A17">{hiLabel(vals[hi], hi)}</text></g>}
+      {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="10" fill="#9A918A">{l}</text> : null)}
+    </svg>
+  );
+}
+function OdHBars({ rows, max, empty }) {
+  if (!rows.length) return <div className="od-empty">{empty}</div>;
+  const m = max || Math.max(1, ...rows.map(r => r.v));
+  return (
+    <div className="od-hb">
+      {rows.map((r, i) => (
+        <div className="r" key={i}><b>{r.name}</b><span>{r.note}</span><i style={{ "--w": `${Math.max(2, (r.v/m)*100).toFixed(1)}%`, "--c": r.color }}/></div>
+      ))}
+    </div>
+  );
+}
+function OdItem({ color, icon, tag, title, sub, when, onClick }) {
+  return (
+    <button type="button" className="od-item" onClick={onClick} disabled={!onClick}>
+      <span className="th" style={{ background: color }}><Icon name={icon} size={16} color="#fff"/></span>
+      <span className="tx"><em style={{ color }}>{tag}</em><b>{title}</b>{sub ? <small>{sub}</small> : null}</span>
+      {when ? <span className="when">{when}</span> : null}
+    </button>
+  );
+}
+
+// The app has no error boundary, so a throw here would blank every screen.
+// This keeps a dashboard bug inside the Dashboard tab.
+class OdBoundary extends Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err) { console.warn("[HE dashboard] render failed:", err); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div style={{ padding: 18, borderRadius: 14, background: C.card, border: `1px solid ${C.border}`, color: C.text, maxWidth: 640, margin: "20px auto" }}>
+        <b>The dashboard hit an error and stopped.</b>
+        <div style={{ fontSize: 12.5, color: C.dim, marginTop: 6 }}>The rest of the app is fine. Send Koy a screenshot of this: {String((this.state.err && this.state.err.message) || this.state.err)}</div>
+        <button type="button" onClick={() => this.setState({ err: null })} style={{ marginTop: 10, border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>Try again</button>
+      </div>
+    );
+  }
+}
+
+function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob }) {
+  const [tab, setTab] = useState(() => { try { const t = localStorage.getItem("he_odash_tab"); return OD_TABS.some(x => x[0] === t) ? t : "overview"; } catch { return "overview"; } });
+  const pickTab = (t) => { setTab(t); try { localStorage.setItem("he_odash_tab", t); } catch {} };
+  const [actFilter, setActFilter] = useState("all");
+  const [actQ, setActQ] = useState("");
+  const [tick, setTick] = useState(0);
+  useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 5*60*1000); return () => clearInterval(id); }, []);
+  // People tab only: the device list (read once per visit, like Settings does).
+  const [devices, setDevices] = useState(null);
+  const [latest, setLatest] = useState(null);
+  useEffect(() => {
+    if (tab !== "people") return;
+    let dead = false;
+    (async () => {
+      try { const snap = await getDoc(doc(db, "settings", "deviceVersions")); if (!dead) setDevices(snap.exists() ? (snap.data().devices || {}) : {}); }
+      catch (e) { if (!dead) setDevices({}); }
+      try { const res = await fetch(`/service-worker.js?t=${Date.now()}`, { cache: "no-store" }); const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/); if (!dead) setLatest(m ? m[1] : null); } catch (e) {}
+    })();
+    return () => { dead = true; };
+  }, [tab]);
+
+  const open = (job) => { if (job && onSelectJob) onSelectJob(job); };
+  const d = useMemo(() => {
+    const now = new Date(), today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const secs = mode === "commercial" ? COMM_BOARD_SECTIONS : STAGE_SECTIONS;
+    const live = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote");
+    const secOf = (j) => { try { return secs.find(s => s.test(j)) || null; } catch (e) { return null; } };
+    const active = live.filter(j => { const s = secOf(j); return !s || !["complete","completed"].includes(s.key); });
+    const bySec = secs.map(s => ({ ...s, n: active.filter(j => secOf(j) === s).length })).filter(s => s.n);
+
+    const events = odBuildEvents(live, now);
+    const evToday = events.filter(e => localYmd(e.at) === today);
+    const perDay = []; for (let i = 13; i >= 0; i--) { const k = localYmd(new Date(t0.getTime() - i*OD_DAY)); perDay.push({ k, d: new Date(t0.getTime() - i*OD_DAY), n: events.filter(e => localYmd(e.at) === k).length }); }
+
+    // Punch, COs, return trips, QC
+    let openPunch = 0; const punchJobs = new Set(); const byForeman = {};
+    const cutoff30 = now.getTime() - 30*OD_DAY;
+    active.forEach(j => [j.roughPunch, j.finishPunch, j.qcPunch].forEach(p => sbv2WalkPunch(p, it => {
+      if (!it || it.voided) return;
+      const f = j.foreman || "No foreman"; byForeman[f] = byForeman[f] || { open: 0, closed: 0 };
+      if (!it.done) { openPunch++; punchJobs.add(j.id); byForeman[f].open++; }
+      else { const at = odDate(it.checkedAtTs || it.checkedAt); if (at && at.getTime() >= cutoff30) byForeman[f].closed++; }
+    })));
+    const openCOs = []; active.forEach(j => (j.changeOrders || []).forEach(co => { if (co && !["completed","converted","denied"].includes(co.coStatus || "")) openCOs.push({ co, job: j }); }));
+    const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
+    const openRTs = []; live.forEach(j => (j.returnTrips || []).forEach(rt => { if (rt && !rt.signedOff && rt.rtStatus !== "complete") openRTs.push({ rt, job: j }); }));
+    const qcRows = []; active.forEach(j => {
+      if (["needs","scheduled"].includes(j.qcStatus || "")) qcRows.push({ job: j, phase: "Rough QC", st: j.qcStatus, at: odDate(j.qcStatusDate) });
+      if (["needs","scheduled"].includes(j.finishQcStatus || "")) qcRows.push({ job: j, phase: "Finish QC", st: j.finishQcStatus, at: odDate(j.finishQcStatusDate) });
+    });
+
+    // Inspections: first attempt per job and phase decides first-pass.
+    const firsts = [], fails = [];
+    live.forEach(j => [["roughInspectionAttempts","Rough"],["finalInspectionAttempts","Final"]].forEach(([k, ph]) => {
+      const atts = (j[k] || []).map(a => ({ ...a, _at: odDate(a && a.date) })).filter(a => a._at && a.result).sort((a, b) => a._at - b._at);
+      if (atts.length) firsts.push({ job: j, ph, at: atts[0]._at, pass: atts[0].result === "pass" });
+      atts.forEach(a => { if (a.result === "fail") fails.push({ job: j, ph, at: a._at, items: (a.items || []).map(it => odText(it && (it.text || it))).filter(Boolean), by: a.by || "" }); });
+    }));
+    fails.sort((a, b) => b.at - a.at);
+    const in90 = firsts.filter(f => f.at.getTime() >= now.getTime() - 90*OD_DAY);
+    const fp90 = in90.length ? Math.round(100 * in90.filter(f => f.pass).length / in90.length) : null;
+    const insp30 = []; live.forEach(j => [["roughInspectionAttempts"],["finalInspectionAttempts"]].forEach(([k]) => (j[k] || []).forEach(a => { const at = odDate(a && a.date); if (at && a.result && at.getTime() >= cutoff30) insp30.push(a.result); })));
+    const months = []; for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); const mf = firsts.filter(f => f.at.getFullYear() === m.getFullYear() && f.at.getMonth() === m.getMonth()); months.push({ label: m.toLocaleDateString([], { month: "short" }), n: mf.length, v: mf.length ? Math.round(100 * mf.filter(f => f.pass).length / mf.length) : null }); }
+
+    // Schedule
+    const sched = odBuildSchedule(active, upcoming);
+    const ahead = (days) => sched.filter(s => s.at >= t0 && s.at < new Date(t0.getTime() + days*OD_DAY));
+    const overdue = sched.filter(s => s.at < t0 && s.type !== "start");
+    const needsDate = [];
+    active.forEach(j => {
+      if (j.quickJob || j.tempPed) return;
+      const rs = effRS(j), fs = effFS(j);
+      if (["","waiting_date"].includes(rs) && !j.roughProjectedStart) needsDate.push({ job: j, what: "Rough start" });
+      else if (rs === "complete" && ["","waiting_date"].includes(fs) && !j.finishProjectedStart) needsDate.push({ job: j, what: "Finish start" });
+      else if (parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult && rs !== "complete") needsDate.push({ job: j, what: "Rough inspection" });
+    });
+    (upcoming || []).forEach(u => { if (u && !u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start" }); });
+    const scans = active.filter(j => matterportScanNeeded(j));
+
+    // People
+    const staff = (users || []).filter(u => u && u.active !== false && getAccess(u) !== "contractor" && u.name);
+    const people = staff.map(u => {
+      const mine = events.filter(e => e.who && sameName(e.who, u.name));
+      let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
+      live.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
+      const todayMine = mine.filter(e => localYmd(e.at) === today);
+      const jobsToday = new Set(todayMine.map(e => e.job.id)).size;
+      const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(new Date(t0.getTime() - i*OD_DAY)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
+      const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : "quiet";
+      const lastJob = mine.length ? mine[0].job.name : "";
+      return { u, name: u.name, last, lastDateOnly, todayN: todayMine.length, jobsToday, days7, status, lastJob, role: getAccess(u) };
+    }).sort((a, b) => (b.todayN - a.todayN) || ((b.last || 0) - (a.last || 0)));
+    const foremen = people.filter(p => p.u.role === "foreman" || p.role === "standard" || active.some(j => sameName(j.foreman, p.name)));
+    const openNeeds = (needs || []).filter(n => n && !n.voided && needIsOpen(n, today));
+    const load = {}; openNeeds.forEach(n => { const a = needAssignee(n) || "Unassigned"; load[a] = load[a] || { n: 0, urgent: 0 }; load[a].n++; if (needPriority(n) === "urgent") load[a].urgent++; });
+    const timeOff = openNeeds.filter(n => n.timeoffId);
+
+    // Busiest job today (or this week)
+    const tally = (list) => { const m = {}; list.forEach(e => { m[e.job.id] = m[e.job.id] || { job: e.job, n: 0, ev: [] }; m[e.job.id].n++; m[e.job.id].ev.push(e); }); return Object.values(m).sort((a, b) => b.n - a.n)[0] || null; };
+    const busy = tally(evToday) ? { ...tally(evToday), when: "today" } : (tally(events.filter(e => now - e.at < 7*OD_DAY)) ? { ...tally(events.filter(e => now - e.at < 7*OD_DAY)), when: "this week" } : null);
+
+    return { now, today, t0, live, active, bySec, events, evToday, perDay, openPunch, punchJobs, byForeman, openCOs, coWaiting, openRTs, qcRows,
+      firsts, fails, fp90, in90, insp30, months, sched, ahead, overdue, needsDate, scans, people, foremen, openNeeds, load, timeOff, busy };
+  }, [jobs, users, needs, upcoming, mode, tick]); // eslint-disable-line
+
+  const greet = d.now.getHours() < 12 ? "Good morning" : d.now.getHours() < 17 ? "Good afternoon" : "Good evening";
+  const me = odFirst(identity && identity.name) || "there";
+  const dateLine = d.now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+  const onApp = d.people.filter(p => p.status === "active").length;
+  const urgentN = d.openNeeds.filter(n => needPriority(n) === "urgent").length;
+  const next7 = d.ahead(7), next14 = d.ahead(14);
+  const starts14 = next14.filter(s => s.type === "start");
+  const insp7 = next7.filter(s => s.type === "insp");
+
+  // ── shared right-panel pieces ──
+  const Me = ({ sub }) => (
+    <div className="od-me"><i className="av">{(me[0] || "?").toUpperCase()}</i><div><b>{(identity && identity.name) || me}</b><small>{sub}</small></div></div>
+  );
+  const Stats = ({ items }) => <div className="od-stats">{items.map(([v, l], i) => <div key={i}><b>{v}</b><small>{l}</small></div>)}</div>;
+  const Sec = ({ children, right }) => <div className="od-sec"><span>{children}</span>{right ? <small>{right}</small> : null}</div>;
+  const schedItem = (s, i) => (
+    <OdItem key={i} color={OD_SCHED_COLOR[s.type]} icon={OD_SCHED_ICON[s.type]} tag={s.label + (s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : "")}
+      title={s.name} sub={s.detail || (s.job && s.job.foreman ? s.job.foreman : "")} when={`${odDow(s.at)} ${odShort(s.at)}`} onClick={s.job ? () => open(s.job) : null}/>
+  );
+
+  // Calendar for this month with dated work marked.
+  const Cal = () => {
+    const y = d.now.getFullYear(), m = d.now.getMonth(), first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+    const marks = {}; d.sched.forEach(s => { if (s.at.getFullYear() === y && s.at.getMonth() === m) { const k = s.at.getDate(); if (!marks[k] || s.type === "insp") marks[k] = OD_SCHED_COLOR[s.type]; } });
+    const cells = []; for (let i = 0; i < first; i++) cells.push(<div key={"b" + i}/>);
+    for (let k = 1; k <= days; k++) cells.push(<div key={k}><span className={"d" + (marks[k] ? " m" : "") + (k === d.now.getDate() ? " today" : "")} style={marks[k] ? { background: marks[k] } : null}>{k}</span></div>);
+    return (
+      <div className="od-cal">
+        <div className="h">{d.now.toLocaleDateString([], { month: "long", year: "numeric" })}</div>
+        <div className="grid">{["Su","Mo","Tu","We","Th","Fr","Sa"].map(x => <div key={x} className="dow">{x}</div>)}{cells}</div>
+        <div className="od-legend"><span style={{ "--c": OD_O }}>Start</span><span style={{ "--c": OD_G }}>Inspection</span><span style={{ "--c": OD_B }}>QC</span><span style={{ "--c": OD_R }}>Return trip</span></div>
+      </div>
+    );
+  };
+
+  // ── Activity table (Overview shows the top of it, Activity the whole thing) ──
+  const ACT_FILTERS = [["all","All"],["punch","Punch"],["co","Change orders"],["insp","Inspections"],["rt","Return trips"],["update","Updates"],["photo","Photos"]];
+  const actList = d.events.filter(e => (actFilter === "all" || e.type === actFilter) &&
+    (!actQ.trim() || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(actQ.trim().toLowerCase()))).slice(0, 80);
+  const TONE = { good: OD_G, bad: OD_R };
+  const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera" };
+  const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_GOLD };
+  const ActRows = ({ list }) => list.length ? (
+    <div className="od-rows">
+      {list.map((e, i) => (
+        <button type="button" className="od-row" key={i} onClick={() => open(e.job)}>
+          <span className="k" style={{ "--c": e.tone ? TONE[e.tone] : TYPE_COLOR[e.type] }}><Icon name={TYPE_ICON[e.type] || "activity"} size={15}/></span>
+          <span className="m"><b>{e.job.name || "Job"}{e.job.division === "commercial" ? <em>COMMERCIAL</em> : null}</b><small>{e.label}{e.detail ? `: ${e.detail}` : ""}</small></span>
+          <span className="w">{e.who ? odFirst(e.who) : ""}</span>
+          <span className="t">{odWhen(e, d.now)}</span>
+        </button>
+      ))}
+    </div>
+  ) : <div className="od-empty">Nothing matches.</div>;
+
+  const Pulse = ({ list }) => (
+    <div className="od-pulse">
+      {list.map(p => (
+        <div className="od-person" key={p.u.id || p.name}>
+          <i className="av sm">{(p.name[0] || "?").toUpperCase()}</i>
+          <div><b>{odFirst(p.name)}</b><small>{p.status === "active" ? `${p.todayN} update${p.todayN === 1 ? "" : "s"} · ${p.jobsToday} job${p.jobsToday === 1 ? "" : "s"} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</small></div>
+          <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_GOLD : "#B9B0A8" }}/>
+        </div>
+      ))}
+    </div>
+  );
+
+  let main = null, right = null;
+  if (tab === "overview") {
+    const secBars = d.bySec.slice(0, 7);
+    const actMax = Math.max(1, ...d.perDay.map(p => p.n));
+    const insPass = d.insp30.filter(r => r === "pass").length;
+    main = (<>
+      <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {d.evToday.length} update{d.evToday.length === 1 ? "" : "s"} today across {new Set(d.evToday.map(e => e.job.id)).size} jobs</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Active jobs" color={OD_O} icon="hardHat" value={d.active.length} sub={`${d.bySec.length} stages`}>
+          <OdBars vals={secBars.map(s => s.n)} color={OD_O} hi={secBars.reduce((b, s, i) => s.n > secBars[b].n ? i : b, 0)} label={secBars.map(s => `${s.label} ${s.n}`).join(", ")}/>
+        </OdMini>
+        <OdMini title="Inspections, 30 days" color={OD_G} icon="checkCircle" value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed` : "none logged"}>
+          <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
+        </OdMini>
+        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`}>
+          <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
+        </OdMini>
+        <OdMini title="Open punch items" color={OD_R} icon="openitems" value={d.openPunch} sub={`${d.punchJobs.size} jobs`}>
+          <OdBars vals={Object.values(d.byForeman).map(f => f.open).sort((a, b) => b - a).slice(0, 6)} color={OD_R} hi={0} label="Open punch items by foreman"/>
+        </OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Updates per day<small>all jobs, last 14 days</small></div>
+          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => i % 2 === 1 ? "" : odShort(p.d))} color={OD_O} min={0} max={Math.ceil(actMax*1.15) || 1}
+            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Updates per day, last 14 days: ${d.perDay.map(p => p.n).join(", ")}`}
+            hiLabel={(v, i) => `${v} · ${odShort(d.perDay[i].d)}`}/>
+        </div>
+        <div className="od-white od-pad od-busy">
+          <div className="od-ct">Busiest job<small>{d.busy ? d.busy.when : ""}</small></div>
+          {d.busy ? (<>
+            <button type="button" className="od-link" onClick={() => open(d.busy.job)}><b>{d.busy.job.name}</b></button>
+            <div className="od-big">{d.busy.n}<small>update{d.busy.n === 1 ? "" : "s"} · {d.busy.job.foreman || "no foreman"}</small></div>
+            <div className="od-mini-list">{d.busy.ev.slice(0, 4).map((e, i) => <div key={i}><span style={{ background: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type] }}/>{e.label}{e.who ? ` · ${odFirst(e.who)}` : ""}</div>)}</div>
+          </>) : <div className="od-empty">No job updates this week.</div>}
+        </div>
+      </div>
+      <Sec right={`${onApp} on the app today`}>Foremen today</Sec>
+      <div className="od-plan">
+        {d.foremen.slice(0, 6).map((p, i) => {
+          const fj = d.active.filter(j => sameName(j.foreman, p.name));
+          const op = fj.reduce((n, j) => n + [j.roughPunch, j.finishPunch, j.qcPunch].reduce((m, pp) => { let c = 0; sbv2WalkPunch(pp, it => { if (it && !it.voided && !it.done) c++; }); return m + c; }, 0), 0);
+          return (
+            <div className={"od-white od-crew" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name}>
+              <div><b>{p.name}</b><p>{fj.length} active job{fj.length === 1 ? "" : "s"} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
+                <span className="day">{p.status === "active" ? `${p.todayN} update${p.todayN === 1 ? "" : "s"} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
+              <OdBars vals={p.days7} color={i === 0 && p.todayN ? "#fff" : OD_O} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
+            </div>
+          );
+        })}
+        {!d.foremen.length && <div className="od-empty">No foremen on the team list.</div>}
+      </div>
+    </>);
+    right = (<>
+      <Me sub={mode === "commercial" ? "Commercial" : "Residential"}/>
+      <Stats items={[[d.active.length, "Active jobs"], [onApp, "On app today"], [d.openNeeds.length, "Open tasks"]]}/>
+      <Cal/>
+      <Sec right="next 14 days">Scheduled</Sec>
+      <div className="od-list">{next14.slice(0, 6).map(schedItem)}{!next14.length && <div className="od-empty dark">Nothing dated in the next 14 days.</div>}</div>
+    </>);
+  } else if (tab === "activity") {
+    const byHour = [6,8,10,12,14,16].map(h => d.evToday.filter(e => !e.dateOnly && e.at.getHours() >= h && e.at.getHours() < h + 2).length);
+    main = (<>
+      <div className="od-head"><div><h1>Activity</h1><p>Everything logged on {mode === "commercial" ? "commercial" : "residential"} jobs in the last 30 days · tap a row to open the job</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Updates today" color={OD_O} icon="activity" value={d.evToday.length} sub={`${new Set(d.evToday.map(e => e.job.id)).size} jobs`}><OdBars vals={byHour} color={OD_O} hi={byHour.indexOf(Math.max(...byHour))} label={`Updates today by two-hour block from 6 AM: ${byHour.join(", ")}`}/></OdMini>
+        <OdMini title="Punch closed today" color={OD_G} icon="openitems" value={d.evToday.filter(e => e.type === "punch" && e.tone === "good").length} sub="items"><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={OD_G} hi={6} label="Punch items closed per day, last 7 days"/></OdMini>
+        <OdMini title="Photo batches today" color={OD_GOLD} icon="camera" value={d.evToday.filter(e => e.type === "photo").length} sub="uploads"><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_GOLD} hi={6} label="Photo uploads per day, last 7 days"/></OdMini>
+        <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={d.fails.filter(f => d.now - f.at < 7*OD_DAY).length} sub="this week"><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f.at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day, last 7 days"/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Recent activity<small>{actList.length === 80 ? "newest 80" : `${actList.length} rows`}</small>
+          <div className="od-filters" role="group" aria-label="Filter activity">{ACT_FILTERS.map(([k, l]) => <button type="button" key={k} aria-pressed={actFilter === k} onClick={() => setActFilter(k)}>{l}</button>)}</div>
+        </div>
+        <input className="od-q" type="search" value={actQ} onChange={e => setActQ(e.target.value)} placeholder="Filter by job, person or what happened" aria-label="Filter activity"/>
+        <ActRows list={actList}/>
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Activity"/>
+      <Stats items={[[d.events.length, "Updates, 30 days"], [onApp, "On app today"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Sec>Team pulse</Sec>
+      <Pulse list={d.people.slice(0, 12)}/>
+    </>);
+  } else if (tab === "schedule") {
+    const days = []; for (let i = 0; i < 7; i++) { const dd = new Date(d.t0.getTime() + i*OD_DAY); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
+    main = (<>
+      <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {next7.length} in the next 7 days</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label={`${starts14.filter(s => s.confirmed).length} of ${starts14.length} starts confirmed`}/></OdMini>
+        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated"><OdBars vals={days.map(x => x.items.filter(s => s.type === "insp").length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
+        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs"><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label={`${d.needsDate.length} of ${d.active.length} active jobs need a date`}/></OdMini>
+        <OdMini title="Overdue" color={OD_GOLD} icon="alertTriangle" value={d.overdue.length} sub="past their date"><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_GOLD} label={`${d.overdue.length} dated items past due`}/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Next 7 days<small>tap an item to open the job</small></div>
+        <div className="od-weekwrap"><div className="od-week">
+          {days.map((x, i) => (
+            <div className={"col" + (i === 0 ? " today" : "")} key={i}>
+              <div className="dh">{i === 0 ? "Today" : odDow(x.dd)} <span>{odShort(x.dd)}</span></div>
+              {x.items.map((s, k) => (
+                <button type="button" className="blk" key={k} style={{ "--c": OD_SCHED_COLOR[s.type] }} onClick={s.job ? () => open(s.job) : undefined}>
+                  <b>{s.name}</b><small>{s.label}{s.type === "start" && !s.confirmed ? " · projected" : ""}</small>
+                </button>
+              ))}
+              {!x.items.length && <div className="none">—</div>}
+            </div>
+          ))}
+        </div></div>
+      </div>
+      <Sec right={`${starts14.length} in the next 14 days`}>Starts</Sec>
+      <div className="od-plan">
+        {starts14.slice(0, 6).map((s, i) => (
+          <button type="button" className={"od-white od-start" + (!s.confirmed && i === starts14.findIndex(x => !x.confirmed) ? " hot" : "")} key={i} onClick={s.job ? () => open(s.job) : undefined}>
+            <span className="dd">{odDow(s.at)} {odShort(s.at)}</span><b>{s.name}</b><p>{s.label}{s.job && s.job.foreman ? ` · ${s.job.foreman}` : ""}</p>
+            <span className="st" style={{ "--c": s.confirmed ? OD_G : OD_O }}>{s.confirmed ? "Confirmed" : "Projected"}</span>
+          </button>
+        ))}
+        {!starts14.length && <div className="od-empty">No starts dated in the next 14 days.</div>}
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Scheduling"/>
+      <Stats items={[[d.active.length, "On the board"], [(upcoming || []).length, "Upcoming"], [d.scans.length, "Scans due"]]}/>
+      {d.overdue.length > 0 && <><Sec right={`${d.overdue.length}`}>Past their date</Sec><div className="od-list">{d.overdue.slice(-5).reverse().map(schedItem)}</div></>}
+      <Sec right={`${d.needsDate.length}`}>Needs a date</Sec>
+      <div className="od-list">{d.needsDate.slice(0, 6).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={n.job ? n.job.foreman || "" : "Upcoming tab"} onClick={n.job ? () => open(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
+      <Sec right={`${d.scans.length}`}>Matterport scans due</Sec>
+      <div className="od-list">{d.scans.slice(0, 4).map((j, i) => <OdItem key={i} color={OD_P} icon="camera" tag={`Rough ${parseStage(j.roughStage)}%`} title={j.name} sub="Scan before drywall" onClick={() => open(j)}/>)}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
+    </>);
+  } else if (tab === "quality") {
+    const fRows = Object.entries(d.byForeman).filter(([n]) => n !== "No foreman").map(([n, v]) => ({ n, ...v })).sort((a, b) => b.open - a.open).slice(0, 8);
+    const fMax = Math.max(1, ...fRows.map(r => r.open + r.closed));
+    const fpLo = d.months.every(m => m.v == null || m.v >= 50) ? 50 : 0;
+    main = (<>
+      <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase</p></div></div>
+      <div className="od-minis">
+        <OdMini title="First-pass, 90 days" color={OD_G} icon="checkCircle" value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={`${d.in90.length} inspections`}><OdRing pct={(d.fp90 || 0)/100} color={OD_G} label={`First-pass rate ${d.fp90 == null ? "not available" : d.fp90 + " percent"}`}/></OdMini>
+        <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch} sub={`${d.punchJobs.size} jobs`}><OdBars vals={fRows.slice(0, 6).map(r => r.open)} color={OD_O} hi={0} label="Open punch items by foreman"/></OdMini>
+        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => x.rt.rtScheduled || x.rt.rtStatus === "scheduled").length} scheduled`}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => x.rt.rtScheduled || x.rt.rtStatus === "scheduled").length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips that are scheduled"/></OdMini>
+        <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of open QC walks that are scheduled"/></OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">First-pass inspections<small>by month</small></div>
+          {d.months.some(m => m.v != null)
+            ? <OdLine vals={d.months.map(m => m.v)} labels={d.months.map(m => m.label)} color={OD_G} min={fpLo} max={100}
+                ticks={fpLo ? [50, 75, 100] : [0, 25, 50, 75, 100]} fmt={v => `${v}%`} target={90} targetLabel="Target 90%"
+                label={`First-pass rate by month: ${d.months.map(m => `${m.label} ${m.v == null ? "none" : m.v + "%"}`).join(", ")}`} hiLabel={(v, i) => `${v}% · ${d.months[i].n} insp.`}/>
+            : <div className="od-empty">No inspection results logged in the last 6 months.</div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Failed inspections<small>latest</small></div>
+          <div className="od-fails">
+            {d.fails.slice(0, 5).map((f, i) => (
+              <button type="button" key={i} onClick={() => open(f.job)}><b>{f.job.name}</b><span>{f.ph} · {odShort(f.at)}</span><small>{f.items.length ? f.items.slice(0, 2).join(" · ") : "No items listed"}</small></button>
+            ))}
+            {!d.fails.length && <div className="od-empty">No failed inspections logged.</div>}
+          </div>
+        </div>
+      </div>
+      <Sec right="open now · closed in the last 30 days">Punch by foreman</Sec>
+      <div className="od-white od-board">
+        {fRows.map((r, i) => (
+          <div className="r" key={r.n}><i className="av sm">{(r.n[0] || "?").toUpperCase()}</i><div className="nm"><b>{r.n}</b><small>{r.open} open · {r.closed} closed</small></div>
+            <div className="bar"><i style={{ width: `${(r.closed/fMax)*100}%`, background: OD_G }}/><i style={{ width: `${(r.open/fMax)*100}%`, background: OD_O }}/></div></div>
+        ))}
+        {!fRows.length && <div className="od-empty">No punch items on active jobs.</div>}
+        {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span></div>}
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Quality"/>
+      <Stats items={[[d.fp90 == null ? "—" : `${d.fp90}%`, "First-pass"], [d.punchJobs.size ? (d.openPunch/d.punchJobs.size).toFixed(1) : "0", "Punch / job"], [d.fails.filter(f => d.now - f.at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
+      <Sec right={`${d.openRTs.length}`}>Open return trips</Sec>
+      <div className="od-list">{d.openRTs.slice(0, 5).map((x, i) => <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={x.rt.scheduledDate ? (odDate(x.rt.scheduledDate) ? `${odDow(odDate(x.rt.scheduledDate))} ${odShort(odDate(x.rt.scheduledDate))}` : "") : "No date"} onClick={() => open(x.job)}/>)}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
+      <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
+      <div className="od-list">{d.qcRows.slice(0, 5).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => open(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
+    </>);
+  } else {
+    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O })).sort((a, b) => b.v - a.v).slice(0, 8);
+    const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 8);
+    const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
+    const dayLabels = []; for (let i = 6; i >= 0; i--) dayLabels.push(odDow(new Date(d.t0.getTime() - i*OD_DAY)));
+    const latestBuild = parseAppBuild(latest);
+    const devList = Object.entries(devices || {}).map(([id, v]) => ({ id, ...v, build: parseAppBuild(v && v.version), seen: odDate(v && v.lastSeenAt) }))
+      .filter(v => v.seen && d.now - v.seen < 14*OD_DAY).sort((a, b) => (a.build - b.build) || (b.seen - a.seen));
+    const current = devList.filter(v => latestBuild && v.build >= latestBuild).length;
+    main = (<>
+      <div className="od-head"><div><h1>People</h1><p>Who is on the app, what is on their plate, and which phones need an update</p></div></div>
+      <div className="od-minis">
+        <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.people.length}`}><OdRing pct={d.people.length ? onApp/d.people.length : 0} color={OD_G} label={`${onApp} of ${d.people.length} on the app today`}/></OdMini>
+        <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label={`${urgentN} of ${d.openNeeds.length} open tasks are urgent`}/></OdMini>
+        <OdMini title="Time off waiting" color={OD_O} icon="calendar" value={d.timeOff.length} sub="requests"><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
+        <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest version unknown"}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label={`${current} of ${devList.length} devices on the latest build`}/></OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Updates by person<small>last 7 days</small></div>
+          {heat.length ? (
+            <div className="od-heat" style={{ gridTemplateColumns: `86px repeat(7, minmax(0,1fr))` }}>
+              <div/>{dayLabels.map((l, i) => <div className="h" key={i}>{l}</div>)}
+              {heat.map(p => [<div className="n" key={p.name}>{odFirst(p.name)}</div>, ...p.days7.map((v, i) => { const a = v/heatMax; return <div className="c" key={p.name + i} style={{ background: v ? `rgba(242,112,42,${(0.14 + a*0.86).toFixed(2)})` : "#F6F2EE", color: a > 0.55 ? "#fff" : "#7C736C" }}>{v || "–"}</div>; })])}
+            </div>
+          ) : <div className="od-empty">No updates logged this week.</div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">My Day load<small>open tasks</small></div>
+          <OdHBars rows={loadRows} empty="No open My Day tasks."/>
+        </div>
+      </div>
+      <Sec right="green = today, gold = last 3 days">Team pulse</Sec>
+      <Pulse list={d.people}/>
+    </>);
+    right = (<>
+      <Me sub="Team"/>
+      <Stats items={[[d.people.length, "Team"], [d.foremen.length, "Foremen"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Sec right={`${d.timeOff.length}`}>Time off waiting</Sec>
+      <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_O} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub="Decide it on My Day" when={at ? `${odDow(at)} ${odShort(at)}` : ""}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
+      <Sec right={latest || ""}>Devices behind</Sec>
+      <div className="od-box">
+        {devices == null ? <div className="od-empty dark">Loading devices…</div> : devList.filter(v => !latestBuild || v.build < latestBuild).slice(0, 8).map(v => (
+          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">{odWhen({ at: v.seen }, d.now)}</span><em>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
+        ))}
+        {devices != null && !devList.filter(v => !latestBuild || v.build < latestBuild).length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
+      </div>
+    </>);
+  }
+
+  return (
+    <div className="odash">
+      <style>{`
+        .odash{--pan:rgba(40,33,30,.62);--inset:rgba(0,0,0,.22);--line:rgba(255,255,255,.09);--ink:#F5F1EC;--dim:rgba(245,241,236,.64);--faint:rgba(245,241,236,.42);
+          --card:#fff;--cink:#1E1A17;--cdim:#7C736C;--cline:#ECE7E2;--o:${OD_O};
+          color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:dark;
+          background:radial-gradient(55% 45% at 12% 6%,rgba(214,150,92,.34),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(170,100,55,.3),transparent 70%),linear-gradient(180deg,#241B16,#120E0C)}
+        .odash *{box-sizing:border-box}
+        .odash button{font:inherit;color:inherit}
+        .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+        .odash .od-tabs{display:flex;gap:4px;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:4px;overflow-x:auto;max-width:100%;scrollbar-width:none}
+        .odash .od-tabs::-webkit-scrollbar{display:none}
+        .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-tabs button:hover{color:var(--ink)}
+        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:#fff;box-shadow:0 6px 14px -6px rgba(242,112,42,.8)}
+        .odash .od-help{display:inline-flex;align-items:center;background:rgba(255,255,255,.92);border-radius:999px;padding:3px 8px;color:#1B1F24}
+        .odash .od-top .live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim)}
+        .odash .od-top .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#2FBF71;box-shadow:0 0 0 4px rgba(47,191,113,.2)}
+        .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}
+        .odash .od-panel{background:var(--pan);border:1px solid var(--line);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;
+          -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+        .odash .od-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+        .odash .od-head p{margin:3px 0 0;font-size:12.5px;color:var(--dim)}
+        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:0;text-align:left}
+        .odash .od-pad{padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+        .odash .od-minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+        .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1)}
+        .odash .od-mini:hover,.odash .od-crew:hover,.odash .od-start:hover{transform:translateY(-4px)}
+        .odash .od-mini .t{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:700}
+        .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
+        .odash .od-mini .b{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:auto;flex-wrap:wrap}
+        .odash .od-mini .v{font-size:22px;font-weight:800;line-height:1;color:var(--c);font-variant-numeric:tabular-nums}
+        .odash .od-mini .v small{font-size:11px;font-weight:500;color:var(--cdim);margin-left:4px}
+        .odash .spark{flex:none}
+        .odash .od-row2{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px}
+        .odash .od-ct{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:14px}
+        .odash .od-ct small{font-weight:500;color:var(--cdim);font-size:12px}
+        .odash .od-svg{width:100%;height:auto;display:block}
+        .odash .od-big{font-size:30px;font-weight:800;line-height:1}
+        .odash .od-big small{font-size:12px;font-weight:500;color:var(--cdim);margin-left:6px}
+        .odash .od-link{all:unset;cursor:pointer;font-size:16px;line-height:1.25}
+        .odash .od-link:hover b{text-decoration:underline}
+        .odash .od-mini-list{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--cdim)}
+        .odash .od-mini-list span{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px}
+        .odash .od-sec{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;color:var(--ink)}
+        .odash .od-sec span::before{content:"";display:inline-block;width:3px;height:15px;border-radius:2px;background:var(--o);margin-right:9px;vertical-align:-2px}
+        .odash .od-sec small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--dim)}
+        .odash .od-plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+        .odash .od-crew{padding:14px;display:flex;gap:10px;align-items:center;min-width:0;transition:transform .25s}
+        .odash .od-crew > div{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
+        .odash .od-crew b{font-size:13.5px}
+        .odash .od-crew p{margin:0;font-size:11.5px;color:var(--cdim);line-height:1.35}
+        .odash .od-crew .day{align-self:flex-start;margin-top:5px;font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 9px;background:#F2EEEA}
+        .odash .od-crew.hot{background:var(--o);color:#fff}
+        .odash .od-crew.hot p{color:rgba(255,255,255,.86)}
+        .odash .od-crew.hot .day{background:rgba(255,255,255,.25)}
+        .odash .od-start{padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0;cursor:pointer;transition:transform .25s}
+        .odash .od-start .dd{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-start b{font-size:14px}
+        .odash .od-start p{margin:0;font-size:11.5px;color:var(--cdim)}
+        .odash .od-start .st{align-self:flex-start;margin-top:6px;font-size:10.5px;font-weight:800;border-radius:999px;padding:2px 9px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,#fff)}
+        .odash .od-start.hot{background:var(--o);color:#fff}
+        .odash .od-start.hot .dd,.odash .od-start.hot p{color:rgba(255,255,255,.86)}
+        .odash .od-start.hot .st{background:rgba(255,255,255,.25);color:#fff}
+        .odash .od-me{display:flex;align-items:center;gap:10px}
+        .odash .av{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#3B5BA5;color:#fff;font-style:normal;font-weight:800;font-size:14px;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.22)}
+        .odash .av.sm{width:30px;height:30px;font-size:12px;box-shadow:none}
+        .odash .od-me b{display:block;font-size:14px}
+        .odash .od-me small{display:block;font-size:11.5px;color:var(--dim)}
+        .odash .od-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:10px 4px;text-align:center}
+        .odash .od-stats div+div{border-left:1px solid var(--line)}
+        .odash .od-stats b{display:block;font-size:16px;font-variant-numeric:tabular-nums}
+        .odash .od-stats small{font-size:10.5px;color:var(--dim)}
+        .odash .od-cal{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:12px}
+        .odash .od-cal .h{font-weight:700;font-size:13px;margin-bottom:8px}
+        .odash .od-cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px 0;text-align:center;font-size:11px}
+        .odash .od-cal .dow{color:var(--faint);font-size:10px;padding-bottom:4px}
+        .odash .od-cal .d{width:26px;height:26px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums}
+        .odash .od-cal .d.m{color:#fff;font-weight:800}
+        .odash .od-cal .d.today{box-shadow:inset 0 0 0 1.5px var(--ink);color:var(--ink);font-weight:800}
+        .odash .od-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:10.5px;color:var(--dim)}
+        .odash .od-legend.light{color:var(--cdim);padding:4px 0 10px}
+        .odash .od-legend span{display:inline-flex;align-items:center;gap:5px}
+        .odash .od-legend span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c)}
+        .odash .od-list{display:flex;flex-direction:column;gap:8px}
+        .odash .od-item{display:flex;align-items:center;gap:10px;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:14px;padding:9px 10px;text-align:left;cursor:pointer;min-width:0}
+        .odash .od-item:disabled{cursor:default}
+        .odash .od-item:not(:disabled):hover{background:rgba(255,255,255,.06)}
+        .odash .od-item .th{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center}
+        .odash .od-item .tx{min-width:0;flex:1;display:flex;flex-direction:column}
+        .odash .od-item em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+        .odash .od-item b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-item small{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-item .when{font-size:10.5px;color:var(--faint);white-space:nowrap;flex:none}
+        .odash .od-filters{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+        .odash .od-filters button{border:1px solid var(--cline);background:transparent;color:var(--cdim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-filters button[aria-pressed="true"]{background:#FFF0E6;border-color:transparent;color:#C2511A}
+        .odash .od-q{width:100%;border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none}
+        .odash .od-q:focus{border-color:var(--o)}
+        .odash .od-rows{display:flex;flex-direction:column}
+        .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%}
+        .odash .od-row:hover{background:#FBF8F5}
+        .odash .od-row .k{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
+        .odash .od-row .m{min-width:0;display:flex;flex-direction:column}
+        .odash .od-row .m b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-row .m b em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.08em;color:${OD_P};margin-left:6px}
+        .odash .od-row .m small{font-size:12px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-row .w{font-size:12px;font-weight:700;color:var(--cink)}
+        .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;min-width:110px;text-align:right}
+        .odash .od-pulse{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0}
+        .odash .od-person > div{min-width:0;flex:1}
+        .odash .od-person b{display:block;font-size:13px}
+        .odash .od-person small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .beat{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
+        .odash .od-weekwrap{overflow-x:auto}
+        .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
+        .odash .od-week .col{background:#F8F5F2;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+        .odash .od-week .col.today{background:#FFF1E7}
+        .odash .od-week .dh{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-week .col.today .dh{color:#C2511A}
+        .odash .od-week .dh span{font-weight:600;margin-left:3px}
+        .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);min-width:0}
+        .odash .od-week .blk b{display:block;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-week .blk small{display:block;font-size:10.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-week .none{color:#C9C1BA;font-size:12px;text-align:center;margin-top:20px}
+        .odash .od-fails{display:flex;flex-direction:column}
+        .odash .od-fails button{all:unset;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;padding:9px 0;border-bottom:1px solid var(--cline)}
+        .odash .od-fails button:last-child{border-bottom:0}
+        .odash .od-fails b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-fails span{font-size:11.5px;color:${OD_R};font-weight:700;white-space:nowrap}
+        .odash .od-fails small{grid-column:1/-1;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-board{padding:4px 16px}
+        .odash .od-board .r{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(80px,40%);gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--cline)}
+        .odash .od-board .nm b{display:block;font-size:13px}
+        .odash .od-board .nm small{display:block;font-size:11px;color:var(--cdim)}
+        .odash .od-board .bar{display:flex;height:8px;border-radius:99px;background:#F2EEEA;overflow:hidden;gap:2px}
+        .odash .od-board .bar i{display:block;height:100%}
+        .odash .od-hb{display:flex;flex-direction:column;gap:9px}
+        .odash .od-hb .r{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;font-size:12px}
+        .odash .od-hb .r span{color:var(--cdim);font-variant-numeric:tabular-nums}
+        .odash .od-hb .r i{grid-column:1/-1;height:7px;border-radius:99px;background:#F2EEEA;overflow:hidden}
+        .odash .od-hb .r i::after{content:"";display:block;height:100%;width:var(--w);background:var(--c);border-radius:inherit}
+        .odash .od-heat{display:grid;gap:4px;align-items:center;font-size:11px}
+        .odash .od-heat .h{text-align:center;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-heat .n{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-heat .c{height:28px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-variant-numeric:tabular-nums}
+        .odash .od-box{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:4px 12px}
+        .odash .od-dev{display:flex;align-items:center;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+        .odash .od-dev:last-child{border-bottom:0}
+        .odash .od-dev .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+        .odash .od-dev .sn{color:var(--dim);font-size:11px;white-space:nowrap}
+        .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
+        .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
+        .odash .od-empty.dark{color:var(--dim)}
+        .odash button:focus-visible,.odash input:focus-visible{outline:2px solid var(--o);outline-offset:2px}
+        @media (max-width:1100px){.odash .od-grid{grid-template-columns:minmax(0,1fr)}.odash .od-minis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media (max-width:700px){.odash{padding:10px;border-radius:16px}.odash .od-panel{padding:14px}.odash .od-row2,.odash .od-plan{grid-template-columns:minmax(0,1fr)}
+          .odash .od-row{grid-template-columns:32px minmax(0,1fr)}.odash .od-row .w,.odash .od-row .t{grid-column:2;text-align:left;min-width:0}.odash .od-row .w{display:none}}
+        @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
+        @media (prefers-reduced-motion:reduce){.odash *{transition:none!important}.odash .od-mini:hover,.odash .od-crew:hover,.odash .od-start:hover{transform:none}}
+      `}</style>
+      <div className="od-top">
+        <div className="od-tabs" role="tablist" aria-label="Dashboard views">
+          {OD_TABS.map(([k, l]) => <button type="button" role="tab" key={k} aria-selected={tab === k} onClick={() => pickTab(k)}>{l}</button>)}
+        </div>
+        <span className="od-help"><HelpDot section="dashboard"/></span>
+        <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
+      </div>
+      <div className="od-grid">
+        <div className="od-panel">{main}</div>
+        <div className="od-panel">{right}</div>
+      </div>
+    </div>
+  );
+}
+
 function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
@@ -53724,10 +54504,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-08 · App SW version: v528
+**Last manifest update:** 2026-10-10 · App SW version: v529
 
 ---
 
+- **Dashboard tab — a live office dashboard with five views (Overview · Activity · Schedule · Quality · People), Koy only** · 'shipped 2026-10-10' · 'SW v529' · 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"* and *"I want to be the only one with the view"*. A new top nav tab **Dashboard** (right after My Day) behind a new per-user grant **'office.dash'** (no tier, like 'tools.view'): Settings → Team → TOOL ACCESS gains a first box, **Dashboard tab (live office dashboard)**; the nav and the route check the live team record ('myLiveRec', the v465 lesson). It follows the Resi / Commercial switch (mode-filtered 'jobs', 'needsForMode', Upcoming only in residential). **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending' (waiting on the GC), open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards (active jobs, open punch, 7-day updates), this month's calendar and the next 14 days of dated work. **Activity:** one stream of the last 30 days built from the job fields (punch added/closed by 'addedAtTs'/'checkedAtTs', CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return-trip sign-off/scheduling, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed rough and finish starts, 'fourWayTargetDate'/'finalInspectionTargetDate' without a result, scheduled QC walks, scheduled Matterport scans, scheduled return trips, Upcoming-tab starts), starts in the next 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with their items, punch by foreman (open vs closed in 30 days), open return trips, open QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count ('needIsOpen', 'needPriority', 'needAssignee'), time-off requests still open (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, and devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the People tab opens, like the Settings card). No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Tapping a job row or card opens the job. Guide 'public/sops/dashboard.html' behind the tab's "?" ('<HelpDot section="dashboard"/>'). **Flip-day: tick Dashboard tab for Koy in Settings → Team**; until then nobody sees it. **Why it won't lose data:** the dashboard only reads — it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory and does one read-only 'getDoc' of 'settings/deviceVersions'; it has no 'setDoc'/'updateDoc'/'saveJob' call; the only new write anywhere is the TOOL ACCESS checkbox, which writes the same 'caps' array through the existing 'upd' → 'saveUsers' path the Tools boxes use; no loader, rules or Cloud Function change.
 - **Commercial job cards get a Materials tab: the residential Material Tracking, one list per job, each order charged to a cost center you pick** · 'shipped 2026-10-09' · 'SW v528' · Braden (a Need on Riverton & Laundromat): *"Material tracking section for this job. Underground portion."* Koy: *"i mean like material tracking in residential"*, *"yes full"*, then *"i think the job cards should just have a material ordering tab instead of just in the undergrouhd section"* (commercial only; pick the cost center on each card). 'COMM_TABS' gains **Materials** after Bid Items; the tab renders the residential 'MaterialOrders' with phase '"comm"', stored in a new job list 'commMaterials' (loader + defaults; written through 'u()' with the v523 live-copy reconcile for Send and the v524 order-by-cost-center upsert). **Charge to:** on a commercial card the Send sheet lists the job's Simpro cost centers from the stock cache ('Section · Cost center'); Send stays disabled until one is picked; the pick is saved on the card ('chargeCcId' / 'chargeCcName') and sent as 'ccId'. **Server:** 'sendMaterialPO' requires 'ccId' for phase 'comm' and charges exactly that job cost center ('pickCostCenterById' in 'materialPO/rules.js'); Rough / Finish still match by phase, unchanged. Order from the bid ('sendMaterialOrder') already charges each line's own cost center, unchanged. **Simpro PO sync** ('syncSimproPOsForJob' + 'scheduledSimproPOSync') reconciles 'commMaterials' as a third pass sharing the claimed-PO set and counts its cards when picking candidate jobs. Commercial orders also show in the unsent-PO list and Open Items ("Materials"), the Bid Items order summary (commercial jobs now get it; Order material opens the Materials tab) and the Material Tracking job-section check. New guide 'materials.html' (registered in 'SOP_FILES_INLINE'). Tests: 'scripts/materialpo-test.js' gains 5 by-id cases. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:syncSimproPOsForJob,functions:scheduledSimproPOSync' (deployed 2026-10-09 before the app push).** **Why it won't lose data:** the new list is additive on the job ('data.commMaterials'), written through the same 'u()' funnel (version stamp kept) and live-copy reconciles as Rough / Finish; the PO sync writes 'commMaterials' only on jobs that already have it, and only the fields it already fills on the other two lists; Rough / Finish code paths and cost-center rules are unchanged; no rules change.
 - **Job Start: every log-linked item can be checked by hand (Phases 2, 3 and 5 too)** · 'shipped 2026-10-09' · 'SW v527' · Justin, on Phase 5 RELEASED + PO: *"This is still forcing me to upload something that I don't want to have to upload to check the box."* v522 only unlocked Phase 4. The remaining seven '"trk"' items (2 PROJECT FOLDERS; 3 LONG-LEAD REQUESTED, LEAD TIMES + PRICING; 5 RELEASED + PO, SHIP DATES IN WRITING, PROCUREMENT LOG, SHIP COMPLETE / SPLIT) become '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so a job the logs already closed never slides back. No Job Start step is '"trk"' any more (the code path stays). Guide 'jobstart.html' lists every log-linked item. **Why it won't lose data:** hand checks use the existing 'patchStart' write into 'commercial.start.items', the same shape as every item; nothing existing is rewritten; no loader, rules or function change.
 - **Easier to read and use: the axe accessibility pass** · 'shipped 2026-10-08' · 'SW v526' · Koy: *"go ahead, fix all"* after an axe-core scan of the live app (10 tabs + a job card). **Zoom:** the viewport no longer sets 'user-scalable=no'; desktop and Android can pinch-zoom again, and iOS keeps 'maximum-scale=1' (set by a tiny inline script in 'public/index.html') only to stop Safari's tap-a-text-box zoom jump — iOS still pinch-zooms with it. **Contrast:** new 'src/a11y.js' 'readableInk(color, bg)' darkens a color just enough for 4.5:1 on a light background, same hue (lime '#84cc16' → readable green, bright blue/green/red foreman colors likewise); applied in 'getPersonColor' (so every crew name, schedule tile and foreman header), the Job Board lane headers ('StageSectionList'), 'Pill', the My Day message chips and the Matterport scan-status select. New token 'C.faint' '#666E79' replaces 'C.muted' ('#CDD3DB', 1.4:1) as a TEXT color at 352 sites; 'C.muted' stays for borders. Buttons with black text on the blue accent (left from the old yellow accent) are white now (21 sites). The 'View →' dim opacity is gone. **Touch:** job card tabs, Close and Refresh are at least 40px tall on touch screens ('.he-tap' / '.he-tap-sq', 'pointer:coarse' only, desktop unchanged); the Job Info Simpro **Pull** link got a 24px hit area. **Keyboard + screen reader:** 'installA11y()' (called once from 'src/index.js') gives every inline 'cursor:pointer' box that holds no controls of its own 'role=button' + 'tabindex=0' with Enter/Space to click, names unlabeled '<select>'s from the label drawn next to them, and draws a blue ':focus-visible' ring for keyboard users only. The job card is a 'role=dialog' with a name; the page has one '<main>' and a hidden '<h1>'. **Why it won't lose data:** display-only — no save path, loader, rules or functions touched; 'a11y.js' only sets DOM attributes React does not manage, and stored 'colorOverrides' are untouched (darkening happens on read).
@@ -58936,6 +59717,7 @@ function usageWithZeros(rows, knownKeys) {
 // in the header JSX.
 const NAV_MAIN_TABS = [
   { key: "myday", label: "My Day", perm: "myday.view" },
+  { key: "dashboard", label: "Dashboard", perm: "office.dash" },
   { key: "home", label: "Job Board" },
   { key: "today", modes: ["resi"], label: "Today", perm: "today.view" },
   { key: "needs", label: "Needs", perm: "board.view" },
@@ -68588,6 +69370,10 @@ function App() {
       )}
 
       {/* Tools tab (v468) — standalone field calculators in an iframe; see TOOLS. */}
+      {view==="dashboard"&&can(myLiveRec,"office.dash")&&(
+        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming} identity={myLiveRec} mode={mode} onSelectJob={setSelected}/></OdBoundary>
+      )}
+
       {view==="tools"&&can(myLiveRec,"tools.view")&&(
         <ToolsView jobs={allJobs} onUpdateJob={updateJob} who={myLiveRec}/>
       )}
