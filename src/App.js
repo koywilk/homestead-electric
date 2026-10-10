@@ -45459,7 +45459,21 @@ function PlansCard({ identity, users = [] }) {
 // getDoc DeviceVersionsCard does). Nothing here writes to Firestore.
 // Gate: "office.dash" is a per-user grant (Settings → Team → TOOL ACCESS),
 // checked against the live team record like the Tools tab.
-const OD_TABS = [["overview","Overview"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"]];
+const OD_TABS = [["overview","Overview"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Command Center"]];
+// Command Center tab (v530): Koy's Claude automations (Routines) and the Claude
+// sessions that aren't finished. Claude's own services hold that data, so an
+// hourly Routine copies a small summary (names, schedules, statuses, titles; no
+// prompts) into settings/ccSnapshot as one JSON string; this tab only reads it.
+const OD_ORIGIN = { ios: "iPhone", claude_code_cli: "Mac terminal", desktop_app: "Desktop app", web: "Web", android: "Android" };
+function odAgo(at, now) {
+  if (!at) return "";
+  const m = Math.max(0, Math.round((now - at) / 60000));
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
 const OD_O = "#F2702A", OD_G = "#2FBF71", OD_R = "#E5484D", OD_B = "#3B6FE0", OD_P = "#8F7EE0", OD_GOLD = "#C99A2E";
 const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
 const OD_DAY = 24*60*60*1000;
@@ -45668,6 +45682,21 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       try { const res = await fetch(`/service-worker.js?t=${Date.now()}`, { cache: "no-store" }); const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/); if (!dead) setLatest(m ? m[1] : null); } catch (e) {}
     })();
     return () => { dead = true; };
+  }, [tab]);
+
+  // Command Center tab: live read of the snapshot doc while the tab is open.
+  const [cc, setCc] = useState(undefined);   // undefined = loading, null = none yet
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let unsub = null;
+    try {
+      unsub = onSnapshot(doc(db, "settings", "ccSnapshot"), snap => {
+        if (!snap.exists()) { setCc(null); return; }
+        try { const raw = snap.data() || {}; setCc({ ...JSON.parse(raw.json || "{}"), updatedAt: raw.updatedAt || "" }); }
+        catch (e) { console.warn("[HE dashboard] ccSnapshot unreadable:", e.message); setCc(null); }
+      }, () => setCc(null));
+    } catch (e) { setCc(null); }
+    return () => { if (unsub) unsub(); };
   }, [tab]);
 
   const open = (job) => { if (job && onSelectJob) onSelectJob(job); };
@@ -46000,6 +46029,79 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
       <div className="od-list">{d.qcRows.slice(0, 5).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => open(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
+  } else if (tab === "cc") {
+    const snap = cc || {};
+    const routines = (Array.isArray(snap.routines) ? snap.routines : []).filter(Boolean);
+    const sessions = (Array.isArray(snap.sessions) ? snap.sessions : []).filter(Boolean);
+    const openS = sessions.filter(x => x.bucket !== "completed" && x.status !== "archived")
+      .sort((a, b) => (odDate(b.updatedAt) || 0) - (odDate(a.updatedAt) || 0));
+    const groups = [["blocked", "Needs you", OD_R], ["review_ready", "Ready to review", OD_B], ["working", "Working now", OD_G], ["failed", "Stopped with an error", OD_R]];
+    const grouped = groups.map(([k, label, color]) => ({ k, label, color, list: openS.filter(x => x.bucket === k) }));
+    const rest = openS.filter(x => !groups.some(g => g[0] === x.bucket));
+    if (rest.length) grouped.push({ k: "other", label: "Idle", color: OD_GOLD, list: rest });
+    const waiting = openS.filter(x => x.bucket === "blocked" || x.bucket === "review_ready").length;
+    const on = routines.filter(r => r.enabled);
+    const ran = routines.filter(r => r.lastStatus);
+    const okRuns = ran.filter(r => r.lastStatus === "succeeded");
+    const nameCount = {}; on.forEach(r => { const k = String(r.name || "").trim().toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
+    const dupes = Object.values(nameCount).filter(n => n > 1).length;
+    const upd = odDate(snap.updatedAt);
+    const stale = upd && d.now - upd > 3*60*60*1000;
+    const next = on.map(r => ({ ...r, _next: odDate(r.nextAt) })).filter(r => r._next && r._next >= d.now).sort((a, b) => a._next - b._next);
+    const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`} · ${odTime(at)}` : "";
+    const statusColor = (r) => !r.enabled ? "#8C847D" : !r.lastStatus ? OD_GOLD : r.lastStatus === "succeeded" ? OD_G : OD_R;
+    main = (<>
+      <div className="od-head"><div><h1>Command Center</h1><p>Your Claude automations and the sessions that aren't finished · {cc === undefined ? "loading…" : upd ? `updated ${odAgo(upd, d.now)}` : "no snapshot yet"}</p></div>
+        {stale && <span className="od-warn">Snapshot is {odAgo(upd, d.now).replace(" ago", "")} old. Check the Command Center snapshot routine.</span>}</div>
+      {cc === null ? (
+        <div className="od-white od-pad"><div className="od-ct">Nothing here yet</div><div className="od-empty">The Command Center snapshot routine fills this in every hour. Once it has run, your automations and open Claude sessions show up here.</div></div>
+      ) : (<>
+        <div className="od-minis">
+          <OdMini title="Automations on" color={OD_O} icon="refresh" value={on.length} sub={`of ${routines.length}`}><OdRing pct={routines.length ? on.length/routines.length : 0} color={OD_O} label={`${on.length} of ${routines.length} automations on`}/></OdMini>
+          <OdMini title="Last runs OK" color={OD_G} icon="checkCircle" value={ran.length ? okRuns.length : "—"} sub={ran.length ? `of ${ran.length}` : "none yet"}><OdRing pct={ran.length ? okRuns.length/ran.length : 0} color={OD_G} label={`${okRuns.length} of ${ran.length} last runs succeeded`}/></OdMini>
+          <OdMini title="Open sessions" color={OD_B} icon="activity" value={openS.length} sub="not finished"><OdBars vals={grouped.map(g => g.list.length)} color={OD_B} hi={0} label={grouped.map(g => `${g.label} ${g.list.length}`).join(", ")}/></OdMini>
+          <OdMini title="Waiting on you" color={OD_R} icon="bell" value={waiting} sub="sessions"><OdRing pct={openS.length ? waiting/openS.length : 0} color={OD_R} label={`${waiting} of ${openS.length} open sessions are waiting on you`}/></OdMini>
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Open Claude sessions<small>tap one to open it in Claude</small></div>
+          {grouped.filter(g => g.list.length).map(g => (
+            <div className="od-sgroup" key={g.k}>
+              <div className="sh" style={{ "--c": g.color }}>{g.label}<span>{g.list.length}</span></div>
+              {g.list.map(x => (
+                <a className="od-sess" key={x.id} href={`https://claude.ai/code/${encodeURIComponent(x.id)}`} target="_blank" rel="noopener noreferrer">
+                  <span className="m"><b>{x.title || "Untitled session"}</b><small>{[OD_ORIGIN[x.origin] || x.origin, x.summary].filter(Boolean).join(" · ")}</small></span>
+                  <span className="t">{odAgo(odDate(x.updatedAt), d.now)}</span>
+                </a>
+              ))}
+            </div>
+          ))}
+          {!openS.length && <div className="od-empty">Every session is finished.</div>}
+        </div>
+        <Sec right="next runs">Coming up</Sec>
+        <div className="od-plan">
+          {next.slice(0, 6).map((r, i) => (
+            <div className={"od-white od-start" + (i === 0 ? " hot" : "")} key={r.id || i} style={{ cursor: "default" }}>
+              <span className="dd">{when(r._next)}</span><b>{r.name}</b><p>{r.schedule || ""}</p>
+            </div>
+          ))}
+          {!next.length && <div className="od-empty">No automation is scheduled to run.</div>}
+        </div>
+      </>)}
+    </>);
+    right = (<>
+      <Me sub="Command Center"/>
+      <Stats items={[[`${on.length}/${routines.length}`, "Automations on"], [openS.length, "Open sessions"], [waiting, "Waiting on you"]]}/>
+      <Sec right={dupes ? `${dupes} duplicate${dupes === 1 ? "" : "s"}` : `${routines.length}`}>Automations</Sec>
+      <div className="od-list">
+        {routines.slice().sort((a, b) => (b.enabled - a.enabled) || String(a.name).localeCompare(String(b.name))).map((r, i) => {
+          const dup = r.enabled && nameCount[String(r.name || "").trim().toLowerCase()] > 1;
+          const last = odDate(r.lastAt);
+          const sub = !r.enabled ? "Off" : dup ? "Duplicate: this name runs more than once" : last ? `${r.lastStatus === "succeeded" ? "Ran" : "Failed"} ${when(last)}` : "Hasn't run yet";
+          return <OdItem key={r.id || i} color={statusColor(r)} icon={r.enabled ? "refresh" : "x"} tag={r.schedule || (r.enabled ? "On demand" : "Off")} title={r.name} sub={sub}/>;
+        })}
+        {!routines.length && <div className="od-empty dark">{cc === undefined ? "Loading…" : "No automations in the snapshot."}</div>}
+      </div>
+    </>);
   } else {
     const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O })).sort((a, b) => b.v - a.v).slice(0, 8);
     const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 8);
@@ -46204,6 +46306,17 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-dev .sn{color:var(--dim);font-size:11px;white-space:nowrap}
         .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
         .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
+        .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFD3B8;background:rgba(242,112,42,.18);border:1px solid rgba(242,112,42,.4);border-radius:999px;padding:4px 10px}
+        .odash .od-sgroup{display:flex;flex-direction:column}
+        .odash .od-sgroup .sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--c);padding:10px 0 4px}
+        .odash .od-sgroup .sh span{color:var(--cdim);font-weight:700}
+        .odash .od-sess{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--cline);color:var(--cink);text-decoration:none}
+        .odash .od-sess:hover{background:#FBF8F5}
+        .odash .od-sess .m{min-width:0;display:flex;flex-direction:column}
+        .odash .od-sess b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-sess small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-sess .t{font-size:11.5px;color:var(--cdim);white-space:nowrap}
         .odash .od-empty.dark{color:var(--dim)}
         .odash button:focus-visible,.odash input:focus-visible{outline:2px solid var(--o);outline-offset:2px}
         @media (max-width:1100px){.odash .od-grid{grid-template-columns:minmax(0,1fr)}.odash .od-minis{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -46223,6 +46336,48 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <div className="od-panel">{main}</div>
         <div className="od-panel">{right}</div>
       </div>
+    </div>
+  );
+}
+
+// ── Standalone dashboard page (v530) ─────────────────────────────────────────
+// Koy: "I actually want this as a stand alone dashboard". /dashboard opens the
+// same OfficeDash full screen, without the app's nav, after the normal PIN
+// gate. Same per-user grant as the tab (office.dash). Tapping a job opens it in
+// the app through the existing ?jobId= deep link.
+const IS_DASH_PAGE = (() => { try { return /^\/dashboard\/?$/.test(window.location.pathname); } catch (e) { return false; } })();
+function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
+  useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
+  const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
+  const segBtn = (on) => ({ border: 0, borderRadius: 999, padding: "6px 12px", fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer",
+    background: on ? "#F2702A" : "transparent", color: on ? "#fff" : "rgba(245,241,236,.7)" });
+  return (
+    <div style={{ minHeight: "100vh", background: "#120E0C", color: "#F5F1EC", fontFamily: "'DM Sans',sans-serif",
+      padding: "calc(12px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px))" }}>
+      <div style={{ maxWidth: 1400, margin: "0 auto 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 800, fontSize: 15 }}>
+          <span style={{ width: 30, height: 30, borderRadius: 9, background: "#F2702A", display: "grid", placeItems: "center" }}><Icon name="zap" size={16} color="#fff"/></span>
+          Homestead <span style={{ color: "rgba(245,241,236,.6)", fontWeight: 600 }}>Dashboard</span>
+        </span>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {canCommercial && (
+            <span style={{ display: "inline-flex", background: "rgba(0,0,0,.3)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 999, padding: 3, gap: 2 }}>
+              <button type="button" style={segBtn(mode !== "commercial")} onClick={() => setMode("resi")}>Resi</button>
+              <button type="button" style={segBtn(mode === "commercial")} onClick={() => setMode("commercial")}>Commercial</button>
+            </span>
+          )}
+          <a href="/" style={{ color: "#F5F1EC", fontSize: 12.5, fontWeight: 700, textDecoration: "none", border: "1px solid rgba(255,255,255,.18)", borderRadius: 999, padding: "6px 12px" }}>Open the app</a>
+        </span>
+      </div>
+      {ok ? (
+        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob}/></OdBoundary>
+      ) : (
+        <div style={{ maxWidth: 520, margin: "40px auto", background: "#fff", color: "#1B1F24", borderRadius: 16, padding: 20 }}>
+          <b>This dashboard isn't turned on for you.</b>
+          <div style={{ fontSize: 13, color: "#5E6670", marginTop: 6 }}>It needs the Dashboard tab box in Settings → Team → Tool access.</div>
+          <a href="/" style={{ display: "inline-block", marginTop: 12, color: "#3B5BA5", fontWeight: 700 }}>Open the app</a>
+        </div>
+      )}
     </div>
   );
 }
@@ -54504,10 +54659,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-10 · App SW version: v529
+**Last manifest update:** 2026-10-10 · App SW version: v530
 
 ---
 
+- **Dashboard as its own page ('/dashboard') + a Command Center tab for Koy's Claude automations and open sessions** · 'shipped 2026-10-10' · 'SW v530' · 'DashPage' · Koy: *"I actually want this as a stand alone dashboard that includes a tab for my current personal cc"* — the personal Command Center was built in Claude and isn't reachable from his phone; it shows *"all my automated tools and open Claude sessions not completed yet"*. **'/dashboard'** renders 'OfficeDash' full screen with a slim header (Resi / Commercial switch, Open the app) and no app nav, after the normal PIN gate and after every App hook ('IS_DASH_PAGE', a module-level path check; the return sits right above App's main return). Same grant ('office.dash'); without it the page says so and links to the app. Tapping a job goes to '/?jobId=<id>', the existing deep link. **Command Center tab** (6th tab, also inside the app's Dashboard tab): reads 'settings/ccSnapshot' ('{json, updatedAt}', live 'onSnapshot' only while the tab is open) — routines (name, human schedule, on/off, last run status and time, next run) and Claude sessions (title, status bucket, origin, last activity, summary). Shows automations on, last runs OK, open sessions, waiting on you; open sessions grouped Needs you / Ready to review / Working now (each opens 'https://claude.ai/code/<id>' in a new tab); the next six runs; every automation with a status color and a duplicate-name flag; a warning when the snapshot is over 3 hours old. The snapshot is written by an hourly Claude Routine (outside the app) that reads Claude's routine and session lists and PATCHes that one doc; it stores names, schedules, statuses and titles only, never prompts. Guide 'dashboard.html' gains the page and the tab. **Why it won't lose data:** the app only reads 'settings/ccSnapshot'; the page and tab add no app write; the Routine writes only that one new doc, which nothing else in the app reads or writes; no loader, rules or Cloud Function change.
 - **Dashboard tab — a live office dashboard with five views (Overview · Activity · Schedule · Quality · People), Koy only** · 'shipped 2026-10-10' · 'SW v529' · 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"* and *"I want to be the only one with the view"*. A new top nav tab **Dashboard** (right after My Day) behind a new per-user grant **'office.dash'** (no tier, like 'tools.view'): Settings → Team → TOOL ACCESS gains a first box, **Dashboard tab (live office dashboard)**; the nav and the route check the live team record ('myLiveRec', the v465 lesson). It follows the Resi / Commercial switch (mode-filtered 'jobs', 'needsForMode', Upcoming only in residential). **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending' (waiting on the GC), open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards (active jobs, open punch, 7-day updates), this month's calendar and the next 14 days of dated work. **Activity:** one stream of the last 30 days built from the job fields (punch added/closed by 'addedAtTs'/'checkedAtTs', CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return-trip sign-off/scheduling, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed rough and finish starts, 'fourWayTargetDate'/'finalInspectionTargetDate' without a result, scheduled QC walks, scheduled Matterport scans, scheduled return trips, Upcoming-tab starts), starts in the next 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with their items, punch by foreman (open vs closed in 30 days), open return trips, open QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count ('needIsOpen', 'needPriority', 'needAssignee'), time-off requests still open (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, and devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the People tab opens, like the Settings card). No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Tapping a job row or card opens the job. Guide 'public/sops/dashboard.html' behind the tab's "?" ('<HelpDot section="dashboard"/>'). **Flip-day: tick Dashboard tab for Koy in Settings → Team**; until then nobody sees it. **Why it won't lose data:** the dashboard only reads — it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory and does one read-only 'getDoc' of 'settings/deviceVersions'; it has no 'setDoc'/'updateDoc'/'saveJob' call; the only new write anywhere is the TOOL ACCESS checkbox, which writes the same 'caps' array through the existing 'upd' → 'saveUsers' path the Tools boxes use; no loader, rules or Cloud Function change.
 - **Commercial job cards get a Materials tab: the residential Material Tracking, one list per job, each order charged to a cost center you pick** · 'shipped 2026-10-09' · 'SW v528' · Braden (a Need on Riverton & Laundromat): *"Material tracking section for this job. Underground portion."* Koy: *"i mean like material tracking in residential"*, *"yes full"*, then *"i think the job cards should just have a material ordering tab instead of just in the undergrouhd section"* (commercial only; pick the cost center on each card). 'COMM_TABS' gains **Materials** after Bid Items; the tab renders the residential 'MaterialOrders' with phase '"comm"', stored in a new job list 'commMaterials' (loader + defaults; written through 'u()' with the v523 live-copy reconcile for Send and the v524 order-by-cost-center upsert). **Charge to:** on a commercial card the Send sheet lists the job's Simpro cost centers from the stock cache ('Section · Cost center'); Send stays disabled until one is picked; the pick is saved on the card ('chargeCcId' / 'chargeCcName') and sent as 'ccId'. **Server:** 'sendMaterialPO' requires 'ccId' for phase 'comm' and charges exactly that job cost center ('pickCostCenterById' in 'materialPO/rules.js'); Rough / Finish still match by phase, unchanged. Order from the bid ('sendMaterialOrder') already charges each line's own cost center, unchanged. **Simpro PO sync** ('syncSimproPOsForJob' + 'scheduledSimproPOSync') reconciles 'commMaterials' as a third pass sharing the claimed-PO set and counts its cards when picking candidate jobs. Commercial orders also show in the unsent-PO list and Open Items ("Materials"), the Bid Items order summary (commercial jobs now get it; Order material opens the Materials tab) and the Material Tracking job-section check. New guide 'materials.html' (registered in 'SOP_FILES_INLINE'). Tests: 'scripts/materialpo-test.js' gains 5 by-id cases. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:syncSimproPOsForJob,functions:scheduledSimproPOSync' (deployed 2026-10-09 before the app push).** **Why it won't lose data:** the new list is additive on the job ('data.commMaterials'), written through the same 'u()' funnel (version stamp kept) and live-copy reconciles as Rough / Finish; the PO sync writes 'commMaterials' only on jobs that already have it, and only the fields it already fills on the other two lists; Rough / Finish code paths and cost-center rules are unchanged; no rules change.
 - **Job Start: every log-linked item can be checked by hand (Phases 2, 3 and 5 too)** · 'shipped 2026-10-09' · 'SW v527' · Justin, on Phase 5 RELEASED + PO: *"This is still forcing me to upload something that I don't want to have to upload to check the box."* v522 only unlocked Phase 4. The remaining seven '"trk"' items (2 PROJECT FOLDERS; 3 LONG-LEAD REQUESTED, LEAD TIMES + PRICING; 5 RELEASED + PO, SHIP DATES IN WRITING, PROCUREMENT LOG, SHIP COMPLETE / SPLIT) become '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so a job the logs already closed never slides back. No Job Start step is '"trk"' any more (the code path stays). Guide 'jobstart.html' lists every log-linked item. **Why it won't lose data:** hand checks use the existing 'patchStart' write into 'commercial.start.items', the same shape as every item; nothing existing is rewritten; no loader, rules or function change.
@@ -67366,6 +67522,12 @@ function App() {
         await saveUsers(newList);
       }}
     />;
+  }
+
+  // ── Standalone dashboard (v530): /dashboard, after the PIN gate and every hook ──
+  if (IS_DASH_PAGE) {
+    return <DashPage ok={can(myLiveRec,"office.dash")} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
+      identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}/>;
   }
 
   return (
