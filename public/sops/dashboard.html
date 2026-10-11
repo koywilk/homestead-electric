@@ -1,7 +1,7 @@
 <!doctype html>
-<!-- Homestead Electric · in-app SOP · drafted 2026-10-10 by Claude for the Dashboard tab
-     (SW v529). Replace by dropping a SOP Recorder export over this file, same
-     filename (dashboard.html = the "Dashboard" tab). -->
+<!-- Homestead Electric · in-app SOP · drafted 2026-10-10 by Claude for the standalone Dashboard page
+     (SW v530). Replace by dropping a SOP Recorder export over this file, same
+     filename (dashboard.html = the /dashboard page). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -51,8 +51,8 @@
 
   <div class="tldr">
     <h2>The 30-second version</h2>
-    <p>The <b>Dashboard</b> tab is a read-only office view. It only shows for people who have the
-    <b>Dashboard tab</b> box ticked in Settings → Team → Tool access (Koy, for now). It reads the same
+    <p>The <b>Dashboard</b> is Koy's own page at <b>homestead-electric.vercel.app/dashboard</b>. It is not a tab
+    in the app, and it only opens for Koy's login. It is read-only and reads the same
     jobs, team and My Day tasks the rest of the app already has, so it is live: when someone closes a
     punch item or logs an inspection, the numbers move. It follows the <b>Residential / Commercial</b>
     switch like every other screen. Tap any job row or card to open that job. Nothing on this screen
@@ -65,10 +65,9 @@
     A job with no dates or no logged results shows up as "Needs a date" or simply isn't counted.
   </div>
 
-  <div class="call key"><span class="lbl">Its own page</span><p>Open <b>homestead-electric.vercel.app/dashboard</b>
-  for the dashboard by itself, full screen, without the app's tabs. It asks for your PIN like the app does.
-  On a phone, use Share → Add to Home Screen while on that page to keep it one tap away. Tapping a job there
-  opens it in the app.</p></div>
+  <div class="call key"><span class="lbl">Opening it</span><p>Go to <b>homestead-electric.vercel.app/dashboard</b>.
+  It asks for your PIN like the app does. On a phone, use Share → Add to Home Screen while on that page to keep
+  it one tap away. Tapping a job there opens it in the app.</p></div>
 
   <h2 class="sec">The tabs</h2>
 
@@ -128,9 +127,8 @@
 
   <h2 class="sec">Questions</h2>
   <div class="qa">
-    <div class="row"><p class="q">I don't see the Dashboard tab.</p><p class="a">It needs the
-    <b>Dashboard tab</b> box ticked for you in Settings → Team → Tool access. Tick it, then the tab shows
-    right after My Day.</p></div>
+    <div class="row"><p class="q">It says "This page is private."</p><p class="a">The page only opens for
+    Koy's login. Pick Koy on the PIN screen, or open the app instead.</p></div>
     <div class="row"><p class="q">Why is there no money tab?</p><p class="a">Billing totals and what
     GCs owe live in Simpro, not in this app. Change order dollar amounts aren't stored on the job card
     either, so the dashboard counts change orders instead of adding up dollars.</p></div>
@@ -141,7 +139,7 @@
     and never opens a job or logs anything won't show as active.</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · in-app guide for the Dashboard tab · guide drafted 2026-10-10 (SW v529), updated 2026-10-10 (SW v530: /dashboard page, Command Center tab)</div>
+  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab)</div>
 </div>
 </body>
 </html>

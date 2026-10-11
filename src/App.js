@@ -4819,9 +4819,6 @@ const PERMISSIONS = {
   // tier gets it here; this key only exists for a per-person caps grant.
   // The server re-checks the same rule with the live PIN (requireBroadcaster).
   "notify.broadcast":       [],
-  // Office Dashboard (v529): Koy, "I want to be the only one with the view".
-  // Per-user grant only (Settings → Team → TOOL ACCESS), like tools.view.
-  "office.dash":            [],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -5236,7 +5233,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>TOOL ACCESS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[{ perm:"office.dash", label:"Dashboard tab (live office dashboard)" }, { perm:"tools.view", label:"Tools tab (all calculators)" }, ...TOOLS.filter(t=>t.perm)].map(t=>{
+                        {[{ perm:"tools.view", label:"Tools tab (all calculators)" }, ...TOOLS.filter(t=>t.perm)].map(t=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(t.perm);
                           return (
                             <label key={t.perm} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -5248,7 +5245,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Nobody sees the Dashboard or Tools tab without its box. The boxes under Tools show that tool inside it.</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -45450,15 +45447,15 @@ function PlansCard({ identity, users = [] }) {
   );
 }
 
-// ── Office Dashboard (v529) ──────────────────────────────────────────────────
-// Koy: "I want different views of the live data" + "I want to be the only one
-// with the view". One read-only screen with five tabs (Overview · Activity ·
-// Schedule · Quality · People), built ONLY from what App already holds in
-// memory (jobs for the current mode, users, needs, Upcoming). The one extra
-// read is the People tab's device list (settings/deviceVersions, the same
-// getDoc DeviceVersionsCard does). Nothing here writes to Firestore.
-// Gate: "office.dash" is a per-user grant (Settings → Team → TOOL ACCESS),
-// checked against the live team record like the Tools tab.
+// ── Office Dashboard (v530) ──────────────────────────────────────────────────
+// Koy: "I want different views of the live data", "I want to be the only one
+// with the view", and "a stand alone dashboard ... not in the app". Rendered
+// ONLY by the /dashboard page (DashPage below), never as an app tab. One
+// read-only screen with six tabs (Overview · Activity · Schedule · Quality ·
+// People · Command Center), built from what App already holds in memory (jobs
+// for the current mode, users, needs, Upcoming). Extra reads: the People tab's
+// device list (settings/deviceVersions, the same getDoc DeviceVersionsCard
+// does) and the Command Center snapshot. Nothing here writes to Firestore.
 const OD_TABS = [["overview","Overview"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Command Center"]];
 // Command Center tab (v530): Koy's Claude automations (Routines) and the Claude
 // sessions that aren't finished. Claude's own services hold that data, so an
@@ -46341,10 +46338,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
 }
 
 // ── Standalone dashboard page (v530) ─────────────────────────────────────────
-// Koy: "I actually want this as a stand alone dashboard". /dashboard opens the
-// same OfficeDash full screen, without the app's nav, after the normal PIN
-// gate. Same per-user grant as the tab (office.dash). Tapping a job opens it in
+// Koy: "I actually want this as a stand alone dashboard" ... "not in the app".
+// /dashboard opens OfficeDash full screen, without the app's nav, after the
+// normal PIN gate. It is Koy's personal page ("I want to be the only one with
+// the view"), so it opens for his own team record only (id "koy", the same
+// record the Team editor protects with u.id!=="koy"). Tapping a job opens it in
 // the app through the existing ?jobId= deep link.
+const isDashOwner = (u) => !!u && u.id === "koy";
 const IS_DASH_PAGE = (() => { try { return /^\/dashboard\/?$/.test(window.location.pathname); } catch (e) { return false; } })();
 function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
@@ -46373,8 +46373,8 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
         <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob}/></OdBoundary>
       ) : (
         <div style={{ maxWidth: 520, margin: "40px auto", background: "#fff", color: "#1B1F24", borderRadius: 16, padding: 20 }}>
-          <b>This dashboard isn't turned on for you.</b>
-          <div style={{ fontSize: 13, color: "#5E6670", marginTop: 6 }}>It needs the Dashboard tab box in Settings → Team → Tool access.</div>
+          <b>This page is private.</b>
+          <div style={{ fontSize: 13, color: "#5E6670", marginTop: 6 }}>It only opens for Koy's login.</div>
           <a href="/" style={{ display: "inline-block", marginTop: 12, color: "#3B5BA5", fontWeight: 700 }}>Open the app</a>
         </div>
       )}
@@ -54663,8 +54663,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ---
 
-- **Dashboard as its own page ('/dashboard') + a Command Center tab for Koy's Claude automations and open sessions** · 'shipped 2026-10-10' · 'SW v530' · 'DashPage' · Koy: *"I actually want this as a stand alone dashboard that includes a tab for my current personal cc"* — the personal Command Center was built in Claude and isn't reachable from his phone; it shows *"all my automated tools and open Claude sessions not completed yet"*. **'/dashboard'** renders 'OfficeDash' full screen with a slim header (Resi / Commercial switch, Open the app) and no app nav, after the normal PIN gate and after every App hook ('IS_DASH_PAGE', a module-level path check; the return sits right above App's main return). Same grant ('office.dash'); without it the page says so and links to the app. Tapping a job goes to '/?jobId=<id>', the existing deep link. **Command Center tab** (6th tab, also inside the app's Dashboard tab): reads 'settings/ccSnapshot' ('{json, updatedAt}', live 'onSnapshot' only while the tab is open) — routines (name, human schedule, on/off, last run status and time, next run) and Claude sessions (title, status bucket, origin, last activity, summary). Shows automations on, last runs OK, open sessions, waiting on you; open sessions grouped Needs you / Ready to review / Working now (each opens 'https://claude.ai/code/<id>' in a new tab); the next six runs; every automation with a status color and a duplicate-name flag; a warning when the snapshot is over 3 hours old. The snapshot is written by an hourly Claude Routine (outside the app) that reads Claude's routine and session lists and PATCHes that one doc; it stores names, schedules, statuses and titles only, never prompts. Guide 'dashboard.html' gains the page and the tab. **Why it won't lose data:** the app only reads 'settings/ccSnapshot'; the page and tab add no app write; the Routine writes only that one new doc, which nothing else in the app reads or writes; no loader, rules or Cloud Function change.
-- **Dashboard tab — a live office dashboard with five views (Overview · Activity · Schedule · Quality · People), Koy only** · 'shipped 2026-10-10' · 'SW v529' · 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"* and *"I want to be the only one with the view"*. A new top nav tab **Dashboard** (right after My Day) behind a new per-user grant **'office.dash'** (no tier, like 'tools.view'): Settings → Team → TOOL ACCESS gains a first box, **Dashboard tab (live office dashboard)**; the nav and the route check the live team record ('myLiveRec', the v465 lesson). It follows the Resi / Commercial switch (mode-filtered 'jobs', 'needsForMode', Upcoming only in residential). **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending' (waiting on the GC), open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards (active jobs, open punch, 7-day updates), this month's calendar and the next 14 days of dated work. **Activity:** one stream of the last 30 days built from the job fields (punch added/closed by 'addedAtTs'/'checkedAtTs', CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return-trip sign-off/scheduling, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed rough and finish starts, 'fourWayTargetDate'/'finalInspectionTargetDate' without a result, scheduled QC walks, scheduled Matterport scans, scheduled return trips, Upcoming-tab starts), starts in the next 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with their items, punch by foreman (open vs closed in 30 days), open return trips, open QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count ('needIsOpen', 'needPriority', 'needAssignee'), time-off requests still open (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, and devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the People tab opens, like the Settings card). No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Tapping a job row or card opens the job. Guide 'public/sops/dashboard.html' behind the tab's "?" ('<HelpDot section="dashboard"/>'). **Flip-day: tick Dashboard tab for Koy in Settings → Team**; until then nobody sees it. **Why it won't lose data:** the dashboard only reads — it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory and does one read-only 'getDoc' of 'settings/deviceVersions'; it has no 'setDoc'/'updateDoc'/'saveJob' call; the only new write anywhere is the TOOL ACCESS checkbox, which writes the same 'caps' array through the existing 'upd' → 'saveUsers' path the Tools boxes use; no loader, rules or Cloud Function change.
+- **Standalone dashboard at '/dashboard' (Koy only): Overview · Activity · Schedule · Quality · People · Command Center, live, not in the app** · 'shipped 2026-10-11' · 'SW v530' · 'DashPage' + 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"*, *"I want to be the only one with the view"*, *"a stand alone dashboard that includes a tab for my current personal cc"* and *"not in the app"*. **The page:** 'homestead-electric.vercel.app/dashboard' renders 'OfficeDash' full screen with a slim header (Resi / Commercial switch, Open the app) and no app nav or tab; it is not in 'NAV_MAIN_TABS' and adds no permission or Settings checkbox. It boots the same bundle, passes the normal PIN gate, and returns right above App's main return (after every hook; 'IS_DASH_PAGE' is a module-level path check). It opens only for Koy's own team record ('isDashOwner': id 'koy', the record the Team editor already protects); anyone else sees "This page is private". Tapping a job goes to '/?jobId=<id>', the existing deep link. **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending', open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards, this month's calendar, the next 14 days of dated work. **Activity:** the last 30 days from the job fields (punch added/closed, CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return trips, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed starts, inspection target dates without a result, scheduled QC walks, Matterport scans and return trips, Upcoming-tab starts), starts in 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with items, punch by foreman, open return trips and QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count, open time-off requests (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the tab opens). **Command Center:** Koy's Claude automations (Routines) and the Claude sessions that aren't finished, from 'settings/ccSnapshot' ('{json, updatedAt}', live 'onSnapshot' only while the tab is open), written by the hourly Claude Routine "Command Center snapshot (Dashboard tab)" outside the app (names, schedules, statuses and titles only, never prompts). Sessions grouped Needs you / Ready to review / Working now, each opening 'https://claude.ai/code/<id>'; next runs; every automation with a status color and a duplicate-name flag; a warning when the snapshot is over 3 hours old. No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Wrapped in its own error boundary ('OdBoundary'; the app has none). Guide 'public/sops/dashboard.html' behind the page's "?". **Why it won't lose data:** the page only reads; it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory plus two read-only docs ('settings/deviceVersions', 'settings/ccSnapshot'); it has no 'setDoc'/'updateDoc'/'saveJob'; nothing in the app's tabs, nav or Settings changes; no loader, rules or Cloud Function change.
 - **Commercial job cards get a Materials tab: the residential Material Tracking, one list per job, each order charged to a cost center you pick** · 'shipped 2026-10-09' · 'SW v528' · Braden (a Need on Riverton & Laundromat): *"Material tracking section for this job. Underground portion."* Koy: *"i mean like material tracking in residential"*, *"yes full"*, then *"i think the job cards should just have a material ordering tab instead of just in the undergrouhd section"* (commercial only; pick the cost center on each card). 'COMM_TABS' gains **Materials** after Bid Items; the tab renders the residential 'MaterialOrders' with phase '"comm"', stored in a new job list 'commMaterials' (loader + defaults; written through 'u()' with the v523 live-copy reconcile for Send and the v524 order-by-cost-center upsert). **Charge to:** on a commercial card the Send sheet lists the job's Simpro cost centers from the stock cache ('Section · Cost center'); Send stays disabled until one is picked; the pick is saved on the card ('chargeCcId' / 'chargeCcName') and sent as 'ccId'. **Server:** 'sendMaterialPO' requires 'ccId' for phase 'comm' and charges exactly that job cost center ('pickCostCenterById' in 'materialPO/rules.js'); Rough / Finish still match by phase, unchanged. Order from the bid ('sendMaterialOrder') already charges each line's own cost center, unchanged. **Simpro PO sync** ('syncSimproPOsForJob' + 'scheduledSimproPOSync') reconciles 'commMaterials' as a third pass sharing the claimed-PO set and counts its cards when picking candidate jobs. Commercial orders also show in the unsent-PO list and Open Items ("Materials"), the Bid Items order summary (commercial jobs now get it; Order material opens the Materials tab) and the Material Tracking job-section check. New guide 'materials.html' (registered in 'SOP_FILES_INLINE'). Tests: 'scripts/materialpo-test.js' gains 5 by-id cases. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:syncSimproPOsForJob,functions:scheduledSimproPOSync' (deployed 2026-10-09 before the app push).** **Why it won't lose data:** the new list is additive on the job ('data.commMaterials'), written through the same 'u()' funnel (version stamp kept) and live-copy reconciles as Rough / Finish; the PO sync writes 'commMaterials' only on jobs that already have it, and only the fields it already fills on the other two lists; Rough / Finish code paths and cost-center rules are unchanged; no rules change.
 - **Job Start: every log-linked item can be checked by hand (Phases 2, 3 and 5 too)** · 'shipped 2026-10-09' · 'SW v527' · Justin, on Phase 5 RELEASED + PO: *"This is still forcing me to upload something that I don't want to have to upload to check the box."* v522 only unlocked Phase 4. The remaining seven '"trk"' items (2 PROJECT FOLDERS; 3 LONG-LEAD REQUESTED, LEAD TIMES + PRICING; 5 RELEASED + PO, SHIP DATES IN WRITING, PROCUREMENT LOG, SHIP COMPLETE / SPLIT) become '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so a job the logs already closed never slides back. No Job Start step is '"trk"' any more (the code path stays). Guide 'jobstart.html' lists every log-linked item. **Why it won't lose data:** hand checks use the existing 'patchStart' write into 'commercial.start.items', the same shape as every item; nothing existing is rewritten; no loader, rules or function change.
 - **Easier to read and use: the axe accessibility pass** · 'shipped 2026-10-08' · 'SW v526' · Koy: *"go ahead, fix all"* after an axe-core scan of the live app (10 tabs + a job card). **Zoom:** the viewport no longer sets 'user-scalable=no'; desktop and Android can pinch-zoom again, and iOS keeps 'maximum-scale=1' (set by a tiny inline script in 'public/index.html') only to stop Safari's tap-a-text-box zoom jump — iOS still pinch-zooms with it. **Contrast:** new 'src/a11y.js' 'readableInk(color, bg)' darkens a color just enough for 4.5:1 on a light background, same hue (lime '#84cc16' → readable green, bright blue/green/red foreman colors likewise); applied in 'getPersonColor' (so every crew name, schedule tile and foreman header), the Job Board lane headers ('StageSectionList'), 'Pill', the My Day message chips and the Matterport scan-status select. New token 'C.faint' '#666E79' replaces 'C.muted' ('#CDD3DB', 1.4:1) as a TEXT color at 352 sites; 'C.muted' stays for borders. Buttons with black text on the blue accent (left from the old yellow accent) are white now (21 sites). The 'View →' dim opacity is gone. **Touch:** job card tabs, Close and Refresh are at least 40px tall on touch screens ('.he-tap' / '.he-tap-sq', 'pointer:coarse' only, desktop unchanged); the Job Info Simpro **Pull** link got a 24px hit area. **Keyboard + screen reader:** 'installA11y()' (called once from 'src/index.js') gives every inline 'cursor:pointer' box that holds no controls of its own 'role=button' + 'tabindex=0' with Enter/Space to click, names unlabeled '<select>'s from the label drawn next to them, and draws a blue ':focus-visible' ring for keyboard users only. The job card is a 'role=dialog' with a name; the page has one '<main>' and a hidden '<h1>'. **Why it won't lose data:** display-only — no save path, loader, rules or functions touched; 'a11y.js' only sets DOM attributes React does not manage, and stored 'colorOverrides' are untouched (darkening happens on read).
@@ -59873,7 +59872,6 @@ function usageWithZeros(rows, knownKeys) {
 // in the header JSX.
 const NAV_MAIN_TABS = [
   { key: "myday", label: "My Day", perm: "myday.view" },
-  { key: "dashboard", label: "Dashboard", perm: "office.dash" },
   { key: "home", label: "Job Board" },
   { key: "today", modes: ["resi"], label: "Today", perm: "today.view" },
   { key: "needs", label: "Needs", perm: "board.view" },
@@ -67526,7 +67524,7 @@ function App() {
 
   // ── Standalone dashboard (v530): /dashboard, after the PIN gate and every hook ──
   if (IS_DASH_PAGE) {
-    return <DashPage ok={can(myLiveRec,"office.dash")} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
+    return <DashPage ok={isDashOwner(myLiveRec)} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
       identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}/>;
   }
 
@@ -69532,10 +69530,6 @@ function App() {
       )}
 
       {/* Tools tab (v468) — standalone field calculators in an iframe; see TOOLS. */}
-      {view==="dashboard"&&can(myLiveRec,"office.dash")&&(
-        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming} identity={myLiveRec} mode={mode} onSelectJob={setSelected}/></OdBoundary>
-      )}
-
       {view==="tools"&&can(myLiveRec,"tools.view")&&(
         <ToolsView jobs={allJobs} onUpdateJob={updateJob} who={myLiveRec}/>
       )}
