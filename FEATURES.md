@@ -4,7 +4,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-10-08 · App SW version: v528
+**Last manifest update:** 2026-10-12 · App SW version: v529
+
+---
+
+- **Crash reporting and session replay (PostHog)** · `shipped 2026-10-12` · `SW v529` · Until now a black screen or a lost save in the field was invisible until someone complained. The app now boots PostHog once at start (`src/posthog.js`, called from `src/index.js` before React renders): every uncaught error and unhandled promise rejection is sent as an exception, and for a crew member who entered their PIN the screen is recorded for session replay with every input masked (the PIN pad included). Errors carry the crew member's display name only (the same name the PIN login stores; role and PIN never leave the device) and the build stamp (`app_version`, the service-worker version Settings shows), so a crash reads as who, which build, when. Replay starts only after a PIN login and stops on sign-out; share-link, GC portal and homeowner pages get error capture but no replay, because they return before the identity line. Every URL-like property is cut at its query string before it is sent, and replay's network list is cut the same way, so link tokens never reach PostHog. Autocapture is off (no click stream, no event bill). The key lives in Vercel as `REACT_APP_POSTHOG_KEY` (US Cloud; optional `REACT_APP_POSTHOG_HOST` only for an EU project); without it every call is a no-op and the app runs exactly as before. Vercel Analytics stays wired for now and can be removed later. Why it can't lose data: observability only. Nothing reads or writes Firestore, touches an app localStorage key, or sits on any save path; the module returns before doing anything when the key is absent, and every PostHog call is wrapped so a failure inside it can never throw into the app.
 
 ---
 
