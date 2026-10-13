@@ -45457,7 +45457,7 @@ function PlansCard({ identity, users = [] }) {
 // for the current mode, users, needs, Upcoming). Extra reads: the People tab's
 // device list (settings/deviceVersions, the same getDoc DeviceVersionsCard
 // does) and the Command Center snapshot. Nothing here writes to Firestore.
-const OD_TABS = [["overview","Overview"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Command Center"]];
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Command Center"]];
 // Command Center tab (v530): Koy's Claude automations (Routines) and the Claude
 // sessions that aren't finished. Claude's own services hold that data, so an
 // hourly Routine copies a small summary (names, schedules, statuses, titles; no
@@ -45587,17 +45587,21 @@ function OdRing({ pct, color, size = 36, label }) {
     </svg>
   );
 }
-function OdMini({ title, color, icon, value, sub, children }) {
-  return (
-    <div className="od-white od-mini" style={{ "--c": color }}>
-      <div className="t">{title}<i><Icon name={icon} size={12} stroke={2.4}/></i></div>
-      <div className="b"><div className="v">{value}{sub ? <small>{sub}</small> : null}</div>{children}</div>
-    </div>
-  );
+// A stat card. With onClick it becomes a button that opens the list behind the number.
+function OdMini({ title, color, icon, value, sub, children, onClick }) {
+  const inner = (<>
+    <div className="t">{title}<i><Icon name={icon} size={12} stroke={2.4}/></i></div>
+    <div className="b"><div className="v">{value}{sub ? <small>{sub}</small> : null}</div>{children}</div>
+    {onClick && <span className="more">See the list<Icon name="chevronRight" size={11}/></span>}
+  </>);
+  return onClick
+    ? <button type="button" className="od-white od-mini od-tap" style={{ "--c": color }} onClick={onClick}>{inner}</button>
+    : <div className="od-white od-mini" style={{ "--c": color }}>{inner}</div>;
 }
-// Area line chart. vals may contain nulls (no data that period).
-function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel, label, hiLabel }) {
-  const W = 560, H = 200, L = 40, R = 14, T = 26, B = 26;
+// Area line chart. vals may hold nulls. Tap or hover a point to select it (sel/onSel);
+// the selected point gets the label pill from tip(v, i).
+function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel, label, sel, onSel, tip }) {
+  const W = 560, H = 200, L = 40, R = 14, T = 28, B = 26;
   const x = (i) => L + (vals.length < 2 ? 0 : i*(W-L-R)/(vals.length-1));
   const y = (v) => T + (1 - (v-min)/(max-min || 1))*(H-T-B);
   const pts = vals.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
@@ -45607,8 +45611,13 @@ function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel
     const p0 = pts[i-2] || pts[i-1], p1 = pts[i-1], p2 = p, p3 = pts[i+1] || p;
     d += ` C${(p1[0]+(p2[0]-p0[0])/6).toFixed(1)} ${(p1[1]+(p2[1]-p0[1])/6).toFixed(1)} ${(p2[0]-(p3[0]-p1[0])/6).toFixed(1)} ${(p2[1]-(p3[1]-p1[1])/6).toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
   });
-  let hi = -1; vals.forEach((v, i) => { if (v != null && (hi < 0 || v >= vals[hi])) hi = i; });
+  let hi = sel != null && vals[sel] != null ? sel : -1;
+  if (hi < 0) vals.forEach((v, i) => { if (v != null && (hi < 0 || v >= vals[hi])) hi = i; });
   const gid = "odg" + String(color).replace(/[^a-z0-9]/gi, "");
+  const step = vals.length > 1 ? (W-L-R)/(vals.length-1) : W-L-R;
+  const pill = hi >= 0 && tip ? tip(vals[hi], hi) : "";
+  const pw = Math.max(54, pill.length * 6.2 + 16);
+  const px = hi >= 0 ? Math.min(W - R - pw/2, Math.max(L + pw/2, x(hi))) : 0;
   return (
     <svg className="od-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} fontFamily="inherit">
       <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".26"/><stop offset="1" stopColor={color} stopOpacity="0"/></linearGradient></defs>
@@ -45616,20 +45625,27 @@ function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel
       {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="10" fill={OD_B}>{targetLabel}</text></g>}
       {pts.length > 1 && <path d={`${d} L${pts[pts.length-1][0]} ${y(min)} L${pts[0][0]} ${y(min)}Z`} fill={`url(#${gid})`}/>}
       {pts.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>}
+      {hi >= 0 && <line x1={x(hi)} x2={x(hi)} y1={y(vals[hi])} y2={y(min)} stroke={color} strokeWidth="1" strokeDasharray="2 3"/>}
       {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#fff" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
-      {hi >= 0 && hiLabel && <g><rect x={x(hi)-38} y={y(vals[hi])-27} width="76" height="18" rx="9" fill="#FFF3EA" stroke={color}/><text x={x(hi)} y={y(vals[hi])-14.5} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1E1A17">{hiLabel(vals[hi], hi)}</text></g>}
+      {pill && <g><rect x={px-pw/2} y={y(vals[hi])-27} width={pw} height="18" rx="9" fill="#FFF3EA" stroke={color}/><text x={px} y={y(vals[hi])-14.5} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1E1A17">{pill}</text></g>}
       {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="10" fill="#9A918A">{l}</text> : null)}
+      {onSel && vals.map((v, i) => <rect key={"h" + i} x={x(i) - step/2} y={T - 10} width={step} height={H - T - B + 10} fill="transparent" style={{ cursor: "pointer" }}
+        onMouseEnter={() => onSel(i)} onClick={() => onSel(i)}><title>{labels[i] || ""}</title></rect>)}
     </svg>
   );
 }
+// Horizontal bars. A row with onClick is a button.
 function OdHBars({ rows, max, empty }) {
   if (!rows.length) return <div className="od-empty">{empty}</div>;
   const m = max || Math.max(1, ...rows.map(r => r.v));
   return (
     <div className="od-hb">
-      {rows.map((r, i) => (
-        <div className="r" key={i}><b>{r.name}</b><span>{r.note}</span><i style={{ "--w": `${Math.max(2, (r.v/m)*100).toFixed(1)}%`, "--c": r.color }}/></div>
-      ))}
+      {rows.map((r, i) => {
+        const body = (<><b>{r.name}</b><span>{r.note}</span><i style={{ "--w": `${Math.max(2, (r.v/m)*100).toFixed(1)}%`, "--c": r.color }}/></>);
+        return r.onClick
+          ? <button type="button" className={"r tap" + (r.on ? " on" : "")} key={i} onClick={r.onClick}>{body}</button>
+          : <div className="r" key={i}>{body}</div>;
+      })}
     </div>
   );
 }
@@ -45639,6 +45655,7 @@ function OdItem({ color, icon, tag, title, sub, when, onClick }) {
       <span className="th" style={{ background: color }}><Icon name={icon} size={16} color="#fff"/></span>
       <span className="tx"><em style={{ color }}>{tag}</em><b>{title}</b>{sub ? <small>{sub}</small> : null}</span>
       {when ? <span className="when">{when}</span> : null}
+      {onClick ? <span className="chev"><Icon name="chevronRight" size={14}/></span> : null}
     </button>
   );
 }
@@ -45661,14 +45678,79 @@ class OdBoundary extends Component {
   }
 }
 
+// Slide-over panel for a job, a person or a list behind a number.
+function OdSheet({ title, sub, onClose, children, actions }) {
+  useEffect(() => {
+    const k = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <div className="od-sheet-wrap" onClick={onClose}>
+      <div className="od-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}>
+        <div className="od-sheet-h">
+          <div className="tt"><b>{title}</b>{sub ? <small>{sub}</small> : null}</div>
+          {actions}
+          <button type="button" className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
+        </div>
+        <div className="od-sheet-b">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// Everything open on one job, for the job panel and the drill-down lists.
+function odJobInfo(j, now) {
+  const punch = [];
+  [["roughPunch","Rough"],["finishPunch","Finish"],["qcPunch","QC"]].forEach(([k, ph]) => sbv2WalkPunch(j[k], (it, ctx) => {
+    if (!it || it.voided || it.done) return;
+    const at = odDate(it.addedAtTs || it.addedAt);
+    punch.push({ text: odText(it.text) || "(no text)", phase: ph, room: (ctx && ctx.roomName) || "", who: it.assignedTo || "",
+      age: at ? Math.max(0, Math.floor((now - at) / OD_DAY)) : null, serious: it.severity === "serious", waiting: !!it.waiting, job: j });
+  }));
+  const cos = (j.changeOrders || []).filter(Boolean);
+  const openCos = cos.filter(co => !["completed","converted","denied"].includes(co.coStatus || ""));
+  const rts = (j.returnTrips || []).filter(Boolean);
+  const openRts = rts.filter(rt => !rt.signedOff && rt.rtStatus !== "complete");
+  const atts = [...(j.roughInspectionAttempts || []).map(a => ({ ...a, ph: "Rough" })), ...(j.finalInspectionAttempts || []).map(a => ({ ...a, ph: "Final" }))]
+    .filter(a => a && a.result).map(a => ({ ...a, _at: odDate(a.date) })).sort((a, b) => (b._at || 0) - (a._at || 0));
+  const failOpen = [];
+  if (j.roughInspectionResult === "fail") (j.roughInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Rough", text: odText(it.text || it) }); });
+  if (j.finalInspectionResult === "fail") (j.finalInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Final", text: odText(it.text || it) }); });
+  return { punch, cos, openCos, rts, openRts, atts, failOpen };
+}
+const odStatusLabel = (v) => { const s = ROUGH_STATUSES.find(x => x.value === (v || "")); return v ? ((s && s.label) || v) : "Not set"; };
+const odPlural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob }) {
-  const [tab, setTab] = useState(() => { try { const t = localStorage.getItem("he_odash_tab"); return OD_TABS.some(x => x[0] === t) ? t : "overview"; } catch { return "overview"; } });
-  const pickTab = (t) => { setTab(t); try { localStorage.setItem("he_odash_tab", t); } catch {} };
+  const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
+  const [tab, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
+  const pickTab = (t) => { setTab(t); keep("he_odash_tab", t); };
+  const [foreman, setForeman] = useState(() => read("he_odash_foreman", v => v != null, ""));
+  const pickForeman = (f) => { setForeman(f); keep("he_odash_foreman", f); };
+  const [range, setRange] = useState(() => Number(read("he_odash_range", v => ["7","14","30"].includes(v), "14")));
+  const pickRange = (r) => { setRange(r); keep("he_odash_range", String(r)); };
+  const [q, setQ] = useState("");
+  const [sheet, setSheet] = useState(null);
   const [actFilter, setActFilter] = useState("all");
   const [actQ, setActQ] = useState("");
+  const [actPerson, setActPerson] = useState("");
+  const [actDay, setActDay] = useState("");
+  const [chartSel, setChartSel] = useState(null);
+  const [fpSel, setFpSel] = useState(null);
+  const [week, setWeek] = useState(0);
+  const [jobsSort, setJobsSort] = useState({ key: "last", dir: -1 });
+  const [jobsStage, setJobsStage] = useState("");
+  const [jobsQ, setJobsQ] = useState("");
+  const [ccFilter, setCcFilter] = useState("open");
+  const [ccQ, setCcQ] = useState("");
+  const [showAllDevices, setShowAllDevices] = useState(false);
   const [tick, setTick] = useState(0);
   useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 5*60*1000); return () => clearInterval(id); }, []);
-  // People tab only: the device list (read once per visit, like Settings does).
+  useEffect(() => { setChartSel(null); setActDay(""); }, [range, foreman]);
+
+  // People tab: the device list (read once per visit, like Settings does).
   const [devices, setDevices] = useState(null);
   const [latest, setLatest] = useState(null);
   useEffect(() => {
@@ -45681,7 +45763,6 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     })();
     return () => { dead = true; };
   }, [tab]);
-
   // Command Center tab: live read of the snapshot doc while the tab is open.
   const [cc, setCc] = useState(undefined);   // undefined = loading, null = none yet
   useEffect(() => {
@@ -45697,52 +45778,63 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     return () => { if (unsub) unsub(); };
   }, [tab]);
 
-  const open = (job) => { if (job && onSelectJob) onSelectJob(job); };
   const d = useMemo(() => {
     const now = new Date(), today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const secs = mode === "commercial" ? COMM_BOARD_SECTIONS : STAGE_SECTIONS;
-    const live = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote");
+    const allLive = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote");
+    const foremen = [...new Set(allLive.map(j => String(j.foreman || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const live = foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
+    const up = (upcoming || []).filter(u => u && (!foreman || sameName(u.foreman, foreman)));
     const secOf = (j) => { try { return secs.find(s => s.test(j)) || null; } catch (e) { return null; } };
-    const active = live.filter(j => { const s = secOf(j); return !s || !["complete","completed"].includes(s.key); });
-    const bySec = secs.map(s => ({ ...s, n: active.filter(j => secOf(j) === s).length })).filter(s => s.n);
+    const isDone = (j) => { const s = secOf(j); return !!s && ["complete","completed"].includes(s.key); };
+    const active = live.filter(j => !isDone(j));
+    const secIdx = (j) => { const s = secOf(j); return s ? secs.indexOf(s) : 999; };
+    const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) === s) })).filter(s => s.jobs.length);
 
     const events = odBuildEvents(live, now);
+    const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
+    const inRange = events.filter(e => now - e.at < range*OD_DAY);
     const evToday = events.filter(e => localYmd(e.at) === today);
-    const perDay = []; for (let i = 13; i >= 0; i--) { const k = localYmd(new Date(t0.getTime() - i*OD_DAY)); perDay.push({ k, d: new Date(t0.getTime() - i*OD_DAY), n: events.filter(e => localYmd(e.at) === k).length }); }
+    const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = new Date(t0.getTime() - i*OD_DAY), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
 
-    // Punch, COs, return trips, QC
-    let openPunch = 0; const punchJobs = new Set(); const byForeman = {};
-    const cutoff30 = now.getTime() - 30*OD_DAY;
-    active.forEach(j => [j.roughPunch, j.finishPunch, j.qcPunch].forEach(p => sbv2WalkPunch(p, it => {
-      if (!it || it.voided) return;
-      const f = j.foreman || "No foreman"; byForeman[f] = byForeman[f] || { open: 0, closed: 0 };
-      if (!it.done) { openPunch++; punchJobs.add(j.id); byForeman[f].open++; }
-      else { const at = odDate(it.checkedAtTs || it.checkedAt); if (at && at.getTime() >= cutoff30) byForeman[f].closed++; }
-    })));
-    const openCOs = []; active.forEach(j => (j.changeOrders || []).forEach(co => { if (co && !["completed","converted","denied"].includes(co.coStatus || "")) openCOs.push({ co, job: j }); }));
+    // Per-job rollups
+    const info = {}, lastAct = {};
+    live.forEach(j => {
+      info[j.id] = odJobInfo(j, now);
+      let last = (evById[j.id] && evById[j.id][0] && evById[j.id][0].at) || null;
+      [odDate(j.lastActivityAt), odDate(j.updated_at)].forEach(x => { if (x && (!last || x > last)) last = x; });
+      lastAct[j.id] = last;
+    });
+    const sched = odBuildSchedule(active, up);
+    const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
+
+    const openPunch = active.flatMap(j => info[j.id].punch);
+    const openCOs = active.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
     const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
-    const openRTs = []; live.forEach(j => (j.returnTrips || []).forEach(rt => { if (rt && !rt.signedOff && rt.rtStatus !== "complete") openRTs.push({ rt, job: j }); }));
+    const openRTs = live.flatMap(j => info[j.id].openRts.map(rt => ({ rt, job: j })));
     const qcRows = []; active.forEach(j => {
       if (["needs","scheduled"].includes(j.qcStatus || "")) qcRows.push({ job: j, phase: "Rough QC", st: j.qcStatus, at: odDate(j.qcStatusDate) });
       if (["needs","scheduled"].includes(j.finishQcStatus || "")) qcRows.push({ job: j, phase: "Finish QC", st: j.finishQcStatus, at: odDate(j.finishQcStatusDate) });
     });
+    const byForeman = {};
+    active.forEach(j => { const f = j.foreman || "No foreman"; byForeman[f] = byForeman[f] || { open: 0, closed: 0, items: [] }; byForeman[f].open += info[j.id].punch.length; byForeman[f].items.push(...info[j.id].punch); });
+    events.forEach(e => { if (e.type === "punch" && e.tone === "good" && now - e.at < 30*OD_DAY) { const f = e.job.foreman || "No foreman"; if (byForeman[f]) byForeman[f].closed++; } });
 
-    // Inspections: first attempt per job and phase decides first-pass.
-    const firsts = [], fails = [];
-    live.forEach(j => [["roughInspectionAttempts","Rough"],["finalInspectionAttempts","Final"]].forEach(([k, ph]) => {
-      const atts = (j[k] || []).map(a => ({ ...a, _at: odDate(a && a.date) })).filter(a => a._at && a.result).sort((a, b) => a._at - b._at);
+    // Inspections
+    const firsts = [], allAtts = [];
+    live.forEach(j => info[j.id].atts.forEach(a => { if (a._at) allAtts.push({ ...a, job: j }); }));
+    live.forEach(j => ["Rough","Final"].forEach(ph => {
+      const atts = info[j.id].atts.filter(a => a.ph === ph && a._at).sort((a, b) => a._at - b._at);
       if (atts.length) firsts.push({ job: j, ph, at: atts[0]._at, pass: atts[0].result === "pass" });
-      atts.forEach(a => { if (a.result === "fail") fails.push({ job: j, ph, at: a._at, items: (a.items || []).map(it => odText(it && (it.text || it))).filter(Boolean), by: a.by || "" }); });
     }));
-    fails.sort((a, b) => b.at - a.at);
-    const in90 = firsts.filter(f => f.at.getTime() >= now.getTime() - 90*OD_DAY);
+    allAtts.sort((a, b) => b._at - a._at);
+    const fails = allAtts.filter(a => a.result === "fail");
+    const in90 = firsts.filter(f => now - f.at < 90*OD_DAY);
     const fp90 = in90.length ? Math.round(100 * in90.filter(f => f.pass).length / in90.length) : null;
-    const insp30 = []; live.forEach(j => [["roughInspectionAttempts"],["finalInspectionAttempts"]].forEach(([k]) => (j[k] || []).forEach(a => { const at = odDate(a && a.date); if (at && a.result && at.getTime() >= cutoff30) insp30.push(a.result); })));
-    const months = []; for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); const mf = firsts.filter(f => f.at.getFullYear() === m.getFullYear() && f.at.getMonth() === m.getMonth()); months.push({ label: m.toLocaleDateString([], { month: "short" }), n: mf.length, v: mf.length ? Math.round(100 * mf.filter(f => f.pass).length / mf.length) : null }); }
+    const insp30 = allAtts.filter(a => now - a._at < 30*OD_DAY);
+    const months = []; for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); const mf = firsts.filter(f => f.at.getFullYear() === m.getFullYear() && f.at.getMonth() === m.getMonth()); months.push({ m, label: m.toLocaleDateString([], { month: "short" }), n: mf.length, pass: mf.filter(f => f.pass).length, v: mf.length ? Math.round(100 * mf.filter(f => f.pass).length / mf.length) : null, list: mf }); }
 
     // Schedule
-    const sched = odBuildSchedule(active, upcoming);
-    const ahead = (days) => sched.filter(s => s.at >= t0 && s.at < new Date(t0.getTime() + days*OD_DAY));
     const overdue = sched.filter(s => s.at < t0 && s.type !== "start");
     const needsDate = [];
     active.forEach(j => {
@@ -45752,204 +45844,333 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       else if (rs === "complete" && ["","waiting_date"].includes(fs) && !j.finishProjectedStart) needsDate.push({ job: j, what: "Finish start" });
       else if (parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult && rs !== "complete") needsDate.push({ job: j, what: "Rough inspection" });
     });
-    (upcoming || []).forEach(u => { if (u && !u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start" }); });
+    up.forEach(u => { if (!u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start" }); });
     const scans = active.filter(j => matterportScanNeeded(j));
+
+    // Needs attention
+    const attn = [
+      { k: "overdue", label: "Inspections past their date", color: OD_R, icon: "alertTriangle",
+        rows: overdue.filter(s => s.type === "insp").map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_R })) },
+      { k: "failOpen", label: "Failed inspection items not fixed", color: OD_R, icon: "x",
+        rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
+      { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
+        rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < new Date(t0.getTime() + 3*OD_DAY)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+      { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
+        rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
+      { k: "rtNoDate", label: "Return trips with no date", color: OD_GOLD, icon: "returntrips",
+        rows: openRTs.filter(x => !x.rt.scheduledDate && x.rt.rtStatus !== "scheduled").map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_GOLD })) },
+      { k: "quiet", label: "In progress, no update in 5+ days", color: OD_GOLD, icon: "clock",
+        rows: active.filter(j => (effRS(j) === "inprogress" || effFS(j) === "inprogress") && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
+          .map(j => ({ title: j.name, sub: `${j.foreman || "No foreman"} · last update ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "unknown"}`, job: j, color: OD_GOLD })) },
+      { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
+        rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
+    ].filter(a => a.rows.length);
 
     // People
     const staff = (users || []).filter(u => u && u.active !== false && getAccess(u) !== "contractor" && u.name);
     const people = staff.map(u => {
       const mine = events.filter(e => e.who && sameName(e.who, u.name));
       let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
-      live.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
+      allLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
       const todayMine = mine.filter(e => localYmd(e.at) === today);
-      const jobsToday = new Set(todayMine.map(e => e.job.id)).size;
       const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(new Date(t0.getTime() - i*OD_DAY)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
       const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : "quiet";
-      const lastJob = mine.length ? mine[0].job.name : "";
-      return { u, name: u.name, last, lastDateOnly, todayN: todayMine.length, jobsToday, days7, status, lastJob, role: getAccess(u) };
+      return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set(todayMine.map(e => e.job.id)).size, days7, status, role: getAccess(u),
+        lastJob: mine.length ? mine[0].job.name : "" };
     }).sort((a, b) => (b.todayN - a.todayN) || ((b.last || 0) - (a.last || 0)));
-    const foremen = people.filter(p => p.u.role === "foreman" || p.role === "standard" || active.some(j => sameName(j.foreman, p.name)));
+    const foremenP = people.filter(p => p.u.role === "foreman" || p.role === "standard" || active.some(j => sameName(j.foreman, p.name)));
     const openNeeds = (needs || []).filter(n => n && !n.voided && needIsOpen(n, today));
-    const load = {}; openNeeds.forEach(n => { const a = needAssignee(n) || "Unassigned"; load[a] = load[a] || { n: 0, urgent: 0 }; load[a].n++; if (needPriority(n) === "urgent") load[a].urgent++; });
+    const load = {}; openNeeds.forEach(n => { const a = needAssignee(n) || "Unassigned"; (load[a] = load[a] || { n: 0, urgent: 0, list: [] }); load[a].n++; load[a].list.push(n); if (needPriority(n) === "urgent") load[a].urgent++; });
     const timeOff = openNeeds.filter(n => n.timeoffId);
 
-    // Busiest job today (or this week)
-    const tally = (list) => { const m = {}; list.forEach(e => { m[e.job.id] = m[e.job.id] || { job: e.job, n: 0, ev: [] }; m[e.job.id].n++; m[e.job.id].ev.push(e); }); return Object.values(m).sort((a, b) => b.n - a.n)[0] || null; };
-    const busy = tally(evToday) ? { ...tally(evToday), when: "today" } : (tally(events.filter(e => now - e.at < 7*OD_DAY)) ? { ...tally(events.filter(e => now - e.at < 7*OD_DAY)), when: "this week" } : null);
+    const tally = (list) => { const m = {}; list.forEach(e => { (m[e.job.id] = m[e.job.id] || { job: e.job, n: 0, ev: [] }); m[e.job.id].n++; m[e.job.id].ev.push(e); }); return Object.values(m).sort((a, b) => b.n - a.n); };
+    const busyToday = tally(evToday), busyRange = tally(inRange);
+    const busy = busyToday[0] ? { ...busyToday[0], when: "today" } : busyRange[0] ? { ...busyRange[0], when: `last ${range} days` } : null;
 
-    return { now, today, t0, live, active, bySec, events, evToday, perDay, openPunch, punchJobs, byForeman, openCOs, coWaiting, openRTs, qcRows,
-      firsts, fails, fp90, in90, insp30, months, sched, ahead, overdue, needsDate, scans, people, foremen, openNeeds, load, timeOff, busy };
-  }, [jobs, users, needs, upcoming, mode, tick]); // eslint-disable-line
+    return { now, today, t0, secs, foremen, allLive, live, up, active, secOf, secIdx, bySec, events, evById, inRange, evToday, perDay, info, lastAct, sched, nextOf,
+      openPunch, openCOs, coWaiting, openRTs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, overdue, needsDate, scans, attn,
+      people, foremenP, openNeeds, load, timeOff, busy, busyRange };
+  }, [jobs, users, needs, upcoming, mode, tick, foreman, range]); // eslint-disable-line
 
+  const openJob = (job) => { if (job) setSheet({ kind: "job", id: job.id }); };
+  const openPerson = (name) => setSheet({ kind: "person", name });
+  const openList = (title, sub, rows) => setSheet({ kind: "list", title, sub, rows });
+  const goApp = (job) => { if (job && onSelectJob) onSelectJob(job); };
+  const ahead = (days) => d.sched.filter(s => s.at >= d.t0 && s.at < new Date(d.t0.getTime() + days*OD_DAY));
   const greet = d.now.getHours() < 12 ? "Good morning" : d.now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const me = odFirst(identity && identity.name) || "there";
   const dateLine = d.now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
   const onApp = d.people.filter(p => p.status === "active").length;
   const urgentN = d.openNeeds.filter(n => needPriority(n) === "urgent").length;
-  const next7 = d.ahead(7), next14 = d.ahead(14);
+  const next7 = ahead(7), next14 = ahead(14), next30 = ahead(30);
   const starts14 = next14.filter(s => s.type === "start");
   const insp7 = next7.filter(s => s.type === "insp");
-
-  // ── shared right-panel pieces ──
-  const Me = ({ sub }) => (
-    <div className="od-me"><i className="av">{(me[0] || "?").toUpperCase()}</i><div><b>{(identity && identity.name) || me}</b><small>{sub}</small></div></div>
-  );
-  const Stats = ({ items }) => <div className="od-stats">{items.map(([v, l], i) => <div key={i}><b>{v}</b><small>{l}</small></div>)}</div>;
-  const Sec = ({ children, right }) => <div className="od-sec"><span>{children}</span>{right ? <small>{right}</small> : null}</div>;
-  const schedItem = (s, i) => (
-    <OdItem key={i} color={OD_SCHED_COLOR[s.type]} icon={OD_SCHED_ICON[s.type]} tag={s.label + (s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : "")}
-      title={s.name} sub={s.detail || (s.job && s.job.foreman ? s.job.foreman : "")} when={`${odDow(s.at)} ${odShort(s.at)}`} onClick={s.job ? () => open(s.job) : null}/>
-  );
-
-  // Calendar for this month with dated work marked.
-  const Cal = () => {
-    const y = d.now.getFullYear(), m = d.now.getMonth(), first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
-    const marks = {}; d.sched.forEach(s => { if (s.at.getFullYear() === y && s.at.getMonth() === m) { const k = s.at.getDate(); if (!marks[k] || s.type === "insp") marks[k] = OD_SCHED_COLOR[s.type]; } });
-    const cells = []; for (let i = 0; i < first; i++) cells.push(<div key={"b" + i}/>);
-    for (let k = 1; k <= days; k++) cells.push(<div key={k}><span className={"d" + (marks[k] ? " m" : "") + (k === d.now.getDate() ? " today" : "")} style={marks[k] ? { background: marks[k] } : null}>{k}</span></div>);
-    return (
-      <div className="od-cal">
-        <div className="h">{d.now.toLocaleDateString([], { month: "long", year: "numeric" })}</div>
-        <div className="grid">{["Su","Mo","Tu","We","Th","Fr","Sa"].map(x => <div key={x} className="dow">{x}</div>)}{cells}</div>
-        <div className="od-legend"><span style={{ "--c": OD_O }}>Start</span><span style={{ "--c": OD_G }}>Inspection</span><span style={{ "--c": OD_B }}>QC</span><span style={{ "--c": OD_R }}>Return trip</span></div>
-      </div>
-    );
-  };
-
-  // ── Activity table (Overview shows the top of it, Activity the whole thing) ──
-  const ACT_FILTERS = [["all","All"],["punch","Punch"],["co","Change orders"],["insp","Inspections"],["rt","Return trips"],["update","Updates"],["photo","Photos"]];
-  const actList = d.events.filter(e => (actFilter === "all" || e.type === actFilter) &&
-    (!actQ.trim() || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(actQ.trim().toLowerCase()))).slice(0, 80);
+  const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
   const TONE = { good: OD_G, bad: OD_R };
   const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera" };
   const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_GOLD };
-  const ActRows = ({ list }) => list.length ? (
+  const TYPE_NAME = { punch: "Punch", co: "Change orders", insp: "Inspections", rt: "Return trips", update: "Updates", photo: "Photos" };
+  const punchRows = (list) => list.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, job: p.job, tag: [p.who && `On ${odFirst(p.who)}`, p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · ") }));
+  const schedRow = (s) => ({ title: s.name, sub: `${s.label}${s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""}${s.detail ? " · " + s.detail : ""}`, right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job });
+  const eventRow = (e) => ({ title: e.job.name, sub: `${e.label}${e.detail ? ": " + e.detail : ""}${e.who ? " · " + odFirst(e.who) : ""}`, right: odWhen(e, d.now), color: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type], job: e.job });
+
+  // ── shared pieces ──
+  const Me = ({ sub }) => (
+    <div className="od-me"><i className="av">{(me[0] || "?").toUpperCase()}</i><div><b>{(identity && identity.name) || me}</b><small>{sub}</small></div></div>
+  );
+  const Stats = ({ items }) => <div className="od-stats">{items.map(([v, l, fn], i) => fn
+    ? <button type="button" key={i} onClick={fn}><b>{v}</b><small>{l}</small></button>
+    : <div key={i}><b>{v}</b><small>{l}</small></div>)}</div>;
+  const Sec = ({ children, right, onRight }) => <div className="od-sec"><span>{children}</span>{right ? (onRight ? <button type="button" onClick={onRight}>{right}</button> : <small>{right}</small>) : null}</div>;
+  const schedItem = (s, i) => (
+    <OdItem key={i} color={OD_SCHED_COLOR[s.type]} icon={OD_SCHED_ICON[s.type]} tag={s.label + (s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : "")}
+      title={s.name} sub={s.detail || (s.job && s.job.foreman ? s.job.foreman : "")} when={`${odDow(s.at)} ${odShort(s.at)}`} onClick={s.job ? () => openJob(s.job) : null}/>
+  );
+  const Cal = () => {
+    const y = d.now.getFullYear(), m = d.now.getMonth(), first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+    const byDay = {}; d.sched.forEach(s => { if (s.at.getFullYear() === y && s.at.getMonth() === m) (byDay[s.at.getDate()] = byDay[s.at.getDate()] || []).push(s); });
+    const color = (list) => OD_SCHED_COLOR[(list.find(s => s.type === "insp") || list[0]).type];
+    const cells = []; for (let i = 0; i < first; i++) cells.push(<div key={"b" + i}/>);
+    for (let k = 1; k <= days; k++) {
+      const list = byDay[k];
+      cells.push(<div key={k}>{list
+        ? <button type="button" className={"d m" + (k === d.now.getDate() ? " today" : "")} style={{ background: color(list) }} title={odPlural(list.length, "item")}
+            onClick={() => openList(new Date(y, m, k).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }), odPlural(list.length, "dated item"), list.map(schedRow))}>{k}</button>
+        : <span className={"d" + (k === d.now.getDate() ? " today" : "")}>{k}</span>}</div>);
+    }
+    return (
+      <div className="od-cal">
+        <div className="h">{d.now.toLocaleDateString([], { month: "long", year: "numeric" })}<small>tap a colored day</small></div>
+        <div className="grid">{["Su","Mo","Tu","We","Th","Fr","Sa"].map(x => <div key={x} className="dow">{x}</div>)}{cells}</div>
+        <div className="od-legend"><span style={{ "--c": OD_O }}>Start</span><span style={{ "--c": OD_G }}>Inspection</span><span style={{ "--c": OD_B }}>QC</span><span style={{ "--c": OD_P }}>Scan</span><span style={{ "--c": OD_R }}>Return trip</span></div>
+      </div>
+    );
+  };
+  const Rows = ({ rows, empty }) => rows.length ? (
     <div className="od-rows">
-      {list.map((e, i) => (
-        <button type="button" className="od-row" key={i} onClick={() => open(e.job)}>
-          <span className="k" style={{ "--c": e.tone ? TONE[e.tone] : TYPE_COLOR[e.type] }}><Icon name={TYPE_ICON[e.type] || "activity"} size={15}/></span>
-          <span className="m"><b>{e.job.name || "Job"}{e.job.division === "commercial" ? <em>COMMERCIAL</em> : null}</b><small>{e.label}{e.detail ? `: ${e.detail}` : ""}</small></span>
-          <span className="w">{e.who ? odFirst(e.who) : ""}</span>
-          <span className="t">{odWhen(e, d.now)}</span>
+      {rows.map((r, i) => (
+        <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
+          <span className="k" style={{ "--c": r.color || OD_O }}><Icon name={r.icon || "activity"} size={15}/></span>
+          <span className="m"><b>{r.title}</b>{r.tag ? <em>{r.tag}</em> : null}<small>{r.sub}</small></span>
+          <span className="t">{r.right || ""}</span>
         </button>
       ))}
     </div>
-  ) : <div className="od-empty">Nothing matches.</div>;
-
+  ) : <div className="od-empty">{empty || "Nothing here."}</div>;
   const Pulse = ({ list }) => (
     <div className="od-pulse">
       {list.map(p => (
-        <div className="od-person" key={p.u.id || p.name}>
+        <button type="button" className="od-person" key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
           <i className="av sm">{(p.name[0] || "?").toUpperCase()}</i>
-          <div><b>{odFirst(p.name)}</b><small>{p.status === "active" ? `${p.todayN} update${p.todayN === 1 ? "" : "s"} · ${p.jobsToday} job${p.jobsToday === 1 ? "" : "s"} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</small></div>
+          <div><b>{odFirst(p.name)}</b><small>{p.status === "active" ? `${odPlural(p.todayN, "update")} · ${odPlural(p.jobsToday, "job")} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</small></div>
           <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_GOLD : "#B9B0A8" }}/>
-        </div>
+        </button>
       ))}
     </div>
   );
+  const search = q.trim().toLowerCase();
+  const searchHits = search ? d.allLive.filter(j => `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(search)).slice(0, 8) : [];
 
   let main = null, right = null;
   if (tab === "overview") {
-    const secBars = d.bySec.slice(0, 7);
     const actMax = Math.max(1, ...d.perDay.map(p => p.n));
-    const insPass = d.insp30.filter(r => r === "pass").length;
+    const insPass = d.insp30.filter(a => a.result === "pass").length;
+    const selDay = chartSel != null && d.perDay[chartSel] ? d.perDay[chartSel] : null;
+    const selEvents = selDay ? d.events.filter(e => localYmd(e.at) === selDay.k) : [];
+    const selTop = selDay ? (() => { const m = {}; selEvents.forEach(e => { m[e.job.name] = (m[e.job.name] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3); })() : [];
     main = (<>
-      <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {d.evToday.length} update{d.evToday.length === 1 ? "" : "s"} today across {new Set(d.evToday.map(e => e.job.id)).size} jobs</p></div></div>
+      <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {odPlural(d.evToday.length, "update")} today across {odPlural(new Set(d.evToday.map(e => e.job.id)).size, "job")}{foreman ? ` · ${foreman}'s jobs only` : ""}</p></div></div>
       <div className="od-minis">
-        <OdMini title="Active jobs" color={OD_O} icon="hardHat" value={d.active.length} sub={`${d.bySec.length} stages`}>
-          <OdBars vals={secBars.map(s => s.n)} color={OD_O} hi={secBars.reduce((b, s, i) => s.n > secBars[b].n ? i : b, 0)} label={secBars.map(s => `${s.label} ${s.n}`).join(", ")}/>
+        <OdMini title="Active jobs" color={OD_O} icon="hardHat" value={d.active.length} sub={odPlural(d.bySec.length, "stage")}
+          onClick={() => openList("Active jobs", "Grouped by board stage", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: `${s.label} · ${j.foreman || "No foreman"}`, right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
+          <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_O} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
         </OdMini>
-        <OdMini title="Inspections, 30 days" color={OD_G} icon="checkCircle" value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed` : "none logged"}>
+        <OdMini title="Inspections, 30 days" color={OD_G} icon="checkCircle" value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed` : "none logged"}
+          onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed`, d.insp30.map(a => ({ title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job })))}>
           <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
         </OdMini>
-        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`}>
+        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`}
+          onClick={() => openList("Open change orders", `${d.coWaiting} waiting on the GC`, d.openCOs.slice().sort((a, b) => String(a.co.coStatus).localeCompare(String(b.co.coStatus))).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_GOLD : OD_B, job: x.job })))}>
           <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
         </OdMini>
-        <OdMini title="Open punch items" color={OD_R} icon="openitems" value={d.openPunch} sub={`${d.punchJobs.size} jobs`}>
+        <OdMini title="Open punch items" color={OD_R} icon="openitems" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
+          onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}>
           <OdBars vals={Object.values(d.byForeman).map(f => f.open).sort((a, b) => b - a).slice(0, 6)} color={OD_R} hi={0} label="Open punch items by foreman"/>
         </OdMini>
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">Updates per day<small>all jobs, last 14 days</small></div>
-          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => i % 2 === 1 ? "" : odShort(p.d))} color={OD_O} min={0} max={Math.ceil(actMax*1.15) || 1}
-            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Updates per day, last 14 days: ${d.perDay.map(p => p.n).join(", ")}`}
-            hiLabel={(v, i) => `${v} · ${odShort(d.perDay[i].d)}`}/>
+          <div className="od-ct">Updates per day<small>all jobs, last {range} days · tap a day</small></div>
+          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => (range > 14 ? i % 5 === 0 : i % 2 === 0) || i === d.perDay.length - 1 ? odShort(p.d) : "")} color={OD_O} min={0} max={Math.ceil(actMax*1.2) || 1}
+            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Updates per day: ${d.perDay.map(p => p.n).join(", ")}`}
+            sel={chartSel} onSel={setChartSel} tip={(v, i) => `${v} · ${odDow(d.perDay[i].d)} ${odShort(d.perDay[i].d)}`}/>
+          {selDay ? (
+            <div className="od-daysum">
+              <div><b>{odDow(selDay.d)} {odShort(selDay.d)}: {odPlural(selDay.n, "update")}</b><small>{selTop.length ? selTop.map(([n, c]) => `${n} (${c})`).join(" · ") : "Nothing logged"}</small></div>
+              {selDay.n > 0 && <button type="button" onClick={() => { setActDay(selDay.k); setActFilter("all"); pickTab("activity"); }}>See them</button>}
+            </div>
+          ) : <div className="od-hint">Tap or hover the chart to see a day.</div>}
         </div>
-        <div className="od-white od-pad od-busy">
-          <div className="od-ct">Busiest job<small>{d.busy ? d.busy.when : ""}</small></div>
-          {d.busy ? (<>
-            <button type="button" className="od-link" onClick={() => open(d.busy.job)}><b>{d.busy.job.name}</b></button>
-            <div className="od-big">{d.busy.n}<small>update{d.busy.n === 1 ? "" : "s"} · {d.busy.job.foreman || "no foreman"}</small></div>
-            <div className="od-mini-list">{d.busy.ev.slice(0, 4).map((e, i) => <div key={i}><span style={{ background: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type] }}/>{e.label}{e.who ? ` · ${odFirst(e.who)}` : ""}</div>)}</div>
-          </>) : <div className="od-empty">No job updates this week.</div>}
+        <div className="od-white od-pad">
+          <div className="od-ct">Needs attention<small>{d.attn.length ? "tap a line" : ""}</small></div>
+          {d.attn.length ? (
+            <div className="od-attn">
+              {d.attn.map(a => (
+                <button type="button" key={a.k} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}>
+                  <span className="ic" style={{ "--c": a.color }}><Icon name={a.icon} size={14}/></span><span className="lb">{a.label}</span><span className="n" style={{ color: a.color }}>{a.rows.length}</span><Icon name="chevronRight" size={13}/>
+                </button>
+              ))}
+            </div>
+          ) : <div className="od-empty">Nothing flagged. Every inspection has a result, every start is confirmed and every job has had an update this week.</div>}
+          {d.busy && <div className="od-busy">
+            <small>Busiest job {d.busy.when}</small>
+            <button type="button" className="od-link" onClick={() => openJob(d.busy.job)}><b>{d.busy.job.name}</b> · {odPlural(d.busy.n, "update")}</button>
+          </div>}
         </div>
       </div>
-      <Sec right={`${onApp} on the app today`}>Foremen today</Sec>
+      <Sec right={`${onApp} on the app today`}>Foremen</Sec>
       <div className="od-plan">
-        {d.foremen.slice(0, 6).map((p, i) => {
+        {d.foremenP.slice(0, 9).map((p, i) => {
           const fj = d.active.filter(j => sameName(j.foreman, p.name));
-          const op = fj.reduce((n, j) => n + [j.roughPunch, j.finishPunch, j.qcPunch].reduce((m, pp) => { let c = 0; sbv2WalkPunch(pp, it => { if (it && !it.voided && !it.done) c++; }); return m + c; }, 0), 0);
+          const op = fj.reduce((n, j) => n + d.info[j.id].punch.length, 0);
           return (
-            <div className={"od-white od-crew" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name}>
-              <div><b>{p.name}</b><p>{fj.length} active job{fj.length === 1 ? "" : "s"} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
-                <span className="day">{p.status === "active" ? `${p.todayN} update${p.todayN === 1 ? "" : "s"} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
+            <button type="button" className={"od-white od-crew od-tap" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
+              <div><b>{p.name}</b><p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
+                <span className="day">{p.status === "active" ? `${odPlural(p.todayN, "update")} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
               <OdBars vals={p.days7} color={i === 0 && p.todayN ? "#fff" : OD_O} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
-            </div>
+            </button>
           );
         })}
-        {!d.foremen.length && <div className="od-empty">No foremen on the team list.</div>}
+        {!d.foremenP.length && <div className="od-empty">No foremen on the team list.</div>}
       </div>
     </>);
     right = (<>
-      <Me sub={mode === "commercial" ? "Commercial" : "Residential"}/>
-      <Stats items={[[d.active.length, "Active jobs"], [onApp, "On app today"], [d.openNeeds.length, "Open tasks"]]}/>
+      <Me sub={`${mode === "commercial" ? "Commercial" : "Residential"}${foreman ? " · " + foreman : ""}`}/>
+      <Stats items={[[d.active.length, "Active jobs", () => pickTab("jobs")], [onApp, "On app today", () => pickTab("people")], [d.openNeeds.length, "Open tasks", () => pickTab("people")]]}/>
       <Cal/>
-      <Sec right="next 14 days">Scheduled</Sec>
-      <div className="od-list">{next14.slice(0, 6).map(schedItem)}{!next14.length && <div className="od-empty dark">Nothing dated in the next 14 days.</div>}</div>
+      <Sec right="see all" onRight={() => pickTab("schedule")}>Next 14 days</Sec>
+      <div className="od-list">{next14.slice(0, 7).map(schedItem)}{!next14.length && <div className="od-empty dark">Nothing dated in the next 14 days.</div>}</div>
     </>);
-  } else if (tab === "activity") {
-    const byHour = [6,8,10,12,14,16].map(h => d.evToday.filter(e => !e.dateOnly && e.at.getHours() >= h && e.at.getHours() < h + 2).length);
+  } else if (tab === "jobs") {
+    const jq = jobsQ.trim().toLowerCase();
+    let list = d.active.filter(j => (!jobsStage || (d.secOf(j) && d.secOf(j).key === jobsStage)) && (!jq || `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(jq)));
+    const val = {
+      name: j => String(j.name || "").toLowerCase(), foreman: j => String(j.foreman || "~").toLowerCase(), stage: j => d.secIdx(j),
+      punch: j => d.info[j.id].punch.length, cos: j => d.info[j.id].openCos.length, next: j => d.nextOf[j.id] ? d.nextOf[j.id].at.getTime() : 9e15, last: j => d.lastAct[j.id] ? d.lastAct[j.id].getTime() : 0,
+    };
+    const f = val[jobsSort.key] || val.last;
+    list = list.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * jobsSort.dir; });
+    const sortBy = (key) => setJobsSort(s => ({ key, dir: s.key === key ? -s.dir : (key === "last" || key === "punch" || key === "cos" ? -1 : 1) }));
+    const H = ({ k, children }) => <button type="button" className={"th" + (jobsSort.key === k ? " on" : "")} onClick={() => sortBy(k)}>{children}{jobsSort.key === k ? (jobsSort.dir > 0 ? " ↑" : " ↓") : ""}</button>;
     main = (<>
-      <div className="od-head"><div><h1>Activity</h1><p>Everything logged on {mode === "commercial" ? "commercial" : "residential"} jobs in the last 30 days · tap a row to open the job</p></div></div>
-      <div className="od-minis">
-        <OdMini title="Updates today" color={OD_O} icon="activity" value={d.evToday.length} sub={`${new Set(d.evToday.map(e => e.job.id)).size} jobs`}><OdBars vals={byHour} color={OD_O} hi={byHour.indexOf(Math.max(...byHour))} label={`Updates today by two-hour block from 6 AM: ${byHour.join(", ")}`}/></OdMini>
-        <OdMini title="Punch closed today" color={OD_G} icon="openitems" value={d.evToday.filter(e => e.type === "punch" && e.tone === "good").length} sub="items"><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={OD_G} hi={6} label="Punch items closed per day, last 7 days"/></OdMini>
-        <OdMini title="Photo batches today" color={OD_GOLD} icon="camera" value={d.evToday.filter(e => e.type === "photo").length} sub="uploads"><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_GOLD} hi={6} label="Photo uploads per day, last 7 days"/></OdMini>
-        <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={d.fails.filter(f => d.now - f.at < 7*OD_DAY).length} sub="this week"><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f.at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day, last 7 days"/></OdMini>
+      <div className="od-head"><div><h1>Jobs</h1><p>{odPlural(d.active.length, "active job")}{foreman ? ` for ${foreman}` : ""} · tap a column to sort, a row to open the job</p></div></div>
+      <div className="od-chips">
+        <button type="button" aria-pressed={!jobsStage} onClick={() => setJobsStage("")}>All <span>{d.active.length}</span></button>
+        {d.bySec.map(s => <button type="button" key={s.key} aria-pressed={jobsStage === s.key} onClick={() => setJobsStage(jobsStage === s.key ? "" : s.key)} style={{ "--c": s.color }}><i/>{s.label} <span>{s.jobs.length}</span></button>)}
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">Recent activity<small>{actList.length === 80 ? "newest 80" : `${actList.length} rows`}</small>
-          <div className="od-filters" role="group" aria-label="Filter activity">{ACT_FILTERS.map(([k, l]) => <button type="button" key={k} aria-pressed={actFilter === k} onClick={() => setActFilter(k)}>{l}</button>)}</div>
+        <input className="od-q" type="search" value={jobsQ} onChange={e => setJobsQ(e.target.value)} placeholder="Filter by job, number, address, GC or foreman" aria-label="Filter jobs"/>
+        <div className="od-tablewrap">
+          <div className="od-table">
+            <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman</H><H k="stage">Stage</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last update</H></div>
+            {list.map(j => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id]; return (
+              <button type="button" className="tr" key={j.id} onClick={() => openJob(j)}>
+                <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small></span>
+                <span className="c">{j.foreman || "—"}</span>
+                <span className="c"><em className="pill" style={{ "--c": s ? s.color : "#8C847D" }}>{s ? s.label : "—"}</em></span>
+                <span className="c num">{d.info[j.id].punch.length || "—"}</span>
+                <span className="c num">{d.info[j.id].openCos.length || "—"}</span>
+                <span className="c">{nx ? <>{odShort(nx.at)} <small>{nx.label}</small></> : "—"}</span>
+                <span className="c">{la ? odAgo(la, d.now) : "—"}</span>
+              </button>
+            ); })}
+            {!list.length && <div className="od-empty">No jobs match.</div>}
+          </div>
         </div>
-        <input className="od-q" type="search" value={actQ} onChange={e => setActQ(e.target.value)} placeholder="Filter by job, person or what happened" aria-label="Filter activity"/>
-        <ActRows list={actList}/>
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Jobs"/>
+      <Stats items={[[d.active.length, "Active"], [d.needsDate.length, "Need a date", () => openList("Needs a date", odPlural(d.needsDate.length, "job"), d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what, color: OD_R, job: n.job })))], [d.attn.reduce((n, a) => n + a.rows.length, 0), "Flags", () => pickTab("overview")]]}/>
+      <Sec>By stage</Sec>
+      <div className="od-box light"><OdHBars rows={d.bySec.map(s => ({ name: s.label, note: s.jobs.length, v: s.jobs.length, color: s.color, on: jobsStage === s.key, onClick: () => setJobsStage(jobsStage === s.key ? "" : s.key) }))} empty="No active jobs."/></div>
+      <Sec>By foreman</Sec>
+      <div className="od-box light"><OdHBars rows={d.foremen.map(fm => ({ name: fm, note: d.active.filter(j => sameName(j.foreman, fm)).length, v: d.active.filter(j => sameName(j.foreman, fm)).length, color: OD_O, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) })).filter(r => r.v)} empty="No foremen set on jobs."/></div>
+    </>);
+  } else if (tab === "activity") {
+    const aq = actQ.trim().toLowerCase();
+    const base = actDay ? d.events.filter(e => localYmd(e.at) === actDay) : d.inRange;
+    const typeCounts = Object.keys(TYPE_NAME).map(k => ({ k, n: base.filter(e => e.type === k).length }));
+    const personNames = [...new Set(base.map(e => e.who).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const list = base.filter(e => (actFilter === "all" || e.type === actFilter) && (!actPerson || sameName(e.who, actPerson)) &&
+      (!aq || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(aq))).slice(0, 200);
+    const groups = []; list.forEach(e => { const k = localYmd(e.at); if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, at: e.at, list: [] }); groups[groups.length - 1].list.push(e); });
+    const topJobs = d.busyRange.slice(0, 8);
+    main = (<>
+      <div className="od-head"><div><h1>Activity</h1><p>{actDay ? `Everything logged on ${odDow(odDate(actDay))} ${odShort(odDate(actDay))}` : `Everything logged in the last ${range} days`} · tap a row for the job</p></div>
+        {actDay && <button type="button" className="od-clear" onClick={() => setActDay("")}>Show all {range} days</button>}</div>
+      <div className="od-minis">
+        <OdMini title="Updates" color={OD_O} icon="activity" value={base.length} sub={actDay ? "that day" : `last ${range} days`}><OdBars vals={d.perDay.slice(-7).map(p => p.n)} color={OD_O} hi={6} label="Updates per day, last 7 days"/></OdMini>
+        <OdMini title="Punch closed" color={OD_G} icon="openitems" value={base.filter(e => e.type === "punch" && e.tone === "good").length} sub="items" onClick={() => setActFilter("punch")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={OD_G} hi={6} label="Punch items closed per day"/></OdMini>
+        <OdMini title="Photo uploads" color={OD_GOLD} icon="camera" value={base.filter(e => e.type === "photo").length} sub="batches" onClick={() => setActFilter("photo")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_GOLD} hi={6} label="Photo uploads per day"/></OdMini>
+        <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={base.filter(e => e.type === "insp" && e.tone === "bad").length} sub={actDay ? "that day" : `last ${range} days`} onClick={() => setActFilter("insp")}><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f._at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day"/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Recent activity<small>{list.length === 200 ? "newest 200" : odPlural(list.length, "row")}</small>
+          <div className="od-filters" role="group" aria-label="Filter by type">
+            <button type="button" aria-pressed={actFilter === "all"} onClick={() => setActFilter("all")}>All</button>
+            {typeCounts.map(t => <button type="button" key={t.k} aria-pressed={actFilter === t.k} onClick={() => setActFilter(actFilter === t.k ? "all" : t.k)}>{TYPE_NAME[t.k]} <span>{t.n}</span></button>)}
+          </div>
+        </div>
+        <div className="od-frow">
+          <input className="od-q" type="search" value={actQ} onChange={e => setActQ(e.target.value)} placeholder="Filter by job or what happened" aria-label="Filter activity"/>
+          <select className="od-sel light" value={actPerson} onChange={e => setActPerson(e.target.value)} aria-label="Filter by person">
+            <option value="">Everyone</option>{personNames.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        {groups.map(g => (
+          <div key={g.k}>
+            <div className="od-dayh">{g.k === d.today ? "Today" : `${odDow(g.at)} ${odShort(g.at)}`}<span>{odPlural(g.list.length, "update")}</span></div>
+            <Rows rows={g.list.map(e => ({ ...eventRow(e), right: e.dateOnly ? "" : odTime(e.at), icon: TYPE_ICON[e.type] }))}/>
+          </div>
+        ))}
+        {!groups.length && <div className="od-empty">Nothing matches.</div>}
       </div>
     </>);
     right = (<>
       <Me sub="Activity"/>
-      <Stats items={[[d.events.length, "Updates, 30 days"], [onApp, "On app today"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Stats items={[[d.inRange.length, `Updates, ${range} d`], [onApp, "On app today"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Sec>What kind</Sec>
+      <div className="od-box light"><OdHBars rows={typeCounts.filter(t => t.n).map(t => ({ name: TYPE_NAME[t.k], note: t.n, v: t.n, color: TYPE_COLOR[t.k], on: actFilter === t.k, onClick: () => setActFilter(actFilter === t.k ? "all" : t.k) }))} empty="Nothing logged."/></div>
+      <Sec>Most active jobs</Sec>
+      <div className="od-list">{topJobs.map((t, i) => <OdItem key={i} color={OD_O} icon="hardHat" tag={odPlural(t.n, "update")} title={t.job.name} sub={t.job.foreman || ""} onClick={() => openJob(t.job)}/>)}{!topJobs.length && <div className="od-empty dark">No updates in this range.</div>}</div>
       <Sec>Team pulse</Sec>
-      <Pulse list={d.people.slice(0, 12)}/>
+      <Pulse list={d.people.slice(0, 10)}/>
     </>);
   } else if (tab === "schedule") {
-    const days = []; for (let i = 0; i < 7; i++) { const dd = new Date(d.t0.getTime() + i*OD_DAY); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
+    const ws = new Date(d.t0.getTime() + week*7*OD_DAY);
+    const days = []; for (let i = 0; i < 7; i++) { const dd = new Date(ws.getTime() + i*OD_DAY); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
+    const types = [["start","Starts"],["insp","Inspections"],["qc","QC walks"],["scan","Scans"],["rt","Return trips"]];
     main = (<>
-      <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {next7.length} in the next 7 days</p></div></div>
+      <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days</p></div></div>
       <div className="od-minis">
-        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label={`${starts14.filter(s => s.confirmed).length} of ${starts14.length} starts confirmed`}/></OdMini>
-        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated"><OdBars vals={days.map(x => x.items.filter(s => s.type === "insp").length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
-        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs"><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label={`${d.needsDate.length} of ${d.active.length} active jobs need a date`}/></OdMini>
-        <OdMini title="Overdue" color={OD_GOLD} icon="alertTriangle" value={d.overdue.length} sub="past their date"><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_GOLD} label={`${d.overdue.length} dated items past due`}/></OdMini>
+        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
+        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" onClick={() => openList("Inspections in the next 7 days", "", insp7.map(schedRow))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(new Date(d.t0.getTime() + i*OD_DAY))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
+        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" onClick={() => openList("Needs a date", "", d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what + (n.job && n.job.foreman ? " · " + n.job.foreman : ""), color: OD_R, job: n.job })))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
+        <OdMini title="Past their date" color={OD_GOLD} icon="alertTriangle" value={d.overdue.length} sub="no result yet" onClick={() => openList("Past their date", "Dated work with no result", d.overdue.map(schedRow))}><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_GOLD} label="Share of dated items past due"/></OdMini>
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">Next 7 days<small>tap an item to open the job</small></div>
+        <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(new Date(ws.getTime() + 6*OD_DAY))}`}<small>tap an item for the job</small>
+          <span className="od-nav"><button type="button" onClick={() => setWeek(w => w - 1)} aria-label="Previous week"><Icon name="chevronLeft" size={14}/></button>
+            {week !== 0 && <button type="button" onClick={() => setWeek(0)}>Today</button>}
+            <button type="button" onClick={() => setWeek(w => w + 1)} aria-label="Next week"><Icon name="chevronRight" size={14}/></button></span>
+        </div>
         <div className="od-weekwrap"><div className="od-week">
           {days.map((x, i) => (
-            <div className={"col" + (i === 0 ? " today" : "")} key={i}>
-              <div className="dh">{i === 0 ? "Today" : odDow(x.dd)} <span>{odShort(x.dd)}</span></div>
+            <div className={"col" + (localYmd(x.dd) === d.today ? " today" : "")} key={i}>
+              <div className="dh">{localYmd(x.dd) === d.today ? "Today" : odDow(x.dd)} <span>{odShort(x.dd)}</span></div>
               {x.items.map((s, k) => (
-                <button type="button" className="blk" key={k} style={{ "--c": OD_SCHED_COLOR[s.type] }} onClick={s.job ? () => open(s.job) : undefined}>
+                <button type="button" className="blk" key={k} style={{ "--c": OD_SCHED_COLOR[s.type] }} onClick={s.job ? () => openJob(s.job) : undefined}>
                   <b>{s.name}</b><small>{s.label}{s.type === "start" && !s.confirmed ? " · projected" : ""}</small>
                 </button>
               ))}
@@ -45958,177 +46179,123 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           ))}
         </div></div>
       </div>
-      <Sec right={`${starts14.length} in the next 14 days`}>Starts</Sec>
-      <div className="od-plan">
-        {starts14.slice(0, 6).map((s, i) => (
-          <button type="button" className={"od-white od-start" + (!s.confirmed && i === starts14.findIndex(x => !x.confirmed) ? " hot" : "")} key={i} onClick={s.job ? () => open(s.job) : undefined}>
-            <span className="dd">{odDow(s.at)} {odShort(s.at)}</span><b>{s.name}</b><p>{s.label}{s.job && s.job.foreman ? ` · ${s.job.foreman}` : ""}</p>
-            <span className="st" style={{ "--c": s.confirmed ? OD_G : OD_O }}>{s.confirmed ? "Confirmed" : "Projected"}</span>
-          </button>
-        ))}
-        {!starts14.length && <div className="od-empty">No starts dated in the next 14 days.</div>}
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Next 30 days<small>tap a kind to list it</small></div>
+          <OdHBars rows={types.map(([k, l]) => { const its = next30.filter(s => s.type === k); return { name: l, note: its.length, v: its.length, color: OD_SCHED_COLOR[k], onClick: its.length ? () => openList(`${l}, next 30 days`, "", its.map(schedRow)) : undefined }; })} empty="Nothing dated."/>
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Starts<small>next 14 days</small></div>
+          <Rows rows={starts14.map(s => ({ ...schedRow(s), icon: "flag" }))} empty="No starts dated in the next 14 days."/>
+        </div>
       </div>
     </>);
     right = (<>
       <Me sub="Scheduling"/>
-      <Stats items={[[d.active.length, "On the board"], [(upcoming || []).length, "Upcoming"], [d.scans.length, "Scans due"]]}/>
-      {d.overdue.length > 0 && <><Sec right={`${d.overdue.length}`}>Past their date</Sec><div className="od-list">{d.overdue.slice(-5).reverse().map(schedItem)}</div></>}
+      <Stats items={[[d.active.length, "On the board", () => pickTab("jobs")], [d.up.length, "Upcoming"], [d.scans.length, "Scans due"]]}/>
+      {d.overdue.length > 0 && <><Sec right={`${d.overdue.length}`}>Past their date</Sec><div className="od-list">{d.overdue.slice(-6).reverse().map(schedItem)}</div></>}
       <Sec right={`${d.needsDate.length}`}>Needs a date</Sec>
-      <div className="od-list">{d.needsDate.slice(0, 6).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={n.job ? n.job.foreman || "" : "Upcoming tab"} onClick={n.job ? () => open(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
+      <div className="od-list">{d.needsDate.slice(0, 8).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={n.job ? n.job.foreman || "" : "Upcoming tab"} onClick={n.job ? () => openJob(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
       <Sec right={`${d.scans.length}`}>Matterport scans due</Sec>
-      <div className="od-list">{d.scans.slice(0, 4).map((j, i) => <OdItem key={i} color={OD_P} icon="camera" tag={`Rough ${parseStage(j.roughStage)}%`} title={j.name} sub="Scan before drywall" onClick={() => open(j)}/>)}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
+      <div className="od-list">{d.scans.slice(0, 6).map((j, i) => <OdItem key={i} color={OD_P} icon="camera" tag={`Rough ${parseStage(j.roughStage)}%`} title={j.name} sub="Scan before drywall" onClick={() => openJob(j)}/>)}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
     </>);
   } else if (tab === "quality") {
-    const fRows = Object.entries(d.byForeman).filter(([n]) => n !== "No foreman").map(([n, v]) => ({ n, ...v })).sort((a, b) => b.open - a.open).slice(0, 8);
+    const fRows = Object.entries(d.byForeman).filter(([n]) => n !== "No foreman").map(([n, v]) => ({ n, ...v })).sort((a, b) => b.open - a.open);
     const fMax = Math.max(1, ...fRows.map(r => r.open + r.closed));
     const fpLo = d.months.every(m => m.v == null || m.v >= 50) ? 50 : 0;
+    const buckets = [["0–7 days", 0, 7, OD_G], ["8–14 days", 8, 14, OD_GOLD], ["15–30 days", 15, 30, OD_O], ["Over 30 days", 31, 1e9, OD_R]].map(([l, a, b, c]) => ({ l, c, items: d.openPunch.filter(p => p.age != null && p.age >= a && p.age <= b) }));
+    const noAge = d.openPunch.filter(p => p.age == null);
+    if (noAge.length) buckets.push({ l: "No date", c: "#B9B0A8", items: noAge });
+    const serious = d.openPunch.filter(p => p.serious);
     main = (<>
       <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase</p></div></div>
       <div className="od-minis">
-        <OdMini title="First-pass, 90 days" color={OD_G} icon="checkCircle" value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={`${d.in90.length} inspections`}><OdRing pct={(d.fp90 || 0)/100} color={OD_G} label={`First-pass rate ${d.fp90 == null ? "not available" : d.fp90 + " percent"}`}/></OdMini>
-        <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch} sub={`${d.punchJobs.size} jobs`}><OdBars vals={fRows.slice(0, 6).map(r => r.open)} color={OD_O} hi={0} label="Open punch items by foreman"/></OdMini>
-        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => x.rt.rtScheduled || x.rt.rtStatus === "scheduled").length} scheduled`}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => x.rt.rtScheduled || x.rt.rtStatus === "scheduled").length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips that are scheduled"/></OdMini>
-        <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of open QC walks that are scheduled"/></OdMini>
+        <OdMini title="First-pass, 90 days" color={OD_G} icon="checkCircle" value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={odPlural(d.in90.length, "inspection")} onClick={() => openList("First inspections, last 90 days", d.fp90 == null ? "" : `${d.fp90}% passed the first time`, d.in90.slice().sort((a, b) => b.at - a.at).map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed first time" : "failed first time"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}><OdRing pct={(d.fp90 || 0)/100} color={OD_G} label="First-pass rate"/></OdMini>
+        <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch.length} sub={`${serious.length} serious`} onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}><OdBars vals={buckets.map(b => b.items.length)} color={OD_O} hi={3} label="Open punch by age"/></OdMini>
+        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => x.rt.scheduledDate || x.rt.rtStatus === "scheduled").length} scheduled`} onClick={() => openList("Open return trips", "", d.openRTs.map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ") || "Return trip", tag: x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "", right: x.rt.scheduledDate || "No date", color: OD_R, job: x.job })))}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => x.rt.scheduledDate || x.rt.rtStatus === "scheduled").length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips scheduled"/></OdMini>
+        <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`} onClick={() => openList("Open QC walks", "", d.qcRows.map(r => ({ title: r.job.name, sub: `${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`, right: r.at ? odShort(r.at) : "", color: OD_B, job: r.job })))}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of QC walks scheduled"/></OdMini>
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">First-pass inspections<small>by month</small></div>
+          <div className="od-ct">First-pass inspections<small>by month · tap a month</small></div>
           {d.months.some(m => m.v != null)
             ? <OdLine vals={d.months.map(m => m.v)} labels={d.months.map(m => m.label)} color={OD_G} min={fpLo} max={100}
-                ticks={fpLo ? [50, 75, 100] : [0, 25, 50, 75, 100]} fmt={v => `${v}%`} target={90} targetLabel="Target 90%"
-                label={`First-pass rate by month: ${d.months.map(m => `${m.label} ${m.v == null ? "none" : m.v + "%"}`).join(", ")}`} hiLabel={(v, i) => `${v}% · ${d.months[i].n} insp.`}/>
+                ticks={fpLo ? [50, 75, 100] : [0, 25, 50, 75, 100]} fmt={v => `${v}%`} target={90} targetLabel="Target 90%" sel={fpSel} onSel={setFpSel}
+                label={`First-pass rate by month: ${d.months.map(m => `${m.label} ${m.v == null ? "none" : m.v + "%"}`).join(", ")}`} tip={(v, i) => `${v}% · ${d.months[i].pass} of ${d.months[i].n}`}/>
             : <div className="od-empty">No inspection results logged in the last 6 months.</div>}
+          {fpSel != null && d.months[fpSel] && d.months[fpSel].n > 0 && <div className="od-daysum"><div><b>{d.months[fpSel].label}: {d.months[fpSel].pass} of {d.months[fpSel].n} passed first time</b></div>
+            <button type="button" onClick={() => openList(`First inspections in ${d.months[fpSel].m.toLocaleDateString([], { month: "long" })}`, "", d.months[fpSel].list.map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed" : "failed"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}>List them</button></div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Open punch by age<small>tap a bar</small></div>
+          <OdHBars rows={buckets.map(b => ({ name: b.l, note: b.items.length, v: b.items.length, color: b.c, onClick: b.items.length ? () => openList(`Punch open ${b.l.toLowerCase()}`, odPlural(b.items.length, "item"), punchRows(b.items)) : undefined }))} empty="No open punch."/>
+          {serious.length > 0 && <button type="button" className="od-flag" onClick={() => openList("Serious punch items", "", punchRows(serious))}><Icon name="alertTriangle" size={13}/>{odPlural(serious.length, "serious item")} open</button>}
+        </div>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Punch by foreman<small>open now · closed in 30 days · tap a name</small></div>
+          <div className="od-board">
+            {fRows.map(r => (
+              <button type="button" className="r" key={r.n} onClick={() => openList(`${r.n}: open punch`, `${r.open} open · ${r.closed} closed in 30 days`, punchRows(r.items))}>
+                <i className="av sm">{(r.n[0] || "?").toUpperCase()}</i><span className="nm"><b>{r.n}</b><small>{r.open} open · {r.closed} closed</small></span>
+                <span className="bar"><i style={{ width: `${(r.closed/fMax)*100}%`, background: OD_G }}/><i style={{ width: `${(r.open/fMax)*100}%`, background: OD_O }}/></span>
+              </button>
+            ))}
+            {!fRows.length && <div className="od-empty">No punch items on active jobs.</div>}
+          </div>
+          {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span></div>}
         </div>
         <div className="od-white od-pad">
           <div className="od-ct">Failed inspections<small>latest</small></div>
-          <div className="od-fails">
-            {d.fails.slice(0, 5).map((f, i) => (
-              <button type="button" key={i} onClick={() => open(f.job)}><b>{f.job.name}</b><span>{f.ph} · {odShort(f.at)}</span><small>{f.items.length ? f.items.slice(0, 2).join(" · ") : "No items listed"}</small></button>
-            ))}
-            {!d.fails.length && <div className="od-empty">No failed inspections logged.</div>}
-          </div>
+          <Rows rows={d.fails.slice(0, 8).map(f => ({ title: f.job.name, sub: (f.items || []).length ? (f.items || []).map(it => odText(it && (it.text || it))).filter(Boolean).slice(0, 2).join(" · ") : "No items listed", tag: `${f.ph}${f.by ? " · " + f.by : ""}`, right: odShort(f._at), color: OD_R, icon: "x", job: f.job }))} empty="No failed inspections logged."/>
         </div>
-      </div>
-      <Sec right="open now · closed in the last 30 days">Punch by foreman</Sec>
-      <div className="od-white od-board">
-        {fRows.map((r, i) => (
-          <div className="r" key={r.n}><i className="av sm">{(r.n[0] || "?").toUpperCase()}</i><div className="nm"><b>{r.n}</b><small>{r.open} open · {r.closed} closed</small></div>
-            <div className="bar"><i style={{ width: `${(r.closed/fMax)*100}%`, background: OD_G }}/><i style={{ width: `${(r.open/fMax)*100}%`, background: OD_O }}/></div></div>
-        ))}
-        {!fRows.length && <div className="od-empty">No punch items on active jobs.</div>}
-        {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span></div>}
       </div>
     </>);
     right = (<>
       <Me sub="Quality"/>
-      <Stats items={[[d.fp90 == null ? "—" : `${d.fp90}%`, "First-pass"], [d.punchJobs.size ? (d.openPunch/d.punchJobs.size).toFixed(1) : "0", "Punch / job"], [d.fails.filter(f => d.now - f.at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
+      <Stats items={[[d.fp90 == null ? "—" : `${d.fp90}%`, "First-pass"], [d.active.length ? (d.openPunch.length / Math.max(1, new Set(d.openPunch.map(p => p.job.id)).size)).toFixed(1) : "0", "Punch / job"], [d.fails.filter(f => d.now - f._at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
       <Sec right={`${d.openRTs.length}`}>Open return trips</Sec>
-      <div className="od-list">{d.openRTs.slice(0, 5).map((x, i) => <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={x.rt.scheduledDate ? (odDate(x.rt.scheduledDate) ? `${odDow(odDate(x.rt.scheduledDate))} ${odShort(odDate(x.rt.scheduledDate))}` : "") : "No date"} onClick={() => open(x.job)}/>)}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
+      <div className="od-list">{d.openRTs.slice(0, 6).map((x, i) => { const sd = odDate(x.rt.scheduledDate); return <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={sd ? `${odDow(sd)} ${odShort(sd)}` : "No date"} onClick={() => openJob(x.job)}/>; })}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
       <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
-      <div className="od-list">{d.qcRows.slice(0, 5).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => open(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
+      <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
-  } else if (tab === "cc") {
-    const snap = cc || {};
-    const routines = (Array.isArray(snap.routines) ? snap.routines : []).filter(Boolean);
-    const sessions = (Array.isArray(snap.sessions) ? snap.sessions : []).filter(Boolean);
-    const openS = sessions.filter(x => x.bucket !== "completed" && x.status !== "archived")
-      .sort((a, b) => (odDate(b.updatedAt) || 0) - (odDate(a.updatedAt) || 0));
-    const groups = [["blocked", "Needs you", OD_R], ["review_ready", "Ready to review", OD_B], ["working", "Working now", OD_G], ["failed", "Stopped with an error", OD_R]];
-    const grouped = groups.map(([k, label, color]) => ({ k, label, color, list: openS.filter(x => x.bucket === k) }));
-    const rest = openS.filter(x => !groups.some(g => g[0] === x.bucket));
-    if (rest.length) grouped.push({ k: "other", label: "Idle", color: OD_GOLD, list: rest });
-    const waiting = openS.filter(x => x.bucket === "blocked" || x.bucket === "review_ready").length;
-    const on = routines.filter(r => r.enabled);
-    const ran = routines.filter(r => r.lastStatus);
-    const okRuns = ran.filter(r => r.lastStatus === "succeeded");
-    const nameCount = {}; on.forEach(r => { const k = String(r.name || "").trim().toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
-    const dupes = Object.values(nameCount).filter(n => n > 1).length;
-    const upd = odDate(snap.updatedAt);
-    const stale = upd && d.now - upd > 3*60*60*1000;
-    const next = on.map(r => ({ ...r, _next: odDate(r.nextAt) })).filter(r => r._next && r._next >= d.now).sort((a, b) => a._next - b._next);
-    const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`} · ${odTime(at)}` : "";
-    const statusColor = (r) => !r.enabled ? "#8C847D" : !r.lastStatus ? OD_GOLD : r.lastStatus === "succeeded" ? OD_G : OD_R;
-    main = (<>
-      <div className="od-head"><div><h1>Command Center</h1><p>Your Claude automations and the sessions that aren't finished · {cc === undefined ? "loading…" : upd ? `updated ${odAgo(upd, d.now)}` : "no snapshot yet"}</p></div>
-        {stale && <span className="od-warn">Snapshot is {odAgo(upd, d.now).replace(" ago", "")} old. Check the Command Center snapshot routine.</span>}</div>
-      {cc === null ? (
-        <div className="od-white od-pad"><div className="od-ct">Nothing here yet</div><div className="od-empty">The Command Center snapshot routine fills this in every hour. Once it has run, your automations and open Claude sessions show up here.</div></div>
-      ) : (<>
-        <div className="od-minis">
-          <OdMini title="Automations on" color={OD_O} icon="refresh" value={on.length} sub={`of ${routines.length}`}><OdRing pct={routines.length ? on.length/routines.length : 0} color={OD_O} label={`${on.length} of ${routines.length} automations on`}/></OdMini>
-          <OdMini title="Last runs OK" color={OD_G} icon="checkCircle" value={ran.length ? okRuns.length : "—"} sub={ran.length ? `of ${ran.length}` : "none yet"}><OdRing pct={ran.length ? okRuns.length/ran.length : 0} color={OD_G} label={`${okRuns.length} of ${ran.length} last runs succeeded`}/></OdMini>
-          <OdMini title="Open sessions" color={OD_B} icon="activity" value={openS.length} sub="not finished"><OdBars vals={grouped.map(g => g.list.length)} color={OD_B} hi={0} label={grouped.map(g => `${g.label} ${g.list.length}`).join(", ")}/></OdMini>
-          <OdMini title="Waiting on you" color={OD_R} icon="bell" value={waiting} sub="sessions"><OdRing pct={openS.length ? waiting/openS.length : 0} color={OD_R} label={`${waiting} of ${openS.length} open sessions are waiting on you`}/></OdMini>
-        </div>
-        <div className="od-white od-pad">
-          <div className="od-ct">Open Claude sessions<small>tap one to open it in Claude</small></div>
-          {grouped.filter(g => g.list.length).map(g => (
-            <div className="od-sgroup" key={g.k}>
-              <div className="sh" style={{ "--c": g.color }}>{g.label}<span>{g.list.length}</span></div>
-              {g.list.map(x => (
-                <a className="od-sess" key={x.id} href={`https://claude.ai/code/${encodeURIComponent(x.id)}`} target="_blank" rel="noopener noreferrer">
-                  <span className="m"><b>{x.title || "Untitled session"}</b><small>{[OD_ORIGIN[x.origin] || x.origin, x.summary].filter(Boolean).join(" · ")}</small></span>
-                  <span className="t">{odAgo(odDate(x.updatedAt), d.now)}</span>
-                </a>
-              ))}
-            </div>
-          ))}
-          {!openS.length && <div className="od-empty">Every session is finished.</div>}
-        </div>
-        <Sec right="next runs">Coming up</Sec>
-        <div className="od-plan">
-          {next.slice(0, 6).map((r, i) => (
-            <div className={"od-white od-start" + (i === 0 ? " hot" : "")} key={r.id || i} style={{ cursor: "default" }}>
-              <span className="dd">{when(r._next)}</span><b>{r.name}</b><p>{r.schedule || ""}</p>
-            </div>
-          ))}
-          {!next.length && <div className="od-empty">No automation is scheduled to run.</div>}
-        </div>
-      </>)}
-    </>);
-    right = (<>
-      <Me sub="Command Center"/>
-      <Stats items={[[`${on.length}/${routines.length}`, "Automations on"], [openS.length, "Open sessions"], [waiting, "Waiting on you"]]}/>
-      <Sec right={dupes ? `${dupes} duplicate${dupes === 1 ? "" : "s"}` : `${routines.length}`}>Automations</Sec>
-      <div className="od-list">
-        {routines.slice().sort((a, b) => (b.enabled - a.enabled) || String(a.name).localeCompare(String(b.name))).map((r, i) => {
-          const dup = r.enabled && nameCount[String(r.name || "").trim().toLowerCase()] > 1;
-          const last = odDate(r.lastAt);
-          const sub = !r.enabled ? "Off" : dup ? "Duplicate: this name runs more than once" : last ? `${r.lastStatus === "succeeded" ? "Ran" : "Failed"} ${when(last)}` : "Hasn't run yet";
-          return <OdItem key={r.id || i} color={statusColor(r)} icon={r.enabled ? "refresh" : "x"} tag={r.schedule || (r.enabled ? "On demand" : "Off")} title={r.name} sub={sub}/>;
-        })}
-        {!routines.length && <div className="od-empty dark">{cc === undefined ? "Loading…" : "No automations in the snapshot."}</div>}
-      </div>
-    </>);
-  } else {
-    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O })).sort((a, b) => b.v - a.v).slice(0, 8);
-    const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 8);
+  } else if (tab === "people") {
+    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O, onClick: () => n === "Unassigned"
+      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_O })))
+      : openPerson(n) })).sort((a, b) => b.v - a.v).slice(0, 10);
+    const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 10);
     const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
-    const dayLabels = []; for (let i = 6; i >= 0; i--) dayLabels.push(odDow(new Date(d.t0.getTime() - i*OD_DAY)));
+    const dayDates = []; for (let i = 6; i >= 0; i--) dayDates.push(new Date(d.t0.getTime() - i*OD_DAY));
     const latestBuild = parseAppBuild(latest);
     const devList = Object.entries(devices || {}).map(([id, v]) => ({ id, ...v, build: parseAppBuild(v && v.version), seen: odDate(v && v.lastSeenAt) }))
       .filter(v => v.seen && d.now - v.seen < 14*OD_DAY).sort((a, b) => (a.build - b.build) || (b.seen - a.seen));
     const current = devList.filter(v => latestBuild && v.build >= latestBuild).length;
+    const behind = devList.filter(v => !latestBuild || v.build < latestBuild);
+    const shownDevices = showAllDevices ? devList : behind.slice(0, 8);
     main = (<>
-      <div className="od-head"><div><h1>People</h1><p>Who is on the app, what is on their plate, and which phones need an update</p></div></div>
+      <div className="od-head"><div><h1>People</h1><p>Who is on the app, what is on their plate, and which phones need an update · tap anyone</p></div></div>
       <div className="od-minis">
-        <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.people.length}`}><OdRing pct={d.people.length ? onApp/d.people.length : 0} color={OD_G} label={`${onApp} of ${d.people.length} on the app today`}/></OdMini>
-        <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label={`${urgentN} of ${d.openNeeds.length} open tasks are urgent`}/></OdMini>
-        <OdMini title="Time off waiting" color={OD_O} icon="calendar" value={d.timeOff.length} sub="requests"><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
-        <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest version unknown"}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label={`${current} of ${devList.length} devices on the latest build`}/></OdMini>
+        <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.people.length}`} onClick={() => openList("On the app today", "", d.people.filter(p => p.status === "active").map(p => ({ title: p.name, sub: `${odPlural(p.todayN, "update")} · ${odPlural(p.jobsToday, "job")}`, right: p.last ? odTime(p.last) : "", color: OD_G, onClick: () => openPerson(p.name) })))}><OdRing pct={d.people.length ? onApp/d.people.length : 0} color={OD_G} label={`${onApp} of ${d.people.length} on the app today`}/></OdMini>
+        <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`} onClick={() => openList("Open My Day tasks", `${urgentN} urgent`, d.openNeeds.slice().sort((a, b) => (needPriority(a) === "urgent" ? 0 : 1) - (needPriority(b) === "urgent" ? 0 : 1)).map(t => ({ title: odText(t.text) || "Task", sub: [needAssignee(t) && "On " + odFirst(needAssignee(t)), t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B })))}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label="Share of open tasks that are urgent"/></OdMini>
+        <OdMini title="Time off waiting" color={OD_O} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Decide these on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
+        <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => setShowAllDevices(true)}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">Updates by person<small>last 7 days</small></div>
+          <div className="od-ct">Updates by person<small>last 7 days · tap a square</small></div>
           {heat.length ? (
             <div className="od-heat" style={{ gridTemplateColumns: `86px repeat(7, minmax(0,1fr))` }}>
-              <div/>{dayLabels.map((l, i) => <div className="h" key={i}>{l}</div>)}
-              {heat.map(p => [<div className="n" key={p.name}>{odFirst(p.name)}</div>, ...p.days7.map((v, i) => { const a = v/heatMax; return <div className="c" key={p.name + i} style={{ background: v ? `rgba(242,112,42,${(0.14 + a*0.86).toFixed(2)})` : "#F6F2EE", color: a > 0.55 ? "#fff" : "#7C736C" }}>{v || "–"}</div>; })])}
+              <div/>{dayDates.map((dd, i) => <div className="h" key={i}>{odDow(dd)}</div>)}
+              {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{odFirst(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
+                return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "update")}`}
+                  onClick={() => openList(`${odFirst(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, odPlural(v, "update"), p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
+                  style={{ background: v ? `rgba(242,112,42,${(0.14 + a*0.86).toFixed(2)})` : "#F6F2EE", color: a > 0.55 ? "#fff" : "#7C736C" }}>{v || "–"}</button>; })])}
             </div>
           ) : <div className="od-empty">No updates logged this week.</div>}
         </div>
         <div className="od-white od-pad">
-          <div className="od-ct">My Day load<small>open tasks</small></div>
+          <div className="od-ct">My Day load<small>open tasks · tap a name</small></div>
           <OdHBars rows={loadRows} empty="No open My Day tasks."/>
         </div>
       </div>
@@ -46137,17 +46304,164 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
     right = (<>
       <Me sub="Team"/>
-      <Stats items={[[d.people.length, "Team"], [d.foremen.length, "Foremen"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Stats items={[[d.people.length, "Team"], [d.foremenP.length, "Foremen"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days", () => openList("Quiet for 3+ days", "No updates or job opens", d.people.filter(p => p.status === "quiet").map(p => ({ title: p.name, sub: p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days", color: "#8C847D", onClick: () => openPerson(p.name) })))]]}/>
       <Sec right={`${d.timeOff.length}`}>Time off waiting</Sec>
       <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_O} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub="Decide it on My Day" when={at ? `${odDow(at)} ${odShort(at)}` : ""}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
-      <Sec right={latest || ""}>Devices behind</Sec>
+      <Sec right={showAllDevices ? "behind only" : "show all"} onRight={() => setShowAllDevices(s => !s)}>{showAllDevices ? "All devices" : "Devices behind"}</Sec>
       <div className="od-box">
-        {devices == null ? <div className="od-empty dark">Loading devices…</div> : devList.filter(v => !latestBuild || v.build < latestBuild).slice(0, 8).map(v => (
-          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">{odWhen({ at: v.seen }, d.now)}</span><em>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
+        {devices == null ? <div className="od-empty dark">Loading devices…</div> : shownDevices.map(v => (
+          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">{odAgo(v.seen, d.now)}</span><em className={latestBuild && v.build >= latestBuild ? "ok" : ""}>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
         ))}
-        {devices != null && !devList.filter(v => !latestBuild || v.build < latestBuild).length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
+        {devices != null && !shownDevices.length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
       </div>
     </>);
+  } else {
+    const snap = cc || {};
+    const routines = (Array.isArray(snap.routines) ? snap.routines : []).filter(Boolean);
+    const sessions = (Array.isArray(snap.sessions) ? snap.sessions : []).filter(Boolean);
+    const sorted = sessions.filter(x => x.status !== "archived").sort((a, b) => (odDate(b.updatedAt) || 0) - (odDate(a.updatedAt) || 0));
+    const openS = sorted.filter(x => x.bucket !== "completed");
+    const cq = ccQ.trim().toLowerCase();
+    const shown = (ccFilter === "open" ? openS : ccFilter === "all" ? sorted : sorted.filter(x => x.bucket === ccFilter)).filter(x => !cq || `${x.title} ${x.summary}`.toLowerCase().includes(cq));
+    const groups = [["blocked", "Needs you", OD_R], ["review_ready", "Ready to review", OD_B], ["working", "Working now", OD_G], ["failed", "Stopped with an error", OD_R], ["idle", "Idle", OD_GOLD], ["completed", "Finished", "#8C847D"]];
+    const grouped = groups.map(([k, label, color]) => ({ k, label, color, list: shown.filter(x => (x.bucket || "idle") === k) })).filter(g => g.list.length);
+    const waiting = openS.filter(x => x.bucket === "blocked" || x.bucket === "review_ready").length;
+    const on = routines.filter(r => r.enabled);
+    const ran = routines.filter(r => r.lastStatus);
+    const okRuns = ran.filter(r => r.lastStatus === "succeeded");
+    const failedRuns = ran.filter(r => r.lastStatus !== "succeeded");
+    const nameCount = {}; on.forEach(r => { const k = String(r.name || "").trim().toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
+    const dupes = Object.values(nameCount).filter(n => n > 1).length;
+    const upd = odDate(snap.updatedAt);
+    const stale = upd && d.now - upd > 3*60*60*1000;
+    const next = on.map(r => ({ ...r, _next: odDate(r.nextAt) })).filter(r => r._next && r._next >= d.now).sort((a, b) => a._next - b._next);
+    const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
+    const statusColor = (r) => !r.enabled ? "#8C847D" : !r.lastStatus ? OD_GOLD : r.lastStatus === "succeeded" ? OD_G : OD_R;
+    const routineRow = (r) => ({ title: r.name, sub: `${r.schedule || "On demand"} · ${!r.enabled ? "off" : r.lastStatus ? `last run ${r.lastStatus === "succeeded" ? "worked" : "failed"} ${at2(odDate(r.lastAt))}` : "hasn't run"}${r._next ? " · next " + at2(r._next) : ""}`, color: statusColor(r), icon: "refresh" });
+    const chips = [["open", `Not finished ${openS.length}`], ["blocked", "Needs you"], ["review_ready", "Ready to review"], ["working", "Working"], ["completed", "Finished"], ["all", "All"]];
+    main = (<>
+      <div className="od-head"><div><h1>Command Center</h1><p>Your Claude automations and sessions · {cc === undefined ? "loading…" : upd ? `updated ${odAgo(upd, d.now)}` : "no snapshot yet"}</p></div>
+        {stale && <span className="od-warn">This list is {odAgo(upd, d.now).replace(" ago", "")} old. The hourly routine needs the Claude_Code_Remote connector.</span>}</div>
+      {cc === null ? (
+        <div className="od-white od-pad"><div className="od-ct">Nothing here yet</div><div className="od-empty">The Command Center snapshot routine fills this in. Once it has run, your automations and Claude sessions show up here.</div></div>
+      ) : (<>
+        <div className="od-minis">
+          <OdMini title="Automations on" color={OD_O} icon="refresh" value={on.length} sub={`of ${routines.length}`} onClick={() => openList("Automations", `${on.length} on`, routines.map(r => routineRow({ ...r, _next: odDate(r.nextAt) })))}><OdRing pct={routines.length ? on.length/routines.length : 0} color={OD_O} label="Share of automations on"/></OdMini>
+          <OdMini title="Last runs OK" color={OD_G} icon="checkCircle" value={ran.length ? okRuns.length : "—"} sub={ran.length ? `of ${ran.length}` : "none yet"} onClick={failedRuns.length ? () => openList("Automations whose last run failed", "", failedRuns.map(r => routineRow(r))) : undefined}><OdRing pct={ran.length ? okRuns.length/ran.length : 0} color={OD_G} label="Share of last runs that worked"/></OdMini>
+          <OdMini title="Open sessions" color={OD_B} icon="activity" value={openS.length} sub="not finished" onClick={() => setCcFilter("open")}><OdBars vals={groups.slice(0, 4).map(([k]) => openS.filter(x => x.bucket === k).length)} color={OD_B} hi={0} label="Open sessions by status"/></OdMini>
+          <OdMini title="Waiting on you" color={OD_R} icon="bell" value={waiting} sub="sessions" onClick={() => setCcFilter("blocked")}><OdRing pct={openS.length ? waiting/openS.length : 0} color={OD_R} label="Share of open sessions waiting on you"/></OdMini>
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Claude sessions<small>tap one to open it in Claude</small></div>
+          <div className="od-filters left">{chips.map(([k, l]) => <button type="button" key={k} aria-pressed={ccFilter === k} onClick={() => setCcFilter(k)}>{l}</button>)}</div>
+          <input className="od-q" type="search" value={ccQ} onChange={e => setCcQ(e.target.value)} placeholder="Search session titles" aria-label="Search sessions"/>
+          {grouped.map(g => (
+            <div className="od-sgroup" key={g.k}>
+              <div className="sh" style={{ "--c": g.color }}>{g.label}<span>{g.list.length}</span></div>
+              {g.list.map(x => (
+                <a className="od-sess" key={x.id} href={`https://claude.ai/code/${encodeURIComponent(x.id)}`} target="_blank" rel="noopener noreferrer">
+                  <span className="m"><b>{x.title || "Untitled session"}</b><small>{[OD_ORIGIN[x.origin] || x.origin, x.summary].filter(Boolean).join(" · ")}</small></span>
+                  <span className="t">{odAgo(odDate(x.updatedAt), d.now)}<Icon name="external" size={12}/></span>
+                </a>
+              ))}
+            </div>
+          ))}
+          {!grouped.length && <div className="od-empty">No sessions match.</div>}
+        </div>
+        <Sec right="next runs">Coming up</Sec>
+        <div className="od-plan">
+          {next.slice(0, 6).map((r, i) => (
+            <div className={"od-white od-start" + (i === 0 ? " hot" : "")} key={r.id || i}>
+              <span className="dd">{at2(r._next)}</span><b>{r.name}</b><p>{r.schedule || ""}</p>
+            </div>
+          ))}
+          {!next.length && <div className="od-empty">No automation is scheduled to run.</div>}
+        </div>
+      </>)}
+    </>);
+    right = (<>
+      <Me sub="Command Center"/>
+      <Stats items={[[`${on.length}/${routines.length}`, "Automations on"], [openS.length, "Open sessions", () => setCcFilter("open")], [waiting, "Waiting on you", () => setCcFilter("blocked")]]}/>
+      <Sec right={dupes ? `${dupes} duplicate${dupes === 1 ? "" : "s"}` : `${routines.length}`}>Automations</Sec>
+      <div className="od-list">
+        {routines.slice().sort((a, b) => (b.enabled - a.enabled) || String(a.name).localeCompare(String(b.name))).map((r, i) => {
+          const dup = r.enabled && nameCount[String(r.name || "").trim().toLowerCase()] > 1;
+          const last = odDate(r.lastAt), nx = odDate(r.nextAt);
+          const sub = !r.enabled ? "Off" : dup ? "Duplicate: this name runs more than once" : last ? `${r.lastStatus === "succeeded" ? "Ran" : "Failed"} ${at2(last)}` : "Hasn't run yet";
+          return <OdItem key={r.id || i} color={statusColor(r)} icon={r.enabled ? "refresh" : "x"} tag={r.schedule || (r.enabled ? "On demand" : "Off")} title={r.name} sub={sub}
+            onClick={() => openList(r.name, r.schedule || "", [
+              { title: r.enabled ? "On" : "Off", sub: "Status", color: statusColor(r), icon: "refresh" },
+              { title: last ? at2(last) : "Never", sub: r.lastStatus ? `Last run ${r.lastStatus === "succeeded" ? "worked" : "failed"}` : "Last run", color: statusColor(r), icon: "clock" },
+              { title: nx ? at2(nx) : "Not scheduled", sub: "Next run", color: OD_B, icon: "calendar" },
+              ...(dup ? [{ title: "Set up more than once", sub: "Another automation has the same name; you may get two reports.", color: OD_R, icon: "alertTriangle" }] : []),
+            ])}/>;
+        })}
+        {!routines.length && <div className="od-empty dark">{cc === undefined ? "Loading…" : "No automations in the snapshot."}</div>}
+      </div>
+    </>);
+  }
+
+  // ── sheet (job / person / list) ──
+  let sheetEl = null;
+  if (sheet && sheet.kind === "job") {
+    const j = d.allLive.find(x => x.id === sheet.id) || (jobs || []).find(x => x && x.id === sheet.id);
+    if (j) {
+      const inf = d.info[j.id] || odJobInfo(j, d.now), s = d.secOf(j), ev = (d.evById[j.id] || []).slice(0, 15), up = d.sched.filter(x => x.job && x.job.id === j.id);
+      const fact = (l, v) => <div><small>{l}</small><b>{v || "—"}</b></div>;
+      sheetEl = (
+        <OdSheet title={j.name} sub={[j.simproNo && "#" + j.simproNo, j.address, j.gc].filter(Boolean).join(" · ")} onClose={() => setSheet(null)}
+          actions={onSelectJob ? <button type="button" className="go" onClick={() => goApp(j)}>Open in app</button> : null}>
+          <div className="od-facts">
+            {fact("Stage", s ? s.label : "")}{fact("Foreman", j.foreman)}{fact("Lead", j.lead)}
+            {fact("Rough", `${odStatusLabel(effRS(j))}${parseStage(j.roughStage) ? " · " + parseStage(j.roughStage) + "%" : ""}`)}
+            {fact("Finish", `${odStatusLabel(effFS(j))}${parseStage(j.finishStage) ? " · " + parseStage(j.finishStage) + "%" : ""}`)}
+            {fact("QC", j.qcStatus ? `${j.qcStatus}${j.qcStatusDate ? " · " + j.qcStatusDate : ""}` : "")}
+            {fact("Rough inspection", j.roughInspectionResult ? (j.roughInspectionResult === "pass" ? "Passed" : "Failed") : j.fourWayTargetDate ? "Target " + j.fourWayTargetDate : "")}
+            {fact("Final inspection", j.finalInspectionResult ? (j.finalInspectionResult === "pass" ? "Passed" : "Failed") : j.finalInspectionTargetDate ? "Target " + j.finalInspectionTargetDate : "")}
+            {fact("Last update", d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "")}
+          </div>
+          {j.statusUpdate ? <div className="od-note"><small>Status update{j.statusUpdateBy ? " · " + j.statusUpdateBy : ""}</small>{odText(j.statusUpdate)}</div> : null}
+          {inf.failOpen.length > 0 && <><div className="od-sh">Failed inspection items to fix <span>{inf.failOpen.length}</span></div><Rows rows={inf.failOpen.map(x => ({ title: x.text, sub: x.ph + " inspection", color: OD_R, icon: "x" }))}/></>}
+          <div className="od-sh">Coming up <span>{up.length}</span></div>
+          <Rows rows={up.map(x => ({ title: x.label, sub: x.type === "start" ? (x.confirmed ? "Confirmed" : "Projected") : x.detail || "", right: `${odDow(x.at)} ${odShort(x.at)}`, color: OD_SCHED_COLOR[x.type], icon: OD_SCHED_ICON[x.type] }))} empty="No dates set."/>
+          <div className="od-sh">Open punch <span>{inf.punch.length}</span></div>
+          <Rows rows={inf.punch.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).slice(0, 25).map(p => ({ title: p.text, sub: `${p.phase}${p.room ? " · " + p.room : ""}${p.who ? " · on " + odFirst(p.who) : ""}`, tag: [p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · "), right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, icon: "openitems" }))} empty="No open punch."/>
+          <div className="od-sh">Change orders <span>{inf.cos.length}</span></div>
+          <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders" }))} empty="No change orders."/>
+          <div className="od-sh">Return trips <span>{inf.rts.length}</span></div>
+          <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOffDate || rt.scheduledDate || "", color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips" }))} empty="No return trips."/>
+          <div className="od-sh">Inspections <span>{inf.atts.length}</span></div>
+          <Rows rows={inf.atts.map(a => ({ title: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}`, sub: [(a.items || []).length && odPlural(a.items.length, "item"), a.by].filter(Boolean).join(" · "), right: a.date || "", color: a.result === "fail" ? OD_R : OD_G, icon: a.result === "fail" ? "x" : "checkCircle" }))} empty="No inspection results logged."/>
+          <div className="od-sh">Recent activity <span>{ev.length}</span></div>
+          <Rows rows={ev.map(e => ({ title: e.label, sub: [e.detail, e.who && odFirst(e.who)].filter(Boolean).join(" · "), right: odWhen(e, d.now), color: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type], icon: TYPE_ICON[e.type] }))} empty="Nothing logged in 30 days."/>
+        </OdSheet>
+      );
+    }
+  } else if (sheet && sheet.kind === "person") {
+    const p = d.people.find(x => sameName(x.name, sheet.name));
+    const tasks = d.openNeeds.filter(n => sameName(needAssignee(n), sheet.name));
+    const theirJobs = d.active.filter(j => sameName(j.foreman, sheet.name) || sameName(j.lead, sheet.name));
+    sheetEl = (
+      <OdSheet title={sheet.name} sub={p ? (p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days") : ""} onClose={() => setSheet(null)}>
+        <div className="od-facts">
+          <div><small>Today</small><b>{p ? odPlural(p.todayN, "update") : "—"}</b></div>
+          <div><small>Last 7 days</small><b>{p ? odPlural(p.days7.reduce((a, b) => a + b, 0), "update") : "—"}</b></div>
+          <div><small>Open tasks</small><b>{tasks.length}{tasks.filter(t => needPriority(t) === "urgent").length ? ` · ${tasks.filter(t => needPriority(t) === "urgent").length} urgent` : ""}</b></div>
+        </div>
+        <div className="od-sh">Open My Day tasks <span>{tasks.length}</span></div>
+        <Rows rows={tasks.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate, needRequester(t) && "from " + odFirst(needRequester(t))].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B, icon: "myday" }))} empty="No open tasks."/>
+        <div className="od-sh">Their jobs <span>{theirJobs.length}</span></div>
+        <Rows rows={theirJobs.map(j => ({ title: j.name, sub: `${d.secOf(j) ? d.secOf(j).label : ""} · ${odPlural(d.info[j.id].punch.length, "open punch item")}`, right: d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "", color: d.secOf(j) ? d.secOf(j).color : OD_O, icon: "hardHat", job: j }))} empty="Not foreman or lead on an active job."/>
+        <div className="od-sh">Recent activity <span>{p ? Math.min(20, p.mine.length) : 0}</span></div>
+        <Rows rows={p ? p.mine.slice(0, 20).map(e => ({ ...eventRow(e), icon: TYPE_ICON[e.type] })) : []} empty="Nothing logged in 30 days."/>
+      </OdSheet>
+    );
+  } else if (sheet && sheet.kind === "list") {
+    sheetEl = (
+      <OdSheet title={sheet.title} sub={sheet.sub} onClose={() => setSheet(null)}>
+        <Rows rows={sheet.rows} empty="Nothing in this list."/>
+      </OdSheet>
+    );
   }
 
   return (
@@ -46159,44 +46473,72 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           background:radial-gradient(55% 45% at 12% 6%,rgba(214,150,92,.34),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(170,100,55,.3),transparent 70%),linear-gradient(180deg,#241B16,#120E0C)}
         .odash *{box-sizing:border-box}
         .odash button{font:inherit;color:inherit}
-        .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+        .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
         .odash .od-tabs{display:flex;gap:4px;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:4px;overflow-x:auto;max-width:100%;scrollbar-width:none}
         .odash .od-tabs::-webkit-scrollbar{display:none}
-        .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
         .odash .od-tabs button:hover{color:var(--ink)}
         .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:#fff;box-shadow:0 6px 14px -6px rgba(242,112,42,.8)}
         .odash .od-help{display:inline-flex;align-items:center;background:rgba(255,255,255,.92);border-radius:999px;padding:3px 8px;color:#1B1F24}
         .odash .od-top .live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim)}
         .odash .od-top .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#2FBF71;box-shadow:0 0 0 4px rgba(47,191,113,.2)}
-        .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}
-        .odash .od-panel{background:var(--pan);border:1px solid var(--line);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;
-          -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+        .odash .od-ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+        .odash .od-sel{background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;max-width:220px}
+        .odash .od-sel.light{background:#F8F5F2;border-color:var(--cline);color:var(--cink);color-scheme:light}
+        .odash .od-seg{display:inline-flex;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
+        .odash .od-seg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-seg button[aria-pressed="true"]{background:rgba(255,255,255,.14);color:var(--ink)}
+        .odash .od-find{position:relative;flex:1;min-width:200px;max-width:380px;margin-left:auto}
+        .odash .od-find input{width:100%;background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:12.5px;outline:none}
+        .odash .od-find input::placeholder{color:var(--faint)}
+        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:#fff;color:var(--cink);border-radius:14px;box-shadow:0 18px 40px -12px rgba(0,0,0,.6);overflow:hidden}
+        .odash .od-find .hits button{display:flex;flex-direction:column;align-items:flex-start;width:100%;border:0;background:transparent;padding:9px 14px;text-align:left;cursor:pointer;border-bottom:1px solid var(--cline)}
+        .odash .od-find .hits button:hover{background:#FBF5F0}
+        .odash .od-find .hits b{font-size:13px}.odash .od-find .hits small{font-size:11.5px;color:var(--cdim)}
+        .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:start}
+        .odash .od-panel{background:var(--pan);border:1px solid var(--line);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+        .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
         .odash .od-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
         .odash .od-head p{margin:3px 0 0;font-size:12.5px;color:var(--dim)}
+        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFD3B8;background:rgba(242,112,42,.18);border:1px solid rgba(242,112,42,.4);border-radius:12px;padding:5px 10px;max-width:420px}
+        .odash .od-clear{margin-left:auto;border:1px solid var(--line);background:var(--inset);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:0;text-align:left}
         .odash .od-pad{padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
         .odash .od-minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-        .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1)}
-        .odash .od-mini:hover,.odash .od-crew:hover,.odash .od-start:hover{transform:translateY(-4px)}
+        .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),box-shadow .25s}
+        .odash .od-tap{cursor:pointer}
+        .odash .od-tap:hover{transform:translateY(-4px);box-shadow:0 16px 28px -16px rgba(0,0,0,.7)}
         .odash .od-mini .t{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:700}
         .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
         .odash .od-mini .b{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:auto;flex-wrap:wrap}
         .odash .od-mini .v{font-size:22px;font-weight:800;line-height:1;color:var(--c);font-variant-numeric:tabular-nums}
         .odash .od-mini .v small{font-size:11px;font-weight:500;color:var(--cdim);margin-left:4px}
+        .odash .od-mini .more{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--cdim);margin-top:-2px}
         .odash .spark{flex:none}
-        .odash .od-row2{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px}
+        .odash .od-row2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
         .odash .od-ct{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:14px}
         .odash .od-ct small{font-weight:500;color:var(--cdim);font-size:12px}
         .odash .od-svg{width:100%;height:auto;display:block}
-        .odash .od-big{font-size:30px;font-weight:800;line-height:1}
-        .odash .od-big small{font-size:12px;font-weight:500;color:var(--cdim);margin-left:6px}
-        .odash .od-link{all:unset;cursor:pointer;font-size:16px;line-height:1.25}
+        .odash .od-hint{font-size:11.5px;color:var(--cdim)}
+        .odash .od-daysum{display:flex;align-items:center;gap:10px;background:#FBF5F0;border-radius:12px;padding:9px 12px}
+        .odash .od-daysum div{flex:1;min-width:0;display:flex;flex-direction:column}
+        .odash .od-daysum b{font-size:12.5px}.odash .od-daysum small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-daysum button{border:0;background:var(--o);color:#fff;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-attn{display:flex;flex-direction:column}
+        .odash .od-attn button{display:flex;align-items:center;gap:10px;border:0;border-bottom:1px solid var(--cline);background:transparent;padding:10px 2px;text-align:left;cursor:pointer;color:var(--cdim)}
+        .odash .od-attn button:hover{background:#FBF8F5}
+        .odash .od-attn .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
+        .odash .od-attn .lb{flex:1;font-size:12.5px;font-weight:600;color:var(--cink)}
+        .odash .od-attn .n{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+        .odash .od-busy{margin-top:auto;display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--cline);padding-top:10px}
+        .odash .od-busy small{font-size:11px;color:var(--cdim)}
+        .odash .od-link{all:unset;cursor:pointer;font-size:13px;color:var(--cink)}
         .odash .od-link:hover b{text-decoration:underline}
-        .odash .od-mini-list{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--cdim)}
-        .odash .od-mini-list span{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px}
+        .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:#FDECEC;color:#B4262B;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-sec{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;color:var(--ink)}
         .odash .od-sec span::before{content:"";display:inline-block;width:3px;height:15px;border-radius:2px;background:var(--o);margin-right:9px;vertical-align:-2px}
         .odash .od-sec small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--dim)}
+        .odash .od-sec button{margin-left:auto;border:0;background:transparent;color:#FFB585;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
         .odash .od-crew{padding:14px;display:flex;gap:10px;align-items:center;min-width:0;transition:transform .25s}
         .odash .od-crew > div{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
@@ -46206,65 +46548,83 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-crew.hot{background:var(--o);color:#fff}
         .odash .od-crew.hot p{color:rgba(255,255,255,.86)}
         .odash .od-crew.hot .day{background:rgba(255,255,255,.25)}
-        .odash .od-start{padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0;cursor:pointer;transition:transform .25s}
+        .odash .od-start{padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0}
         .odash .od-start .dd{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-start b{font-size:14px}
         .odash .od-start p{margin:0;font-size:11.5px;color:var(--cdim)}
-        .odash .od-start .st{align-self:flex-start;margin-top:6px;font-size:10.5px;font-weight:800;border-radius:999px;padding:2px 9px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,#fff)}
         .odash .od-start.hot{background:var(--o);color:#fff}
         .odash .od-start.hot .dd,.odash .od-start.hot p{color:rgba(255,255,255,.86)}
-        .odash .od-start.hot .st{background:rgba(255,255,255,.25);color:#fff}
         .odash .od-me{display:flex;align-items:center;gap:10px}
         .odash .av{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#3B5BA5;color:#fff;font-style:normal;font-weight:800;font-size:14px;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.22)}
         .odash .av.sm{width:30px;height:30px;font-size:12px;box-shadow:none}
         .odash .od-me b{display:block;font-size:14px}
         .odash .od-me small{display:block;font-size:11.5px;color:var(--dim)}
-        .odash .od-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:10px 4px;text-align:center}
-        .odash .od-stats div+div{border-left:1px solid var(--line)}
+        .odash .od-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:6px 4px;text-align:center}
+        .odash .od-stats > *{border:0;background:transparent;padding:6px 2px;border-radius:12px}
+        .odash .od-stats > * + *{border-left:1px solid var(--line);border-radius:0}
+        .odash .od-stats button{cursor:pointer}.odash .od-stats button:hover b{color:#FFB585}
         .odash .od-stats b{display:block;font-size:16px;font-variant-numeric:tabular-nums}
         .odash .od-stats small{font-size:10.5px;color:var(--dim)}
         .odash .od-cal{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:12px}
-        .odash .od-cal .h{font-weight:700;font-size:13px;margin-bottom:8px}
+        .odash .od-cal .h{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:13px;margin-bottom:8px}
+        .odash .od-cal .h small{margin-left:auto;font-weight:500;font-size:10.5px;color:var(--faint)}
         .odash .od-cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px 0;text-align:center;font-size:11px}
         .odash .od-cal .dow{color:var(--faint);font-size:10px;padding-bottom:4px}
-        .odash .od-cal .d{width:26px;height:26px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums}
-        .odash .od-cal .d.m{color:#fff;font-weight:800}
+        .odash .od-cal .d{width:26px;height:26px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums;border:0;background:transparent;font-size:11px}
+        .odash .od-cal button.d{cursor:pointer;color:#fff;font-weight:800}
+        .odash .od-cal button.d:hover{transform:scale(1.12)}
         .odash .od-cal .d.today{box-shadow:inset 0 0 0 1.5px var(--ink);color:var(--ink);font-weight:800}
+        .odash .od-cal button.d.today{color:#fff;box-shadow:0 0 0 2px var(--ink)}
         .odash .od-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:10.5px;color:var(--dim)}
-        .odash .od-legend.light{color:var(--cdim);padding:4px 0 10px}
+        .odash .od-legend.light{color:var(--cdim);margin-top:0}
         .odash .od-legend span{display:inline-flex;align-items:center;gap:5px}
         .odash .od-legend span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c)}
         .odash .od-list{display:flex;flex-direction:column;gap:8px}
         .odash .od-item{display:flex;align-items:center;gap:10px;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:14px;padding:9px 10px;text-align:left;cursor:pointer;min-width:0}
         .odash .od-item:disabled{cursor:default}
-        .odash .od-item:not(:disabled):hover{background:rgba(255,255,255,.06)}
+        .odash .od-item:not(:disabled):hover{background:rgba(255,255,255,.07)}
         .odash .od-item .th{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center}
         .odash .od-item .tx{min-width:0;flex:1;display:flex;flex-direction:column}
         .odash .od-item em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
         .odash .od-item b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-item small{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-item .when{font-size:10.5px;color:var(--faint);white-space:nowrap;flex:none}
+        .odash .od-item .chev{color:var(--faint);flex:none;display:grid}
         .odash .od-filters{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+        .odash .od-filters.left{margin-left:0}
         .odash .od-filters button{border:1px solid var(--cline);background:transparent;color:var(--cdim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-filters button span{opacity:.7;margin-left:2px}
         .odash .od-filters button[aria-pressed="true"]{background:#FFF0E6;border-color:transparent;color:#C2511A}
-        .odash .od-q{width:100%;border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none}
+        .odash .od-chips{display:flex;gap:6px;flex-wrap:wrap}
+        .odash .od-chips button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--inset);color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-chips button i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+        .odash .od-chips button span{opacity:.7}
+        .odash .od-chips button[aria-pressed="true"]{background:var(--o);border-color:transparent;color:#fff}
+        .odash .od-frow{display:flex;gap:8px;flex-wrap:wrap}
+        .odash .od-frow .od-q{flex:1;min-width:180px}
+        .odash .od-q{width:100%;border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none;color-scheme:light}
         .odash .od-q:focus{border-color:var(--o)}
+        .odash .od-dayh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cdim);padding:12px 0 2px;border-bottom:1px solid var(--cline)}
+        .odash .od-dayh span{margin-left:auto;font-weight:600;letter-spacing:0;text-transform:none}
         .odash .od-rows{display:flex;flex-direction:column}
-        .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%}
-        .odash .od-row:hover{background:#FBF8F5}
+        .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%;color:var(--cink)}
+        .odash .od-row:disabled{cursor:default}
+        .odash .od-row:not(:disabled):hover{background:#FBF8F5}
         .odash .od-row .k{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
         .odash .od-row .m{min-width:0;display:flex;flex-direction:column}
         .odash .od-row .m b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-row .m b em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.08em;color:${OD_P};margin-left:6px}
-        .odash .od-row .m small{font-size:12px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-row .w{font-size:12px;font-weight:700;color:var(--cink)}
-        .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;min-width:110px;text-align:right}
+        .odash .od-row .m em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#C2511A}
+        .odash .od-row .m small{font-size:12px;color:var(--cdim);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+        .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
         .odash .od-pulse{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0}
+        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:0;text-align:left;cursor:pointer}
+        .odash .od-person:hover{background:#FBF5F0}
         .odash .od-person > div{min-width:0;flex:1}
         .odash .od-person b{display:block;font-size:13px}
         .odash .od-person small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .beat{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
+        .odash .od-nav{margin-left:auto;display:inline-flex;gap:4px}
+        .odash .od-nav button{border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;min-width:30px;height:28px;padding:0 10px;display:grid;place-items:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--cink)}
         .odash .od-weekwrap{overflow-x:auto}
         .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
         .odash .od-week .col{background:#F8F5F2;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
@@ -46272,40 +46632,49 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-week .dh{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-week .col.today .dh{color:#C2511A}
         .odash .od-week .dh span{font-weight:600;margin-left:3px}
-        .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);min-width:0}
+        .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);min-width:0;color:var(--cink)}
         .odash .od-week .blk b{display:block;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-week .blk small{display:block;font-size:10.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-week .none{color:#C9C1BA;font-size:12px;text-align:center;margin-top:20px}
-        .odash .od-fails{display:flex;flex-direction:column}
-        .odash .od-fails button{all:unset;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;padding:9px 0;border-bottom:1px solid var(--cline)}
-        .odash .od-fails button:last-child{border-bottom:0}
-        .odash .od-fails b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-fails span{font-size:11.5px;color:${OD_R};font-weight:700;white-space:nowrap}
-        .odash .od-fails small{grid-column:1/-1;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-board{padding:4px 16px}
-        .odash .od-board .r{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(80px,40%);gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--cline)}
+        .odash .od-board{display:flex;flex-direction:column}
+        .odash .od-board .r{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(80px,40%);gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;color:var(--cink)}
+        .odash .od-board .r:hover{background:#FBF8F5}
         .odash .od-board .nm b{display:block;font-size:13px}
         .odash .od-board .nm small{display:block;font-size:11px;color:var(--cdim)}
         .odash .od-board .bar{display:flex;height:8px;border-radius:99px;background:#F2EEEA;overflow:hidden;gap:2px}
         .odash .od-board .bar i{display:block;height:100%}
-        .odash .od-hb{display:flex;flex-direction:column;gap:9px}
-        .odash .od-hb .r{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;font-size:12px}
+        .odash .od-hb{display:flex;flex-direction:column;gap:4px}
+        .odash .od-hb .r{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;font-size:12px;padding:5px 6px;border-radius:10px;border:0;background:transparent;text-align:left;color:var(--cink);width:100%}
+        .odash .od-hb .r.tap{cursor:pointer}.odash .od-hb .r.tap:hover,.odash .od-hb .r.on{background:#FBF2EA}
         .odash .od-hb .r span{color:var(--cdim);font-variant-numeric:tabular-nums}
         .odash .od-hb .r i{grid-column:1/-1;height:7px;border-radius:99px;background:#F2EEEA;overflow:hidden}
         .odash .od-hb .r i::after{content:"";display:block;height:100%;width:var(--w);background:var(--c);border-radius:inherit}
         .odash .od-heat{display:grid;gap:4px;align-items:center;font-size:11px}
         .odash .od-heat .h{text-align:center;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
-        .odash .od-heat .n{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-heat .c{height:28px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-variant-numeric:tabular-nums}
+        .odash .od-heat .n{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--cink);padding:0}
+        .odash .od-heat .c{height:28px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-variant-numeric:tabular-nums;border:0;cursor:pointer}
+        .odash .od-heat .c:disabled{cursor:default}
         .odash .od-box{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:4px 12px}
+        .odash .od-box.light{background:var(--card);border:0;padding:8px}
         .odash .od-dev{display:flex;align-items:center;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
         .odash .od-dev:last-child{border-bottom:0}
         .odash .od-dev .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
         .odash .od-dev .sn{color:var(--dim);font-size:11px;white-space:nowrap}
         .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
-        .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
-        .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
-        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFD3B8;background:rgba(242,112,42,.18);border:1px solid rgba(242,112,42,.4);border-radius:999px;padding:4px 10px}
+        .odash .od-dev em.ok{color:#5FE0A0;background:rgba(47,191,113,.16)}
+        .odash .od-tablewrap{overflow-x:auto}
+        .odash .od-table{min-width:760px;display:flex;flex-direction:column}
+        .odash .od-table .tr{display:grid;grid-template-columns:minmax(180px,2fr) 1fr 1.2fr 64px 56px 1.1fr 1fr;gap:8px;align-items:center;padding:9px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;width:100%;color:var(--cink);font-size:12.5px}
+        .odash .od-table button.tr{cursor:pointer}.odash .od-table button.tr:hover{background:#FBF8F5}
+        .odash .od-table .hd{position:sticky;top:0;background:#fff}
+        .odash .od-table .th{border:0;background:transparent;text-align:left;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);cursor:pointer;padding:0}
+        .odash .od-table .th.on{color:#C2511A}
+        .odash .od-table .c{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table .c small{color:var(--cdim);font-size:11px}
+        .odash .od-table .nm{display:flex;flex-direction:column}
+        .odash .od-table .nm b{overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table .num{font-weight:700;font-variant-numeric:tabular-nums}
+        .odash .pill{font-style:normal;font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,#fff);white-space:nowrap}
         .odash .od-sgroup{display:flex;flex-direction:column}
         .odash .od-sgroup .sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--c);padding:10px 0 4px}
         .odash .od-sgroup .sh span{color:var(--cdim);font-weight:700}
@@ -46314,14 +46683,47 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-sess .m{min-width:0;display:flex;flex-direction:column}
         .odash .od-sess b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-sess small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-sess .t{font-size:11.5px;color:var(--cdim);white-space:nowrap}
+        .odash .od-sess .t{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--cdim);white-space:nowrap}
+        .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
         .odash .od-empty.dark{color:var(--dim)}
-        .odash button:focus-visible,.odash input:focus-visible{outline:2px solid var(--o);outline-offset:2px}
+        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(10,8,7,.55);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+        .od-sheet{width:min(560px,100%);height:100%;background:#FBF8F5;color:#1E1A17;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
+        @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+        .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid #ECE7E2;background:#fff}
+        .od-sheet-h .tt{flex:1;min-width:0;display:flex;flex-direction:column}
+        .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:#7C736C}
+        .od-sheet-h .x{border:0;background:#F2EEEA;border-radius:999px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;flex:none;color:#1E1A17}
+        .od-sheet-h .go{border:0;background:#F2702A;color:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
+        .od-sheet-b{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
+        .odash .od-facts,.od-sheet .od-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:6px}
+        .od-sheet .od-facts div{background:#fff;border-radius:12px;padding:8px 10px;min-width:0}
+        .od-sheet .od-facts small{display:block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7C736C}
+        .od-sheet .od-facts b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .od-sheet .od-note{background:#FFF5EC;border-radius:12px;padding:9px 12px;font-size:13px;margin:6px 0}
+        .od-sheet .od-note small{display:block;font-size:10.5px;font-weight:700;color:#C2511A;text-transform:uppercase;letter-spacing:.05em}
+        .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7C736C;padding:16px 0 4px;border-bottom:1px solid #ECE7E2}
+        .od-sheet .od-sh span{margin-left:auto;font-weight:700}
+        .od-sheet .od-rows{display:flex;flex-direction:column}
+        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #ECE7E2;background:transparent;text-align:left;cursor:pointer;width:100%;color:#1E1A17;font:inherit}
+        .od-sheet .od-row:disabled{cursor:default}
+        .od-sheet .od-row:not(:disabled):hover{background:#fff}
+        .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
+        .od-sheet .od-row .m{min-width:0;display:flex;flex-direction:column}
+        .od-sheet .od-row .m b{font-size:13px;overflow:hidden;text-overflow:ellipsis}
+        .od-sheet .od-row .m em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#C2511A}
+        .od-sheet .od-row .m small{font-size:12px;color:#7C736C}
+        .od-sheet .od-row .t{font-size:11.5px;color:#7C736C;white-space:nowrap}
+        .od-sheet .od-empty{color:#7C736C;font-size:12.5px;padding:10px 2px}
+        .odash button:focus-visible,.odash input:focus-visible,.odash select:focus-visible,.od-sheet button:focus-visible{outline:2px solid var(--o, #F2702A);outline-offset:2px}
         @media (max-width:1100px){.odash .od-grid{grid-template-columns:minmax(0,1fr)}.odash .od-minis{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media (max-width:700px){.odash{padding:10px;border-radius:16px}.odash .od-panel{padding:14px}.odash .od-row2,.odash .od-plan{grid-template-columns:minmax(0,1fr)}
-          .odash .od-row{grid-template-columns:32px minmax(0,1fr)}.odash .od-row .w,.odash .od-row .t{grid-column:2;text-align:left;min-width:0}.odash .od-row .w{display:none}}
+          .odash .od-find{max-width:none;margin-left:0;flex-basis:100%}
+          .od-sheet-wrap{align-items:flex-end}.od-sheet{width:100%;height:92%;border-radius:20px 20px 0 0;animation:odUp .24s cubic-bezier(.2,.8,.2,1)}
+          .od-sheet-h{border-radius:20px 20px 0 0;padding-top:16px}
+          .od-sheet .od-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @keyframes odUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}}
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
-        @media (prefers-reduced-motion:reduce){.odash *{transition:none!important}.odash .od-mini:hover,.odash .od-crew:hover,.odash .od-start:hover{transform:none}}
+        @media (prefers-reduced-motion:reduce){.odash *,.od-sheet{transition:none!important;animation:none!important}.odash .od-tap:hover{transform:none}}
       `}</style>
       <div className="od-top">
         <div className="od-tabs" role="tablist" aria-label="Dashboard views">
@@ -46330,10 +46732,25 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <span className="od-help"><HelpDot section="dashboard"/></span>
         <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
       </div>
+      {tab !== "cc" && (
+        <div className="od-ctrl">
+          <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Foreman">
+            <option value="">All foremen</option>{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+          <span className="od-seg" role="group" aria-label="Date range">{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} onClick={() => pickRange(r)}>{r} days</button>)}</span>
+          <div className="od-find">
+            <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
+            {searchHits.length > 0 && <div className="hits">{searchHits.map(j => (
+              <button type="button" key={j.id} onClick={() => { setQ(""); openJob(j); }}><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.foreman, d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · ")}</small></button>
+            ))}</div>}
+          </div>
+        </div>
+      )}
       <div className="od-grid">
         <div className="od-panel">{main}</div>
         <div className="od-panel">{right}</div>
       </div>
+      {sheetEl}
     </div>
   );
 }
@@ -46347,6 +46764,18 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
 // the app through the existing ?jobId= deep link.
 const isDashOwner = (u) => !!u && u.id === "koy";
 const IS_DASH_PAGE = (() => { try { return /^\/dashboard\/?$/.test(window.location.pathname); } catch (e) { return false; } })();
+// Add to Home Screen on /dashboard must make a Dashboard icon, not another copy of
+// the crew app: the site's only manifest is the app's (start_url "/"). Swap in the
+// dashboard's own manifest before anyone can tap Share (same idea as the GC
+// portal's _gcApplyInstallIdentity, v409). Never throws.
+if (IS_DASH_PAGE) {
+  try {
+    const l = document.querySelector('link[rel="manifest"]');
+    if (l) l.setAttribute("href", "/dashboard-manifest.json");
+    const t = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    if (t) t.setAttribute("content", "Dashboard");
+  } catch (e) {}
+}
 function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
   const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
@@ -54660,10 +55089,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-13 · App SW version: v530
+**Last manifest update:** 2026-10-13 · App SW version: v531
 
 ---
 
+- **Dashboard v2: every number and job opens, a Jobs tab, Needs attention, foreman filter + 7/14/30-day range, and its own Home Screen icon** · 'shipped 2026-10-13' · 'SW v531' · 'OfficeDash' · Koy, on v530: *"It just adds the app to my Home Screen not the dashboard. Also was hoping for this to be more interactive and have a lot more info in each tab."* **Home Screen:** '/dashboard' swaps the page's '<link rel=manifest>' to the new 'public/dashboard-manifest.json' ('id' and 'start_url' '/dashboard', name "Homestead Dashboard", short name "Dashboard") and retitles 'apple-mobile-web-app-title', at module load before anyone can tap Share (the GC portal's v409 trick), so Add to Home Screen makes a Dashboard icon instead of a second crew-app icon. **Everywhere:** a job panel ('OdSheet') opens from any job row, card, calendar item or search hit: stage, foreman, lead, rough/finish status and %, QC, inspection results or targets, last update, status update, failed-inspection items still open, coming-up dates, open punch (phase, room, who, age, serious/waiting), change orders, return trips, inspection history and recent activity, with **Open in app** ('?jobId='). Every stat card opens the list behind its number; a person panel shows their open My Day tasks, their jobs and their activity. A control row adds a **foreman filter** (all job tabs), a **7 / 14 / 30-day range** and a **job finder** (name, number, address, GC). **Overview:** tap-or-hover chart with a day summary and "See them" into Activity; **Needs attention** (inspections past their date, failed-inspection items not fixed, starts in 3 days not confirmed, COs to send, return trips with no date, in-progress jobs quiet 5+ days, serious punch); tappable calendar days. **Jobs (new tab):** stage chips, filter box, sortable table (job, foreman, stage, punch, COs, next date, last update), by-stage and by-foreman bars that filter. **Activity:** grouped by day, type chips with counts, person picker, most-active jobs. **Schedule:** week-by-week navigation, next-30-days by kind, starts list. **Quality:** first-pass chart with month drill-down, open punch by age (0–7, 8–14, 15–30, 30+ days), serious items, punch by foreman lists, latest failed inspections. **People:** tappable 7-day grid squares and names, My Day load by person, quiet-3-days list, all devices toggle. **Command Center:** status chips, session search, automation detail. Choices (tab, foreman, range) are remembered on the device. **Why it won't lose data:** still read-only; the only new reads are the same in-memory job, team and task data; no 'setDoc'/'updateDoc'/'saveJob'; the manifest swap only changes a '<link>' and a '<meta>' on the /dashboard page; no loader, rules or Cloud Function change.
 - **Standalone dashboard at '/dashboard' (Koy only): Overview · Activity · Schedule · Quality · People · Command Center, live, not in the app** · 'shipped 2026-10-11' · 'SW v530' · 'DashPage' + 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"*, *"I want to be the only one with the view"*, *"a stand alone dashboard that includes a tab for my current personal cc"* and *"not in the app"*. **The page:** 'homestead-electric.vercel.app/dashboard' renders 'OfficeDash' full screen with a slim header (Resi / Commercial switch, Open the app) and no app nav or tab; it is not in 'NAV_MAIN_TABS' and adds no permission or Settings checkbox. It boots the same bundle, passes the normal PIN gate, and returns right above App's main return (after every hook; 'IS_DASH_PAGE' is a module-level path check). It opens only for Koy's own team record ('isDashOwner': id 'koy', the record the Team editor already protects); anyone else sees "This page is private". Tapping a job goes to '/?jobId=<id>', the existing deep link. **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending', open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards, this month's calendar, the next 14 days of dated work. **Activity:** the last 30 days from the job fields (punch added/closed, CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return trips, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed starts, inspection target dates without a result, scheduled QC walks, Matterport scans and return trips, Upcoming-tab starts), starts in 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with items, punch by foreman, open return trips and QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count, open time-off requests (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the tab opens). **Command Center:** Koy's Claude automations (Routines) and the Claude sessions that aren't finished, from 'settings/ccSnapshot' ('{json, updatedAt}', live 'onSnapshot' only while the tab is open), written by the hourly Claude Routine "Command Center snapshot (Dashboard tab)" outside the app (names, schedules, statuses and titles only, never prompts). Sessions grouped Needs you / Ready to review / Working now, each opening 'https://claude.ai/code/<id>'; next runs; every automation with a status color and a duplicate-name flag; a warning when the snapshot is over 3 hours old. No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Wrapped in its own error boundary ('OdBoundary'; the app has none). Guide 'public/sops/dashboard.html' behind the page's "?". **Why it won't lose data:** the page only reads; it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory plus two read-only docs ('settings/deviceVersions', 'settings/ccSnapshot'); it has no 'setDoc'/'updateDoc'/'saveJob'; nothing in the app's tabs, nav or Settings changes; no loader, rules or Cloud Function change.
 - **Crash reporting and session replay (PostHog)** · 'shipped 2026-10-12' · 'SW v529' · Until now a black screen or a lost save in the field was invisible until someone complained. The app now boots PostHog once at start ('src/posthog.js', called from 'src/index.js' before React renders): every uncaught error and unhandled promise rejection is sent as an exception, and for a crew member who entered their PIN the screen is recorded for session replay with every input masked (the PIN pad included). Errors carry the crew member's display name only (the same name the PIN login stores; role and PIN never leave the device) and the build stamp ('app_version', the service-worker version Settings shows), so a crash reads as who, which build, when. Replay starts only after a PIN login and stops on sign-out; share-link, GC portal and homeowner pages get error capture but no replay, because they return before the identity line. Every URL-like property is cut at its query string before it is sent, and replay's network list is cut the same way, so link tokens never reach PostHog. Autocapture is off (no click stream, no event bill). The key lives in Vercel as 'REACT_APP_POSTHOG_KEY' (US Cloud; optional 'REACT_APP_POSTHOG_HOST' only for an EU project); without it every call is a no-op and the app runs exactly as before. Vercel Analytics stays wired for now and can be removed later. Why it can't lose data: observability only. Nothing reads or writes Firestore, touches an app localStorage key, or sits on any save path; the module returns before doing anything when the key is absent, and every PostHog call is wrapped so a failure inside it can never throw into the app.
 - **Commercial job cards get a Materials tab: the residential Material Tracking, one list per job, each order charged to a cost center you pick** · 'shipped 2026-10-09' · 'SW v528' · Braden (a Need on Riverton & Laundromat): *"Material tracking section for this job. Underground portion."* Koy: *"i mean like material tracking in residential"*, *"yes full"*, then *"i think the job cards should just have a material ordering tab instead of just in the undergrouhd section"* (commercial only; pick the cost center on each card). 'COMM_TABS' gains **Materials** after Bid Items; the tab renders the residential 'MaterialOrders' with phase '"comm"', stored in a new job list 'commMaterials' (loader + defaults; written through 'u()' with the v523 live-copy reconcile for Send and the v524 order-by-cost-center upsert). **Charge to:** on a commercial card the Send sheet lists the job's Simpro cost centers from the stock cache ('Section · Cost center'); Send stays disabled until one is picked; the pick is saved on the card ('chargeCcId' / 'chargeCcName') and sent as 'ccId'. **Server:** 'sendMaterialPO' requires 'ccId' for phase 'comm' and charges exactly that job cost center ('pickCostCenterById' in 'materialPO/rules.js'); Rough / Finish still match by phase, unchanged. Order from the bid ('sendMaterialOrder') already charges each line's own cost center, unchanged. **Simpro PO sync** ('syncSimproPOsForJob' + 'scheduledSimproPOSync') reconciles 'commMaterials' as a third pass sharing the claimed-PO set and counts its cards when picking candidate jobs. Commercial orders also show in the unsent-PO list and Open Items ("Materials"), the Bid Items order summary (commercial jobs now get it; Order material opens the Materials tab) and the Material Tracking job-section check. New guide 'materials.html' (registered in 'SOP_FILES_INLINE'). Tests: 'scripts/materialpo-test.js' gains 5 by-id cases. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:syncSimproPOsForJob,functions:scheduledSimproPOSync' (deployed 2026-10-09 before the app push).** **Why it won't lose data:** the new list is additive on the job ('data.commMaterials'), written through the same 'u()' funnel (version stamp kept) and live-copy reconciles as Rough / Finish; the PO sync writes 'commMaterials' only on jobs that already have it, and only the fields it already fills on the other two lists; Rough / Finish code paths and cost-center rules are unchanged; no rules change.
