@@ -45475,6 +45475,8 @@ function odAgo(at, now) {
 const OD_O = "#F2702A", OD_G = "#2FBF71", OD_R = "#E5484D", OD_B = "#3B6FE0", OD_P = "#8F7EE0", OD_GOLD = "#C99A2E";
 const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
 const OD_DAY = 24*60*60*1000;
+// Calendar days, not 24-hour steps: the fall-back Sunday is 25 hours long.
+const odAddDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 
 function odDate(v) {
   if (!v) return null;
@@ -45491,7 +45493,7 @@ const odTime = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-dig
 const odShort = (d) => `${d.getMonth()+1}/${d.getDate()}`;
 const odDow = (d) => d.toLocaleDateString([], { weekday: "short" });
 function odWhen(ev, now) {
-  const today = localYmd(now), y = localYmd(new Date(now.getTime() - OD_DAY)), k = localYmd(ev.at);
+  const today = localYmd(now), y = localYmd(odAddDays(now, -1)), k = localYmd(ev.at);
   const day = k === today ? "Today" : k === y ? "Yesterday" : `${odDow(ev.at)} ${odShort(ev.at)}`;
   return ev.dateOnly ? day : `${day} · ${odTime(ev.at)}`;
 }
@@ -45545,26 +45547,46 @@ function odBuildEvents(jobs, now) {
 }
 
 // Dated work coming up (and overdue), from the job fields the Forecast reads.
-function odBuildSchedule(jobs, upcoming) {
+// Dated work ahead and behind (v532: audited against live data). Only dates
+// that still mean something: no inspection target once that inspection is
+// logged or the phase moved past it, no start for a phase underway, on hold
+// or done, no scan once the link is in. Completed jobs keep only open RTs.
+function odBuildSchedule(jobs, upcoming, today) {
   const out = [];
   const add = (raw, type, label, job, extra) => { const at = odDate(raw); if (at) out.push({ at, type, label, job, name: job ? job.name : (extra && extra.name) || "", ...(extra || {}) }); };
+  const lastAttempt = (list) => (list || []).reduce((m, x) => { const at = x && odDate(x.date); return at && (!m || at > m) ? at : m; }, null);
+  const liveNames = new Set();
   jobs.forEach(j => {
-    const rs = effRS(j), fs = effFS(j);
-    if (j.roughProjectedStart && !["complete","inprogress"].includes(rs))
+    liveNames.add(String(j.name || "").trim().toLowerCase());
+    (j.returnTrips || []).forEach(rt => {
+      if (!rt || rt.signedOff || rt.rtStatus === "complete") return;
+      const dated = rt.scheduledDate || rt.date || (rt.rtStatus === "scheduled" && rt.rtStatusDate);
+      if (dated) add(dated, "rt", "Return trip", j, { detail: odText(rt.scope), who: rt.assignedTo || "" });
+      else if (rt.rtStatusDate) add(rt.rtStatusDate, "rt", "Schedule return trip by", j, { detail: odText(rt.scope), who: rt.assignedTo || "", by: true });
+    });
+    let phase = null; try { phase = odPhase(j, today); } catch (e) {}
+    if (!phase || phase.key === "complete") return;
+    if (j.quickJob) { if (j.quickJobStatus === "scheduled" && j.quickJobDate) add(j.quickJobDate, "start", "Quick job", j, { confirmed: true }); return; }
+    if (j.tempPed) { if (j.tempPedStatus === "scheduled" && j.tempPedScheduledDate) add(j.tempPedScheduledDate, "start", "Temp ped set", j, { confirmed: true }); return; }
+    const rs = effRS(j), fs = effFS(j), rp = parseStage(j.roughStage), fp = parseStage(j.finishStage);
+    const roughStarted = !OD_NOT_STARTED.includes(rs) || rp > 0, finishStarted = !OD_NOT_STARTED.includes(fs) || fp > 0;
+    if (j.roughProjectedStart && !roughStarted)
       add(j.roughProjectedStart, "start", "Rough start", j, { confirmed: !!j.roughStartConfirmed || ["scheduled","date_confirmed"].includes(rs) });
-    if (j.finishProjectedStart && !["complete","inprogress"].includes(fs))
+    if (j.finishProjectedStart && !finishStarted)
       add(j.finishProjectedStart, "start", "Finish start", j, { confirmed: !!j.finishStartConfirmed || ["scheduled","date_confirmed"].includes(fs) });
-    if (j.fourWayTargetDate && !j.roughInspectionResult) add(j.fourWayTargetDate, "insp", "Rough inspection", j);
-    if (j.finalInspectionTargetDate && !j.finalInspectionResult) add(j.finalInspectionTargetDate, "insp", "Final inspection", j);
+    const insp = (target, result, attempts, label, ok) => {
+      const at = odDate(target), last = lastAttempt(attempts);
+      if (!at || result || !ok || (last && localYmd(last) >= localYmd(at))) return;
+      add(target, "insp", label, j);
+    };
+    insp(j.fourWayTargetDate, j.roughInspectionResult, j.roughInspectionAttempts, "Rough inspection", roughStarted && rs !== "complete" && !finishStarted);
+    insp(j.finalInspectionTargetDate, j.finalInspectionResult, j.finalInspectionAttempts, "Final inspection", finishStarted);
     if (j.qcStatus === "scheduled" && j.qcStatusDate) add(j.qcStatusDate, "qc", "Rough QC walk", j);
     if (j.finishQcStatus === "scheduled" && j.finishQcStatusDate) add(j.finishQcStatusDate, "qc", "Finish QC walk", j);
-    if (j.matterportStatus === "scheduled" && j.matterportStatusDate) add(j.matterportStatusDate, "scan", "Matterport scan", j);
-    (j.returnTrips || []).forEach(rt => {
-      if (rt && !rt.signedOff && rt.rtStatus !== "complete" && (rt.scheduledDate || (rt.rtStatus === "scheduled" && rt.rtStatusDate)))
-        add(rt.scheduledDate || rt.rtStatusDate, "rt", "Return trip", j, { detail: odText(rt.scope) });
-    });
+    const scanned = (Array.isArray(j.matterportLinks) && j.matterportLinks.length) || j.matterportLink;
+    if (j.matterportStatus === "scheduled" && j.matterportStatusDate && !scanned) add(j.matterportStatusDate, "scan", "Matterport scan", j);
   });
-  (upcoming || []).forEach(u => { if (u && u.projectedStart) add(u.projectedStart, "start", "Upcoming job start", null, { name: u.name || "Upcoming job", confirmed: !!u.startConfirmed }); });
+  (upcoming || []).forEach(u => { if (u && u.projectedStart && !liveNames.has(String(u.name || "").trim().toLowerCase())) add(u.projectedStart, "start", "Upcoming job start", null, { name: u.name || "Upcoming job", confirmed: !!u.startConfirmed }); });
   return out.sort((a, b) => a.at - b.at);
 }
 const OD_SCHED_COLOR = { start: OD_O, insp: OD_G, qc: OD_B, scan: OD_P, rt: OD_R };
@@ -45704,15 +45726,24 @@ function odJobInfo(j, now) {
   const punch = [];
   [["roughPunch","Rough"],["finishPunch","Finish"],["qcPunch","QC"]].forEach(([k, ph]) => sbv2WalkPunch(j[k], (it, ctx) => {
     if (!it || it.voided || it.done) return;
-    const at = odDate(it.addedAtTs || it.addedAt);
+    const at = odDate(it.addedAtTs || it.addedAt) || (/^\d{13}$/.test(String(it.id || "")) ? new Date(+it.id) : null);
     punch.push({ text: odText(it.text) || "(no text)", phase: ph, room: (ctx && ctx.roomName) || "", who: it.assignedTo || "",
       age: at ? Math.max(0, Math.floor((now - at) / OD_DAY)) : null, serious: it.severity === "serious", waiting: !!it.waiting, job: j });
   }));
   const cos = (j.changeOrders || []).filter(Boolean);
-  const openCos = cos.filter(co => !["completed","converted","denied"].includes(co.coStatus || ""));
+  const openCos = cos.filter(co => !["completed","converted","denied"].includes(co.coStatus || "") && !coIsConverted(co, j.returnTrips));
   const rts = (j.returnTrips || []).filter(Boolean);
   const openRts = rts.filter(rt => !rt.signedOff && rt.rtStatus !== "complete");
-  const atts = [...(j.roughInspectionAttempts || []).map(a => ({ ...a, ph: "Rough" })), ...(j.finalInspectionAttempts || []).map(a => ({ ...a, ph: "Final" }))]
+  // The Pass/Fail buttons log an attempt on every tap and leave it when the
+  // result is cleared: drop back-to-back repeats and a trailing attempt whose
+  // phase result is now blank, so counts match what really happened.
+  const realAtts = (list, result, ph) => {
+    const out = [];
+    (list || []).forEach(a => { if (!a || !a.result) return; const p = out[out.length - 1]; if (p && p.result === a.result && p.date === a.date) return; out.push({ ...a, ph }); });
+    if (!result && out.length) out.pop();
+    return out;
+  };
+  const atts = [...realAtts(j.roughInspectionAttempts, j.roughInspectionResult, "Rough"), ...realAtts(j.finalInspectionAttempts, j.finalInspectionResult, "Final")]
     .filter(a => a && a.result).map(a => ({ ...a, _at: odDate(a.date) })).sort((a, b) => (b._at || 0) - (a._at || 0));
   const failOpen = [];
   if (j.roughInspectionResult === "fail") (j.roughInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Rough", text: odText(it.text || it) }); });
@@ -45778,6 +45809,12 @@ function odPhase(j, today) {
   if (!prepClearedToStart(j)) return ph("prep");
   return ph("roughNext", when(j.roughProjectedStart) ? `Rough ${when(j.roughProjectedStart, j.roughStartConfirmed)}` : rs === "waiting_date" || !rs ? "Waiting on a rough date" : "");
 }
+// A return trip's date lives in rtStatusDate (scheduledDate is always empty in
+// live data); with status "needs" that same field is the schedule-by date.
+const odRtDate = (rt) => rt.scheduledDate || rt.date || (rt.rtStatus === "scheduled" ? rt.rtStatusDate : "") || "";
+const odRtLabel = (rt) => { const at = odDate(odRtDate(rt)); if (at) return `${odDow(at)} ${odShort(at)}`; const by = odDate(rt.rtStatusDate); return by ? `Schedule by ${odShort(by)}` : "No date"; };
+const OD_QC_BUCKET = { failed: "failed, needs fixing", overdue: "walk date passed, log the result", needs: "needs a walk", scheduled: "scheduled" };
+const odQcText = (v) => v ? (getStatusDef(QC_STATUSES, v).label || v).replace(/^QC /, "") : "";
 const odStatusLabel = (v) => { const s = ROUGH_STATUSES.find(x => x.value === (v || "")); return v ? ((s && s.label) || v) : "Not set"; };
 const odPlural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
@@ -45857,7 +45894,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
     const inRange = events.filter(e => now - e.at < range*OD_DAY);
     const evToday = events.filter(e => localYmd(e.at) === today);
-    const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = new Date(t0.getTime() - i*OD_DAY), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
+    const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = odAddDays(t0, -i), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
 
     // Per-job rollups
     const info = {}, lastAct = {};
@@ -45867,20 +45904,25 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       [odDate(j.lastActivityAt), odDate(j.updated_at)].forEach(x => { if (x && (!last || x > last)) last = x; });
       lastAct[j.id] = last;
     });
-    const sched = odBuildSchedule(active, up);
+    const sched = odBuildSchedule(live, up, today);
     const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
 
     const openPunch = active.flatMap(j => info[j.id].punch);
-    const openCOs = active.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
+    const openCOs = live.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
     const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
     const openRTs = live.flatMap(j => info[j.id].openRts.map(rt => ({ rt, job: j })));
-    const qcRows = []; active.forEach(j => {
-      if (["needs","scheduled"].includes(j.qcStatus || "")) qcRows.push({ job: j, phase: "Rough QC", st: j.qcStatus, at: odDate(j.qcStatusDate) });
-      if (["needs","scheduled"].includes(j.finishQcStatus || "")) qcRows.push({ job: j, phase: "Finish QC", st: j.finishQcStatus, at: odDate(j.finishQcStatusDate) });
+    // Same rows and buckets as the app's QC tracker (qcWalkRows / qcBucketOf),
+    // with the date compared as a real date.
+    const qcRows = []; let qcAll = []; try { qcAll = qcWalkRows(active); } catch (e) {}
+    qcAll.forEach(r => {
+      const at = odDate(r.date), st = r.status === "scheduled" && at && localYmd(at) < today ? (r.started ? "overdue" : "needs") : qcBucketOf({ ...r, date: "" }, today);
+      if (["failed","overdue","needs","scheduled"].includes(st)) qcRows.push({ job: r.job, phase: r.phase + " QC", st, at });
     });
+    const qcOrder = { failed: 0, overdue: 1, needs: 2, scheduled: 3 }; qcRows.sort((a, b) => qcOrder[a.st] - qcOrder[b.st]);
     const byForeman = {};
-    active.forEach(j => { const f = j.foreman || "No foreman"; byForeman[f] = byForeman[f] || { open: 0, closed: 0, items: [] }; byForeman[f].open += info[j.id].punch.length; byForeman[f].items.push(...info[j.id].punch); });
-    events.forEach(e => { if (e.type === "punch" && e.tone === "good" && now - e.at < 30*OD_DAY) { const f = e.job.foreman || "No foreman"; if (byForeman[f]) byForeman[f].closed++; } });
+    const fmOf = (j) => SBV2_EXCLUDE_NAME(j.foreman) ? "No foreman" : String(j.foreman).trim();
+    active.forEach(j => { const f = fmOf(j); byForeman[f] = byForeman[f] || { open: 0, closed: 0, items: [] }; byForeman[f].open += info[j.id].punch.length; byForeman[f].items.push(...info[j.id].punch); });
+    events.forEach(e => { if (e.type === "punch" && e.tone === "good" && now - e.at < 30*OD_DAY) { const f = fmOf(e.job); if (byForeman[f]) byForeman[f].closed++; } });
 
     // Inspections
     const firsts = [], allAtts = [];
@@ -45898,6 +45940,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
 
     // Schedule
     const overdue = sched.filter(s => s.at < t0 && s.type !== "start");
+    const startsPast = sched.filter(s => s.at < t0 && s.type === "start");
     const needsDate = [];
     active.forEach(j => {
       if (j.quickJob || j.tempPed) return;
@@ -45911,16 +45954,20 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
 
     // Needs attention
     const attn = [
-      { k: "overdue", label: "Inspections past their date", color: OD_R, icon: "alertTriangle",
+      { k: "overdue", label: "Inspection date passed, no result logged", color: OD_R, icon: "alertTriangle",
         rows: overdue.filter(s => s.type === "insp").map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_R })) },
+      { k: "startsPast", label: "Start date passed, phase not started", color: OD_O, icon: "flag",
+        rows: startsPast.map(s => ({ title: s.name, sub: `${s.label} was ${s.confirmed ? "set" : "projected"} for ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+      { k: "rtLate", label: "Return trips past their date", color: OD_R, icon: "returntrips",
+        rows: overdue.filter(s => s.type === "rt").map(s => ({ title: s.name, sub: `${s.by ? "Should have been scheduled by" : "Was set for"} ${odShort(s.at)}${s.detail ? " · " + s.detail : ""}`, job: s.job, color: OD_R })) },
       { k: "failOpen", label: "Failed inspection items not fixed", color: OD_R, icon: "x",
         rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
       { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
-        rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < new Date(t0.getTime() + 3*OD_DAY)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+        rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
       { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
         rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
       { k: "rtNoDate", label: "Return trips with no date", color: OD_GOLD, icon: "returntrips",
-        rows: openRTs.filter(x => !x.rt.scheduledDate && x.rt.rtStatus !== "scheduled").map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_GOLD })) },
+        rows: openRTs.filter(x => !x.rt.scheduledDate && !x.rt.date && !x.rt.rtStatusDate).map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_GOLD })) },
       { k: "quiet", label: "In progress, no update in 5+ days", color: OD_GOLD, icon: "clock",
         rows: active.filter(j => (effRS(j) === "inprogress" || effFS(j) === "inprogress") && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
           .map(j => ({ title: j.name, sub: `${j.foreman || "No foreman"} · last update ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "unknown"}`, job: j, color: OD_GOLD })) },
@@ -45935,7 +45982,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
       allLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
       const todayMine = mine.filter(e => localYmd(e.at) === today);
-      const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(new Date(t0.getTime() - i*OD_DAY)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
+      const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(odAddDays(t0, -i)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
       const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : "quiet";
       return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set(todayMine.map(e => e.job.id)).size, days7, status, role: getAccess(u),
         lastJob: mine.length ? mine[0].job.name : "" };
@@ -45958,7 +46005,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const openPerson = (name) => setSheet({ kind: "person", name });
   const openList = (title, sub, rows) => setSheet({ kind: "list", title, sub, rows });
   const goApp = (job) => { if (job && onSelectJob) onSelectJob(job); };
-  const ahead = (days) => d.sched.filter(s => s.at >= d.t0 && s.at < new Date(d.t0.getTime() + days*OD_DAY));
+  const ahead = (days) => d.sched.filter(s => s.at >= d.t0 && s.at < odAddDays(d.t0, days));
   const greet = d.now.getHours() < 12 ? "Good morning" : d.now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const me = odFirst(identity && identity.name) || "there";
   const dateLine = d.now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
@@ -46210,19 +46257,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Pulse list={d.people.slice(0, 10)}/>
     </>);
   } else if (tab === "schedule") {
-    const ws = new Date(d.t0.getTime() + week*7*OD_DAY);
-    const days = []; for (let i = 0; i < 7; i++) { const dd = new Date(ws.getTime() + i*OD_DAY); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
+    const ws = odAddDays(d.t0, week*7);
+    const days = []; for (let i = 0; i < 7; i++) { const dd = odAddDays(ws, i); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
     const types = [["start","Starts"],["insp","Inspections"],["qc","QC walks"],["scan","Scans"],["rt","Return trips"]];
     main = (<>
       <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days</p></div></div>
       <div className="od-minis">
         <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
-        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" onClick={() => openList("Inspections in the next 7 days", "", insp7.map(schedRow))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(new Date(d.t0.getTime() + i*OD_DAY))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
+        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" onClick={() => openList("Inspections in the next 7 days", "", insp7.map(schedRow))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
         <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" onClick={() => openList("Needs a date", "", d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what + (n.job && n.job.foreman ? " · " + n.job.foreman : ""), color: OD_R, job: n.job })))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
         <OdMini title="Past their date" color={OD_GOLD} icon="alertTriangle" value={d.overdue.length} sub="no result yet" onClick={() => openList("Past their date", "Dated work with no result", d.overdue.map(schedRow))}><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_GOLD} label="Share of dated items past due"/></OdMini>
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(new Date(ws.getTime() + 6*OD_DAY))}`}<small>tap an item for the job</small>
+        <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(odAddDays(ws, 6))}`}<small>tap an item for the job</small>
           <span className="od-nav"><button type="button" onClick={() => setWeek(w => w - 1)} aria-label="Previous week"><Icon name="chevronLeft" size={14}/></button>
             {week !== 0 && <button type="button" onClick={() => setWeek(0)}>Today</button>}
             <button type="button" onClick={() => setWeek(w => w + 1)} aria-label="Next week"><Icon name="chevronRight" size={14}/></button></span>
@@ -46274,8 +46321,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-minis">
         <OdMini title="First-pass, 90 days" color={OD_G} icon="checkCircle" value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={odPlural(d.in90.length, "inspection")} onClick={() => openList("First inspections, last 90 days", d.fp90 == null ? "" : `${d.fp90}% passed the first time`, d.in90.slice().sort((a, b) => b.at - a.at).map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed first time" : "failed first time"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}><OdRing pct={(d.fp90 || 0)/100} color={OD_G} label="First-pass rate"/></OdMini>
         <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch.length} sub={`${serious.length} serious`} onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}><OdBars vals={buckets.map(b => b.items.length)} color={OD_O} hi={3} label="Open punch by age"/></OdMini>
-        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => x.rt.scheduledDate || x.rt.rtStatus === "scheduled").length} scheduled`} onClick={() => openList("Open return trips", "", d.openRTs.map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ") || "Return trip", tag: x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "", right: x.rt.scheduledDate || "No date", color: OD_R, job: x.job })))}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => x.rt.scheduledDate || x.rt.rtStatus === "scheduled").length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips scheduled"/></OdMini>
-        <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`} onClick={() => openList("Open QC walks", "", d.qcRows.map(r => ({ title: r.job.name, sub: `${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`, right: r.at ? odShort(r.at) : "", color: OD_B, job: r.job })))}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of QC walks scheduled"/></OdMini>
+        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => odRtDate(x.rt)).length} scheduled`} onClick={() => openList("Open return trips", "", d.openRTs.map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ") || "Return trip", tag: x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "", right: odRtLabel(x.rt), color: OD_R, job: x.job })))}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => odRtDate(x.rt)).length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips scheduled"/></OdMini>
+        <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`} onClick={() => openList("Open QC walks", "", d.qcRows.map(r => ({ title: r.job.name, sub: `${r.phase} · ${OD_QC_BUCKET[r.st]}`, right: r.at ? odShort(r.at) : "", color: OD_B, job: r.job })))}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of QC walks scheduled"/></OdMini>
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
@@ -46318,9 +46365,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Me sub="Quality"/>
       <Stats items={[[d.fp90 == null ? "—" : `${d.fp90}%`, "First-pass"], [d.active.length ? (d.openPunch.length / Math.max(1, new Set(d.openPunch.map(p => p.job.id)).size)).toFixed(1) : "0", "Punch / job"], [d.fails.filter(f => d.now - f._at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
       <Sec right={`${d.openRTs.length}`}>Open return trips</Sec>
-      <div className="od-list">{d.openRTs.slice(0, 6).map((x, i) => { const sd = odDate(x.rt.scheduledDate); return <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={sd ? `${odDow(sd)} ${odShort(sd)}` : "No date"} onClick={() => openJob(x.job)}/>; })}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
+      <div className="od-list">{d.openRTs.slice(0, 6).map((x, i) => { return <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={odRtLabel(x.rt)} onClick={() => openJob(x.job)}/>; })}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
       <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
-      <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${r.st === "scheduled" ? "scheduled" : "needs a walk"}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
+      <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${OD_QC_BUCKET[r.st]}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
   } else if (tab === "people") {
     const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O, onClick: () => n === "Unassigned"
@@ -46328,7 +46375,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       : openPerson(n) })).sort((a, b) => b.v - a.v).slice(0, 10);
     const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 10);
     const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
-    const dayDates = []; for (let i = 6; i >= 0; i--) dayDates.push(new Date(d.t0.getTime() - i*OD_DAY));
+    const dayDates = []; for (let i = 6; i >= 0; i--) dayDates.push(odAddDays(d.t0, -i));
     const latestBuild = parseAppBuild(latest);
     const devList = Object.entries(devices || {}).map(([id, v]) => ({ id, ...v, build: parseAppBuild(v && v.version), seen: odDate(v && v.lastSeenAt) }))
       .filter(v => v.seen && d.now - v.seen < 14*OD_DAY).sort((a, b) => (a.build - b.build) || (b.seen - a.seen));
@@ -46477,7 +46524,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             {fact("Where it is", s ? s.label + (s.note ? " · " + s.note : "") : "")}{fact("Job prep", d.prepOpen(j) ? "Not finished" : (j.quickJob || j.tempPed || j.division === "commercial") ? "" : "Complete")}{fact("Foreman", j.foreman)}{fact("Lead", j.lead)}
             {fact("Rough", `${odStatusLabel(effRS(j))}${parseStage(j.roughStage) ? " · " + parseStage(j.roughStage) + "%" : ""}`)}
             {fact("Finish", `${odStatusLabel(effFS(j))}${parseStage(j.finishStage) ? " · " + parseStage(j.finishStage) + "%" : ""}`)}
-            {fact("QC", j.qcStatus ? `${j.qcStatus}${j.qcStatusDate ? " · " + j.qcStatusDate : ""}` : "")}
+            {fact("Rough QC", j.qcStatus ? `${odQcText(j.qcStatus)}${j.qcStatusDate ? " · " + j.qcStatusDate : ""}` : "")}{fact("Finish QC", j.finishQcStatus ? `${odQcText(j.finishQcStatus)}${j.finishQcStatusDate ? " · " + j.finishQcStatusDate : ""}` : parseStage(j.finishStage) >= 80 ? "Needs a walk" : "")}
             {fact("Rough inspection", j.roughInspectionResult ? (j.roughInspectionResult === "pass" ? "Passed" : "Failed") : j.fourWayTargetDate ? "Target " + j.fourWayTargetDate : "")}
             {fact("Final inspection", j.finalInspectionResult ? (j.finalInspectionResult === "pass" ? "Passed" : "Failed") : j.finalInspectionTargetDate ? "Target " + j.finalInspectionTargetDate : "")}
             {fact("Last update", d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "")}
@@ -46491,7 +46538,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <div className="od-sh">Change orders <span>{inf.cos.length}</span></div>
           <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders" }))} empty="No change orders."/>
           <div className="od-sh">Return trips <span>{inf.rts.length}</span></div>
-          <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOffDate || rt.scheduledDate || "", color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips" }))} empty="No return trips."/>
+          <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOff ? (rt.signedOffDate || "") : odRtLabel(rt), color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips" }))} empty="No return trips."/>
           <div className="od-sh">Inspections <span>{inf.atts.length}</span></div>
           <Rows rows={inf.atts.map(a => ({ title: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}`, sub: [(a.items || []).length && odPlural(a.items.length, "item"), a.by].filter(Boolean).join(" · "), right: a.date || "", color: a.result === "fail" ? OD_R : OD_G, icon: a.result === "fail" ? "x" : "checkCircle" }))} empty="No inspection results logged."/>
           <div className="od-sh">Recent activity <span>{ev.length}</span></div>
