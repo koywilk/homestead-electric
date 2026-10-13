@@ -1,9 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { installA11y } from './a11y';
+import { bootPostHog } from './posthog';
 
-installA11y();
+// Crash reporting boots before React renders so a crash in the very first
+// render is still seen. No-op without REACT_APP_POSTHOG_KEY (v529).
+bootPostHog();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<React.StrictMode><App /></React.StrictMode>);
