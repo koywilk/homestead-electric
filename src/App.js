@@ -45453,16 +45453,24 @@ function PlansCard({ identity, users = [] }) {
 // with the view", and "a stand alone dashboard ... not in the app". Rendered
 // ONLY by the /dashboard page (DashPage below), never as an app tab. One
 // read-only screen with six tabs (Overview · Activity · Schedule · Quality ·
-// People · Command Center), built from what App already holds in memory (jobs
+// People · Automations), built from what App already holds in memory (jobs
 // for the current mode, users, needs, Upcoming). Extra reads: the People tab's
 // device list (settings/deviceVersions, the same getDoc DeviceVersionsCard
-// does) and the Command Center snapshot. Nothing here writes to Firestore.
-const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Command Center"]];
-// Command Center tab (v530): Koy's Claude automations (Routines) and the Claude
-// sessions that aren't finished. Claude's own services hold that data, so an
-// hourly Routine copies a small summary (names, schedules, statuses, titles; no
-// prompts) into settings/ccSnapshot as one JSON string; this tab only reads it.
-const OD_ORIGIN = { ios: "iPhone", claude_code_cli: "Mac terminal", desktop_app: "Desktop app", web: "Web", android: "Android" };
+// does) and the Automations tab's two sources. Nothing here writes to Firestore.
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"]];
+// Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
+// what Koy's two Claude Routines produced, read from where they already put it.
+// Plan intake → agentFindings (the Today Plans card's source, live listener
+// while the tab is open). Appliance Loads → the master sheet via
+// fetchApplSheetRows (the Tools view's read). Run times mirror the Routines'
+// UTC crons (Plan Intake trig_012uNPUHJgwF6MQgozHz1V86 "0 13,18,22 * * *";
+// Appliance Loads trig_014qafaiKGjXqAY2eKKCvrab "58 6 * * *"); if a Routine's
+// schedule changes, change it here too.
+const OD_RUNS = { plan: [[13, 0], [18, 0], [22, 0]], appl: [[6, 58]] };
+const odNextRun = (utc, now) => { let best = null; for (let k = 0; k < 2; k++) utc.forEach(([h, m]) => { const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k, h, m)); if (t > now && (!best || t < best)) best = t; }); return best; };
+const odRunTimes = (utc) => utc.map(([h, m]) => { const t = new Date(); t.setUTCHours(h, m, 0, 0); return t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }).join(", ");
+const OD_PLAN_FOLDER = ["folder_created", "folder_adopted", "folder_renamed", "folder_linked", "quote_merged", "quote_closed"];
+const OD_PLAN_WALK = ["walk_existing_job", "walk_unmatched"];
 function odAgo(at, now) {
   if (!at) return "";
   const m = Math.max(0, Math.round((now - at) / 60000));
@@ -45893,8 +45901,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [jobsSort, setJobsSort] = useState({ key: "last", dir: -1 });
   const [jobsStage, setJobsStage] = useState("");
   const [jobsQ, setJobsQ] = useState("");
-  const [ccFilter, setCcFilter] = useState("open");
-  const [ccQ, setCcQ] = useState("");
+  const [planShow, setPlanShow] = useState("all");
   const [showAllDevices, setShowAllDevices] = useState(false);
   const [tick, setTick] = useState(0);
   useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 5*60*1000); return () => clearInterval(id); }, []);
@@ -45913,20 +45920,28 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     })();
     return () => { dead = true; };
   }, [tab]);
-  // Command Center tab: live read of the snapshot doc while the tab is open.
-  const [cc, setCc] = useState(undefined);   // undefined = loading, null = none yet
+  // Automations tab: plan-intake findings (live while the tab is open, same
+  // query and dry/test filter as the Today Plans card) and the appliance sheet.
+  const [findings, setFindings] = useState(undefined);   // undefined = loading, null = unreadable
   useEffect(() => {
     if (tab !== "cc") return;
     let unsub = null;
     try {
-      unsub = onSnapshot(doc(db, "settings", "ccSnapshot"), snap => {
-        if (!snap.exists()) { setCc(null); return; }
-        try { const raw = snap.data() || {}; setCc({ ...JSON.parse(raw.json || "{}"), updatedAt: raw.updatedAt || "" }); }
-        catch (e) { console.warn("[HE dashboard] ccSnapshot unreadable:", e.message); setCc(null); }
-      }, () => setCc(null));
-    } catch (e) { setCc(null); }
+      unsub = onSnapshot(query(collection(db, "agentFindings"), orderBy("createdAt", "desc"), limit(250)),
+        snap => setFindings(snap.docs.filter(x => !/^(dry|test)_/.test(x.id)).map(x => ({ id: x.id, ...x.data() }))),
+        () => setFindings(null));
+    } catch (e) { setFindings(null); }
     return () => { if (unsub) unsub(); };
   }, [tab]);
+  const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
+  const [applTick, setApplTick] = useState(0);
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let dead = false;
+    setAppl(undefined);
+    fetchApplSheetRows(true).then(rows => { if (!dead) setAppl({ rows }); }, e => { if (!dead) setAppl({ err: e.message || "The appliance sheet could not be read." }); });
+    return () => { dead = true; };
+  }, [tab, applTick]);
 
   const d = useMemo(() => {
     const now = new Date(), today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -46506,87 +46521,102 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       </div>
     </>);
   } else {
-    const snap = cc || {};
-    const routines = (Array.isArray(snap.routines) ? snap.routines : []).filter(Boolean);
-    const sessions = (Array.isArray(snap.sessions) ? snap.sessions : []).filter(Boolean);
-    const sorted = sessions.filter(x => x.status !== "archived").sort((a, b) => (odDate(b.updatedAt) || 0) - (odDate(a.updatedAt) || 0));
-    const openS = sorted.filter(x => x.bucket !== "completed");
-    const cq = ccQ.trim().toLowerCase();
-    const shown = (ccFilter === "open" ? openS : ccFilter === "all" ? sorted : sorted.filter(x => x.bucket === ccFilter)).filter(x => !cq || `${x.title} ${x.summary}`.toLowerCase().includes(cq));
-    const groups = [["blocked", "Needs you", OD_R], ["review_ready", "Ready to review", OD_B], ["working", "Working now", OD_G], ["failed", "Stopped with an error", OD_R], ["idle", "Idle", OD_GOLD], ["completed", "Finished", "#8C847D"]];
-    const grouped = groups.map(([k, label, color]) => ({ k, label, color, list: shown.filter(x => (x.bucket || "idle") === k) })).filter(g => g.list.length);
-    const waiting = openS.filter(x => x.bucket === "blocked" || x.bucket === "review_ready").length;
-    const on = routines.filter(r => r.enabled);
-    const ran = routines.filter(r => r.lastStatus);
-    const okRuns = ran.filter(r => r.lastStatus === "succeeded");
-    const failedRuns = ran.filter(r => r.lastStatus !== "succeeded");
-    const nameCount = {}; on.forEach(r => { const k = String(r.name || "").trim().toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
-    const dupes = Object.values(nameCount).filter(n => n > 1).length;
-    const upd = odDate(snap.updatedAt);
-    const stale = upd && d.now - upd > 3*60*60*1000;
-    const next = on.map(r => ({ ...r, _next: odDate(r.nextAt) })).filter(r => r._next && r._next >= d.now).sort((a, b) => a._next - b._next);
+    // ── Automations: Plan Intake + Appliance Loads ──
+    const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
     const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
-    const statusColor = (r) => !r.enabled ? "#8C847D" : !r.lastStatus ? OD_GOLD : r.lastStatus === "succeeded" ? OD_G : OD_R;
-    const routineRow = (r) => ({ title: r.name, sub: `${r.schedule || "On demand"} · ${!r.enabled ? "off" : r.lastStatus ? `last run ${r.lastStatus === "succeeded" ? "worked" : "failed"} ${at2(odDate(r.lastAt))}` : "hasn't run"}${r._next ? " · next " + at2(r._next) : ""}`, color: statusColor(r), icon: "refresh" });
-    const chips = [["open", `Not finished ${openS.length}`], ["blocked", "Needs you"], ["review_ready", "Ready to review"], ["working", "Working"], ["completed", "Finished"], ["all", "All"]];
+    const go = (url) => { try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {} };
+    // Plan Intake
+    const cutoff = d.now.getTime() - 14*OD_DAY;
+    const fl = (findings || []).map(f => ({ ...f, _at: odDate(f.createdAt) })).filter(f => f._at && f._at.getTime() >= cutoff);
+    const needs = fl.filter(f => PLAN_NEEDS.includes(f.type) && !f.seen);
+    const filed = fl.filter(f => f.type === "plans_filed");
+    const filesN = filed.reduce((n, f) => { const m = /^(\d+) files? filed/.exec(f.summary || ""); return n + (m ? +m[1] : 1); }, 0);
+    const folders = fl.filter(f => OD_PLAN_FOLDER.includes(f.type));
+    const walks = fl.filter(f => OD_PLAN_WALK.includes(f.type));
+    const lastPlan = fl.length ? fl[0]._at : null;
+    const planColor = (f) => PLAN_NEEDS.includes(f.type) ? (f.seen ? OD_GOLD : OD_R) : f.type === "plans_filed" ? OD_G : OD_B;
+    const planIcon = (f) => f.type === "plans_filed" ? "fileText" : OD_PLAN_WALK.includes(f.type) ? "mapPin" : OD_PLAN_FOLDER.includes(f.type) ? "folder" : "alertTriangle";
+    const planOpen = (f) => { const j = jobByNo(f.number); openList(`${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, at2(f._at), [
+      { title: odText(f.summary) || "—", sub: [f.from && "From " + f.from, f.bestGuess && "Best guess: " + f.bestGuess, f.seen && f.seenBy && "Seen by " + odFirst(f.seenBy)].filter(Boolean).join(" · "), color: planColor(f), icon: planIcon(f) },
+      ...(f.links || []).filter(l => l && l.url).map(l => ({ title: `Open ${String(l.label || "link").toLowerCase()}`, sub: l.label === "Email" ? "Gmail" : l.label === "Simpro" ? "Simpro" : "Google Drive", color: OD_B, icon: "external", onClick: () => go(l.url) })),
+      ...(j ? [{ title: `Open ${j.name}`, sub: "Job panel", color: OD_O, icon: "hardHat", job: j }] : []),
+      ...(f.canFile && !f.seen ? [{ title: "File it from Today → Plans in the app", sub: "The Plans card has the File it form for this plan", color: OD_GOLD, icon: "info" }] : []),
+    ]); };
+    const pNum = (n) => /^#?Q?\d+$/i.test(String(n || "").trim()) ? planNum(String(n).trim()) : "No number";
+    const planRow = (f) => ({ title: `${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, sub: odText(f.summary), right: at2(f._at), color: planColor(f), icon: planIcon(f), onClick: () => planOpen(f) });
+    const planList = planShow === "needs" ? needs : planShow === "filed" ? filed : planShow === "folders" ? [...folders, ...walks].sort((a, b) => b._at - a._at) : fl;
+    const planDays = []; planList.forEach(f => { const k = localYmd(f._at); const g = planDays[planDays.length - 1]; if (g && g.k === k) g.list.push(f); else planDays.push({ k, at: f._at, list: [f] }); });
+    // Appliance Loads
+    const arows = (appl && appl.rows) || [];
+    // Same test as the sheet's Summary "Items with TBD amps" column.
+    const isTbd = (r) => /^tbd$/i.test(r.load);
+    const ajobs = []; arows.forEach(r => { let g = ajobs.find(x => x.no === r.no); if (!g) { g = { no: r.no, label: r.label, rows: [], amps: 0, notIn: 0, likely: 0, tbd: 0, typical: 0 }; ajobs.push(g); }
+      g.rows.push(r); g.amps += r.total || 0; if (r.inCC.startsWith("not")) g.notIn++; else if (r.inCC === "likely") g.likely++; if (isTbd(r)) g.tbd++; if (/^typical/i.test(r.conf)) g.typical++; });
+    ajobs.forEach(g => { g.job = jobByNo(g.no); });
+    ajobs.sort((a, b) => (b.notIn + b.likely + b.tbd) - (a.notIn + a.likely + a.tbd) || Number(b.no) - Number(a.no));
+    const aSum = (k) => ajobs.reduce((n, g) => n + g[k], 0);
+    const applItem = (r) => ({ title: r.item + (r.qty && r.qty !== "1" ? ` × ${r.qty}` : ""), sub: [r.loc, r.model, r.inCC.startsWith("not") ? "Not in CC yet" : r.inCC === "likely" ? `Likely in CC as ${r.cc || "?"}` : r.cc && `In CC as ${r.cc}`, isTbd(r) && "no amps found"].filter(Boolean).join(" · "),
+      right: isTbd(r) ? "TBD" : r.load ? `${r.load} A` : "", color: r.inCC.startsWith("not") ? OD_R : r.inCC === "likely" ? OD_GOLD : isTbd(r) ? OD_R : OD_G, icon: "zap", onClick: r.link ? () => go(r.link) : undefined });
+    const applOpen = (g) => openList(g.label, `${odPlural(g.rows.length, "item")} · ${Math.round(g.amps)} A connected · tap an item for its source file`, [
+      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: "Job panel", color: OD_O, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_GOLD, icon: "info" }]),
+      ...g.rows.filter(r => r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r)).map(applItem),
+      ...g.rows.filter(r => !(r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r))).map(applItem),
+    ]);
+    const applList = (title, pred) => openList(title, "tap an item for its source file", ajobs.flatMap(g => g.rows.filter(pred).map(r => ({ ...applItem(r), title: `${g.label} · ${r.item}` }))));
+    const nPlan = odNextRun(OD_RUNS.plan, d.now), nAppl = odNextRun(OD_RUNS.appl, d.now);
+    const chips = [["all", `All ${fl.length}`], ["needs", `Needs you ${needs.length}`], ["filed", `Filed ${filed.length}`], ["folders", `Folders & walks ${folders.length + walks.length}`]];
     main = (<>
-      <div className="od-head"><div><h1>Command Center</h1><p>Your Claude automations and sessions · {cc === undefined ? "loading…" : upd ? `updated ${odAgo(upd, d.now)}` : "no snapshot yet"}</p></div>
-        {stale && <span className="od-warn">This list is {odAgo(upd, d.now).replace(" ago", "")} old. The hourly routine needs the Claude_Code_Remote connector.</span>}</div>
-      {cc === null ? (
-        <div className="od-white od-pad"><div className="od-ct">Nothing here yet</div><div className="od-empty">The Command Center snapshot routine fills this in. Once it has run, your automations and Claude sessions show up here.</div></div>
-      ) : (<>
-        <div className="od-minis">
-          <OdMini title="Automations on" color={OD_O} icon="refresh" value={on.length} sub={`of ${routines.length}`} onClick={() => openList("Automations", `${on.length} on`, routines.map(r => routineRow({ ...r, _next: odDate(r.nextAt) })))}><OdRing pct={routines.length ? on.length/routines.length : 0} color={OD_O} label="Share of automations on"/></OdMini>
-          <OdMini title="Last runs OK" color={OD_G} icon="checkCircle" value={ran.length ? okRuns.length : "—"} sub={ran.length ? `of ${ran.length}` : "none yet"} onClick={failedRuns.length ? () => openList("Automations whose last run failed", "", failedRuns.map(r => routineRow(r))) : undefined}><OdRing pct={ran.length ? okRuns.length/ran.length : 0} color={OD_G} label="Share of last runs that worked"/></OdMini>
-          <OdMini title="Open sessions" color={OD_B} icon="activity" value={openS.length} sub="not finished" onClick={() => setCcFilter("open")}><OdBars vals={groups.slice(0, 4).map(([k]) => openS.filter(x => x.bucket === k).length)} color={OD_B} hi={0} label="Open sessions by status"/></OdMini>
-          <OdMini title="Waiting on you" color={OD_R} icon="bell" value={waiting} sub="sessions" onClick={() => setCcFilter("blocked")}><OdRing pct={openS.length ? waiting/openS.length : 0} color={OD_R} label="Share of open sessions waiting on you"/></OdMini>
-        </div>
-        <div className="od-white od-pad">
-          <div className="od-ct">Claude sessions<small>tap one to open it in Claude</small></div>
-          <div className="od-filters left">{chips.map(([k, l]) => <button type="button" key={k} aria-pressed={ccFilter === k} onClick={() => setCcFilter(k)}>{l}</button>)}</div>
-          <input className="od-q" type="search" value={ccQ} onChange={e => setCcQ(e.target.value)} placeholder="Search session titles" aria-label="Search sessions"/>
-          {grouped.map(g => (
-            <div className="od-sgroup" key={g.k}>
-              <div className="sh" style={{ "--c": g.color }}>{g.label}<span>{g.list.length}</span></div>
-              {g.list.map(x => (
-                <a className="od-sess" key={x.id} href={`https://claude.ai/code/${encodeURIComponent(x.id)}`} target="_blank" rel="noopener noreferrer">
-                  <span className="m"><b>{x.title || "Untitled session"}</b><small>{[OD_ORIGIN[x.origin] || x.origin, x.summary].filter(Boolean).join(" · ")}</small></span>
-                  <span className="t">{odAgo(odDate(x.updatedAt), d.now)}<Icon name="external" size={12}/></span>
-                </a>
-              ))}
-            </div>
-          ))}
-          {!grouped.length && <div className="od-empty">No sessions match.</div>}
-        </div>
-        <Sec right="next runs">Coming up</Sec>
-        <div className="od-plan">
-          {next.slice(0, 6).map((r, i) => (
-            <div className={"od-white od-start" + (i === 0 ? " hot" : "")} key={r.id || i}>
-              <span className="dd">{at2(r._next)}</span><b>{r.name}</b><p>{r.schedule || ""}</p>
-            </div>
-          ))}
-          {!next.length && <div className="od-empty">No automation is scheduled to run.</div>}
-        </div>
-      </>)}
+      <div className="od-head"><div><h1>Automations</h1><p>What Plan Intake and the Appliance Loads pull produced · live</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Plans filed, 14 days" color={OD_G} icon="fileText" value={findings === undefined ? "…" : filesN} sub={`${filed.length} ${filed.length === 1 ? "batch" : "batches"}`} onClick={() => setPlanShow("filed")}><OdBars vals={[13,12,11,10,9,8,7,6,5,4,3,2,1,0].map(i => filed.filter(f => localYmd(f._at) === localYmd(odAddDays(d.t0, -i))).length)} color={OD_G} hi={13} label="Plan filings per day, last 14 days"/></OdMini>
+        <OdMini title="Plans need you" color={OD_R} icon="alertTriangle" value={findings === undefined ? "…" : needs.length} sub="not seen yet" onClick={() => setPlanShow("needs")}><OdRing pct={fl.length ? needs.length/fl.length : 0} color={OD_R} label="Share of plan findings that need you"/></OdMini>
+        <OdMini title="Not in CC yet" color={OD_O} icon="zap" value={appl === undefined ? "…" : aSum("notIn")} sub={`${aSum("likely")} likely`} onClick={() => applList("Appliances not in CC Home Runs yet", r => r.inCC.startsWith("not") || r.inCC === "likely")}><OdRing pct={arows.length ? (aSum("notIn") + aSum("likely"))/arows.length : 0} color={OD_O} label="Share of appliances not confirmed in Home Runs"/></OdMini>
+        <OdMini title="Appliances, no amps" color={OD_GOLD} icon="help" value={appl === undefined ? "…" : aSum("tbd")} sub={`of ${arows.length}`} onClick={() => applList("Appliances with no amps found", isTbd)}><OdRing pct={arows.length ? aSum("tbd")/arows.length : 0} color={OD_GOLD} label="Share of appliances with no amps"/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Plan Intake<small>{lastPlan ? `last activity ${odAgo(lastPlan, d.now)}` : findings === undefined ? "loading…" : "nothing in 14 days"}{nPlan ? ` · next run ${at2(nPlan)}` : ""}</small></div>
+        <div className="od-filters left">{chips.map(([k, l]) => <button type="button" key={k} aria-pressed={planShow === k} onClick={() => setPlanShow(k)}>{l}</button>)}</div>
+        {findings === null ? <div className="od-empty">The plan intake log could not be read.</div> : planDays.map(g => (
+          <div className="od-sgroup" key={g.k}>
+            <div className="sh" style={{ "--c": OD_B }}>{g.k === d.today ? "Today" : `${odDow(g.at)} ${odShort(g.at)}`}<span>{g.list.length}</span></div>
+            <Rows rows={g.list.map(planRow)}/>
+          </div>
+        ))}
+        {findings !== null && findings !== undefined && !planList.length && <div className="od-empty">{planShow === "needs" ? "Nothing waiting on you." : "Nothing in the last 14 days."}</div>}
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Appliance Loads<small>{appl && appl.rows ? `${odPlural(ajobs.length, "job")} · ${arows.length} items · ${Math.round(aSum("amps")).toLocaleString()} A connected` : appl === undefined ? "loading…" : ""}{nAppl ? ` · next pull ${at2(nAppl)}` : ""}</small>
+          <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setApplTick(t => t + 1)}>Refresh</button><button type="button" className="od-mini-btn" onClick={() => go(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`)}>Open sheet</button></div></div>
+        {appl && appl.err ? <div className="od-empty">{appl.err}</div> : (
+          <div className="od-tablewrap"><div className="od-table appl">
+            <div className="tr hd"><span className="c">Job</span><span className="c">Items</span><span className="c">Amps</span><span className="c">Not in CC</span><span className="c">Likely</span><span className="c">No amps</span><span className="c">Typical</span></div>
+            {ajobs.map(g => (
+              <button type="button" className="tr" key={g.no} onClick={() => applOpen(g)}>
+                <span className="c nm"><b>{g.label}</b><small>{g.job ? g.job.name : "no app job with this number"}</small></span>
+                <span className="c num">{g.rows.length}</span><span className="c num">{Math.round(g.amps * 10) / 10}</span>
+                <span className="c num" style={g.notIn ? { color: OD_R, fontWeight: 700 } : null}>{g.notIn || "—"}</span>
+                <span className="c num" style={g.likely ? { color: OD_GOLD, fontWeight: 700 } : null}>{g.likely || "—"}</span>
+                <span className="c num" style={g.tbd ? { color: OD_R, fontWeight: 700 } : null}>{g.tbd || "—"}</span>
+                <span className="c num">{g.typical || "—"}</span>
+              </button>
+            ))}
+            {appl === undefined && <div className="od-empty">Loading the sheet…</div>}
+          </div></div>
+        )}
+      </div>
     </>);
     right = (<>
-      <Me sub="Command Center"/>
-      <Stats items={[[`${on.length}/${routines.length}`, "Automations on"], [openS.length, "Open sessions", () => setCcFilter("open")], [waiting, "Waiting on you", () => setCcFilter("blocked")]]}/>
-      <Sec right={dupes ? `${dupes} duplicate${dupes === 1 ? "" : "s"}` : `${routines.length}`}>Automations</Sec>
+      <Me sub="Automations"/>
+      <Stats items={[[needs.length, "Plans need you", () => setPlanShow("needs")], [filesN, "Plans filed, 14 d", () => setPlanShow("filed")], [aSum("notIn"), "Not in CC yet"]]}/>
+      <Sec right={`${needs.length}`}>Needs you</Sec>
       <div className="od-list">
-        {routines.slice().sort((a, b) => (b.enabled - a.enabled) || String(a.name).localeCompare(String(b.name))).map((r, i) => {
-          const dup = r.enabled && nameCount[String(r.name || "").trim().toLowerCase()] > 1;
-          const last = odDate(r.lastAt), nx = odDate(r.nextAt);
-          const sub = !r.enabled ? "Off" : dup ? "Duplicate: this name runs more than once" : last ? `${r.lastStatus === "succeeded" ? "Ran" : "Failed"} ${at2(last)}` : "Hasn't run yet";
-          return <OdItem key={r.id || i} color={statusColor(r)} icon={r.enabled ? "refresh" : "x"} tag={r.schedule || (r.enabled ? "On demand" : "Off")} title={r.name} sub={sub}
-            onClick={() => openList(r.name, r.schedule || "", [
-              { title: r.enabled ? "On" : "Off", sub: "Status", color: statusColor(r), icon: "refresh" },
-              { title: last ? at2(last) : "Never", sub: r.lastStatus ? `Last run ${r.lastStatus === "succeeded" ? "worked" : "failed"}` : "Last run", color: statusColor(r), icon: "clock" },
-              { title: nx ? at2(nx) : "Not scheduled", sub: "Next run", color: OD_B, icon: "calendar" },
-              ...(dup ? [{ title: "Set up more than once", sub: "Another automation has the same name; you may get two reports.", color: OD_R, icon: "alertTriangle" }] : []),
-            ])}/>;
-        })}
-        {!routines.length && <div className="od-empty dark">{cc === undefined ? "Loading…" : "No automations in the snapshot."}</div>}
+        {needs.slice(0, 8).map(f => <OdItem key={f.id} color={OD_R} icon={planIcon(f)} tag={PLAN_LABEL[f.type] || f.type} title={f.filename || pNum(f.number)} sub={odText(f.summary)} when={odAgo(f._at, d.now)} onClick={() => planOpen(f)}/>)}
+        {!needs.length && <div className="od-empty dark">{findings === undefined ? "Loading…" : "Nothing from Plan Intake is waiting on you."}</div>}
+      </div>
+      <Sec>When they run</Sec>
+      <div className="od-list">
+        <OdItem color={OD_B} icon="refresh" tag="Plan Intake" title={`Daily ${odRunTimes(OD_RUNS.plan)}`} sub={nPlan ? `Next ${at2(nPlan)} · files emailed plans, matches site walks` : ""}/>
+        <OdItem color={OD_B} icon="refresh" tag="Appliance Loads" title={`Nightly ${odRunTimes(OD_RUNS.appl)}`} sub={nAppl ? `Next ${at2(nAppl)} · reads new appliance packages, checks Home Runs` : ""}/>
       </div>
     </>);
   }
@@ -46860,6 +46890,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-table .th{border:0;background:transparent;text-align:left;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);cursor:pointer;padding:0}
         .odash .od-table .th.on{color:#C2511A}
         .odash .od-table .c{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table.appl{min-width:620px}
+        .odash .od-table.appl .tr{grid-template-columns:minmax(170px,2.2fr) repeat(6,minmax(54px,1fr))}
+        .odash .od-table.appl .hd .c{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-ct-actions{margin-left:auto;display:flex;gap:6px}
+        .odash .od-mini-btn{border:1px solid var(--cline);background:#fff;color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+        .odash .od-mini-btn:hover{background:#FBF8F5}
         .odash .od-table .c small{color:var(--cdim);font-size:11px}
         .odash .od-table .c.st small{display:block;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .nm{display:flex;flex-direction:column}
@@ -55280,10 +55316,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-13 · App SW version: v532
+**Last manifest update:** 2026-10-13 · App SW version: v533
 
 ---
 
+- **Dashboard: the Command Center tab becomes Automations — what Plan Intake and the Appliance Loads pull produced** · 'shipped 2026-10-13' · 'SW v533' · 'OfficeDash' · Koy: *"really i just want to see outputs for the plan intake and the appliance sheet pull."* The old tab depended on an hourly Claude Routine copying routines and sessions into 'settings/ccSnapshot'; Routines on this account can't carry the connector that lists them, so it never refreshed (that Routine is now off). The tab (key still 'cc', so a remembered tab opens) now reads the two automations' own outputs where they already land. **Plan Intake:** live 'agentFindings' listener while the tab is open (same query and dry/test filter as the Today Plans card), last 14 days grouped by day, chips All / Needs you (unseen 'PLAN_NEEDS') / Filed / Folders & walks; each line opens its folder, file, email (the finding's own links) and the app job matched by Simpro #; minis for plans filed (file count from the finding summary, per-day bars) and plans needing you. **Appliance Loads:** 'fetchApplSheetRows' (the Tools view's Master-tab read), one row per job: items, connected amps, Not in CC yet, Likely, no amps (the sheet's TBD rule) and typical rows, matching the sheet's own Summary tab; tap a job for its appliances (attention first), tap an appliance to open its source file; Refresh and Open sheet. Next run times come from the two Routines' UTC crons ('OD_RUNS'). Guide 'public/sops/dashboard.html' updated. **Why it won't lose data:** read-only: one 'onSnapshot' on 'agentFindings' (rules already allow the read; no seen stamps written here) and the existing sheet CSV read; the ccSnapshot listener is removed; no job, needs or settings write; the crew app, Plans card, Tools view, loader, rules and functions are untouched.
 - **Dashboard accuracy pass: stages go by where the work actually is, and every tab checked against live job data** · 'shipped 2026-10-13' · 'SW v532' · 'odPhase' · 'odBuildSchedule' · 'odBuildEvents' · Koy: *"Oakhill says it's in job prep. I know that job prep isn't all the way completed, but the rough is in progress, and it should show that. Vista Meadows shows it's in between, but the finish is in progress. I just need it to be way more accurate and real."* Four audits ran the dashboard's own code over a read-only copy of the live jobs, needs and team list and compared every number with what the data says. **Stages:** the dashboard no longer borrows the Job Board's 'STAGE_SECTIONS' (first match wins, and "Pre Job Prep" is checked before any status, so Oak Hill 5 with rough In Progress sat in prep because Cabinet Plans was unticked). New 'odPhase()': finish status, then rough status, wins; "invoice" counts as complete; unfinished prep (or an open commercial Pre-Con checklist) is a separate **Prep not finished** flag; a scheduled/date-set phase whose date has arrived reads **start date passed**; a phase with daily updates or closed punch under a not-started status goes where the work is and is flagged **status behind the work**; no status at all reads **No status set**; commercial jobs with no commercial stage fall back to the crew status. Each job shows the reason ("5%", "Finish projected 11/2", "Work logged 8/13, status still Awaiting Start Date"). **Last work:** "last update" counted 'lastActivityAt' / 'updated_at', which the presence ping and Simpro cache writes stamp on merely opening a job; it is now the newest real work (any age), so quiet-job ages are true (Cowdrey 3 d became 63 d). **Schedule:** inspection targets drop once that inspection is logged or the job moved past it, and targets 30+ days old are their own "result never logged" list; passed start dates have their own list; return-trip dates come from 'rtStatusDate' ('scheduledDate' is never set in live data) and a "needs" trip shows its schedule-by date; quick jobs and temp peds are on the schedule; scanned Matterports drop; On Hold phases aren't starts; completed jobs still show their open return trips; Upcoming entries already on the board aren't doubled; calendar days are real days, so the week view doesn't lose 11/2 when the clocks fall back. **Quality:** repeated Pass/Fail taps and a cleared result no longer count as extra inspections; "Unassigned" / "Paul" aren't foremen ('SBV2_EXCLUDE_NAME'); QC walks use the QC tracker's own rows and buckets (failed, walk date passed, needs a walk, scheduled) and the job panel shows rough and finish QC; open change orders count on every live job and drop ones converted to a return trip; old punch items get their age from their id. **Activity:** adds questions asked/answered, job notes, return-trip punch, change orders sent / quoted / moved in Simpro, and status-update history; photos are counted from every photo (punch items and return-trip punch included, plan PDFs excluded), one line per job and day; the "return trip scheduled" row (really the trip date) moved to Schedule. **People:** foremen go by Team Members title (as the Crew Planner does) with a **No active foreman** card for jobs on Unassigned / contractors / deactivated people; duplicate team records collapse; "jobs touched today" includes jobs opened; phones on latest counts each person's newest device. **Overview:** Needs attention adds ready to invoice, change orders waiting on the GC 60+ days and return trips past their date. Guide 'public/sops/dashboard.html' updated. **Why it won't lose data:** still read-only: no new reads, no 'setDoc' / 'updateDoc' / 'saveJob'; every change is how already-loaded job, team and task data is grouped and counted on the Koy-only /dashboard page; the crew app, Job Board, loader, rules and Cloud Functions are untouched.
 - **Dashboard v2: every number and job opens, a Jobs tab, Needs attention, foreman filter + 7/14/30-day range, and its own Home Screen icon** · 'shipped 2026-10-13' · 'SW v531' · 'OfficeDash' · Koy, on v530: *"It just adds the app to my Home Screen not the dashboard. Also was hoping for this to be more interactive and have a lot more info in each tab."* **Home Screen:** '/dashboard' swaps the page's '<link rel=manifest>' to the new 'public/dashboard-manifest.json' ('id' and 'start_url' '/dashboard', name "Homestead Dashboard", short name "Dashboard") and retitles 'apple-mobile-web-app-title', at module load before anyone can tap Share (the GC portal's v409 trick), so Add to Home Screen makes a Dashboard icon instead of a second crew-app icon. **Everywhere:** a job panel ('OdSheet') opens from any job row, card, calendar item or search hit: stage, foreman, lead, rough/finish status and %, QC, inspection results or targets, last update, status update, failed-inspection items still open, coming-up dates, open punch (phase, room, who, age, serious/waiting), change orders, return trips, inspection history and recent activity, with **Open in app** ('?jobId='). Every stat card opens the list behind its number; a person panel shows their open My Day tasks, their jobs and their activity. A control row adds a **foreman filter** (all job tabs), a **7 / 14 / 30-day range** and a **job finder** (name, number, address, GC). **Overview:** tap-or-hover chart with a day summary and "See them" into Activity; **Needs attention** (inspections past their date, failed-inspection items not fixed, starts in 3 days not confirmed, COs to send, return trips with no date, in-progress jobs quiet 5+ days, serious punch); tappable calendar days. **Jobs (new tab):** stage chips, filter box, sortable table (job, foreman, stage, punch, COs, next date, last update), by-stage and by-foreman bars that filter. **Activity:** grouped by day, type chips with counts, person picker, most-active jobs. **Schedule:** week-by-week navigation, next-30-days by kind, starts list. **Quality:** first-pass chart with month drill-down, open punch by age (0–7, 8–14, 15–30, 30+ days), serious items, punch by foreman lists, latest failed inspections. **People:** tappable 7-day grid squares and names, My Day load by person, quiet-3-days list, all devices toggle. **Command Center:** status chips, session search, automation detail. Choices (tab, foreman, range) are remembered on the device. **Why it won't lose data:** still read-only; the only new reads are the same in-memory job, team and task data; no 'setDoc'/'updateDoc'/'saveJob'; the manifest swap only changes a '<link>' and a '<meta>' on the /dashboard page; no loader, rules or Cloud Function change.
 - **Standalone dashboard at '/dashboard' (Koy only): Overview · Activity · Schedule · Quality · People · Command Center, live, not in the app** · 'shipped 2026-10-11' · 'SW v530' · 'DashPage' + 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"*, *"I want to be the only one with the view"*, *"a stand alone dashboard that includes a tab for my current personal cc"* and *"not in the app"*. **The page:** 'homestead-electric.vercel.app/dashboard' renders 'OfficeDash' full screen with a slim header (Resi / Commercial switch, Open the app) and no app nav or tab; it is not in 'NAV_MAIN_TABS' and adds no permission or Settings checkbox. It boots the same bundle, passes the normal PIN gate, and returns right above App's main return (after every hook; 'IS_DASH_PAGE' is a module-level path check). It opens only for Koy's own team record ('isDashOwner': id 'koy', the record the Team editor already protects); anyone else sees "This page is private". Tapping a job goes to '/?jobId=<id>', the existing deep link. **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending', open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards, this month's calendar, the next 14 days of dated work. **Activity:** the last 30 days from the job fields (punch added/closed, CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return trips, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed starts, inspection target dates without a result, scheduled QC walks, Matterport scans and return trips, Upcoming-tab starts), starts in 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with items, punch by foreman, open return trips and QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count, open time-off requests (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the tab opens). **Command Center:** Koy's Claude automations (Routines) and the Claude sessions that aren't finished, from 'settings/ccSnapshot' ('{json, updatedAt}', live 'onSnapshot' only while the tab is open), written by the hourly Claude Routine "Command Center snapshot (Dashboard tab)" outside the app (names, schedules, statuses and titles only, never prompts). Sessions grouped Needs you / Ready to review / Working now, each opening 'https://claude.ai/code/<id>'; next runs; every automation with a status color and a duplicate-name flag; a warning when the snapshot is over 3 hours old. No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Wrapped in its own error boundary ('OdBoundary'; the app has none). Guide 'public/sops/dashboard.html' behind the page's "?". **Why it won't lose data:** the page only reads; it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory plus two read-only docs ('settings/deviceVersions', 'settings/ccSnapshot'); it has no 'setDoc'/'updateDoc'/'saveJob'; nothing in the app's tabs, nav or Settings changes; no loader, rules or Cloud Function change.
