@@ -45719,6 +45719,65 @@ function odJobInfo(j, now) {
   if (j.finalInspectionResult === "fail") (j.finalInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Final", text: odText(it.text || it) }); });
   return { punch, cos, openCos, rts, openRts, atts, failOpen };
 }
+// Where the work actually is (v532). The Job Board's STAGE_SECTIONS sort by
+// the first match, so a job whose prep checklist isn't fully ticked sits in
+// "Pre Job Prep" even with rough underway. Here the crew's own rough/finish
+// status wins; unfinished prep is a separate flag, and a start date that has
+// passed without the status moving gets its own honest label.
+const OD_PHASES = [
+  { key: "finish",     label: "Finish in progress",       color: "#3B6FE0" },
+  { key: "finishDue",  label: "Finish start date passed", color: "#C99A2E" },
+  { key: "finishHold", label: "Finish on hold",           color: "#B0892C" },
+  { key: "between",    label: "Rough done, finish next",  color: "#E8A020" },
+  { key: "rough",      label: "Rough in progress",        color: "#F2702A" },
+  { key: "roughDue",   label: "Rough start date passed",  color: "#C99A2E" },
+  { key: "roughHold",  label: "Rough on hold",            color: "#B0892C" },
+  { key: "roughNext",  label: "Rough not started",        color: "#8C847D" },
+  { key: "prep",       label: "Job prep",                 color: "#3E9D98" },
+  { key: "commPrecon", label: "Pre-Con",                  color: "#3E9D98" },
+  { key: "commReady",  label: "Ready to start",           color: "#8C847D" },
+  { key: "commInProgress", label: "In progress",          color: "#F2702A" },
+  { key: "commHold",   label: "On hold",                  color: "#B0892C" },
+  { key: "commCloseout", label: "Closeout",               color: "#8F7EE0" },
+  { key: "quick",      label: "Quick job",                color: "#8F7EE0" },
+  { key: "ped",        label: "Temp ped",                 color: "#8F7EE0" },
+  { key: "complete",   label: "Complete",                 color: "#2FBF71" },
+];
+const OD_PHASE = Object.fromEntries(OD_PHASES.map((p, i) => [p.key, { ...p, i }]));
+const OD_NOT_STARTED = ["", "waiting_date", "date_confirmed", "scheduled"];
+function odPhase(j, today) {
+  const ph = (key, note) => ({ ...OD_PHASE[key], note: note || "" });
+  if (j.quickJob) {
+    const s = j.quickJobStatus || "new";
+    return ["complete", "invoice"].includes(s) ? ph("complete") : ph("quick", s === "inprogress" ? "In progress" : s === "scheduled" ? "Scheduled" : "New");
+  }
+  if (j.tempPed) return j.tempPedStatus === "completed" ? ph("complete") : ph("ped", j.tempPedStatus === "scheduled" ? "Scheduled" : "Ready to schedule");
+  if (j.division === "commercial") {
+    const st = commOf(j).stage;
+    if (st === "complete") return ph("complete");
+    if (st === "inprogress") return ph("commInProgress");
+    if (st === "hold") return ph("commHold");
+    if (st === "closeout") return ph("commCloseout");
+    return commPhase(j) !== null ? ph("commPrecon") : ph("commReady");
+  }
+  const rs = effRS(j), fs = effFS(j);
+  const due = (v) => { const at = odDate(v); return at && localYmd(at) <= today ? at : null; };
+  const when = (v, ok) => { const at = odDate(v); return at ? `${ok ? "confirmed" : "projected"} ${odShort(at)}${localYmd(at) < today ? " (date passed)" : ""}` : ""; };
+  if (fs === "complete") return ph("complete");
+  if (fs === "inprogress") return ph("finish", parseStage(j.finishStage) ? `${parseStage(j.finishStage)}%` : "");
+  if (fs === "waiting") return ph("finishHold");
+  if (rs === "complete") {
+    const at = ["scheduled", "date_confirmed"].includes(fs) && due(j.finishProjectedStart);
+    if (at) return ph("finishDue", `Set for ${odShort(at)}, finish status not moved to In Progress`);
+    return ph("between", when(j.finishProjectedStart) ? `Finish ${when(j.finishProjectedStart, j.finishStartConfirmed)}` : fs === "waiting_date" || !fs ? "Waiting on a finish date" : "");
+  }
+  if (rs === "inprogress") return ph("rough", parseStage(j.roughStage) ? `${parseStage(j.roughStage)}%` : "");
+  if (rs === "waiting") return ph("roughHold");
+  const at = ["scheduled", "date_confirmed"].includes(rs) && due(j.roughProjectedStart);
+  if (at) return ph("roughDue", `Set for ${odShort(at)}, rough status not moved to In Progress`);
+  if (!prepClearedToStart(j)) return ph("prep");
+  return ph("roughNext", when(j.roughProjectedStart) ? `Rough ${when(j.roughProjectedStart, j.roughStartConfirmed)}` : rs === "waiting_date" || !rs ? "Waiting on a rough date" : "");
+}
 const odStatusLabel = (v) => { const s = ROUGH_STATUSES.find(x => x.value === (v || "")); return v ? ((s && s.label) || v) : "Not set"; };
 const odPlural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
@@ -45780,16 +45839,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
 
   const d = useMemo(() => {
     const now = new Date(), today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const secs = mode === "commercial" ? COMM_BOARD_SECTIONS : STAGE_SECTIONS;
+    const secs = OD_PHASES;
     const allLive = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote");
     const foremen = [...new Set(allLive.map(j => String(j.foreman || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
     const live = foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
     const up = (upcoming || []).filter(u => u && (!foreman || sameName(u.foreman, foreman)));
-    const secOf = (j) => { try { return secs.find(s => s.test(j)) || null; } catch (e) { return null; } };
-    const isDone = (j) => { const s = secOf(j); return !!s && ["complete","completed"].includes(s.key); };
+    const phaseById = {};
+    allLive.forEach(j => { try { phaseById[j.id] = odPhase(j, today); } catch (e) { phaseById[j.id] = null; } });
+    const secOf = (j) => phaseById[j.id] || null;
+    const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && j.division !== "commercial" && !prepClearedToStart(j); } catch (e) { return false; } };
+    const isDone = (j) => { const s = secOf(j); return !!s && s.key === "complete"; };
     const active = live.filter(j => !isDone(j));
-    const secIdx = (j) => { const s = secOf(j); return s ? secs.indexOf(s) : 999; };
-    const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) === s) })).filter(s => s.jobs.length);
+    const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
+    const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
 
     const events = odBuildEvents(live, now);
     const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
@@ -45887,7 +45949,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const busyToday = tally(evToday), busyRange = tally(inRange);
     const busy = busyToday[0] ? { ...busyToday[0], when: "today" } : busyRange[0] ? { ...busyRange[0], when: `last ${range} days` } : null;
 
-    return { now, today, t0, secs, foremen, allLive, live, up, active, secOf, secIdx, bySec, events, evById, inRange, evToday, perDay, info, lastAct, sched, nextOf,
+    return { now, today, t0, secs, foremen, allLive, live, up, active, secOf, secIdx, bySec, prepOpen, events, evById, inRange, evToday, perDay, info, lastAct, sched, nextOf,
       openPunch, openCOs, coWaiting, openRTs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, overdue, needsDate, scans, attn,
       people, foremenP, openNeeds, load, timeOff, busy, busyRange };
   }, [jobs, users, needs, upcoming, mode, tick, foreman, range]); // eslint-disable-line
@@ -45982,7 +46044,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {odPlural(d.evToday.length, "update")} today across {odPlural(new Set(d.evToday.map(e => e.job.id)).size, "job")}{foreman ? ` · ${foreman}'s jobs only` : ""}</p></div></div>
       <div className="od-minis">
         <OdMini title="Active jobs" color={OD_O} icon="hardHat" value={d.active.length} sub={odPlural(d.bySec.length, "stage")}
-          onClick={() => openList("Active jobs", "Grouped by board stage", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: `${s.label} · ${j.foreman || "No foreman"}`, right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
+          onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
           <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_O} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
         </OdMini>
         <OdMini title="Inspections, 30 days" color={OD_G} icon="checkCircle" value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed` : "none logged"}
@@ -46072,12 +46134,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <input className="od-q" type="search" value={jobsQ} onChange={e => setJobsQ(e.target.value)} placeholder="Filter by job, number, address, GC or foreman" aria-label="Filter jobs"/>
         <div className="od-tablewrap">
           <div className="od-table">
-            <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman</H><H k="stage">Stage</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last update</H></div>
+            <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman</H><H k="stage">Where it is</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last update</H></div>
             {list.map(j => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id]; return (
               <button type="button" className="tr" key={j.id} onClick={() => openJob(j)}>
                 <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small></span>
                 <span className="c">{j.foreman || "—"}</span>
-                <span className="c"><em className="pill" style={{ "--c": s ? s.color : "#8C847D" }}>{s ? s.label : "—"}</em></span>
+                <span className="c st"><em className="pill" style={{ "--c": s ? s.color : "#8C847D" }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
                 <span className="c num">{d.info[j.id].punch.length || "—"}</span>
                 <span className="c num">{d.info[j.id].openCos.length || "—"}</span>
                 <span className="c">{nx ? <>{odShort(nx.at)} <small>{nx.label}</small></> : "—"}</span>
@@ -46092,7 +46154,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     right = (<>
       <Me sub="Jobs"/>
       <Stats items={[[d.active.length, "Active"], [d.needsDate.length, "Need a date", () => openList("Needs a date", odPlural(d.needsDate.length, "job"), d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what, color: OD_R, job: n.job })))], [d.attn.reduce((n, a) => n + a.rows.length, 0), "Flags", () => pickTab("overview")]]}/>
-      <Sec>By stage</Sec>
+      <Sec>Where the work is</Sec>
       <div className="od-box light"><OdHBars rows={d.bySec.map(s => ({ name: s.label, note: s.jobs.length, v: s.jobs.length, color: s.color, on: jobsStage === s.key, onClick: () => setJobsStage(jobsStage === s.key ? "" : s.key) }))} empty="No active jobs."/></div>
       <Sec>By foreman</Sec>
       <div className="od-box light"><OdHBars rows={d.foremen.map(fm => ({ name: fm, note: d.active.filter(j => sameName(j.foreman, fm)).length, v: d.active.filter(j => sameName(j.foreman, fm)).length, color: OD_O, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) })).filter(r => r.v)} empty="No foremen set on jobs."/></div>
@@ -46412,7 +46474,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdSheet title={j.name} sub={[j.simproNo && "#" + j.simproNo, j.address, j.gc].filter(Boolean).join(" · ")} onClose={() => setSheet(null)}
           actions={onSelectJob ? <button type="button" className="go" onClick={() => goApp(j)}>Open in app</button> : null}>
           <div className="od-facts">
-            {fact("Stage", s ? s.label : "")}{fact("Foreman", j.foreman)}{fact("Lead", j.lead)}
+            {fact("Where it is", s ? s.label + (s.note ? " · " + s.note : "") : "")}{fact("Job prep", d.prepOpen(j) ? "Not finished" : (j.quickJob || j.tempPed || j.division === "commercial") ? "" : "Complete")}{fact("Foreman", j.foreman)}{fact("Lead", j.lead)}
             {fact("Rough", `${odStatusLabel(effRS(j))}${parseStage(j.roughStage) ? " · " + parseStage(j.roughStage) + "%" : ""}`)}
             {fact("Finish", `${odStatusLabel(effFS(j))}${parseStage(j.finishStage) ? " · " + parseStage(j.finishStage) + "%" : ""}`)}
             {fact("QC", j.qcStatus ? `${j.qcStatus}${j.qcStatusDate ? " · " + j.qcStatusDate : ""}` : "")}
@@ -46671,6 +46733,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-table .th.on{color:#C2511A}
         .odash .od-table .c{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .c small{color:var(--cdim);font-size:11px}
+        .odash .od-table .c.st small{display:block;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .nm{display:flex;flex-direction:column}
         .odash .od-table .nm b{overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .num{font-weight:700;font-variant-numeric:tabular-nums}
