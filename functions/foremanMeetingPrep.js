@@ -308,14 +308,14 @@ function buildModel(inputs) {
       // No "Rough"/"Finish" cost centers at all (small jobs, service calls) ⇒ "Other", whole-job hours.
       if (!rough && !finish) {
         if (!extras || extras.used <= 0) return;
-        m.hours.other.push({ name: j.name, phase: "other", cur: extras, rough: null, finish: null, extras: null,
+        m.hours.other.push({ name: j.name, sn: snOf(j), phase: "other", cur: extras, rough: null, finish: null, extras: null,
           margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate, ratio: extras.ratio });
         return;
       }
       const cur = inFinish ? finish : rough;
       if (!inFinish && rough && rough.used === 0 && !(finish && finish.used > 0)) return;   // not started
       const stage = parseInt(j[(inFinish ? "finish" : "rough") + "Stage"]);   // app's phase % done
-      const row = { name: j.name, phase: inFinish ? "finish" : "rough", cur, rough, finish, extras,
+      const row = { name: j.name, sn: snOf(j), phase: inFinish ? "finish" : "rough", cur, rough, finish, extras,
         stage: Number.isFinite(stage) ? stage : null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate,
         ratio: cur ? cur.ratio : 0 };
@@ -330,7 +330,7 @@ function buildModel(inputs) {
       const t = j.simproNo ? simproTotalsById[snOf(j)] : null;
       if (!t) return;
       const cur = ph(t.rough);
-      m.hours.roughDone.push({ name: j.name, phase: "roughDone", cur, rough: null, finish: null, extras: null,
+      m.hours.roughDone.push({ name: j.name, sn: snOf(j), phase: "roughDone", cur, rough: null, finish: null, extras: null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate, ratio: cur ? cur.ratio : 0, done: roughDoneOn(j) });
     });
     m.hours.roughDone.sort((a, b) => b.done - a.done);
@@ -341,7 +341,7 @@ function buildModel(inputs) {
       const parts = [t.rough, t.finish, t.extras].filter(Boolean);
       const tot = parts.length ? { used: parts.reduce((n, p) => n + (p.used || 0), 0), est: parts.reduce((n, p) => n + (p.est || 0), 0) } : null;
       const cur = ph(tot);
-      m.hours.completed.push({ name: j.name, phase: "completed", cur, rough: ph(t.rough), finish: ph(t.finish), extras: null,
+      m.hours.completed.push({ name: j.name, sn: snOf(j), phase: "completed", cur, rough: ph(t.rough), finish: ph(t.finish), extras: null,
         margin: (typeof t.margin === "number") ? t.margin : null, marginEst: !!t.isEstimate, ratio: cur ? cur.ratio : 0, done: completedOn(j) });
     });
     m.hours.completed.sort((a, b) => b.done - a.done);
@@ -479,6 +479,9 @@ function hoursLines(r) {
   const mg = line(true);
   if (r.margin == null) mg.grey("margin n/a");
   else { mg.text += "margin "; mg.push(`${r.margin.toFixed(0)}%${r.marginEst ? " est" : ""}`, marginColor(r.margin, r.phase), true); }
+  // Weekly Lead Meeting doc only (./leadMeetingDoc.js): last week's margin.
+  if (r.was) mg.grey(`   (was ${r.was.margin}% ${r.was.label})`);
+  else if (r.firstTracked) mg.grey("   (first week tracked)");
   out.forEach(l => { delete l.push; delete l.grey; });
   return out;
 }
@@ -497,6 +500,7 @@ function renderLines(m) {
 
   H1(m.heading);
   G(`Prepared ${m.generated}.`);
+  if (m.note) G(m.note);
 
   H2("Notes");
   B("");
@@ -538,11 +542,12 @@ function renderLines(m) {
   list(m.upcoming.soon, m.upcoming.error, "Nothing on the Upcoming tab.");
 
   H2("Hours vs bid");
+  if (m.hoursNote) G(m.hoursNote);
   if (m.hours.error) G("Could not load Simpro hours.");
   else [["rough", "In rough"], ["finish", "In finish"], ["other", "Other"], ["roughDone", "Rough completed in the last 30 days"], ["completed", "Finish completed in the last 30 days"]].forEach(([k, label]) => {
     const rows = m.hours[k];
     if (k === "other" && !rows.length) return;
-    H3(label);
+    H3((m.hoursTitles && m.hoursTitles[k]) || label);
     if (!rows.length) { G(k === "completed" ? "No jobs finished in the last 30 days." : k === "roughDone" ? "No roughs completed in the last 30 days." : `No residential jobs in ${k} with hours in Simpro.`); return; }
     // Grouped by margin band (Koy, 2026-09-21): on pace / middle ground / bad place / no margin yet.
     const band = (r) => r.margin == null ? "none" : marginColor(r.margin, r.phase);

@@ -5223,13 +5223,47 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   }
 
   const docLink = `https://docs.google.com/document/d/${FOREMAN_NOTES_DOC_ID}/edit`;
+
+  // 7 · Weekly Lead Meeting doc (v536): the same section as its own Google Doc,
+  //     Hours vs bid trimmed to jobs whose margin moved since last week. Never
+  //     affects the notes-doc insert above; a failure is logged and reported.
+  let weekly = null;
+  try { weekly = await writeWeeklyLeadDoc(model, { testRun, docs, mtNow }); }
+  catch (e) { functions.logger.error("weeklyLeadDoc failed", { error: e.message }); weekly = { error: e.message }; }
+
   await sendToName("Koy", {
     title: testRun ? "📝 Foreman + Lead notes (test) ready" : "📝 Foreman + Lead notes ready",
-    body: `${model.heading} is at the top of the meeting doc`,
+    body: `${model.heading} is at the top of the meeting doc` + (weekly && weekly.name ? ` · ${weekly.name} is in Drive (${weekly.moved} margin${weekly.moved === 1 ? "" : "s"} moved)` : weekly && weekly.error ? " · the Weekly Lead Meeting doc failed" : ""),
     jobId: "", section: "",
   });
-  functions.logger.info("foremanMeetingPrep inserted", { docLink, testRun, ...model.counts });
-  return { ok: true, docLink, counts: model.counts };
+  functions.logger.info("foremanMeetingPrep inserted", { docLink, testRun, weekly, ...model.counts });
+  return { ok: true, docLink, weekly, counts: model.counts };
+}
+
+// Weekly Lead Meeting doc (v536) — Koy, 2026-10-13: "Yes, I want that every
+// week" (the Oct 7 doc whose Hours vs bid showed only margins that moved).
+// Pure logic in ./leadMeetingDoc.js; this does the I/O: margin history in the
+// server-only meetingPrepState/leadMargins (closed to the app by the rules'
+// catch-all), a new Google Doc in the packet folder (Shared Drive — the service
+// account has no My Drive storage), filled with the same Docs requests as the
+// notes doc. Test runs write the doc but never move the history.
+const leadDocLib = require("./leadMeetingDoc.js");
+async function writeWeeklyLeadDoc(model, { testRun, docs, mtNow }) {
+  const ref = db.doc("meetingPrepState/leadMargins");
+  const snap = await ref.get();
+  const todayYmd = `${mtNow.getFullYear()}-${String(mtNow.getMonth() + 1).padStart(2, "0")}-${String(mtNow.getDate()).padStart(2, "0")}`;
+  const { model: wm, history, moved, tracked } = leadDocLib.weeklyModel(model, snap.exists ? snap.data() : {}, todayYmd);
+  const name = `Weekly Lead Meeting — ${leadDocLib.meetingYmd(model.heading) || todayYmd}${testRun ? " (test)" : ""}`;
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file"] });
+  const drive = google.drive({ version: "v3", auth });
+  const created = await drive.files.create({
+    requestBody: { name, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" },
+    fields: "id, webViewLink", supportsAllDrives: true,
+  });
+  const id = created.data.id;
+  await docs.documents.batchUpdate({ documentId: id, requestBody: { requests: foremanPrepLib.docsRequests(foremanPrepLib.renderLines(wm), 1) } });
+  if (!testRun) await ref.set(history);
+  return { id, name, link: created.data.webViewLink || `https://docs.google.com/document/d/${id}/edit`, moved, tracked };
 }
 
 // ── Dashboard: newest automated doc per folder (v535) ──────────────────────

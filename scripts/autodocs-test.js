@@ -27,5 +27,6 @@ ok(pickLatest(packet, pre("packet")).url.includes("/fp2/"), "packet: keeps Drive
 ok(pickLatest(monday, pre("monday")).id === "1g2P", "monday: the (v2) made later the same day wins");
 ok(pickLatest(monday, pre("monday")).url === "https://docs.google.com/document/d/1g2P/edit", "monday: builds a link when Drive gives none");
 ok(pickLatest([], pre("monday")) === null && pickLatest(undefined, "x") === null, "empty or missing listing gives null");
+ok(pickLatest([...packet, { id: "wl", name: "Weekly Lead Meeting — 2026-10-14", createdTime: "2026-10-13T22:05:00Z" }, { id: "wlt", name: "Weekly Lead Meeting — 2026-10-14 (test)", createdTime: "2026-10-13T21:00:00Z" }], pre("weekly")).id === "wl", "weekly: newest Weekly Lead Meeting");
 ok(new Set(AUTO_DOC_SOURCES.map(s => s.key)).size === AUTO_DOC_SOURCES.length, "keys are unique");
 console.log(`autodocs-test: ${n} checks passed`);
