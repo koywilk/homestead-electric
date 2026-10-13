@@ -88,17 +88,24 @@
 
   <div class="step"><div class="num">1b</div><div class="body">
     <h3>Jobs</h3>
-    <p>Every active job in one table: foreman, stage, open punch, open change orders, next date and last update.
-    Tap a column to sort, a stage chip or bar to filter, a row to open the job. <b>Needs attention</b> on the
-    Overview lists what is slipping: inspections past their date, failed items not fixed, unconfirmed starts in the
-    next 3 days, change orders still to send, return trips with no date, quiet jobs and serious punch.</p>
+    <p>Every active job in one table: foreman, where the work is, open punch, open change orders, next date and
+    the last work logged. <b>Where it is</b> goes by the crew's rough and finish status, not the Job Board's
+    sections, so a job with rough underway shows "Rough in progress" even if prep isn't fully checked off. Unfinished
+    prep shows as its own "Prep not finished" note. If a start date passed and nobody moved the status, the job says
+    "start date passed". If daily updates or closed punch were logged while the status still says not started, the job
+    goes where the work is and is flagged. Tap a column to sort, a chip or bar to filter, a row to open the job.
+    <b>Needs attention</b> on the Overview lists what is slipping: status behind the work, jobs ready to invoice,
+    change orders waiting on the GC 60+ days, inspection dates passed with no result, start dates passed, return trips
+    past their date or with no date, failed items not fixed, unconfirmed starts in the next 3 days, change orders still
+    to send, and jobs in progress with no work logged in 5+ days. Opening a job doesn't count as work.</p>
   </div></div>
 
   <div class="step"><div class="num">2</div><div class="body">
     <h3>Activity</h3>
     <p>Everything logged on the jobs in the last 30 days, newest first: punch items added and closed,
-    change orders added and moved, inspection passes and fails, return trips, daily and status updates,
-    and photo uploads (one line per person, job and day). Use the filter buttons or type a job, person
+    change orders added, sent to the GC, quoted and moved in Simpro, inspection passes and fails, return trips and
+    their punch, questions asked and answered, job notes, daily and status updates, and photos (one line per job and
+    day; photos carry no uploader name, so they show the day only). Use the filter buttons or type a job, person
     or word to narrow it. Team pulse on the right shows who has been on the app today.</p>
   </div></div>
 
@@ -152,7 +159,7 @@
     and never opens a job or logs anything won't show as active.</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon)</div>
+  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data)</div>
 </div>
 </body>
 </html>
