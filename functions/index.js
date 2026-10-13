@@ -5232,6 +5232,44 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   return { ok: true, docLink, counts: model.counts };
 }
 
+// ── Dashboard: newest automated doc per folder (v535) ──────────────────────
+// Koy 2026-10-13: "make the folder cards open the latest doc." Read-only: lists
+// the fixed folders in ./autoDocs.js (never a caller-supplied id) with the
+// read-only Drive scope and returns the newest doc of each kind. The service
+// account sees the packet folder through the Shared Drive; a folder it isn't
+// shared on lists as empty ({ error: "none" }) or fails ({ error: "no_access" }),
+// and either way the card keeps opening the folder. Cached 10 minutes per instance.
+const autoDocsLib = require("./autoDocs.js");
+let _autoDocsCache = { at: 0, val: null };
+exports.autoDocsLatest = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  if (_autoDocsCache.val && Date.now() - _autoDocsCache.at < 10 * 60 * 1000 && !(data && data.refresh === true)) return _autoDocsCache.val;
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.readonly"] });
+  const drive = google.drive({ version: "v3", auth });
+  const lists = {};
+  const out = { at: new Date().toISOString(), docs: {} };
+  for (const src of autoDocsLib.AUTO_DOC_SOURCES) {
+    if (!(src.folder in lists)) {
+      try {
+        const r = await drive.files.list({
+          q: `'${src.folder}' in parents and trashed=false and mimeType='application/vnd.google-apps.document'`,
+          orderBy: "createdTime desc", pageSize: 100,
+          fields: "files(id,name,createdTime,modifiedTime,webViewLink)",
+          supportsAllDrives: true, includeItemsFromAllDrives: true,
+        });
+        lists[src.folder] = r.data.files || [];
+      } catch (e) {
+        functions.logger.warn("autoDocsLatest list failed", { folder: src.folder, code: e.code, error: e.message });
+        lists[src.folder] = { error: e.code === 403 || e.code === 404 ? "no_access" : "error" };
+      }
+    }
+    const l = lists[src.folder];
+    out.docs[src.key] = Array.isArray(l) ? (autoDocsLib.pickLatest(l, src.prefix) || { error: "none" }) : l;
+  }
+  _autoDocsCache = { at: Date.now(), val: out };
+  return out;
+});
+
 exports.foremanMeetingPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .pubsub.schedule("0 16 * * 2")

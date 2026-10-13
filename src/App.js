@@ -45469,18 +45469,20 @@ const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"]
 const OD_RUNS = { plan: [[13, 0], [18, 0], [22, 0]], appl: [[6, 58]] };
 const odNextRun = (utc, now) => { let best = null; for (let k = 0; k < 2; k++) utc.forEach(([h, m]) => { const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k, h, m)); if (t > now && (!best || t < best)) best = t; }); return best; };
 const odRunTimes = (utc) => utc.map(([h, m]) => { const t = new Date(); t.setUTCHours(h, m, 0, 0); return t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }).join(", ");
-// Automated docs (v534): where each automation saves what it writes. Drive
-// can't be listed from the browser without sign-in, so these are the folders
-// and standing docs themselves (IDs from functions/index.js and the Routines).
+// Automated docs (v534): where each automation saves what it writes (IDs from
+// functions/index.js and the Routines). v535: a card with `latest` opens the
+// newest doc of its kind, found by the autoDocsLatest callable (functions/
+// autoDocs.js); until that answers, or if it can't see the folder, the card
+// opens the folder as before.
 const OD_GDOC = (id) => `https://docs.google.com/document/d/${id}/edit`;
 const OD_GFOLDER = (id) => `https://drive.google.com/drive/folders/${id}`;
 const OD_DOCS = [
   { k: "bonus",   title: "Koy Bonus Tracker", when: "Josh's sheet, shared with you", by: "Google Sheets", what: "Your bonus progress", url: "https://docs.google.com/spreadsheets/d/1YXBY_Obc-halWetukFMaZG0WgPT8tV6JAeosTDgoCHQ/edit", sheet: true },
-  { k: "packet",  title: "Friday Packet", when: "Fridays 5:30 AM", by: "App (fridayPacket)", what: "Money & billing, blockers, week ahead", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true },
-  { k: "lead",    title: "Lead Meeting Prep", when: "Tuesdays 6:00 AM", by: "App (leadMeetingPrep)", what: "One doc per Wednesday lead meeting", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true },
+  { k: "packet",  title: "Friday Packet", when: "Fridays 5:30 AM", by: "App (fridayPacket)", what: "Money & billing, blockers, week ahead", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "packet" },
+  { k: "lead",    title: "Lead Meeting Prep", when: "Tuesdays 6:00 AM", by: "App (leadMeetingPrep)", what: "One doc per Wednesday lead meeting", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "lead" },
   { k: "foreman", title: "Foreman + Lead meeting notes", when: "Tuesdays 4:00 PM", by: "App (foremanMeetingPrep)", what: "This week's prep is added at the top", url: OD_GDOC("1t7i3gFiLsWmb-htGleutCZFh6TXSAnNbqbq9_ma3e80") },
-  { k: "monday",  title: "Monday Office Meeting", when: "Mondays 3:00 PM", by: "Claude routine", what: "Prefilled from last week, calendar, approved COs, bids", url: OD_GFOLDER("1-_A2XYgbz85O83K1Hwspka4KCnYeZQYP"), folder: true },
-  { k: "strategy", title: "Weekly Strategy Meeting prep", when: "Routine is off", by: "Claude routine", what: "Saved in the same folder as the Friday Packet", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true },
+  { k: "monday",  title: "Monday Office Meeting", when: "Mondays 3:00 PM", by: "Claude routine", what: "Prefilled from last week, calendar, approved COs, bids", url: OD_GFOLDER("1-_A2XYgbz85O83K1Hwspka4KCnYeZQYP"), folder: true, latest: "monday" },
+  { k: "strategy", title: "Weekly Strategy Meeting prep", when: "Routine is off", by: "Claude routine", what: "Saved in the same folder as the Friday Packet", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "strategy" },
   { k: "leadnotes", title: "Lead meeting notes", when: "Read by the prep runs", by: "You", what: "The running Tuesday notes doc", url: OD_GDOC("1gn8CcqImvP2Zra_0gC8xAhUTzV8M8UGOrw44ipLwFKg") },
   { k: "ninety",  title: "First 90 Days plan", when: "Checked Mon 6:30 AM + Fri 3:00 PM", by: "Claude routine reads it", what: "Goals, action plan and weekly checklist", url: OD_GDOC("1o61lNWEa0rBJWd5ZtMKIGcorv3VQRV7-VZTctsu8zdU") },
   { k: "appl",    title: "Appliance Loads - Master", when: "Nightly about 1:00 AM", by: "Claude routine", what: "Every job's appliances, amps and Home Runs check", url: "https://docs.google.com/spreadsheets/d/1oiefT8TN2oSUGzyNgwg2dFsmXVPL8DxwYGoIksxQKKI/edit" },
@@ -45949,6 +45951,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         () => setFindings(null));
     } catch (e) { setFindings(null); }
     return () => { if (unsub) unsub(); };
+  }, [tab]);
+  const [latestDocs, setLatestDocs] = useState({});
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let dead = false;
+    try { httpsCallable(functions, "autoDocsLatest")({}).then(r => { if (!dead) setLatestDocs((r && r.data && r.data.docs) || {}); }, e => console.warn("[HE dashboard] autoDocsLatest:", e && e.message)); } catch (e) {}
+    return () => { dead = true; };
   }, [tab]);
   const [packetAt, setPacketAt] = useState(null);
   useEffect(() => {
@@ -46600,13 +46609,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-white od-pad">
         <div className="od-ct">Automated docs<small>tap to open in Google Drive</small></div>
         <div className="od-docs">
-          {OD_DOCS.map(x => (
-            <a className="od-doc" key={x.k} href={x.url} target="_blank" rel="noopener noreferrer">
-              <span className="k"><Icon name={x.folder ? "folderOpen" : x.sheet ? "dollarSign" : "fileText"} size={16}/></span>
-              <span className="m"><b>{x.title}</b><small>{x.what}</small><small className="w">{x.when} · {x.by}{x.k === "packet" && packetAt ? ` · last made ${at2(packetAt)}` : ""}</small></span>
-              <Icon name="external" size={13}/>
-            </a>
-          ))}
+          {OD_DOCS.map(x => { const lt = x.latest && latestDocs[x.latest] && latestDocs[x.latest].url ? latestDocs[x.latest] : null, made = lt && odDate(lt.createdTime); return (
+            <div className="od-doc" key={x.k}>
+              <a className="go" href={lt ? lt.url : x.url} target="_blank" rel="noopener noreferrer">
+                <span className="k"><Icon name={lt ? "fileText" : x.folder ? "folderOpen" : x.sheet ? "dollarSign" : "fileText"} size={16}/></span>
+                <span className="m"><b>{x.title}</b><small>{lt ? `Latest: ${lt.name}${made ? " · made " + at2(made) : ""}` : x.what}</small><small className="w">{x.when} · {x.by}{x.k === "packet" && packetAt && !lt ? ` · last made ${at2(packetAt)}` : ""}</small></span>
+              </a>
+              {lt ? <a className="fold" href={x.url} target="_blank" rel="noopener noreferrer" title="Open the folder" aria-label={`Open the ${x.title} folder`}><Icon name="folderOpen" size={14}/></a> : <span className="fold"><Icon name="external" size={13}/></span>}
+            </div>
+          ); })}
         </div>
       </div>
       <div className="od-white od-pad">
@@ -46931,8 +46942,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-table.appl .hd .c{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-ct-actions{margin-left:auto;display:flex;gap:6px}
         .odash .od-docs{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:10px}
-        .odash .od-doc{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--cline);border-radius:12px;color:var(--cink);text-decoration:none;background:#fff}
-        .odash .od-doc:hover{background:#FBF8F5}
+        .odash .od-doc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 6px 4px 4px;border:1px solid var(--cline);border-radius:12px;background:#fff}
+        .odash .od-doc .go{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;padding:6px 8px;border-radius:9px;color:var(--cink);text-decoration:none;min-width:0}
+        .odash .od-doc .go:hover{background:#FBF8F5}
+        .odash .od-doc .fold{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;color:var(--cdim)}
+        .odash .od-doc a.fold:hover{background:#FBF8F5;color:var(--cink)}
         .odash .od-doc .k{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:#EEF3FD;color:#3B6FE0}
         .odash .od-doc .m{min-width:0;display:flex;flex-direction:column;gap:1px}
         .odash .od-doc .m b{font-size:13px}
@@ -55360,10 +55374,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-13 · App SW version: v534
+**Last manifest update:** 2026-10-13 · App SW version: v535
 
 ---
 
+- **Dashboard Automated docs: the folder cards open the newest doc** · 'shipped 2026-10-13' · 'SW v535' · 'autoDocsLatest' · Koy: *"make the folder cards open the latest doc."* New read-only callable **'autoDocsLatest'** (app key, like the other callables) lists the fixed folders in 'functions/autoDocs.js' with the read-only Drive scope and returns the newest doc of each kind by name prefix and creation time: **Friday Packet**, **Lead Meeting Prep**, **Weekly Strategy Meeting** (packet folder, which the service account already reaches through the Shared Drive) and **Monday Office Meeting** (Koy's own folder, now shared read-only with 'homestead-electric@appspot.gserviceaccount.com'). "SUPERSEDED …" copies and hand-made prep docs don't match; a later "(v2)" the same day wins. Cached 10 minutes per instance. The card opens that doc and shows "Latest: <name> · made <when>"; a small folder button opens the folder. Until the function is deployed, or if a folder can't be read, the card opens the folder exactly as in v534. Pure picker tested by new 'scripts/autodocs-test.js' (8 checks on the real folder listings, wired into prebuild). **Deploy:** 'firebase deploy --only functions:autoDocsLatest'. **Why it won't lose data:** the callable only lists files (read-only scope, fixed folder ids, never a caller-supplied id) and writes nothing; the client only reads its answer; the one Drive change is a read-only share of the Monday folder to the app's own service account.
 - **Dashboard Automations tab: Automated docs — one tap to every doc and folder the automations write** · 'shipped 2026-10-13' · 'SW v534' · 'OD_DOCS' · Koy: *"i also will need all the automated docs there as well for easy access."* Koy: *"also if we can link my bonus tracker that would be sweet."* A card grid at the top of Automations, each with what it is, when it runs and what makes it: **Koy Bonus Tracker** (Josh's Google Sheet, shared with Koy) first, then **Friday Packet** (fridayPacket, Fri 5:30 AM) and **Lead Meeting Prep** (leadMeetingPrep, Tue 6 AM) → the packet folder; **Foreman + Lead meeting notes** (foremanMeetingPrep, Tue 4 PM, prep added at the top); **Monday Office Meeting** (Claude routine, Mon 3 PM) → its folder; **Weekly Strategy Meeting prep** (routine off; same folder as the packet); **Lead meeting notes**; **First 90 Days plan** (read by the Mon/Fri check-ins); **Appliance Loads - Master**; **Job Plans**. IDs come from functions/index.js and the Routines and were checked against Drive. The Friday Packet card shows when it last ran ('settings/fridayPacket.lastRunAt', one 'getDoc' when the tab opens). Drive can't be listed from the browser without sign-in, so folders open in Drive rather than naming the newest doc. **Why it won't lose data:** links plus one read of a settings doc; nothing is written; no function, rules or loader change.
 - **Dashboard: the Command Center tab becomes Automations — what Plan Intake and the Appliance Loads pull produced** · 'shipped 2026-10-13' · 'SW v533' · 'OfficeDash' · Koy: *"really i just want to see outputs for the plan intake and the appliance sheet pull."* The old tab depended on an hourly Claude Routine copying routines and sessions into 'settings/ccSnapshot'; Routines on this account can't carry the connector that lists them, so it never refreshed (that Routine is now off). The tab (key still 'cc', so a remembered tab opens) now reads the two automations' own outputs where they already land. **Plan Intake:** live 'agentFindings' listener while the tab is open (same query and dry/test filter as the Today Plans card), last 14 days grouped by day, chips All / Needs you (unseen 'PLAN_NEEDS') / Filed / Folders & walks; each line opens its folder, file, email (the finding's own links) and the app job matched by Simpro #; minis for plans filed (file count from the finding summary, per-day bars) and plans needing you. **Appliance Loads:** 'fetchApplSheetRows' (the Tools view's Master-tab read), one row per job: items, connected amps, Not in CC yet, Likely, no amps (the sheet's TBD rule) and typical rows, matching the sheet's own Summary tab; tap a job for its appliances (attention first), tap an appliance to open its source file; Refresh and Open sheet. Next run times come from the two Routines' UTC crons ('OD_RUNS'). Guide 'public/sops/dashboard.html' updated. **Why it won't lose data:** read-only: one 'onSnapshot' on 'agentFindings' (rules already allow the read; no seen stamps written here) and the existing sheet CSV read; the ccSnapshot listener is removed; no job, needs or settings write; the crew app, Plans card, Tools view, loader, rules and functions are untouched.
 - **Dashboard accuracy pass: stages go by where the work actually is, and every tab checked against live job data** · 'shipped 2026-10-13' · 'SW v532' · 'odPhase' · 'odBuildSchedule' · 'odBuildEvents' · Koy: *"Oakhill says it's in job prep. I know that job prep isn't all the way completed, but the rough is in progress, and it should show that. Vista Meadows shows it's in between, but the finish is in progress. I just need it to be way more accurate and real."* Four audits ran the dashboard's own code over a read-only copy of the live jobs, needs and team list and compared every number with what the data says. **Stages:** the dashboard no longer borrows the Job Board's 'STAGE_SECTIONS' (first match wins, and "Pre Job Prep" is checked before any status, so Oak Hill 5 with rough In Progress sat in prep because Cabinet Plans was unticked). New 'odPhase()': finish status, then rough status, wins; "invoice" counts as complete; unfinished prep (or an open commercial Pre-Con checklist) is a separate **Prep not finished** flag; a scheduled/date-set phase whose date has arrived reads **start date passed**; a phase with daily updates or closed punch under a not-started status goes where the work is and is flagged **status behind the work**; no status at all reads **No status set**; commercial jobs with no commercial stage fall back to the crew status. Each job shows the reason ("5%", "Finish projected 11/2", "Work logged 8/13, status still Awaiting Start Date"). **Last work:** "last update" counted 'lastActivityAt' / 'updated_at', which the presence ping and Simpro cache writes stamp on merely opening a job; it is now the newest real work (any age), so quiet-job ages are true (Cowdrey 3 d became 63 d). **Schedule:** inspection targets drop once that inspection is logged or the job moved past it, and targets 30+ days old are their own "result never logged" list; passed start dates have their own list; return-trip dates come from 'rtStatusDate' ('scheduledDate' is never set in live data) and a "needs" trip shows its schedule-by date; quick jobs and temp peds are on the schedule; scanned Matterports drop; On Hold phases aren't starts; completed jobs still show their open return trips; Upcoming entries already on the board aren't doubled; calendar days are real days, so the week view doesn't lose 11/2 when the clocks fall back. **Quality:** repeated Pass/Fail taps and a cleared result no longer count as extra inspections; "Unassigned" / "Paul" aren't foremen ('SBV2_EXCLUDE_NAME'); QC walks use the QC tracker's own rows and buckets (failed, walk date passed, needs a walk, scheduled) and the job panel shows rough and finish QC; open change orders count on every live job and drop ones converted to a return trip; old punch items get their age from their id. **Activity:** adds questions asked/answered, job notes, return-trip punch, change orders sent / quoted / moved in Simpro, and status-update history; photos are counted from every photo (punch items and return-trip punch included, plan PDFs excluded), one line per job and day; the "return trip scheduled" row (really the trip date) moved to Schedule. **People:** foremen go by Team Members title (as the Crew Planner does) with a **No active foreman** card for jobs on Unassigned / contractors / deactivated people; duplicate team records collapse; "jobs touched today" includes jobs opened; phones on latest counts each person's newest device. **Overview:** Needs attention adds ready to invoice, change orders waiting on the GC 60+ days and return trips past their date. Guide 'public/sops/dashboard.html' updated. **Why it won't lose data:** still read-only: no new reads, no 'setDoc' / 'updateDoc' / 'saveJob'; every change is how already-loaded job, team and task data is grouped and counted on the Koy-only /dashboard page; the crew app, Job Board, loader, rules and Cloud Functions are untouched.
