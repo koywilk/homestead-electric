@@ -105,10 +105,13 @@ check(H.commPhase({ division:"commercial" }), 1, "fresh commercial job → phase
 check(H.commPhase({ division:"commercial", hiddenSections:{ jobstart:true } }), null, "v467: Job Start hidden as a section → no phase (Ready to Start / no pre-con rows)");
 check(H.commPhase(cj({ items: doneThrough(1) })), 2, "phase 1 checked → phase 2");
 check(H.commPhase(cj({ items: doneThrough(2) })), 3, "phase 2 checked (folders via Drive) → phase 3");
-check(H.commPhase(cj({ items: doneThrough(2) }, { driveFolderId:"" })), 2, "no Drive folder → 2.folders open → still phase 2");
+check(H.commPhase(cj({ items: doneThrough(2, ["2.folders"]) }, { driveFolderId:"" })), 2, "no Drive folder and 2.folders not checked → still phase 2");
+check(H.commPhase(cj({ items: doneThrough(2) }, { driveFolderId:"" })), 3, "v527: no Drive folder but 2.folders checked by hand → phase 3");
 check(H.commPhase(cj({ items: doneThrough(3) })), 4, "phase 3 checks + log → phase 4");
 check(H.commPhase(cj({ items: doneThrough(4) })), 5, "phase 4 → 5");
 check(H.commPhase(cj({ items: doneThrough(5) })), 6, "phase 5 (log satisfies trackers) → 6");
+check(H.commPhase(cj({ items: doneThrough(5) }, { commercial:{ start:{ items: doneThrough(5), na:{}, notes:{}, overrides:{} }, submittals: [], rfis: [] } })), 6, "v527 (Justin): phases 1–5 checked by hand with an empty gear log → 6");
+check(H.commPhase(cj({ items: doneThrough(5, ["5.released"]) }, { commercial:{ start:{ items: doneThrough(5, ["5.released"]), na:{}, notes:{}, overrides:{} }, submittals: [], rfis: [] } })), 5, "v527: 5.released unchecked and no log → still phase 5");
 check(H.commPhase(cj({ items: doneThrough(12) })), null, "all twelve checked → null (Ready to Start)");
 const ov = cj({ items: doneThrough(3), overrides: { 4: { by:"Brady", at:"9/25/2026" } } });
 check(H.commPhase(ov), 5, "move-on override on 4 → phase 5");

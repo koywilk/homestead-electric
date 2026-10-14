@@ -5226,14 +5226,86 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
   }
 
   const docLink = `https://docs.google.com/document/d/${FOREMAN_NOTES_DOC_ID}/edit`;
+
+  // 7 · Weekly Lead Meeting doc (v536): the same section as its own Google Doc,
+  //     Hours vs bid trimmed to jobs whose margin moved since last week. Never
+  //     affects the notes-doc insert above; a failure is logged and reported.
+  let weekly = null;
+  try { weekly = await writeWeeklyLeadDoc(model, { testRun, docs, mtNow }); }
+  catch (e) { functions.logger.error("weeklyLeadDoc failed", { error: e.message }); weekly = { error: e.message }; }
+
   await sendToName("Koy", {
     title: testRun ? "📝 Foreman + Lead notes (test) ready" : "📝 Foreman + Lead notes ready",
-    body: `${model.heading} is at the top of the meeting doc`,
+    body: `${model.heading} is at the top of the meeting doc` + (weekly && weekly.name ? ` · ${weekly.name} is in Drive (${weekly.moved} margin${weekly.moved === 1 ? "" : "s"} moved)` : weekly && weekly.error ? " · the Weekly Lead Meeting doc failed" : ""),
     jobId: "", section: "",
   });
-  functions.logger.info("foremanMeetingPrep inserted", { docLink, testRun, ...model.counts });
-  return { ok: true, docLink, counts: model.counts };
+  functions.logger.info("foremanMeetingPrep inserted", { docLink, testRun, weekly, ...model.counts });
+  return { ok: true, docLink, weekly, counts: model.counts };
 }
+
+// Weekly Lead Meeting doc (v536) — Koy, 2026-10-13: "Yes, I want that every
+// week" (the Oct 7 doc whose Hours vs bid showed only margins that moved).
+// Pure logic in ./leadMeetingDoc.js; this does the I/O: margin history in the
+// server-only meetingPrepState/leadMargins (closed to the app by the rules'
+// catch-all), a new Google Doc in the packet folder (Shared Drive — the service
+// account has no My Drive storage), filled with the same Docs requests as the
+// notes doc. Test runs write the doc but never move the history.
+const leadDocLib = require("./leadMeetingDoc.js");
+async function writeWeeklyLeadDoc(model, { testRun, docs, mtNow }) {
+  const ref = db.doc("meetingPrepState/leadMargins");
+  const snap = await ref.get();
+  const todayYmd = `${mtNow.getFullYear()}-${String(mtNow.getMonth() + 1).padStart(2, "0")}-${String(mtNow.getDate()).padStart(2, "0")}`;
+  const { model: wm, history, moved, tracked } = leadDocLib.weeklyModel(model, snap.exists ? snap.data() : {}, todayYmd);
+  const name = `Weekly Lead Meeting — ${leadDocLib.meetingYmd(model.heading) || todayYmd}${testRun ? " (test)" : ""}`;
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file"] });
+  const drive = google.drive({ version: "v3", auth });
+  const created = await drive.files.create({
+    requestBody: { name, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" },
+    fields: "id, webViewLink", supportsAllDrives: true,
+  });
+  const id = created.data.id;
+  await docs.documents.batchUpdate({ documentId: id, requestBody: { requests: foremanPrepLib.docsRequests(foremanPrepLib.renderLines(wm), 1) } });
+  if (!testRun) await ref.set(history);
+  return { id, name, link: created.data.webViewLink || `https://docs.google.com/document/d/${id}/edit`, moved, tracked };
+}
+
+// ── Dashboard: newest automated doc per folder (v535) ──────────────────────
+// Koy 2026-10-13: "make the folder cards open the latest doc." Read-only: lists
+// the fixed folders in ./autoDocs.js (never a caller-supplied id) with the
+// read-only Drive scope and returns the newest doc of each kind. The service
+// account sees the packet folder through the Shared Drive; a folder it isn't
+// shared on lists as empty ({ error: "none" }) or fails ({ error: "no_access" }),
+// and either way the card keeps opening the folder. Cached 10 minutes per instance.
+const autoDocsLib = require("./autoDocs.js");
+let _autoDocsCache = { at: 0, val: null };
+exports.autoDocsLatest = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  if (_autoDocsCache.val && Date.now() - _autoDocsCache.at < 10 * 60 * 1000 && !(data && data.refresh === true)) return _autoDocsCache.val;
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.readonly"] });
+  const drive = google.drive({ version: "v3", auth });
+  const lists = {};
+  const out = { at: new Date().toISOString(), docs: {} };
+  for (const src of autoDocsLib.AUTO_DOC_SOURCES) {
+    if (!(src.folder in lists)) {
+      try {
+        const r = await drive.files.list({
+          q: `'${src.folder}' in parents and trashed=false and mimeType='application/vnd.google-apps.document'`,
+          orderBy: "createdTime desc", pageSize: 100,
+          fields: "files(id,name,createdTime,modifiedTime,webViewLink)",
+          supportsAllDrives: true, includeItemsFromAllDrives: true,
+        });
+        lists[src.folder] = r.data.files || [];
+      } catch (e) {
+        functions.logger.warn("autoDocsLatest list failed", { folder: src.folder, code: e.code, error: e.message });
+        lists[src.folder] = { error: e.code === 403 || e.code === 404 ? "no_access" : "error" };
+      }
+    }
+    const l = lists[src.folder];
+    out.docs[src.key] = Array.isArray(l) ? (autoDocsLib.pickLatest(l, src.prefix) || { error: "none" }) : l;
+  }
+  _autoDocsCache = { at: Date.now(), val: out };
+  return out;
+});
 
 exports.foremanMeetingPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB" })
@@ -5773,7 +5845,8 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
 // ─── Sync Simpro POs into a job's material orders ─────────────────────────
 // Read-only from Simpro. Writes ONLY to the app's Firestore job document.
 // Pulls the open POs Simpro has for one job, matches them to existing
-// roughMaterials / finishMaterials entries by supplier source, and fills
+// roughMaterials / finishMaterials / commMaterials (v527, commercial
+// Materials tab) entries by supplier source, and fills
 // in fields the user hasn't manually set yet:
 //   • po           — the Simpro PO number (only if empty)
 //   • ordered      — flipped true only if false (preserves manual override)
@@ -6180,12 +6253,16 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
 
     const roughResult = reconcilePhase(jobData?.roughMaterials);
     const finishResult = reconcilePhase(jobData?.finishMaterials);
+    // v527: commercial Materials tab cards. Same claimed-PO set, so one Simpro
+    // PO never lands on two cards. Only written when the job already has the list.
+    const commResult = Array.isArray(jobData?.commMaterials) ? reconcilePhase(jobData.commMaterials) : { changed: false, next: [] };
 
     // ── 6. Write only if something actually changed ─────────────────────
-    if (roughResult.changed || finishResult.changed) {
+    if (roughResult.changed || finishResult.changed || commResult.changed) {
       const payload = {};
       if (roughResult.changed) payload["data.roughMaterials"] = roughResult.next;
       if (finishResult.changed) payload["data.finishMaterials"] = finishResult.next;
+      if (commResult.changed) payload["data.commMaterials"] = commResult.next;
       payload["data.simproPOsLastSyncedAt"] = nowIso;
       await jobRef.update(payload);
     }
@@ -6267,7 +6344,8 @@ exports.scheduledSimproPOSync = functions
       if (status === "completed" || status === "archived" || job.archived) return;
       const rough = Array.isArray(job.roughMaterials) ? job.roughMaterials : [];
       const finish = Array.isArray(job.finishMaterials) ? job.finishMaterials : [];
-      const all = [...rough, ...finish];
+      const comm = Array.isArray(job.commMaterials) ? job.commMaterials : []; // v527
+      const all = [...rough, ...finish, ...comm];
       // Has any order not yet linked to a Simpro PO?
       const hasPending = all.some(o => o && !o.simproPoId && o.source && o.source !== "Shop");
       if (!hasPending && all.length > 0) return;
@@ -7958,3 +8036,25 @@ exports.planRoutineApi    = _planIntake.planRoutineApi;
 exports.planIntakeDigest   = _planIntake.planIntakeDigest;
 exports.planIntakeWalkPush = _planIntake.planIntakeWalkPush;
 exports.planFileByHand     = _planIntake.planFileByHand;
+
+// ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
+// Send on a Material Tracking card creates the PO in Simpro and emails it
+// (functions/materialPO/, rules tested by scripts/materialpo-test.js). Mode on
+// gc_config/material_po; missing = test (admins only, email only to the test
+// inbox). Vault: 03-Roadmap/Crew POs from the App.md. Deploy ONLY this:
+//   firebase deploy --only functions:sendMaterialPO
+// 2026-10-09: PO email goes through Google Workspace as bids@ (po-mailer service
+// account, domain-wide delegation, gmail.send only) — CED's Mimecast held the .cc mail.
+const _poGmail = require("./materialPO/gmail.js")({ functions, db });
+const _materialPO = require("./materialPO/send.js")({
+  functions, db, TZ,
+  simproReqWithRetry,
+  requireMember,
+  accessOf: gcAdminAccessOf,
+  loadMailConfig: gcLoadMailConfig,
+  gmailSend: _poGmail.send,
+});
+exports.poMailerTest = _poGmail.test;
+exports.sendMaterialPO = _materialPO.sendMaterialPO;
+// v524: one order from the bid → one PO per cost center, one email (deploy with sendMaterialPO).
+exports.sendMaterialOrder = _materialPO.sendMaterialOrder;

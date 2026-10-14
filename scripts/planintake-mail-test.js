@@ -14,6 +14,12 @@ const skips = [
   [msg("Homestead Bids <bids@homesteadelectric.net>", "Quote/Change Order Approved - Tuhaye Hollow"), "quote/CO approval"],
   [msg("bids@homesteadelectric.net", "Quote no. 3183 - Sandlin Residence - Sandlin Residence - Tuhaye"), "quote/CO approval"],
   [msg("Callen <callenjakeman83@gmail.com>", "Purchase Order no. 7194 - Nguyen Residence"), "purchase order"],
+  // Simpro's new PO template (2026-10-07 on) and CED's replies to it — real subjects from Koy's inbox.
+  [msg("Homestead Electric <bids@homesteadelectric.net>", "PO 7236 – Miller Residence – Homestead Electric"), "purchase order"],
+  [msg("bids@homesteadelectric.net", "PO 7234 – Bridlewood Lane Residence - Midway – Homestead Electric"), "purchase order"],
+  [msg("Chloe Hill <chloe@cedaf.com>", "RE: PO 7236 – Miller Residence – Homestead Electric"), "purchase order"],
+  [msg("Brayden <brayden@cedaf.com>", "RE: PO 7235 – 23 Vista Meadows – Homestead Electric"), "purchase order"],
+  [msg("keegan@homesteadelectric.net", "Fwd: PO 7240 - Oak Hill 5"), "purchase order"],
   [msg("Home Depot <HomeDepot@order.homedepot.com>", "Your Electronic Receipt"), "receipt"],
   [msg("Google <esignature-noreply@google.com>", "eSigned Document Ready: \"Foreman Responsibilities\""), "eSignature"],
   [msg("HBA <hbautah2@hbautah2.gmuser.net>", "Don't Miss This!", { extra: [{ name: "List-Unsubscribe", value: "<mailto:x>" }] }), "newsletter"],
@@ -25,6 +31,9 @@ const keeps = [
   msg("cassmosier@gmail.com", "Mosier Project Drawing_V5"),
   msg("Wes <wes@harwoodhomesllc.com>", "Re: Following up on quote 3214 - Sandlin Residence Lighting Control"),
   msg("bids@homesteadelectric.net", "Plans for Oak Hill 5"),                                      // bids@ but not an approval
+  msg("Wes <wes@harwoodhomesllc.com>", "PO box change for the Sandlin plans"),                     // "PO" without a number
+  msg("gc@builder.com", "Plans attached - PO 123 for lot 7"),                                       // PO number not leading the subject
+  msg("Josh <josh@homesteadelectric.net>", "Polaris Ridge plans"),                                  // starts with "Po"
   msg("Dropbox <no-reply@dropboxmail.com>", "Jake shared \"Bellini Garage\" with you", { extra: [{ name: "List-Unsubscribe", value: "<x>" }] }),
   msg("Google Drive <drive-shares-dm-noreply@google.com>", "Item shared with you: \"Koplin set\"", { extra: [{ name: "List-Unsubscribe", value: "<x>" }] }),
 ];
@@ -50,6 +59,8 @@ const nested = msg("a@b.com", "x", { parts: [
   { mimeType: "multipart/mixed", parts: [pdf("SPECS.PDF", "C"), { filename: "noext", mimeType: "application/pdf", body: { attachmentId: "D", size: 9 } }] },
 ] });
 eq(M.pdfParts(nested).map(p => p.attachmentId), ["A", "C", "D"], "every PDF in the MIME tree, images skipped");
+eq(M.pdfParts(msg("x", "Fwd: plans + order", { parts: [pdf("Purchase_Order_No_7236.pdf", "PO"), pdf("Miller E1.pdf", "PLAN")] })).map(p => p.attachmentId),
+  ["PLAN"], "Simpro's own PO PDF is never ingested as a plan");
 eq(M.bodyText(nested).trim(), "see attached", "plain body decoded");
 
 // share links

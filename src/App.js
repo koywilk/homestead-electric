@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, Component } from "react";
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
@@ -9,6 +9,8 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
+import { syncPostHogIdentity } from "./posthog";
+import { readableInk } from "./a11y";
 import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
@@ -194,8 +196,8 @@ function gcAdminCallable(name, identity) {
 // Same live-PIN proof for ANY team member (announcements: open a message, Got
 // it, reply). Adds the identity id so the server picks the right record even
 // when two people share a name (the server's requireMember).
-function memberCallable(name, identity) {
-  const raw = httpsCallable(functions, name);
+function memberCallable(name, identity, opts) {
+  const raw = httpsCallable(functions, name, opts);
   return (payload = {}) => raw({ ...(payload || {}), by: (identity && identity.name) || "", pin: (identity && identity.pin) || "",
     uid: (identity && identity.id) || "" });
 }
@@ -1910,6 +1912,7 @@ const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":3
 const C = {
   bg:"#EEF0F3", surface:"#F4F6F8", card:"#FFFFFF", border:"#E1E4E9",
   muted:"#CDD3DB", text:"#1B1F24", dim:"#5E6670", accent:"#3B5BA5",
+  faint:"#666E79", // text that used C.muted (1.4:1) — 4.5:1 on every page background
   blue:"#3B5BA5", green:"#3E7D5A", red:"#B23A3A", purple:"#6A5E97",
   orange:"#B06A2C", teal:"#3E7D7A", rough:"#3B5BA5", finish:"#6A7BAA",
 };
@@ -2333,13 +2336,15 @@ const PREP_CHECKLIST_ITEMS = [
 // Every step is a PHASE; a job is in exactly one, derived from its checks. All
 // twelve are pre-construction (Brady · Justin = comm.precon; Zane · Abe = comm.site
 // on phase 6). item = [key, label, kind]; kind: "check" (default) | "trk" (derived
-// from the Gear & Submittals / RFI logs) | "photo" | "date".
+// from the Gear & Submittals / RFI logs; no job step uses it since v527) | "auto"
+// (v522 Phase 4, v527 every log-linked step — Justin: tap to check by hand AND it
+// still checks itself from the log, either counts) | "photo" | "date".
 const COMM_START_STEPS = [
   { n:1,  label:"Quote Approval / Contract Award", short:"CONTRACT AWARD", owner:"precon", items:[["award","AWARD DOC"],["permitResp","PERMIT RESPONSIBILITY"],["utility","UTILITY / SERVICE COORD"],["contacts","CONTACTS SET"]] },
-  { n:2,  label:"Project Setup & Initial Review", short:"PROJECT SETUP", owner:"precon", items:[["jobNo","JOB # / COST CODES"],["folders","PROJECT FOLDERS","trk"],["planReview","PLAN / SPEC REVIEW"],["schedule","SCHEDULE + MILESTONES"],["scope","SCOPE BY SYSTEM"]] },
-  { n:3,  label:"Request Vendor Submittals", short:"SUBMITTALS", owner:"precon", items:[["ced","CED SENT PLANS/SPECS"],["fa","FA CO. SENT PLANS/SPECS"],["longLead","LONG-LEAD REQUESTED","trk"],["leadTimes","LEAD TIMES + PRICING","trk"]] },
-  { n:4,  label:"Electrical Submittal Review", short:"SUBMITTAL REVIEW", owner:"precon", items:[["pmReview","PM / ESTIMATOR REVIEWED"],["dims","DIMENSIONS / CLEARANCES"],["rfis","RFI LIST","trk"],["toGc","SENT TO GC","trk"],["approved","ALL APPROVED","trk"],["comments","COMMENTS RESOLVED"]] },
-  { n:5,  label:"Release / Order Long-Lead Gear", short:"RELEASE GEAR", owner:"precon", items:[["released","RELEASED + PO","trk"],["shipDates","SHIP DATES IN WRITING","trk"],["procLog","PROCUREMENT LOG","trk"],["shipMode","SHIP COMPLETE / SPLIT","trk"],["storage","DELIVERY / STORAGE"]] },
+  { n:2,  label:"Project Setup & Initial Review", short:"PROJECT SETUP", owner:"precon", items:[["jobNo","JOB # / COST CODES"],["folders","PROJECT FOLDERS","auto"],["planReview","PLAN / SPEC REVIEW"],["schedule","SCHEDULE + MILESTONES"],["scope","SCOPE BY SYSTEM"]] },
+  { n:3,  label:"Request Vendor Submittals", short:"SUBMITTALS", owner:"precon", items:[["ced","CED SENT PLANS/SPECS"],["fa","FA CO. SENT PLANS/SPECS"],["longLead","LONG-LEAD REQUESTED","auto"],["leadTimes","LEAD TIMES + PRICING","auto"]] },
+  { n:4,  label:"Electrical Submittal Review", short:"SUBMITTAL REVIEW", owner:"precon", items:[["pmReview","PM / ESTIMATOR REVIEWED"],["dims","DIMENSIONS / CLEARANCES"],["rfis","RFI LIST","auto"],["toGc","SENT TO GC","auto"],["approved","ALL APPROVED","auto"],["comments","COMMENTS RESOLVED"]] },
+  { n:5,  label:"Release / Order Long-Lead Gear", short:"RELEASE GEAR", owner:"precon", items:[["released","RELEASED + PO","auto"],["shipDates","SHIP DATES IN WRITING","auto"],["procLog","PROCUREMENT LOG","auto"],["shipMode","SHIP COMPLETE / SPLIT","auto"],["storage","DELIVERY / STORAGE"]] },
   { n:6,  label:"Preconstruction / Site Coordination", short:"SITE COORD", owner:"site", items:[["kickoff","GC KICKOFF ATTENDED"],["schedOk","SCHEDULE CONFIRMED"],["manpower","MANPOWER PLAN"],["milestones","MILESTONES SET"],["laydown","LAYDOWN / STORAGE"],["tempNeeds","TEMP POWER NEEDS"],["trailer","TRAILER / CONTAINER"],["crane","CRANE / FORKLIFT"],["rentals","RENTALS + DATES"],["bim","BIM / CLASH"]] },
   { n:7,  label:"Site Work Takeoff & Ordering", short:"SITE TAKEOFF", owner:"precon", items:[["takeoff","SITE TAKEOFF DONE"],["pvc","PVC / CONDUIT"],["sweeps","SWEEPS / ELBOWS"],["duct","DUCT BANK"],["boxes","PULL BOXES / HANDHOLES"],["ground","GROUNDING"],["siteLt","SITE LIGHTING"],["util","UTILITY / SERVICE CONDUIT"],["vaults","UTILITY VAULTS"],["lvPath","COMM / FA PATHWAYS"],["tape","TAPE / SPACERS / ENCASEMENT"],["ordered","SITE MATERIAL ORDERED"]] },
   { n:8,  label:"Temporary Power", short:"TEMP POWER", owner:"precon", items:[["req","REQUIREMENTS"],["tempUtil","TEMP UTILITY SERVICE"],["svc","SERVICE / METER / MAIN"],["dist","DISTRIBUTION"],["spider","SPIDER BOXES / GFCI"],["lighting","TEMP LIGHTING"],["trailerPwr","TRAILER POWER"],["cranePwr","CRANE / HOIST POWER"],["energized","INSPECTED + ENERGIZED","date"],["maint","MAINTENANCE OWNER"]] },
@@ -2378,6 +2383,7 @@ const commItemState = (j, n, k) => {
   const it = p.items.find(x => x[0] === k); const st = commStartOf(j); const K = commItemKey(n, k);
   if (st.na && st.na[K]) return "na";
   if (it && it[2] === "trk") return commTrackerDone(j, n, k) ? "done" : "todo";
+  if (it && it[2] === "auto" && commTrackerDone(j, n, k)) return "done";
   return (st.items && st.items[K] && st.items[K].done) ? "done" : "todo";
 };
 const commPhaseChecked = (j, n) => COMM_PHASE_BY_N[n].items.every(([k]) => commItemState(j, n, k) !== "todo");
@@ -4720,6 +4726,9 @@ const ROLE_OPTIONS = ["admin","foreman","lead","crew"];
 // had zero can() call sites. Every key below is verified wired.)
 const PERMISSIONS = {
   "tasks.view":      ["admin","manager","standard"],
+  // v523 Crew POs: Send on a Material Tracking card. Admins only while the server
+  // is in test mode (gc_config/material_po); widen this when it goes live.
+  "materials.sendPO": ["admin","manager","standard","limited"], // v525 live: everyone but contractors (Koy 2026-10-08)
   "schedule.view":   ["admin","manager","standard"],
   "schedule.edit":   ["admin","manager"],
   "pipeline.view":   ["admin","manager","standard"],
@@ -5120,7 +5129,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
           </div>
         )}
         <button onClick={newUser}
-          style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
+          style={{background:C.accent,border:"none",borderRadius:9,color:"#fff",
             fontWeight:700,padding:"8px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
           + Add Person
         </button>
@@ -5161,7 +5170,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
                         {TITLE_OPTIONS.map(t=><option key={t} value={t}>{TITLE_LABELS[t]}</option>)}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Field role — which card group they appear in</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Field role — which card group they appear in</div>
                     </div>
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>ACCESS LEVEL</div>
@@ -5171,7 +5180,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           fontWeight:700,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
                         {ACCESS_OPTIONS.map(a=><option key={a} value={a} style={{color:C.text,fontWeight:400}}>{ACCESS_LABELS[a]}</option>)}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>What they can see and do</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>What they can see and do</div>
                     </div>
                   </div>
                   {/* Access description */}
@@ -5190,7 +5199,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         <option value="">Residential (default)</option>
                         <option value="commercial">Commercial</option>
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which division they land in at login — for people who mostly work commercial</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Which division they land in at login — for people who mostly work commercial</div>
                     </div>
                   )}
                   {/* Company hats — per-user grants for centralized duties (job
@@ -5210,12 +5219,12 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                               <input type="checkbox" checked={on}
                                 onChange={e=>{ const cur=Array.isArray(u.caps)?u.caps:[]; const next=e.target.checked?[...new Set([...cur,cap])]:cur.filter(c=>c!==cap); upd(u.id,{caps:next}); }}
                                 style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
-                              <span style={{fontSize:12,color:on?C.text:C.muted}}>{label}</span>
+                              <span style={{fontSize:12,color:on?C.text:C.faint}}>{label}</span>
                             </label>
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Hats route My Day rows to whoever wears them. Nobody wearing one → the Head of Residential (commercial hats → the Head of Commercial).</div>
                     </div>
                   )}
                   {/* Tool access (v484) — per-user grants for Tools tab calculators that
@@ -5232,12 +5241,12 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                               <input type="checkbox" checked={on}
                                 onChange={e=>{ const cur=Array.isArray(u.caps)?u.caps:[]; const next=e.target.checked?[...new Set([...cur,t.perm])]:cur.filter(c=>c!==t.perm); upd(u.id,{caps:next}); }}
                                 style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
-                              <span style={{fontSize:12,color:on?C.text:C.muted}}>{t.label}</span>
+                              <span style={{fontSize:12,color:on?C.text:C.faint}}>{t.label}</span>
                             </label>
                           );
                         })}
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Nobody sees the Tools tab without the first box. The others show that tool inside it.</div>
                     </div>
                   )}
                   {Array.isArray(u.caps) && u.caps.includes("resi.head") && (
@@ -5254,7 +5263,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         <input type="date" value={u.coverUntil||""} onChange={e=>upd(u.id,{coverUntil:e.target.value})}
                           style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"3px 6px",fontSize:12,fontFamily:"inherit"}}/>
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Routes their My Day rows and personal tasks until the date passes, then routes back on its own.</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Routes their My Day rows and personal tasks until the date passes, then routes back on its own.</div>
                     </div>
                   )}
                   {/* Foreman assignment — for crew/lead */}
@@ -5270,7 +5279,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                           <option key={f.id} value={f.id}>{f.name}</option>
                         ))}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which foreman's crew they belong to</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Which foreman's crew they belong to</div>
                     </div>
                   )}
                   {/* Coordinator — office scheduler who owns this foreman's book.
@@ -5288,7 +5297,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         {list.filter(o=>{const a=getAccess(o); return a==="admin"||a==="manager";})
                              .map(o=>(<option key={o.id} value={o.name}>{o.name}</option>))}
                       </select>
-                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which office scheduler runs this foreman's book</div>
+                      <div style={{fontSize:10,color:C.faint,marginTop:3}}>Which office scheduler runs this foreman's book</div>
                     </div>
                   )}
                   {/* PIN */}
@@ -5309,7 +5318,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         {showPin[u.id]?"Hide":"Show"}
                       </button>
                     </div>
-                    <div style={{fontSize:10,color:C.muted,marginTop:4}}>Leave blank for no PIN required</div>
+                    <div style={{fontSize:10,color:C.faint,marginTop:4}}>Leave blank for no PIN required</div>
                   </div>
                   {/* Notification Preferences */}
                   {(()=>{
@@ -5353,7 +5362,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                                     <label key={item.key} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                                       <input type="checkbox" checked={on} onChange={e=>setKey(item.key,e.target.checked)}
                                         style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
-                                      <span style={{fontSize:11,color:on?C.text:C.muted}}>{item.label}</span>
+                                      <span style={{fontSize:11,color:on?C.text:C.faint}}>{item.label}</span>
                                       {!isDefault&&on&&<span style={{fontSize:9,color:C.orange,fontWeight:700}}>custom</span>}
                                       {isDefault&&!on&&<span style={{fontSize:9,color:C.dim,fontWeight:700}}>off</span>}
                                     </label>
@@ -5369,7 +5378,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
 
                   <div style={{display:"flex",gap:8,marginTop:4}}>
                     <button onClick={save}
-                      style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                      style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
                         fontWeight:700,padding:"8px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                       Save
                     </button>
@@ -5450,7 +5459,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                             </span>
                           );
                         })()}
-                        <span style={{color:C.muted}}>PIN: {u.pin?"••••":"not set"}</span>
+                        <span style={{color:C.faint}}>PIN: {u.pin?"••••":"not set"}</span>
                       </div>
                     </div>
                   </div>
@@ -5675,7 +5684,7 @@ function EmailModal({ subject, body, onClose }) {
 
                 flexShrink:0,transition:"all 0.15s"}}>
 
-                {selected.includes(t.email)&&<span style={{color:"#000",fontSize:11,fontWeight:700}}>✓</span>}
+                {selected.includes(t.email)&&<span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
 
               </div>
 
@@ -5722,7 +5731,7 @@ function EmailModal({ subject, body, onClose }) {
 
             <button onClick={addCustom}
 
-              style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,
+              style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontWeight:700,
 
                 padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
 
@@ -5744,7 +5753,7 @@ function EmailModal({ subject, body, onClose }) {
 
               <button onClick={()=>removeCustom(email)}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
 
             </div>
 
@@ -5797,7 +5806,7 @@ function EmailModal({ subject, body, onClose }) {
 
             style={{background:allRecipients.length?C.blue:"#1e2030",border:"none",borderRadius:8,
 
-              color:allRecipients.length?C.text:C.muted,padding:"8px 20px",fontSize:12,fontWeight:700,
+              color:allRecipients.length?C.text:C.faint,padding:"8px 20px",fontSize:12,fontWeight:700,
 
               cursor:allRecipients.length?"pointer":"not-allowed",fontFamily:"inherit",transition:"all 0.15s"}}>
 
@@ -5838,7 +5847,7 @@ const Pill = ({label, color, onClick, onHold, title}) => {
       onPointerLeave={onHold ? clearHold : undefined}
       title={title || (onHold ? "Tap to open · hold to filter the board" : (onClick ? "Tap to open" : undefined))}
       style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,
-        background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap",
+        background:`${color}22`,color:readableInk(color,"#E9ECF0"),border:`1px solid ${color}44`,whiteSpace:"nowrap",
         cursor: interactive ? "pointer" : "default", userSelect:"none"}}>{label}</span>
   );
 };
@@ -6226,7 +6235,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
             ))}
           </div>
         )}
-        <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Tap a field to change it.</div>
+        <div style={{ fontSize: 11, color: C.faint, marginTop: 6 }}>Tap a field to change it.</div>
         {open === "kind" && (
           <div>
             {sub("Type")}
@@ -6257,7 +6266,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
               {chip("Normal", !prio, () => setPrio(""))}
               {chip("Low", prio === "low", () => setPrio("low"))}
             </div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Urgent sorts to the top of their list and shows a red flag. Low sinks to the bottom.</div>
+            <div style={{ fontSize: 12, color: C.faint, marginTop: 8 }}>Urgent sorts to the top of their list and shows a red flag. Low sinks to the bottom.</div>
           </div>
         )}
         {open === "job" && (
@@ -6284,7 +6293,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
             <input type="date" value={due.date} onChange={e => setDue({ bucket: due.bucket, date: e.target.value })} style={sel} />
           </div>
         )}
-        <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>{goes}</div>
+        <div style={{ fontSize: 12, color: C.faint, marginTop: 12 }}>{goes}</div>
       </div>
     </SheetShell>
   );
@@ -6917,7 +6926,7 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
     ghost:  {background:"none",border:`1px solid ${C.border}`,color:C.dim},
 
-    primary:{background:C.accent,border:"none",color:"#000",fontWeight:700},
+    primary:{background:C.accent,border:"none",color:"#fff",fontWeight:700},
 
     add:    {background:`${C.green}15`,border:`1px dashed ${C.green}55`,color:C.green},
 
@@ -7058,7 +7067,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // publish with no deploy at all, only the `file` line below changes — no
 // button, no tab, no caller.
 /* SOPS_START */
-const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
+const SOP_FILES_INLINE = [{"key":"activity","title":"Activity — Crew Guide","file":"/sops/activity.html"},{"key":"biditems","title":"Bid Items — Crew Guide","file":"/sops/biditems.html"},{"key":"changeorders","title":"Change Orders — Crew & Office Guide","file":"/sops/changeorders.html"},{"key":"commercialmode","title":"Commercial Mode — Guide","file":"/sops/commercialmode.html"},{"key":"completed","title":"Completed — Guide","file":"/sops/completed.html"},{"key":"crewlink","title":"The Crew Link — Live Plans for the Field","file":"/sops/crewlink.html"},{"key":"dashboard","title":"Dashboard — Live Office Dashboard Guide","file":"/sops/dashboard.html"},{"key":"finish","title":"Finish Tab — Crew Guide","file":"/sops/finish.html"},{"key":"gcportal","title":"The GC Portal — Office Guide","file":"/sops/gcportal.html"},{"key":"gear","title":"Gear — Commercial Phase Guide","file":"/sops/gear.html"},{"key":"generatorlink","title":"The Generator Link — Homeowner Picks Their Loads","file":"/sops/generatorlink.html"},{"key":"homeruns","title":"Home Runs — Crew Guide","file":"/sops/homeruns.html"},{"key":"jobinfo","title":"Job Info — Crew Guide","file":"/sops/jobinfo.html"},{"key":"jobprep","title":"Job Prep — Office Guide","file":"/sops/jobprep.html"},{"key":"jobstart","title":"Job Start — Commercial Pre-Con Guide","file":"/sops/jobstart.html"},{"key":"lighting","title":"Lighting — Commercial Phase Guide","file":"/sops/lighting.html"},{"key":"lightinglinks","title":"Lighting Links — Collab, Hub & Loads","file":"/sops/lightinglinks.html"},{"key":"liveviewlink","title":"The Live View Link — Home Runs Progress","file":"/sops/liveviewlink.html"},{"key":"materials","title":"Materials — Commercial Ordering Guide","file":"/sops/materials.html"},{"key":"myday","title":"My Day — Crew Guide","file":"/sops/myday.html"},{"key":"needs","title":"Needs — Crew Guide","file":"/sops/needs.html"},{"key":"openitems","title":"Open Items — Crew Guide","file":"/sops/openitems.html"},{"key":"panelizedlighting","title":"Panelized Lighting — Crew Guide","file":"/sops/panelizedlighting.html"},{"key":"photos","title":"Photos — Crew Guide","file":"/sops/photos.html"},{"key":"planslinks","title":"Plans & Links — Crew Guide","file":"/sops/planslinks.html"},{"key":"power","title":"Power — Commercial Phase Guide","file":"/sops/power.html"},{"key":"qc","title":"QC Walks — Crew Guide","file":"/sops/qc.html"},{"key":"questionlinks","title":"Question Links — GCs, Designers & Homeowners","file":"/sops/questionlinks.html"},{"key":"questions","title":"Job Questions — Crew Guide","file":"/sops/questions.html"},{"key":"returntrips","title":"Return Trips — Crew Guide","file":"/sops/returntrips.html"},{"key":"rough","title":"Rough Tab — Crew Guide","file":"/sops/rough.html"},{"key":"settings","title":"Settings — Devices, App Versions & the Version Lock","file":"/sops/settings.html"},{"key":"tapelight","title":"Tape Light — Crew Guide","file":"/sops/tapelight.html"},{"key":"tools","title":"Tools — Field Calculators Guide","file":"/sops/tools.html"},{"key":"underground","title":"Underground — Commercial Phase Guide","file":"/sops/underground.html"}];
 /* SOPS_END */
 
 // Optional polish only. A guide needs NO entry here — its title comes from the
@@ -7345,7 +7354,7 @@ function RemindButton({ to = "", title, body, jobId, section, label = "Remind", 
             </select>
             <button onClick={send} disabled={state==="sending"}
               style={{ width:"100%", padding:"7px 10px", fontSize:12, fontWeight:700, fontFamily:"inherit",
-                border:"none", borderRadius:7, background:C.accent, color:"#000", cursor:"pointer" }}>
+                border:"none", borderRadius:7, background:C.accent, color:"#fff", cursor:"pointer" }}>
               {state==="sending" ? "Sending…" : "Send reminder"}
             </button>
           </div>
@@ -8062,6 +8071,8 @@ function NeedsAttention({jobs, onSelectJob}) {
     const finPOs   = matsHidden ? [] : (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
     if(roughPOs.length) unsentPOs.push({job, name, count:roughPOs.length, phase:'Rough', orders:roughPOs});
     if(finPOs.length)   unsentPOs.push({job, name, count:finPOs.length, phase:'Finish', orders:finPOs});
+    const commPOs = matsHidden ? [] : (job.commMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp); // v527
+    if(commPOs.length)    unsentPOs.push({job, name, count:commPOs.length, phase:'Materials', orders:commPOs});
 
     // Waiting punch items
     const rw = flatPunchWaiting(job.roughPunch);
@@ -11022,6 +11033,7 @@ function JobNoteCard({
                 <span style={{ fontSize:10, color: C.dim }}>
                   Created {note.sharedAt ? new Date(note.sharedAt).toLocaleString() : '—'}
                 </span>
+                <LinkOpens jobId={jobId} linkKey={`jobnote:${note.id}`} createdAt={note.sharedAt||null} style={{marginTop:0}}/>
                 <button onClick={revokeShareLink}
                   style={{
                     marginLeft:'auto',
@@ -11969,7 +11981,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 style={{background:selectedIds.size===0?'var(--surface)':'#F4ECE2',
                   border:`1px solid ${selectedIds.size===0?C.border:'#D9BC9B'}`,
                   borderRadius:99,padding:'2px 8px',fontSize:10,fontWeight:700,
-                  color:selectedIds.size===0?C.muted:'#c2410c',
+                  color:selectedIds.size===0?C.faint:'#c2410c',
                   fontFamily:'inherit',outline:'none',
                   cursor:selectedIds.size===0?'not-allowed':'pointer'}}>
                 <option value="">Assign {selectedIds.size||'…'} to…</option>
@@ -11978,7 +11990,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               </select>
               {selectedIds.size > 0 && (
                 <button onClick={clearSelection}
-                  style={{background:'none',border:'none',color:C.muted,
+                  style={{background:'none',border:'none',color:C.faint,
                     fontSize:10,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
                     textDecoration:'underline'}}>
                   unselect all
@@ -12071,7 +12083,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   <Btn onClick={() => commitEdit(item.id, editHtml, editMaterial)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
                   <button onClick={() => { setEditingId(null); setEditMaterial(''); }}
-                    style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+                    style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
                 </div>
               </div>
             ) : (
@@ -12081,7 +12093,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text, material: item.materialNeeded||'' }); }
                   else           { setEditingId(item.id); setEditHtml(item.text); setEditMaterial(item.materialNeeded||''); }
                 }}
-                  style={{ fontSize: 12, color: item.done ? C.muted : C.text,
+                  style={{ fontSize: 12, color: item.done ? C.faint : C.text,
                     textDecoration: item.done ? 'line-through' : 'none',
                     cursor: item.done ? 'default' : 'text',
                     borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
@@ -12131,7 +12143,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   cursor: "pointer", userSelect: "none", flexShrink: 0,
                   border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
                   background: item.severity === "serious" ? "#B23A3A14" : C.bg,
-                  color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
+                  color: item.severity === "serious" ? "#B23A3A" : C.faint }}>
                 {item.severity === "serious" ? "QC miss or bigger item" : "Minor QC item"}
               </span>
             )}
@@ -12144,7 +12156,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 style={{ background: item.waiting ? '#F3E9CF' : 'none',
                   border: item.waiting ? '1px solid #D9BC6B' : '1px solid transparent',
                   borderRadius: 4, cursor:'pointer', fontSize:10, flexShrink:0,
-                  padding:'1px 6px', color: item.waiting ? '#6E5212' : C.muted,
+                  padding:'1px 6px', color: item.waiting ? '#6E5212' : C.faint,
                   fontFamily:'inherit', fontWeight: item.waiting ? 700 : 400 }}>
                 {item.waiting ? 'Waiting ×' : 'Wait'}
               </button>
@@ -12168,7 +12180,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
             )}
 
             <button onClick={async () => { if(!await showConfirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
-              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
+              style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
           </div>
 
@@ -12194,7 +12206,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                     padding: "2px 8px",
                     fontSize: 10,
                     fontWeight: item.assignedTo ? 700 : 500,
-                    color: item.assignedTo ? C.accent : C.muted,
+                    color: item.assignedTo ? C.accent : C.faint,
                     fontFamily: "inherit",
                     cursor: "pointer",
                     outline: "none",
@@ -12230,7 +12242,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
               </span>
               <button onClick={()=>{setWaitingEditId(item.id);setWaitingText(item.waitingOn||'');}}
-                style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                style={{fontSize:9,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
             </div>
@@ -12248,7 +12260,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 </span>
               )}
               <button onClick={()=>{setMaterialEditId(item.id);setMaterialText(item.materialNeeded||'');}}
-                style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                style={{fontSize:9,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
             </div>
@@ -12290,7 +12302,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   style={{fontSize:11,background:'#3B5BA5',color:'#fff',border:'none',borderRadius:5,
                     padding:'3px 12px',cursor:'pointer',fontFamily:'inherit'}}>Save</button>
                 <button onClick={()=>setMaterialEditId(null)}
-                  style={{fontSize:11,background:'none',border:'none',color:C.muted,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
+                  style={{fontSize:11,background:'none',border:'none',color:C.faint,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
               </div>
             </div>
           )}
@@ -12388,8 +12400,8 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems:'center' }}>
             <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
             <button onClick={() => { setAddOpen(false); setAddHtml(''); setAddMaterial(''); setAddMatSource(''); }}
-              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-            <span style={{fontSize:10,color:C.muted,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
+              style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+            <span style={{fontSize:10,color:C.faint,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
           </div>
         </div>
       ) : !addOpen && (
@@ -12694,7 +12706,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                       onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
                     <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                       style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
-                        color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
+                        color: C.faint, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
                       Remove {room.name}
                     </button>
                   </>
@@ -12819,7 +12831,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {filterIds!=null && (
-            <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.muted}}>
+            <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.faint}}>
               {sharedCount} of {allItemIds.length} shared
             </span>
           )}
@@ -12866,7 +12878,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             removeFloor(e.key);
           }}
             style={{display:"block",margin:"2px 0 6px auto",background:"none",border:"none",
-              color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:"inherit",
+              color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:"inherit",
               textDecoration:"underline"}}>
             Remove {e.label}
           </button>
@@ -12882,7 +12894,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
               fontSize:12,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
           <Btn onClick={addFloor} variant="add" style={{fontSize:11,padding:"5px 12px"}}>Add</Btn>
           <button onClick={()=>setAddingFloor(false)}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
         </div>
       ) : (
         <Btn onClick={()=>setAddingFloor(true)} variant="add"
@@ -13206,7 +13218,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         ) : (
           <HeStrikeSpan done={!!item.done} onClick={()=>{setEditingItem({fk,roomId,itemId:item.id});setEditText(item.text);}}
             title="Click to edit"
-            style={{flex:1,minWidth:0,fontSize:12,color:item.done?C.muted:C.text,
+            style={{flex:1,minWidth:0,fontSize:12,color:item.done?C.faint:C.text,
               textDecoration:item.done?'line-through':'none',lineHeight:1.4,
               cursor:'text',borderRadius:4,padding:'2px 4px',
               transition:'background 0.1s'}}
@@ -13226,7 +13238,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
               cursor: "pointer", userSelect: "none", flexShrink: 0,
               border: `1.5px solid ${item.severity === "serious" ? "#B23A3A" : C.border}`,
               background: item.severity === "serious" ? "#B23A3A14" : C.bg,
-              color: item.severity === "serious" ? "#B23A3A" : C.muted }}>
+              color: item.severity === "serious" ? "#B23A3A" : C.faint }}>
             {item.severity === "serious" ? "QC miss or bigger item" : "Minor QC item"}
           </span>
         )}
@@ -13256,14 +13268,14 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         {!item.done && (
           <button onClick={()=>openVoidModal(fk, roomId, item.id, item.text)}
             title="Not actually a QC item — void with reason"
-            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.faint,
               borderRadius:5,cursor:'pointer',fontSize:10,flexShrink:0,
               padding:'2px 7px',fontFamily:'inherit',fontWeight:600,lineHeight:1.4}}>
             Void
           </button>
         )}
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
-          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
+          style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
       {(item.addedBy||item.checkedBy)&&(
         <div style={{fontSize:9,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
@@ -13294,7 +13306,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
     <div key={item.id} style={{marginBottom:6,border:`1px dashed ${C.border}`,
       borderRadius:8,padding:'6px 10px',background:C.surface,opacity:0.85}}>
       <div style={{display:'flex',alignItems:'center',gap:8}}>
-        <span style={{flex:1,fontSize:12,color:C.muted,lineHeight:1.4,
+        <span style={{flex:1,fontSize:12,color:C.faint,lineHeight:1.4,
           textDecoration:'line-through'}}>
           {item.text}
         </span>
@@ -13308,7 +13320,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
       </div>
       <div style={{fontSize:10,color:C.dim,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
         <span style={{fontWeight:700,color:'#6E7682'}}>Void reason:</span>
-        <span style={{color:C.muted}}>{item.voidReason || '(no reason recorded)'}</span>
+        <span style={{color:C.faint}}>{item.voidReason || '(no reason recorded)'}</span>
         {(item.voidedBy||item.voidedAt) && (
           <span>· by {item.voidedBy || '—'}{item.voidedAt ? ` · ${item.voidedAt}` : ''}</span>
         )}
@@ -13370,14 +13382,14 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
             <Btn onClick={commitAdd} variant="primary" style={{fontSize:11,padding:'4px 14px'}}>Add</Btn>
             <button onClick={()=>{setAddOpen(false);setAddText('');setNewRoomName('');}}
-              style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Cancel</button>
-            <span style={{fontSize:10,color:C.muted}}>↵ Enter to add</span>
+              style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Cancel</button>
+            <span style={{fontSize:10,color:C.faint}}>↵ Enter to add</span>
           </div>
         </div>
       )}
 
       {qcGroups.length===0&&voidedGroups.length===0&&!addOpen&&(
-        <div style={{textAlign:'center',padding:'20px 12px',color:C.muted,fontSize:12,
+        <div style={{textAlign:'center',padding:'20px 12px',color:C.faint,fontSize:12,
           border:`1px dashed ${C.border}`,borderRadius:8}}>
           No {phase.toLowerCase()} QC items yet — tap "+ Add QC Item" to log issues.
         </div>
@@ -13402,7 +13414,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
               <div style={{marginTop:6}}>
                 <button onClick={()=>setVoidedCollapsed(c=>({...c,[voidKey]:!c[voidKey]}))}
                   style={{background:'none',border:`1px dashed ${C.border}`,borderRadius:7,
-                    color:C.muted,cursor:'pointer',fontSize:10,fontWeight:700,
+                    color:C.faint,cursor:'pointer',fontSize:10,fontWeight:700,
                     padding:'4px 10px',fontFamily:'inherit',letterSpacing:'0.04em',
                     display:'inline-flex',alignItems:'center',gap:6}}>
                   <span>Voided ({voidedItems.length})</span>
@@ -13435,7 +13447,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
             </div>
             <button onClick={()=>setVoidedCollapsed(c=>({...c,[voidKey]:!c[voidKey]}))}
               style={{background:'none',border:`1px dashed ${C.border}`,borderRadius:7,
-                color:C.muted,cursor:'pointer',fontSize:10,fontWeight:700,
+                color:C.faint,cursor:'pointer',fontSize:10,fontWeight:700,
                 padding:'4px 10px',fontFamily:'inherit',letterSpacing:'0.04em',
                 display:'inline-flex',alignItems:'center',gap:6}}>
               <span>Voided ({items.length})</span>
@@ -13553,8 +13565,55 @@ function poItemsPreview(items) {
   return lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0];
 }
 
-function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
+// v523 Crew POs from the app (vault: 03-Roadmap/Crew POs from the App.md).
+// Send on a card creates the PO in Simpro on this phase's cost center and emails
+// it (CED) or hands back the number (store runs) — sendMaterialPO callable.
+// MATERIAL_PO_TEST mirrors the server's test mode: the email goes ONLY to the
+// test inbox, never the supplier. Flip together with gc_config/material_po.mode.
+// v525: LIVE (Koy, 2026-10-08: "do those 5 steps and lets do it"). A copy of the
+// app that still says test is refused by the server once the switch is live.
+const MATERIAL_PO_TEST = false;
+const PO_SEND_KIND = { "ced":"email", "home depot":"number", "amazon":"number", "ace hardware":"number", "ace":"number" };
+const poSendKind = (source) => PO_SEND_KIND[String(source||"").trim().toLowerCase()] || "";
+const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").replace(/<\/(p|div|li)>/gi,"\n")
+  .replace(/<[^>]+>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+  .replace(/&quot;/g,'"').replace(/&#39;|&rsquo;|&lsquo;/g,"'").split("\n").map(l=>l.trim()).filter(Boolean);
+const poTodayMDY = () => new Date().toLocaleDateString("en-US");
+const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
+
+// v527: Material Tracking runs in three places — residential Rough / Finish and the
+// commercial Materials tab (job.commMaterials, phase "comm"; each card picks the
+// Simpro cost center it is charged to, sent to sendMaterialPO as ccId).
+const matPhaseLabel = (ph) => ph === "finish" ? "Finish" : ph === "comm" ? "Materials" : "Rough-In";
+function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,bid=null,onRefreshBid=null,onUpsertCards=null,openBuilder=false,onBuilderClosed=null}) {
   const safeOrders = Array.isArray(orders) ? orders : [];
+  // v523: the Send sheet — {id, get, date, busy, error, done}
+  const [sendSheet, setSendSheet] = useState(null);
+  // v524: Order from the bid (OrderBuilder). openBuilder lets Bid Items → Order material open it.
+  const [builderOpen, setBuilderOpen] = useState(false);
+  useEffect(() => { if (openBuilder) setBuilderOpen(true); }, [openBuilder]);
+  const canOrderFromBid = !!(onUpsertCards && simproNo && can(getIdentity(), "materials.sendPO"));
+  const [resuming, setResuming] = useState(null);
+  const resumeOrder = async (orderId, date) => {
+    const me = getIdentity(); if (!me || !onUpsertCards) return;
+    setResuming(orderId);
+    try {
+      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId, source: "CED", groups: [], resume: true, clientTest: MATERIAL_PO_TEST });
+      const res = (r && r.data) || {};
+      const cards = poOrderCards(res, orderId, date, me);
+      if (cards.length) onUpsertCards(cards.map(({ date: _d, pickupDate: _p, ...c }) => c)); // keep the cards' own dates
+      if (res.ok && res.emailOk) {
+        try { const k = PO_ORDER_LS(jobId, phase); const d = JSON.parse(localStorage.getItem(k) || "null"); if (d && d.orderId === orderId) localStorage.removeItem(k); } catch {}
+        if (typeof toast !== "undefined" && toast.success) toast.success(res.mode === "test" ? "Order emailed to the test inbox." : "Order emailed to CED.");
+      } else {
+        const why = res.failed ? `${res.failed.costCenter}: ${res.failed.error}` : (res.emailError || "the email didn't go out");
+        if (typeof toast !== "undefined" && toast.error) toast.error(`Not finished: ${why}. Try again in a minute.`); else window.alert(`Not finished: ${why}`);
+      }
+    } catch (e) {
+      const m = String((e && e.message) || e || "Something went wrong.");
+      if (typeof toast !== "undefined" && toast.error) toast.error(m); else window.alert(m);
+    } finally { setResuming(null); }
+  };
 
   const [collapsed, setCollapsed] = useState(() => {
     const m = {};
@@ -13590,6 +13649,10 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
           to ship. To re-enable in the future: restore the button JSX here
           AND the syncFromSimpro / syncing state declared above. The
           Cloud Function syncSimproPOsForJob is still deployed and callable. */}
+      {canOrderFromBid && (
+        <button onClick={()=>setBuilderOpen(true)} style={{width:"100%",marginBottom:8,background:C.accent,border:"none",color:"#fff",borderRadius:9,
+          padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>New order from the bid</button>
+      )}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add PO</Btn>
 
       {[...safeOrders]
@@ -13620,7 +13683,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
             <div onClick={()=>toggle(o.id)}
               style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer",userSelect:"none"}}>
               <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
-              {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
+              {o.po && <span style={{fontSize:11,color:C.faint}}>#{o.po}</span>}
               {o.needsOrder && !o.ordered && !o.pickedUp && !o.deliveredToShop && (
                 <StatusPill variant="needs">{o.source==="Shop" ? "Needs to be Picked Up" : "Need to Order"}</StatusPill>
               )}
@@ -13637,13 +13700,13 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                 <StatusPill variant="accent">{o.source}</StatusPill>
               )}
               {isCollapsed && o.items && (
-                <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
+                <span style={{fontSize:11,color:C.faint,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
                   {poItemsPreview(o.items)}
                 </span>
               )}
-              <span style={{marginLeft:"auto",color:C.muted,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
+              <span style={{marginLeft:"auto",color:C.faint,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
               <button onClick={e=>{e.stopPropagation();del(o.id);}}
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px"}}>Remove</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"0 2px"}}>Remove</button>
             </div>
 
             {/* ── Expanded body ── */}
@@ -13673,7 +13736,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                   </div>
                 </div>
 
-                <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.muted}}>(copy & paste into Simpro)</span></div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.faint}}>(copy & paste into Simpro)</span></div>
                 {/* draftKey ties this textarea's localStorage draft to the
                     specific PO row — survives page reloads on mobile so a
                     coworker can never lose a typed list mid-edit again
@@ -13681,6 +13744,38 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                 <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
                   draftKey={`po_${jobId||'nojob'}_${phase||'nophase'}_${o.id}`}
                   placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
+
+                {/* v523: Send from the app. Shows for CED (email) and store runs
+                    (number only) until the card is ordered/picked up; a send
+                    whose email failed offers a resend of the same PO. */}
+                {(() => {
+                  const kind = poSendKind(o.source);
+                  if (!kind || !onPatchOrder || !can(getIdentity(), "materials.sendPO")) return null;
+                  if (o.pickedUp || o.deliveredToShop) return null;
+                  // v524: a PO from an order from the bid is resent from the order screen, never re-sent here
+                  // (this card's own send would make a new PO).
+                  if (o.poOrderId) return (o.poEmailOk || o.ordered || !onUpsertCards) ? null : (
+                    <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:6}}>
+                      <div style={{fontSize:11,color:C.dim}}>Part of an order from the bid that isn't finished. Finish sending emails CED every PO already made for it, without making new ones.</div>
+                      <button disabled={resuming===o.poOrderId} onClick={()=>resumeOrder(o.poOrderId, o.pickupDate)}
+                        style={{alignSelf:"flex-start",background:C.accent,border:"none",color:"#fff",borderRadius:8,padding:"7px 14px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                        {resuming===o.poOrderId ? <><Spinner size={12}/> Sending…</> : "Finish sending"}</button>
+                    </div>);
+                  const testLeftover = o.poSentMode === "test" && !MATERIAL_PO_TEST;
+                  const emailRetry = !testLeftover && o.poSentVia === "app" && kind === "email" && !o.poEmailOk;
+                  if (!testLeftover && (o.poSentVia === "app" || o.ordered) && !emailRetry) return null;
+                  const hint = (t) => <div style={{marginTop:8,fontSize:11,color:C.dim}}>{t}</div>;
+                  if (!simproNo) return hint("Add the Simpro Job # to this job to send this PO from here.");
+                  if (kind === "email" && !poPlainLines(o.items).length) return hint(`Type the material list, then Send to ${o.source}.`);
+                  const label = emailRetry ? `Resend email for PO ${o.po}` : kind === "email" ? `Send to ${o.source}` : "Get a PO number";
+                  return (
+                    <button onClick={()=>setSendSheet({id:o.id, get:"willcall", date:o.pickupDate||poTomorrowMDY(), busy:false, error:"", done:null, cc:String(o.chargeCcId||o.poCcId||"")})}
+                      style={{marginTop:8,width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:9,
+                        padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      {label}
+                    </button>
+                  );
+                })()}
 
                 {/* Copy-for-Simpro helper. The TA stores items as HTML
                     (<br> separators + entities) but Simpro's PO line entry
@@ -13805,7 +13900,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                               <input type="checkbox" checked={checked} onChange={()=>toggleLine(txt)}
                                 style={{accentColor:"#3E7D5A",width:14,height:14,cursor:"pointer",marginTop:2,flexShrink:0}}/>
                               <span style={{
-                                fontSize:12,color: checked ? C.muted : C.text,
+                                fontSize:12,color: checked ? C.faint : C.text,
                                 textDecoration: checked ? "line-through" : "none",
                                 wordBreak:"break-word",lineHeight:1.35,
                               }}>{txt}</span>
@@ -13898,10 +13993,504 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
       })}
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add PO</Btn>
+
+      {/* v524: Order from the bid */}
+      {canOrderFromBid && (
+        <OrderBuilder open={builderOpen} onClose={()=>{ setBuilderOpen(false); if (onBuilderClosed) onBuilderClosed(); }}
+          jobId={jobId} phase={phase} bid={bid} onRefreshBid={onRefreshBid} onUpsertCards={onUpsertCards}/>
+      )}
+
+      {/* v523: Send sheet — check the order, then send it from the app. */}
+      {sendSheet && (() => {
+        const o = safeOrders.find(x => x.id === sendSheet.id);
+        if (!o) return null;
+        const kind = poSendKind(o.source);
+        const lines = poPlainLines(o.items);
+        const busy = !!sendSheet.busy, done = sendSheet.done;
+        const close = () => { if (!busy) setSendSheet(null); };
+        const phaseLabel = matPhaseLabel(phase);
+        // v527: commercial Materials tab — each card picks the Simpro cost center it's charged to.
+        const isComm = phase === "comm";
+        const ccOpts = (bid && Array.isArray(bid.costCenters) ? bid.costCenters : []).filter(c => c && c.ccId != null)
+          .map(c => ({ id: String(c.ccId), label: [c.sectionName, String(c.ccName || "").trim()].filter(Boolean).join(" · ") }));
+        const ccPick = ccOpts.find(c => c.id === String(sendSheet.cc || "")) || null;
+        const needCc = isComm && !ccPick;
+        const chip = (val, label) => (
+          <button key={val} type="button" disabled={busy} onClick={()=>setSendSheet(s=>({...s, get:val}))}
+            style={{fontFamily:"inherit",fontSize:13,borderRadius:99,padding:"6px 12px",cursor:"pointer",
+              border:`1px solid ${sendSheet.get===val?C.accent:C.border}`,background:sendSheet.get===val?"rgba(59,91,165,0.10)":C.surface,
+              color:sendSheet.get===val?C.accent:C.text,fontWeight:sendSheet.get===val?700:500}}>{label}</button>
+        );
+        const send = async () => {
+          const me = getIdentity();
+          if (!me) { setSendSheet(s=>({...s, error:"Sign in again, then send."})); return; }
+          if (needCc) { setSendSheet(s=>({...s, error:"Pick which cost center this order is charged to."})); return; }
+          setSendSheet(s=>({...s, busy:true, error:""}));
+          try {
+            const r = await memberCallable("sendMaterialPO", me)({ jobId, phase, orderId:o.id, source:o.source,
+              items:o.items||"", get:sendSheet.get, date:sendSheet.date||"", clientTest:MATERIAL_PO_TEST,
+              ...(isComm ? { ccId: ccPick.id } : {}) });
+            const res = (r && r.data) || {};
+            if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
+            const patch = { po:String(res.poNo), simproPoId:String(res.poNo), poSentVia:"app", poSentMode:res.mode||"",
+              poSentBy:me.name||"", poSentAt:poTodayMDY(), poCostCenter:res.costCenter||"",
+              poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", "),
+              ...(isComm ? { chargeCcId: ccPick.id, chargeCcName: ccPick.label } : {}) };
+            if (res.kind !== "email" || res.emailOk) Object.assign(patch, { ordered:true, orderedBy:me.name||"", orderedAt:poTodayMDY() });
+            // Dates fill only if still empty on the LIVE card (someone may have typed one meanwhile).
+            const pickDate = sendSheet.date;
+            onPatchOrder(o.id, (cur) => ({ ...patch,
+              ...(cur.date ? {} : { date: poTodayMDY() }),
+              ...(cur.pickupDate || !pickDate ? {} : { pickupDate: pickDate }) }));
+            setSendSheet(s=>({...s, busy:false, done:res}));
+          } catch (e) {
+            setSendSheet(s=>({...s, busy:false, error:String((e && e.message) || e || "Something went wrong.")}));
+          }
+        };
+        return (
+          <div onClick={close} style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(10,14,22,0.45)",
+            display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()} role="dialog" aria-label="Send PO"
+              style={{background:C.card,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",
+                borderRadius:"16px 16px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
+                boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:14}}>
+              {busy ? (
+                <PoSendMotion phase="sending" title={kind === "email" ? `Sending to ${o.source}` : "Getting a PO number"}
+                  steps={kind === "email" ? ["Making the PO in Simpro", "Building the PO form", MATERIAL_PO_TEST ? "Emailing the test inbox" : `Emailing ${o.source}`] : ["Making the PO in Simpro"]}/>
+              ) : done ? (<>
+                <PoSendMotion phase={done.kind === "email" && !done.emailOk ? "warn" : "sent"}
+                  title={done.kind === "email" ? (done.emailOk ? `PO ${done.poNo} sent` : `PO ${done.poNo} made`) : `PO ${done.poNo}`}
+                  sub={`In Simpro on ${done.costCenter || phaseLabel}${done.again ? " (already sent from this card)" : ""}.`}/>
+                {done.kind === "email" && done.emailOk && (
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                    {done.mode === "test"
+                      ? <>Test send: the email went only to <b>{(done.emailedTo||[]).join(", ")}</b>. {done.supplier} did not get it. Void PO {done.poNo} in Simpro when you're done looking.</>
+                      : <>Emailed to {done.supplier}. bids@ and you are copied, and their reply comes to you.</>}
+                  </div>
+                )}
+                {done.kind === "email" && !done.emailOk && (
+                  <div style={{fontSize:13,color:"#B23A3A",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>
+                    The PO is in Simpro, but the email didn't go out: {done.emailError || "unknown error"}. Tap Resend email on the card to try again. It won't make a second PO.
+                  </div>
+                )}
+                {done.kind !== "email" && (
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                    Give PO <b>{done.poNo}</b> at the {done.supplier} counter. It's saved on this card.
+                  </div>
+                )}
+                <button onClick={()=>setSendSheet(null)} style={{fontFamily:"inherit",fontWeight:700,fontSize:15,border:"none",
+                  borderRadius:12,padding:13,background:C.accent,color:"#fff",cursor:"pointer"}}>Done</button>
+              </>) : (<>
+                <div>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1}}>
+                    {kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? `Resend PO ${o.po}` : `Send to ${o.source}`) : "Get a PO number"}
+                  </div>
+                  <div style={{fontSize:12,color:C.dim,marginTop:3}}>{isComm ? (ccPick ? `Charged to ${ccPick.label} in Simpro` : "Pick the cost center it's charged to") : `${phaseLabel} · charged to this job's ${phaseLabel} in Simpro`}</div>
+                </div>
+                {isComm && (
+                  <div style={{display:"grid",gap:6}}>
+                    <label htmlFor={`po-cc-${o.id}`} style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Charge to</label>
+                    {ccOpts.length ? (
+                      <select id={`po-cc-${o.id}`} value={ccPick ? ccPick.id : ""} disabled={busy}
+                        onChange={e=>{ const v = e.target.value; const c = ccOpts.find(x => x.id === v); setSendSheet(s=>({...s, cc:v, error:""}));
+                          if (c && onPatchOrder) onPatchOrder(o.id, { chargeCcId: c.id, chargeCcName: c.label }); }}
+                        style={{fontFamily:"inherit",fontSize:14,padding:"9px 10px",borderRadius:10,border:`1px solid ${needCc?"#B23A3A":C.border}`,background:C.card,color:C.text}}>
+                        <option value="">Pick a cost center…</option>
+                        {ccOpts.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                      </select>
+                    ) : (
+                      <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                        This job's Simpro cost centers aren't loaded yet. {onRefreshBid ? <button type="button" onClick={onRefreshBid} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,color:C.accent,background:"none",border:"none",padding:0,cursor:"pointer",textDecoration:"underline"}}>Load them</button> : "Open Bid Items to load them."}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {MATERIAL_PO_TEST && (
+                  <div style={{fontSize:12,color:C.accent,background:"rgba(59,91,165,0.08)",border:"1px solid rgba(59,91,165,0.3)",borderRadius:10,padding:"8px 10px"}}>
+                    Test mode: the PO is really made in Simpro, but the email goes only to the test inbox, never to {o.source}.
+                  </div>
+                )}
+                {kind === "email" && (<>
+                  <div style={{display:"grid",gap:6}}>
+                    <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</span>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{chip("willcall","Will call")}{chip("deliver","Deliver to job")}</div>
+                  </div>
+                  <div style={{display:"grid",gap:6}}>
+                    <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>{sendSheet.get==="deliver"?"Deliver on":"Pick up on"}</span>
+                    <DateInp value={sendSheet.date} onChange={e=>setSendSheet(s=>({...s, date:e.target.value}))}/>
+                  </div>
+                  <div style={{display:"grid",gap:6}}>
+                    <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Material list · {lines.length} line{lines.length===1?"":"s"}</span>
+                    <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",
+                      whiteSpace:"pre-wrap",maxHeight:200,overflowY:"auto"}}>{lines.join("\n")}</div>
+                    <span style={{fontSize:11,color:C.faint}}>To change the list, close this and edit it on the card.</span>
+                  </div>
+                </>)}
+                {kind !== "email" && (
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
+                    No email for store runs. You get a PO number to give at the {o.source} counter, saved on this card.
+                  </div>
+                )}
+                {sendSheet.error && (
+                  <div style={{fontSize:13,color:"#B23A3A",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>{sendSheet.error}</div>
+                )}
+                <button onClick={send} disabled={busy || needCc} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
+                  padding:14,background:(busy || needCc)?C.border:C.accent,color:"#fff",cursor:(busy || needCc)?"default":"pointer"}}>
+                  {busy ? "Sending…" : kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? "Resend email" : `Send to ${o.source}`) : "Get a PO number"}
+                </button>
+                <button onClick={close} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,
+                  borderRadius:12,padding:11,background:C.card,color:C.text,cursor:busy?"default":"pointer"}}>Cancel</button>
+              </>)}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
 
+
+// ── Order from the bid (v524) ─────────────────────────────────────────────
+// One order → one PO per cost center → one email to CED (sendMaterialOrder).
+// Built on the job's bid data (simproStock, already loaded for Bid Items):
+// pick a cost center, add bid items at the still-to-go quantity, type anything
+// else, add from more cost centers, review, send. The unfinished order is kept
+// on this phone (he_po_order_<job>_<phase>) with ONE order id, so Send again
+// after a dropped connection or a half-finished order can never make a second
+// set of POs — the server keys every PO on that id + the cost center.
+// Vault: 03-Roadmap/Crew POs from the App.md · approved proposal page 4ZRXqw62…
+const PO_ORDER_LS = (jobId, phase) => `he_po_order_${jobId || "nojob"}_${phase || "nophase"}`;
+const poIsMaterialRow = (r) => r && Number(r.required) > 0 && !/\blabou?r\b/i.test(String(r.name || ""));
+const poToGo = (r) => Math.max(0, Math.round(((Number(r.required) || 0) - (Number(r.assigned) || 0)) * 100) / 100);
+const poEscLine = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Sending / sent motion for PO sends (v524, Koy: "make sure there's a motion graphic
+// for when it's sending and shows it sent"). Sending = a paper plane crossing a
+// dashed trail with a caption for the step it's probably on (timed, never ahead
+// of the last step; the real answer is what flips it). Sent = a green check that
+// draws in with a small burst. Warn = a still "!" (nothing to celebrate).
+// Reduced-motion users get the still versions.
+const PO_MOTION_CSS = `
+@keyframes he-po-fly{0%{transform:translate(-46px,10px) rotate(-8deg);opacity:0}18%{opacity:1}82%{opacity:1}100%{transform:translate(46px,-10px) rotate(-8deg);opacity:0}}
+@keyframes he-po-dash{to{stroke-dashoffset:-24}}
+@keyframes he-po-cap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes he-po-pop{0%{transform:scale(.4);opacity:0}60%{transform:scale(1.08);opacity:1}100%{transform:scale(1)}}
+@keyframes he-po-draw{to{stroke-dashoffset:0}}
+@keyframes he-po-ring{0%{transform:scale(.8);opacity:.55}100%{transform:scale(1.9);opacity:0}}
+@keyframes he-po-burst{0%{transform:rotate(var(--a)) translateY(0) scale(1);opacity:1}100%{transform:rotate(var(--a)) translateY(-46px) scale(.3);opacity:0}}
+.he-po-plane{animation:he-po-fly 1.5s cubic-bezier(.45,0,.35,1) infinite}
+.he-po-trail{animation:he-po-dash .9s linear infinite}
+.he-po-cap{animation:he-po-cap .35s ease-out}
+.he-po-pop{animation:he-po-pop .45s cubic-bezier(.3,1.4,.5,1) both}
+.he-po-check{stroke-dasharray:30;stroke-dashoffset:30;animation:he-po-draw .4s .3s ease-out forwards}
+.he-po-ring{animation:he-po-ring .9s .2s ease-out both}
+.he-po-dot{animation:he-po-burst .7s .3s ease-out both}
+@media (prefers-reduced-motion: reduce){.he-po-plane,.he-po-trail,.he-po-cap,.he-po-pop,.he-po-ring,.he-po-dot{animation:none}.he-po-plane{opacity:1}.he-po-check{animation:none;stroke-dashoffset:0}.he-po-ring,.he-po-dot{display:none}}
+`;
+function PoSendMotion({ phase = "sending", steps = [], title = "", sub = "" }) {
+  const [i, setI] = useState(0);
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (phase !== "sending") return undefined;
+    setI(0); setSlow(false);
+    const t = setInterval(() => setI(n => Math.min(n + 1, Math.max(0, steps.length - 1))), 1800);
+    const s8 = setTimeout(() => setSlow(true), 9000);
+    return () => { clearInterval(t); clearTimeout(s8); };
+  }, [phase, steps.length]);
+  useEffect(() => { if (phase === "sent") { try { if (navigator.vibrate) navigator.vibrate(25); } catch {} } }, [phase]);
+  const GREEN = "#3E7D5A", RED = "#B23A3A";
+  return (
+    <div role="status" aria-live="polite" style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"18px 8px 10px",textAlign:"center"}}>
+      <style>{PO_MOTION_CSS}</style>
+      {phase === "sending" && (
+        <svg width="150" height="72" viewBox="0 0 150 72" aria-hidden="true">
+          <path className="he-po-trail" d="M10 52 Q75 18 140 30" fill="none" stroke={C.accent} strokeOpacity="0.35" strokeWidth="2" strokeDasharray="4 8" strokeLinecap="round"/>
+          <g transform="translate(75 36)"><g className="he-po-plane">
+            <path d="M-14 2 L14 -10 L4 12 L0 3 Z" fill={C.accent}/>
+            <path d="M0 3 L14 -10 L-2 6 Z" fill="#fff" fillOpacity="0.35"/>
+          </g></g>
+        </svg>
+      )}
+      {phase === "sent" && (
+        <div style={{position:"relative",width:72,height:72}} aria-hidden="true">
+          <span className="he-po-ring" style={{position:"absolute",inset:0,borderRadius:"50%",border:`2px solid ${GREEN}`}}/>
+          {[0,60,120,180,240,300].map(a => (
+            <span key={a} className="he-po-dot" style={{"--a":`${a}deg`,position:"absolute",left:33,top:33,width:6,height:6,borderRadius:"50%",
+              background:a % 120 ? C.accent : GREEN,transformOrigin:"3px 3px"}}/>
+          ))}
+          <svg className="he-po-pop" width="72" height="72" viewBox="0 0 72 72" style={{position:"absolute",inset:0}}>
+            <circle cx="36" cy="36" r="30" fill={GREEN}/>
+            <path className="he-po-check" d="M24 37 L32 45 L48 28" fill="none" stroke="#fff" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+      )}
+      {phase === "warn" && (
+        <svg className="he-po-pop" width="60" height="60" viewBox="0 0 60 60" aria-hidden="true">
+          <circle cx="30" cy="30" r="26" fill="rgba(178,58,58,0.10)" stroke={RED} strokeWidth="2"/>
+          <path d="M30 17 V34" stroke={RED} strokeWidth="5" strokeLinecap="round"/><circle cx="30" cy="43" r="3" fill={RED}/>
+        </svg>
+      )}
+      {title && <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1,color:phase === "sent" ? GREEN : phase === "warn" ? RED : C.text}}>{title}</div>}
+      {phase === "sending" && steps.length > 0 && <div key={i} className="he-po-cap" style={{fontSize:14,color:C.dim}}>{steps[i]}…</div>}
+      {phase === "sending" && slow && <div style={{fontSize:12,color:C.faint}}>Simpro can be slow. Keep this open; it won't send twice.</div>}
+      {sub && <div style={{fontSize:13,color:C.dim}}>{sub}</div>}
+    </div>
+  );
+}
+
+// Quantity box that can be cleared while typing (an empty box doesn't drop the line; leaving it at 0 does).
+function PoQtyInput({ value, onCommit, label }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(t => (Number(t) === Number(value) ? t : String(value))); }, [value]);
+  return (
+    <input type="number" inputMode="decimal" min="0" value={text} aria-label={label}
+      onChange={e => { setText(e.target.value); const n = Number(e.target.value); if (e.target.value !== "" && n > 0) onCommit(n); }}
+      onBlur={() => { const n = Number(text); if (!(n > 0)) onCommit(0); }}
+      style={{width:62,textAlign:"center",fontFamily:"inherit",fontSize:14,fontWeight:700,border:`1px solid ${C.accent}`,borderRadius:8,padding:4,background:C.card,color:C.text}}/>
+  );
+}
+
+// Cards for every PO in a sendMaterialOrder answer (shared by the order screen and Finish sending on a card).
+function poOrderCards(res, orderId, date, me) {
+  const today = poTodayMDY(); const sent = !!(res.ok && res.emailOk);
+  return (res.pos || []).map(p => ({
+    id: uid(), date: today, po: String(p.poNo), pickupDate: date || "", source: "CED",
+    items: (p.lines || []).map(poEscLine).join("<br>"), needsOrder: true, pickedUp: false,
+    ordered: sent, orderedBy: sent ? ((me && me.name) || "") : "", orderedAt: sent ? today : "",
+    simproPoId: String(p.poNo), poSentVia: "app", poSentMode: res.mode || "", poSentBy: (me && me.name) || "", poSentAt: today,
+    poCostCenter: p.costCenter || "", poEmailOk: sent, poEmailedTo: (res.emailedTo || []).join(", "),
+    poOrderId: orderId, poCcId: p.ccId,
+  }));
+}
+const PO_ORDER_CALL = { timeout: 300000 }; // one Simpro PO per cost center + PDFs + email can take a while
+
+function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsertCards }) {
+  const ccs = (bid && Array.isArray(bid.costCenters)) ? bid.costCenters : [];
+  const blank = () => ({ orderId: "o" + Date.now() + Math.random().toString(36).slice(2, 6), lines: {}, typed: {}, get: "willcall", date: poTomorrowMDY() });
+  const [draft, setDraft] = useState(() => {
+    try { const d = JSON.parse(localStorage.getItem(PO_ORDER_LS(jobId, phase)) || "null"); if (d && d.orderId) return { ...blank(), ...d }; } catch {}
+    return blank();
+  });
+  const [step, setStep] = useState("cc");
+  const [ccId, setCcId] = useState(null);
+  const [q, setQ] = useState("");
+  const [extra, setExtra] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  useEffect(() => { try { localStorage.setItem(PO_ORDER_LS(jobId, phase), JSON.stringify(draft)); } catch {} }, [draft, jobId, phase]);
+  useEffect(() => {
+    if (!open) return;
+    setStep(prev => prev === "done" ? "cc" : prev); setError("");
+    // Re-read this phone's saved order: Finish sending on a card may have cleared it.
+    try { const d = JSON.parse(localStorage.getItem(PO_ORDER_LS(jobId, phase)) || "null"); setDraft(cur => (d && d.orderId) ? { ...blank(), ...d } : (cur.made && cur.made.length ? blank() : cur)); } catch {}
+  }, [open]); // also reads jobId/phase; reruns only on open
+  if (!open) return null;
+
+  const ccById = new Map(ccs.map(c => [Number(c.ccId), c]));
+  const ccLabel = (c) => [c && c.sectionName, c && String(c.ccName || "").trim()].filter(Boolean).join(" · ");
+  const linesFor = (id) => draft.lines[id] || {};
+  const typedFor = (id) => draft.typed[id] || [];
+  const pickedIn = (id) => {
+    const c = ccById.get(Number(id)); if (!c) return [];
+    const L = linesFor(id);
+    return (c.rows || []).filter(r => (L[r.catalogId] || 0) > 0).map(r => ({ catalogId: r.catalogId, part: r.partNo, name: r.name, qty: L[r.catalogId] }));
+  };
+  // One group per cost center that has anything in it, in the bid's own order.
+  const groups = ccs.map(c => Number(c.ccId)).filter(id => pickedIn(id).length || typedFor(id).length)
+    .map(id => ({ ccId: id, cc: ccById.get(id), items: pickedIn(id), typed: typedFor(id) }));
+  const lineCount = groups.reduce((n, g) => n + g.items.length + g.typed.length, 0);
+  const setLine = (id, catalogId, qty) => setDraft(d => ({ ...d, lines: { ...d.lines, [id]: { ...(d.lines[id] || {}), [catalogId]: Math.max(0, Math.round((Number(qty) || 0) * 100) / 100) } } }));
+  const addTyped = (id, t) => { const v = String(t || "").trim(); if (!v) return; setDraft(d => ({ ...d, typed: { ...d.typed, [id]: [...(d.typed[id] || []), v] } })); };
+  const delTyped = (id, i) => setDraft(d => ({ ...d, typed: { ...d.typed, [id]: (d.typed[id] || []).filter((_, k) => k !== i) } }));
+  const phaseLabel = matPhaseLabel(phase);
+  const goCount = (c) => (c.rows || []).filter(r => poIsMaterialRow(r) && poToGo(r) > 0).length;
+  const madePo = (id) => { const m = (draft.made || []).find(x => Number(x.ccId) === Number(id)); return m ? m.poNo : null; };
+  const madeNote = (id) => madePo(id) && box(<span style={{color:"#B06A2C"}}>PO {madePo(id)} is already made for this cost center. Changes here won't change it. Put anything new on another cost center, or on a new order after this one is sent.</span>);
+
+  const send = async () => {
+    const me = getIdentity();
+    if (!me) { setError("Sign in again, then send."); return; }
+    setBusy(true); setError("");
+    try {
+      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: draft.date,
+        clientTest: MATERIAL_PO_TEST, groups: groups.map(g => ({ ccId: g.ccId, items: g.items, typed: g.typed })) });
+      const res = (r && r.data) || {};
+      const cards = poOrderCards(res, draft.orderId, draft.date, me);
+      if (cards.length && onUpsertCards) onUpsertCards(cards);
+      setResult(res);
+      if (res.ok && res.emailOk) {
+        try { localStorage.removeItem(PO_ORDER_LS(jobId, phase)); } catch {}
+        setDraft(blank());
+      } else {
+        // Remember which cost centers already have their PO, so the screen can say edits there won't change it.
+        setDraft(d => ({ ...d, made: (res.pos || []).map(p => ({ ccId: Number(p.ccId), poNo: String(p.poNo) })) }));
+      }
+      setStep("done");
+    } catch (e) {
+      setError(String((e && e.message) || e || "Something went wrong."));
+    } finally { setBusy(false); }
+  };
+
+  const shell = (title, sub, back, body, bottom) => (
+    <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(10,14,22,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div role="dialog" aria-label="Order from the bid" style={{background:C.bg,width:"100%",maxWidth:560,height:"94vh",borderRadius:"16px 16px 0 0",
+        display:"flex",flexDirection:"column",boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",overflow:"hidden"}}>
+        <div style={{background:"linear-gradient(#141821,#1B2030)",color:"#E6EAF1",padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={back || onClose} disabled={busy} aria-label={back ? "Back" : "Close"} style={{background:"none",border:"none",color:"#9AA3B2",fontSize:22,cursor:"pointer",padding:0,lineHeight:1}}>{back ? "‹" : "✕"}</button>
+          <div style={{minWidth:0}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.03em",lineHeight:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{title}</div>
+            <div style={{fontSize:12,color:"#9AA3B2"}}>{sub}</div>
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:12,display:"flex",flexDirection:"column",gap:10}}>{body}</div>
+        {bottom && <div style={{background:C.card,borderTop:`1px solid ${C.border}`,padding:"10px 12px calc(10px + env(safe-area-inset-bottom, 0px))",display:"flex",flexDirection:"column",gap:6}}>{bottom}</div>}
+      </div>
+    </div>
+  );
+  const primary = (label, onClick, disabled) => (
+    <button onClick={onClick} disabled={disabled || busy} style={{fontFamily:"inherit",fontWeight:700,fontSize:15,border:"none",borderRadius:10,padding:12,
+      background:(disabled || busy) ? C.border : C.accent,color:"#fff",cursor:(disabled || busy) ? "default" : "pointer"}}>{label}</button>
+  );
+  const secondary = (label, onClick) => (
+    <button onClick={onClick} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:10,
+      background:C.card,color:C.text,cursor:"pointer"}}>{label}</button>
+  );
+  const box = (children, style = {}) => <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",...style}}>{children}</div>;
+  const chip = (on, label, onClick) => (
+    <button type="button" onClick={onClick} style={{fontFamily:"inherit",fontSize:13,borderRadius:99,padding:"6px 12px",cursor:"pointer",
+      border:`1px solid ${on ? C.accent : C.border}`,background:on ? "rgba(59,91,165,0.10)" : C.surface,color:on ? C.accent : C.text,fontWeight:on ? 700 : 500}}>{label}</button>
+  );
+  const reviewBtn = lineCount ? primary(`Review order (${lineCount} line${lineCount === 1 ? "" : "s"} in ${groups.length} cost center${groups.length === 1 ? "" : "s"})`, () => setStep("review")) : null;
+  const testNote = MATERIAL_PO_TEST && box(<span style={{color:C.accent}}>Test mode: the POs are really made in Simpro, but the email goes only to the test inbox, never to CED.</span>, { borderColor: "rgba(59,91,165,0.3)", background: "rgba(59,91,165,0.08)" });
+
+  // ── Sending ──
+  if (busy) {
+    const n = groups.length || ((result && result.pos) || []).length || 1;
+    return shell("Sending", phaseLabel, null, <div style={{margin:"auto 0"}}><PoSendMotion phase="sending" title={n > 1 ? `Sending ${n} POs` : "Sending your PO"}
+      steps={[`Making ${n > 1 ? `${n} POs` : "the PO"} in Simpro`, n > 1 ? `Building ${n} PO forms` : "Building the PO form", MATERIAL_PO_TEST ? "Emailing the test inbox" : "Emailing CED"]}/></div>, null);
+  }
+
+  // ── Done ──
+  if (step === "done" && result) {
+    const ok = result.ok && result.emailOk;
+    const nPo = (result.pos || []).length;
+    return shell(ok ? "Order sent" : "Not finished yet", `${phaseLabel} · ${nPo} PO${nPo === 1 ? "" : "s"}`, null, <>
+      {ok ? <PoSendMotion phase="sent" title={nPo > 1 ? `${nPo} POs sent` : "PO sent"} sub={result.mode === "test" ? "To the test inbox" : "To CED"}/>
+          : <PoSendMotion phase="warn" title="Not finished yet"/>}
+      {(result.pos || []).map(p => <Fragment key={p.poNo}>{box(<><b>PO {p.poNo}</b> · {p.costCenter}<br /><span style={{color:C.dim}}>{(p.lines || []).length} line{(p.lines || []).length === 1 ? "" : "s"}</span></>)}</Fragment>)}
+      {result.ok && result.emailOk && box(result.mode === "test"
+        ? <>Test send: the email went only to <b>{(result.emailedTo || []).join(", ")}</b>. CED did not get it. Void the PO{(result.pos || []).length === 1 ? "" : "s"} in Simpro when you're done looking.</>
+        : <>Emailed to CED in one email with {(result.pos || []).length === 1 ? "the PO form" : "every PO form"} attached. bids@ and you are copied, and their reply comes to you.</>)}
+      {result.ok && !result.emailOk && box(<span style={{color:"#B23A3A"}}>The POs are in Simpro, but the email didn't go out: {result.emailError || "unknown error"}. Tap Send again to retry the email. It won't make new POs.</span>)}
+      {!result.ok && result.failed && box(<span style={{color:"#B23A3A"}}>{result.failed.costCenter} didn't go through: {result.failed.error}. Tap Send again to finish. The PO{(result.pos || []).length === 1 ? "" : "s"} already made won't be made twice, and the email goes once everything is made.</span>)}
+      {box(<>Each PO is on its own card in Material Tracking{ok ? ", marked Ordered" : ""}.</>)}
+      {error && box(<span style={{color:"#B23A3A"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
+    </>, ok ? primary("Done", () => { setResult(null); setStep("cc"); onClose(); })
+        : <>{primary(busy ? "Sending…" : "Send again", send)}{secondary("Close", onClose)}</>);
+  }
+
+  // ── No bid yet ──
+  if (!ccs.length) {
+    return shell("New order", phaseLabel, null, <>
+      {box(bid === "loading" ? "Loading this job's bid from Simpro…" : "This job's bid hasn't loaded from Simpro yet. Refresh it, or type a list on a PO card and use Send to CED.")}
+      {onRefreshBid && secondary("Refresh the bid", onRefreshBid)}
+    </>, null);
+  }
+
+  // ── Pick a cost center ──
+  if (step === "cc" || !ccById.has(Number(ccId)) && step === "items") {
+    let lastSection = null;
+    return shell("New order", `${phaseLabel} · pick a cost center`, null, <>
+      {testNote}
+      <div style={{fontSize:12,color:C.faint}}>From the job's bid in Simpro. Orange = items still to go. Pick as many as the order needs.</div>
+      {lineCount > 0 && !(draft.made && draft.made.length) && (
+        <button onClick={() => { if (window.confirm("Clear this order and start over? Nothing has been sent.")) setDraft(blank()); }}
+          style={{alignSelf:"flex-start",fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.dim,borderRadius:99,padding:"4px 12px",cursor:"pointer"}}>Start over</button>
+      )}
+      {ccs.map(c => {
+        const id = Number(c.ccId); const g = goCount(c); const inOrder = pickedIn(id).length + typedFor(id).length;
+        const head = c.sectionName !== lastSection ? (lastSection = c.sectionName, <div key={"h" + id} style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase",padding:"6px 2px 0"}}>{c.sectionName || "Section"}</div>) : null;
+        return (<Fragment key={id}>{head}
+          <button onClick={() => { setCcId(id); setQ(""); setStep("items"); }} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:"2px 8px",alignItems:"center",textAlign:"left",
+            fontFamily:"inherit",border:`1px solid ${inOrder ? C.accent : C.border}`,background:inOrder ? "rgba(59,91,165,0.08)" : C.card,color:C.text,borderRadius:10,padding:"9px 11px",cursor:"pointer"}}>
+            <span style={{fontSize:14,fontWeight:500}}>{String(c.ccName || "").trim() || "Cost center"}</span>
+            <span style={{fontSize:12,fontWeight:700,color:g ? "#B06A2C" : "#3E7D5A"}}>{c.ok === false ? "" : g ? `${g} item${g === 1 ? "" : "s"} to go` : "all assigned"}</span>
+            {inOrder > 0 && <span style={{gridColumn:"1/-1",fontSize:11,fontWeight:700,color:C.accent}}>{inOrder} in this order</span>}
+          </button></Fragment>);
+      })}
+    </>, reviewBtn);
+  }
+
+  // ── Items for one cost center ──
+  if (step === "items") {
+    const c = ccById.get(Number(ccId)); const L = linesFor(ccId); const X = typedFor(ccId);
+    const rows = (c.rows || []).filter(poIsMaterialRow).filter(r => !q || `${r.partNo} ${r.name}`.toLowerCase().includes(q.toLowerCase()));
+    return shell(String(c.ccName || "").trim() || "Cost center", `${c.sectionName || ""} · ${phaseLabel}`, () => setStep("cc"), <>
+      {madeNote(ccId)}
+      <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search this cost center's bid" aria-label="Search bid items"
+        style={{fontFamily:"inherit",fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.surface,color:C.text}}/>
+      {!rows.length && box(c.ok === false ? "Simpro didn't send this cost center's items. Refresh the bid on the Bid Items tab." : "No bid items match. Type what you need below.")}
+      <div>{rows.map(r => { const g = poToGo(r); const qty = L[r.catalogId] || 0;
+        return (<div key={r.catalogId} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:"2px 10px",alignItems:"center",padding:"9px 0",borderTop:`1px solid ${C.border}`}}>
+          <span style={{fontSize:14,fontWeight:500,overflowWrap:"anywhere"}}>{r.name}</span>
+          <span style={{gridRow:"1/4",gridColumn:2}}>{qty > 0 ? (
+            <span style={{display:"flex",alignItems:"center",gap:4}}>
+              <button onClick={() => setLine(ccId, r.catalogId, qty - 1)} aria-label="Less" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,cursor:"pointer"}}>−</button>
+              <PoQtyInput value={qty} onCommit={n => setLine(ccId, r.catalogId, n)} label={`Quantity for ${r.name}`}/>
+              <button onClick={() => setLine(ccId, r.catalogId, qty + 1)} aria-label="More" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,cursor:"pointer"}}>+</button>
+            </span>) : (
+            <button onClick={() => setLine(ccId, r.catalogId, Math.max(1, g))} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,border:`1px solid ${C.accent}`,color:C.accent,background:C.card,borderRadius:8,padding:"6px 12px",cursor:"pointer"}}>Add</button>)}
+          </span>
+          <span style={{fontSize:11,color:C.faint}}>{r.partNo}</span>
+          <span style={{fontSize:12,color:C.dim}}>Bid {Number(r.required).toLocaleString()} · Assigned {Number(r.assigned).toLocaleString()} · <b style={{color:g ? "#B06A2C" : "#3E7D5A"}}>{g ? `${g.toLocaleString()} to go` : "all assigned"}</b></span>
+        </div>); })}</div>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",display:"flex",flexDirection:"column",gap:8}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.04em",color:C.accent}}>Type in parts or notes</div>
+        {X.map((t, i) => <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:13,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+          <span style={{flex:1,minWidth:0,overflowWrap:"anywhere"}}>{t}</span>
+          <button onClick={() => delTyped(ccId, i)} style={{fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.dim,borderRadius:99,padding:"3px 10px",cursor:"pointer"}}>Remove</button></div>)}
+        <div style={{display:"flex",gap:6}}>
+          <input value={extra} onChange={e => setExtra(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTyped(ccId, extra); setExtra(""); } }}
+            placeholder={'e.g. 2 boxes 1/2" NM connectors, or a part number'} aria-label="Type a part or note"
+            style={{flex:1,minWidth:0,fontFamily:"inherit",fontSize:14,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",background:C.surface,color:C.text}}/>
+          <button onClick={() => { addTyped(ccId, extra); setExtra(""); }} style={{fontFamily:"inherit",fontSize:13,fontWeight:700,border:`1px solid ${C.border}`,background:C.card,color:C.text,borderRadius:10,padding:"0 12px",cursor:"pointer"}}>Add</button>
+        </div>
+        <span style={{fontSize:11,color:C.faint}}>Anything not in the bid, or the whole order typed. Goes on this cost center's PO.</span>
+      </div>
+    </>, <>{secondary("Add from another cost center", () => setStep("cc"))}{reviewBtn}</>);
+  }
+
+  // ── Review ──
+  return shell("Review order", phaseLabel, () => setStep("cc"), <>
+    {testNote}
+    <div><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Supplier</div>
+      <div style={{display:"flex",gap:6,marginTop:6}}>{chip(true, "CED", () => {})}</div></div>
+    <div><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</div>
+      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>{chip(draft.get === "willcall", "Will call", () => setDraft(d => ({ ...d, get: "willcall" })))}{chip(draft.get === "deliver", "Deliver to job", () => setDraft(d => ({ ...d, get: "deliver" })))}</div></div>
+    <div><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",marginBottom:6}}>{draft.get === "deliver" ? "Deliver on" : "Pick up on"}</div>
+      <DateInp value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}/></div>
+    {groups.length > 1 && box(<><b>{groups.length} cost centers = {groups.length} POs.</b> Each PO is charged to its own cost center. CED gets them together in one email.</>)}
+    {groups.map((g, i) => (
+      <div key={g.ccId} style={{border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",background:C.card,display:"flex",flexDirection:"column",gap:4}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontSize:11,fontWeight:700,color:C.accent,background:"rgba(59,91,165,0.10)",borderRadius:99,padding:"2px 8px"}}>{madePo(g.ccId) ? `PO ${madePo(g.ccId)} made` : `PO ${i + 1} of ${groups.length}`}</span>
+          <b style={{fontSize:13}}>{String(g.cc.ccName || "").trim()}</b>
+          <button onClick={() => { setCcId(g.ccId); setStep("items"); }} style={{marginLeft:"auto",fontFamily:"inherit",fontSize:12,border:`1px solid ${C.border}`,background:C.surface,color:C.text,borderRadius:99,padding:"3px 10px",cursor:"pointer"}}>Edit</button>
+          <span style={{flexBasis:"100%",fontSize:12,color:C.dim}}>{g.cc.sectionName}</span>
+        </div>
+        {g.items.map(it => <div key={it.catalogId} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"5px 0",borderTop:`1px solid ${C.border}`,fontSize:13}}>
+          <span>{it.name}<br /><span style={{fontSize:11,color:C.faint}}>{it.part}</span></span><b style={{fontVariantNumeric:"tabular-nums"}}>{Number(it.qty).toLocaleString()}</b></div>)}
+        {g.typed.map((t, k) => <div key={"t" + k} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"5px 0",borderTop:`1px solid ${C.border}`,fontSize:13}}>
+          <span>{t}</span><span style={{fontSize:11,color:C.faint}}>typed</span></div>)}
+      </div>))}
+    {!groups.length && box("Nothing in the order yet.")}
+    {groups.length > 10 && box(<span style={{color:"#B23A3A"}}>One order can have up to 10 cost centers. Send this one with 10, then start a new order for the rest.</span>)}
+    {secondary("Add from another cost center", () => setStep("cc"))}
+    {box(<>One email to <b>CED's Homestead inbox</b> with {groups.length === 1 ? "the PO form" : `all ${groups.length} PO forms`}. bids@ and you are copied, so CED's reply reaches both.</>)}
+    {error && box(<span style={{color:"#B23A3A"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
+  </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10));
+}
 
 // ── Material Tally ────────────────────────────────────────────
 // Field-use count list: add items by name, tap +/− to count, copy all as "Nx Item"
@@ -13965,7 +14554,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
           <button onClick={()=>updCount(item.id,1)}
             style={{...btnBase,border:`1px solid ${C.accent}`,background:`${C.accent}18`,color:C.accent}}>+</button>
           <button onClick={()=>del(item.id)}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
               fontSize:16,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
         </div>
       ))}
@@ -14000,7 +14589,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
           <button onClick={async ()=>{ if(!await showConfirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
             style={{padding:"10px 14px",borderRadius:8,
               border:`1px solid ${C.border}`,background:C.surface,
-              color:C.muted,fontSize:12,fontWeight:700,
+              color:C.faint,fontSize:12,fontWeight:700,
               cursor:"pointer",fontFamily:"inherit"}}>
             Clear
           </button>
@@ -14438,7 +15027,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null,homeRuns
                 </div>
                 <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
                 {!showPicker&&<button onClick={async ()=>{ if(!await showConfirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
+                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
               </div>
             ))}
           </div>
@@ -14631,6 +15220,64 @@ function bidWireRollup(costCenters) {
   return [...agg.values()].sort((x, y) => (y.required - x.required) || String(x.name).localeCompare(String(y.name)));
 }
 // ── end Bid stock derivations ────────────────────────────────────────────────
+
+// ── Orders (v523) ─────────────────────────────────────────────
+// Whole-job view of every PO card from Rough + Finish Material Tracking, on the
+// Bid Items tab next to what the bid calls for. Read-only; "Order material"
+// adds a card to the phase's Material Tracking so every order lives in one place.
+function JobOrdersSummary({job, onOrder, phases = ["rough","finish"]}) {
+  const [picking, setPicking] = useState(false);
+  const tag = (list, ph) => (Array.isArray(list) ? list : []).filter(Boolean).map(o => ({...o, _ph: ph}));
+  const rows = [...tag(job.roughMaterials, "Rough-In"), ...tag(job.finishMaterials, "Finish"), ...tag(job.commMaterials, "Materials")]
+    .filter(o => o.po || o.source || poPlainLines(o.items).length);
+  const state = (o) => o.pickedUp ? ["Picked Up","done",2] : o.deliveredToShop ? ["Delivered to Shop","done",2]
+    : o.ordered ? ["Order Sent","inprogress",1] : o.needsOrder ? [o.source==="Shop"?"Needs to be Picked Up":"Need to Order","needs",0] : ["Saved","neutral",1];
+  rows.sort((a,b) => (state(a)[2]-state(b)[2]) || ((Number(b.po)||0)-(Number(a.po)||0)));
+  const open = rows.filter(o => !o.pickedUp && !o.deliveredToShop).length;
+  return (
+    <Section label={`Orders · ${rows.length}${open ? ` · ${open} open` : ""}`} color={C.accent}>
+      <div style={{fontSize:12,color:C.dim,marginBottom:10}}>Every PO card from Material Tracking on this job.</div>
+      {picking ? (
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+          {phases.map(ph => (
+            <button key={ph} onClick={()=>{ setPicking(false); onOrder(ph); }}
+              style={{flex:1,minWidth:120,background:C.accent,color:"#fff",border:"none",borderRadius:9,padding:"10px 12px",
+                fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{`For ${matPhaseLabel(ph)}`}</button>
+          ))}
+          <button onClick={()=>setPicking(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:9,
+            padding:"10px 12px",fontSize:13,color:C.dim,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+        </div>
+      ) : (
+        <button onClick={()=>setPicking(true)} style={{width:"100%",background:C.accent,color:"#fff",border:"none",borderRadius:9,
+          padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:12}}>Order material</button>
+      )}
+      {!rows.length && <div style={{fontSize:12,color:C.faint,fontStyle:"italic"}}>No PO cards on this job yet.</div>}
+      {rows.map(o => {
+        const [label, variant] = state(o);
+        const lines = poPlainLines(o.items);
+        const who = o.poSentBy || o.orderedBy || o.pickedUpBy || "";
+        const when = o.poSentAt || o.orderedAt || o.date || "";
+        return (
+          <div key={`${o._ph}-${o.id}`} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:"2px 10px",
+            padding:"9px 0",borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.text}}>
+              {o.po ? `PO ${o.po}` : "No PO # yet"}{o.source ? ` · ${o.source}` : ""}
+            </span>
+            <StatusPill variant={variant}>{label}</StatusPill>
+            <span style={{gridColumn:"1/-1",fontSize:11,color:C.dim}}>
+              {o._ph}{who ? ` · ${who}` : ""}{when ? ` · ${when}` : ""}{o.poSentVia==="app" ? (o.poSentMode==="test" ? " · test send from the app" : " · sent from the app") : ""}
+            </span>
+            {lines.length > 0 && (
+              <span style={{gridColumn:"1/-1",fontSize:11,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0]}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </Section>
+  );
+}
 
 // ── Bid Items (Simpro Cost Centers) ───────────────────────────
 // "Is this in the bid?" panel. Reads the job's Simpro cost centers plus
@@ -15779,7 +16426,7 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
           </label>
         </div>
         {flatItems.length===0 && (
-          <div style={{textAlign:"center",padding:"30px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>
+          <div style={{textAlign:"center",padding:"30px 0",color:C.faint,fontSize:12,fontStyle:"italic"}}>
             No punch items exist on this job yet. Add items on the Rough or Finish tabs first.
           </div>
         )}
@@ -16139,7 +16786,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
               <button onClick={async ()=>{ if(!await showConfirm("Delete this return trip?")) return; del(t.id); }}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11}}>Remove</button>
 
             </div>
 
@@ -16403,7 +17050,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
                     border:`1px solid ${(!t.signedOffBy||!t.signedOffDate)?C.border:C.green}`,
 
-                    borderRadius:8,color:(!t.signedOffBy||!t.signedOffDate)?C.muted:"#000",
+                    borderRadius:8,color:(!t.signedOffBy||!t.signedOffDate)?C.faint:"#000",
 
                     padding:"7px 14px",fontSize:12,fontWeight:700,cursor:(!t.signedOffBy||!t.signedOffDate)?"not-allowed":"pointer",
 
@@ -16431,7 +17078,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
 
-                    color:C.muted,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                    color:C.faint,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
 
                   Undo
 
@@ -16535,7 +17182,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
         border:r.status==="Pulled"?`1px solid rgba(62,125,90,0.3)`:r.status==="Need Specs"?`1px solid rgba(239,68,68,0.3)`:`1px solid transparent`}}>
       {/* Row 1: drag handle, number, panel, wire, delete */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
-        <span style={{fontSize:10,color:C.muted,textAlign:"right"}}>{r.num}.</span>
+        <span style={{fontSize:10,color:C.faint,textAlign:"right"}}>{r.num}.</span>
         <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
           style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",outline:"none",width:"100%"}}>
@@ -16553,7 +17200,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
           </option>)}
         </select>
         <button onClick={()=>del(r.id)}
-          style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
+          style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
       </div>
       {/* Row 2: load name + status */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
@@ -16590,7 +17237,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
           </>
         ) : (
           <button type="button" onClick={()=>setNoteOpen(true)} title="Add a note — location, or anything useful"
-            style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:10,color:C.muted,display:"inline-flex",alignItems:"center",gap:4}}>
+            style={{background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:"inherit",fontSize:10,color:C.faint,display:"inline-flex",alignItems:"center",gap:4}}>
             <Icon name="note" size={11} stroke={2}/>+ note
           </button>
         )}
@@ -16670,7 +17317,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
               {pulled.map((r,i)=>renderRow(r,i))}
             </>
           )}
-          {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
+          {rows.length===0&&<div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No rows yet</div>}
         </>);
       })()}
       <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
@@ -16733,7 +17380,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
   };
   const delIn = (fk) => (id) => onHRChange({...homeRuns, [fk]: sortHRRows((homeRuns[fk]||[]).filter(r=>r.id!==id))});
 
-  if(!flat.length) return <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:12}}>No loads yet — switch to the floor view to add rows.</div>;
+  if(!flat.length) return <div style={{fontSize:11,color:C.faint,fontStyle:"italic",marginBottom:12}}>No loads yet — switch to the floor view to add rows.</div>;
 
   return (
     <div style={{marginBottom:12}}>
@@ -16753,7 +17400,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
               style={{display:"flex",width:"100%",alignItems:"baseline",gap:8,marginBottom:gOpen?8:0,
                 background:"none",border:"none",borderRadius:0,padding:"0 0 4px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
                 borderBottom:`1px solid ${p?C.accent+"44":C.border}`}}>
-              <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.muted}}>
+              <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.faint}}>
                 {p||"No Panel Assigned"}{gOpen?" ▴":" ▾"}
               </span>
               <span style={{fontSize:10,color:pulled===rows.length?C.green:C.dim}}>
@@ -16870,7 +17517,7 @@ function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
             color:C.text,fontSize:12,fontFamily:"'SF Mono', Menlo, monospace",
             resize:"vertical",outline:"none",lineHeight:1.5}}/>
         <div style={{marginTop:12,marginBottom:12,fontSize:11,color:C.dim}}>
-          <strong style={{color:parsed.length>0?C.green:C.muted}}>{parsed.length} rows detected</strong>
+          <strong style={{color:parsed.length>0?C.green:C.faint}}>{parsed.length} rows detected</strong>
         </div>
         {parsed.length > 0 && (
           <div style={{maxHeight:180,overflowY:"auto",border:`1px solid ${C.border}`,
@@ -16878,9 +17525,9 @@ function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
             {parsed.map((p,i)=>(
               <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"3px 6px",
                 borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
-                <span style={{minWidth:42,color:C.muted,fontFamily:"monospace"}}>{p.wire}</span>
+                <span style={{minWidth:42,color:C.faint,fontFamily:"monospace"}}>{p.wire}</span>
                 <span style={{flex:1,color:C.text}}>{p.name}</span>
-                <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.muted,
+                <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.faint,
                   background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                   padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>
               </div>
@@ -17029,7 +17676,7 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, ampOvr, 
         {!loading && err && <div style={{fontSize:12,color:"#B23A3A",padding:"10px 12px",border:"1px solid #B23A3A55",borderRadius:8,marginBottom:12,lineHeight:1.5}}>{err}</div>}
         {!loading && !err && (<>
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
-            <strong style={{color:items.length>0?C.green:C.muted}}>{items.length} to add</strong>
+            <strong style={{color:items.length>0?C.green:C.faint}}>{items.length} to add</strong>
             {items.length>0 && ` (${items.filter(p=>p.level==="green").length} ready · ${items.filter(p=>p.level==="yellow").length} to confirm · ${items.filter(p=>p.level==="red").length} need specs)`}
             {` · ${inCC} already in Home Runs`}{skippedDup>0?` · ${skippedDup} skipped (same name already here)`:""}
             {totalForJob===0 && " · no rows for this job number in the sheet yet"}
@@ -17038,10 +17685,10 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, ampOvr, 
             <div style={{maxHeight:260,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:7,padding:6,marginBottom:14,background:C.surface}}>
               {items.map((p,i)=>(
                 <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"4px 6px",borderBottom:i<items.length-1?`0.5px solid ${C.border}`:"none"}}>
-                  <span style={{minWidth:54,color:C.muted,fontSize:10}}>{FL[p.fk]}</span>
+                  <span style={{minWidth:54,color:C.faint,fontSize:10}}>{FL[p.fk]}</span>
                   <span style={{minWidth:64,fontSize:9,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:"#B7791F"}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
                   <span style={{minWidth:36,fontSize:10,color:C.dim,fontFamily:"monospace"}}>{p.wire||"—"}</span>
-                  <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:10,color:C.muted}}>{p.note}</span></span>
+                  <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:10,color:C.faint}}>{p.note}</span></span>
                 </div>
               ))}
             </div>
@@ -17089,7 +17736,7 @@ function HRAddFloor({homeRuns, onHRChange}) {
           fontSize:12,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
       <Btn onClick={add} variant="add" style={{fontSize:11,padding:"5px 12px"}}>Add</Btn>
       <button onClick={()=>setAdding(false)}
-        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
     </div>
   );
 }
@@ -17418,7 +18065,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
         {loads.length>0&&(
           <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
-              color:C.muted,fontSize:11,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+              color:C.faint,fontSize:11,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
             Clear All
           </button>
         )}
@@ -17429,7 +18076,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
         padding:'11px 14px',borderRadius:11,background:`${C.accent}0f`,border:`1px solid ${C.accent}`}}>
         <span style={{fontSize:22,fontWeight:800,color:C.text,fontVariantNumeric:'tabular-nums'}}>{usage.circuits}</span>
         <span style={{fontSize:12,color:C.dim,margin:'0 8px 0 4px'}}>circuits on generator</span>
-        <span style={{color:C.muted,margin:'0 8px'}}>·</span>
+        <span style={{color:C.faint,margin:'0 8px'}}>·</span>
         <span style={{fontSize:22,fontWeight:800,color:C.text,fontVariantNumeric:'tabular-nums'}}>{usage.slotsUsed}</span>
         <span style={{fontSize:12,color:C.dim,margin:'0 4px'}}>panel slots (2-pole = 2)</span>
         {usage.provisional>0 && (
@@ -17440,7 +18087,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
       </div>
 
       {loads.length===0&&(
-        <div style={{textAlign:'center',padding:'24px',color:C.muted,fontSize:12,fontStyle:'italic',
+        <div style={{textAlign:'center',padding:'24px',color:C.faint,fontSize:12,fontStyle:'italic',
           border:`1px dashed ${C.border}`,borderRadius:10,marginBottom:12}}>
           No loads yet — add them in Home Runs (they sync here), or add one manually
         </div>
@@ -17461,7 +18108,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
             borderLeft:`3px solid ${load.recommended?C.accent:load.included?C.blue:C.muted}`,
             opacity:load.included?1:0.45,transition:'border-color 0.1s,background 0.1s',
           }}>
-          <span style={{fontSize:13,color:C.muted,cursor:'grab',userSelect:'none',flexShrink:0}}>⠿</span>
+          <span style={{fontSize:13,color:C.faint,cursor:'grab',userSelect:'none',flexShrink:0}}>⠿</span>
           <span style={{fontSize:10,fontWeight:700,color:C.dim,minWidth:14,textAlign:'center',flexShrink:0}}>{i+1}</span>
           <input type="checkbox" checked={!!load.included} onChange={()=>toggle(load.id,'included')}
             style={{accentColor:C.blue,width:13,height:13,flexShrink:0,cursor:'pointer'}}/>
@@ -17498,12 +18145,12 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
             style={{
               background:load.recommended?`${C.accent}22`:'none',
               border:`1px solid ${load.recommended?C.accent:C.border}`,
-              borderRadius:6,color:load.recommended?C.accent:C.muted,
+              borderRadius:6,color:load.recommended?C.accent:C.faint,
               fontSize:13,padding:'2px 7px',cursor:'pointer',flexShrink:0,
               fontWeight:load.recommended?800:400,transition:'all 0.15s',
             }}>★</button>
           <button onClick={()=>del(load.id)}
-            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',
+            style={{background:'none',border:'none',color:C.faint,cursor:'pointer',
               fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
         </div>
       ))}
@@ -17713,7 +18360,7 @@ function GenPanelGrid({ circuits, slotCount }) {
     const base = { border:`1px solid ${C.border}`, height:24, padding:'0 6px', fontSize:11,
       whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', position:'relative',
       borderTop: isBottom ? `1px dashed ${C.border}` : `1px solid ${C.border}` };
-    if (!c || !c.name) return <td style={{...base, color:C.muted}}/>;
+    if (!c || !c.name) return <td style={{...base, color:C.faint}}/>;
     const isSplit = !!c.splitTandem;
     const isQuad = !!c.quadOuter || (c.notes||'').includes('quad inner');
     const num = parseInt(key, 10);
@@ -17941,7 +18588,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       {/* Header comes from the collapsible <Section> wrapper at the mount
           (2026-07-20, Koy: every Home Runs tab section starts collapsed). */}
       {list.length === 0 && (
-        <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>
+        <div style={{fontSize:11,color:C.faint,fontStyle:"italic",marginBottom:8}}>
           No panel schedules yet — add one to print breaker assignments.
         </div>
       )}
@@ -17989,7 +18636,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                   style={{width:60,fontSize:11,padding:"3px 7px",borderRadius:5,
                     background:C.surface,border:`1px solid ${C.border}`,color:C.text,outline:"none",fontFamily:"inherit"}}/>
               )}
-              <span style={{fontSize:10,color:C.muted,fontWeight:600,marginLeft:"auto"}}>
+              <span style={{fontSize:10,color:C.faint,fontWeight:600,marginLeft:"auto"}}>
                 {filledCount} filled
               </span>
               {/* Fill from home runs — looks at the home-run rows assigned to
@@ -18065,7 +18712,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                 DOWNLOAD
               </button>
               <button onClick={()=>delPanel(p.id)}
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>×</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,flexShrink:0}}>×</button>
             </div>
             {isOpen && (
               <div style={{padding:"8px 12px",overflowX:"auto"}}>
@@ -18181,7 +18828,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                     })}
                   </tbody>
                 </table>
-                <div style={{fontSize:10,color:C.muted,marginTop:6,fontStyle:"italic"}}>
+                <div style={{fontSize:10,color:C.faint,marginTop:6,fontStyle:"italic"}}>
                   Each slot has two rows for tandem breakers. Top row = primary, bottom row = tandem.
                 </div>
               </div>
@@ -19023,7 +19670,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   {l}
                 </button>
               ))}
-              {hrViewEff==='panel'&&<span style={{fontSize:10,color:C.muted}}>panel → floor → A-Z · add rows in By Floor</span>}
+              {hrViewEff==='panel'&&<span style={{fontSize:10,color:C.faint}}>panel → floor → A-Z · add rows in By Floor</span>}
               <button type="button" onClick={()=>setApplImportOpen(true)}
                 style={{marginLeft:"auto",fontSize:11,fontWeight:700,padding:"4px 12px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
                   border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>
@@ -19081,7 +19728,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
                 <button onClick={()=>{ const ne=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key); const u={...homeRuns,extraFloors:ne}; delete u[ef.key]; onHRChange(u); }}
                   style={{position:'absolute',top:0,right:0,background:'none',border:'none',
-                    color:C.muted,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
+                    color:C.faint,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
                   Remove
                 </button>
               </div>
@@ -19189,7 +19836,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
             <Icon name="link" size={11}/> Copy link
           </button>
-          <button onClick={()=>openUrl(hoLink)}
+          <button onClick={()=>openUrl(hoLink+"&preview=1")}
             style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
               fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
             Preview
@@ -19202,6 +19849,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
               Check for response
             </button>
           )}
+          <div style={{flexBasis:'100%',marginTop:-4}}><LinkOpens jobId={jobId} linkKey="homeowner:base"/></div>
         </div>
       </Section>
       )}
@@ -19258,7 +19906,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
             ))}
             {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
               <>
-                <div style={{fontSize:10,fontWeight:600,color:'#CDD3DB',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
+                <div style={{fontSize:10,fontWeight:600,color:'#666E79',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
                   NOT ON GENERATOR · {(hoResponse.items||[]).filter(i=>!i.included).length}
                 </div>
                 {(hoResponse.items||[]).filter(i=>!i.included).map((it,idx)=>(
@@ -19285,6 +19933,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
         </button>
         <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
         <HelpDot section="liveviewlink"/>
+        <div style={{flexBasis:'100%',marginTop:-4}}><LinkOpens jobId={jobId} linkKey="homeruns:base"/></div>
       </div>
       )}
 
@@ -19348,7 +19997,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                 style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
                   padding:'7px 12px',fontSize:11,color:C.dim,cursor:'pointer'}}>Reset</button>
             </div>
-            <div style={{fontSize:11,color:C.muted,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
+            <div style={{fontSize:11,color:C.faint,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
           </Section>
         );
       })()}
@@ -19480,14 +20129,14 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
           </div>
         ) : (
           <div style={{marginTop:12,marginBottom:12,fontSize:11,color:C.dim}}>
-            <strong style={{color:fresh.length>0?C.green:C.muted}}>{fresh.length} rows detected</strong>
+            <strong style={{color:fresh.length>0?C.green:C.faint}}>{fresh.length} rows detected</strong>
             {dupes > 0 && (
               <span style={{marginLeft:8,color:"#B0892C",fontWeight:700}}>
                 · {dupes} already on this list — skipped
               </span>
             )}
             {!isKeypad && anyMod && (
-              <span style={{marginLeft:8,color:C.muted}}>
+              <span style={{marginLeft:8,color:C.faint}}>
                 · module #s shown below aren&apos;t stored on a load — use “Assign to module” after adding
               </span>
             )}
@@ -19501,11 +20150,11 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
               <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:11,padding:"3px 6px",
                 opacity:p.dupe?0.45:1,
                 borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
-                <span style={{minWidth:26,color:C.muted,fontFamily:"monospace"}}>{p.num||"·"}</span>
+                <span style={{minWidth:26,color:C.faint,fontFamily:"monospace"}}>{p.num||"·"}</span>
                 <span style={{flex:1,color:C.text,textDecoration:p.dupe?"line-through":"none"}}>{p.name}</span>
                 {p.dupe
                   ? <span style={{fontSize:9,color:"#B0892C",fontWeight:700,padding:"1px 6px"}}>already added</span>
-                  : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.muted,
+                  : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#B23A3A":C.faint,
                       background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                       padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>}
               </div>
@@ -19642,7 +20291,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
       </span>) : null;
     const parked = !!(parkedIds && parkedIds.has(l.id));
     const has = !!assignedLabels;
-    const col = parked ? C.orange : has ? color : C.muted;
+    const col = parked ? C.orange : has ? color : C.faint;
     return (
       <button onClick={()=>onAssignLoad(l.id)} title={has ? `${assignedLabels[0]} — tap to move, park or clear` : "Tap to put this load on a panel or zone"}
         style={{fontSize:9,fontWeight:800,color:col,background:has?`${col}15`:"transparent",border:`1px ${has?"solid":"dashed"} ${col}${has?"33":"88"}`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"pointer",fontFamily:"inherit",flexShrink:0,...extra}}>
@@ -19737,7 +20386,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
             </button>
           )}
           <button onClick={exitSelect}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
+            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
             Clear
           </button>
         </div>
@@ -19838,7 +20487,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                             <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,loadPulledPatch(e.target.checked))}
                               title={l.pulled ? `Ran${(l.pulledBy||l.pulledAt)?" — "+[l.pulledBy,l.pulledAt].filter(Boolean).join(" · "):""}` : "Mark as ran"}
                               style={{width:18,height:18,accentColor:C.green,cursor:"pointer",flexShrink:0}}/>
-                            <span style={{fontSize:11,color:C.muted,flexShrink:0}}>{li+1}.</span>
+                            <span style={{fontSize:11,color:C.faint,flexShrink:0}}>{li+1}.</span>
                             <input
                               ref={li===flatSorted.length-1?lastRef:null}
                               value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
@@ -19846,7 +20495,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               style={{background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,borderRadius:0,
                                 color:C.text,padding:"4px 2px",fontSize:14,fontFamily:"inherit",outline:"none",
                                 flex:1,minWidth:0,fontWeight:600}}/>
-                            <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                            <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                           </div>
                           {/* Row 2: location + panel + type + watts + assigned badge.
                               Floor/area is where the load physically lives.
@@ -19894,7 +20543,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,loadPulledPatch(e.target.checked))}
                             title={l.pulled ? `Ran${(l.pulledBy||l.pulledAt)?" — "+[l.pulledBy,l.pulledAt].filter(Boolean).join(" · "):""}` : "Mark as ran"}
                             style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
-                          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
+                          <span style={{fontSize:11,color:C.faint,textAlign:"right",paddingRight:2}}>{li+1}.</span>
                           <div style={{display:"flex",alignItems:"center",gap:4}}>
                             <input
                               ref={li===flatSorted.length-1?lastRef:null}
@@ -19927,7 +20576,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           ); })()}
                           <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
                           <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
-                          <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                          <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
                         </div>
                       );
                     })}
@@ -20348,7 +20997,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
               </span>
             </div>
             <button onClick={()=>deleteRoom(room)} title="Delete room"
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+              style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
               <Icon name="trash" size={12} stroke={2}/>
             </button>
           </div>
@@ -20417,11 +21066,11 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                   )}
                 </div>
                 <button onClick={()=>startEditItem(room.id,item)} title="Edit item"
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
                   <Icon name="pencil" size={12} stroke={2}/>
                 </button>
                 <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
                   <Icon name="x" size={12} stroke={2}/>
                 </button>
               </div>
@@ -20761,7 +21410,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                       style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>
                     <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",
                       textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{job.name||"(unnamed job)"}</span>
-                    <span style={{fontSize:10,color:rooms.length?C.dim:C.muted}}>
+                    <span style={{fontSize:10,color:rooms.length?C.dim:C.faint}}>
                       {rooms.length ? `${rooms.length} room${rooms.length===1?"":"s"} · ${itemCount} item${itemCount===1?"":"s"}` : "No changes logged yet"}
                     </span>
                     {unprocessed>0 && (
@@ -20789,7 +21438,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                     {onUpdateJob && can(identity,"lutron.manage") && (
                       <button onClick={(e)=>{e.stopPropagation(); setExcluded(job, true);}}
                         title="Not this LV company's job — hide it from their tracking link"
-                        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
                           padding:2,display:"flex"}}>
                         <Icon name="x" size={13} stroke={2}/>
                       </button>
@@ -21001,7 +21650,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
                 background: statusBg,
                 borderTop: i>0 ? `1px solid ${C.border}` : "none",
               }}>
-                <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0,width:22}}>{r.num}.</span>
+                <span style={{fontSize:11,color:C.faint,fontWeight:700,flexShrink:0,width:22}}>{r.num}.</span>
                 <span style={{fontSize:12,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                   {r.name}
                 </span>
@@ -21032,7 +21681,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
               borderRadius:6,padding:"3px 0",
               background:r.status==="Pulled"?"rgba(62,125,90,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.08)":"transparent"}}>
 
-              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
+              <span style={{fontSize:11,color:C.faint,textAlign:"right",paddingRight:6}}>{r.num}.</span>
 
               <input ref={ri===loads.length-1?lastRef:null}
                 list={allLoads.length>0?dlId:undefined}
@@ -21046,7 +21695,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
 
               <button onClick={()=>delRow(r.id)}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
 
             </div>
 
@@ -21606,7 +22255,7 @@ function SavantPanelSchedule({
           style={{
             minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
             justifyContent:"center", fontSize:11,
-            color: isMoveTarget ? "#3B5BA5" : (armed ? C.green : (isAddingHere ? C.accent : C.muted)),
+            color: isMoveTarget ? "#3B5BA5" : (armed ? C.green : (isAddingHere ? C.accent : C.faint)),
             fontStyle:"italic", cursor:"pointer",
             background: isMoveTarget ? "#E0E8F3" : (armed
               ? "#DEEFE6"
@@ -21703,7 +22352,7 @@ function SavantPanelSchedule({
               title="Delete"
               style={{
                 position:"absolute", right:2, top:"50%", transform:"translateY(-50%)",
-                background:"none", border:"none", color:C.muted, cursor:"pointer",
+                background:"none", border:"none", color:C.faint, cursor:"pointer",
                 fontSize:14, lineHeight:1, padding:"0 4px",
               }}>×</button>
           )}
@@ -21884,7 +22533,7 @@ function SavantPanelSchedule({
             title="Delete tandem"
             style={{
               position:"absolute", right:2, top:2, zIndex:2,
-              background:"none", border:"none", color:C.muted, cursor:"pointer",
+              background:"none", border:"none", color:C.faint, cursor:"pointer",
               fontSize:14, lineHeight:1, padding:"0 4px",
             }}>×</button>
           <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
@@ -21963,7 +22612,7 @@ function SavantPanelSchedule({
       <div>
         <span style={{flex:1, color:C.text, overflow:"hidden", textOverflow:"ellipsis",
           whiteSpace:"nowrap", minWidth:0}}>
-          {r.description || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
+          {r.description || <span style={{color:C.faint,fontStyle:"italic"}}>(unnamed)</span>}
         </span>
         {r.amp && <span style={{
           fontSize:9, fontWeight:700, color:C.dim, background:"#F4F6F8",
@@ -21979,7 +22628,7 @@ function SavantPanelSchedule({
             }
           }}
           title="Delete this regular breaker"
-          style={{background:"none",border:"none",color:C.muted,fontSize:14,
+          style={{background:"none",border:"none",color:C.faint,fontSize:14,
             cursor:"pointer",padding:"0 2px",flexShrink:0,lineHeight:1}}>
           ✕
         </button>
@@ -22241,7 +22890,7 @@ function SavantPanelSchedule({
                         style={{
                           padding:"3px 9px",fontSize:11,fontWeight:600,
                           background: isUsed ? "#EEF0F3" : "#fff",
-                          color: isUsed ? C.muted : C.purple,
+                          color: isUsed ? C.faint : C.purple,
                           border:`1px solid ${isUsed ? C.border : C.purple+"55"}`,
                           borderRadius:99,cursor:isUsed?"not-allowed":"pointer",
                           fontFamily:"inherit",
@@ -22286,7 +22935,7 @@ function SavantPanelSchedule({
                 {(load.name||"").trim() && (
                   <button onClick={()=>updSmartLoad(m.id,load.id,{name:"",loadType:"",watts:""})}
                     title="Clear this leg"
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
                       fontSize:14,padding:"0 4px",flexShrink:0}}>✕</button>
                 )}
               </div>
@@ -22498,16 +23147,16 @@ function SavantPanelSchedule({
         {_total > 0 && (
           <span style={{fontSize:11,color:C.dim,fontWeight:600,
             display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-            <span style={{color:C.muted}}>·</span>
+            <span style={{color:C.faint}}>·</span>
             <b style={{color:C.text}}>{_total}</b> load{_total===1?"":"s"}
-            <span style={{color:C.muted}}>(</span>
+            <span style={{color:C.faint}}>(</span>
             {_orderedKeys.map((k,i) => (
               <Fragment key={k}>
-                {i > 0 && <span style={{color:C.muted}}>·</span>}
+                {i > 0 && <span style={{color:C.faint}}>·</span>}
                 <span><b style={{color:C.text}}>{_byType[k]}</b> {k.toLowerCase()}</span>
               </Fragment>
             ))}
-            <span style={{color:C.muted}}>)</span>
+            <span style={{color:C.faint}}>)</span>
           </span>
         )}
         <button onClick={()=>{
@@ -22695,7 +23344,7 @@ function SavantPanelSchedule({
                           if (window.confirm(msg)) delSmart(m.id);
                         }}
                         title="Delete this module"
-                        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
                           fontSize:14,padding:0,lineHeight:1}}>×</button>
                     </div>
                   );
@@ -22933,7 +23582,7 @@ function SavantPanelSchedule({
                           <button onClick={()=>{
                               if (window.confirm(`Delete feeder at slot ${r.slot}?`)) delReg(r.id);
                             }}
-                            style={{background:"none",border:"none",color:C.muted,
+                            style={{background:"none",border:"none",color:C.faint,
                               cursor:"pointer",fontSize:14,padding:"0 4px",lineHeight:1}}>×</button>
                         </div>
                       );
@@ -22989,7 +23638,7 @@ function SavantPanelSchedule({
                             const msg = named>0 ? `Delete this module? ${named} load assignments will be lost.` : "Delete this module?";
                             if (window.confirm(msg)) delSmart(m.id);
                           }}
-                          style={{marginLeft:"auto",background:"none",border:"none",color:C.muted,
+                          style={{marginLeft:"auto",background:"none",border:"none",color:C.faint,
                             fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
                       </div>
                       {/* Input A row */}
@@ -23783,7 +24432,7 @@ function SavantSlotFirstTab({ job, u }) {
       borderBottom:`1px solid ${C.border}`,minHeight:46,cursor:"pointer"};
     const slotN = (
       <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",
-        padding:"0 9px",color:C.muted,fontSize:11,fontVariantNumeric:"tabular-nums",
+        padding:"0 9px",color:C.faint,fontSize:11,fontVariantNumeric:"tabular-nums",
         background:C.surface,borderRight:`1px solid ${C.border}`}}>{slot}</div>
     );
     if (!cell) {
@@ -23792,7 +24441,7 @@ function SavantSlotFirstTab({ job, u }) {
           onClick={()=>setSheet({kind:"add", slot})}>
           {slotN}
           <div style={{padding:"8px 11px",display:"flex",alignItems:"center",gap:8,
-            color:C.muted,fontStyle:"italic",fontSize:13}}>+ Tap to add</div>
+            color:C.faint,fontStyle:"italic",fontSize:13}}>+ Tap to add</div>
         </div>
       );
     }
@@ -23866,7 +24515,7 @@ function SavantSlotFirstTab({ job, u }) {
               border:"1px solid #6A5E9733",textTransform:"uppercase",flexShrink:0}}>
               M{m.modNum||"?"}{ch ? `·${ch}` : ""}
             </span>
-            <span style={{fontSize:13,fontWeight:600,color:out?.name?C.text:C.muted,
+            <span style={{fontSize:13,fontWeight:600,color:out?.name?C.text:C.faint,
               flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
               fontStyle:out?.name?"normal":"italic"}}>
               {isContCh
@@ -24056,7 +24705,7 @@ function SheetField({ label, children, hint }) {
       {label && <div style={{fontSize:10,fontWeight:800,color:C.dim,
         letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:5}}>{label}</div>}
       {children}
-      {hint && <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>{hint}</div>}
+      {hint && <div style={{fontSize:10,color:C.faint,marginTop:4,fontStyle:"italic"}}>{hint}</div>}
     </div>
   );
 }
@@ -24608,11 +25257,11 @@ function LutronPanelBuilder({ job, u }) {
   const btn = (primary, extra = {}) => ({ padding: "6px 10px", borderRadius: 8, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 5,
     background: primary ? accent : "transparent", color: primary ? "#fff" : accent, border: `1px solid ${primary ? accent : accent + "66"}`, ...extra });
   const chip = (on, disabled = false, extra = {}) => ({ fontFamily: "inherit", fontSize: 12, fontWeight: on ? 700 : 600, padding: "7px 11px", minHeight: 40, borderRadius: 999, cursor: disabled ? "default" : "pointer", textAlign: "left",
-    background: on ? accent : C.card, color: on ? "#fff" : disabled ? C.muted : C.text, border: `1px solid ${on ? accent : C.border}`, opacity: disabled ? 0.55 : 1, display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15, ...extra });
+    background: on ? accent : C.card, color: on ? "#fff" : disabled ? C.faint : C.text, border: `1px solid ${on ? accent : C.border}`, opacity: disabled ? 0.55 : 1, display: "inline-flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15, ...extra });
   const small = (on) => ({ fontSize: 10, fontWeight: 500, color: on ? "rgba(255,255,255,0.85)" : C.dim });
   const lbl = { fontSize: 10, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: C.dim, margin: "12px 0 6px" };
   const chips = { display: "flex", gap: 6, flexWrap: "wrap" };
-  const zoneRow = (dashed, over) => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", fontFamily: "inherit", background: C.card, border: `1px ${dashed ? "dashed" : "solid"} ${over ? C.red : dashed ? "#CDD3DB" : C.border}`, borderRadius: 7, padding: "5px 7px", marginBottom: 4, minHeight: 34, color: dashed ? C.muted : C.text, cursor: "pointer" });
+  const zoneRow = (dashed, over) => ({ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", fontFamily: "inherit", background: C.card, border: `1px ${dashed ? "dashed" : "solid"} ${over ? C.red : dashed ? "#CDD3DB" : C.border}`, borderRadius: 7, padding: "5px 7px", marginBottom: 4, minHeight: 34, color: dashed ? C.faint : C.text, cursor: "pointer" });
 
   const tile = (k, v, s, warn) => (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px", flex: "1 1 130px", minWidth: 120 }}>
@@ -24861,12 +25510,12 @@ function LutronPanelBuilder({ job, u }) {
                 const rows = [];
                 if (t.bus) {
                   on.slice().sort((a, b) => (Number(a.assign.zone) || 0) - (Number(b.assign.zone) || 0)).forEach(l => rows.push(
-                    <button key={l.id} onClick={() => openAssign(l.id)} style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18, color: C.muted }}>{l.assign.zone}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}</span></button>));
+                    <button key={l.id} onClick={() => openAssign(l.id)} style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18, color: C.faint }}>{l.assign.zone}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}</span></button>));
                   if (on.length < t.zones) rows.push(<button key="open" onClick={() => openFill(p.id, m.id, (on.reduce((mx, l) => Math.max(mx, Number(l.assign.zone) || 0), 0) + 1))} style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 18 }}>{on.length + 1}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open address</span><span style={{ fontSize: 10.5 }}>tap to fill</span></button>);
                 } else {
                   for (let z = 1; z <= t.zones; z++) { const l = zoneLoad(p.id, m.id, z); const over = l && lutronOverWatt(l, panels); const cap = lutronZoneCap(m.type, z);
                     rows.push(l
-                      ? <button key={z} onClick={() => openAssign(l.id)} title="Move or clear" style={zoneRow(false, over)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>{z}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: over ? C.red : C.dim, whiteSpace: "nowrap", fontWeight: over ? 700 : 400 }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}{over ? ` · over ${cap}W` : ""}</span></button>
+                      ? <button key={z} onClick={() => openAssign(l.id)} title="Move or clear" style={zoneRow(false, over)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.faint }}>{z}</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: over ? C.red : C.dim, whiteSpace: "nowrap", fontWeight: over ? 700 : 400 }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")}{over ? ` · over ${cap}W` : ""}</span></button>
                       : <button key={z} onClick={() => openFill(p.id, m.id, z)} title="Put a load here" style={zoneRow(true, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16 }}>{z}</span><span style={{ flex: 1, fontSize: 12.5, fontWeight: 500 }}>open zone</span><span style={{ fontSize: 10.5 }}>{cap ? `≤${cap}W` : "tap to fill"}</span></button>); }
                 }
                 return (
@@ -24878,10 +25527,10 @@ function LutronPanelBuilder({ job, u }) {
                         options={["", ...Object.keys(LUTRON_MODULES).filter(k => !LUTRON_MODULES[k].legacy || k === lutronNormalizeType(m.type)), ...(t.custom ? [lutronNormalizeType(m.type)] : [])]}
                         style={{ fontSize: 10, fontWeight: 700, color: accent, padding: "3px 6px", maxWidth: 150 }}/>
                       <span style={{ marginLeft: "auto", fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{on.length}/{t.zones} {t.bus ? "loads" : "zones"}{Array.isArray(t.maxW) ? ` · ≤${t.maxW[0]}/${t.maxW[1]}W` : t.maxA ? ` · ≤${t.maxA}A` : ""}</span>
-                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
+                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
                     </div>
                     {rows}
-                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>{t.label}</div>
+                    <div style={{ fontSize: 10.5, color: C.faint, marginTop: 2 }}>{t.label}</div>
                   </div>
                 );
               })}
@@ -24895,7 +25544,7 @@ function LutronPanelBuilder({ job, u }) {
               <div style={{ marginTop: 8, border: `1px dashed ${C.orange}`, borderRadius: 10, padding: "8px 9px" }}>
                 <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.orange, marginBottom: 4 }}>On this panel, no module yet · {parked.length}</div>
                 {parked.slice().sort((a, b) => String(a.room || "").localeCompare(String(b.room || "")) || String(a.name || "").localeCompare(String(b.name || ""))).map(l => (
-                  <button key={l.id} onClick={() => openAssign(l.id)} title="Pick a module and zone" style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.muted }}>·</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")} · pick a module</span></button>
+                  <button key={l.id} onClick={() => openAssign(l.id)} title="Pick a module and zone" style={zoneRow(false, false)}><span style={{ fontSize: 10, fontWeight: 800, width: 16, color: C.faint }}>·</span><span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span><span style={{ fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>{[l.room, l.watts ? `${l.watts}W` : ""].filter(Boolean).join(" · ")} · pick a module</span></button>
                 ))}
               </div>
             )}
@@ -25162,7 +25811,7 @@ function PanelModulesSection({
                   {isConfirmed ? '✓ EDIT' : 'CONFIRM'}
                 </button>
               )}
-              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
+              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
             </div>
 
             {/* ── Load rows ── */}
@@ -25181,13 +25830,13 @@ function PanelModulesSection({
                       background: load.pulled ? "rgba(62,125,90,0.08)" : "transparent",
                       borderTop: i>0 ? `1px solid ${C.border}` : "none",
                     }}>
-                      <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0,width:22}}>{load.num}.</span>
+                      <span style={{fontSize:11,color:C.faint,fontWeight:700,flexShrink:0,width:22}}>{load.num}.</span>
                       <span style={{fontSize:12,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                         {load.name}
                       </span>
-                      {load.ch && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>Ch {load.ch}</span>}
-                      {load.loadType && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.loadType}</span>}
-                      {load.watts && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.watts}W</span>}
+                      {load.ch && <span style={{fontSize:10,color:C.faint,flexShrink:0}}>Ch {load.ch}</span>}
+                      {load.loadType && <span style={{fontSize:10,color:C.faint,flexShrink:0}}>{load.loadType}</span>}
+                      {load.watts && <span style={{fontSize:10,color:C.faint,flexShrink:0}}>{load.watts}W</span>}
                       {showKeypad && load.keypad && <span style={{fontSize:10,color:`${accentColor}`,fontWeight:600,flexShrink:0}}>KP {load.keypad}</span>}
                       {load.pulled && <span style={{fontSize:10,fontWeight:700,color:C.green,letterSpacing:"0.04em",flexShrink:0}}>✓ PULLED</span>}
                     </div>
@@ -25207,7 +25856,7 @@ function PanelModulesSection({
                         const who=getIdentity();
                         updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
                       }} style={{width:18,height:18,accentColor:accentColor,cursor:"pointer",margin:0,flexShrink:0}}/>
-                      <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0}}>#{load.num}</span>
+                      <span style={{fontSize:11,color:C.faint,fontWeight:700,flexShrink:0}}>#{load.num}</span>
                       <input
                         ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
                         list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
@@ -25215,7 +25864,7 @@ function PanelModulesSection({
                         onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
                         style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                           padding:"7px 10px",fontSize:13,fontFamily:"inherit",outline:"none",minWidth:0,boxSizing:"border-box"}}/>
-                      <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                      <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                     </div>
                     {/* Row 2: Ch, Load Type, Watts */}
                     <div style={{display:"grid",gridTemplateColumns:"60px 1fr 60px",gap:6,marginBottom:showKeypad||showMove?6:0}}>
@@ -25273,7 +25922,7 @@ function PanelModulesSection({
                           const who=getIdentity();
                           updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
                         }} style={{width:15,height:15,accentColor:accentColor,cursor:"pointer",margin:0}}/>
-                        <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
+                        <span style={{fontSize:11,color:C.faint,textAlign:"center",fontWeight:700}}>{load.num}</span>
                         <input
                           ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
                           list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
@@ -25289,11 +25938,11 @@ function PanelModulesSection({
                           <select value={moveValueFor(mod)} onChange={e=>handleRowMove(mod.id,load.id,e.target.value)}
                             title="Move to module (across any panel section)"
                             style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
-                              background:"#fff",color:C.muted,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
+                              background:"#fff",color:C.faint,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
                             {renderMoveOptions(mod)}
                           </select>
                         )}
-                        <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                        <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
                       </div>
                       {load.pulled&&load.pulledBy&&(
                         <div style={{paddingLeft:4,marginTop:1}}>
@@ -25444,7 +26093,7 @@ function TapeLightSection({lights,onChange}) {
 
             <button onClick={()=>del(l.id)}
 
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+              style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11}}>Remove</button>
 
           </div>
 
@@ -26256,7 +26905,7 @@ function DriveFilesSection({ job, onUpdate }) {
 
       {/* Empty state */}
       {folderId && !loading && !error && driveFiles.length === 0 && (
-        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+        <div style={{ fontSize: 11, color: C.faint, fontStyle: "italic", padding: "16px",
           textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
           No files found in this Drive folder
         </div>
@@ -26276,7 +26925,7 @@ function DriveFilesSection({ job, onUpdate }) {
             {folderNames.length > 1 && (
               <div onClick={() => toggleFolder(folder)}
                 style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10,
-                  color: isArchive ? C.muted : C.accent,
+                  color: isArchive ? C.faint : C.accent,
                   fontWeight: 700, letterSpacing: "0.06em",
                   marginBottom: isCollapsed ? 0 : 8,
                   paddingBottom: isCollapsed ? 0 : 4,
@@ -26286,11 +26935,11 @@ function DriveFilesSection({ job, onUpdate }) {
                 <span style={{ fontSize: 11, lineHeight: 1, flexShrink: 0 }}>{isCollapsed ? "▸" : "▾"}</span>
                 <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={13}/> {folder === "Root" ? "Top Level" : folder}</span>
                 {isArchive && (
-                  <span style={{ fontStyle: "italic", fontWeight: 400, color: C.muted, letterSpacing: 0 }}>
+                  <span style={{ fontStyle: "italic", fontWeight: 400, color: C.faint, letterSpacing: 0 }}>
                     — archived plans
                   </span>
                 )}
-                <span style={{ marginLeft: "auto", fontWeight: 400, color: C.muted, fontStyle: "normal", letterSpacing: 0 }}>
+                <span style={{ marginLeft: "auto", fontWeight: 400, color: C.faint, fontStyle: "normal", letterSpacing: 0 }}>
                   {fileCount} file{fileCount === 1 ? "" : "s"}
                 </span>
               </div>
@@ -26328,7 +26977,7 @@ function DriveFilesSection({ job, onUpdate }) {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                        <div style={{ fontSize: 10, color: C.muted }}>
+                        <div style={{ fontSize: 10, color: C.faint }}>
                           {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
                         </div>
                       </div>
@@ -26505,7 +27154,7 @@ function FileUploadSection({ jobId, files, onChange }) {
       )}
 
       {(!files || files.length === 0) && !uploading && (
-        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+        <div style={{ fontSize: 11, color: C.faint, fontStyle: "italic", padding: "16px",
           textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
           No files uploaded yet — use the buttons above to upload plans, photos, or documents
         </div>
@@ -26546,7 +27195,7 @@ function FileUploadSection({ jobId, files, onChange }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                <div style={{ fontSize: 10, color: C.muted }}>
+                <div style={{ fontSize: 10, color: C.faint }}>
                   {f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""}
                 </div>
               </div>
@@ -26557,7 +27206,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                 Open ↗
               </a>
               <button onClick={() => handleDelete(f)}
-                style={{ background: "none", border: "none", color: C.muted, cursor: "pointer",
+                style={{ background: "none", border: "none", color: C.faint, cursor: "pointer",
                   fontSize: 13, flexShrink: 0 }}>✕</button>
             </div>
           ))}
@@ -26669,7 +27318,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
             {links.length===0&&(
 
-              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet</div>
+              <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No links yet</div>
 
             )}
 
@@ -26721,7 +27370,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                   <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
 
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
 
                 </div>
 
@@ -26824,7 +27473,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                   <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
 
-                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
 
                 </div>
 
@@ -26834,7 +27483,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
             {(!cl.urls||cl.urls.length===0)&&(
 
-              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet — hit "+ Add"</div>
+              <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No links yet — hit "+ Add"</div>
 
             )}
 
@@ -26860,7 +27509,7 @@ const TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Rough"
 
               "Change Orders","Return Trips","Open Items","Completed","QC"];
 // ── Commercial job card (spec §7). Residential-only tabs simply aren't in this list. ──
-const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
+const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","Materials","Job Start","Power","Lighting","Gear","Underground","Gear & Submittals","RFIs","Change Orders","Open Items","Completed"];
 // v467: the on-site commercial phase tabs (Koy: "power, lighting, gear, underground;
 // tabs inside of underground: utility work, building site work, building
 // underground"). Each is a CommPhaseTab stored under commercial.phases[<key>]
@@ -27018,7 +27667,7 @@ const JOB_SECTIONS = [
     hasData:(j)=>!!j.hasTempPed },
   { key:"materials", label:"Material Tracking",
     where:"Rough + Finish · Material Tracking + Count List · PO buttons on notes, punch, panels",
-    hasData:(j)=>(j.roughMaterials||[]).length>0 || (j.finishMaterials||[]).length>0 ||
+    hasData:(j)=>(j.roughMaterials||[]).length>0 || (j.finishMaterials||[]).length>0 || (j.commMaterials||[]).length>0 ||
       (j.roughTally||[]).length>0 || (j.finishTally||[]).length>0 },
 ];
 const JOB_SECTION_BY_KEY = Object.fromEntries(JOB_SECTIONS.map(s => [s.key, s]));
@@ -27088,7 +27737,7 @@ function HiddenSectionBanner({ job, sectionKey, u, identity }) {
       </span>
       {canEdit && (
         <button type="button" onClick={()=>u(jobSectionPatch(job, sectionKey, false))}
-          style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontSize:11,fontWeight:700,
+          style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontSize:11,fontWeight:700,
             padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>Turn back on</button>
       )}
     </div>
@@ -27169,7 +27818,7 @@ function JobSectionsPanel({ job, u, identity }) {
       </div>
       {open && (
         <div>
-          <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+          <div style={{fontSize:11,color:C.faint,marginBottom:10,lineHeight:1.5}}>
             Turn off anything this job doesn&apos;t have. It disappears everywhere — the job card, share links,
             the GC portal, reminders. Nothing is deleted — turn it back on any time (say a generator gets added
             during rough) and everything comes back.
@@ -27195,7 +27844,7 @@ function JobSectionsPanel({ job, u, identity }) {
                     <span style={{display:"block",fontSize:13,fontWeight:600,color:shownOn?C.text:C.dim}}>
                       {s.label}{parentOff ? ` — off with ${parentLabel}` : (on ? "" : " — hidden")}
                     </span>
-                    <span style={{display:"block",fontSize:10,color:C.muted,marginTop:1}}>
+                    <span style={{display:"block",fontSize:10,color:C.faint,marginTop:1}}>
                       {s.where}{s.perm && canEdit && !can(identity, s.perm) ? " · office only" : ""}
                     </span>
                   </span>
@@ -27693,7 +28342,7 @@ function getAllActiveNotes(notes) {
 
 const normalizeJob = (raw) => ({
   changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
-  roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
+  roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[], commMaterials:[],
   homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
   roughQuestions:{upper:[],main:[],basement:[]},
   finishQuestions:{upper:[],main:[],basement:[]},
@@ -27717,6 +28366,7 @@ const normalizeJob = (raw) => ({
   roughMaterials: raw?.roughMaterials || [],
   roughUpdates:   raw?.roughUpdates   || [],
   finishMaterials:raw?.finishMaterials|| [],
+  commMaterials: raw?.commMaterials || [], // v527: commercial Underground tab
   finishUpdates:  raw?.finishUpdates  || [],
   roughPunch:  raw?.roughPunch  || {},
   finishPunch: raw?.finishPunch || {},
@@ -27900,7 +28550,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                       <button type="button" onClick={() => doPullSimpro({ force: true })} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
                         style={{ background: "none", border: "none", padding: "0 4px", margin: 0,
-                          color: simproPulling ? C.muted : C.accent, fontSize: 9, fontWeight: 700,
+                          color: simproPulling ? C.faint : C.accent, fontSize: 9, fontWeight: 700,
                           cursor: simproPulling ? "wait" : "pointer", fontFamily: "inherit",
                           letterSpacing: "0.05em", textTransform: "uppercase",
                           display: "inline-flex", alignItems: "center", gap: 3 }}>
@@ -28004,7 +28654,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                   }} style={{ cursor: "pointer", fontSize: 14, color: "#B23A3A", padding: "4px", lineHeight: 1, flexShrink: 0 }}>✕</span>
                 </div>
               ))}
-              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
+              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 11, color: C.faint, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
             </div>
           </div>
 
@@ -28286,7 +28936,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                       <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
                         style={{background:"none",border:"none",padding:"0 4px",margin:0,
-                          color: simproPulling?C.muted:C.accent, fontSize:9, fontWeight:700,
+                          color: simproPulling?C.faint:C.accent, fontSize:9, fontWeight:700,
                           cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
                           letterSpacing:"0.05em", textTransform:"uppercase",
                           display:"inline-flex", alignItems:"center", gap:3}}>
@@ -28361,7 +29011,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                   }} style={{cursor:"pointer",fontSize:14,color:"#B23A3A",padding:"4px",lineHeight:1,flexShrink:0}}>✕</span>
                 </div>
               ))}
-              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
+              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
             </div>
           </div>
 
@@ -29133,6 +29783,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // cache-on-the-job pattern as the cost centers above (simproStockCache,
   // 12h TTL, additive u() write only), same bare deps.
   const [simproStock, setSimproStock] = useState(null);
+  const [builderPhase, setBuilderPhase] = useState(null); // v524: Bid Items → Order material opens the order screen on this phase
   const [simproStockErr, setSimproStockErr] = useState(null);
   const [simproStockRefreshing, setSimproStockRefreshing] = useState(false);
   const [simproStockTick, setSimproStockTick] = useState(0);
@@ -29835,7 +30486,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
       onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 
-      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
+      <div role="dialog" aria-modal="true" aria-label={`Job ${job.name||""}`} onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
 
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
@@ -29856,7 +30507,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
 
-                {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
+                {job.type==="quote"&&<span style={{fontSize:12,color:"#fff",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
 
                 {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
 
@@ -30021,7 +30672,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <button
                     onClick={()=>{ if(convertJobNo.trim()){ onConvertQuote&&onConvertQuote({...job,simproNo:convertJobNo.trim()}); setConvertPrompt(false); setConvertJobNo(""); } }}
                     disabled={!convertJobNo.trim()}
-                    style={{background:convertJobNo.trim()?C.accent:"#555",color:"#000",border:"none",
+                    style={{background:convertJobNo.trim()?C.accent:"#555",color:"#fff",border:"none",
                       borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,
                       cursor:convertJobNo.trim()?"pointer":"not-allowed",fontFamily:"inherit"}}>
                     Convert
@@ -30031,7 +30682,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               ) : (
                 <button onClick={()=>setConvertPrompt(true)}
-                  style={{background:C.accent,color:"#000",border:"none",borderRadius:8,
+                  style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,
                     padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
                     fontFamily:"inherit",letterSpacing:"0.03em"}}>
                   Convert to Job
@@ -30075,7 +30726,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <Icon name="plus" size={13} stroke={2.5}/> Need
               </button>
             )}
-            <button onClick={refreshJob} title="Refresh"
+            <button onClick={refreshJob} title="Refresh" aria-label="Refresh job" className="he-tap-sq"
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
 
@@ -30087,7 +30738,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             </button>
 
-            <button onClick={onClose}
+            <button onClick={onClose} aria-label="Close job" className="he-tap-sq"
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
 
@@ -30107,9 +30758,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tabsForJob(job, tab).map(t=>(
 
-            <button key={t} data-hetab={t} onClick={()=>setTab(t)}
+            <button key={t} data-hetab={t} onClick={()=>setTab(t)} className="he-tap"
 
-              style={{background:tab===t&&!_ink?C.accent:"none",color:tab===t?"#000":C.dim,
+              style={{background:tab===t&&!_ink?C.accent:"none",color:tab===t?"#fff":C.dim,
 
                 border:"none",borderRadius:"8px 8px 0 0",padding:"6px 13px",fontSize:11,
 
@@ -30502,13 +31153,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               )}
 
               {!isSectionHidden(job,"materials")&&(<>
-              <Section label="Material Tracking" color={C.rough}>
+              <Section label="Material Tracking" color={C.rough} defaultOpen={builderPhase==="rough"}>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}
-                  simproNo={job.simproNo} jobId={job.id} phase="rough"/>
+                  simproNo={job.simproNo} jobId={job.id} phase="rough"
+                  onPatchOrder={(id,p)=>{ /* v523: reconcile against the live job copy, never this render's list */
+                    const cur = Array.isArray(jobRef.current.roughMaterials) ? jobRef.current.roughMaterials : [];
+                    if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
+                    u({roughMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}
+                    bid={simproStock} onRefreshBid={refetchSimproStock}
+                    openBuilder={builderPhase==="rough"} onBuilderClosed={()=>setBuilderPhase(null)}
+                    onUpsertCards={!simproJobNoOf(job) ? null : (cards)=>{ /* v524: add or update order cards on the live job copy (dedupe by order + cost center) */
+                      const cur = Array.isArray(jobRef.current.roughMaterials) ? jobRef.current.roughMaterials : [];
+                      const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                      const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                      for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                      u({roughMaterials:next}); }}/>
               </Section>
 
               <Section label="Material Count List" color={C.rough} defaultOpen={false}>
-                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
+                <div style={{fontSize:12,color:C.faint,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
                 <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}
                   onAddToPO={text=>{
                     const orders = job.roughMaterials||[];
@@ -30815,13 +31478,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {!isSectionHidden(job,"materials")&&(
               <div style={{marginTop:20}}>
 
-                <Section label="Finish Material Tracking" color={C.finish}>
+                <Section label="Finish Material Tracking" color={C.finish} defaultOpen={builderPhase==="finish"}>
                   <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}
-                    simproNo={job.simproNo} jobId={job.id} phase="finish"/>
+                    simproNo={job.simproNo} jobId={job.id} phase="finish"
+                    onPatchOrder={(id,p)=>{ /* v523: reconcile against the live job copy, never this render's list */
+                      const cur = Array.isArray(jobRef.current.finishMaterials) ? jobRef.current.finishMaterials : [];
+                      if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
+                      u({finishMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}
+                    bid={simproStock} onRefreshBid={refetchSimproStock}
+                    openBuilder={builderPhase==="finish"} onBuilderClosed={()=>setBuilderPhase(null)}
+                    onUpsertCards={!simproJobNoOf(job) ? null : (cards)=>{ /* v524: add or update order cards on the live job copy (dedupe by order + cost center) */
+                      const cur = Array.isArray(jobRef.current.finishMaterials) ? jobRef.current.finishMaterials : [];
+                      const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                      const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                      for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                      u({finishMaterials:next}); }}/>
                 </Section>
 
                 <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
-                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
+                  <div style={{fontSize:12,color:C.faint,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
                   <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}
                     onAddToPO={text=>{
                       const orders = job.finishMaterials||[];
@@ -30934,10 +31609,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
                 <HelpDot section="lightinglinks"/>
+                <div style={{flexBasis:'100%',marginTop:-4}}><LinkOpens jobId={job.id} linkKey="lighting:base"/></div>
                 </>)}
                 {(job.lightingSystem||"Control 4")==="Lutron" && !offTechLightingLink(job) && (
                   <>
-                    {!isSectionHidden(job,"lvCollab") && <span style={{width:1,height:16,background:C.border}}/>}
                     <button onClick={()=>{
                       const link=`${window.location.origin}/?lightinghub=1`;
                       navigator.clipboard.writeText(link).then(()=>toast.success('Hub link copied! One link for the plans company — lists every Lutron job, no re-sending needed as new jobs start.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
@@ -30946,6 +31621,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       Copy hub link ↗
                     </button>
                     <span style={{fontSize:11,color:C.dim}}>One-time link — lists every Lutron job for them</span>
+                    <div style={{flexBasis:'100%',marginTop:-4,display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontSize:10.5,color:C.dim}}>This job's Plan Changes page:</span>
+                      <LinkOpens jobId={job.id} linkKey="lutronshare:base" style={{marginTop:0}}/>
+                    </div>
                   </>
                 )}
               </div>
@@ -31031,7 +31710,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                     background: job.lightingSystemLocked ? "#DEEFE6" : "transparent",
 
-                    color: job.lightingSystemLocked ? "#2C5C40" : C.muted,
+                    color: job.lightingSystemLocked ? "#2C5C40" : C.faint,
 
                     border: `1px solid ${job.lightingSystemLocked ? "#86efac" : C.border}`,
 
@@ -31309,7 +31988,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   return (
                     <button key={kind} disabled={!would} onClick={()=>suggestRoom(loads, kind)}
                       title={would ? `Suggest ${KIND_LABEL[kind]} for the ${would} load${would===1?"":"s"} in this room that aren't ${KIND_LABEL[kind]} yet` : `Every load here is already ${KIND_LABEL[kind]} (or suggested)`}
-                      style={{padding:"3px 8px",fontSize:10,fontFamily:"inherit",fontWeight:700,cursor:would?"pointer":"default",background:"transparent",color:would?C.blue:C.muted,border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{KIND_LABEL[kind]}</button>
+                      style={{padding:"3px 8px",fontSize:10,fontFamily:"inherit",fontWeight:700,cursor:would?"pointer":"default",background:"transparent",color:would?C.blue:C.faint,border:"none",borderLeft:first?"none":`1px solid ${C.border}`}}>{KIND_LABEL[kind]}</button>
                   );
                 };
                 return (
@@ -31483,7 +32162,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     if(pl0.baseline && !window.confirm("Overwrite the current baseline snapshot with today's loads?")) return;
                     u({ panelizedLighting: { ...pl0, baseline: { lockedAt:new Date().toISOString(), lockedBy: identity?.name||"", loads: snap } } });
                   }}
-                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,display:"inline-flex",alignItems:"center",gap:5}}>
+                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.faint,border:`1px solid ${C.border}`,display:"inline-flex",alignItems:"center",gap:5}}>
                   <Icon name="lock" size={11} stroke={2.25}/>{job.panelizedLighting?.baseline ? "Update baseline" : "Set baseline"}
                 </button>
                 {/* Hidden for Lutron — Koy 2026-07-08: "they literally have
@@ -31492,7 +32171,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     the opposite of useful. Still shown for Control4/Savant/
                     Crestron, where Homestead does the engineering and an AV
                     programmer genuinely needs this list. */}
-                {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (
+                {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (<>
                   <button title="Copy a read-only link to send the AV programmer"
                     onClick={()=>{
                       const link = `${window.location.origin}/?loads=${job.id}`;
@@ -31502,7 +32181,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:C.purple,color:"#fff",border:"none",display:"inline-flex",alignItems:"center",gap:5}}>
                     Share loads
                   </button>
-                )}
+                  <div style={{display:'inline-flex',marginLeft:4}}><LinkOpens jobId={job.id} linkKey="loads:base" style={{marginTop:0}}/></div>
+                </>)}
                 {(job.lightingSystem||"Control 4")!=="Lutron" && !isSectionHidden(job,"loadsShare") && (
                   <HelpDot section="lightinglinks"/>
                 )}
@@ -31835,18 +32515,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       textTransform:"none",flexShrink:0,marginLeft:8,
                       display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                       <span>{filledMods.length} mod{filledMods.length===1?"":"s"}</span>
-                      <span style={{color:C.muted}}>·</span>
+                      <span style={{color:C.faint}}>·</span>
                       <span>{total} load{total===1?"":"s"}</span>
                       {orderedKeys.length > 0 && (
                         <>
-                          <span style={{color:C.muted}}>(</span>
+                          <span style={{color:C.faint}}>(</span>
                           {orderedKeys.map((k,i) => (
                             <Fragment key={k}>
-                              {i > 0 && <span style={{color:C.muted}}>·</span>}
+                              {i > 0 && <span style={{color:C.faint}}>·</span>}
                               <span>{byType[k]} {k.toLowerCase()}</span>
                             </Fragment>
                           ))}
-                          <span style={{color:C.muted}}>)</span>
+                          <span style={{color:C.faint}}>)</span>
                         </>
                       )}
                     </span>
@@ -32047,7 +32727,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         const updated={...job.panelizedLighting,extraFloors:newExtras};
                         delete updated[ef.key+"_keypad"];
                         u({panelizedLighting:updated});
-                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
+                      }} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
                     </div>
                     {/* Same Savant branch for extra panels — simple switch-leg
                         list with smart-breaker pairing. Loads live in
@@ -32213,6 +32893,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
+          {/* v527 (Braden, Koy): a Materials tab on commercial job cards — the residential
+              Material Tracking, one list for the job (job.commMaterials). Each card picks the
+              Simpro cost center it's charged to; Order from the bid charges each line's own. */}
+          {tab==="Materials" && isCommercial(job) && (
+            <div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>MATERIALS</div><HelpDot section="materials"/></div>
+              <MaterialOrders orders={job.commMaterials} onChange={v=>u({commMaterials:v})}
+                simproNo={job.simproNo} jobId={job.id} phase="comm"
+                onPatchOrder={(id,p)=>{ /* reconcile against the live job copy, never this render's list (v523 rule) */
+                  const cur = Array.isArray(jobRef.current.commMaterials) ? jobRef.current.commMaterials : [];
+                  if (!cur.some(x=>x.id===id)) { console.warn('[PO] card not on this job any more', id); if (typeof toast !== 'undefined' && toast.info) toast.info('The PO was made. Open that job again to see its number on the card.'); return; }
+                  u({commMaterials:cur.map(x=>x.id===id?{...x,...(typeof p==="function"?p(x):p)}:x)}); }}
+                bid={simproStock} onRefreshBid={refetchSimproStock}
+                openBuilder={builderPhase==="comm"} onBuilderClosed={()=>setBuilderPhase(null)}
+                onUpsertCards={!simproJobNoOf(job) ? null : (cards)=>{ /* v524 dedupe by order + cost center, on the live copy */
+                  const cur = Array.isArray(jobRef.current.commMaterials) ? jobRef.current.commMaterials : [];
+                  const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                  const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                  for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                  u({commMaterials:next}); }}/>
+            </div>
+          )}
           {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab} assigneeOptions={punchAssigneeOptions}/>)}
           {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
           {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
@@ -32296,6 +32998,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               job's Simpro bid, plus Required vs Assigned. Its own tab since
               v510; the data still loads when the job opens (simproCostCenters /
               simproStock effects above), so switching here is instant. */}
+          {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&(tabsFor(job).includes("Rough")||isCommercial(job))&&(
+            <JobOrdersSummary job={job} phases={isCommercial(job) ? ["comm"] : ["rough","finish"]} onOrder={(ph)=>{
+              // v523: a fresh card on the right phase, reconciled against the live job copy.
+              // v527: commercial jobs order onto their Materials tab.
+              const key = ph==="finish" ? "finishMaterials" : ph==="comm" ? "commMaterials" : "roughMaterials";
+              const cur = Array.isArray(jobRef.current[key]) ? jobRef.current[key] : [];
+              setTab(ph==="finish" ? "Finish" : ph==="comm" ? "Materials" : "Rough");
+              // v524: admins (test) / senders (live) get the order screen; everyone else a blank card, as before.
+              if (simproJobNoOf(job) && can(getIdentity(), "materials.sendPO")) { setBuilderPhase(ph); return; }
+              u({[key]:[...cur,{id:uid(),date:"",po:"",pickupDate:"",source:"CED",items:"",pickedUp:false,needsOrder:true}]});
+              if (typeof toast !== "undefined" && toast.success) toast.success(ph==="comm" ? "New PO card added on the Materials tab" : `New PO card added under ${ph==="finish"?"Finish":"Rough"} → Material Tracking`);
+            }}/>
+          )}
           {tab==="Bid Items"&&(
             <BidItemsPanel
               simproNo={simproJobNoOf(job)}
@@ -32649,9 +33364,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         color:rqc.done===rqc.total?C.green:C.blue,marginBottom:4}}>ROUGH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
                         color:rqc.done===rqc.total?C.green:C.blue,lineHeight:1}}>
-                        {rqc.done}<span style={{fontSize:12,fontWeight:400,color:C.muted}}>/{rqc.total}</span>
+                        {rqc.done}<span style={{fontSize:12,fontWeight:400,color:C.faint}}>/{rqc.total}</span>
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      <div style={{fontSize:10,color:C.faint,marginTop:2}}>
                         {rqc.done===rqc.total?'all resolved':`${rqc.total-rqc.done} remaining`}
                       </div>
                     </div>
@@ -32670,9 +33385,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         color:fqc.done===fqc.total?C.green:C.purple,marginBottom:4}}>FINISH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
                         color:fqc.done===fqc.total?C.green:C.purple,lineHeight:1}}>
-                        {fqc.done}<span style={{fontSize:12,fontWeight:400,color:C.muted}}>/{fqc.total}</span>
+                        {fqc.done}<span style={{fontSize:12,fontWeight:400,color:C.faint}}>/{fqc.total}</span>
                       </div>
-                      <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      <div style={{fontSize:10,color:C.faint,marginTop:2}}>
                         {fqc.done===fqc.total?'all resolved':`${fqc.total-fqc.done} remaining`}
                       </div>
                     </div>
@@ -32726,7 +33441,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               <div style={{fontSize:11,color:C.dim}}>by {job[byKey]||"—"} · {job[dateKey]||"—"}</div>
                             </div>
                           </div>
-                          <button onClick={()=>u({[doneKey]:false,[byKey]:"",[dateKey]:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                          <button onClick={()=>u({[doneKey]:false,[byKey]:"",[dateKey]:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.faint,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
                         </div>
                       ):(
                         <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
@@ -32803,8 +33518,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       {(k==="simproNo"||k==="simproQuoteNo") && String(job[k]||"").trim() && (
                         <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                           title="Fill blank fields from Simpro (Site address + Site Contact)"
-                          style={{background:"none",border:"none",padding:"0 4px",margin:0,
-                            color: simproPulling?C.muted:C.accent, fontSize:9, fontWeight:700,
+                          style={{background:"none",border:"none",padding:"4px 8px",margin:0,minHeight:24,
+                            color: simproPulling?C.faint:C.accent, fontSize:9, fontWeight:700,
                             cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
                             letterSpacing:"0.05em", textTransform:"uppercase",
                             display:"inline-flex", alignItems:"center", gap:3}}>
@@ -32906,7 +33621,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {c.primary && (
                           <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.04em",
                             textTransform:"uppercase",
-                            color: anyLead ? C.muted : "#3E7D5A",
+                            color: anyLead ? C.faint : "#3E7D5A",
                             background: anyLead ? "transparent" : "#E8F1EC",
                             border: anyLead ? `1px solid ${C.border}` : "none",
                             borderRadius:4,padding:"1px 6px"}}>Simpro primary</span>
@@ -32974,14 +33689,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",gap:6,
                   letterSpacing:"0.06em",fontWeight:600}}>
                   STATUS UPDATE
-                  <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>
+                  <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>
                     shows on job cards
                   </span>
                   {job.statusUpdate && (
                     <button onClick={()=>u({statusUpdate:"",statusUpdateBy:"",statusUpdateAt:""})}
                       title="Clear this status update"
                       style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
-                        borderRadius:5,color:C.muted,fontSize:9,fontWeight:600,
+                        borderRadius:5,color:C.faint,fontSize:9,fontWeight:600,
                         padding:"2px 8px",cursor:"pointer",fontFamily:"inherit",
                         letterSpacing:"0.04em",textTransform:"uppercase"}}>Clear</button>
                   )}
@@ -33016,7 +33731,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:5,maxHeight:260,overflowY:"auto"}}>
                         {[...job.statusUpdateHistory].reverse().map((h, i) => (
                           <div key={i} style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,borderLeft:"3px solid #B0892C",background:C.card}}>
-                            <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
+                            <div style={{fontSize:10,color:C.faint,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
                             <div style={{fontSize:12,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{h.text}</div>
                           </div>
                         ))}
@@ -33034,7 +33749,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {/* Access note — gate code, keybox, etc. */}
               <div style={{marginTop:12}}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
-                  ACCESS NOTE <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
+                  ACCESS NOTE <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
                 </div>
                 <textarea
                   value={job.accessNote||""} onChange={e=>u({accessNote:e.target.value})}
@@ -33086,13 +33801,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     }} style={{cursor:"pointer",fontSize:14,color:"#B23A3A",padding:"4px",lineHeight:1,flexShrink:0}}>✕</span>
                   </div>
                 ))}
-                {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
+                {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.faint,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
                 {/* Scan status */}
                 {(()=>{const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");return(
                   <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:8}}>
                     <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>SCAN STATUS</span>
                     <select value={job.matterportStatus||""} onChange={e=>{const v=e.target.value;const def=getStatusDef(MATTERPORT_STATUSES,v);u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});}}
-                      style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                      style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color?readableInk(mpDef.color,"#E6ECEA"):C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
                       {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                     </select>
                     {mpDef.hasDate&&<DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})} style={{width:120,fontSize:11,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>}
@@ -33172,11 +33887,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {lbl("Blue Stakes (811)")}
                     {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?"#B0892C":bs.state==="active"?C.green:C.dim; return (
                       <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.muted,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
                         {bs.state!=="none" && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.04em",borderRadius:99,padding:"6px 12px",color:"#fff",background:colr}}>{bs.label}</span>}
-                        {bs.state==="none" && <span style={{fontSize:10,color:C.muted}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
+                        {bs.state==="none" && <span style={{fontSize:10,color:C.faint}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
                       </div>); })()}
                   </div>
                   <div style={{marginTop:14}}>
@@ -33338,7 +34053,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {!needsSchedModal.hard && (
                 <div style={{flex:1,minWidth:120}}>
                   <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>
-                    END <span style={{color:C.muted,fontWeight:500}}>(optional)</span>
+                    END <span style={{color:C.faint,fontWeight:500}}>(optional)</span>
                   </div>
                   <DateInp value={needsSchedModal.endDate||""}
                     onChange={e=>setNeedsSchedModal({...needsSchedModal, endDate: e.target.value})}
@@ -33346,7 +34061,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               )}
             </div>
-            <div style={{fontSize:10,color:C.muted,marginTop:6,fontStyle:"italic"}}>
+            <div style={{fontSize:10,color:C.faint,marginTop:6,fontStyle:"italic"}}>
               {needsSchedModal.hard
                 ? "Hard deadlines pin a single date — no window."
                 : "Leave both blank for flexible. Set END to schedule a window (renders as “May 11–22”)."}
@@ -33847,7 +34562,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRoom(q.id)} title="Set which room this question is about"
                 style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
-                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.muted}}>
+                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.faint}}>
                 {cur||'+ room'}
               </button>
             );
@@ -33861,7 +34576,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   onKeyDown={e=>{ if(e.key==='Enter'){setRoom(q.id,e.currentTarget.value);setEditRoom(null);} else if(e.key==='Escape'){setEditRoom(null);} }}
                   onBlur={e=>{ setRoom(q.id,e.currentTarget.value); setEditRoom(null); }}
                   style={{fontSize:10,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
-                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,'');setEditRoom(null);}} style={{fontSize:9,color:C.muted,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,'');setEditRoom(null);}} style={{fontSize:9,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
               </div>
             );
           })()}
@@ -33869,7 +34584,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRecip(q.id)} title="Set who this question is for"
                 style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
-                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.muted}}>
+                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.faint}}>
                 {cur?`For: ${cur}`:'+ recipient'}
               </button>
             );
@@ -33883,7 +34598,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   onKeyDown={e=>{ if(e.key==='Enter'){upd(q.id,{for:e.currentTarget.value.trim()});setEditRecip(null);} else if(e.key==='Escape'){setEditRecip(null);} }}
                   onBlur={e=>{ upd(q.id,{for:e.currentTarget.value.trim()}); setEditRecip(null); }}
                   style={{fontSize:10,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
-                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:9,color:C.muted,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:9,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
               </div>
             );
           })()}
@@ -33897,7 +34612,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
         <button onClick={async ()=>{ if(!await showConfirm("Delete this question?")) return; del(q.id); }}
 
-          style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+          style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
 
             fontSize:12,flexShrink:0,padding:"0 2px"}}>✕</button>
 
@@ -33909,7 +34624,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
           {more && (
             <div style={{marginBottom:10}}>
-              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.muted,fontWeight:600}}>(GC sees this)</span></div>
+              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.faint,fontWeight:600}}>(GC sees this)</span></div>
               <input type="text" value={q.note||""} onChange={e=>upd(q.id,{note:e.target.value})}
                 placeholder="e.g. We recommend a 200A panel here"
                 style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
@@ -34168,7 +34883,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       {open.length===0&&answered.length===0&&recipFilter==null&&statusFilter==null&&(
 
-        <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
+        <div style={{fontSize:11,color:C.faint,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
 
       )}
 
@@ -34351,7 +35066,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
       )}
 
       {filterIds!=null&&allQIds.length>0&&(
-        <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.muted,marginBottom:8}}>
+        <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.faint,marginBottom:8}}>
           {sharedQCount} of {allQIds.length} shared
         </div>
       )}
@@ -34409,7 +35124,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
           {recipients.map(r=>(
             <button key={r} type="button" disabled={!selectedIds.size} onClick={()=>assignSelectedTo(r)}
               style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:99,fontFamily:"inherit",cursor:selectedIds.size?"pointer":"not-allowed",
-                border:`1px solid ${C.border}`,background:C.card,color:selectedIds.size?color:C.muted,opacity:selectedIds.size?1:0.6}}>{r}</button>
+                border:`1px solid ${C.border}`,background:C.card,color:selectedIds.size?color:C.faint,opacity:selectedIds.size?1:0.6}}>{r}</button>
           ))}
           <input placeholder="New recipient…" disabled={!selectedIds.size}
             onKeyDown={e=>{ if(e.key==="Enter"&&e.currentTarget.value.trim()){ assignSelectedTo(e.currentTarget.value.trim()); e.currentTarget.value=""; } }}
@@ -35021,17 +35736,17 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
 
-                letterSpacing:"0.08em",color:sec.color}}>{sec.label}</div>
+                letterSpacing:"0.08em",color:readableInk(sec.color,"#EEF0F3")}}>{sec.label}</div>
 
               <div style={{background:`${sec.color}18`,border:`1px solid ${sec.color}33`,
 
-                borderRadius:99,padding:"2px 10px",fontSize:11,color:sec.color,fontWeight:700}}>
+                borderRadius:99,padding:"2px 10px",fontSize:11,color:readableInk(sec.color,"#E2E5EC"),fontWeight:700}}>
 
                 {sJobs.length}
 
               </div>
 
-              <div style={{marginLeft:"auto",color:sec.color,fontSize:13,fontWeight:700}}>
+              <div style={{marginLeft:"auto",color:readableInk(sec.color,"#EEF0F3"),fontSize:13,fontWeight:700}}>
 
                 {isCollapsed ? "▸" : "▾"}
 
@@ -35299,10 +36014,10 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
           label="Add progress photo"/>
       </div>
       <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
-        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
         <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
         <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
-        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
+        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
       </div>
     </div>
   );
@@ -35379,14 +36094,14 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
               {signedCount>0&&<span style={{marginLeft:8,color:C.green,fontWeight:700}}>· {signedCount} signed</span>}
             </div>
           </div>
-          {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
+          {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#fff",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
         </div>
       </div>
 
       {/* ── Mobile card layout ── */}
       {narrow ? (
         <div style={{padding:"12px 14px"}}>
-          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.faint,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
           {upcoming.map(u=>{
             const isEditing=editingId===u.id;
             const fc=getFC(u.foreman)||"#6E7682";
@@ -35407,7 +36122,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>
-                          {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                          {u.name||<span style={{color:C.faint,fontStyle:"italic"}}>Untitled</span>}
                         </div>
                         <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                           {isSigned&&<SignedBadge/>}
@@ -35430,14 +36145,14 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                             <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
                           </>
                         ) : (
-                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                         )}
                       </div>
                     </div>
                     {u.address&&(
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
                         <div style={{fontSize:11,color:C.dim,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                          <span style={{color:C.muted,fontSize:10}}>Address </span>{u.address}
+                          <span style={{color:C.faint,fontSize:10}}>Address </span>{u.address}
                         </div>
                         <AddressLink address={u.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#3B5BA5",border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,flexShrink:0,textDecoration:"none"}}>
                           <Icon name="mapPin" size={11} stroke={2.5}/> Maps
@@ -35445,10 +36160,10 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       </div>
                     )}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginBottom:u.notes?6:0}}>
-                      {u.city&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>City </span>{u.city}</div>}
-                      {u.customer&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Customer </span>{u.customer}</div>}
-                      {u.sales&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Sales </span>{u.sales}</div>}
-                      {u.lastFollowUp&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Follow Up </span>{u.lastFollowUp}</div>}
+                      {u.city&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>City </span>{u.city}</div>}
+                      {u.customer&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>Customer </span>{u.customer}</div>}
+                      {u.sales&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>Sales </span>{u.sales}</div>}
+                      {u.lastFollowUp&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.faint,fontSize:10}}>Follow Up </span>{u.lastFollowUp}</div>}
                     </div>
                     {u.notes&&<div style={{fontSize:12,color:C.dim,marginTop:4,lineHeight:1.4}}>{u.notes}</div>}
                     {(u.photos||[]).length>0&&(
@@ -35475,7 +36190,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             ))}
             <div style={{width:200,flexShrink:0}}/>
           </div>
-          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.faint,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
           {upcoming.map(u=>{
             const isEditing=editingId===u.id;
             const isSigned=!!u.signed;
@@ -35497,10 +36212,10 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                   <>
                     <div style={{flex:2.5,paddingRight:12,overflow:"hidden"}}>
                       <div style={{fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                        {u.name||<span style={{color:C.faint,fontStyle:"italic"}}>Untitled</span>}
                         {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6E7682",background:`${getFC(u.foreman)||"#6E7682"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6E7682"}33`}}>{u.foreman}</span>}
                       </div>
-                      {u.address&&<div style={{marginTop:2,fontSize:10,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
+                      {u.address&&<div style={{marginTop:2,fontSize:10,color:C.faint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
                       {isSigned&&<div style={{marginTop:2}}><SignedBadge/></div>}
                       {(u.photos||[]).length>0&&(
                         <div style={{marginTop:3,display:"flex",gap:4,alignItems:"center"}}>
@@ -35509,7 +36224,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                               <img src={safeImageSrc(p.url)} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
                             </a>
                           ))}
-                          {(u.photos||[]).length>4&&<span style={{fontSize:10,color:C.muted,fontWeight:700}}>+{(u.photos||[]).length-4}</span>}
+                          {(u.photos||[]).length>4&&<span style={{fontSize:10,color:C.faint,fontWeight:700}}>+{(u.photos||[]).length-4}</span>}
                         </div>
                       )}
                     </div>
@@ -35535,12 +36250,12 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
                       {confirmDeleteId===u.id ? (
                         <>
-                          <span style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>Remove?</span>
+                          <span style={{fontSize:10,color:C.faint,whiteSpace:"nowrap"}}>Remove?</span>
                           <button onClick={()=>del(u.id)} style={{background:"#B23A3A",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
                           <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
                         </>
                       ) : (
-                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                       )}
                     </div>
                   </>
@@ -36168,7 +36883,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
               />
               <button onClick={saveDate}
                 style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
-                  borderRadius:5,color:"#000",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                  borderRadius:5,color:"#fff",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
                 Set
               </button>
               {task.dueDate&&(
@@ -36485,10 +37200,10 @@ function buildJobActivity(job, cfg) {
     return {
       label: `${phase} · ${o.source || "Materials"} · ${status}`,
       detail: cleanText(o.items).slice(0,80),
-      sourceTab: phase === "Rough" ? "Rough" : "Finish",
+      sourceTab: phase === "Rough" ? "Rough" : phase === "Materials" ? "Materials" : "Finish",
     };
   });
-  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish")];
+  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish"), ...matsBucket(job.commMaterials,"Materials")];
   if (matsAll.length && !isSectionHidden(job, "materials")) groups.push({ key:"materials", label:"Materials & POs", items: matsAll }); // v440
 
   // ── QUESTIONS ─────────────────────────────────────────────────────
@@ -36720,7 +37435,7 @@ function JobActivity({ job, onSetTab }) {
           color:C.dim, textTransform:"uppercase", marginBottom:8,
           display:"flex", alignItems:"center", gap:8}}>
           <span>To do on this job</span>
-          <span style={{fontSize:10, color:C.muted}}>
+          <span style={{fontSize:10, color:C.faint}}>
             {totalTodos === 0 ? "Nothing open" : `${totalTodos} open`}
           </span>
         </div>
@@ -36828,7 +37543,7 @@ function JobActivity({ job, onSetTab }) {
                   onMouseLeave={ev=>{ ev.currentTarget.style.background="transparent"; }}>
                   <div style={{display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap"}}>
                     <span style={{fontSize:13, color:C.text}}>{e.label}</span>
-                    <span style={{fontSize:11, color:C.muted, marginLeft:"auto"}}>
+                    <span style={{fontSize:11, color:C.faint, marginLeft:"auto"}}>
                       {new Date(e.at).toLocaleDateString("en-US", { month:"short", day:"numeric" })}
                       {e.actor && ` · ${e.actor}`}
                     </span>
@@ -36904,7 +37619,7 @@ function JobPhotos({ job, onSetTab }) {
         color:C.dim, textTransform:"uppercase", marginBottom:8,
         display:"flex", alignItems:"center", gap:8}}>
         <span>All photos & files</span>
-        <span style={{fontSize:10, color:C.muted}}>
+        <span style={{fontSize:10, color:C.faint}}>
           {allPhotos.length === 0 ? "Nothing yet" :
             `${visible.length} of ${allPhotos.length}`}
         </span>
@@ -38016,7 +38731,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                     </div>
                     {/* Job blocks */}
                     {dayJobs.length === 0
-                      ? <div style={{fontSize:10,color:C.muted,textAlign:"center",padding:"8px 0",
+                      ? <div style={{fontSize:10,color:C.faint,textAlign:"center",padding:"8px 0",
                           fontStyle:"italic"}}>—</div>
                       : dayJobs.map(g => {
                           const appJob   = jobBySimproNo[g.projectId];
@@ -38209,7 +38924,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
         {embedded ? (
           <span style={{display:"inline-flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim}}>All QC walks</span>
-            <span style={{fontSize:12,color:C.muted}}>{rows.length}</span>
+            <span style={{fontSize:12,color:C.faint}}>{rows.length}</span>
             {openCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#B23A3A",background:"#B23A3A18",borderRadius:5,padding:"1px 6px"}}>{openCount} need action</span>}
             {schedCount>0 && <span style={{fontSize:10,fontWeight:700,color:"#3B5BA5",background:"#3B5BA518",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
           </span>
@@ -38270,7 +38985,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
           </div>
         );
       })}
-      {rows.length===0 && <div style={{textAlign:"center",padding:embedded?"14px 0":"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+      {rows.length===0 && <div style={{textAlign:"center",padding:embedded?"14px 0":"60px 0",color:C.faint,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
 }
@@ -38296,7 +39011,7 @@ function NavView({ jobs }) {
           outline:"none",marginBottom:16}}/>
 
       {active.length===0&&(
-        <div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>
+        <div style={{textAlign:"center",padding:"48px 0",color:C.faint,fontSize:13,fontStyle:"italic"}}>
           {search ? "No jobs match that search." : "No jobs with addresses yet."}
         </div>
       )}
@@ -38314,7 +39029,7 @@ function NavView({ jobs }) {
         </div>
       ))}
 
-      <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:16}}>
+      <div style={{textAlign:"center",fontSize:11,color:C.faint,marginTop:16}}>
         {active.length} job{active.length!==1?"s":""} with addresses
       </div>
     </div>
@@ -38496,7 +39211,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
       <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:3,gap:2,marginBottom:14}}>
         {seg("all","All",null)}{seg("proj","Projected",C.orange)}{seg("conf","Confirmed",C.green)}
       </div>
-      {total===0 && gaps.length===0 && <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
+      {total===0 && gaps.length===0 && <div style={{textAlign:"center",color:C.faint,fontSize:13,padding:"48px 10px"}}>No starts match this filter.</div>}
       {groups.map(([label,b])=>{
         const arr=byBucket[b]; if(!arr||!arr.length) return null;
         return (
@@ -38504,7 +39219,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
             <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 3px 8px"}}>
               <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.07em",textTransform:"uppercase",color:b===-1?C.red:C.dim}}>{label}</span>
               <span style={{flex:1,height:1,background:C.border}}/>
-              <span style={{fontSize:10.5,fontWeight:700,color:C.muted}}>{arr.length}</span>
+              <span style={{fontSize:10.5,fontWeight:700,color:C.faint}}>{arr.length}</span>
             </div>
             {arr.map(e=>{
               const accent = e.up?C.orange:(e.phase==="Finish"?C.finish:C.rough);
@@ -38543,7 +39258,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
           <div style={{display:"flex",alignItems:"center",gap:8,margin:"16px 3px 8px"}}>
             <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.07em",textTransform:"uppercase",color:_STARTS_GOLD}}>Needs date</span>
             <span style={{flex:1,height:1,background:C.border}}/>
-            <span style={{fontSize:10.5,fontWeight:700,color:C.muted}}>{gaps.length}</span>
+            <span style={{fontSize:10.5,fontWeight:700,color:C.faint}}>{gaps.length}</span>
           </div>
           <div style={{fontSize:11,color:C.dim,margin:"0 3px 9px"}}>Rough not started, rough done and finish not scheduled, or still in Upcoming. No date set.</div>
           {gaps.map(e=>{
@@ -38561,7 +39276,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
                   cursor:canOpen(e)?"pointer":"default"}}>
                 <div style={{flex:"0 0 46px",textAlign:"center"}}>
                   <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
-                  <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.muted,
+                  <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.faint,
                     whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{bad?e.date:"—"}</div>
                 </div>
                 <div style={{width:1,alignSelf:"stretch",background:C.border,margin:"1px 0"}}/>
@@ -41071,7 +41786,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     <div style={{display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
                       {matchTeamModal.idx!=null && <button onClick={()=>{ if(window.confirm("Delete this team?")){ teamRemove(matchTeamModal.idx); setMatchTeamModal(null); } }} style={{marginRight:"auto",background:"none",border:"none",color:"#B23A3A",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Delete team</button>}
                       <button onClick={()=>setMatchTeamModal(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,padding:"7px 16px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>Cancel</button>
-                      <button onClick={saveTeamModal} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",padding:"7px 18px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>{matchTeamModal.idx==null?"Create team":"Save"}</button>
+                      <button onClick={saveTeamModal} style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",padding:"7px 18px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>{matchTeamModal.idx==null?"Create team":"Save"}</button>
                     </div>
                   </div>
                 </div>
@@ -41152,7 +41867,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
               borderRadius:10,border:`1px solid ${C.border}`}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>ROSTER</span>
-                <span style={{fontSize:10,color:C.muted,fontWeight:500}}>Click a name to assign their week · drag for single cells</span>
+                <span style={{fontSize:10,color:C.faint,fontWeight:500}}>Click a name to assign their week · drag for single cells</span>
                 <button onClick={()=>setCrewPTOModalOpen(true)}
                   title="Mark people out (PTO, sick days, vacation)"
                   style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:5,
@@ -41184,7 +41899,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       title={ptoThisWeek ? "Has PTO this week" : `Open ${name}'s week assignment grid`}
                       style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",
                         borderRadius:99,cursor:"grab",userSelect:"none",fontSize:11,fontWeight:700,
-                        color:isSel?"#fff":ptoThisWeek?C.muted:col,
+                        color:isSel?"#fff":ptoThisWeek?C.faint:col,
                         background:isSel?col:ptoThisWeek?"#EEF0F3":col+"15",
                         border:`2px ${ptoThisWeek?"dashed":"solid"} ${isSel?col:ptoThisWeek?"#CDD3DB":col+"44"}`,
                         opacity: ptoThisWeek ? 0.7 : 1,
@@ -41302,7 +42017,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           }}>
                           {allNames.length===0?(
                             <div onClick={e=>e.stopPropagation()} style={{minWidth:180}}>
-                              <div style={{fontSize:10,color:C.muted,fontStyle:"italic",marginBottom:6}}>
+                              <div style={{fontSize:10,color:C.faint,fontStyle:"italic",marginBottom:6}}>
                                 Type a name or pick from roster
                               </div>
                               <div style={{display:"flex",gap:4,marginBottom:6}}>
@@ -41355,7 +42070,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                       </span>
                                     );
                                   })}
-                                  {teamUnassigned.length>8&&<span style={{fontSize:9,color:C.muted,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
+                                  {teamUnassigned.length>8&&<span style={{fontSize:9,color:C.faint,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
                                 </div>
                               )}
                             </div>
@@ -41405,7 +42120,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   title="Add helper"
                                   style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
                                     marginLeft:3,width:18,height:18,borderRadius:99,
-                                    border:`1px dashed ${C.border}`,color:C.muted,fontSize:11,fontWeight:700,
+                                    border:`1px dashed ${C.border}`,color:C.faint,fontSize:11,fontWeight:700,
                                     cursor:"pointer",userSelect:"none",flexShrink:0,lineHeight:1}}>+</span>
                               );
                             }
@@ -41451,7 +42166,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           {/* Dissolve — small × tucked in the top-right of the card */}
                           <span onClick={e=>{e.stopPropagation();teamRemove(idx);}}
                             title="Dissolve team"
-                            style={{position:"absolute",top:2,right:4,fontSize:12,color:C.muted,cursor:"pointer",
+                            style={{position:"absolute",top:2,right:4,fontSize:12,color:C.faint,cursor:"pointer",
                               fontWeight:400,opacity:0.35,transition:"opacity 0.15s",padding:"0 3px",lineHeight:1}}
                             onMouseEnter={e=>e.currentTarget.style.opacity=0.85}
                             onMouseLeave={e=>e.currentTarget.style.opacity=0.35}>
@@ -41474,7 +42189,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                   {/* Unassigned people */}
                   {teamUnassigned.length>0&&(
                     <div style={{paddingTop:8,borderTop:`1px solid ${C.border}`}}>
-                      <div style={{fontSize:9,fontWeight:700,color:C.muted,letterSpacing:"0.08em",marginBottom:6}}>
+                      <div style={{fontSize:9,fontWeight:700,color:C.faint,letterSpacing:"0.08em",marginBottom:6}}>
                         NOT ON A TEAM
                       </div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -41503,7 +42218,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     </div>
                   )}
 
-                  <div style={{fontSize:10,color:C.muted,marginTop:8,fontStyle:"italic"}}>
+                  <div style={{fontSize:10,color:C.faint,marginTop:8,fontStyle:"italic"}}>
                     Drag names between teams or tap a name then tap a team card to move them.
                     First person in each team is the lead.
                   </div>
@@ -41524,7 +42239,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                 </button>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 10px",minWidth:140}}>
                   <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",
-                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#3B5BA5":crewWeekOff<0?C.muted:C.dim}}>
+                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#3B5BA5":crewWeekOff<0?C.faint:C.dim}}>
                     {crewWeekOff===0?"THIS WEEK":crewWeekOff===1?"NEXT WEEK":crewWeekOff===-1?"LAST WEEK":
                      crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
                   </span>
@@ -41614,7 +42329,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           <div style={{fontSize:12,fontWeight:700,color:isToday3?C.accent:"var(--text)",marginTop:2}}>
                             {d.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
                           </div>
-                          <div style={{fontSize:9,color:isToday3?C.accent:C.muted,fontWeight:700,marginTop:2}}>
+                          <div style={{fontSize:9,color:isToday3?C.accent:C.faint,fontWeight:700,marginTop:2}}>
                             {crewDayTotals[di]} {crewDayTotals[di]===1?"person":"people"}
                           </div>
                         </th>
@@ -41624,7 +42339,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                 </thead>
                 <tbody>
                   {crewPlanJobs.length===0&&(
-                    <tr><td colSpan={6} style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontSize:12}}>
+                    <tr><td colSpan={6} style={{textAlign:"center",padding:"40px 20px",color:C.faint,fontSize:12}}>
                       {crewFocus && crewPinned.length===0 ? (
                         <div>
                           <div style={{fontSize:13,color:"var(--text)",fontWeight:600,marginBottom:6}}>
@@ -41807,7 +42522,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   }}
                                   onDragEnd={()=>{crewRowDragRef.current=null;setCrewRowDragOver(null);crewStopAutoScroll();}}
                                   title="Drag to reorder"
-                                  style={{cursor:"grab",color:C.muted,fontSize:11,lineHeight:1,
+                                  style={{cursor:"grab",color:C.faint,fontSize:11,lineHeight:1,
                                     padding:"2px 2px",userSelect:"none",fontFamily:"monospace",letterSpacing:-2,
                                     opacity:isHover?0.7:0.25,transition:"opacity 0.15s",flexShrink:0}}>
                                   &#8942;&#8942;
@@ -41816,7 +42531,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 <button onClick={e=>{e.stopPropagation();crewTogglePinned(job.id);}}
                                   title={isPinned?"Unpin":"Pin to this week"}
                                   style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",
-                                    color:isPinned?C.accent:C.muted,
+                                    color:isPinned?C.accent:C.faint,
                                     opacity:isPinned?1:(isHover?0.7:0),
                                     transition:"opacity 0.15s,color 0.15s",lineHeight:1,flexShrink:0,
                                     width:isPinned||isHover?"auto":0,overflow:"hidden"}}>
@@ -42030,7 +42745,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                     setCrewExtra(ne); _saveCrewData(crewData,ne);
                                   }}
                                     title="Remove from this week"
-                                    style={{fontSize:11,color:C.muted,cursor:"pointer",fontWeight:700,
+                                    style={{fontSize:11,color:C.faint,cursor:"pointer",fontWeight:700,
                                       padding:"0 3px",opacity:0.6,flexShrink:0}}>
                                     &times;</span>
                                 )}
@@ -42110,7 +42825,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
                                   title={cell.time?.start?"Tap to edit time":"Tap to set time"}
                                   style={{fontSize:9,fontWeight:700,
-                                    color:cell.time?.start?"#3B5BA5":C.muted,
+                                    color:cell.time?.start?"#3B5BA5":C.faint,
                                     background:cell.time?.start?"#3B5BA515":"transparent",
                                     border:`1px ${cell.time?.start?"solid":"dashed"} ${cell.time?.start?"#3B5BA533":C.border}`,
                                     borderRadius:4,padding:"1px 5px",marginBottom:3,cursor:"pointer",
@@ -42317,7 +43032,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       <button onClick={close}
                         title="Close"
                         style={{background:"none",border:"none",cursor:"pointer",
-                          color:C.muted,fontSize:20,lineHeight:1,padding:"4px 8px",fontFamily:"inherit",fontWeight:400}}>
+                          color:C.faint,fontSize:20,lineHeight:1,padding:"4px 8px",fontFamily:"inherit",fontWeight:400}}>
                         &times;
                       </button>
                     </div>
@@ -42504,7 +43219,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 Showing {crewDisplayName(crewForemanFilter)}&#39;s crew only
                               </span>
                               <button onClick={()=>setCrewForemanFilter(null)}
-                                style={{marginLeft:"auto",background:"none",border:"none",color:C.muted,fontSize:10,
+                                style={{marginLeft:"auto",background:"none",border:"none",color:C.faint,fontSize:10,
                                   cursor:"pointer",fontFamily:"inherit",fontWeight:600,textDecoration:"underline"}}>
                                 Show everyone
                               </button>
@@ -42576,7 +43291,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           {byKind.busy.length > 0 && (
                             <div style={{marginBottom:10}}>
                               <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#9A3030",marginBottom:6}}>
-                                BUSY ELSEWHERE · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— still selectable, set times to clarify</span>
+                                BUSY ELSEWHERE · {byKind.busy.length} <span style={{fontWeight:500,color:C.faint,letterSpacing:0,textTransform:"none"}}>— still selectable, set times to clarify</span>
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                                 {byKind.busy.map(renderPersonChip)}
@@ -42586,7 +43301,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
 
                           {byKind.pto.length > 0 && (
                             <div>
-                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.muted,marginBottom:6}}>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.faint,marginBottom:6}}>
                                 PTO · {byKind.pto.length}
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -42777,7 +43492,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             {titleName.toUpperCase()}
                           </div>
                           {wiz.kind === 'team' && team && (
-                            <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                            <div style={{fontSize:11,color:C.faint,marginTop:2}}>
                               {teamNames.map(n => crewDisplayName(n)).join(", ")}
                             </div>
                           )}
@@ -42790,7 +43505,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       <button onClick={applyAndClose}
                         title="Save and close"
                         style={{background:"none",border:"none",cursor:"pointer",
-                          color:C.muted,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
+                          color:C.faint,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
                         &times;
                       </button>
                     </div>
@@ -42811,13 +43526,13 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         onChange={e=>setCrewWizardDefaultTime(t=>({...t, end:e.target.value}))}
                         style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
                           padding:"4px 8px",fontSize:11,fontFamily:"inherit",color:"var(--text)"}}/>
-                      <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>
+                      <span style={{fontSize:10,color:C.faint,marginLeft:"auto"}}>
                         Tap a cell's time to override per-cell
                       </span>
                     </div>
                     {/* Grid header */}
                     {crewPlanJobs.length === 0 ? (
-                      <div style={{padding:"20px 12px",textAlign:"center",color:C.muted,fontSize:12}}>
+                      <div style={{padding:"20px 12px",textAlign:"center",color:C.faint,fontSize:12}}>
                         No jobs in this week's planner. Pin some jobs first.
                       </div>
                     ) : (
@@ -42833,7 +43548,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 background:"var(--surface)",borderBottom:`1px solid ${C.border}`,
                                 position:"sticky",top:0,zIndex:1,minWidth:90}}>
                                 {["MON","TUE","WED","THU","FRI"][i]}
-                                <div style={{fontSize:9,fontWeight:600,color:C.muted,marginTop:2}}>
+                                <div style={{fontSize:9,fontWeight:600,color:C.faint,marginTop:2}}>
                                   {d.toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}
                                 </div>
                               </th>
@@ -42898,7 +43613,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                           {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
                                         </div>
                                         {!checked && anotherCells > 0 && (
-                                          <div style={{fontSize:9,fontWeight:500,color:C.muted,marginTop:2}}>
+                                          <div style={{fontSize:9,fontWeight:500,color:C.faint,marginTop:2}}>
                                             also elsewhere
                                           </div>
                                         )}
@@ -43001,7 +43716,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             onChange={e=>setCrewPTODraft({...crewPTODraft,start:e.target.value})}/>
                         </label>
                         <label style={{flex:1}}>
-                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.muted,fontWeight:400}}>(optional)</span></div>
+                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.faint,fontWeight:400}}>(optional)</span></div>
                           <DateInp value={crewPTODraft.end}
                             onChange={e=>setCrewPTODraft({...crewPTODraft,end:e.target.value})}/>
                         </label>
@@ -43026,7 +43741,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     CURRENT PTO ({crewPTOList.length})
                   </div>
                   {crewPTOList.length===0 ? (
-                    <div style={{fontSize:12,color:C.muted,fontStyle:"italic",textAlign:"center",padding:"20px 0"}}>
+                    <div style={{fontSize:12,color:C.faint,fontStyle:"italic",textAlign:"center",padding:"20px 0"}}>
                       No PTO scheduled. Add some above.
                     </div>
                   ) : (
@@ -43043,7 +43758,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                               <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
                                 {crewDisplayName(p.name)} <span style={{color:C.dim,fontWeight:500,marginLeft:4}}>· {range}</span>
                               </div>
-                              {p.note && <div style={{fontSize:10,color:C.muted,marginTop:1,fontStyle:"italic"}}>{p.note}</div>}
+                              {p.note && <div style={{fontSize:10,color:C.faint,marginTop:1,fontStyle:"italic"}}>{p.note}</div>}
                             </div>
                             <button onClick={()=>removePTO(p.id)}
                               style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:5,
@@ -43098,7 +43813,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         <div style={{fontSize:10,fontWeight:700,color:"#B23A3A",letterSpacing:"0.1em",marginBottom:5}}>HARD DATE</div>
                         <DateInp value={crewNeedsModal.date}
                           onChange={e=>setCrewNeedsModal({...crewNeedsModal, date:e.target.value})}/>
-                        <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                        <div style={{fontSize:10,color:C.faint,marginTop:4,fontStyle:"italic"}}>
                           Must happen on this exact date.
                         </div>
                       </div>
@@ -43117,7 +43832,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       </div>
                     )}
                     {!isHard && (
-                      <div style={{fontSize:10,color:C.muted,marginTop:-8,marginBottom:12,fontStyle:"italic"}}>
+                      <div style={{fontSize:10,color:C.faint,marginTop:-8,marginBottom:12,fontStyle:"italic"}}>
                         Leave both blank to just flag as needing scheduling. Latest drives sort order.
                       </div>
                     )}
@@ -43343,14 +44058,14 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           padding:"4px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit"}}>
                         Suggest urgent
                       </button>
-                      <span style={{fontSize:10,color:C.muted,alignSelf:"center",marginLeft:"auto"}}>
+                      <span style={{fontSize:10,color:C.faint,alignSelf:"center",marginLeft:"auto"}}>
                         {crewPinned.length} pinned &middot; {allActive.length} active
                       </span>
                     </div>
                     <div style={{flex:1,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,
                       padding:6,background:"var(--surface)"}}>
                       {allActive.length===0?(
-                        <div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"24px 0",fontStyle:"italic"}}>
+                        <div style={{fontSize:12,color:C.faint,textAlign:"center",padding:"24px 0",fontStyle:"italic"}}>
                           No active jobs found.
                         </div>
                       ):allActive.map(j=>{
@@ -44733,6 +45448,1656 @@ function PlansCard({ identity, users = [] }) {
   );
 }
 
+// ── Office Dashboard (v530) ──────────────────────────────────────────────────
+// Koy: "I want different views of the live data", "I want to be the only one
+// with the view", and "a stand alone dashboard ... not in the app". Rendered
+// ONLY by the /dashboard page (DashPage below), never as an app tab. One
+// read-only screen with six tabs (Overview · Activity · Schedule · Quality ·
+// People · Automations), built from what App already holds in memory (jobs
+// for the current mode, users, needs, Upcoming). Extra reads: the People tab's
+// device list (settings/deviceVersions, the same getDoc DeviceVersionsCard
+// does) and the Automations tab's two sources. Nothing here writes to Firestore.
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"]];
+// Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
+// what Koy's two Claude Routines produced, read from where they already put it.
+// Plan intake → agentFindings (the Today Plans card's source, live listener
+// while the tab is open). Appliance Loads → the master sheet via
+// fetchApplSheetRows (the Tools view's read). Run times mirror the Routines'
+// UTC crons (Plan Intake trig_012uNPUHJgwF6MQgozHz1V86 "0 13,18,22 * * *";
+// Appliance Loads trig_014qafaiKGjXqAY2eKKCvrab "58 6 * * *"); if a Routine's
+// schedule changes, change it here too.
+const OD_RUNS = { plan: [[13, 0], [18, 0], [22, 0]], appl: [[6, 58]] };
+const odNextRun = (utc, now) => { let best = null; for (let k = 0; k < 2; k++) utc.forEach(([h, m]) => { const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k, h, m)); if (t > now && (!best || t < best)) best = t; }); return best; };
+const odRunTimes = (utc) => utc.map(([h, m]) => { const t = new Date(); t.setUTCHours(h, m, 0, 0); return t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }).join(", ");
+// Automated docs (v534): where each automation saves what it writes (IDs from
+// functions/index.js and the Routines). v535: a card with `latest` opens the
+// newest doc of its kind, found by the autoDocsLatest callable (functions/
+// autoDocs.js); until that answers, or if it can't see the folder, the card
+// opens the folder as before.
+const OD_GDOC = (id) => `https://docs.google.com/document/d/${id}/edit`;
+const OD_GFOLDER = (id) => `https://drive.google.com/drive/folders/${id}`;
+const OD_DOCS = [
+  { k: "bonus",   title: "Koy Bonus Tracker", when: "Josh's sheet, shared with you", by: "Google Sheets", what: "Your bonus progress", url: "https://docs.google.com/spreadsheets/d/1YXBY_Obc-halWetukFMaZG0WgPT8tV6JAeosTDgoCHQ/edit", sheet: true },
+  { k: "packet",  title: "Friday Packet", when: "Fridays 5:30 AM", by: "App (fridayPacket)", what: "Money & billing, blockers, week ahead", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "packet" },
+  { k: "lead",    title: "Lead Meeting Prep", when: "Tuesdays 6:00 AM", by: "App (leadMeetingPrep)", what: "One doc per Wednesday lead meeting", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "lead" },
+  { k: "weekly",  title: "Weekly Lead Meeting", when: "Tuesdays 4:00 PM", by: "App (foremanMeetingPrep)", what: "Hours vs bid shows only margins that moved since last week", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "weekly" },
+  { k: "foreman", title: "Foreman + Lead meeting notes", when: "Tuesdays 4:00 PM", by: "App (foremanMeetingPrep)", what: "This week's prep is added at the top", url: OD_GDOC("1t7i3gFiLsWmb-htGleutCZFh6TXSAnNbqbq9_ma3e80") },
+  { k: "monday",  title: "Monday Office Meeting", when: "Mondays 3:00 PM", by: "Claude routine", what: "Prefilled from last week, calendar, approved COs, bids", url: OD_GFOLDER("1-_A2XYgbz85O83K1Hwspka4KCnYeZQYP"), folder: true, latest: "monday" },
+  { k: "strategy", title: "Weekly Strategy Meeting prep", when: "Routine is off", by: "Claude routine", what: "Saved in the same folder as the Friday Packet", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "strategy" },
+  { k: "leadnotes", title: "Lead meeting notes", when: "Read by the prep runs", by: "You", what: "The running Tuesday notes doc", url: OD_GDOC("1gn8CcqImvP2Zra_0gC8xAhUTzV8M8UGOrw44ipLwFKg") },
+  { k: "ninety",  title: "First 90 Days plan", when: "Checked Mon 6:30 AM + Fri 3:00 PM", by: "Claude routine reads it", what: "Goals, action plan and weekly checklist", url: OD_GDOC("1o61lNWEa0rBJWd5ZtMKIGcorv3VQRV7-VZTctsu8zdU") },
+  { k: "appl",    title: "Appliance Loads - Master", when: "Nightly about 1:00 AM", by: "Claude routine", what: "Every job's appliances, amps and Home Runs check", url: "https://docs.google.com/spreadsheets/d/1oiefT8TN2oSUGzyNgwg2dFsmXVPL8DxwYGoIksxQKKI/edit" },
+  { k: "plans",   title: "Job Plans", when: "Plan Intake, 3 times a day", by: "Claude routine + app", what: "Job and quote folders, MOST UPDATED, _Plan Inbox", url: OD_GFOLDER("1laC4udt1sBdV-_QUMzzbKJfD03q4_Ml3"), folder: true },
+];
+const OD_PLAN_FOLDER = ["folder_created", "folder_adopted", "folder_renamed", "folder_linked", "quote_merged", "quote_closed"];
+const OD_PLAN_WALK = ["walk_existing_job", "walk_unmatched"];
+function odAgo(at, now) {
+  if (!at) return "";
+  const m = Math.max(0, Math.round((now - at) / 60000));
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+const OD_O = "#F2702A", OD_G = "#2FBF71", OD_R = "#E5484D", OD_B = "#3B6FE0", OD_P = "#8F7EE0", OD_GOLD = "#C99A2E";
+const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
+const OD_DAY = 24*60*60*1000;
+// Calendar days, not 24-hour steps: the fall-back Sunday is 25 hours long.
+const odAddDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+
+function odDate(v) {
+  if (!v) return null;
+  if (typeof v.toDate === "function") { const d = v.toDate(); return isNaN(d) ? null : d; }
+  if (typeof v === "number") { const d = new Date(v); return isNaN(d) ? null : d; }
+  if (typeof v === "string") return parseAnyDate(v.trim());
+  return null;
+}
+// A date with no clock time ("10/9/2026", "2026-10-09") — shown without a time.
+const odDateOnly = (v) => typeof v === "string" && /^(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})$/.test(v.trim());
+const odText = (html) => String(html || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0*39;/g, "'").replace(/\s+/g, " ").trim();
+const odFirst = (name) => String(name || "").trim().split(/\s+/)[0] || "";
+const odTime = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const odShort = (d) => `${d.getMonth()+1}/${d.getDate()}`;
+const odDow = (d) => d.toLocaleDateString([], { weekday: "short" });
+function odWhen(ev, now) {
+  const today = localYmd(now), y = localYmd(odAddDays(now, -1)), k = localYmd(ev.at);
+  const day = k === today ? "Today" : k === y ? "Yesterday" : `${odDow(ev.at)} ${odShort(ev.at)}`;
+  return ev.dateOnly ? day : `${day} · ${odTime(ev.at)}`;
+}
+
+// Everything that happened on the jobs, newest first, last 30 days.
+// lastWork (optional) gets each job's newest real work, any age — opening a
+// job stamps lastActivityAt / updated_at, so those never count as work.
+function odBuildEvents(jobs, now, lastWork) {
+  const out = [], from = now.getTime() - 30*OD_DAY, to = now.getTime() + 5*60*1000;
+  jobs.forEach(j => {
+    const push = (raw, type, who, label, detail, tone) => {
+      const at = odDate(raw);
+      if (!at || at.getTime() > to) return;
+      if (lastWork && (!lastWork[j.id] || at > lastWork[j.id])) lastWork[j.id] = at;
+      if (at.getTime() < from) return;
+      out.push({ at, dateOnly: odDateOnly(raw), type, who: String(who || "").trim(), label, detail: detail || "", tone: tone || "", job: j });
+    };
+    [["roughPunch","Rough"],["finishPunch","Finish"],["qcPunch","QC"]].forEach(([k, ph]) => sbv2WalkPunch(j[k], it => {
+      if (!it || it.voided) return;
+      if (it.done) push(it.checkedAtTs || it.checkedAt, "punch", it.checkedBy, `${ph} punch closed`, odText(it.text), "good");
+      push(it.addedAtTs || it.addedAt, "punch", it.addedBy, `${ph} punch added`, odText(it.text), "");
+    }));
+    // Return-trip punch (items with originItemId are mirrors of a main punch item).
+    (j.returnTrips || []).forEach(rt => (rt && Array.isArray(rt.punch) ? rt.punch : []).forEach(it => {
+      if (!it || it.voided || it.originItemId) return;
+      if (it.done) push(it.checkedAtTs || it.checkedAt, "punch", it.checkedBy, "Return trip punch closed", odText(it.text), "good");
+      push(it.addedAtTs || it.addedAt, "punch", it.addedBy, "Return trip punch added", odText(it.text), "");
+    }));
+    // Questions, stored per floor.
+    [["roughQuestions","Rough"],["finishQuestions","Finish"]].forEach(([k, ph]) => {
+      const v = j[k], lists = Array.isArray(v) ? [v] : v && typeof v === "object" ? Object.values(v).filter(Array.isArray) : [];
+      lists.forEach(list => list.forEach(q => {
+        if (!q || q.deleted) return;
+        push(q.addedAt, "question", q.addedBy, `${ph} question asked`, odText(q.question), "");
+        if (q.answeredAt) push(q.answeredAt, "question", q.answeredBy, `${ph} question answered`, odText(q.question), "good");
+      }));
+    });
+    (j.jobNotes || []).forEach(n => { if (n && !n.deleted && !n.archived) push(n.createdAt, "note", n.createdBy, "Job note added", odText(n.title), ""); });
+    (j.changeOrders || []).forEach(co => {
+      if (!co) return;
+      push(co.createdAt || co.date, "co", co.createdBy, "Change order added", odText(co.desc), "");
+      // coStatusDate is cleared on most status moves, so it can't date them;
+      // use the stamps the send / quote / Simpro sync paths actually write.
+      if (co.submittedAt) push(co.submittedAt, "co", co.submittedBy, "Change order sent to GC", odText(co.desc), "");
+      if (co.quoteAddedAt) push(co.quoteAddedAt, "co", co.quoteAddedBy, `Quote ${co.quoteNumber ? "#" + co.quoteNumber + " " : ""}added to change order`, odText(co.desc), "");
+      if (co.coStatusSyncedAt && OD_CO_LABEL[co.coStatus])
+        push(co.coStatusSyncedAt, "co", "", `Change order ${OD_CO_LABEL[co.coStatus]} (Simpro)`, odText(co.desc), ["approved","completed"].includes(co.coStatus) ? "good" : co.coStatus === "denied" ? "bad" : "");
+    });
+    [["roughInspectionAttempts","Rough"],["finalInspectionAttempts","Final"]].forEach(([k, ph]) => (j[k] || []).forEach(a => {
+      if (!a || !a.result) return;
+      const fail = a.result === "fail", n = (a.items || []).length;
+      push(a.date, "insp", a.by, `${ph} inspection ${fail ? "failed" : "passed"}`, fail && n ? `${n} item${n === 1 ? "" : "s"} to fix` : "", fail ? "bad" : "good");
+    }));
+    (j.returnTrips || []).forEach(rt => {
+      if (!rt) return;
+      if (rt.signedOff && rt.signedOffDate) push(rt.signedOffDate, "rt", rt.signedOffBy, "Return trip signed off", odText(rt.scope), "good");
+    });
+    [["roughUpdates","Rough"],["finishUpdates","Finish"]].forEach(([k, ph]) => (j[k] || []).forEach(u => {
+      if (u) push(u.createdAt || u.date, "update", u.addedBy, `${ph} daily update`, odText(u.text), "");
+    }));
+    const hist = (j.statusUpdateHistory || []).filter(Boolean);
+    hist.forEach(h => push(h.at, "update", h.by, "Status update", odText(h.text), ""));
+    if (j.statusUpdateAt && !hist.some(h => h.at === j.statusUpdateAt)) push(j.statusUpdateAt, "update", j.statusUpdateBy, "Status update", odText(j.statusUpdate), "");
+    // Photos: one row per job and day so a 40-photo walk is one line. Photos
+    // carry no upload stamp; their id is a millisecond time from the uploading
+    // session, good to the day, so these rows are date-only and unattributed.
+    const seen = new Set(), days = {};
+    const addPh = (p) => {
+      if (!p || p.isFile || !(p.url || p.downloadURL)) return;
+      const url = p.url || p.downloadURL; if (seen.has(url)) return; seen.add(url);
+      const at = odDate(p.takenAt) || (/^\d{13}$/.test(String(p.id || "")) ? new Date(+p.id) : null);
+      if (at) { const k = localYmd(at); days[k] = (days[k] || 0) + 1; }
+    };
+    try { buildJobPhotos(j).forEach(addPh); } catch (e) {}
+    [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pu => sbv2WalkPunch(pu, it => { if (it && !it.voided) (it.photos || []).forEach(addPh); }));
+    (j.returnTrips || []).forEach(rt => (rt && Array.isArray(rt.punch) ? rt.punch : []).forEach(it => { if (it && !it.originItemId) (it.photos || []).forEach(addPh); }));
+    Object.entries(days).forEach(([k, n]) => push(k, "photo", "", `${n} photo${n === 1 ? "" : "s"} added`, "", ""));
+  });
+  return out.sort((a, b) => b.at - a.at);
+}
+
+// Dated work coming up (and overdue), from the job fields the Forecast reads.
+// Dated work ahead and behind (v532: audited against live data). Only dates
+// that still mean something: no inspection target once that inspection is
+// logged or the phase moved past it, no start for a phase underway, on hold
+// or done, no scan once the link is in. Completed jobs keep only open RTs.
+function odBuildSchedule(jobs, upcoming, today) {
+  const out = [];
+  const add = (raw, type, label, job, extra) => { const at = odDate(raw); if (at) out.push({ at, type, label, job, name: job ? job.name : (extra && extra.name) || "", ...(extra || {}) }); };
+  const lastAttempt = (list) => (list || []).reduce((m, x) => { const at = x && odDate(x.date); return at && (!m || at > m) ? at : m; }, null);
+  const liveNames = new Set();
+  jobs.forEach(j => {
+    liveNames.add(String(j.name || "").trim().toLowerCase());
+    (j.returnTrips || []).forEach(rt => {
+      if (!rt || rt.signedOff || rt.rtStatus === "complete") return;
+      const dated = rt.scheduledDate || rt.date || (rt.rtStatus === "scheduled" && rt.rtStatusDate);
+      if (dated) add(dated, "rt", "Return trip", j, { detail: odText(rt.scope), who: rt.assignedTo || "" });
+      else if (rt.rtStatusDate) add(rt.rtStatusDate, "rt", "Schedule return trip by", j, { detail: odText(rt.scope), who: rt.assignedTo || "", by: true });
+    });
+    let phase = null; try { phase = odPhase(j, today); } catch (e) {}
+    if (!phase || phase.key === "complete") return;
+    if (j.quickJob) { if (j.quickJobStatus === "scheduled" && j.quickJobDate) add(j.quickJobDate, "start", "Quick job", j, { confirmed: true }); return; }
+    if (j.tempPed) { if (j.tempPedStatus === "scheduled" && j.tempPedScheduledDate) add(j.tempPedScheduledDate, "start", "Temp ped set", j, { confirmed: true }); return; }
+    const rs = effRS(j), fs = effFS(j), rp = parseStage(j.roughStage), fp = parseStage(j.finishStage);
+    // Work logged under a not-started status counts as started (odPhase "stale").
+    const roughStarted = !OD_NOT_STARTED.includes(rs) || rp > 0 || (phase.stale && ["rough","finish"].includes(phase.key)),
+      finishStarted = !OD_NOT_STARTED.includes(fs) || fp > 0 || (phase.stale && phase.key === "finish");
+    if (j.roughProjectedStart && !roughStarted)
+      add(j.roughProjectedStart, "start", "Rough start", j, { confirmed: !!j.roughStartConfirmed || ["scheduled","date_confirmed"].includes(rs) });
+    if (j.finishProjectedStart && !finishStarted)
+      add(j.finishProjectedStart, "start", "Finish start", j, { confirmed: !!j.finishStartConfirmed || ["scheduled","date_confirmed"].includes(fs) });
+    const insp = (target, result, attempts, label, ok) => {
+      const at = odDate(target), last = lastAttempt(attempts);
+      if (!at || result || !ok || (last && localYmd(last) >= localYmd(at))) return;
+      add(target, "insp", label, j);
+    };
+    insp(j.fourWayTargetDate, j.roughInspectionResult, j.roughInspectionAttempts, "Rough inspection", roughStarted && rs !== "complete" && !finishStarted);
+    insp(j.finalInspectionTargetDate, j.finalInspectionResult, j.finalInspectionAttempts, "Final inspection", finishStarted);
+    if (j.qcStatus === "scheduled" && j.qcStatusDate) add(j.qcStatusDate, "qc", "Rough QC walk", j);
+    if (j.finishQcStatus === "scheduled" && j.finishQcStatusDate) add(j.finishQcStatusDate, "qc", "Finish QC walk", j);
+    const scanned = (Array.isArray(j.matterportLinks) && j.matterportLinks.length) || j.matterportLink;
+    if (j.matterportStatus === "scheduled" && j.matterportStatusDate && !scanned) add(j.matterportStatusDate, "scan", "Matterport scan", j);
+  });
+  (upcoming || []).forEach(u => { if (u && u.projectedStart && !liveNames.has(String(u.name || "").trim().toLowerCase())) add(u.projectedStart, "start", "Upcoming job start", null, { name: u.name || "Upcoming job", confirmed: !!u.startConfirmed }); });
+  return out.sort((a, b) => a.at - b.at);
+}
+const OD_SCHED_COLOR = { start: OD_O, insp: OD_G, qc: OD_B, scan: OD_P, rt: OD_R };
+const OD_SCHED_ICON = { start: "flag", insp: "checkCircle", qc: "clipboard", scan: "camera", rt: "returntrips" };
+
+function OdBars({ vals, color, hi, label, max }) {
+  const w = 7, gap = 5, h = 34, m = max || Math.max(1, ...vals), W = Math.max(1, vals.length*(w+gap)-gap);
+  return (
+    <svg className="spark" width={W} height={h} viewBox={`0 0 ${W} ${h}`} role="img" aria-label={label}>
+      {vals.map((v, i) => { const bh = Math.max(2, Math.round((v/m)*h)); return <rect key={i} x={i*(w+gap)} y={h-bh} width={w} height={bh} rx="2" fill={color} opacity={i === hi ? 1 : .42}/>; })}
+    </svg>
+  );
+}
+function OdRing({ pct, color, size = 36, label }) {
+  const r = size/2 - 4, C2 = 2*Math.PI*r, p = Math.max(0, Math.min(1, pct || 0));
+  return (
+    <svg className="spark" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#F2EEEA" strokeWidth="5"/>
+      {p > 0 && <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" strokeDasharray={`${(C2*p).toFixed(1)} ${C2.toFixed(1)}`} transform={`rotate(-90 ${size/2} ${size/2})`}/>}
+    </svg>
+  );
+}
+// A stat card. With onClick it becomes a button that opens the list behind the number.
+function OdMini({ title, color, icon, value, sub, children, onClick }) {
+  const inner = (<>
+    <div className="t">{title}<i><Icon name={icon} size={12} stroke={2.4}/></i></div>
+    <div className="b"><div className="v">{value}{sub ? <small>{sub}</small> : null}</div>{children}</div>
+    {onClick && <span className="more">See the list<Icon name="chevronRight" size={11}/></span>}
+  </>);
+  return onClick
+    ? <button type="button" className="od-white od-mini od-tap" style={{ "--c": color }} onClick={onClick}>{inner}</button>
+    : <div className="od-white od-mini" style={{ "--c": color }}>{inner}</div>;
+}
+// Area line chart. vals may hold nulls. Tap or hover a point to select it (sel/onSel);
+// the selected point gets the label pill from tip(v, i).
+function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel, label, sel, onSel, tip }) {
+  const W = 560, H = 200, L = 40, R = 14, T = 28, B = 26;
+  const x = (i) => L + (vals.length < 2 ? 0 : i*(W-L-R)/(vals.length-1));
+  const y = (v) => T + (1 - (v-min)/(max-min || 1))*(H-T-B);
+  const pts = vals.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
+  let d = "";
+  pts.forEach((p, i) => {
+    if (!i) { d = `M${p[0].toFixed(1)} ${p[1].toFixed(1)}`; return; }
+    const p0 = pts[i-2] || pts[i-1], p1 = pts[i-1], p2 = p, p3 = pts[i+1] || p;
+    d += ` C${(p1[0]+(p2[0]-p0[0])/6).toFixed(1)} ${(p1[1]+(p2[1]-p0[1])/6).toFixed(1)} ${(p2[0]-(p3[0]-p1[0])/6).toFixed(1)} ${(p2[1]-(p3[1]-p1[1])/6).toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  });
+  let hi = sel != null && vals[sel] != null ? sel : -1;
+  if (hi < 0) vals.forEach((v, i) => { if (v != null && (hi < 0 || v >= vals[hi])) hi = i; });
+  const gid = "odg" + String(color).replace(/[^a-z0-9]/gi, "");
+  const step = vals.length > 1 ? (W-L-R)/(vals.length-1) : W-L-R;
+  const pill = hi >= 0 && tip ? tip(vals[hi], hi) : "";
+  const pw = Math.max(54, pill.length * 6.2 + 16);
+  const px = hi >= 0 ? Math.min(W - R - pw/2, Math.max(L + pw/2, x(hi))) : 0;
+  return (
+    <svg className="od-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} fontFamily="inherit">
+      <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".26"/><stop offset="1" stopColor={color} stopOpacity="0"/></linearGradient></defs>
+      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="#EFEAE5"/><text x={L-8} y={y(t)+3.5} textAnchor="end" fontSize="10" fill="#9A918A">{fmt(t)}</text></g>)}
+      {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="10" fill={OD_B}>{targetLabel}</text></g>}
+      {pts.length > 1 && <path d={`${d} L${pts[pts.length-1][0]} ${y(min)} L${pts[0][0]} ${y(min)}Z`} fill={`url(#${gid})`}/>}
+      {pts.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>}
+      {hi >= 0 && <line x1={x(hi)} x2={x(hi)} y1={y(vals[hi])} y2={y(min)} stroke={color} strokeWidth="1" strokeDasharray="2 3"/>}
+      {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#fff" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
+      {pill && <g><rect x={px-pw/2} y={y(vals[hi])-27} width={pw} height="18" rx="9" fill="#FFF3EA" stroke={color}/><text x={px} y={y(vals[hi])-14.5} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1E1A17">{pill}</text></g>}
+      {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="10" fill="#9A918A">{l}</text> : null)}
+      {onSel && vals.map((v, i) => <rect key={"h" + i} x={x(i) - step/2} y={T - 10} width={step} height={H - T - B + 10} fill="transparent" style={{ cursor: "pointer" }}
+        onMouseEnter={() => onSel(i)} onClick={() => onSel(i)}><title>{labels[i] || ""}</title></rect>)}
+    </svg>
+  );
+}
+// Horizontal bars. A row with onClick is a button.
+function OdHBars({ rows, max, empty }) {
+  if (!rows.length) return <div className="od-empty">{empty}</div>;
+  const m = max || Math.max(1, ...rows.map(r => r.v));
+  return (
+    <div className="od-hb">
+      {rows.map((r, i) => {
+        const body = (<><b>{r.name}</b><span>{r.note}</span><i style={{ "--w": `${Math.max(2, (r.v/m)*100).toFixed(1)}%`, "--c": r.color }}/></>);
+        return r.onClick
+          ? <button type="button" className={"r tap" + (r.on ? " on" : "")} key={i} onClick={r.onClick}>{body}</button>
+          : <div className="r" key={i}>{body}</div>;
+      })}
+    </div>
+  );
+}
+function OdItem({ color, icon, tag, title, sub, when, onClick }) {
+  return (
+    <button type="button" className="od-item" onClick={onClick} disabled={!onClick}>
+      <span className="th" style={{ background: color }}><Icon name={icon} size={16} color="#fff"/></span>
+      <span className="tx"><em style={{ color }}>{tag}</em><b>{title}</b>{sub ? <small>{sub}</small> : null}</span>
+      {when ? <span className="when">{when}</span> : null}
+      {onClick ? <span className="chev"><Icon name="chevronRight" size={14}/></span> : null}
+    </button>
+  );
+}
+
+// The app has no error boundary, so a throw here would blank every screen.
+// This keeps a dashboard bug inside the Dashboard tab.
+class OdBoundary extends Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err) { console.warn("[HE dashboard] render failed:", err); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div style={{ padding: 18, borderRadius: 14, background: C.card, border: `1px solid ${C.border}`, color: C.text, maxWidth: 640, margin: "20px auto" }}>
+        <b>The dashboard hit an error and stopped.</b>
+        <div style={{ fontSize: 12.5, color: C.dim, marginTop: 6 }}>The rest of the app is fine. Send Koy a screenshot of this: {String((this.state.err && this.state.err.message) || this.state.err)}</div>
+        <button type="button" onClick={() => this.setState({ err: null })} style={{ marginTop: 10, border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit" }}>Try again</button>
+      </div>
+    );
+  }
+}
+
+// Slide-over panel for a job, a person or a list behind a number.
+function OdSheet({ title, sub, onClose, children, actions }) {
+  useEffect(() => {
+    const k = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <div className="od-sheet-wrap" onClick={onClose}>
+      <div className="od-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()}>
+        <div className="od-sheet-h">
+          <div className="tt"><b>{title}</b>{sub ? <small>{sub}</small> : null}</div>
+          {actions}
+          <button type="button" className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
+        </div>
+        <div className="od-sheet-b">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// Everything open on one job, for the job panel and the drill-down lists.
+function odJobInfo(j, now) {
+  const punch = [];
+  [["roughPunch","Rough"],["finishPunch","Finish"],["qcPunch","QC"]].forEach(([k, ph]) => sbv2WalkPunch(j[k], (it, ctx) => {
+    if (!it || it.voided || it.done) return;
+    const at = odDate(it.addedAtTs || it.addedAt) || (/^\d{13}$/.test(String(it.id || "")) ? new Date(+it.id) : null);
+    punch.push({ text: odText(it.text) || "(no text)", phase: ph, room: (ctx && ctx.roomName) || "", who: it.assignedTo || "",
+      age: at ? Math.max(0, Math.floor((now - at) / OD_DAY)) : null, serious: it.severity === "serious", waiting: !!it.waiting, job: j });
+  }));
+  const cos = (j.changeOrders || []).filter(Boolean);
+  const openCos = cos.filter(co => !["completed","converted","denied"].includes(co.coStatus || "") && !coIsConverted(co, j.returnTrips));
+  const rts = (j.returnTrips || []).filter(Boolean);
+  const openRts = rts.filter(rt => !rt.signedOff && rt.rtStatus !== "complete");
+  // The Pass/Fail buttons log an attempt on every tap and leave it when the
+  // result is cleared: drop back-to-back repeats and a trailing attempt whose
+  // phase result is now blank, so counts match what really happened.
+  const realAtts = (list, result, ph) => {
+    const out = [];
+    (list || []).forEach(a => { if (!a || !a.result) return; const p = out[out.length - 1]; if (p && p.result === a.result && p.date === a.date) return; out.push({ ...a, ph }); });
+    if (!result && out.length) out.pop();
+    return out;
+  };
+  const atts = [...realAtts(j.roughInspectionAttempts, j.roughInspectionResult, "Rough"), ...realAtts(j.finalInspectionAttempts, j.finalInspectionResult, "Final")]
+    .filter(a => a && a.result).map(a => ({ ...a, _at: odDate(a.date) })).sort((a, b) => (b._at || 0) - (a._at || 0));
+  const failOpen = [];
+  if (j.roughInspectionResult === "fail") (j.roughInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Rough", text: odText(it.text || it) }); });
+  if (j.finalInspectionResult === "fail") (j.finalInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Final", text: odText(it.text || it) }); });
+  return { punch, cos, openCos, rts, openRts, atts, failOpen };
+}
+// Where the work actually is (v532). The Job Board's STAGE_SECTIONS sort by
+// the first match, so a job whose prep checklist isn't fully ticked sits in
+// "Pre Job Prep" even with rough underway. Here the crew's own rough/finish
+// status wins; unfinished prep is a separate flag, and a start date that has
+// passed without the status moving gets its own honest label.
+const OD_PHASES = [
+  { key: "finish",     label: "Finish in progress",       color: "#3B6FE0" },
+  { key: "finishDue",  label: "Finish start date passed", color: "#C99A2E" },
+  { key: "finishHold", label: "Finish on hold",           color: "#B0892C" },
+  { key: "between",    label: "Rough done, finish next",  color: "#E8A020" },
+  { key: "rough",      label: "Rough in progress",        color: "#F2702A" },
+  { key: "roughDue",   label: "Rough start date passed",  color: "#C99A2E" },
+  { key: "roughHold",  label: "Rough on hold",            color: "#B0892C" },
+  { key: "roughNext",  label: "Rough not started",        color: "#8C847D" },
+  { key: "noStatus",   label: "No status set",            color: "#6E6660" },
+  { key: "prep",       label: "Job prep",                 color: "#3E9D98" },
+  { key: "commPrecon", label: "Pre-Con",                  color: "#3E9D98" },
+  { key: "commReady",  label: "Ready to start",           color: "#8C847D" },
+  { key: "commInProgress", label: "In progress",          color: "#F2702A" },
+  { key: "commHold",   label: "On hold",                  color: "#B0892C" },
+  { key: "commCloseout", label: "Closeout",               color: "#8F7EE0" },
+  { key: "quick",      label: "Quick job",                color: "#8F7EE0" },
+  { key: "ped",        label: "Temp ped",                 color: "#8F7EE0" },
+  { key: "complete",   label: "Complete",                 color: "#2FBF71" },
+];
+const OD_PHASE = Object.fromEntries(OD_PHASES.map((p, i) => [p.key, { ...p, i }]));
+const OD_NOT_STARTED = ["", "waiting_date", "date_confirmed", "scheduled"];
+const OD_UNDERWAY = ["rough", "finish", "commInProgress"];
+function odPhase(j, today) {
+  const ph = (key, note) => ({ ...OD_PHASE[key], note: note || "" });
+  if (j.quickJob) {
+    const s = j.quickJobStatus || "new";
+    return ["complete", "invoice"].includes(s) ? ph("complete") : ph("quick", s === "inprogress" ? "In progress" : s === "scheduled" ? "Scheduled" : "New");
+  }
+  if (j.tempPed) return j.tempPedStatus === "completed" ? ph("complete") : ph("ped", j.tempPedStatus === "scheduled" ? "Scheduled" : "Ready to schedule");
+  if (j.division === "commercial") {
+    const st = commOf(j).stage;
+    if (st === "complete") return ph("complete");
+    if (st === "inprogress") return ph("commInProgress");
+    if (st === "hold") return ph("commHold");
+    if (st === "closeout") return ph("commCloseout");
+    // No commercial stage set: the crew's rough/finish status still wins over
+    // the Pre-Con checklist (an open checklist shows as its own flag).
+    const crs = effRS(j), cfs = effFS(j);
+    if (["complete","invoice"].includes(cfs)) return ph("complete");
+    if (cfs === "inprogress") return ph("commInProgress", "Finish in progress");
+    if (crs === "inprogress") return ph("commInProgress", "Rough in progress");
+    if (["complete","invoice"].includes(crs)) return ph("commInProgress", "Rough done, finish next");
+    if ([crs, cfs].includes("waiting")) return ph("commHold");
+    return commPhase(j) !== null ? ph("commPrecon") : ph("commReady");
+  }
+  const rs0 = effRS(j), fs0 = effFS(j);
+  const rs = rs0 === "invoice" ? "complete" : rs0, fs = fs0 === "invoice" ? "complete" : fs0;
+  // Newest daily update or closed punch item for a phase: proof work happened
+  // even when nobody moved the status.
+  const worked = (updKey, punchKey) => {
+    let m = null; const bump = (v) => { const at = odDate(v); if (at && (!m || at > m)) m = at; };
+    (j[updKey] || []).forEach(u => { if (u) bump(u.createdAt || u.date); });
+    sbv2WalkPunch(j[punchKey], it => { if (it && it.done && !it.voided) bump(it.checkedAtTs || it.checkedAt); });
+    return m;
+  };
+  const behind = (at, st) => `Work logged ${odShort(at)}, status still "${odStatusLabel(st)}"`;
+  if (OD_NOT_STARTED.includes(fs) && !["inprogress","waiting"].includes(rs)) { const at = worked("finishUpdates", "finishPunch"); if (at) return { ...ph("finish", behind(at, fs)), stale: true }; }
+  if (OD_NOT_STARTED.includes(rs) && OD_NOT_STARTED.includes(fs)) { const at = worked("roughUpdates", "roughPunch"); if (at) return { ...ph("rough", behind(at, rs)), stale: true }; }
+  const due = (v) => { const at = odDate(v); return at && localYmd(at) <= today ? at : null; };
+  const when = (v, ok) => { const at = odDate(v); return at ? `${ok ? "confirmed" : "projected"} ${odShort(at)}${localYmd(at) < today ? " (date passed)" : ""}` : ""; };
+  if (fs === "complete") return ph("complete");
+  if (fs === "inprogress") return ph("finish", parseStage(j.finishStage) ? `${parseStage(j.finishStage)}%` : "");
+  if (fs === "waiting") return ph("finishHold");
+  if (rs === "complete") {
+    const at = ["scheduled", "date_confirmed"].includes(fs) && due(j.finishProjectedStart);
+    if (at) return ph("finishDue", `Set for ${odShort(at)}, finish status not moved to In Progress`);
+    return ph("between", when(j.finishProjectedStart) ? `Finish ${when(j.finishProjectedStart, j.finishStartConfirmed)}` : fs === "waiting_date" || !fs ? "Waiting on a finish date" : "");
+  }
+  if (rs === "inprogress") return ph("rough", parseStage(j.roughStage) ? `${parseStage(j.roughStage)}%` : "");
+  if (rs === "waiting") return ph("roughHold");
+  const at = ["scheduled", "date_confirmed"].includes(rs) && due(j.roughProjectedStart);
+  if (at) return ph("roughDue", `Set for ${odShort(at)}, rough status not moved to In Progress`);
+  if (!prepClearedToStart(j)) return ph("prep");
+  if (!rs) return ph("noStatus", j.roughProjectedStart ? `Rough projected ${j.roughProjectedStart}` : "");
+  return ph("roughNext", when(j.roughProjectedStart) ? `Rough ${when(j.roughProjectedStart, j.roughStartConfirmed)}` : rs === "waiting_date" || !rs ? "Waiting on a rough date" : "");
+}
+// A return trip's date lives in rtStatusDate (scheduledDate is always empty in
+// live data); with status "needs" that same field is the schedule-by date.
+const odRtDate = (rt) => rt.scheduledDate || rt.date || (rt.rtStatus === "scheduled" ? rt.rtStatusDate : "") || "";
+const odRtLabel = (rt) => { const at = odDate(odRtDate(rt)); if (at) return `${odDow(at)} ${odShort(at)}`; const by = odDate(rt.rtStatusDate); return by ? `Schedule by ${odShort(by)}` : "No date"; };
+const OD_QC_BUCKET = { failed: "failed, needs fixing", overdue: "walk date passed, log the result", needs: "needs a walk", scheduled: "scheduled" };
+const odQcText = (v) => v ? (getStatusDef(QC_STATUSES, v).label || v).replace(/^QC /, "") : "";
+const odStatusLabel = (v) => { const s = ROUGH_STATUSES.find(x => x.value === (v || "")); return v ? ((s && s.label) || v) : "Not set"; };
+const odPlural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob }) {
+  const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
+  const [tab, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
+  const pickTab = (t) => { setTab(t); keep("he_odash_tab", t); };
+  const [foreman, setForeman] = useState(() => read("he_odash_foreman", v => v != null, ""));
+  const pickForeman = (f) => { setForeman(f); keep("he_odash_foreman", f); };
+  const [range, setRange] = useState(() => Number(read("he_odash_range", v => ["7","14","30"].includes(v), "14")));
+  const pickRange = (r) => { setRange(r); keep("he_odash_range", String(r)); };
+  const [q, setQ] = useState("");
+  const [sheet, setSheet] = useState(null);
+  const [actFilter, setActFilter] = useState("all");
+  const [actQ, setActQ] = useState("");
+  const [actPerson, setActPerson] = useState("");
+  const [actDay, setActDay] = useState("");
+  const [chartSel, setChartSel] = useState(null);
+  const [fpSel, setFpSel] = useState(null);
+  const [week, setWeek] = useState(0);
+  const [jobsSort, setJobsSort] = useState({ key: "last", dir: -1 });
+  const [jobsStage, setJobsStage] = useState("");
+  const [jobsQ, setJobsQ] = useState("");
+  const [planShow, setPlanShow] = useState("all");
+  const [showAllDevices, setShowAllDevices] = useState(false);
+  const [tick, setTick] = useState(0);
+  useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 5*60*1000); return () => clearInterval(id); }, []);
+  useEffect(() => { setChartSel(null); setActDay(""); }, [range, foreman]);
+
+  // People tab: the device list (read once per visit, like Settings does).
+  const [devices, setDevices] = useState(null);
+  const [latest, setLatest] = useState(null);
+  useEffect(() => {
+    if (tab !== "people") return;
+    let dead = false;
+    (async () => {
+      try { const snap = await getDoc(doc(db, "settings", "deviceVersions")); if (!dead) setDevices(snap.exists() ? (snap.data().devices || {}) : {}); }
+      catch (e) { if (!dead) setDevices({}); }
+      try { const res = await fetch(`/service-worker.js?t=${Date.now()}`, { cache: "no-store" }); const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/); if (!dead) setLatest(m ? m[1] : null); } catch (e) {}
+    })();
+    return () => { dead = true; };
+  }, [tab]);
+  // Automations tab: plan-intake findings (live while the tab is open, same
+  // query and dry/test filter as the Today Plans card) and the appliance sheet.
+  const [findings, setFindings] = useState(undefined);   // undefined = loading, null = unreadable
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let unsub = null;
+    try {
+      unsub = onSnapshot(query(collection(db, "agentFindings"), orderBy("createdAt", "desc"), limit(250)),
+        snap => setFindings(snap.docs.filter(x => !/^(dry|test)_/.test(x.id)).map(x => ({ id: x.id, ...x.data() }))),
+        () => setFindings(null));
+    } catch (e) { setFindings(null); }
+    return () => { if (unsub) unsub(); };
+  }, [tab]);
+  const [latestDocs, setLatestDocs] = useState({});
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let dead = false;
+    try { httpsCallable(functions, "autoDocsLatest")({}).then(r => { if (!dead) setLatestDocs((r && r.data && r.data.docs) || {}); }, e => console.warn("[HE dashboard] autoDocsLatest:", e && e.message)); } catch (e) {}
+    return () => { dead = true; };
+  }, [tab]);
+  const [packetAt, setPacketAt] = useState(null);
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let dead = false;
+    getDoc(doc(db, "settings", "fridayPacket")).then(snap => { if (!dead) setPacketAt(snap.exists() ? odDate((snap.data() || {}).lastRunAt) : null); }, () => {});
+    return () => { dead = true; };
+  }, [tab]);
+  const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
+  const [applTick, setApplTick] = useState(0);
+  useEffect(() => {
+    if (tab !== "cc") return;
+    let dead = false;
+    setAppl(undefined);
+    fetchApplSheetRows(true).then(rows => { if (!dead) setAppl({ rows }); }, e => { if (!dead) setAppl({ err: e.message || "The appliance sheet could not be read." }); });
+    return () => { dead = true; };
+  }, [tab, applTick]);
+
+  const d = useMemo(() => {
+    const now = new Date(), today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const secs = OD_PHASES;
+    const allLive = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote");
+    const foremen = [...new Set(allLive.map(j => String(j.foreman || "").trim()).filter(n => n && !/^unassigned$/i.test(n)))].sort((a, b) => a.localeCompare(b));
+    const live = foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
+    const up = (upcoming || []).filter(u => u && (!foreman || sameName(u.foreman, foreman)));
+    const phaseById = {};
+    allLive.forEach(j => { try { phaseById[j.id] = odPhase(j, today); } catch (e) { phaseById[j.id] = null; } });
+    const secOf = (j) => phaseById[j.id] || null;
+    const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
+    const isDone = (j) => { const s = secOf(j); return !!s && s.key === "complete"; };
+    const active = live.filter(j => !isDone(j));
+    const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
+    const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
+
+    const lastWork = {};
+    const events = odBuildEvents(live, now, lastWork);
+    const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
+    const inRange = events.filter(e => e.at >= odAddDays(t0, -(range - 1)));
+    const evToday = events.filter(e => localYmd(e.at) === today);
+    const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = odAddDays(t0, -i), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
+
+    // Per-job rollups
+    const info = {}, lastAct = {};
+    live.forEach(j => {
+      info[j.id] = odJobInfo(j, now);
+      lastAct[j.id] = lastWork[j.id] || null;
+    });
+    const sched = odBuildSchedule(live, up, today);
+    const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
+
+    const openPunch = active.flatMap(j => info[j.id].punch);
+    const openCOs = live.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
+    const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
+    const openRTs = live.flatMap(j => info[j.id].openRts.map(rt => ({ rt, job: j })));
+    // Same rows and buckets as the app's QC tracker (qcWalkRows / qcBucketOf),
+    // with the date compared as a real date.
+    const qcRows = []; let qcAll = []; try { qcAll = qcWalkRows(active); } catch (e) {}
+    qcAll.forEach(r => {
+      const at = odDate(r.date), st = r.status === "scheduled" && at && localYmd(at) < today ? (r.started ? "overdue" : "needs") : qcBucketOf({ ...r, date: "" }, today);
+      if (["failed","overdue","needs","scheduled"].includes(st)) qcRows.push({ job: r.job, phase: r.phase + " QC", st, at });
+    });
+    const qcOrder = { failed: 0, overdue: 1, needs: 2, scheduled: 3 }; qcRows.sort((a, b) => qcOrder[a.st] - qcOrder[b.st]);
+    const byForeman = {};
+    const fmOf = (j) => SBV2_EXCLUDE_NAME(j.foreman) ? "No foreman" : String(j.foreman).trim();
+    active.forEach(j => { const f = fmOf(j); byForeman[f] = byForeman[f] || { open: 0, closed: 0, items: [] }; byForeman[f].open += info[j.id].punch.length; byForeman[f].items.push(...info[j.id].punch); });
+    events.forEach(e => { if (e.type === "punch" && e.tone === "good" && now - e.at < 30*OD_DAY) { const f = fmOf(e.job); if (byForeman[f]) byForeman[f].closed++; } });
+
+    // Inspections
+    const firsts = [], allAtts = [];
+    live.forEach(j => info[j.id].atts.forEach(a => { if (a._at) allAtts.push({ ...a, job: j }); }));
+    live.forEach(j => ["Rough","Final"].forEach(ph => {
+      const atts = info[j.id].atts.filter(a => a.ph === ph && a._at).sort((a, b) => a._at - b._at);
+      if (atts.length) firsts.push({ job: j, ph, at: atts[0]._at, pass: atts[0].result === "pass" });
+    }));
+    allAtts.sort((a, b) => b._at - a._at);
+    const fails = allAtts.filter(a => a.result === "fail");
+    const in90 = firsts.filter(f => now - f.at < 90*OD_DAY);
+    const fp90 = in90.length ? Math.round(100 * in90.filter(f => f.pass).length / in90.length) : null;
+    const insp30 = allAtts.filter(a => now - a._at < 30*OD_DAY);
+    const months = []; for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); const mf = firsts.filter(f => f.at.getFullYear() === m.getFullYear() && f.at.getMonth() === m.getMonth()); months.push({ m, label: m.toLocaleDateString([], { month: "short" }), n: mf.length, pass: mf.filter(f => f.pass).length, v: mf.length ? Math.round(100 * mf.filter(f => f.pass).length / mf.length) : null, list: mf }); }
+
+    // Schedule
+    const overdue = sched.filter(s => s.at < t0 && s.type !== "start");
+    const startsPast = sched.filter(s => s.at < t0 && s.type === "start");
+    const needsDate = [];
+    active.forEach(j => {
+      if (j.quickJob || j.tempPed) return;
+      const rs = effRS(j), fs = effFS(j);
+      if (["","waiting_date"].includes(rs) && !j.roughProjectedStart) needsDate.push({ job: j, what: "Rough start" });
+      else if (rs === "complete" && ["","waiting_date"].includes(fs) && !j.finishProjectedStart) needsDate.push({ job: j, what: "Finish start" });
+      else if (parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult && rs !== "complete") needsDate.push({ job: j, what: "Rough inspection" });
+    });
+    up.forEach(u => { if (!u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start" }); });
+    const scans = active.filter(j => matterportScanNeeded(j));
+
+    // Needs attention
+    const attn = [
+      { k: "stale", label: "Status is behind the work logged", color: OD_GOLD, icon: "alertTriangle",
+        rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_GOLD })) },
+      { k: "invoice", label: "Ready to invoice", color: OD_G, icon: "dollarSign",
+        rows: live.filter(j => j.readyToInvoice && !j.invoiceDismissed).map(j => ({ title: j.name, sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo].filter(Boolean).join(" · "), job: j, color: OD_G })) },
+      { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_B, icon: "changeorders",
+        rows: openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: odDate(x.co.submittedAt || x.co.createdAt || x.co.date) })).filter(x => x.at && now - x.at > 60*OD_DAY)
+          .sort((a, b) => a.at - b.at).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, job: x.job, color: OD_B })) },
+      { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_GOLD, icon: "checkCircle",
+        rows: overdue.filter(s => s.type === "insp" && now - s.at > 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_GOLD })) },
+      { k: "overdue", label: "Inspection date passed, no result logged", color: OD_R, icon: "alertTriangle",
+        rows: overdue.filter(s => s.type === "insp" && now - s.at <= 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_R })) },
+      { k: "startsPast", label: "Start date passed, phase not started", color: OD_O, icon: "flag",
+        rows: startsPast.map(s => ({ title: s.name, sub: `${s.label} was ${s.confirmed ? "set" : "projected"} for ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+      { k: "rtLate", label: "Return trips past their date", color: OD_R, icon: "returntrips",
+        rows: overdue.filter(s => s.type === "rt").map(s => ({ title: s.name, sub: `${s.by ? "Should have been scheduled by" : "Was set for"} ${odShort(s.at)}${s.detail ? " · " + s.detail : ""}`, job: s.job, color: OD_R })) },
+      { k: "failOpen", label: "Failed inspection items not fixed", color: OD_R, icon: "x",
+        rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
+      { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
+        rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+      { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
+        rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
+      { k: "rtNoDate", label: "Return trips with no date", color: OD_GOLD, icon: "returntrips",
+        rows: openRTs.filter(x => !x.rt.scheduledDate && !x.rt.date && !x.rt.rtStatusDate).map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_GOLD })) },
+      { k: "quiet", label: "In progress, no update in 5+ days", color: OD_GOLD, icon: "clock",
+        rows: active.filter(j => secOf(j) && OD_UNDERWAY.includes(secOf(j).key) && !secOf(j).stale && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
+          .sort((a, b) => (lastAct[a.id] || 0) - (lastAct[b.id] || 0))
+          .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_GOLD })) },
+      { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
+        rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
+    ].filter(a => a.rows.length);
+
+    // People
+    const accRank = { admin: 0, manager: 1, standard: 2 };
+    const staff = []; const staffKey = new Set();
+    (users || []).filter(u => u && u.active !== false && getAccess(u) !== "contractor" && String(u.name || "").trim())
+      .sort((a, b) => (accRank[getAccess(a)] ?? 9) - (accRank[getAccess(b)] ?? 9))
+      .forEach(u => { const k = String(u.name).trim().toLowerCase(); if (!staffKey.has(k)) { staffKey.add(k); staff.push(u); } });
+    const titleOf = (u) => u.title || (["admin","justin","jeromy"].includes(u.role) ? "admin" : ["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+    const people = staff.map(u => {
+      const mine = events.filter(e => e.who && sameName(e.who, u.name));
+      let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
+      const openedToday = new Set();
+      allLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && localYmd(at) === today) openedToday.add(j.id); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
+      const todayMine = mine.filter(e => localYmd(e.at) === today);
+      const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(odAddDays(t0, -i)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
+      const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : "quiet";
+      return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set([...todayMine.map(e => e.job.id), ...openedToday]).size, openedN: openedToday.size, days7, status, role: getAccess(u), title: titleOf(u),
+        lastJob: mine.length ? mine[0].job.name : "" };
+    }).sort((a, b) => (b.todayN - a.todayN) || ((b.last || 0) - (a.last || 0)));
+    // Foremen = the app's own title rule (Team Members); jobs whose foreman is
+    // blank, Unassigned, a contractor or deactivated get one card of their own.
+    const foremenP = people.filter(p => p.title === "foreman");
+    const noForemanJobs = active.filter(j => !j.quickJob && !j.tempPed && !foremenP.some(p => sameName(j.foreman, p.name)));
+    const openNeeds = (needs || []).filter(n => n && !n.voided && needIsOpen(n, today));
+    const load = {}; openNeeds.forEach(n => { const a = needAssignee(n) || "Unassigned"; (load[a] = load[a] || { n: 0, urgent: 0, list: [] }); load[a].n++; load[a].list.push(n); if (needPriority(n) === "urgent") load[a].urgent++; });
+    const timeOff = openNeeds.filter(n => n.timeoffId);
+
+    const tally = (list) => { const m = {}; list.forEach(e => { (m[e.job.id] = m[e.job.id] || { job: e.job, n: 0, ev: [] }); m[e.job.id].n++; m[e.job.id].ev.push(e); }); return Object.values(m).sort((a, b) => b.n - a.n); };
+    const busyToday = tally(evToday), busyRange = tally(inRange);
+    const busy = busyToday[0] ? { ...busyToday[0], when: "today" } : busyRange[0] ? { ...busyRange[0], when: `last ${range} days` } : null;
+
+    return { now, today, t0, secs, foremen, allLive, live, up, active, secOf, secIdx, bySec, prepOpen, events, evById, inRange, evToday, perDay, info, lastAct, sched, nextOf,
+      openPunch, openCOs, coWaiting, openRTs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, overdue, needsDate, scans, attn,
+      people, foremenP, noForemanJobs, openNeeds, load, timeOff, busy, busyRange };
+  }, [jobs, users, needs, upcoming, mode, tick, foreman, range]); // eslint-disable-line
+
+  const openJob = (job) => { if (job) setSheet({ kind: "job", id: job.id }); };
+  const openPerson = (name) => setSheet({ kind: "person", name });
+  const openList = (title, sub, rows) => setSheet({ kind: "list", title, sub, rows });
+  const goApp = (job) => { if (job && onSelectJob) onSelectJob(job); };
+  const ahead = (days) => d.sched.filter(s => s.at >= d.t0 && s.at < odAddDays(d.t0, days));
+  const greet = d.now.getHours() < 12 ? "Good morning" : d.now.getHours() < 17 ? "Good afternoon" : "Good evening";
+  const me = odFirst(identity && identity.name) || "there";
+  const dateLine = d.now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+  const onApp = d.people.filter(p => p.status === "active").length;
+  const urgentN = d.openNeeds.filter(n => needPriority(n) === "urgent").length;
+  const next7 = ahead(7), next14 = ahead(14), next30 = ahead(30);
+  const starts14 = next14.filter(s => s.type === "start");
+  const insp7 = next7.filter(s => s.type === "insp");
+  const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
+  const TONE = { good: OD_G, bad: OD_R };
+  const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera", question: "help", note: "fileText" };
+  const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_GOLD, question: "#3E9D98", note: "#8C847D" };
+  const TYPE_NAME = { punch: "Punch", co: "Change orders", insp: "Inspections", rt: "Return trips", update: "Updates", photo: "Photos", question: "Questions", note: "Job notes" };
+  const punchRows = (list) => list.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, job: p.job, tag: [p.who && `On ${odFirst(p.who)}`, p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · ") }));
+  const schedRow = (s) => ({ title: s.name, sub: `${s.label}${s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""}${s.detail ? " · " + s.detail : ""}`, right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job });
+  const eventRow = (e) => ({ title: e.job.name, sub: `${e.label}${e.detail ? ": " + e.detail : ""}${e.who ? " · " + odFirst(e.who) : ""}`, right: odWhen(e, d.now), color: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type], job: e.job });
+
+  // ── shared pieces ──
+  const Me = ({ sub }) => (
+    <div className="od-me"><i className="av">{(me[0] || "?").toUpperCase()}</i><div><b>{(identity && identity.name) || me}</b><small>{sub}</small></div></div>
+  );
+  const Stats = ({ items }) => <div className="od-stats">{items.map(([v, l, fn], i) => fn
+    ? <button type="button" key={i} onClick={fn}><b>{v}</b><small>{l}</small></button>
+    : <div key={i}><b>{v}</b><small>{l}</small></div>)}</div>;
+  const Sec = ({ children, right, onRight }) => <div className="od-sec"><span>{children}</span>{right ? (onRight ? <button type="button" onClick={onRight}>{right}</button> : <small>{right}</small>) : null}</div>;
+  const schedItem = (s, i) => (
+    <OdItem key={i} color={OD_SCHED_COLOR[s.type]} icon={OD_SCHED_ICON[s.type]} tag={s.label + (s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : "")}
+      title={s.name} sub={s.detail || (s.job && s.job.foreman ? s.job.foreman : "")} when={`${odDow(s.at)} ${odShort(s.at)}`} onClick={s.job ? () => openJob(s.job) : null}/>
+  );
+  const Cal = () => {
+    const y = d.now.getFullYear(), m = d.now.getMonth(), first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+    const byDay = {}; d.sched.forEach(s => { if (s.at.getFullYear() === y && s.at.getMonth() === m) (byDay[s.at.getDate()] = byDay[s.at.getDate()] || []).push(s); });
+    const color = (list) => OD_SCHED_COLOR[(list.find(s => s.type === "insp") || list[0]).type];
+    const cells = []; for (let i = 0; i < first; i++) cells.push(<div key={"b" + i}/>);
+    for (let k = 1; k <= days; k++) {
+      const list = byDay[k];
+      cells.push(<div key={k}>{list
+        ? <button type="button" className={"d m" + (k === d.now.getDate() ? " today" : "")} style={{ background: color(list) }} title={odPlural(list.length, "item")}
+            onClick={() => openList(new Date(y, m, k).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }), odPlural(list.length, "dated item"), list.map(schedRow))}>{k}</button>
+        : <span className={"d" + (k === d.now.getDate() ? " today" : "")}>{k}</span>}</div>);
+    }
+    return (
+      <div className="od-cal">
+        <div className="h">{d.now.toLocaleDateString([], { month: "long", year: "numeric" })}<small>tap a colored day</small></div>
+        <div className="grid">{["Su","Mo","Tu","We","Th","Fr","Sa"].map(x => <div key={x} className="dow">{x}</div>)}{cells}</div>
+        <div className="od-legend"><span style={{ "--c": OD_O }}>Start</span><span style={{ "--c": OD_G }}>Inspection</span><span style={{ "--c": OD_B }}>QC</span><span style={{ "--c": OD_P }}>Scan</span><span style={{ "--c": OD_R }}>Return trip</span></div>
+      </div>
+    );
+  };
+  const Rows = ({ rows, empty }) => rows.length ? (
+    <div className="od-rows">
+      {rows.map((r, i) => (
+        <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
+          <span className="k" style={{ "--c": r.color || OD_O }}><Icon name={r.icon || "activity"} size={15}/></span>
+          <span className="m"><b>{r.title}</b>{r.tag ? <em>{r.tag}</em> : null}<small>{r.sub}</small></span>
+          <span className="t">{r.right || ""}</span>
+        </button>
+      ))}
+    </div>
+  ) : <div className="od-empty">{empty || "Nothing here."}</div>;
+  const Pulse = ({ list }) => (
+    <div className="od-pulse">
+      {list.map(p => (
+        <button type="button" className="od-person" key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
+          <i className="av sm">{(p.name[0] || "?").toUpperCase()}</i>
+          <div><b>{odFirst(p.name)}</b><small>{p.status === "active" ? `${odPlural(p.todayN, "update")} · ${odPlural(p.jobsToday, "job")} touched today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</small></div>
+          <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_GOLD : "#B9B0A8" }}/>
+        </button>
+      ))}
+    </div>
+  );
+  const search = q.trim().toLowerCase();
+  const searchHits = search ? d.allLive.filter(j => `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(search)).slice(0, 8) : [];
+
+  let main = null, right = null;
+  if (tab === "overview") {
+    const actMax = Math.max(1, ...d.perDay.map(p => p.n));
+    const insPass = d.insp30.filter(a => a.result === "pass").length;
+    const selDay = chartSel != null && d.perDay[chartSel] ? d.perDay[chartSel] : null;
+    const selEvents = selDay ? d.events.filter(e => localYmd(e.at) === selDay.k) : [];
+    const selTop = selDay ? (() => { const m = {}; selEvents.forEach(e => { m[e.job.name] = (m[e.job.name] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3); })() : [];
+    main = (<>
+      <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {odPlural(d.evToday.length, "update")} today across {odPlural(new Set(d.evToday.map(e => e.job.id)).size, "job")}{foreman ? ` · ${foreman}'s jobs only` : ""}</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Active jobs" color={OD_O} icon="hardHat" value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
+          onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
+          <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_O} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
+        </OdMini>
+        <OdMini title="Inspections, 30 days" color={OD_G} icon="checkCircle" value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed` : "none logged"}
+          onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed`, d.insp30.map(a => ({ title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job })))}>
+          <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
+        </OdMini>
+        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`}
+          onClick={() => openList("Open change orders", `${d.coWaiting} waiting on the GC`, d.openCOs.slice().sort((a, b) => String(a.co.coStatus).localeCompare(String(b.co.coStatus))).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_GOLD : OD_B, job: x.job })))}>
+          <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
+        </OdMini>
+        <OdMini title="Open punch items" color={OD_R} icon="openitems" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
+          onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}>
+          <OdBars vals={Object.values(d.byForeman).map(f => f.open).sort((a, b) => b - a).slice(0, 6)} color={OD_R} hi={0} label="Open punch items by foreman"/>
+        </OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Updates per day<small>all jobs, last {range} days · tap a day</small></div>
+          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => (range > 14 ? i % 5 === 0 : i % 2 === 0) || i === d.perDay.length - 1 ? odShort(p.d) : "")} color={OD_O} min={0} max={Math.ceil(actMax*1.2) || 1}
+            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Updates per day: ${d.perDay.map(p => p.n).join(", ")}`}
+            sel={chartSel} onSel={setChartSel} tip={(v, i) => `${v} · ${odDow(d.perDay[i].d)} ${odShort(d.perDay[i].d)}`}/>
+          {selDay ? (
+            <div className="od-daysum">
+              <div><b>{odDow(selDay.d)} {odShort(selDay.d)}: {odPlural(selDay.n, "update")}</b><small>{selTop.length ? selTop.map(([n, c]) => `${n} (${c})`).join(" · ") : "Nothing logged"}</small></div>
+              {selDay.n > 0 && <button type="button" onClick={() => { setActDay(selDay.k); setActFilter("all"); pickTab("activity"); }}>See them</button>}
+            </div>
+          ) : <div className="od-hint">Tap or hover the chart to see a day.</div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Needs attention<small>{d.attn.length ? "tap a line" : ""}</small></div>
+          {d.attn.length ? (
+            <div className="od-attn">
+              {d.attn.map(a => (
+                <button type="button" key={a.k} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}>
+                  <span className="ic" style={{ "--c": a.color }}><Icon name={a.icon} size={14}/></span><span className="lb">{a.label}</span><span className="n" style={{ color: a.color }}>{a.rows.length}</span><Icon name="chevronRight" size={13}/>
+                </button>
+              ))}
+            </div>
+          ) : <div className="od-empty">Nothing flagged. Every inspection has a result, every start is confirmed and every job has had an update this week.</div>}
+          {d.busy && <div className="od-busy">
+            <small>Busiest job {d.busy.when}</small>
+            <button type="button" className="od-link" onClick={() => openJob(d.busy.job)}><b>{d.busy.job.name}</b> · {odPlural(d.busy.n, "update")}</button>
+          </div>}
+        </div>
+      </div>
+      <Sec right={`${onApp} on the app today`}>Foremen</Sec>
+      <div className="od-plan">
+        {d.foremenP.slice(0, 9).map((p, i) => {
+          const fj = d.active.filter(j => sameName(j.foreman, p.name));
+          const op = fj.reduce((n, j) => n + d.info[j.id].punch.length, 0);
+          return (
+            <button type="button" className={"od-white od-crew od-tap" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
+              <div><b>{p.name}</b><p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
+                <span className="day">{p.status === "active" ? `${odPlural(p.todayN, "update")} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
+              <OdBars vals={p.days7} color={i === 0 && p.todayN ? "#fff" : OD_O} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
+            </button>
+          );
+        })}
+        {d.noForemanJobs.length > 0 && (
+          <button type="button" className="od-white od-crew od-tap" onClick={() => openList("Jobs with no active foreman", "Blank, Unassigned, a contractor, or someone no longer on the team", d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman ? `Foreman: ${j.foreman}` : "No foreman", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_GOLD, job: j })))}>
+            <div><b>No active foreman</b><p>{odPlural(d.noForemanJobs.length, "active job")} · {d.noForemanJobs.reduce((n, j) => n + d.info[j.id].punch.length, 0)} open punch</p>
+              <span className="day">Tap for the list</span></div>
+          </button>
+        )}
+        {!d.foremenP.length && <div className="od-empty">No foremen on the team list.</div>}
+      </div>
+    </>);
+    right = (<>
+      <Me sub={`${mode === "commercial" ? "Commercial" : "Residential"}${foreman ? " · " + foreman : ""}`}/>
+      <Stats items={[[d.active.length, "Active jobs", () => pickTab("jobs")], [onApp, "On app today", () => pickTab("people")], [d.openNeeds.length, "Open tasks", () => pickTab("people")]]}/>
+      <Cal/>
+      <Sec right="see all" onRight={() => pickTab("schedule")}>Next 14 days</Sec>
+      <div className="od-list">{next14.slice(0, 7).map(schedItem)}{!next14.length && <div className="od-empty dark">Nothing dated in the next 14 days.</div>}</div>
+    </>);
+  } else if (tab === "jobs") {
+    const jq = jobsQ.trim().toLowerCase();
+    let list = d.active.filter(j => (!jobsStage || (d.secOf(j) && d.secOf(j).key === jobsStage)) && (!jq || `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(jq)));
+    const val = {
+      name: j => String(j.name || "").toLowerCase(), foreman: j => String(j.foreman || "~").toLowerCase(), stage: j => d.secIdx(j),
+      punch: j => d.info[j.id].punch.length, cos: j => d.info[j.id].openCos.length, next: j => d.nextOf[j.id] ? d.nextOf[j.id].at.getTime() : 9e15, last: j => d.lastAct[j.id] ? d.lastAct[j.id].getTime() : 0,
+    };
+    const f = val[jobsSort.key] || val.last;
+    list = list.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * jobsSort.dir; });
+    const sortBy = (key) => setJobsSort(s => ({ key, dir: s.key === key ? -s.dir : (key === "last" || key === "punch" || key === "cos" ? -1 : 1) }));
+    const H = ({ k, children }) => <button type="button" className={"th" + (jobsSort.key === k ? " on" : "")} onClick={() => sortBy(k)}>{children}{jobsSort.key === k ? (jobsSort.dir > 0 ? " ↑" : " ↓") : ""}</button>;
+    main = (<>
+      <div className="od-head"><div><h1>Jobs</h1><p>{odPlural(d.active.length, "active job")}{foreman ? ` for ${foreman}` : ""} · tap a column to sort, a row to open the job</p></div></div>
+      <div className="od-chips">
+        <button type="button" aria-pressed={!jobsStage} onClick={() => setJobsStage("")}>All <span>{d.active.length}</span></button>
+        {d.bySec.map(s => <button type="button" key={s.key} aria-pressed={jobsStage === s.key} onClick={() => setJobsStage(jobsStage === s.key ? "" : s.key)} style={{ "--c": s.color }}><i/>{s.label} <span>{s.jobs.length}</span></button>)}
+      </div>
+      <div className="od-white od-pad">
+        <input className="od-q" type="search" value={jobsQ} onChange={e => setJobsQ(e.target.value)} placeholder="Filter by job, number, address, GC or foreman" aria-label="Filter jobs"/>
+        <div className="od-tablewrap">
+          <div className="od-table">
+            <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman</H><H k="stage">Where it is</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last work</H></div>
+            {list.map(j => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id]; return (
+              <button type="button" className="tr" key={j.id} onClick={() => openJob(j)}>
+                <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small></span>
+                <span className="c">{j.foreman || "—"}</span>
+                <span className="c st"><em className="pill" style={{ "--c": s ? s.color : "#8C847D" }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
+                <span className="c num">{d.info[j.id].punch.length || "—"}</span>
+                <span className="c num">{d.info[j.id].openCos.length || "—"}</span>
+                <span className="c">{nx ? <>{odShort(nx.at)} <small>{nx.label}</small></> : "—"}</span>
+                <span className="c">{la ? odAgo(la, d.now) : "—"}</span>
+              </button>
+            ); })}
+            {!list.length && <div className="od-empty">No jobs match.</div>}
+          </div>
+        </div>
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Jobs"/>
+      <Stats items={[[d.active.length, "Active"], [d.needsDate.length, "Need a date", () => openList("Needs a date", odPlural(d.needsDate.length, "job"), d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what, color: OD_R, job: n.job })))], [d.attn.reduce((n, a) => n + a.rows.length, 0), "Flags", () => pickTab("overview")]]}/>
+      <Sec>Where the work is</Sec>
+      <div className="od-box light"><OdHBars rows={d.bySec.map(s => ({ name: s.label, note: s.jobs.length, v: s.jobs.length, color: s.color, on: jobsStage === s.key, onClick: () => setJobsStage(jobsStage === s.key ? "" : s.key) }))} empty="No active jobs."/></div>
+      <Sec>By foreman</Sec>
+      <div className="od-box light"><OdHBars rows={d.foremen.map(fm => ({ name: fm, note: d.active.filter(j => sameName(j.foreman, fm)).length, v: d.active.filter(j => sameName(j.foreman, fm)).length, color: OD_O, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) })).filter(r => r.v)} empty="No foremen set on jobs."/></div>
+    </>);
+  } else if (tab === "activity") {
+    const aq = actQ.trim().toLowerCase();
+    const base = actDay ? d.events.filter(e => localYmd(e.at) === actDay) : d.inRange;
+    const typeCounts = Object.keys(TYPE_NAME).map(k => ({ k, n: base.filter(e => e.type === k).length }));
+    const personNames = [...new Set(base.map(e => e.who).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const list = base.filter(e => (actFilter === "all" || e.type === actFilter) && (!actPerson || sameName(e.who, actPerson)) &&
+      (!aq || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(aq))).slice(0, 200);
+    const groups = []; list.forEach(e => { const k = localYmd(e.at); if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, at: e.at, list: [] }); groups[groups.length - 1].list.push(e); });
+    const topJobs = d.busyRange.slice(0, 8);
+    main = (<>
+      <div className="od-head"><div><h1>Activity</h1><p>{actDay ? `Everything logged on ${odDow(odDate(actDay))} ${odShort(odDate(actDay))}` : `Everything logged in the last ${range} days`} · tap a row for the job</p></div>
+        {actDay && <button type="button" className="od-clear" onClick={() => setActDay("")}>Show all {range} days</button>}</div>
+      <div className="od-minis">
+        <OdMini title="Updates" color={OD_O} icon="activity" value={base.length} sub={actDay ? "that day" : `last ${range} days`}><OdBars vals={d.perDay.slice(-7).map(p => p.n)} color={OD_O} hi={6} label="Updates per day, last 7 days"/></OdMini>
+        <OdMini title="Punch closed" color={OD_G} icon="openitems" value={base.filter(e => e.type === "punch" && e.tone === "good").length} sub="items" onClick={() => setActFilter("punch")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={OD_G} hi={6} label="Punch items closed per day"/></OdMini>
+        <OdMini title="Photo uploads" color={OD_GOLD} icon="camera" value={base.filter(e => e.type === "photo").length} sub="batches" onClick={() => setActFilter("photo")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_GOLD} hi={6} label="Photo uploads per day"/></OdMini>
+        <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={base.filter(e => e.type === "insp" && e.tone === "bad").length} sub={actDay ? "that day" : `last ${range} days`} onClick={() => setActFilter("insp")}><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f._at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day"/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Recent activity<small>{list.length === 200 ? "newest 200" : odPlural(list.length, "row")}</small>
+          <div className="od-filters" role="group" aria-label="Filter by type">
+            <button type="button" aria-pressed={actFilter === "all"} onClick={() => setActFilter("all")}>All</button>
+            {typeCounts.map(t => <button type="button" key={t.k} aria-pressed={actFilter === t.k} onClick={() => setActFilter(actFilter === t.k ? "all" : t.k)}>{TYPE_NAME[t.k]} <span>{t.n}</span></button>)}
+          </div>
+        </div>
+        <div className="od-frow">
+          <input className="od-q" type="search" value={actQ} onChange={e => setActQ(e.target.value)} placeholder="Filter by job or what happened" aria-label="Filter activity"/>
+          <select className="od-sel light" value={actPerson} onChange={e => setActPerson(e.target.value)} aria-label="Filter by person">
+            <option value="">Everyone</option>{personNames.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        {groups.map(g => (
+          <div key={g.k}>
+            <div className="od-dayh">{g.k === d.today ? "Today" : `${odDow(g.at)} ${odShort(g.at)}`}<span>{odPlural(g.list.length, "update")}</span></div>
+            <Rows rows={g.list.map(e => ({ ...eventRow(e), right: e.dateOnly ? "" : odTime(e.at), icon: TYPE_ICON[e.type] }))}/>
+          </div>
+        ))}
+        {!groups.length && <div className="od-empty">Nothing matches.</div>}
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Activity"/>
+      <Stats items={[[d.inRange.length, `Updates, ${range} d`], [onApp, "On app today"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Sec>What kind</Sec>
+      <div className="od-box light"><OdHBars rows={typeCounts.filter(t => t.n).map(t => ({ name: TYPE_NAME[t.k], note: t.n, v: t.n, color: TYPE_COLOR[t.k], on: actFilter === t.k, onClick: () => setActFilter(actFilter === t.k ? "all" : t.k) }))} empty="Nothing logged."/></div>
+      <Sec>Most active jobs</Sec>
+      <div className="od-list">{topJobs.map((t, i) => <OdItem key={i} color={OD_O} icon="hardHat" tag={odPlural(t.n, "update")} title={t.job.name} sub={t.job.foreman || ""} onClick={() => openJob(t.job)}/>)}{!topJobs.length && <div className="od-empty dark">No updates in this range.</div>}</div>
+      <Sec>Team pulse</Sec>
+      <Pulse list={d.people.slice(0, 10)}/>
+    </>);
+  } else if (tab === "schedule") {
+    const ws = odAddDays(d.t0, week*7);
+    const days = []; for (let i = 0; i < 7; i++) { const dd = odAddDays(ws, i); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
+    const types = [["start","Starts"],["insp","Inspections"],["qc","QC walks"],["scan","Scans"],["rt","Return trips"]];
+    main = (<>
+      <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
+        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" onClick={() => openList("Inspections in the next 7 days", "", insp7.map(schedRow))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
+        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" onClick={() => openList("Needs a date", "", d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what + (n.job && n.job.foreman ? " · " + n.job.foreman : ""), color: OD_R, job: n.job })))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
+        <OdMini title="Past their date" color={OD_GOLD} icon="alertTriangle" value={d.overdue.length} sub="no result yet" onClick={() => openList("Past their date", "Dated work with no result", d.overdue.map(schedRow))}><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_GOLD} label="Share of dated items past due"/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(odAddDays(ws, 6))}`}<small>tap an item for the job</small>
+          <span className="od-nav"><button type="button" onClick={() => setWeek(w => w - 1)} aria-label="Previous week"><Icon name="chevronLeft" size={14}/></button>
+            {week !== 0 && <button type="button" onClick={() => setWeek(0)}>Today</button>}
+            <button type="button" onClick={() => setWeek(w => w + 1)} aria-label="Next week"><Icon name="chevronRight" size={14}/></button></span>
+        </div>
+        <div className="od-weekwrap"><div className="od-week">
+          {days.map((x, i) => (
+            <div className={"col" + (localYmd(x.dd) === d.today ? " today" : "")} key={i}>
+              <div className="dh">{localYmd(x.dd) === d.today ? "Today" : odDow(x.dd)} <span>{odShort(x.dd)}</span></div>
+              {x.items.map((s, k) => (
+                <button type="button" className="blk" key={k} style={{ "--c": OD_SCHED_COLOR[s.type] }} onClick={s.job ? () => openJob(s.job) : undefined}>
+                  <b>{s.name}</b><small>{s.label}{s.type === "start" && !s.confirmed ? " · projected" : ""}</small>
+                </button>
+              ))}
+              {!x.items.length && <div className="none">—</div>}
+            </div>
+          ))}
+        </div></div>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Next 30 days<small>tap a kind to list it</small></div>
+          <OdHBars rows={types.map(([k, l]) => { const its = next30.filter(s => s.type === k); return { name: l, note: its.length, v: its.length, color: OD_SCHED_COLOR[k], onClick: its.length ? () => openList(`${l}, next 30 days`, "", its.map(schedRow)) : undefined }; })} empty="Nothing dated."/>
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Starts<small>next 14 days</small></div>
+          <Rows rows={starts14.map(s => ({ ...schedRow(s), icon: "flag" }))} empty="No starts dated in the next 14 days."/>
+        </div>
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Scheduling"/>
+      <Stats items={[[d.active.length, "On the board", () => pickTab("jobs")], [d.up.length, "Upcoming"], [d.scans.length, "Scans due"]]}/>
+      {d.overdue.length > 0 && <><Sec right={`${d.overdue.length}`}>Past their date</Sec><div className="od-list">{d.overdue.slice(-6).reverse().map(schedItem)}</div></>}
+      <Sec right={`${d.needsDate.length}`}>Needs a date</Sec>
+      <div className="od-list">{d.needsDate.slice(0, 8).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={n.job ? n.job.foreman || "" : "Upcoming tab"} onClick={n.job ? () => openJob(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
+      <Sec right={`${d.scans.length}`}>Matterport scans due</Sec>
+      <div className="od-list">{d.scans.slice(0, 6).map((j, i) => <OdItem key={i} color={OD_P} icon="camera" tag={`Rough ${parseStage(j.roughStage)}%`} title={j.name} sub="Scan before drywall" onClick={() => openJob(j)}/>)}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
+    </>);
+  } else if (tab === "quality") {
+    const fRows = Object.entries(d.byForeman).filter(([n]) => n !== "No foreman").map(([n, v]) => ({ n, ...v })).sort((a, b) => b.open - a.open);
+    const fMax = Math.max(1, ...fRows.map(r => r.open + r.closed));
+    const fpLo = d.months.every(m => m.v == null || m.v >= 50) ? 50 : 0;
+    const buckets = [["0–7 days", 0, 7, OD_G], ["8–14 days", 8, 14, OD_GOLD], ["15–30 days", 15, 30, OD_O], ["Over 30 days", 31, 1e9, OD_R]].map(([l, a, b, c]) => ({ l, c, items: d.openPunch.filter(p => p.age != null && p.age >= a && p.age <= b) }));
+    const noAge = d.openPunch.filter(p => p.age == null);
+    if (noAge.length) buckets.push({ l: "No date", c: "#B9B0A8", items: noAge });
+    const serious = d.openPunch.filter(p => p.serious);
+    main = (<>
+      <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase</p></div></div>
+      <div className="od-minis">
+        <OdMini title="First-pass, 90 days" color={OD_G} icon="checkCircle" value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={odPlural(d.in90.length, "inspection")} onClick={() => openList("First inspections, last 90 days", d.fp90 == null ? "" : `${d.fp90}% passed the first time`, d.in90.slice().sort((a, b) => b.at - a.at).map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed first time" : "failed first time"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}><OdRing pct={(d.fp90 || 0)/100} color={OD_G} label="First-pass rate"/></OdMini>
+        <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch.length} sub={`${serious.length} serious`} onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}><OdBars vals={buckets.map(b => b.items.length)} color={OD_O} hi={3} label="Open punch by age"/></OdMini>
+        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => odRtDate(x.rt)).length} scheduled`} onClick={() => openList("Open return trips", "", d.openRTs.map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ") || "Return trip", tag: x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "", right: odRtLabel(x.rt), color: OD_R, job: x.job })))}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => odRtDate(x.rt)).length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips scheduled"/></OdMini>
+        <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`} onClick={() => openList("Open QC walks", "", d.qcRows.map(r => ({ title: r.job.name, sub: `${r.phase} · ${OD_QC_BUCKET[r.st]}`, right: r.at ? odShort(r.at) : "", color: OD_B, job: r.job })))}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of QC walks scheduled"/></OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">First-pass inspections<small>by month · tap a month</small></div>
+          {d.months.some(m => m.v != null)
+            ? <OdLine vals={d.months.map(m => m.v)} labels={d.months.map(m => m.label)} color={OD_G} min={fpLo} max={100}
+                ticks={fpLo ? [50, 75, 100] : [0, 25, 50, 75, 100]} fmt={v => `${v}%`} target={90} targetLabel="Target 90%" sel={fpSel} onSel={setFpSel}
+                label={`First-pass rate by month: ${d.months.map(m => `${m.label} ${m.v == null ? "none" : m.v + "%"}`).join(", ")}`} tip={(v, i) => `${v}% · ${d.months[i].pass} of ${d.months[i].n}`}/>
+            : <div className="od-empty">No inspection results logged in the last 6 months.</div>}
+          {fpSel != null && d.months[fpSel] && d.months[fpSel].n > 0 && <div className="od-daysum"><div><b>{d.months[fpSel].label}: {d.months[fpSel].pass} of {d.months[fpSel].n} passed first time</b></div>
+            <button type="button" onClick={() => openList(`First inspections in ${d.months[fpSel].m.toLocaleDateString([], { month: "long" })}`, "", d.months[fpSel].list.map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed" : "failed"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}>List them</button></div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Open punch by age<small>tap a bar</small></div>
+          <OdHBars rows={buckets.map(b => ({ name: b.l, note: b.items.length, v: b.items.length, color: b.c, onClick: b.items.length ? () => openList(`Punch open ${b.l.toLowerCase()}`, odPlural(b.items.length, "item"), punchRows(b.items)) : undefined }))} empty="No open punch."/>
+          {serious.length > 0 && <button type="button" className="od-flag" onClick={() => openList("Serious punch items", "", punchRows(serious))}><Icon name="alertTriangle" size={13}/>{odPlural(serious.length, "serious item")} open</button>}
+        </div>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Punch by foreman<small>open now · closed in 30 days · tap a name</small></div>
+          <div className="od-board">
+            {fRows.map(r => (
+              <button type="button" className="r" key={r.n} onClick={() => openList(`${r.n}: open punch`, `${r.open} open · ${r.closed} closed in 30 days`, punchRows(r.items))}>
+                <i className="av sm">{(r.n[0] || "?").toUpperCase()}</i><span className="nm"><b>{r.n}</b><small>{r.open} open · {r.closed} closed</small></span>
+                <span className="bar"><i style={{ width: `${(r.closed/fMax)*100}%`, background: OD_G }}/><i style={{ width: `${(r.open/fMax)*100}%`, background: OD_O }}/></span>
+              </button>
+            ))}
+            {!fRows.length && <div className="od-empty">No punch items on active jobs.</div>}
+          </div>
+          {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span></div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Failed inspections<small>latest</small></div>
+          <Rows rows={d.fails.slice(0, 8).map(f => ({ title: f.job.name, sub: (f.items || []).length ? (f.items || []).map(it => odText(it && (it.text || it))).filter(Boolean).slice(0, 2).join(" · ") : "No items listed", tag: `${f.ph}${f.by ? " · " + f.by : ""}`, right: odShort(f._at), color: OD_R, icon: "x", job: f.job }))} empty="No failed inspections logged."/>
+        </div>
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Quality"/>
+      <Stats items={[[d.fp90 == null ? "—" : `${d.fp90}%`, "First-pass"], [d.active.length ? (d.openPunch.length / Math.max(1, new Set(d.openPunch.map(p => p.job.id)).size)).toFixed(1) : "0", "Punch / job"], [d.fails.filter(f => d.now - f._at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
+      <Sec right={`${d.openRTs.length}`}>Open return trips</Sec>
+      <div className="od-list">{d.openRTs.slice(0, 6).map((x, i) => { return <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={odRtLabel(x.rt)} onClick={() => openJob(x.job)}/>; })}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
+      <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
+      <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${OD_QC_BUCKET[r.st]}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
+    </>);
+  } else if (tab === "people") {
+    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O, onClick: () => n === "Unassigned"
+      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_O })))
+      : openPerson(n) })).sort((a, b) => b.v - a.v).slice(0, 10);
+    const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 10);
+    const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
+    const dayDates = []; for (let i = 6; i >= 0; i--) dayDates.push(odAddDays(d.t0, -i));
+    const latestBuild = parseAppBuild(latest);
+    const devList = Object.entries(devices || {}).map(([id, v]) => ({ id, ...v, build: parseAppBuild(v && v.version), seen: odDate(v && v.lastSeenAt) }))
+      .filter(v => v.seen && d.now - v.seen < 14*OD_DAY).sort((a, b) => b.seen - a.seen)
+      // One row per person: their most recently seen phone or browser.
+      .filter((v, i, arr) => !v.name || arr.findIndex(x => sameName(x.name, v.name)) === i)
+      .sort((a, b) => (a.build - b.build) || (b.seen - a.seen));
+    const current = devList.filter(v => latestBuild && v.build >= latestBuild).length;
+    const behind = devList.filter(v => !latestBuild || v.build < latestBuild);
+    const shownDevices = showAllDevices ? devList : behind.slice(0, 8);
+    main = (<>
+      <div className="od-head"><div><h1>People</h1><p>Who is on the app, what is on their plate, and which phones need an update · tap anyone</p></div></div>
+      <div className="od-minis">
+        <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.people.length}`} onClick={() => openList("On the app today", "", d.people.filter(p => p.status === "active").map(p => ({ title: p.name, sub: `${odPlural(p.todayN, "update")} · opened ${odPlural(p.openedN, "job")}`, right: p.last ? odTime(p.last) : "", color: OD_G, onClick: () => openPerson(p.name) })))}><OdRing pct={d.people.length ? onApp/d.people.length : 0} color={OD_G} label={`${onApp} of ${d.people.length} on the app today`}/></OdMini>
+        <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`} onClick={() => openList("Open My Day tasks", `${urgentN} urgent`, d.openNeeds.slice().sort((a, b) => (needPriority(a) === "urgent" ? 0 : 1) - (needPriority(b) === "urgent" ? 0 : 1)).map(t => ({ title: odText(t.text) || "Task", sub: [needAssignee(t) && "On " + odFirst(needAssignee(t)), t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B })))}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label="Share of open tasks that are urgent"/></OdMini>
+        <OdMini title="Time off waiting" color={OD_O} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Decide these on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
+        <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => setShowAllDevices(true)}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Updates by person<small>last 7 days · tap a square</small></div>
+          {heat.length ? (
+            <div className="od-heat" style={{ gridTemplateColumns: `86px repeat(7, minmax(0,1fr))` }}>
+              <div/>{dayDates.map((dd, i) => <div className="h" key={i}>{odDow(dd)}</div>)}
+              {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{odFirst(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
+                return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "update")}`}
+                  onClick={() => openList(`${odFirst(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, odPlural(v, "update"), p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
+                  style={{ background: v ? `rgba(242,112,42,${(0.14 + a*0.86).toFixed(2)})` : "#F6F2EE", color: a > 0.55 ? "#fff" : "#7C736C" }}>{v || "–"}</button>; })])}
+            </div>
+          ) : <div className="od-empty">No updates logged this week.</div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">My Day load<small>open tasks · tap a name</small></div>
+          <OdHBars rows={loadRows} empty="No open My Day tasks."/>
+        </div>
+      </div>
+      <Sec right="green = today, gold = last 3 days">Team pulse</Sec>
+      <Pulse list={d.people}/>
+    </>);
+    right = (<>
+      <Me sub="Team"/>
+      <Stats items={[[d.people.length, "Team"], [d.foremenP.length, "Foremen"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days", () => openList("Quiet for 3+ days", "No updates or job opens", d.people.filter(p => p.status === "quiet").map(p => ({ title: p.name, sub: p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days", color: "#8C847D", onClick: () => openPerson(p.name) })))]]}/>
+      <Sec right={`${d.timeOff.length}`}>Time off waiting</Sec>
+      <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_O} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub="Decide it on My Day" when={at ? `${odDow(at)} ${odShort(at)}` : ""}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
+      <Sec right={showAllDevices ? "behind only" : "show all"} onRight={() => setShowAllDevices(s => !s)}>{showAllDevices ? "All devices" : "Devices behind"}</Sec>
+      <div className="od-box">
+        {devices == null ? <div className="od-empty dark">Loading devices…</div> : shownDevices.map(v => (
+          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">{odAgo(v.seen, d.now)}</span><em className={latestBuild && v.build >= latestBuild ? "ok" : ""}>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
+        ))}
+        {devices != null && !shownDevices.length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
+      </div>
+    </>);
+  } else {
+    // ── Automations: Plan Intake + Appliance Loads ──
+    const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
+    const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
+    const go = (url) => { try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {} };
+    // Plan Intake
+    const cutoff = d.now.getTime() - 14*OD_DAY;
+    const fl = (findings || []).map(f => ({ ...f, _at: odDate(f.createdAt) })).filter(f => f._at && f._at.getTime() >= cutoff);
+    const needs = fl.filter(f => PLAN_NEEDS.includes(f.type) && !f.seen);
+    const filed = fl.filter(f => f.type === "plans_filed");
+    const filesN = filed.reduce((n, f) => { const m = /^(\d+) files? filed/.exec(f.summary || ""); return n + (m ? +m[1] : 1); }, 0);
+    const folders = fl.filter(f => OD_PLAN_FOLDER.includes(f.type));
+    const walks = fl.filter(f => OD_PLAN_WALK.includes(f.type));
+    const lastPlan = fl.length ? fl[0]._at : null;
+    const planColor = (f) => PLAN_NEEDS.includes(f.type) ? (f.seen ? OD_GOLD : OD_R) : f.type === "plans_filed" ? OD_G : OD_B;
+    const planIcon = (f) => f.type === "plans_filed" ? "fileText" : OD_PLAN_WALK.includes(f.type) ? "mapPin" : OD_PLAN_FOLDER.includes(f.type) ? "folder" : "alertTriangle";
+    const planOpen = (f) => { const j = jobByNo(f.number); openList(`${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, at2(f._at), [
+      { title: odText(f.summary) || "—", sub: [f.from && "From " + f.from, f.bestGuess && "Best guess: " + f.bestGuess, f.seen && f.seenBy && "Seen by " + odFirst(f.seenBy)].filter(Boolean).join(" · "), color: planColor(f), icon: planIcon(f) },
+      ...(f.links || []).filter(l => l && l.url).map(l => ({ title: `Open ${String(l.label || "link").toLowerCase()}`, sub: l.label === "Email" ? "Gmail" : l.label === "Simpro" ? "Simpro" : "Google Drive", color: OD_B, icon: "external", onClick: () => go(l.url) })),
+      ...(j ? [{ title: `Open ${j.name}`, sub: "Job panel", color: OD_O, icon: "hardHat", job: j }] : []),
+      ...(f.canFile && !f.seen ? [{ title: "File it from Today → Plans in the app", sub: "The Plans card has the File it form for this plan", color: OD_GOLD, icon: "info" }] : []),
+    ]); };
+    const pNum = (n) => /^#?Q?\d+$/i.test(String(n || "").trim()) ? planNum(String(n).trim()) : "No number";
+    const planRow = (f) => ({ title: `${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, sub: odText(f.summary), right: at2(f._at), color: planColor(f), icon: planIcon(f), onClick: () => planOpen(f) });
+    const planList = planShow === "needs" ? needs : planShow === "filed" ? filed : planShow === "folders" ? [...folders, ...walks].sort((a, b) => b._at - a._at) : fl;
+    const planDays = []; planList.forEach(f => { const k = localYmd(f._at); const g = planDays[planDays.length - 1]; if (g && g.k === k) g.list.push(f); else planDays.push({ k, at: f._at, list: [f] }); });
+    // Appliance Loads
+    const arows = (appl && appl.rows) || [];
+    // Same test as the sheet's Summary "Items with TBD amps" column.
+    const isTbd = (r) => /^tbd$/i.test(r.load);
+    const ajobs = []; arows.forEach(r => { let g = ajobs.find(x => x.no === r.no); if (!g) { g = { no: r.no, label: r.label, rows: [], amps: 0, notIn: 0, likely: 0, tbd: 0, typical: 0 }; ajobs.push(g); }
+      g.rows.push(r); g.amps += r.total || 0; if (r.inCC.startsWith("not")) g.notIn++; else if (r.inCC === "likely") g.likely++; if (isTbd(r)) g.tbd++; if (/^typical/i.test(r.conf)) g.typical++; });
+    ajobs.forEach(g => { g.job = jobByNo(g.no); });
+    ajobs.sort((a, b) => (b.notIn + b.likely + b.tbd) - (a.notIn + a.likely + a.tbd) || Number(b.no) - Number(a.no));
+    const aSum = (k) => ajobs.reduce((n, g) => n + g[k], 0);
+    const applItem = (r) => ({ title: r.item + (r.qty && r.qty !== "1" ? ` × ${r.qty}` : ""), sub: [r.loc, r.model, r.inCC.startsWith("not") ? "Not in CC yet" : r.inCC === "likely" ? `Likely in CC as ${r.cc || "?"}` : r.cc && `In CC as ${r.cc}`, isTbd(r) && "no amps found"].filter(Boolean).join(" · "),
+      right: isTbd(r) ? "TBD" : r.load ? `${r.load} A` : "", color: r.inCC.startsWith("not") ? OD_R : r.inCC === "likely" ? OD_GOLD : isTbd(r) ? OD_R : OD_G, icon: "zap", onClick: r.link ? () => go(r.link) : undefined });
+    const applOpen = (g) => openList(g.label, `${odPlural(g.rows.length, "item")} · ${Math.round(g.amps)} A connected · tap an item for its source file`, [
+      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: "Job panel", color: OD_O, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_GOLD, icon: "info" }]),
+      ...g.rows.filter(r => r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r)).map(applItem),
+      ...g.rows.filter(r => !(r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r))).map(applItem),
+    ]);
+    const applList = (title, pred) => openList(title, "tap an item for its source file", ajobs.flatMap(g => g.rows.filter(pred).map(r => ({ ...applItem(r), title: `${g.label} · ${r.item}` }))));
+    const nPlan = odNextRun(OD_RUNS.plan, d.now), nAppl = odNextRun(OD_RUNS.appl, d.now);
+    const chips = [["all", `All ${fl.length}`], ["needs", `Needs you ${needs.length}`], ["filed", `Filed ${filed.length}`], ["folders", `Folders & walks ${folders.length + walks.length}`]];
+    main = (<>
+      <div className="od-head"><div><h1>Automations</h1><p>Your automated docs, plus what Plan Intake and the Appliance Loads pull produced · live</p></div></div>
+      <div className="od-minis">
+        <OdMini title="Plans filed, 14 days" color={OD_G} icon="fileText" value={findings === undefined ? "…" : filesN} sub={`${filed.length} ${filed.length === 1 ? "batch" : "batches"}`} onClick={() => setPlanShow("filed")}><OdBars vals={[13,12,11,10,9,8,7,6,5,4,3,2,1,0].map(i => filed.filter(f => localYmd(f._at) === localYmd(odAddDays(d.t0, -i))).length)} color={OD_G} hi={13} label="Plan filings per day, last 14 days"/></OdMini>
+        <OdMini title="Plans need you" color={OD_R} icon="alertTriangle" value={findings === undefined ? "…" : needs.length} sub="not seen yet" onClick={() => setPlanShow("needs")}><OdRing pct={fl.length ? needs.length/fl.length : 0} color={OD_R} label="Share of plan findings that need you"/></OdMini>
+        <OdMini title="Not in CC yet" color={OD_O} icon="zap" value={appl === undefined ? "…" : aSum("notIn")} sub={`${aSum("likely")} likely`} onClick={() => applList("Appliances not in CC Home Runs yet", r => r.inCC.startsWith("not") || r.inCC === "likely")}><OdRing pct={arows.length ? (aSum("notIn") + aSum("likely"))/arows.length : 0} color={OD_O} label="Share of appliances not confirmed in Home Runs"/></OdMini>
+        <OdMini title="Appliances, no amps" color={OD_GOLD} icon="help" value={appl === undefined ? "…" : aSum("tbd")} sub={`of ${arows.length}`} onClick={() => applList("Appliances with no amps found", isTbd)}><OdRing pct={arows.length ? aSum("tbd")/arows.length : 0} color={OD_GOLD} label="Share of appliances with no amps"/></OdMini>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Automated docs<small>tap to open in Google Drive</small></div>
+        <div className="od-docs">
+          {OD_DOCS.map(x => { const lt = x.latest && latestDocs[x.latest] && latestDocs[x.latest].url ? latestDocs[x.latest] : null, made = lt && odDate(lt.createdTime); return (
+            <div className="od-doc" key={x.k}>
+              <a className="go" href={lt ? lt.url : x.url} target="_blank" rel="noopener noreferrer">
+                <span className="k"><Icon name={lt ? "fileText" : x.folder ? "folderOpen" : x.sheet ? "dollarSign" : "fileText"} size={16}/></span>
+                <span className="m"><b>{x.title}</b><small>{lt ? `Latest: ${lt.name}${made ? " · made " + at2(made) : ""}` : x.what}</small><small className="w">{x.when} · {x.by}{x.k === "packet" && packetAt && !lt ? ` · last made ${at2(packetAt)}` : ""}</small></span>
+              </a>
+              {lt ? <a className="fold" href={x.url} target="_blank" rel="noopener noreferrer" title="Open the folder" aria-label={`Open the ${x.title} folder`}><Icon name="folderOpen" size={14}/></a> : <span className="fold"><Icon name="external" size={13}/></span>}
+            </div>
+          ); })}
+        </div>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Plan Intake<small>{lastPlan ? `last activity ${odAgo(lastPlan, d.now)}` : findings === undefined ? "loading…" : "nothing in 14 days"}{nPlan ? ` · next run ${at2(nPlan)}` : ""}</small></div>
+        <div className="od-filters left">{chips.map(([k, l]) => <button type="button" key={k} aria-pressed={planShow === k} onClick={() => setPlanShow(k)}>{l}</button>)}</div>
+        {findings === null ? <div className="od-empty">The plan intake log could not be read.</div> : planDays.map(g => (
+          <div className="od-sgroup" key={g.k}>
+            <div className="sh" style={{ "--c": OD_B }}>{g.k === d.today ? "Today" : `${odDow(g.at)} ${odShort(g.at)}`}<span>{g.list.length}</span></div>
+            <Rows rows={g.list.map(planRow)}/>
+          </div>
+        ))}
+        {findings !== null && findings !== undefined && !planList.length && <div className="od-empty">{planShow === "needs" ? "Nothing waiting on you." : "Nothing in the last 14 days."}</div>}
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Appliance Loads<small>{appl && appl.rows ? `${odPlural(ajobs.length, "job")} · ${arows.length} items · ${Math.round(aSum("amps")).toLocaleString()} A connected` : appl === undefined ? "loading…" : ""}{nAppl ? ` · next pull ${at2(nAppl)}` : ""}</small>
+          <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setApplTick(t => t + 1)}>Refresh</button><button type="button" className="od-mini-btn" onClick={() => go(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`)}>Open sheet</button></div></div>
+        {appl && appl.err ? <div className="od-empty">{appl.err}</div> : (
+          <div className="od-tablewrap"><div className="od-table appl">
+            <div className="tr hd"><span className="c">Job</span><span className="c">Items</span><span className="c">Amps</span><span className="c">Not in CC</span><span className="c">Likely</span><span className="c">No amps</span><span className="c">Typical</span></div>
+            {ajobs.map(g => (
+              <button type="button" className="tr" key={g.no} onClick={() => applOpen(g)}>
+                <span className="c nm"><b>{g.label}</b><small>{g.job ? g.job.name : "no app job with this number"}</small></span>
+                <span className="c num">{g.rows.length}</span><span className="c num">{Math.round(g.amps * 10) / 10}</span>
+                <span className="c num" style={g.notIn ? { color: OD_R, fontWeight: 700 } : null}>{g.notIn || "—"}</span>
+                <span className="c num" style={g.likely ? { color: OD_GOLD, fontWeight: 700 } : null}>{g.likely || "—"}</span>
+                <span className="c num" style={g.tbd ? { color: OD_R, fontWeight: 700 } : null}>{g.tbd || "—"}</span>
+                <span className="c num">{g.typical || "—"}</span>
+              </button>
+            ))}
+            {appl === undefined && <div className="od-empty">Loading the sheet…</div>}
+          </div></div>
+        )}
+      </div>
+    </>);
+    right = (<>
+      <Me sub="Automations"/>
+      <Stats items={[[needs.length, "Plans need you", () => setPlanShow("needs")], [filesN, "Plans filed, 14 d", () => setPlanShow("filed")], [aSum("notIn"), "Not in CC yet"]]}/>
+      <Sec right={`${needs.length}`}>Needs you</Sec>
+      <div className="od-list">
+        {needs.slice(0, 8).map(f => <OdItem key={f.id} color={OD_R} icon={planIcon(f)} tag={PLAN_LABEL[f.type] || f.type} title={f.filename || pNum(f.number)} sub={odText(f.summary)} when={odAgo(f._at, d.now)} onClick={() => planOpen(f)}/>)}
+        {!needs.length && <div className="od-empty dark">{findings === undefined ? "Loading…" : "Nothing from Plan Intake is waiting on you."}</div>}
+      </div>
+      <Sec>When they run</Sec>
+      <div className="od-list">
+        <OdItem color={OD_B} icon="refresh" tag="Plan Intake" title={`Daily ${odRunTimes(OD_RUNS.plan)}`} sub={nPlan ? `Next ${at2(nPlan)} · files emailed plans, matches site walks` : ""}/>
+        <OdItem color={OD_B} icon="refresh" tag="Appliance Loads" title={`Nightly ${odRunTimes(OD_RUNS.appl)}`} sub={nAppl ? `Next ${at2(nAppl)} · reads new appliance packages, checks Home Runs` : ""}/>
+      </div>
+    </>);
+  }
+
+  // ── sheet (job / person / list) ──
+  let sheetEl = null;
+  if (sheet && sheet.kind === "job") {
+    const j = d.allLive.find(x => x.id === sheet.id) || (jobs || []).find(x => x && x.id === sheet.id);
+    if (j) {
+      const inf = d.info[j.id] || odJobInfo(j, d.now), s = d.secOf(j), ev = (d.evById[j.id] || []).slice(0, 15), up = d.sched.filter(x => x.job && x.job.id === j.id);
+      const fact = (l, v) => <div><small>{l}</small><b>{v || "—"}</b></div>;
+      sheetEl = (
+        <OdSheet title={j.name} sub={[j.simproNo && "#" + j.simproNo, j.address, j.gc].filter(Boolean).join(" · ")} onClose={() => setSheet(null)}
+          actions={onSelectJob ? <button type="button" className="go" onClick={() => goApp(j)}>Open in app</button> : null}>
+          <div className="od-facts">
+            {fact("Where it is", s ? s.label + (s.note ? " · " + s.note : "") : "")}{fact("Job prep", d.prepOpen(j) ? "Not finished" : (j.quickJob || j.tempPed || j.division === "commercial") ? "" : "Complete")}{fact("Foreman", j.foreman)}{fact("Lead", j.lead)}
+            {fact("Rough", `${odStatusLabel(effRS(j))}${parseStage(j.roughStage) ? " · " + parseStage(j.roughStage) + "%" : ""}`)}
+            {fact("Finish", `${odStatusLabel(effFS(j))}${parseStage(j.finishStage) ? " · " + parseStage(j.finishStage) + "%" : ""}`)}
+            {fact("Rough QC", j.qcStatus ? `${odQcText(j.qcStatus)}${j.qcStatusDate ? " · " + j.qcStatusDate : ""}` : "")}{fact("Finish QC", j.finishQcStatus ? `${odQcText(j.finishQcStatus)}${j.finishQcStatusDate ? " · " + j.finishQcStatusDate : ""}` : parseStage(j.finishStage) >= 80 ? "Needs a walk" : "")}
+            {fact("Rough inspection", j.roughInspectionResult ? (j.roughInspectionResult === "pass" ? "Passed" : "Failed") : j.fourWayTargetDate ? "Target " + j.fourWayTargetDate : "")}
+            {fact("Final inspection", j.finalInspectionResult ? (j.finalInspectionResult === "pass" ? "Passed" : "Failed") : j.finalInspectionTargetDate ? "Target " + j.finalInspectionTargetDate : "")}
+            {fact("Last work logged", d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "Nothing logged")}
+          </div>
+          {j.statusUpdate ? <div className="od-note"><small>Status update{j.statusUpdateBy ? " · " + j.statusUpdateBy : ""}</small>{odText(j.statusUpdate)}</div> : null}
+          {inf.failOpen.length > 0 && <><div className="od-sh">Failed inspection items to fix <span>{inf.failOpen.length}</span></div><Rows rows={inf.failOpen.map(x => ({ title: x.text, sub: x.ph + " inspection", color: OD_R, icon: "x" }))}/></>}
+          <div className="od-sh">Coming up <span>{up.length}</span></div>
+          <Rows rows={up.map(x => ({ title: x.label, sub: x.type === "start" ? (x.confirmed ? "Confirmed" : "Projected") : x.detail || "", right: `${odDow(x.at)} ${odShort(x.at)}`, color: OD_SCHED_COLOR[x.type], icon: OD_SCHED_ICON[x.type] }))} empty="No dates set."/>
+          <div className="od-sh">Open punch <span>{inf.punch.length}</span></div>
+          <Rows rows={inf.punch.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).slice(0, 25).map(p => ({ title: p.text, sub: `${p.phase}${p.room ? " · " + p.room : ""}${p.who ? " · on " + odFirst(p.who) : ""}`, tag: [p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · "), right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, icon: "openitems" }))} empty="No open punch."/>
+          <div className="od-sh">Change orders <span>{inf.cos.length}</span></div>
+          <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders" }))} empty="No change orders."/>
+          <div className="od-sh">Return trips <span>{inf.rts.length}</span></div>
+          <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOff ? (rt.signedOffDate || "") : odRtLabel(rt), color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips" }))} empty="No return trips."/>
+          <div className="od-sh">Inspections <span>{inf.atts.length}</span></div>
+          <Rows rows={inf.atts.map(a => ({ title: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}`, sub: [(a.items || []).length && odPlural(a.items.length, "item"), a.by].filter(Boolean).join(" · "), right: a.date || "", color: a.result === "fail" ? OD_R : OD_G, icon: a.result === "fail" ? "x" : "checkCircle" }))} empty="No inspection results logged."/>
+          <div className="od-sh">Recent activity <span>{ev.length}</span></div>
+          <Rows rows={ev.map(e => ({ title: e.label, sub: [e.detail, e.who && odFirst(e.who)].filter(Boolean).join(" · "), right: odWhen(e, d.now), color: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type], icon: TYPE_ICON[e.type] }))} empty="Nothing logged in 30 days."/>
+        </OdSheet>
+      );
+    }
+  } else if (sheet && sheet.kind === "person") {
+    const p = d.people.find(x => sameName(x.name, sheet.name));
+    const tasks = d.openNeeds.filter(n => sameName(needAssignee(n), sheet.name));
+    const theirJobs = d.active.filter(j => sameName(j.foreman, sheet.name) || sameName(j.lead, sheet.name));
+    sheetEl = (
+      <OdSheet title={sheet.name} sub={p ? (p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days") : ""} onClose={() => setSheet(null)}>
+        <div className="od-facts">
+          <div><small>Today</small><b>{p ? odPlural(p.todayN, "update") : "—"}</b></div>
+          <div><small>Last 7 days</small><b>{p ? odPlural(p.days7.reduce((a, b) => a + b, 0), "update") : "—"}</b></div>
+          <div><small>Open tasks</small><b>{tasks.length}{tasks.filter(t => needPriority(t) === "urgent").length ? ` · ${tasks.filter(t => needPriority(t) === "urgent").length} urgent` : ""}</b></div>
+        </div>
+        <div className="od-sh">Open My Day tasks <span>{tasks.length}</span></div>
+        <Rows rows={tasks.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate, needRequester(t) && "from " + odFirst(needRequester(t))].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B, icon: "myday" }))} empty="No open tasks."/>
+        <div className="od-sh">Their jobs <span>{theirJobs.length}</span></div>
+        <Rows rows={theirJobs.map(j => ({ title: j.name, sub: `${d.secOf(j) ? d.secOf(j).label : ""} · ${odPlural(d.info[j.id].punch.length, "open punch item")}`, right: d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "", color: d.secOf(j) ? d.secOf(j).color : OD_O, icon: "hardHat", job: j }))} empty="Not foreman or lead on an active job."/>
+        <div className="od-sh">Recent activity <span>{p ? Math.min(20, p.mine.length) : 0}</span></div>
+        <Rows rows={p ? p.mine.slice(0, 20).map(e => ({ ...eventRow(e), icon: TYPE_ICON[e.type] })) : []} empty="Nothing logged in 30 days."/>
+      </OdSheet>
+    );
+  } else if (sheet && sheet.kind === "list") {
+    sheetEl = (
+      <OdSheet title={sheet.title} sub={sheet.sub} onClose={() => setSheet(null)}>
+        <Rows rows={sheet.rows} empty="Nothing in this list."/>
+      </OdSheet>
+    );
+  }
+
+  return (
+    <div className="odash">
+      <style>{`
+        .odash{--pan:rgba(40,33,30,.62);--inset:rgba(0,0,0,.22);--line:rgba(255,255,255,.09);--ink:#F5F1EC;--dim:rgba(245,241,236,.64);--faint:rgba(245,241,236,.42);
+          --card:#fff;--cink:#1E1A17;--cdim:#7C736C;--cline:#ECE7E2;--o:${OD_O};
+          color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:dark;
+          background:radial-gradient(55% 45% at 12% 6%,rgba(214,150,92,.34),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(170,100,55,.3),transparent 70%),linear-gradient(180deg,#241B16,#120E0C)}
+        .odash *{box-sizing:border-box}
+        .odash button{font:inherit;color:inherit}
+        .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+        .odash .od-tabs{display:flex;gap:4px;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:4px;overflow-x:auto;max-width:100%;scrollbar-width:none}
+        .odash .od-tabs::-webkit-scrollbar{display:none}
+        .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-tabs button:hover{color:var(--ink)}
+        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:#fff;box-shadow:0 6px 14px -6px rgba(242,112,42,.8)}
+        .odash .od-help{display:inline-flex;align-items:center;background:rgba(255,255,255,.92);border-radius:999px;padding:3px 8px;color:#1B1F24}
+        .odash .od-top .live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim)}
+        .odash .od-top .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#2FBF71;box-shadow:0 0 0 4px rgba(47,191,113,.2)}
+        .odash .od-ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+        .odash .od-sel{background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;max-width:220px}
+        .odash .od-sel.light{background:#F8F5F2;border-color:var(--cline);color:var(--cink);color-scheme:light}
+        .odash .od-seg{display:inline-flex;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
+        .odash .od-seg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-seg button[aria-pressed="true"]{background:rgba(255,255,255,.14);color:var(--ink)}
+        .odash .od-find{position:relative;flex:1;min-width:200px;max-width:380px;margin-left:auto}
+        .odash .od-find input{width:100%;background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:12.5px;outline:none}
+        .odash .od-find input::placeholder{color:var(--faint)}
+        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:#fff;color:var(--cink);border-radius:14px;box-shadow:0 18px 40px -12px rgba(0,0,0,.6);overflow:hidden}
+        .odash .od-find .hits button{display:flex;flex-direction:column;align-items:flex-start;width:100%;border:0;background:transparent;padding:9px 14px;text-align:left;cursor:pointer;border-bottom:1px solid var(--cline)}
+        .odash .od-find .hits button:hover{background:#FBF5F0}
+        .odash .od-find .hits b{font-size:13px}.odash .od-find .hits small{font-size:11.5px;color:var(--cdim)}
+        .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:start}
+        .odash .od-panel{background:var(--pan);border:1px solid var(--line);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+        .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+        .odash .od-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+        .odash .od-head p{margin:3px 0 0;font-size:12.5px;color:var(--dim)}
+        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFD3B8;background:rgba(242,112,42,.18);border:1px solid rgba(242,112,42,.4);border-radius:12px;padding:5px 10px;max-width:420px}
+        .odash .od-clear{margin-left:auto;border:1px solid var(--line);background:var(--inset);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:0;text-align:left}
+        .odash .od-pad{padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+        .odash .od-minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+        .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),box-shadow .25s}
+        .odash .od-tap{cursor:pointer}
+        .odash .od-tap:hover{transform:translateY(-4px);box-shadow:0 16px 28px -16px rgba(0,0,0,.7)}
+        .odash .od-mini .t{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:700}
+        .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
+        .odash .od-mini .b{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:auto;flex-wrap:wrap}
+        .odash .od-mini .v{font-size:22px;font-weight:800;line-height:1;color:var(--c);font-variant-numeric:tabular-nums}
+        .odash .od-mini .v small{font-size:11px;font-weight:500;color:var(--cdim);margin-left:4px}
+        .odash .od-mini .more{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--cdim);margin-top:-2px}
+        .odash .spark{flex:none}
+        .odash .od-row2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
+        .odash .od-ct{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:14px}
+        .odash .od-ct small{font-weight:500;color:var(--cdim);font-size:12px}
+        .odash .od-svg{width:100%;height:auto;display:block}
+        .odash .od-hint{font-size:11.5px;color:var(--cdim)}
+        .odash .od-daysum{display:flex;align-items:center;gap:10px;background:#FBF5F0;border-radius:12px;padding:9px 12px}
+        .odash .od-daysum div{flex:1;min-width:0;display:flex;flex-direction:column}
+        .odash .od-daysum b{font-size:12.5px}.odash .od-daysum small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-daysum button{border:0;background:var(--o);color:#fff;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-attn{display:flex;flex-direction:column}
+        .odash .od-attn button{display:flex;align-items:center;gap:10px;border:0;border-bottom:1px solid var(--cline);background:transparent;padding:10px 2px;text-align:left;cursor:pointer;color:var(--cdim)}
+        .odash .od-attn button:hover{background:#FBF8F5}
+        .odash .od-attn .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
+        .odash .od-attn .lb{flex:1;font-size:12.5px;font-weight:600;color:var(--cink)}
+        .odash .od-attn .n{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+        .odash .od-busy{margin-top:auto;display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--cline);padding-top:10px}
+        .odash .od-busy small{font-size:11px;color:var(--cdim)}
+        .odash .od-link{all:unset;cursor:pointer;font-size:13px;color:var(--cink)}
+        .odash .od-link:hover b{text-decoration:underline}
+        .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:#FDECEC;color:#B4262B;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-sec{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;color:var(--ink)}
+        .odash .od-sec span::before{content:"";display:inline-block;width:3px;height:15px;border-radius:2px;background:var(--o);margin-right:9px;vertical-align:-2px}
+        .odash .od-sec small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--dim)}
+        .odash .od-sec button{margin-left:auto;border:0;background:transparent;color:#FFB585;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+        .odash .od-crew{padding:14px;display:flex;gap:10px;align-items:center;min-width:0;transition:transform .25s}
+        .odash .od-crew > div{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
+        .odash .od-crew b{font-size:13.5px}
+        .odash .od-crew p{margin:0;font-size:11.5px;color:var(--cdim);line-height:1.35}
+        .odash .od-crew .day{align-self:flex-start;margin-top:5px;font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 9px;background:#F2EEEA}
+        .odash .od-crew.hot{background:var(--o);color:#fff}
+        .odash .od-crew.hot p{color:rgba(255,255,255,.86)}
+        .odash .od-crew.hot .day{background:rgba(255,255,255,.25)}
+        .odash .od-start{padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0}
+        .odash .od-start .dd{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-start b{font-size:14px}
+        .odash .od-start p{margin:0;font-size:11.5px;color:var(--cdim)}
+        .odash .od-start.hot{background:var(--o);color:#fff}
+        .odash .od-start.hot .dd,.odash .od-start.hot p{color:rgba(255,255,255,.86)}
+        .odash .od-me{display:flex;align-items:center;gap:10px}
+        .odash .av{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#3B5BA5;color:#fff;font-style:normal;font-weight:800;font-size:14px;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.22)}
+        .odash .av.sm{width:30px;height:30px;font-size:12px;box-shadow:none}
+        .odash .od-me b{display:block;font-size:14px}
+        .odash .od-me small{display:block;font-size:11.5px;color:var(--dim)}
+        .odash .od-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:6px 4px;text-align:center}
+        .odash .od-stats > *{border:0;background:transparent;padding:6px 2px;border-radius:12px}
+        .odash .od-stats > * + *{border-left:1px solid var(--line);border-radius:0}
+        .odash .od-stats button{cursor:pointer}.odash .od-stats button:hover b{color:#FFB585}
+        .odash .od-stats b{display:block;font-size:16px;font-variant-numeric:tabular-nums}
+        .odash .od-stats small{font-size:10.5px;color:var(--dim)}
+        .odash .od-cal{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:12px}
+        .odash .od-cal .h{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:13px;margin-bottom:8px}
+        .odash .od-cal .h small{margin-left:auto;font-weight:500;font-size:10.5px;color:var(--faint)}
+        .odash .od-cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px 0;text-align:center;font-size:11px}
+        .odash .od-cal .dow{color:var(--faint);font-size:10px;padding-bottom:4px}
+        .odash .od-cal .d{width:26px;height:26px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums;border:0;background:transparent;font-size:11px}
+        .odash .od-cal button.d{cursor:pointer;color:#fff;font-weight:800}
+        .odash .od-cal button.d:hover{transform:scale(1.12)}
+        .odash .od-cal .d.today{box-shadow:inset 0 0 0 1.5px var(--ink);color:var(--ink);font-weight:800}
+        .odash .od-cal button.d.today{color:#fff;box-shadow:0 0 0 2px var(--ink)}
+        .odash .od-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:10.5px;color:var(--dim)}
+        .odash .od-legend.light{color:var(--cdim);margin-top:0}
+        .odash .od-legend span{display:inline-flex;align-items:center;gap:5px}
+        .odash .od-legend span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c)}
+        .odash .od-list{display:flex;flex-direction:column;gap:8px}
+        .odash .od-item{display:flex;align-items:center;gap:10px;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:14px;padding:9px 10px;text-align:left;cursor:pointer;min-width:0}
+        .odash .od-item:disabled{cursor:default}
+        .odash .od-item:not(:disabled):hover{background:rgba(255,255,255,.07)}
+        .odash .od-item .th{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center}
+        .odash .od-item .tx{min-width:0;flex:1;display:flex;flex-direction:column}
+        .odash .od-item em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+        .odash .od-item b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-item small{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-item .when{font-size:10.5px;color:var(--faint);white-space:nowrap;flex:none}
+        .odash .od-item .chev{color:var(--faint);flex:none;display:grid}
+        .odash .od-filters{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+        .odash .od-filters.left{margin-left:0}
+        .odash .od-filters button{border:1px solid var(--cline);background:transparent;color:var(--cdim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-filters button span{opacity:.7;margin-left:2px}
+        .odash .od-filters button[aria-pressed="true"]{background:#FFF0E6;border-color:transparent;color:#C2511A}
+        .odash .od-chips{display:flex;gap:6px;flex-wrap:wrap}
+        .odash .od-chips button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--inset);color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-chips button i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+        .odash .od-chips button span{opacity:.7}
+        .odash .od-chips button[aria-pressed="true"]{background:var(--o);border-color:transparent;color:#fff}
+        .odash .od-frow{display:flex;gap:8px;flex-wrap:wrap}
+        .odash .od-frow .od-q{flex:1;min-width:180px}
+        .odash .od-q{width:100%;border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none;color-scheme:light}
+        .odash .od-q:focus{border-color:var(--o)}
+        .odash .od-dayh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cdim);padding:12px 0 2px;border-bottom:1px solid var(--cline)}
+        .odash .od-dayh span{margin-left:auto;font-weight:600;letter-spacing:0;text-transform:none}
+        .odash .od-rows{display:flex;flex-direction:column}
+        .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%;color:var(--cink)}
+        .odash .od-row:disabled{cursor:default}
+        .odash .od-row:not(:disabled):hover{background:#FBF8F5}
+        .odash .od-row .k{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
+        .odash .od-row .m{min-width:0;display:flex;flex-direction:column}
+        .odash .od-row .m b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-row .m em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#C2511A}
+        .odash .od-row .m small{font-size:12px;color:var(--cdim);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+        .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
+        .odash .od-pulse{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:0;text-align:left;cursor:pointer}
+        .odash .od-person:hover{background:#FBF5F0}
+        .odash .od-person > div{min-width:0;flex:1}
+        .odash .od-person b{display:block;font-size:13px}
+        .odash .od-person small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .beat{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
+        .odash .od-nav{margin-left:auto;display:inline-flex;gap:4px}
+        .odash .od-nav button{border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;min-width:30px;height:28px;padding:0 10px;display:grid;place-items:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--cink)}
+        .odash .od-weekwrap{overflow-x:auto}
+        .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
+        .odash .od-week .col{background:#F8F5F2;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+        .odash .od-week .col.today{background:#FFF1E7}
+        .odash .od-week .dh{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-week .col.today .dh{color:#C2511A}
+        .odash .od-week .dh span{font-weight:600;margin-left:3px}
+        .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);min-width:0;color:var(--cink)}
+        .odash .od-week .blk b{display:block;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-week .blk small{display:block;font-size:10.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-week .none{color:#C9C1BA;font-size:12px;text-align:center;margin-top:20px}
+        .odash .od-board{display:flex;flex-direction:column}
+        .odash .od-board .r{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(80px,40%);gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;color:var(--cink)}
+        .odash .od-board .r:hover{background:#FBF8F5}
+        .odash .od-board .nm b{display:block;font-size:13px}
+        .odash .od-board .nm small{display:block;font-size:11px;color:var(--cdim)}
+        .odash .od-board .bar{display:flex;height:8px;border-radius:99px;background:#F2EEEA;overflow:hidden;gap:2px}
+        .odash .od-board .bar i{display:block;height:100%}
+        .odash .od-hb{display:flex;flex-direction:column;gap:4px}
+        .odash .od-hb .r{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;font-size:12px;padding:5px 6px;border-radius:10px;border:0;background:transparent;text-align:left;color:var(--cink);width:100%}
+        .odash .od-hb .r.tap{cursor:pointer}.odash .od-hb .r.tap:hover,.odash .od-hb .r.on{background:#FBF2EA}
+        .odash .od-hb .r span{color:var(--cdim);font-variant-numeric:tabular-nums}
+        .odash .od-hb .r i{grid-column:1/-1;height:7px;border-radius:99px;background:#F2EEEA;overflow:hidden}
+        .odash .od-hb .r i::after{content:"";display:block;height:100%;width:var(--w);background:var(--c);border-radius:inherit}
+        .odash .od-heat{display:grid;gap:4px;align-items:center;font-size:11px}
+        .odash .od-heat .h{text-align:center;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-heat .n{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--cink);padding:0}
+        .odash .od-heat .c{height:28px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-variant-numeric:tabular-nums;border:0;cursor:pointer}
+        .odash .od-heat .c:disabled{cursor:default}
+        .odash .od-box{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:4px 12px}
+        .odash .od-box.light{background:var(--card);border:0;padding:8px}
+        .odash .od-dev{display:flex;align-items:center;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+        .odash .od-dev:last-child{border-bottom:0}
+        .odash .od-dev .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+        .odash .od-dev .sn{color:var(--dim);font-size:11px;white-space:nowrap}
+        .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
+        .odash .od-dev em.ok{color:#5FE0A0;background:rgba(47,191,113,.16)}
+        .odash .od-tablewrap{overflow-x:auto}
+        .odash .od-table{min-width:760px;display:flex;flex-direction:column}
+        .odash .od-table .tr{display:grid;grid-template-columns:minmax(180px,2fr) 1fr 1.2fr 64px 56px 1.1fr 1fr;gap:8px;align-items:center;padding:9px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;width:100%;color:var(--cink);font-size:12.5px}
+        .odash .od-table button.tr{cursor:pointer}.odash .od-table button.tr:hover{background:#FBF8F5}
+        .odash .od-table .hd{position:sticky;top:0;background:#fff}
+        .odash .od-table .th{border:0;background:transparent;text-align:left;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);cursor:pointer;padding:0}
+        .odash .od-table .th.on{color:#C2511A}
+        .odash .od-table .c{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table.appl{min-width:620px}
+        .odash .od-table.appl .tr{grid-template-columns:minmax(170px,2.2fr) repeat(6,minmax(54px,1fr))}
+        .odash .od-table.appl .hd .c{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-ct-actions{margin-left:auto;display:flex;gap:6px}
+        .odash .od-docs{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:10px}
+        .odash .od-doc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 6px 4px 4px;border:1px solid var(--cline);border-radius:12px;background:#fff}
+        .odash .od-doc .go{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;padding:6px 8px;border-radius:9px;color:var(--cink);text-decoration:none;min-width:0}
+        .odash .od-doc .go:hover{background:#FBF8F5}
+        .odash .od-doc .fold{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;color:var(--cdim)}
+        .odash .od-doc a.fold:hover{background:#FBF8F5;color:var(--cink)}
+        .odash .od-doc .k{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:#EEF3FD;color:#3B6FE0}
+        .odash .od-doc .m{min-width:0;display:flex;flex-direction:column;gap:1px}
+        .odash .od-doc .m b{font-size:13px}
+        .odash .od-doc .m small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-doc .m small.w{color:#C2511A;font-weight:600}
+        .odash .od-mini-btn{border:1px solid var(--cline);background:#fff;color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+        .odash .od-mini-btn:hover{background:#FBF8F5}
+        .odash .od-table .c small{color:var(--cdim);font-size:11px}
+        .odash .od-table .c.st small{display:block;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table .nm{display:flex;flex-direction:column}
+        .odash .od-table .nm b{overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table .num{font-weight:700;font-variant-numeric:tabular-nums}
+        .odash .pill{font-style:normal;font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,#fff);white-space:nowrap}
+        .odash .od-sgroup{display:flex;flex-direction:column}
+        .odash .od-sgroup .sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--c);padding:10px 0 4px}
+        .odash .od-sgroup .sh span{color:var(--cdim);font-weight:700}
+        .odash .od-sess{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--cline);color:var(--cink);text-decoration:none}
+        .odash .od-sess:hover{background:#FBF8F5}
+        .odash .od-sess .m{min-width:0;display:flex;flex-direction:column}
+        .odash .od-sess b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-sess small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-sess .t{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--cdim);white-space:nowrap}
+        .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
+        .odash .od-empty.dark{color:var(--dim)}
+        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(10,8,7,.55);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+        .od-sheet{width:min(560px,100%);height:100%;background:#FBF8F5;color:#1E1A17;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
+        @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+        .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid #ECE7E2;background:#fff}
+        .od-sheet-h .tt{flex:1;min-width:0;display:flex;flex-direction:column}
+        .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:#7C736C}
+        .od-sheet-h .x{border:0;background:#F2EEEA;border-radius:999px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;flex:none;color:#1E1A17}
+        .od-sheet-h .go{border:0;background:#F2702A;color:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
+        .od-sheet-b{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
+        .odash .od-facts,.od-sheet .od-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:6px}
+        .od-sheet .od-facts div{background:#fff;border-radius:12px;padding:8px 10px;min-width:0}
+        .od-sheet .od-facts small{display:block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7C736C}
+        .od-sheet .od-facts b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .od-sheet .od-note{background:#FFF5EC;border-radius:12px;padding:9px 12px;font-size:13px;margin:6px 0}
+        .od-sheet .od-note small{display:block;font-size:10.5px;font-weight:700;color:#C2511A;text-transform:uppercase;letter-spacing:.05em}
+        .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7C736C;padding:16px 0 4px;border-bottom:1px solid #ECE7E2}
+        .od-sheet .od-sh span{margin-left:auto;font-weight:700}
+        .od-sheet .od-rows{display:flex;flex-direction:column}
+        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #ECE7E2;background:transparent;text-align:left;cursor:pointer;width:100%;color:#1E1A17;font:inherit}
+        .od-sheet .od-row:disabled{cursor:default}
+        .od-sheet .od-row:not(:disabled):hover{background:#fff}
+        .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
+        .od-sheet .od-row .m{min-width:0;display:flex;flex-direction:column}
+        .od-sheet .od-row .m b{font-size:13px;overflow:hidden;text-overflow:ellipsis}
+        .od-sheet .od-row .m em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#C2511A}
+        .od-sheet .od-row .m small{font-size:12px;color:#7C736C}
+        .od-sheet .od-row .t{font-size:11.5px;color:#7C736C;white-space:nowrap}
+        .od-sheet .od-empty{color:#7C736C;font-size:12.5px;padding:10px 2px}
+        .odash button:focus-visible,.odash input:focus-visible,.odash select:focus-visible,.od-sheet button:focus-visible{outline:2px solid var(--o, #F2702A);outline-offset:2px}
+        @media (max-width:1100px){.odash .od-grid{grid-template-columns:minmax(0,1fr)}.odash .od-minis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media (max-width:700px){.odash{padding:10px;border-radius:16px}.odash .od-panel{padding:14px}.odash .od-row2,.odash .od-plan{grid-template-columns:minmax(0,1fr)}
+          .odash .od-find{max-width:none;margin-left:0;flex-basis:100%}
+          .od-sheet-wrap{align-items:flex-end}.od-sheet{width:100%;height:92%;border-radius:20px 20px 0 0;animation:odUp .24s cubic-bezier(.2,.8,.2,1)}
+          .od-sheet-h{border-radius:20px 20px 0 0;padding-top:16px}
+          .od-sheet .od-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @keyframes odUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}}
+        @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
+        @media (prefers-reduced-motion:reduce){.odash *,.od-sheet{transition:none!important;animation:none!important}.odash .od-tap:hover{transform:none}}
+      `}</style>
+      <div className="od-top">
+        <div className="od-tabs" role="tablist" aria-label="Dashboard views">
+          {OD_TABS.map(([k, l]) => <button type="button" role="tab" key={k} aria-selected={tab === k} onClick={() => pickTab(k)}>{l}</button>)}
+        </div>
+        <span className="od-help"><HelpDot section="dashboard"/></span>
+        <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
+      </div>
+      {tab !== "cc" && (
+        <div className="od-ctrl">
+          <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Foreman">
+            <option value="">All foremen</option>{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+          <span className="od-seg" role="group" aria-label="Date range">{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} onClick={() => pickRange(r)}>{r} days</button>)}</span>
+          <div className="od-find">
+            <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
+            {searchHits.length > 0 && <div className="hits">{searchHits.map(j => (
+              <button type="button" key={j.id} onClick={() => { setQ(""); openJob(j); }}><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.foreman, d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · ")}</small></button>
+            ))}</div>}
+          </div>
+        </div>
+      )}
+      <div className="od-grid">
+        <div className="od-panel">{main}</div>
+        <div className="od-panel">{right}</div>
+      </div>
+      {sheetEl}
+    </div>
+  );
+}
+
+// ── Standalone dashboard page (v530) ─────────────────────────────────────────
+// Koy: "I actually want this as a stand alone dashboard" ... "not in the app".
+// /dashboard opens OfficeDash full screen, without the app's nav, after the
+// normal PIN gate. It is Koy's personal page ("I want to be the only one with
+// the view"), so it opens for his own team record only (id "koy", the same
+// record the Team editor protects with u.id!=="koy"). Tapping a job opens it in
+// the app through the existing ?jobId= deep link.
+const isDashOwner = (u) => !!u && u.id === "koy";
+const IS_DASH_PAGE = (() => { try { return /^\/dashboard\/?$/.test(window.location.pathname); } catch (e) { return false; } })();
+// Add to Home Screen on /dashboard must make a Dashboard icon, not another copy of
+// the crew app: the site's only manifest is the app's (start_url "/"). Swap in the
+// dashboard's own manifest before anyone can tap Share (same idea as the GC
+// portal's _gcApplyInstallIdentity, v409). Never throws.
+if (IS_DASH_PAGE) {
+  try {
+    const l = document.querySelector('link[rel="manifest"]');
+    if (l) l.setAttribute("href", "/dashboard-manifest.json");
+    const t = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    if (t) t.setAttribute("content", "Dashboard");
+  } catch (e) {}
+}
+function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
+  useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
+  const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
+  const segBtn = (on) => ({ border: 0, borderRadius: 999, padding: "6px 12px", fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer",
+    background: on ? "#F2702A" : "transparent", color: on ? "#fff" : "rgba(245,241,236,.7)" });
+  return (
+    <div style={{ minHeight: "100vh", background: "#120E0C", color: "#F5F1EC", fontFamily: "'DM Sans',sans-serif",
+      padding: "calc(12px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px))" }}>
+      <div style={{ maxWidth: 1400, margin: "0 auto 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 800, fontSize: 15 }}>
+          <span style={{ width: 30, height: 30, borderRadius: 9, background: "#F2702A", display: "grid", placeItems: "center" }}><Icon name="zap" size={16} color="#fff"/></span>
+          Homestead <span style={{ color: "rgba(245,241,236,.6)", fontWeight: 600 }}>Dashboard</span>
+        </span>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {canCommercial && (
+            <span style={{ display: "inline-flex", background: "rgba(0,0,0,.3)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 999, padding: 3, gap: 2 }}>
+              <button type="button" style={segBtn(mode !== "commercial")} onClick={() => setMode("resi")}>Resi</button>
+              <button type="button" style={segBtn(mode === "commercial")} onClick={() => setMode("commercial")}>Commercial</button>
+            </span>
+          )}
+          <a href="/" style={{ color: "#F5F1EC", fontSize: 12.5, fontWeight: 700, textDecoration: "none", border: "1px solid rgba(255,255,255,.18)", borderRadius: 999, padding: "6px 12px" }}>Open the app</a>
+        </span>
+      </div>
+      {ok ? (
+        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob}/></OdBoundary>
+      ) : (
+        <div style={{ maxWidth: 520, margin: "40px auto", background: "#fff", color: "#1B1F24", borderRadius: 16, padding: 20 }}>
+          <b>This page is private.</b>
+          <div style={{ fontSize: 13, color: "#5E6670", marginTop: 6 }}>It only opens for Koy's login.</div>
+          <a href="/" style={{ display: "inline-block", marginTop: 12, color: "#3B5BA5", fontWeight: 700 }}>Open the app</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
@@ -45229,7 +47594,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Active jobs</div>
           <div style={{fontSize:22,fontWeight:600,color:C.text}}>
-            <HeCount value={activeJobs.length}/> <span style={{fontSize:11,color:C.muted,fontWeight:400}}>of {allJobs.length}</span>
+            <HeCount value={activeJobs.length}/> <span style={{fontSize:11,color:C.faint,fontWeight:400}}>of {allJobs.length}</span>
           </div>
         </div>
         <div style={pulseCard}>
@@ -45329,7 +47694,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                     <div key={`ev-${idx}`} style={{...rowStyle, padding:"6px 8px", borderBottom:`1px solid ${C.border}`}}
                       onClick={() => j && onSelectJob && onSelectJob(j)}>
                       <span style={{width:6,height:6,borderRadius:99,background:e.color||C.muted,flexShrink:0}}/>
-                      <span style={{fontSize:11,color:C.muted,minWidth:54}}>{fmtEvTime(e.at)}</span>
+                      <span style={{fontSize:11,color:C.faint,minWidth:54}}>{fmtEvTime(e.at)}</span>
                       <div style={{flex:1,fontSize:13,color:C.text,lineHeight:1.35}}>
                         {e.who && <b>{(e.who||"").split(/\s+/)[0]}</b>}{e.who?" · ":""}
                         <span style={{color:C.text}}>{e.label}</span>
@@ -45389,7 +47754,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
               <div key={j.id} style={{...rowStyle, padding:"6px 10px", opacity:0.55}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:12,color:C.dim}}>{j.name || j.id}</div>
-                  <div style={{fontSize:11,color:C.muted}}>{d ? `no work since ${fmtDay(d)}` : "no logged work"}</div>
+                  <div style={{fontSize:11,color:C.faint}}>{d ? `no work since ${fmtDay(d)}` : "no logged work"}</div>
                 </div>
               </div>
             );
@@ -45443,11 +47808,11 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                       </span>
                     ))}
                   </div>
-                  <div style={{fontSize:11,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+                  <div style={{fontSize:11,color:C.faint,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
                     {p.events.slice(0,3).map((e,i) => (
                       <div key={i} style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.5}}
                         title={e.label + (e.jobName?` · ${e.jobName}`:"")}>
-                        <span style={{color:C.muted}}>{fmtEvTime(e.at)}</span> · {e.label}
+                        <span style={{color:C.faint}}>{fmtEvTime(e.at)}</span> · {e.label}
                         {e.jobName && <span style={{color:C.blue}}> · {e.jobName}</span>}
                       </div>
                     ))}
@@ -45529,7 +47894,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                       {g.events.map((e,i) => (
                         <div key={i} style={{display:"flex", gap:8, alignItems:"flex-start", fontSize:12, color:C.text, lineHeight:1.45, padding:"3px 0"}}>
                           <span style={{width:6, height:6, borderRadius:99, background:e.color||C.muted, marginTop:6, flexShrink:0}}/>
-                          <span style={{fontSize:11, color:C.muted, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtEvTime(e.at)}</span>
+                          <span style={{fontSize:11, color:C.faint, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtEvTime(e.at)}</span>
                           <div style={{flex:1}}>
                             <span>{e.label}</span>
                             {e.detail && <div style={{fontSize:11, color:C.dim, marginTop:1}}>{e.detail}</div>}
@@ -47056,11 +49421,11 @@ function ActivityLog({ jobs, embedded = false }) {
       {!embedded && (
         <>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:4}}>Activity Log</div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+          <div style={{fontSize:12,color:C.faint,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
         </>
       )}
       {embedded && (
-        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+        <div style={{fontSize:12,color:C.faint,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
       )}
       <input placeholder="Filter by job name or person..." value={filter} onChange={e=>setFilter(e.target.value)}
         style={{width:"100%",maxWidth:400,padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,fontSize:13,fontFamily:"inherit",marginBottom:16,outline:"none"}}/>
@@ -47068,21 +49433,21 @@ function ActivityLog({ jobs, embedded = false }) {
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"inherit"}}>
           <thead>
             <tr style={{background:C.surface,borderBottom:`2px solid ${C.border}`}}>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>Job</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:130}}>Last Edited By</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:100}}>When</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:150}}>Date</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Foreman</th>
-              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Lead</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>Job</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:130}}>Last Edited By</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:100}}>When</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:150}}>Date</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Foreman</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.faint,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Lead</th>
             </tr>
           </thead>
           <tbody>
             {filtered.slice(0,100).map(job => (
               <tr key={job.id} style={{borderBottom:`1px solid ${C.border}22`}}>
                 <td style={{padding:"8px 12px",color:C.text,fontWeight:600}}>{job.name||"(untitled)"}</td>
-                <td style={{padding:"8px 12px",color:job._saved_by?C.text:C.muted}}>{job._saved_by||"—"}</td>
-                <td style={{padding:"8px 12px",color:C.muted,fontSize:12}}>{timeAgo(job.updated_at)}</td>
-                <td style={{padding:"8px 12px",color:C.muted,fontSize:11}}>{fmtDate(job.updated_at)}</td>
+                <td style={{padding:"8px 12px",color:job._saved_by?C.text:C.faint}}>{job._saved_by||"—"}</td>
+                <td style={{padding:"8px 12px",color:C.faint,fontSize:12}}>{timeAgo(job.updated_at)}</td>
+                <td style={{padding:"8px 12px",color:C.faint,fontSize:11}}>{fmtDate(job.updated_at)}</td>
                 <td style={{padding:"8px 12px",color:C.text,fontSize:12}}>{job.foreman||"—"}</td>
                 <td style={{padding:"8px 12px",color:C.text,fontSize:12}}>{job.lead||"—"}</td>
               </tr>
@@ -47090,7 +49455,7 @@ function ActivityLog({ jobs, embedded = false }) {
           </tbody>
         </table>
       </div>
-      <div style={{marginTop:10,fontSize:11,color:C.muted}}>{filtered.length} entries — most recent first</div>
+      <div style={{marginTop:10,fontSize:11,color:C.faint}}>{filtered.length} entries — most recent first</div>
     </div>
   );
 }
@@ -47515,7 +49880,7 @@ function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
     setBusy("");
   };
   const chip = (color, text) => (
-    <span key={text} style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: "2px 8px", color,
+    <span key={text} style={{ fontSize: 10.5, fontWeight: 700, borderRadius: 99, padding: "2px 8px", color: readableInk(color, "#E9ECF0"),
       background: `${color}14`, border: `1px solid ${color}44`, whiteSpace: "nowrap" }}>{text}</span>
   );
   const chips = [];
@@ -47548,7 +49913,7 @@ function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
       </div>
     );
   };
-  const grp = (text) => <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.muted, padding: "8px 8px 3px" }}>{text}</div>;
+  const grp = (text) => <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.faint, padding: "8px 8px 3px" }}>{text}</div>;
   const list = () => {
     if (cur === "sent") return <BcSentTab identity={identity}/>;
     const def = BC_TABS.find(t => t.key === cur);
@@ -50387,7 +52752,7 @@ function HomeownerPage({ jobId }) {
       <div style={{fontSize:14,color:'#5E6670',maxWidth:320,lineHeight:1.6}}>
         Thank you. Homestead Electric has your generator load selections.
       </div>
-      <div style={{marginTop:40,fontSize:11,color:'#CDD3DB',letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
+      <div style={{marginTop:40,fontSize:11,color:'#666E79',letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
     </div>
   );
 
@@ -50530,7 +52895,7 @@ function HomeownerPage({ jobId }) {
         {/* NOT ON GENERATOR — add-able (removed items land here too) */}
         {offItems.length>0&&(
           <>
-            <div style={{fontSize:10,fontWeight:700,color:'#CDD3DB',letterSpacing:'0.08em',margin:'22px 0 10px'}}>
+            <div style={{fontSize:10,fontWeight:700,color:'#666E79',letterSpacing:'0.08em',margin:'22px 0 10px'}}>
               NOT ON GENERATOR · {offItems.length}
             </div>
             {offItems.map(it=>(
@@ -50590,7 +52955,7 @@ function HomeownerPage({ jobId }) {
               cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit'}}>
             {submitting?'Submitting…':'Submit my selections'}
           </button>
-          <div style={{textAlign:'center',marginTop:14,fontSize:10,color:'#CDD3DB',letterSpacing:'0.06em'}}>
+          <div style={{textAlign:'center',marginTop:14,fontSize:10,color:'#666E79',letterSpacing:'0.06em'}}>
             HOMESTEAD ELECTRIC
           </div>
         </div>
@@ -51417,6 +53782,9 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
   const [shareLabel, setShareLabel] = useState("");
   const [editingId, setEditingId] = useState(null); // saved-share being edited, or null for a new one
   const [previewId, setPreviewId] = useState(null); // saved-share id shown in the read-only preview iframe, or null
+  // Link opens for the SAVED LINKS rows — listener only while the modal is open.
+  const linkOpens = useLinkOpens(open ? jobId : null);
+  const showBaseOpens = filter != null || !!(linkOpens && linkOpens["questions:base"]);
 
   const flatQs = (qs, phase) => {
     if(!qs || typeof qs !== 'object') return [];
@@ -51566,7 +53934,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
             <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
 
               {/* Saved links — track each person's link */}
-              {totalShares>0 && (
+              {(totalShares>0 || showBaseOpens) && (
                 <div style={{marginBottom:18,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
                   <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
                   {shares.map(s=>{
@@ -51583,6 +53951,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color:color,marginLeft:6}}>editing</span>}</div>
                           <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:'#B0892C'}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
+                          <LinkOpensLine opens={linkOpens} linkKey={`questions:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>setPreviewId(s.id)} style={{fontSize:10.5,fontWeight:600,color:'#1e3a5f',background:'#fff',border:'1px solid #C3D0E0',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Preview</button>
@@ -51591,6 +53960,12 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                       </div>
                     );
                   })}
+                  {showBaseOpens && (
+                    <div style={{padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
+                      <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24'}}>Base link (Share all)</div>
+                      <LinkOpensLine opens={linkOpens} linkKey="questions:base"/>
+                    </div>
+                  )}
                   {editingId && <button onClick={startNew} style={{marginTop:8,fontSize:11,fontWeight:700,color:color,background:'none',border:`1px dashed ${color}66`,borderRadius:6,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>+ Start a new link</button>}
                 </div>
               )}
@@ -51672,6 +54047,9 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
   ];
 
   const stageParam = stage.toLowerCase() + 'punch';
+  // Link opens for the SAVED LINKS rows — listener only while the modal is open.
+  const linkOpens = useLinkOpens(open ? jobId : null);
+  const showBaseOpens = filter != null || !!(linkOpens && linkOpens[`${stageParam}:base`]);
 
   // Flatten every item with its floor + section labels
   const getAllItems = () => {
@@ -51794,7 +54172,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
 
             {/* Item list */}
             <div style={{overflowY:'auto',flex:1,padding:'14px 22px'}}>
-              {shareList.length>0 && (
+              {(shareList.length>0 || showBaseOpens) && (
                 <div style={{marginBottom:16,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
                   <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
                   {shareList.map(s=>{
@@ -51804,6 +54182,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color,marginLeft:6}}>editing</span>}</div>
                           <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} item{cnt!==1?'s':''}</div>
+                          <LinkOpensLine opens={linkOpens} linkKey={`${stageParam}:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>copyLink(s.id)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
@@ -51811,6 +54190,12 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                       </div>
                     );
                   })}
+                  {showBaseOpens && (
+                    <div style={{padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
+                      <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24'}}>Base link (Share all)</div>
+                      <LinkOpensLine opens={linkOpens} linkKey={`${stageParam}:base`}/>
+                    </div>
+                  )}
                   {editingId && <button onClick={startNew} style={{marginTop:8,fontSize:11,fontWeight:700,color,background:'none',border:`1px dashed ${color}66`,borderRadius:6,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>+ Start a new link</button>}
                 </div>
               )}
@@ -51926,11 +54311,11 @@ function ExternalPunchSection({ items, label, onChange, color }) {
             {it.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
           </div>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:13,color:it.done?C.muted:C.text,
+            <div style={{fontSize:13,color:it.done?C.faint:C.text,
               textDecoration:it.done?'line-through':'none',lineHeight:1.45,
               wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{it.text}</div>
 
-            <div style={{fontSize:9,color:C.muted,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+            <div style={{fontSize:9,color:C.faint,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
               <span>added by <b>{it.addedBy||label}</b>{it.addedAt?' · '+it.addedAt:''}</span>
               {it.done&&it.checkedBy&&(
                 <span style={{color:C.green}}>✓ checked by {it.checkedBy}{it.checkedAt?' · '+it.checkedAt:''}</span>
@@ -51938,7 +54323,7 @@ function ExternalPunchSection({ items, label, onChange, color }) {
             </div>
           </div>
           <button onClick={()=>remove(it.id)}
-            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:13,
+            style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:13,
               flexShrink:0,padding:'0 2px',lineHeight:1}}>✕</button>
         </div>
       ))}
@@ -52990,10 +55375,26 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-07 · App SW version: v520
+**Last manifest update:** 2026-10-13 · App SW version: v536
 
 ---
 
+- **Weekly Lead Meeting doc every Tuesday — Hours vs bid shows only the margins that moved since last week** · 'shipped 2026-10-13' · 'SW v536' · 'foremanMeetingPrep' · 'functions/leadMeetingDoc.js' · Koy, about the one-off Oct 7 "Weekly Lead Meeting" doc (*"Hours vs bid shows only jobs whose margin moved since the last meeting doc"*): *"Yes, I want that every week."* The Tuesday 4 PM **foremanMeetingPrep** run already builds the full Foreman + Lead section with every job's Simpro margin for the running notes doc; after that insert it now also writes **Weekly Lead Meeting — <Wednesday's date>** as its own Google Doc in the packet folder (Shared Drive — the service account has no My Drive storage, so it can't write into Koy's "Meeting Info Pull"). Same sections and styling (the same 'renderLines' / 'docsRequests'), with three differences from pure 'weeklyModel()': **Hours vs bid** keeps only jobs whose margin (rounded) moved since the last run, each with *"(was 72% last week)"* (or *two weeks ago* when last week had none); jobs with no margin or no Simpro # are left out; the done groups become **Rough / Finish completed since last meeting**; a note says the full list stays in the Foreman + Lead notes doc. The first run lists every job with a margin, marked *first week tracked*. **Margin history** lives in the new server-only doc 'meetingPrepState/leadMargins' ('{ lastYmd, jobs: { simproNo: [{ d, m }] } }', 8 weeks per job, jobs unseen 90 days dropped; closed to the app by the rules' catch-all); test runs write the doc but never move the history. The push says how many margins moved. The doc failing never affects the notes-doc insert. The dashboard's Automated docs gets a **Weekly Lead Meeting** card that opens the newest one ('autoDocsLatest' gains the 'weekly' prefix). The notes-doc section renders exactly as before (rows gain an internal 'sn'; the new note / was / title hooks are only set by 'weeklyModel'). New 'scripts/leadmeetingdoc-test.js' (14 checks on the Oct 7 margins) in prebuild; 'autodocs-test' +1. **Deploy:** 'firebase deploy --only functions:foremanMeetingPrep,functions:sendTestForemanMeetingPrep,functions:autoDocsLatest'. **Why it won't lose data:** additive — one new Google Doc per week in the packet folder and one new server-only Firestore doc; no job, needs or settings write; the running notes-doc insert is unchanged and runs first; Simpro is read exactly as before (no new calls).
+- **Dashboard Automated docs: the folder cards open the newest doc** · 'shipped 2026-10-13' · 'SW v535' · 'autoDocsLatest' · Koy: *"make the folder cards open the latest doc."* New read-only callable **'autoDocsLatest'** (app key, like the other callables) lists the fixed folders in 'functions/autoDocs.js' with the read-only Drive scope and returns the newest doc of each kind by name prefix and creation time: **Friday Packet**, **Lead Meeting Prep**, **Weekly Strategy Meeting** (packet folder, which the service account already reaches through the Shared Drive) and **Monday Office Meeting** (Koy's own folder, now shared read-only with 'homestead-electric@appspot.gserviceaccount.com'). "SUPERSEDED …" copies and hand-made prep docs don't match; a later "(v2)" the same day wins. Cached 10 minutes per instance. The card opens that doc and shows "Latest: <name> · made <when>"; a small folder button opens the folder. Until the function is deployed, or if a folder can't be read, the card opens the folder exactly as in v534. Pure picker tested by new 'scripts/autodocs-test.js' (8 checks on the real folder listings, wired into prebuild). **Deploy:** 'firebase deploy --only functions:autoDocsLatest'. **Why it won't lose data:** the callable only lists files (read-only scope, fixed folder ids, never a caller-supplied id) and writes nothing; the client only reads its answer; the one Drive change is a read-only share of the Monday folder to the app's own service account.
+- **Dashboard Automations tab: Automated docs — one tap to every doc and folder the automations write** · 'shipped 2026-10-13' · 'SW v534' · 'OD_DOCS' · Koy: *"i also will need all the automated docs there as well for easy access."* Koy: *"also if we can link my bonus tracker that would be sweet."* A card grid at the top of Automations, each with what it is, when it runs and what makes it: **Koy Bonus Tracker** (Josh's Google Sheet, shared with Koy) first, then **Friday Packet** (fridayPacket, Fri 5:30 AM) and **Lead Meeting Prep** (leadMeetingPrep, Tue 6 AM) → the packet folder; **Foreman + Lead meeting notes** (foremanMeetingPrep, Tue 4 PM, prep added at the top); **Monday Office Meeting** (Claude routine, Mon 3 PM) → its folder; **Weekly Strategy Meeting prep** (routine off; same folder as the packet); **Lead meeting notes**; **First 90 Days plan** (read by the Mon/Fri check-ins); **Appliance Loads - Master**; **Job Plans**. IDs come from functions/index.js and the Routines and were checked against Drive. The Friday Packet card shows when it last ran ('settings/fridayPacket.lastRunAt', one 'getDoc' when the tab opens). Drive can't be listed from the browser without sign-in, so folders open in Drive rather than naming the newest doc. **Why it won't lose data:** links plus one read of a settings doc; nothing is written; no function, rules or loader change.
+- **Dashboard: the Command Center tab becomes Automations — what Plan Intake and the Appliance Loads pull produced** · 'shipped 2026-10-13' · 'SW v533' · 'OfficeDash' · Koy: *"really i just want to see outputs for the plan intake and the appliance sheet pull."* The old tab depended on an hourly Claude Routine copying routines and sessions into 'settings/ccSnapshot'; Routines on this account can't carry the connector that lists them, so it never refreshed (that Routine is now off). The tab (key still 'cc', so a remembered tab opens) now reads the two automations' own outputs where they already land. **Plan Intake:** live 'agentFindings' listener while the tab is open (same query and dry/test filter as the Today Plans card), last 14 days grouped by day, chips All / Needs you (unseen 'PLAN_NEEDS') / Filed / Folders & walks; each line opens its folder, file, email (the finding's own links) and the app job matched by Simpro #; minis for plans filed (file count from the finding summary, per-day bars) and plans needing you. **Appliance Loads:** 'fetchApplSheetRows' (the Tools view's Master-tab read), one row per job: items, connected amps, Not in CC yet, Likely, no amps (the sheet's TBD rule) and typical rows, matching the sheet's own Summary tab; tap a job for its appliances (attention first), tap an appliance to open its source file; Refresh and Open sheet. Next run times come from the two Routines' UTC crons ('OD_RUNS'). Guide 'public/sops/dashboard.html' updated. **Why it won't lose data:** read-only: one 'onSnapshot' on 'agentFindings' (rules already allow the read; no seen stamps written here) and the existing sheet CSV read; the ccSnapshot listener is removed; no job, needs or settings write; the crew app, Plans card, Tools view, loader, rules and functions are untouched.
+- **Dashboard accuracy pass: stages go by where the work actually is, and every tab checked against live job data** · 'shipped 2026-10-13' · 'SW v532' · 'odPhase' · 'odBuildSchedule' · 'odBuildEvents' · Koy: *"Oakhill says it's in job prep. I know that job prep isn't all the way completed, but the rough is in progress, and it should show that. Vista Meadows shows it's in between, but the finish is in progress. I just need it to be way more accurate and real."* Four audits ran the dashboard's own code over a read-only copy of the live jobs, needs and team list and compared every number with what the data says. **Stages:** the dashboard no longer borrows the Job Board's 'STAGE_SECTIONS' (first match wins, and "Pre Job Prep" is checked before any status, so Oak Hill 5 with rough In Progress sat in prep because Cabinet Plans was unticked). New 'odPhase()': finish status, then rough status, wins; "invoice" counts as complete; unfinished prep (or an open commercial Pre-Con checklist) is a separate **Prep not finished** flag; a scheduled/date-set phase whose date has arrived reads **start date passed**; a phase with daily updates or closed punch under a not-started status goes where the work is and is flagged **status behind the work**; no status at all reads **No status set**; commercial jobs with no commercial stage fall back to the crew status. Each job shows the reason ("5%", "Finish projected 11/2", "Work logged 8/13, status still Awaiting Start Date"). **Last work:** "last update" counted 'lastActivityAt' / 'updated_at', which the presence ping and Simpro cache writes stamp on merely opening a job; it is now the newest real work (any age), so quiet-job ages are true (Cowdrey 3 d became 63 d). **Schedule:** inspection targets drop once that inspection is logged or the job moved past it, and targets 30+ days old are their own "result never logged" list; passed start dates have their own list; return-trip dates come from 'rtStatusDate' ('scheduledDate' is never set in live data) and a "needs" trip shows its schedule-by date; quick jobs and temp peds are on the schedule; scanned Matterports drop; On Hold phases aren't starts; completed jobs still show their open return trips; Upcoming entries already on the board aren't doubled; calendar days are real days, so the week view doesn't lose 11/2 when the clocks fall back. **Quality:** repeated Pass/Fail taps and a cleared result no longer count as extra inspections; "Unassigned" / "Paul" aren't foremen ('SBV2_EXCLUDE_NAME'); QC walks use the QC tracker's own rows and buckets (failed, walk date passed, needs a walk, scheduled) and the job panel shows rough and finish QC; open change orders count on every live job and drop ones converted to a return trip; old punch items get their age from their id. **Activity:** adds questions asked/answered, job notes, return-trip punch, change orders sent / quoted / moved in Simpro, and status-update history; photos are counted from every photo (punch items and return-trip punch included, plan PDFs excluded), one line per job and day; the "return trip scheduled" row (really the trip date) moved to Schedule. **People:** foremen go by Team Members title (as the Crew Planner does) with a **No active foreman** card for jobs on Unassigned / contractors / deactivated people; duplicate team records collapse; "jobs touched today" includes jobs opened; phones on latest counts each person's newest device. **Overview:** Needs attention adds ready to invoice, change orders waiting on the GC 60+ days and return trips past their date. Guide 'public/sops/dashboard.html' updated. **Why it won't lose data:** still read-only: no new reads, no 'setDoc' / 'updateDoc' / 'saveJob'; every change is how already-loaded job, team and task data is grouped and counted on the Koy-only /dashboard page; the crew app, Job Board, loader, rules and Cloud Functions are untouched.
+- **Dashboard v2: every number and job opens, a Jobs tab, Needs attention, foreman filter + 7/14/30-day range, and its own Home Screen icon** · 'shipped 2026-10-13' · 'SW v531' · 'OfficeDash' · Koy, on v530: *"It just adds the app to my Home Screen not the dashboard. Also was hoping for this to be more interactive and have a lot more info in each tab."* **Home Screen:** '/dashboard' swaps the page's '<link rel=manifest>' to the new 'public/dashboard-manifest.json' ('id' and 'start_url' '/dashboard', name "Homestead Dashboard", short name "Dashboard") and retitles 'apple-mobile-web-app-title', at module load before anyone can tap Share (the GC portal's v409 trick), so Add to Home Screen makes a Dashboard icon instead of a second crew-app icon. **Everywhere:** a job panel ('OdSheet') opens from any job row, card, calendar item or search hit: stage, foreman, lead, rough/finish status and %, QC, inspection results or targets, last update, status update, failed-inspection items still open, coming-up dates, open punch (phase, room, who, age, serious/waiting), change orders, return trips, inspection history and recent activity, with **Open in app** ('?jobId='). Every stat card opens the list behind its number; a person panel shows their open My Day tasks, their jobs and their activity. A control row adds a **foreman filter** (all job tabs), a **7 / 14 / 30-day range** and a **job finder** (name, number, address, GC). **Overview:** tap-or-hover chart with a day summary and "See them" into Activity; **Needs attention** (inspections past their date, failed-inspection items not fixed, starts in 3 days not confirmed, COs to send, return trips with no date, in-progress jobs quiet 5+ days, serious punch); tappable calendar days. **Jobs (new tab):** stage chips, filter box, sortable table (job, foreman, stage, punch, COs, next date, last update), by-stage and by-foreman bars that filter. **Activity:** grouped by day, type chips with counts, person picker, most-active jobs. **Schedule:** week-by-week navigation, next-30-days by kind, starts list. **Quality:** first-pass chart with month drill-down, open punch by age (0–7, 8–14, 15–30, 30+ days), serious items, punch by foreman lists, latest failed inspections. **People:** tappable 7-day grid squares and names, My Day load by person, quiet-3-days list, all devices toggle. **Command Center:** status chips, session search, automation detail. Choices (tab, foreman, range) are remembered on the device. **Why it won't lose data:** still read-only; the only new reads are the same in-memory job, team and task data; no 'setDoc'/'updateDoc'/'saveJob'; the manifest swap only changes a '<link>' and a '<meta>' on the /dashboard page; no loader, rules or Cloud Function change.
+- **Standalone dashboard at '/dashboard' (Koy only): Overview · Activity · Schedule · Quality · People · Command Center, live, not in the app** · 'shipped 2026-10-11' · 'SW v530' · 'DashPage' + 'OfficeDash' · Koy, after the glass dashboard mockups ('admin-overview-mockup.html'): *"I want different views of the live data"*, *"I want to be the only one with the view"*, *"a stand alone dashboard that includes a tab for my current personal cc"* and *"not in the app"*. **The page:** 'homestead-electric.vercel.app/dashboard' renders 'OfficeDash' full screen with a slim header (Resi / Commercial switch, Open the app) and no app nav or tab; it is not in 'NAV_MAIN_TABS' and adds no permission or Settings checkbox. It boots the same bundle, passes the normal PIN gate, and returns right above App's main return (after every hook; 'IS_DASH_PAGE' is a module-level path check). It opens only for Koy's own team record ('isDashOwner': id 'koy', the record the Team editor already protects); anyone else sees "This page is private". Tapping a job goes to '/?jobId=<id>', the existing deep link. **Overview:** active jobs by board stage ('STAGE_SECTIONS' / 'COMM_BOARD_SECTIONS'), inspections passed in 30 days ('roughInspectionAttempts' / 'finalInspectionAttempts'), open COs and how many are 'pending', open punch ('sbv2WalkPunch' over rough/finish/QC punch), updates per day for 14 days, busiest job, foremen cards, this month's calendar, the next 14 days of dated work. **Activity:** the last 30 days from the job fields (punch added/closed, CO 'createdAt'/'coStatusDate' with the real 'desc' and status values, inspection attempts, return trips, rough/finish daily updates, 'statusUpdateAt', photos with 'takenAt' grouped per person/job/day), filters + search, team pulse. **Schedule:** next 7 days as columns (projected/confirmed starts, inspection target dates without a result, scheduled QC walks, Matterport scans and return trips, Upcoming-tab starts), starts in 14 days, past-due, needs a date, 'matterportScanNeeded'. **Quality:** first-pass rate (first attempt per job and phase) for 90 days and by month against 90%, latest failed inspections with items, punch by foreman, open return trips and QC walks. **People:** on the app today (logged events + 'job.presence'), open My Day tasks and urgent count, open time-off requests (the 'toneed_' need docs), a 7-day updates-by-person grid, My Day load, team pulse, devices behind the latest build (one 'getDoc' of 'settings/deviceVersions' when the tab opens). **Command Center:** Koy's Claude automations (Routines) and the Claude sessions that aren't finished, from 'settings/ccSnapshot' ('{json, updatedAt}', live 'onSnapshot' only while the tab is open), written by the hourly Claude Routine "Command Center snapshot (Dashboard tab)" outside the app (names, schedules, statuses and titles only, never prompts). Sessions grouped Needs you / Ready to review / Working now, each opening 'https://claude.ai/code/<id>'; next runs; every automation with a status color and a duplicate-name flag; a warning when the snapshot is over 3 hours old. No Money view: CO amounts and billing/aging aren't stored in the app (Simpro). Wrapped in its own error boundary ('OdBoundary'; the app has none). Guide 'public/sops/dashboard.html' behind the page's "?". **Why it won't lose data:** the page only reads; it derives everything from 'jobs', 'users', 'needs' and 'upcoming' already in App memory plus two read-only docs ('settings/deviceVersions', 'settings/ccSnapshot'); it has no 'setDoc'/'updateDoc'/'saveJob'; nothing in the app's tabs, nav or Settings changes; no loader, rules or Cloud Function change.
+- **Crash reporting and session replay (PostHog)** · 'shipped 2026-10-12' · 'SW v529' · Until now a black screen or a lost save in the field was invisible until someone complained. The app now boots PostHog once at start ('src/posthog.js', called from 'src/index.js' before React renders): every uncaught error and unhandled promise rejection is sent as an exception, and for a crew member who entered their PIN the screen is recorded for session replay with every input masked (the PIN pad included). Errors carry the crew member's display name only (the same name the PIN login stores; role and PIN never leave the device) and the build stamp ('app_version', the service-worker version Settings shows), so a crash reads as who, which build, when. Replay starts only after a PIN login and stops on sign-out; share-link, GC portal and homeowner pages get error capture but no replay, because they return before the identity line. Every URL-like property is cut at its query string before it is sent, and replay's network list is cut the same way, so link tokens never reach PostHog. Autocapture is off (no click stream, no event bill). The key lives in Vercel as 'REACT_APP_POSTHOG_KEY' (US Cloud; optional 'REACT_APP_POSTHOG_HOST' only for an EU project); without it every call is a no-op and the app runs exactly as before. Vercel Analytics stays wired for now and can be removed later. Why it can't lose data: observability only. Nothing reads or writes Firestore, touches an app localStorage key, or sits on any save path; the module returns before doing anything when the key is absent, and every PostHog call is wrapped so a failure inside it can never throw into the app.
+- **Commercial job cards get a Materials tab: the residential Material Tracking, one list per job, each order charged to a cost center you pick** · 'shipped 2026-10-09' · 'SW v528' · Braden (a Need on Riverton & Laundromat): *"Material tracking section for this job. Underground portion."* Koy: *"i mean like material tracking in residential"*, *"yes full"*, then *"i think the job cards should just have a material ordering tab instead of just in the undergrouhd section"* (commercial only; pick the cost center on each card). 'COMM_TABS' gains **Materials** after Bid Items; the tab renders the residential 'MaterialOrders' with phase '"comm"', stored in a new job list 'commMaterials' (loader + defaults; written through 'u()' with the v523 live-copy reconcile for Send and the v524 order-by-cost-center upsert). **Charge to:** on a commercial card the Send sheet lists the job's Simpro cost centers from the stock cache ('Section · Cost center'); Send stays disabled until one is picked; the pick is saved on the card ('chargeCcId' / 'chargeCcName') and sent as 'ccId'. **Server:** 'sendMaterialPO' requires 'ccId' for phase 'comm' and charges exactly that job cost center ('pickCostCenterById' in 'materialPO/rules.js'); Rough / Finish still match by phase, unchanged. Order from the bid ('sendMaterialOrder') already charges each line's own cost center, unchanged. **Simpro PO sync** ('syncSimproPOsForJob' + 'scheduledSimproPOSync') reconciles 'commMaterials' as a third pass sharing the claimed-PO set and counts its cards when picking candidate jobs. Commercial orders also show in the unsent-PO list and Open Items ("Materials"), the Bid Items order summary (commercial jobs now get it; Order material opens the Materials tab) and the Material Tracking job-section check. New guide 'materials.html' (registered in 'SOP_FILES_INLINE'). Tests: 'scripts/materialpo-test.js' gains 5 by-id cases. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:syncSimproPOsForJob,functions:scheduledSimproPOSync' (deployed 2026-10-09 before the app push).** **Why it won't lose data:** the new list is additive on the job ('data.commMaterials'), written through the same 'u()' funnel (version stamp kept) and live-copy reconciles as Rough / Finish; the PO sync writes 'commMaterials' only on jobs that already have it, and only the fields it already fills on the other two lists; Rough / Finish code paths and cost-center rules are unchanged; no rules change.
+- **Job Start: every log-linked item can be checked by hand (Phases 2, 3 and 5 too)** · 'shipped 2026-10-09' · 'SW v527' · Justin, on Phase 5 RELEASED + PO: *"This is still forcing me to upload something that I don't want to have to upload to check the box."* v522 only unlocked Phase 4. The remaining seven '"trk"' items (2 PROJECT FOLDERS; 3 LONG-LEAD REQUESTED, LEAD TIMES + PRICING; 5 RELEASED + PO, SHIP DATES IN WRITING, PROCUREMENT LOG, SHIP COMPLETE / SPLIT) become '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so a job the logs already closed never slides back. No Job Start step is '"trk"' any more (the code path stays). Guide 'jobstart.html' lists every log-linked item. **Why it won't lose data:** hand checks use the existing 'patchStart' write into 'commercial.start.items', the same shape as every item; nothing existing is rewritten; no loader, rules or function change.
+- **Easier to read and use: the axe accessibility pass** · 'shipped 2026-10-08' · 'SW v526' · Koy: *"go ahead, fix all"* after an axe-core scan of the live app (10 tabs + a job card). **Zoom:** the viewport no longer sets 'user-scalable=no'; desktop and Android can pinch-zoom again, and iOS keeps 'maximum-scale=1' (set by a tiny inline script in 'public/index.html') only to stop Safari's tap-a-text-box zoom jump — iOS still pinch-zooms with it. **Contrast:** new 'src/a11y.js' 'readableInk(color, bg)' darkens a color just enough for 4.5:1 on a light background, same hue (lime '#84cc16' → readable green, bright blue/green/red foreman colors likewise); applied in 'getPersonColor' (so every crew name, schedule tile and foreman header), the Job Board lane headers ('StageSectionList'), 'Pill', the My Day message chips and the Matterport scan-status select. New token 'C.faint' '#666E79' replaces 'C.muted' ('#CDD3DB', 1.4:1) as a TEXT color at 352 sites; 'C.muted' stays for borders. Buttons with black text on the blue accent (left from the old yellow accent) are white now (21 sites). The 'View →' dim opacity is gone. **Touch:** job card tabs, Close and Refresh are at least 40px tall on touch screens ('.he-tap' / '.he-tap-sq', 'pointer:coarse' only, desktop unchanged); the Job Info Simpro **Pull** link got a 24px hit area. **Keyboard + screen reader:** 'installA11y()' (called once from 'src/index.js') gives every inline 'cursor:pointer' box that holds no controls of its own 'role=button' + 'tabindex=0' with Enter/Space to click, names unlabeled '<select>'s from the label drawn next to them, and draws a blue ':focus-visible' ring for keyboard users only. The job card is a 'role=dialog' with a name; the page has one '<main>' and a hidden '<h1>'. **Why it won't lose data:** display-only — no save path, loader, rules or functions touched; 'a11y.js' only sets DOM attributes React does not manage, and stored 'colorOverrides' are untouched (darkening happens on read).
+- **Crew POs from the app go LIVE: everyone but contractors can send POs to CED** · 'shipped 2026-10-08' · 'SW v525' · Koy: *"okay do those 5 steps and lets do it"* (after the v524 test runs worked and every test PO was archived). 'MATERIAL_PO_TEST' = **false** and 'PERMISSIONS["materials.sendPO"]' = admin, manager, standard, limited (Koy: everyone but contractors — leads and foremen send POs from Simpro Mobile today). Both send paths go live together: **New order from the bid** (v524, one PO per cost center, one email) and the card's **Send to CED** / **Get a PO number** (v523, the phase's Rough or Finish cost center). Live email: to CED's address on its Simpro vendor record ('homestead@cedaf.com', the same one Simpro Mobile pre-fills; Koy confirmed), CC bids@homesteadelectric.net + the sender's Simpro email, reply-to the sender (bids@ if they have none), from 'orders@homesteadelectric.cc', no '[TEST]'. The test notes on both send screens disappear with the flag. **Turn-on order:** this app version first, then 'gc_config/material_po.mode' = 'live' (Koy, Firestore console) — while the server is still on test, non-admins get "still being tested"; once live, any copy of the app still on v523/v524 is refused with "Update the app first" ('clientTest'). Test-send cards left on job 1444 show Send again once live (a test log never blocks a real send), so they get deleted rather than tapped. Guide 'rough.html' now covers both send paths and drops the office-only line. Training video [[Order from the Bid]] re-rendered without the testing line. **PO email moves to Google Workspace as bids@ (2026-10-09, functions only, no app version change):** the first live order (Keegan, PO 7250) was "delivered" to CED by Resend but never seen — 'cedaf.com' runs Mimecast, which held mail from the brand-new lookalike 'orders@homesteadelectric.cc'. PO emails now go out through Google from **bids@homesteadelectric.net**: new 'functions/materialPO/gmail.js' — service account 'po-mailer@homestead-electric.iam.gserviceaccount.com' (no roles; client ID 101108296202486355073) authorized by the Workspace admin (Josh) for domain-wide delegation with only 'gmail.send'; the functions' own account (Token Creator on po-mailer) signs a 1-hour JWT acting for 'gc_config/material_po.gmailUser' (default koy@homesteadelectric.net, whose Gmail has bids@ under "Send mail as") and sends 'From: Homestead Electric <bids@homesteadelectric.net>' via the Gmail upload endpoint; no password or long-lived token is stored. 'material_po.sender' = 'gmail' (default) or 'resend' (old path, kept as a switch). A Google failure is a visible failure (Send again), never a quiet fall back to .cc. New public 'poMailerTest' link sends one test email from bids@ to the gmailUser only, at most once a minute. Gates: materialpo-test 13 groups (+ MIME: headers, encoded subject, attachments, no header injection), materialpo-sim 26 scenarios (+ live order via Google with both PO forms and no Resend, Google failure → retry once with no .cc fallback, 'sender: resend' switch, test mode via Google → test inbox only; mutation-checked). **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder,functions:poMailerTest'.** **Why it won't lose data:** a constant and a permission list change; no field, loader, rules or function code touched (the server already had live mode, tested by 'materialpo-sim.js' live-routing scenarios).
+- **Order from the bid: pick material from the job's cost centers, one PO per cost center, one email to CED** · 'shipped 2026-10-08' · 'SW v524' · Koy: *"the next big step in this would be to be able to add material from the cost centers to an order. It would also be able to order that material from the cost center that it's in, instead of the Rough or the Finish cost center (the base ones)"* + *"there is also an option for typing in parts as well still right?"* + *"remove the ced invoice change as well"* (approved off the proposal page for the boss and CED, then *"go ahead"*). Material Tracking (Rough and Finish) gets **New order from the bid** above + Add PO (anyone with 'materials.sendPO', real Simpro jobs only — not quotes). A full-screen **'OrderBuilder'** sheet: pick a cost center (grouped by section, from the bid the job already loads for Bid Items — 'simproStock'; orange "N to go", blue "N in this order"), add bid items at the still-to-go quantity with a − / number / + stepper (labour and Simpro deduction lines hidden; search by name or part #), **Type in parts or notes** on every cost center (anything not in the bid, or the whole order typed), add from more cost centers, then **Review**: CED, Will call / Deliver to job, the date, and each cost center as its own "PO n of N" with Edit. **Send to CED** calls the new callable **'sendMaterialOrder'**: the cost centers are checked against the job's bid in Simpro right then, ONE Simpro PO is made per cost center (charged to that cost center, the list in VendorNotes exactly as crews paste it today — no Simpro line items, no prices, so receiving and CED invoices don't change), then ONE email goes to CED with one PO form PDF per PO ("POs 7262 & 7263 – job – Homestead Electric"). Each PO lands as its own Material Tracking card (PO #, the lines, Ordered when the email went, plus 'poOrderId' / 'poCcId' / the v523 'po*' fields), upserted by order + cost center through the job's live copy ('jobRef.current'). **Retry safety:** the unfinished order is kept on the phone ('he_po_order_<job>_<phase>' in localStorage) under ONE order id until the email goes; every PO is claimed at 'material_po_log/<order>-cc<ccId>' (same claim / lost-answer recovery as v523) and the order's email at 'material_po_log/<order>' ('emailingAt'), so three taps, a dropped connection, a refused cost center (the POs already made stay, Send again finishes the rest) or a failed email never make a second PO or a second email. The order doc keeps 'madeKeys', so a Send again that no longer lists a cost center whose PO is already made still emails that PO; the screen marks those cost centers "PO #### made" and says edits there won't change it. A card from an order never shows the card's own Send (that would make a new PO); an unfinished one shows **Finish sending** instead, which works from any phone (the callable with 'resume:true' and no groups emails every PO the order already made, without making any). If more is added to an order whose email already went (a lost answer, then Send again with another cost center), only the new PO is made and it gets its own email; the order doc tracks 'emailedPoNos' so no PO is ever emailed twice. The call waits up to 5 minutes ('memberCallable' takes an options arg). **Sending / sent motion** (Koy: *"we need to make sure theres a motion graphic for when its sending and shows it sent"*): new 'PoSendMotion' — while sending, a paper plane crosses a dashed trail with a caption for the likely step (timed, never past the last step; the server answer is what flips it) and a "Simpro can be slow" line after 9 s; when it lands, a green check draws in with a ring and a small burst (and a 25 ms buzz on Android); a failed or half-finished send gets a still red "!" instead. Used on the order screen and on the v523 card Send sheet; CSS keyframes scoped 'he-po-*', still versions under 'prefers-reduced-motion'. Training video (Remotion, 62 s, vertical) lives outside the repo at '~/homestead-training-videos'. **Fix (2026-10-08, after comparing app POs with crew Simpro Mobile POs):** marking a PO Sent to Supplier now keeps Simpro's **auto-adjust status ON** (was off), so receipting moves an app PO to Completed on its own like every crew PO; checked on test PO 7249 that Status 24 + auto-adjust true holds "Sent to Supplier". Functions only ('sendMaterialPO' + 'sendMaterialOrder' redeploy), no app version change. Over 10 cost centers is blocked on review; **Start over** clears an unsent order (hidden once any PO is made). Independent review: 5 findings fixed (a crash from 'React.Fragment' without a React import, Bid Items → Order material not opening because Material Tracking starts folded — it now opens unfolded when asked, retry errors not shown, the 70 s client timeout, the quantity box vanishing when cleared). **Bid Items → Order material** opens the order screen on the chosen phase for senders (everyone else still gets a blank card). Same test mode as v523 (admins only, email only to the test inbox, '[TEST]'); live sender is 'orders@homesteadelectric.cc'. Gates: 'scripts/materialpo-test.js' ('cleanOrderGroups', 'orderLine', 'groupKey', plural email wording) + 'scripts/materialpo-sim.js' now 23 scenarios (one PO per cost center + one email with every PDF, three taps → 2 POs 1 email, refused cost center then finish, cost center not on the job refused, email retry, two retries racing after a failed email → 1 email, live routing with a typed-only order, non-admin / empty refused, Send again without an already-made cost center still emails its PO, Finish sending from a card emails once, Finish with nothing made refused, an addition after the email gets its own email with only the new PO; mutation-checked). Guides updated: rough, finish, biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder'.** **Why it won't lose data:** no new top-level job field; new cards are added (or the same order's cards updated in place) inside 'roughMaterials' / 'finishMaterials' through the normal save against the live job copy; nothing is deleted; the draft in localStorage only ever holds the unsent order; the only server writes are the function-only 'material_po_log' docs; no rules change.
+- **Crew POs from the app: Send to CED from the Material Tracking card, and an Orders list on Bid Items** · 'shipped 2026-10-08' · 'SW v523' · Koy: *"have the crews create and send a PO from the Command Center app. Right now, they have to use Simpro Mobile to do that and email the supplier"* + *"I would want this in the material tracking section as well of the finish and rough… it makes a lot of sense on the bid items page as well"* + *"i want the test po to be from me to me only so i see exactly how it looks"*. Crews already build each order on a Material Tracking PO card (Rough and Finish) and used **COPY FOR SIMPRO** to paste it into Simpro Mobile. The card now has **Send to CED** (or **Get a PO number** for Home Depot / ACE / Amazon store runs) above Copy for Simpro. A sheet confirms will call or delivery, the pick-up date and the list (read-only; edit on the card), then the new callable **'sendMaterialPO'** checks the sender's name + live PIN ('requireMember'), creates the PO in Simpro ('POST /vendorOrders/', Stage Approved, charged to the job's first Base-section cost center whose company cost center is Rough In or Finish, storage Shop, Reference "Job No. N - name", the list in VendorNotes like crews paste today, DueDate = pick-up date), emails it (CED) through Resend modeled on Simpro's own PO email with the sender's signature from their Simpro employee record, marks it Sent to Supplier, and logs it in function-only **'material_po_log/{job_phase_card}'** so a double tap or a retry returns the same PO instead of a second one (a failed email offers **Resend email**, never a new PO). The card gets the PO #, Ordered with who/when, and 'simproPoId' / 'poSentVia' / 'poSentMode' / 'poSentBy' / 'poSentAt' / 'poCostCenter' / 'poEmailOk' / 'poEmailedTo', written through the job's live copy ('jobRef.current'), not the render's list. **Bid Items → Orders** (folded, residential tabs only, hidden with Material Tracking): every PO card from both phases with status, who, when; **Order material** asks Rough-In or Finish and adds a card there. **Test mode (shipping state):** server mode on 'gc_config/material_po' (missing = test): only admins can send ('materials.sendPO' = admin, and the server refuses others), the email goes ONLY to the test inbox (default 'gc_config/mail.soakTo'), nobody is copied, the subject starts '[TEST]' with a banner naming where it would have gone, and the Simpro PO is real with a TEST private note, so it gets voided. Live = set 'mode:"live"' + a verified sender ('from: bids@homesteadelectric.net' after the Resend DNS records), widen 'materials.sendPO', and flip 'MATERIAL_PO_TEST'. Simpro's API has no send/email/PDF action (route probe 2026-10-08), so the app sends its own email. **PO form PDF (added 2026-10-08 after Koy's first test: "it just sent a list though not the attached pdf form we use from simpro"):** 'functions/materialPO/pdf.js' (pdf-lib, now in functions/package.json) rebuilds Simpro's "Order w/o prices" form — longhorn logo (cropped from a real Simpro PO PDF into 'materialPO/logo.js'), company block from Simpro's company record, PURCHASE ORDER NO., Vendor / Branch Address (vendor record) / Date Ordered / Date Required / Job Name / Site Address (job's site) / Reference / Ordered By, Delivery Address and Special Instructions (pickup line + list), Approved By, Page n/N, flows onto more pages — attached as 'Purchase_Order_No_####.pdf'; the email body then uses Simpro's wording ("…is attached") without the list. If the PDF can't be built the email still goes with the list in the body. **New form (2026-10-08, Koy: "this would be the correct po attachment" + "price would be left off of this for the crews"):** the PDF now matches Homestead's newer Simpro PO form (PO 7224) — cream paper, copper double frame, centered longhorn logo (transparent PNG), serif "Purchase Order" title, Supplier / PO No. / Ordered / Required, Job No. / Job Site (Simpro site name) / Reference / Supplier Quote / Ordered By, ORDER ITEMS table (Part # / Item / Qty; typed lines go in the table with no part # or qty), DELIVERY & SPECIAL INSTRUCTIONS (pickup or delivery line), approval lines, "QUESTIONS ABOUT THIS ORDER? CALL OUR OFFICE." footer, PAGE n OF N. No Unit Price, Total, Freight, Tax or Purchase Order Total. pdf.js loads lazily so the root (Vercel) build's gates don't need functions deps; the sim checks the PDF where pdf-lib exists and the fallback where it doesn't. **Duplicate safety (independent review, 9 findings fixed):** the card is claimed in a Firestore transaction; everything needed to finish is logged BEFORE the Simpro POST with a claim id that also goes in the PO's private notes, so a lost or unclear Simpro answer (timeout, 5xx) is marked unknown and the next try searches Simpro's newest POs for that id and adopts the PO instead of making a second; the email is claimed too ('emailingAt'); test always wins for the email ('emailMode': a live PO retried while the switch is on test goes only to the test inbox); a test send is archived ('…__test_<ts>') and doesn't block the real send once live; when live, a copy of the app that still says test ('clientTest') is refused; card dates fill only if still empty on the live card. Gates 'scripts/materialpo-test.js' (rules) + 'scripts/materialpo-sim.js' (the real handler vs fake Firestore/Simpro/email: one PO for three simultaneous taps, test inbox only, email retry, lost-answer recovery, refusal, live routing, test-wins, archive, store run, bad input; mutation-checked) in prebuild. Guide updated: biditems. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:sendMaterialPO'.** **Why it won't lose data:** no new top-level job field; the new fields live inside each existing order object in 'roughMaterials' / 'finishMaterials', which the loader passes through whole; every card write reconciles against the live job copy through the normal save; nothing is deleted; the only new collection is server-written and client-denied by the catch-all; no rules change.
+- **Job Start Phase 4: the three log-linked items can be checked by hand** · 'shipped 2026-10-07' · 'SW v522' · Justin: *"Can you remove that requirement on those submittal steps? Section 4."* RFI LIST, SENT TO GC and ALL APPROVED were '"trk"' items (no tap; they only checked themselves from the RFI / Gear & Submittals logs, and tapping jumped to the log). They are now kind '"auto"': tap cycles ○ → ✓ → N/A like any item, and 'commItemState' still returns done when 'commTrackerDone' says the log covers it, so either the hand check or the log closes the item. The checklist row shows "or from RFIs / Gear & Submittals"; the chip is solid-bordered (the double border stays for true tracker items in phases 2, 3 and 5, unchanged). RFIs tab help text and 'jobstart.html' updated. **Why it won't lose data:** hand checks go through the existing 'patchStart' write into 'commercial.start.items["4.rfis" | "4.toGc" | "4.approved"]', the same shape every other item uses; nothing existing is rewritten. A job whose logs already closed these items stays closed. No loader, rules or function change.
+- **Link opens: see whether a share link was opened, and how often** · 'shipped 2026-10-07' · 'SW v521' · needs 'firebase deploy --only firestore:rules' for counting to start (until then writes are refused harmlessly) · Koy: *"I mostly want to see if they have even opened it, or how many times they have opened it."* Every share page now counts its own opens, and the office sees one small line next to each link: **Opened 6× · 2 devices · last today 9:12 am**, or *Not opened yet · sent today*, *Not opened · sent 4 days ago* (red) or *No opens since Oct 7* (links made before today). Tap a line with opens to unfold first opened, last opened and one row per device (*iPhone · Safari · 4× · last today 9:12 am*). Green = opened in the last 3 days, blue = opened but not lately, red = never opened and sent 3+ days ago. Shows under: Share Questions and Share Punch (rough and finish) SAVED LINKS (each named link, plus a *Base link (Share all)* row when it has opens or the job still carries a legacy filter), Home Runs Share, the Homeowner generator link, Lighting collab Share, Share loads, the Plan Changes (Lutron) page under the hub link, and each Job Note's share link. Counted kinds: questions, roughpunch, finishpunch, qcpunch, homeowner, homeruns, loads, lighting, lutronshare, jobnote; not counted: the Lutron hub ('?lightinghub='), the App Map and the GC Portal. **One recorder at the router:** 'recordLinkOpen()' runs once at the top of 'App()' before any share route, skips staff devices (raw 'he_identity' present or the durable 'he_staff_device' flag that '_setUsageUser' sets) and 'preview=1', throttles the same device and link to once per 30 minutes ('he_lo_<jobId>_<linkKey>'), and stores a rough device label only (iPhone/iPad/Android/Mac/Windows/Other + Safari/Chrome/Edge/Firefox/Browser; no IP, location or name). Link key = '<kind>:<shareId|base>'; job notes use 'jobnote:<noteId>' and the token is never stored. The office reads with 'useLinkOpens(jobId)' (one 'onSnapshot' only while a surface is mounted); 'linkOpenState' / 'formatOpenWhen' / 'linkOpenTarget' / 'deviceLabel' / 'shouldRecordOpen' are pure and gated by scripts/linkopens-test.js (wired into prebuild). 'LINK_OPENS_SINCE' = 2026-10-07 decides *No opens since*. Display only: no pushes, no emails, no roll-up page. New 'link_opens/{jobId}' rule: read open, create/update only with keys 'links' + 'updated_at', no delete. In-app guides updated: questionlinks, questions, rough, homeruns, liveviewlink, generatorlink, lightinglinks. **Why it won't lose data:** additive only. A new 'link_opens' collection written solely by public share pages; no 'jobs/{id}' field, loader, or existing write path touched; the office only reads it; the recorder can't break a share page (try/catch, no await on render).
 - **Daily Job Updates: home runs pulled and switch legs pulled, by day** · 'shipped 2026-10-07' · 'SW v520' · Koy: *"on daily job updates it shows closed punch items, can it show homeruns pulled and switch legs if applicable?"* On the Rough tab's Daily Job Updates, each day now also gets two bars next to **PUNCH CLOSED**: **HOME RUNS PULLED** (blue) and **SWITCH LEGS PULLED** (purple), each with a count, collapsed until tapped, newest day first, TODAY labelled. A row shows the name, where it is (panel, floor, wire for a home run; for a leg, room, location and panel from the Loads list, or the panel name and module from a panel schedule) and who pulled it. An item is placed on the day of its own stamp: a home run's 'statusBy' / 'statusAt', a lighting load or leg's 'pulledBy' / 'pulledAt' (both M/D/YYYY), the same stamps the Home Runs Pulled and Loads Ran lists show. Switch legs come from the Loads list and from the panel schedules (every panel and extra floor), named the way the Panelized tab names them (the job's own panel names, default Panel A / B / C). Each Loads-list row stands alone, so two legs with the same name both show; a panel-schedule row is left out only when the Loads list already has a leg of that name pulled the same day (same leg ticked in two places). Something marked pulled with no stamp date cannot be placed on a day, so it is not listed: pulled before the stamps existed, ticked with **Pull all**, brought in with a pasted list, or a Savant leg (none of those write who/when; making Pull all and paste stamp is a separate, later change to the save path). Rough tab only (residential: commercial jobs have no Rough tab); the Finish tab's updates are unchanged. 'pulledHomeRunsByDay' / 'pulledLegsByDay' are pure and gated by scripts/pulleddaily-test.js (wired into prebuild). The bars are for reading on screen; the emailed daily update still carries only the typed updates. The Rough guide (public/sops/rough.html) describes the new bars and what does not show. **Why it won't lose data:** read-only. It only reads 'homeRuns' and 'panelizedLighting' that the job already holds and draws lists; nothing is written, no field is added, and the save call, loader, rules and functions are untouched.
 - **Save pill: bigger, higher contrast, stays up longer** · 'shipped 2026-10-06' · 'SW v519' · Koy: *"want it a little more obvious and easy to see"* and *"saved should be green."* The v518 'HeSaveHud' pill is now 15px semibold text with a solid near-black background, a thin outline (steel blue while saving, green on Saved, red on a failed save) and a soft shadow so it stands out against the dark job-card backdrop, with a slightly bigger spinner and a small spring when it appears. **Saved** is green text, held for 3 seconds inside the pill itself (the app's own 2-second return to idle is untouched), and a new save or a failure replaces it at once. Still text only, with no check or ring.  **Why it won't lose data:** presentational only, one component in src/motion.js. It reads the same 'syncStatus' and calls the same 'flushSaves' as before; the save call, 'setSyncStatus' and the 2-second timer in App.js are not touched. No fields, loader, rules, function or save-path changes.
 - **Save indicator that shows everywhere: a small "Saving… / Saved / Save failed" pill at the top of the screen** · 'shipped 2026-10-06' · 'SW v518' · Koy: *"Now I just don't see the ripple anymore, but I don't see any saving confirmation."* v517 removed the green ripple and left the quiet 'Saved' text in the three Job Board headers, but a job card is a full-screen overlay that covers those headers, so inside a job there was no confirmation at all. 'HeSaveHud' (src/motion.js) is mounted once at the App root, above every overlay (job card, sheets), fixed at the top-center, and driven by the same 'syncStatus' as the header chips: **Saving…** (spinner), **Saved** (plain light text, about 2 seconds), then it disappears; **Save failed · tap to retry** stays up until a save succeeds and calls 'flushSaves' when tapped. Text only: no green, no check, no ring. The header chips stay. **Why it won't lose data:** presentational only. It reads 'syncStatus' and calls the existing 'flushSaves' on tap; the save call, 'setSyncStatus' and the 2-second return to idle are untouched. No fields, loader, rules, function or save-path changes.
@@ -53781,10 +56182,10 @@ function TimeOffPage({ identity = null, users = [] }) {
           <button onClick={()=>decide(r,"approved")} style={{padding:"4px 12px", fontSize:12, fontWeight:700, border:"none", borderRadius:7, background:"#2C5C40", color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>Approve</button>
           <button onClick={()=>decide(r,"denied")} style={{padding:"4px 12px", fontSize:12, fontWeight:600, border:`1px solid ${C.border}`, borderRadius:7, background:"transparent", color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>Deny</button>
         </>)}
-        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{padding:"3px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
+        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{padding:"3px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.faint, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
       </div>
       {r.note && <div style={{fontSize:12, color:C.dim, marginTop:4}}>{r.note}</div>}
-      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:10.5, color:C.muted, marginTop:3}}>{r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
+      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:10.5, color:C.faint, marginTop:3}}>{r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
     </div>
   );
 
@@ -53798,7 +56199,7 @@ function TimeOffPage({ identity = null, users = [] }) {
         <div style={{fontSize:14, fontWeight:600, marginBottom:10}}>Request time off{me?` — ${me}`:""}</div>
         <div style={{display:"flex", gap:12, flexWrap:"wrap", marginBottom:10}}>
           <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Start</div><DateInp value={draft.start} onChange={e=>setDraft({...draft, start:e.target.value})}/></div>
-          <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>End <span style={{color:C.muted}}>(optional)</span></div><DateInp value={draft.end} onChange={e=>setDraft({...draft, end:e.target.value})}/></div>
+          <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>End <span style={{color:C.faint}}>(optional)</span></div><DateInp value={draft.end} onChange={e=>setDraft({...draft, end:e.target.value})}/></div>
         </div>
         <div style={{marginBottom:10}}>
           <div style={{fontSize:10, color:C.dim, marginBottom:4}}>Pay</div>
@@ -53811,12 +56212,12 @@ function TimeOffPage({ identity = null, users = [] }) {
             })}
           </div>
         </div>
-        <div style={{marginBottom:10}}><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Reason / note <span style={{color:C.muted}}>(optional)</span></div>
+        <div style={{marginBottom:10}}><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Reason / note <span style={{color:C.faint}}>(optional)</span></div>
           <input type="text" value={draft.note} onChange={e=>setDraft({...draft, note:e.target.value})} placeholder="e.g. family trip, appointment…"
             style={{width:"100%", padding:"7px 10px", fontSize:13, border:`1px solid ${C.border}`, borderRadius:7, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}/>
         </div>
         <button onClick={submitRequest} disabled={!draft.start||submitting}
-          style={{padding:"8px 18px", fontSize:13, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#000":C.muted, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
+          style={{padding:"8px 18px", fontSize:13, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#000":C.faint, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
           {submitting?"Submitting…":"Submit request"}
         </button>
       </div>
@@ -53827,14 +56228,14 @@ function TimeOffPage({ identity = null, users = [] }) {
           <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:6}}>
             <span style={{fontSize:14, fontWeight:600}}>Pending approvals</span>
             <span style={{fontSize:11, color:"#8A6A1E", background:"#F3E9CF", border:"1px solid #EAD9A6", borderRadius:99, padding:"1px 8px"}}>{pending.length}</span>
-            <span style={{fontSize:11, color:C.muted}}>{isAdmin?"all crew":"your book"}</span>
+            <span style={{fontSize:11, color:C.faint}}>{isAdmin?"all crew":"your book"}</span>
           </div>
           {pending.length===0 ? <div style={{fontSize:13, color:C.dim, padding:"8px 0"}}>Nothing waiting on you.</div> : pending.map(r=>card(r, true))}
           {decided.length>0 && (
             <div style={{marginTop:6}}>
               <div onClick={()=>setShowDecided(o=>!o)} style={{display:"flex", alignItems:"center", gap:8, padding:"8px 0 4px", cursor:"pointer", userSelect:"none"}}>
                 <span style={{fontSize:12, fontWeight:600, color:C.dim}}>Decided</span>
-                <span style={{fontSize:11, color:C.muted}}>{decided.length}</span>
+                <span style={{fontSize:11, color:C.faint}}>{decided.length}</span>
                 <span style={{marginLeft:"auto", color:C.dim, transform:showDecided?"rotate(0)":"rotate(-90deg)", transition:"transform 0.15s"}}>▾</span>
               </div>
               {showDecided && decided.map(r=>card(r, false))}
@@ -54093,7 +56494,7 @@ function AppMapSharePage({ identity = null } = {}) {
                 </button>
               ))}
               <span style={{flex:1}}/>
-              <span style={{fontSize:11, color:C.muted}}>From: {identity?.name || "you"}</span>
+              <span style={{fontSize:11, color:C.faint}}>From: {identity?.name || "you"}</span>
               <button
                 onClick={submitSuggestion}
                 disabled={!suggText.trim() || suggSubmitting}
@@ -54101,7 +56502,7 @@ function AppMapSharePage({ identity = null } = {}) {
                   padding:"6px 14px", fontSize:13, fontWeight:500,
                   border:`1px solid ${C.accent}`, borderRadius:6,
                   background: suggText.trim() && !suggSubmitting ? C.accent : C.bg,
-                  color: suggText.trim() && !suggSubmitting ? "#fff" : C.muted,
+                  color: suggText.trim() && !suggSubmitting ? "#fff" : C.faint,
                   cursor: suggText.trim() && !suggSubmitting ? "pointer" : "not-allowed",
                 }}>
                 {suggSubmitting ? "Saving…" : "Submit"}
@@ -54115,7 +56516,7 @@ function AppMapSharePage({ identity = null } = {}) {
           <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginBottom:12}}>
             <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap"}}>
               <span style={{fontSize:14, fontWeight:600}}>Suggestion inbox</span>
-              <span style={{fontSize:12, color:C.muted}}>{suggestions.length} total</span>
+              <span style={{fontSize:12, color:C.faint}}>{suggestions.length} total</span>
               <span style={{flex:1}}/>
               <span style={{fontSize:12, color:C.dim}}>Filter:</span>
               {["all","new","reviewing","planned","built","declined"].map(s => (
@@ -54177,7 +56578,7 @@ function AppMapSharePage({ identity = null } = {}) {
                   <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
                   <div style={{flex:1, minWidth:0}}>
                     <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? `${n.parent}: ` : ""}{n.name}</span>
-                    <span style={{fontSize:11, color:C.muted, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
+                    <span style={{fontSize:11, color:C.faint, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
                   </div>
                   <span style={{fontSize:11, color:C.dim, flexShrink:0, fontVariantNumeric:"tabular-nums"}}>{n.date}</span>
                 </div>
@@ -54198,7 +56599,7 @@ function AppMapSharePage({ identity = null } = {}) {
             <div key={section.title} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, marginBottom:10, overflow:"hidden"}}>
               <div onClick={() => toggle(section.title)} style={{display:"flex", alignItems:"center", gap:10, padding:"12px 14px", cursor:"pointer", userSelect:"none"}}>
                 <span style={{fontSize:14, fontWeight:600, flex:1, letterSpacing:"-0.005em"}}>{section.title}</span>
-                <span style={{fontSize:12, color:C.muted, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
+                <span style={{fontSize:12, color:C.faint, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
                 <span style={{color:C.dim, transform: isCollapsed ? "rotate(-90deg)" : "rotate(0)", transition:"transform 0.15s"}}>▾</span>
               </div>
               {!isCollapsed && (
@@ -54210,7 +56611,7 @@ function AppMapSharePage({ identity = null } = {}) {
                         <span style={{fontWeight:500}}>{it.name}</span>
                         {isNewDate(it.date) && <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"1px 6px"}}>NEW</span>}
                         {it.status && it.status!=="shipped" && <span style={badgeStyle(it.status)}>{it.status}</span>}
-                        {it.date && <span style={{fontSize:11, color:C.muted, fontVariantNumeric:"tabular-nums"}}>{it.date}</span>}
+                        {it.date && <span style={{fontSize:11, color:C.faint, fontVariantNumeric:"tabular-nums"}}>{it.date}</span>}
                       </div>
                       {it.desc && <div style={{color:C.dim, fontSize:13, marginTop:2}}>{it.desc}</div>}
                       {it.subs && it.subs.length > 0 && (
@@ -54227,7 +56628,7 @@ function AppMapSharePage({ identity = null } = {}) {
         })}
 
 
-        <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"14px 0"}}>
+        <div style={{fontSize:11, color:C.faint, textAlign:"center", padding:"14px 0"}}>
           {isInApp ? "App Map · always current with the live app" : "Share-only page · always current with the live app · no auth required"}
         </div>
       </main>
@@ -55318,7 +57719,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
       <div style={{display:"flex", gap:8, marginBottom:14, flexWrap:"wrap"}}>
         <button onClick={copyToClipboard}
           style={{fontSize:12, fontWeight:700, padding:"9px 18px", borderRadius:8, border:"none",
-            background:C.accent, color:"#000", cursor:"pointer", fontFamily:"inherit"}}>
+            background:C.accent, color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>
           {copied ? "Copied!" : "Copy text"}
         </button>
         <a href={smsHref}
@@ -56167,7 +58568,7 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               <button key={k||"none"} onClick={()=>patch(x=>({...x, status:k, statusAt: commLocalDate(), statusBy: me }))}
                 style={{border:"none",padding:"7px 12px",fontSize:11,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim}}>{l}</button>); })}
           </div>
-          {ph.statusAt && <div style={{fontSize:10,color:C.muted,marginTop:3}}>set {ph.statusAt}{ph.statusBy?` by ${ph.statusBy}`:""}</div>}
+          {ph.statusAt && <div style={{fontSize:10,color:C.faint,marginTop:3}}>set {ph.statusAt}{ph.statusBy?` by ${ph.statusBy}`:""}</div>}
         </div>
         <div style={{minWidth:150}}>{lbl("Start")}<DateInp value={ph.start||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, start:v})); }}/></div>
         <div style={{minWidth:150}}>{lbl("Complete")}<DateInp value={ph.end||""} onChange={e=>{ const v=e.target.value; patch(x=>({...x, end:v})); }}/></div>
@@ -56192,11 +58593,11 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
                 <input value={renaming.text} autoFocus onChange={e=>setRenaming({ key:b.key, text:e.target.value })} onKeyDown={e=>{ if(e.key==="Enter"){ renameBuilding(b.key, renaming.text); setRenaming(null); } if(e.key==="Escape") setRenaming(null); }}
                   style={{flex:1,maxWidth:260,border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
                 <button onClick={()=>{ renameBuilding(b.key, renaming.text); setRenaming(null); }} style={{background:"none",border:"none",color:col,cursor:"pointer",fontSize:11,fontWeight:700,padding:"2px 4px",fontFamily:"inherit"}}>Save</button>
-                <button onClick={()=>setRenaming(null)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit"}}>Cancel</button>
+                <button onClick={()=>setRenaming(null)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit"}}>Cancel</button>
               </>) : (
-                <button onClick={()=>setRenaming({ key:b.key, text:b.label })} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Rename</button>
+                <button onClick={()=>setRenaming({ key:b.key, text:b.label })} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Rename</button>
               )}
-              <button onClick={() => removeBuilding(b)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Remove {b.label}</button>
+              <button onClick={() => removeBuilding(b)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:11,padding:"2px 4px",fontFamily:"inherit",textDecoration:"underline"}}>Remove {b.label}</button>
             </div>
           </div>
         ))}
@@ -56206,12 +58607,12 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               placeholder="Building / area name (e.g. Building A)…"
               style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
             <Btn onClick={addBuilding} variant="add" style={{fontSize:11,padding:"6px 12px"}}>Add</Btn>
-            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:13}}>✕</button>
           </div>
         ) : (
           <Btn onClick={()=>setAddingBuilding(true)} variant="add" style={{fontSize:11,padding:"5px 12px",marginTop:2}}>+ Add Building / Area</Btn>
         )}
-        <div style={{fontSize:10,color:C.muted,marginTop:6}}>Buildings are shared by Power, Lighting and Underground on this job — each tab keeps its own items.</div>
+        <div style={{fontSize:10,color:C.faint,marginTop:6}}>Buildings are shared by Power, Lighting and Underground on this job — each tab keeps its own items.</div>
       </div>
       ) : (
       <div style={{marginBottom:12}}>
@@ -56222,15 +58623,15 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               <button onClick={()=>toggleItem(i.id)} title={i.done?"Mark open":"Mark done"} style={{width:26,height:26,borderRadius:"50%",border:`2px solid ${i.done?"#3E7D5A":col}`,background:i.done?"#3E7D5A":"#fff",color:"#fff",fontWeight:800,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>{i.done?"✓":""}</button>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,color:i.done?C.dim:C.text,textDecoration:i.done?"line-through":"none",wordBreak:"break-word"}}>{i.text}</div>
-                <div style={{fontSize:10,color:C.muted}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
+                <div style={{fontSize:10,color:C.faint}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
               </div>
-              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.muted,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
+              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.faint,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
             </div>
           ))}
           <div style={{display:"flex",gap:8}}>
             <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addItem(); } }} placeholder="Add an item… (Enter)"
               style={{flex:1,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:C.text,background:"#fff"}}/>
-            <button onClick={addItem} disabled={!newItem.trim()} style={{padding:"8px 14px",borderRadius:8,border:"none",background:newItem.trim()?col:C.surface,color:newItem.trim()?"#fff":C.muted,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:newItem.trim()?"pointer":"default"}}>Add</button>
+            <button onClick={addItem} disabled={!newItem.trim()} style={{padding:"8px 14px",borderRadius:8,border:"none",background:newItem.trim()?col:C.surface,color:newItem.trim()?"#fff":C.faint,fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:newItem.trim()?"pointer":"default"}}>Add</button>
           </div>
         </div>
       </div>
@@ -56261,7 +58662,7 @@ function JobCompletedTab({ job, needs = [] }) {
         <span style={{fontSize:12,color:C.dim}}>{rows.length} finished on this job</span>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…" style={{marginLeft:"auto",padding:"6px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"inherit",color:C.text,background:"#fff",width:180}}/>
       </div>
-      {rows.length === 0 && <div style={{padding:"24px 0",textAlign:"center",color:C.muted,fontSize:13}}>Nothing finished on this job yet. Needs and tasks land here when they are marked Done.</div>}
+      {rows.length === 0 && <div style={{padding:"24px 0",textAlign:"center",color:C.faint,fontSize:13}}>Nothing finished on this job yet. Needs and tasks land here when they are marked Done.</div>}
       <div style={{display:"flex",flexDirection:"column",gap:7}}>
         {rows.map(n => { const k = needKind(n); const voided = !!n.voided; const reps = needUpdates(n).length; const photos = needPhotos(n);
           return (
@@ -56334,7 +58735,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
     const state = commItemState(job, n, k); const K = commItemKey(n, k);
     const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
     const col = isOwed ? "#B0892C" : state === "done" ? "#46916A" : state === "na" ? C.dim : C.red;
-    const title = kind === "trk" ? "Derived from the Gear & Submittals / RFI logs — fill the log and this checks itself" : kind === "photo" ? "Photo item — tap to check, add photos below" : kind === "date" ? "Check + date" : (canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only");
+    const title = kind === "trk" ? "Derived from the Gear & Submittals / RFI logs — fill the log and this checks itself" : kind === "auto" ? (canEdit ? "Tap: ○ → ✓ → N/A — also checks itself when the log is filled in" : "Read-only") : kind === "photo" ? "Photo item — tap to check, add photos below" : kind === "date" ? "Check + date" : (canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only");
     return (
       <span key={K} onClick={(e) => { e.stopPropagation(); if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }} title={title}
         style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:10, fontWeight:700, letterSpacing:"0.05em", cursor: !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
@@ -56360,7 +58761,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       <div onClick={(e) => e.stopPropagation()} style={{ marginTop:8, padding:"10px 12px", border:`1px solid ${C.border}`, borderLeft:`3px solid ${C.blue}`, borderRadius:8, background:C.surface }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
           <span style={{ fontSize:10, fontWeight:800, letterSpacing:"0.1em", color:C.dim, textTransform:"uppercase" }}>{it[1]} — note &amp; docs</span>
-          {meta && meta.by && <span style={{ fontSize:10, color:C.muted }}>note by {meta.by}{meta.at ? ` · ${meta.at}` : ""}</span>}
+          {meta && meta.by && <span style={{ fontSize:10, color:C.faint }}>note by {meta.by}{meta.at ? ` · ${meta.at}` : ""}</span>}
           <button onClick={() => setOpenItem(null)} title="Close" style={{ marginLeft:"auto", border:"none", background:"transparent", color:C.dim, cursor:"pointer", fontSize:16, lineHeight:1, fontFamily:"inherit" }}>×</button>
         </div>
         <textarea value={itemNote(K)} readOnly={!canEdit} placeholder={`Note for ${it[1]}… e.g. "Subcontract 009 sent by Mitch 5/7/26 for $X — signed by Josh"`} rows={2}
@@ -56421,7 +58822,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
     const rec = (st.items || {})[K];
     const ring = state === "done" ? "#46916A" : isOwed ? "#B0892C" : state === "na" ? C.muted : "#9AA3AE";
     const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K;
-    const sub = [kind === "trk" ? trkLabel(K) : null, kind === "photo" ? "photo" : null, kind === "date" ? "date" : null,
+    const sub = [kind === "trk" ? trkLabel(K) : null, kind === "auto" ? `or ${trkLabel(K)}` : null, kind === "photo" ? "photo" : null, kind === "date" ? "date" : null,
       state === "done" && rec && rec.by ? `done ${rec.at || ""} by ${String(rec.by).split(" ")[0]}`.replace("  ", " ") : null,
       state === "na" ? "N/A" : null, isOwed ? "owed" : null].filter(Boolean).join(" · ");
     return (
@@ -56431,10 +58832,10 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         <span style={{ width:22, height:22, borderRadius:6, flexShrink:0, display:"grid", placeItems:"center", fontSize:12, fontWeight:800, border:`2px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${ring}`, background: state === "done" ? "#46916A" : "#fff", color: state === "done" ? "#fff" : C.dim }}>{state === "done" ? "✓" : state === "na" ? "—" : ""}</span>
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ fontSize:12, fontWeight:700, letterSpacing:"0.03em", color: state === "todo" ? (isOwed ? "#B0892C" : C.text) : C.dim, textDecoration: state === "na" ? "line-through" : "none", overflowWrap:"anywhere" }}>{label}</div>
-          {sub && <div style={{ fontSize:10, color:C.muted, marginTop:1 }}>{sub}</div>}
+          {sub && <div style={{ fontSize:10, color:C.faint, marginTop:1 }}>{sub}</div>}
         </div>
         <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? "Has a note / docs — tap to open" : "Add a note or attach a doc to this item"}
-          style={{ display:"inline-flex", alignItems:"center", gap:2, padding:"4px 6px", borderRadius:6, color: hasNote || nDocs || on ? C.blue : C.muted, cursor:"pointer" }}>
+          style={{ display:"inline-flex", alignItems:"center", gap:2, padding:"4px 6px", borderRadius:6, color: hasNote || nDocs || on ? C.blue : C.faint, cursor:"pointer" }}>
           <Icon name="note" size={13} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:9 }}>{nDocs}</span>}
         </span>
       </div>
@@ -56679,7 +59080,7 @@ function CommRfisTab({ job, u, identity }) {
   return (
     <div>
       <Section label="RFIs" color={C.teal} defaultOpen>
-        <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>Anything that needs clarifying before purchasing or underground. Phase 4's RFI LIST chip checks itself once there is a row; an open RFI that blocks purchasing shows on the gear pill.</div>
+        <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>Anything that needs clarifying before purchasing or underground. Phase 4's RFI LIST item checks itself once there is a row (or tap it to check it by hand); an open RFI that blocks purchasing shows on the gear pill.</div>
         {rows.length === 0 && <div style={{ fontSize:12, color:C.dim, padding:14, border:`1px dashed ${C.muted}`, borderRadius:10, marginBottom:10 }}>No RFIs yet.</div>}
         {rows.map(r => (
           <div key={r.id} style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 12px", marginBottom:8, background: r.answeredAt ? C.card : "#B0892C06" }}>
@@ -57388,7 +59789,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                 display:"flex", flexDirection:"column", gap:8,
               }}>
                 {items.length === 0 ? (
-                  <div style={{fontSize:11,color:C.muted,textAlign:"center",
+                  <div style={{fontSize:11,color:C.faint,textAlign:"center",
                     padding:"16px 8px",fontStyle:"italic"}}>
                     None
                   </div>
@@ -57439,7 +59840,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             onDeleteRedline && onDeleteRedline(co.redlineId);
                           }}
                           style={{position:"absolute",top:6,right:7,border:"none",background:"none",
-                            color:C.muted,cursor:"pointer",fontSize:15,lineHeight:1,padding:"0 3px",
+                            color:C.faint,cursor:"pointer",fontSize:15,lineHeight:1,padding:"0 3px",
                             fontFamily:"inherit"}}>×</button>
                       )}
 
@@ -57491,7 +59892,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             own status — a scheduled walk has not been walked yet. */}
                         {isWalk && (
                           <label onClick={e=>e.stopPropagation()}
-                            style={{display:"inline-flex",alignItems:"center",gap:3,color:C.muted}}>
+                            style={{display:"inline-flex",alignItems:"center",gap:3,color:C.faint}}>
                             {co.walkStatus === "scheduled" ? "walk" : "walked"}
                             <input
                               type="date"
@@ -57519,7 +59920,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             {(co.jobForeman||"").split(" ")[0]}
                           </span>
                         )}
-                        {co.jobGc && <span style={{color:C.muted}}>· {co.jobGc}</span>}
+                        {co.jobGc && <span style={{color:C.faint}}>· {co.jobGc}</span>}
                       </div>
 
                       {/* Walk note — EDITABLE on every walk card (quoted or
@@ -57636,7 +60037,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                           <span style={{fontSize:9}}>▾</span>
                         </button>
                         {co.coStatusDate && (
-                          <span style={{fontSize:10,color:C.muted,marginLeft:6}}>
+                          <span style={{fontSize:10,color:C.faint,marginLeft:6}}>
                             · {co.coStatusDate}
                           </span>
                         )}
@@ -57685,7 +60086,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
           far more discoverable than the foreman select, and "nothing yet" is
           actively misleading when a query simply didn't match. */}
       {filteredCOs.length === 0 && (
-        <div style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontStyle:"italic"}}>
+        <div style={{textAlign:"center",padding:"40px 20px",color:C.faint,fontStyle:"italic"}}>
           {search.trim()
             ? `Nothing matches “${search.trim()}”${foremanFilter ? ` for ${foremanFilter}` : ""}.`
             : `No change orders or red line walks ${foremanFilter ? `for ${foremanFilter}` : "yet"}.`}
@@ -57724,7 +60125,7 @@ function AppHelpBox() {
           placeholder="e.g. How do I turn a note into a CO?"
           style={{flex:1,minWidth:220,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:"inherit",outline:"none"}}/>
         <button onClick={ask} disabled={loading}
-          style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontWeight:700,padding:"9px 18px",fontSize:13,cursor:loading?"default":"pointer",fontFamily:"inherit"}}>
+          style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",fontWeight:700,padding:"9px 18px",fontSize:13,cursor:loading?"default":"pointer",fontFamily:"inherit"}}>
           {loading ? "Asking…" : "Ask"}
         </button>
       </div>
@@ -58546,7 +60947,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
 
   const font = "'Bebas Neue',sans-serif";
   const GREEN = C.green, RED = C.red;
-  const num = (n, color) => <span style={{fontWeight:n>0?800:400, color:n>0?color:C.muted}}>{n}</span>;
+  const num = (n, color) => <span style={{fontWeight:n>0?800:400, color:n>0?color:C.faint}}>{n}</span>;
   const chip = (txt, color, solid) => <span style={{display:"inline-block",padding:"3px 8px",borderRadius:6,fontSize:10,fontWeight:800,letterSpacing:"0.05em",whiteSpace:"nowrap",
     background:solid?color:color+"22",color:solid?"#fff":color,border:`1px solid ${color}`}}>{txt}</span>;
   const lvColor = (l) => l === "green" ? GREEN : l === "red" ? RED : APPL_YELLOW;
@@ -58614,7 +61015,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
           {summary.map(j => (
             <button key={j.no} onClick={()=>{ setOpenNo(j.no); setFilter("all"); setMsg(""); setOpenRow(null); }}
               style={{display:"grid",gridTemplateColumns:cols,gap:8,alignItems:"center",width:"100%",textAlign:"left",padding:"11px 14px",border:"none",borderBottom:`1px solid ${C.border}`,background:C.card,color:C.text,fontFamily:"inherit",fontSize:13,cursor:"pointer"}}>
-              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:9,fontWeight:700,color:C.muted,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
+              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:9,fontWeight:700,color:C.faint,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
               <span>{j.rows.length}</span>
               <span>{applFmt(j.amps)}</span>
               <span style={{display:"flex",height:10,borderRadius:5,overflow:"hidden",background:C.border}}>
@@ -58983,6 +61384,217 @@ function ToolsView({ jobs, onUpdateJob, who }) {
   );
 }
 
+// ── Link opens helpers ─────────────────────────────────────────────────────
+// Share-link open tracking (spec: docs/superpowers/specs/2026-10-07-link-opens-design.md).
+// Pure — tested verbatim by scripts/linkopens-test.js. The recorder and the
+// office line below use these; nothing here touches Firestore.
+const LINK_OPENS_SINCE = "2026-10-07T00:00:00";      // local; tracking start (set to ship day)
+const LINK_OPEN_THROTTLE_MS = 30 * 60 * 1000;          // same device + link counts again after 30 min
+const LINK_OPEN_FRESH_MS = 3 * 24 * 60 * 60 * 1000;    // green under 3 days; red when unopened 3+ days
+const LINK_KEY_SAFE = /^[A-Za-z0-9_-]{1,64}$/;
+// Same order as the routes at the top of App() — the first match is the page shown.
+const LINK_OPEN_ROUTES = ["homeowner", "questions", "homeruns", "loads", "lighting", "lightinghub",
+  "lutronshare", "roughpunch", "finishpunch", "qcpunch", "jobnote"];
+const LINK_OPEN_NAMED = { questions: 1, roughpunch: 1, finishpunch: 1, qcpunch: 1 };
+const linkOpenTarget = (search) => {
+  let p;
+  try { p = new URLSearchParams(search || ""); } catch (e) { return null; }
+  if (p.get("preview") === "1") return null;
+  for (const kind of LINK_OPEN_ROUTES) {
+    const raw = p.get(kind);
+    if (raw == null) continue;
+    if (kind === "lightinghub") return null;
+    if (kind === "jobnote") {
+      const parts = String(raw).split(":");
+      const jobId = (parts[0] || "").trim(), noteId = (parts[1] || "").trim();
+      if (!jobId || jobId.length > 128 || jobId.includes("/") || !LINK_KEY_SAFE.test(noteId)) return null;
+      return { jobId, key: "jobnote:" + noteId };
+    }
+    const jobId = String(raw).trim();
+    if (!jobId || jobId.length > 128 || jobId.includes("/")) return null;
+    const s = (p.get("s") || "").trim();
+    const shareId = LINK_OPEN_NAMED[kind] && LINK_KEY_SAFE.test(s) ? s : "base";
+    return { jobId, key: kind + ":" + shareId };
+  }
+  return null;
+};
+// A device that has ever been signed into the app is staff. Reads the raw
+// identity key (IDENTITY_KEY) on purpose — getIdentity() deletes an expired one.
+const isStaffDevice = (getItem) => {
+  try { return !!(getItem("he_identity") || getItem("he_staff_device") === "1"); }
+  catch (e) { return false; }
+};
+const isBotAgent = (ua, webdriver) => !!webdriver || /HeadlessChrome|bot|crawl|spider|preview/i.test(String(ua || ""));
+const shouldRecordOpen = (lastIso, nowMs) => {
+  const t = Date.parse(lastIso || "");
+  if (!isFinite(t)) return true;
+  return nowMs - t >= LINK_OPEN_THROTTLE_MS || nowMs < t;
+};
+const deviceLabel = (ua) => {
+  const s = String(ua || "");
+  const dev = /iPad/.test(s) ? "iPad" : /iPhone|iPod/.test(s) ? "iPhone" : /Android/.test(s) ? "Android"
+    : /Macintosh|Mac OS X/.test(s) ? "Mac" : /Windows/.test(s) ? "Windows" : "Other";
+  const br = /Edg(e|A|iOS)?\//.test(s) ? "Edge" : /Firefox\/|FxiOS\//.test(s) ? "Firefox"
+    : /Chrome\/|CriOS\//.test(s) ? "Chrome" : /Safari\//.test(s) ? "Safari" : "Browser";
+  return dev + " · " + br;
+};
+const linkOpenDayDiff = (fromMs, nowMs) => {
+  const f = new Date(fromMs), n = new Date(nowMs);
+  const a = new Date(f.getFullYear(), f.getMonth(), f.getDate()).getTime();
+  const b = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  return Math.round((b - a) / 86400000);
+};
+const formatOpenWhen = (iso, nowMs) => {
+  const ms = Date.parse(iso || "");
+  if (!isFinite(ms)) return "";
+  const d = new Date(ms);
+  const t = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/\s+/g, " ").toLowerCase();
+  const days = linkOpenDayDiff(ms, nowMs);
+  if (days === 0) return "today " + t;
+  if (days === 1) return "yesterday " + t;
+  if (days > 1 && days < 7) return d.toLocaleDateString("en-US", { weekday: "short" }) + " " + t;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", " + t;
+};
+const linkOpenState = (entry, createdAt, nowMs, sinceIso) => {
+  const opens = (entry && Number(entry.opens)) || 0;
+  if (opens > 0) {
+    const devs = entry.devices && typeof entry.devices === "object" ? Object.keys(entry.devices).length : 0;
+    const devices = Math.max(devs, 1);
+    const lastMs = Date.parse(entry.lastAt || "");
+    const when = formatOpenWhen(entry.lastAt, nowMs);
+    const fresh = isFinite(lastMs) && nowMs - lastMs < LINK_OPEN_FRESH_MS;
+    const label = opens === 1
+      ? "Opened once" + (when ? " · " + when : "")
+      : "Opened " + opens + "× · " + devices + " device" + (devices === 1 ? "" : "s") + (when ? " · last " + when : "");
+    return { state: fresh ? "on" : "once", label, opens, devices };
+  }
+  const sinceMs = Date.parse(sinceIso || "");
+  const madeMs = Date.parse(createdAt || "");
+  if (!isFinite(madeMs) || !isFinite(sinceMs) || madeMs < sinceMs) {
+    const since = isFinite(sinceMs) ? new Date(sinceMs).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "tracking started";
+    return { state: "pre", label: "No opens since " + since, opens: 0, devices: 0 };
+  }
+  const days = Math.max(0, linkOpenDayDiff(madeMs, nowMs));
+  if (nowMs - madeMs >= LINK_OPEN_FRESH_MS) return { state: "late", label: "Not opened · sent " + days + " days ago", opens: 0, devices: 0 };
+  const ago = days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
+  return { state: "none", label: "Not opened yet · sent " + ago, opens: 0, devices: 0 };
+};
+// ── end Link opens helpers ─────────────────────────────────────────────────
+
+// Fire-and-forget: count this page load as one open of the share link in the
+// URL. Runs once per page load (called at the top of App(), before the share
+// routes). Never throws, never blocks, never toasts. Writes ONLY
+// link_opens/{jobId} — never jobs/{id}.
+let _linkOpenDone = false;
+function recordLinkOpen() {
+  if (_linkOpenDone) return;
+  _linkOpenDone = true;
+  try {
+    const target = linkOpenTarget(window.location.search);
+    if (!target) return;
+    let ls = null;
+    try { ls = window.localStorage; } catch (e) {}
+    const get = (k) => (ls ? ls.getItem(k) : null);
+    const put = (k, v) => { try { if (ls) ls.setItem(k, v); } catch (e) {} };
+    if (isStaffDevice(get)) return;
+    if (typeof navigator !== "undefined" && isBotAgent(navigator.userAgent, navigator.webdriver)) return;
+    const nowMs = Date.now(), nowIso = new Date(nowMs).toISOString();
+    const throttleKey = "he_lo_" + target.jobId + "_" + target.key;
+    let last = null;
+    try { last = get(throttleKey); } catch (e) {}
+    if (!shouldRecordOpen(last, nowMs)) return;
+    put(throttleKey, nowIso);
+    let deviceId = null;
+    try { deviceId = get("he_link_device"); } catch (e) {}
+    if (!deviceId || !LINK_KEY_SAFE.test(deviceId)) {
+      deviceId = "d_" + Math.random().toString(36).slice(2, 12);
+      put("he_link_device", deviceId);
+    }
+    const label = deviceLabel(typeof navigator !== "undefined" ? navigator.userAgent : "");
+    const ref = doc(db, "link_opens", target.jobId);
+    getDoc(ref).catch(() => null).then((snap) => {
+      const prev = snap && snap.exists() ? ((((snap.data() || {}).links) || {})[target.key] || {}) : {};
+      const entry = {
+        opens: increment(1),
+        lastAt: nowIso,
+        devices: { [deviceId]: { label, opens: increment(1), lastAt: nowIso } },
+      };
+      if (snap && !prev.firstAt) entry.firstAt = nowIso;
+      return setDoc(ref, { links: { [target.key]: entry }, updated_at: nowIso }, { merge: true });
+    }).catch((e) => console.warn("[HE link-opens] write failed:", e && e.message));
+  } catch (e) {
+    console.warn("[HE link-opens] skipped:", e && e.message);
+  }
+}
+
+// Office side: live read of link_opens/{jobId}. null = loading / failed / off
+// (callers render nothing — never a wrong "Not opened"); {} = no opens yet.
+function useLinkOpens(jobId) {
+  const [links, setLinks] = useState(null);
+  useEffect(() => {
+    if (!jobId) { setLinks(null); return; }
+    let alive = true;
+    const unsub = onSnapshot(doc(db, "link_opens", String(jobId)),
+      (snap) => { if (alive) setLinks(snap.exists() ? (((snap.data() || {}).links) || {}) : {}); },
+      (e) => { console.warn("[HE link-opens] read failed:", e && e.message); if (alive) setLinks(null); });
+    return () => { alive = false; unsub(); };
+  }, [jobId]);
+  return links;
+}
+const LINK_OPEN_DOT = { on: C.green, once: C.blue, late: C.red };
+function LinkOpensLine({ opens, linkKey, createdAt = null, style }) {
+  const [open, setOpen] = useState(false);
+  if (!opens || !linkKey) return null;
+  const entry = opens[linkKey] || null;
+  const nowMs = Date.now();
+  const st = linkOpenState(entry, createdAt, nowMs, LINK_OPENS_SINCE);
+  const solid = LINK_OPEN_DOT[st.state];
+  const dot = (
+    <span style={{ width: 8, height: 8, borderRadius: "50%", flex: "none", display: "inline-block", boxSizing: "border-box",
+      background: solid || "transparent", border: solid ? "none" : `1.5px ${st.state === "pre" ? "dashed" : "solid"} ${C.muted}` }}/>
+  );
+  const color = st.state === "on" ? C.green : st.state === "late" ? C.red : C.dim;
+  const base = { display: "inline-flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 10.5, fontWeight: 600, color,
+    fontFamily: "inherit", background: "none", border: "none", padding: "2px 0", textAlign: "left", ...(style || {}) };
+  if (st.opens === 0) return <span style={base}>{dot}{st.label}</span>;
+  const devs = Object.entries((entry && entry.devices) || {})
+    .map(([id, d]) => ({ id, ...(d || {}) }))
+    .sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
+  const kv = (k, v) => (
+    <div style={{ display: "flex", gap: 10 }}>
+      <span style={{ width: 92, flex: "none" }}>{k}</span>
+      <span style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>{v || "—"}</span>
+    </div>
+  );
+  return (
+    <div>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ ...base, cursor: "pointer" }}>
+        {dot}{st.label}
+        <span style={{ color: C.faint, fontSize: 9, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+      </button>
+      {open && (
+        <div style={{ margin: "6px 0 2px 14px", padding: "8px 10px", background: "#fff", border: `1px solid ${C.border}`,
+          borderRadius: 8, fontSize: 11, color: C.dim, display: "grid", gap: 4, maxWidth: 420 }}>
+          {kv("First opened", formatOpenWhen(entry.firstAt, nowMs))}
+          {kv("Last opened", formatOpenWhen(entry.lastAt, nowMs))}
+          <div style={{ borderTop: "1px solid #E7EAEF", margin: "3px 0" }}/>
+          {devs.map(d => (
+            <div key={d.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", fontVariantNumeric: "tabular-nums" }}>
+              <b style={{ fontWeight: 600, color: C.text }}>{String(d.label || "Unknown device")}</b>
+              <span>{(Number(d.opens) || 0)}× · last {formatOpenWhen(d.lastAt, nowMs)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+// Self-subscribing variant for spots that show one link (Task 4).
+function LinkOpens({ jobId, linkKey, createdAt = null, style }) {
+  const opens = useLinkOpens(jobId);
+  return <LinkOpensLine opens={opens} linkKey={linkKey} createdAt={createdAt} style={style}/>;
+}
+
 // Who usage is counted for: set from the internal app shell's render (never
 // from a share-link / GC-portal / homeowner page — those return before App's
 // hooks), and null for contractors. Same module-level pattern as
@@ -58990,8 +61602,16 @@ function ToolsView({ jobs, onUpdateJob, who }) {
 let _usageUser = null;
 const _usageMemSeen = new Set();   // session fallback when localStorage throws
 let _usagePruned = false;
+let _staffMarked = false;
 function _setUsageUser(identity) {
   _usageUser = (identity && identity.id && getAccess(identity) !== "contractor") ? identity : null;
+  // Link opens: any device that has rendered the app shell signed in (contractors
+  // included) is staff forever, so its share-link opens never count — even
+  // after the PIN expires and he_identity is cleared.
+  if (!_staffMarked && identity && identity.id) {
+    _staffMarked = true;
+    try { localStorage.setItem("he_staff_device", "1"); } catch (e) {}
+  }
 }
 // Fire-and-forget: count one open of <kind>/<key> for today, at most once per
 // device per user per day. Never throws, never blocks, never toasts.
@@ -60256,7 +62876,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
             {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
             {r.prio === "urgent" && <span title="Marked urgent" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: C.red }}><Icon name="flag" size={9} stroke={2.5} />Urgent</span>}
-            {r.prio === "low" && <span title="Low priority" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.muted, border: `1px solid ${C.border}` }}>Low</span>}
+            {r.prio === "low" && <span title="Low priority" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.faint, border: `1px solid ${C.border}` }}>Low</span>}
             {r.sub.map((s, i) => <span key={i}>{s}</span>)}
             {(r.bucket === "overdue") && <span style={{ fontSize: 10, fontWeight: 700, color: bColor }}>{bLabel}</span>}
             {/* v446: who it's on, as a visible control when the viewer can change it. */}
@@ -60275,7 +62895,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12, marginTop: 4, cursor: "pointer" }}>
               <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
               <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : r.latest.kind === "void" ? C.red : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
-              <span style={{ color: C.muted }}>{timeAgo(r.latest.at)}{r.latest.editedAt ? " (edited)" : ""}</span>
+              <span style={{ color: C.faint }}>{timeAgo(r.latest.at)}{r.latest.editedAt ? " (edited)" : ""}</span>
               {/* v444 (Koy: "its hard to tell that you can click on the '2 updates'"):
                   a real outlined button, not grey text — tap to open/close the thread. */}
               {!selectMode && (
@@ -60303,7 +62923,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <Icon name="note" size={12} stroke={2} />
                     <span style={{ fontWeight: 600, color: last.role === "client" ? C.orange : C.text }}>{who(last)}: {line(last)}</span>
-                    <span style={{ color: C.muted }}>{timeAgo(last.at)}</span>
+                    <span style={{ color: C.faint }}>{timeAgo(last.at)}</span>
                     {!selectMode && <span role="button" aria-expanded={false} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap" }}><Icon name="note" size={11} stroke={2.25} />{t.length} in discussion ▾</span>}
                   </div>
                 )}
@@ -60314,7 +62934,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                       <div key={m.id || i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <span style={{ fontWeight: 600, color: m.role === "client" ? C.orange : C.text }}>{who(m)}:</span> {line(m)}{" "}
-                          <span style={{ color: C.muted }}>· {timeAgo(m.at)}</span>
+                          <span style={{ color: C.faint }}>· {timeAgo(m.at)}</span>
                           {(m.photos || []).filter(p => p && p.url).map((p, j) => <a key={j} href={p.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ marginLeft: 6, color: C.accent, fontWeight: 600 }}>photo</a>)}
                         </span>
                       </div>
@@ -60365,7 +62985,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                   <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontWeight: 600, color: u.kind === "void" ? C.red : C.text }}>{first(u.by)}:</span> {needUpdateLine(u)}{" "}
-                      <span style={{ color: C.muted }}>· {timeAgo(u.at)}{u.editedAt ? " (edited)" : ""}</span>
+                      <span style={{ color: C.faint }}>· {timeAgo(u.at)}{u.editedAt ? " (edited)" : ""}</span>
                     </span>
                     {mine && (
                       <button onClick={() => setReplyEdit({ key: r.key, by: u.by, at: u.at, text: String(u.text || "") })} title="Edit your reply"
@@ -60525,11 +63145,11 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: tight ? "auto" : 0 }}>
         {!selectMode && canMarkUrgent(r) && (
           <button onClick={() => toggleUrgent(r)} title={r.prio === "urgent" ? "Urgent — tap to clear" : "Mark urgent"} aria-pressed={r.prio === "urgent"}
-            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.muted, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
+            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.faint, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#B23A3A10" } : {}) }}>!</button>
         )}
         {!selectMode && r.sel && onSaveFocus && (
           <button onClick={() => toggleFocus(r.key)} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} aria-pressed={pinned}
-            style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.muted, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
+            style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.faint, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
         )}
         {!selectMode && r.canDone && (
           <button onClick={r.onDone} title="Done" style={{ ...ib, color: C.green }}><Icon name="check" size={20} stroke={2.25} /></button>
@@ -60587,7 +63207,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
           <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
           <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
-          <span style={{ fontSize: 12, color: C.muted }}>{g.rows.length}</span>
+          <span style={{ fontSize: 12, color: C.faint }}>{g.rows.length}</span>
           {overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
           {(() => { const nn = g.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
           {g.badge && <span style={{ fontSize: 10, fontWeight: 700, color: C.orange, background: "#B06A2C1A", borderRadius: 5, padding: "1px 6px" }}>{g.badge}</span>}
@@ -60604,7 +63224,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                     <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
                       <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
-                      <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
+                      <span style={{ fontSize: 12, color: C.faint, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
                       {/* v490 (Koy: "want it to appear on each drop downs header so i can see it easy") */}
                       {(() => { const nn = c.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
                       {c.overdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
@@ -60635,7 +63255,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                           ? <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
                           : <>
                               <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{(job && job.name) || "No job"}</span>
-                              <span style={{ fontSize: 12, color: C.muted, fontVariantNumeric: "tabular-nums" }}><HeCount value={n} ms={500}/></span>
+                              <span style={{ fontSize: 12, color: C.faint, fontVariantNumeric: "tabular-nums" }}><HeCount value={n} ms={500}/></span>
                               {(() => { const nn = rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
                               {od > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{od} overdue</span>}
                             </>}
@@ -60722,7 +63342,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       <div onClick={() => toggleGroup("pulse")} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
         <span style={{ display: "inline-flex", transition: "transform .15s", transform: pulseOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
         <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>Team pulse</span>
-        <span style={{ fontSize: 12, color: C.muted }}>{pulse.length} people</span>
+        <span style={{ fontSize: 12, color: C.faint }}>{pulse.length} people</span>
         {pulseOverdue > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.red, background: "#B23A3A18", borderRadius: 5, padding: "1px 6px" }}>{pulseOverdue} overdue</span>}
         <span style={{ flex: 1, height: 1, background: C.border }} />
       </div>
@@ -60821,7 +63441,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         <div style={{ border: `1px solid #66A8FF`, borderRadius: 12, padding: "10px 10px 12px", marginBottom: 14, background: C.surface }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 8px" }}>
             <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}><span style={{ color: "#66A8FF" }}>★</span> Focus today</span>
-            <span style={{ fontSize: 12, color: C.muted }}>{pinnedRows.length}/3</span>
+            <span style={{ fontSize: 12, color: C.faint }}>{pinnedRows.length}/3</span>
           </div>
           {pinnedRows.length
             ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{pinnedRows.map(Row)}</div>
@@ -60956,7 +63576,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         <div style={{ fontSize: 14, lineHeight: 1.45, color: C.text, marginBottom: 8, wordBreak: "break-word" }}>{n.text}</div>
         {lastNeedUpdate(n) && (
           <div style={{ fontSize: 12, marginTop: -4, marginBottom: 8, color: lastNeedUpdate(n).kind === "waiting" ? C.orange : C.dim, fontWeight: 600 }}>
-            {String(lastNeedUpdate(n).by || "").split(" ")[0]}: {needUpdateLine(lastNeedUpdate(n))} <span style={{ color: C.muted, fontWeight: 400 }}>· {timeAgo(lastNeedUpdate(n).at)}</span>
+            {String(lastNeedUpdate(n).by || "").split(" ")[0]}: {needUpdateLine(lastNeedUpdate(n))} <span style={{ color: C.faint, fontWeight: 400 }}>· {timeAgo(lastNeedUpdate(n).at)}</span>
           </div>
         )}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -61011,7 +63631,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {items.length === 0
-          ? <div style={{ fontSize: 13, color: C.muted, padding: "8px 2px" }}>{emptyMsg}</div>
+          ? <div style={{ fontSize: 13, color: C.faint, padding: "8px 2px" }}>{emptyMsg}</div>
           : items.map(Card)}
       </div>
     </div>
@@ -61065,7 +63685,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
       <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.dim, marginBottom: doneToday.length ? 10 : 0 }}>
           <Icon name="check" size={15} stroke={2.25} />
-          <span style={{ fontSize: 13 }}>Done today{doneToday.length ? ` · ${doneToday.length}` : ""} <span style={{ color: C.muted }}>(clears overnight)</span></span>
+          <span style={{ fontSize: 13 }}>Done today{doneToday.length ? ` · ${doneToday.length}` : ""} <span style={{ color: C.faint }}>(clears overnight)</span></span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {doneToday.map(n => (
@@ -61074,7 +63694,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
                 <span style={{ flex: 1, minWidth: 0, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.red, border: `1px solid ${C.red}66`, background: `${C.red}14` }}>Voided</span>
                   <span style={{ textDecoration: "line-through" }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
-                  <span style={{ color: C.muted }}>voided by {String(n.voidedBy || n.doneBy || "?").split(" ")[0]}{n.voidReason ? ` · ${n.voidReason}` : ""}</span>
+                  <span style={{ color: C.faint }}>voided by {String(n.voidedBy || n.doneBy || "?").split(" ")[0]}{n.voidReason ? ` · ${n.voidReason}` : ""}</span>
                 </span>
               ) : (
                 <span style={{ textDecoration: "line-through", flex: 1, minWidth: 0 }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
@@ -62347,6 +64967,9 @@ function GCPortalDetail({ job, link, P, livePlans, initialSection, onClose }) {
 }
 
 function App() {
+  // Link opens: count this load if it's a share link (no-op for the app itself).
+  recordLinkOpen();
+
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
@@ -62415,6 +65038,8 @@ function App() {
   // Share-link / GC-portal / homeowner routes returned above, so they never
   // reach this line.
   _setUsageUser(identity);
+  // v529: crash reports + replay follow the signed-in name (name only).
+  syncPostHogIdentity(identity);
   const [notifStatus,  setNotifStatus]  = useState(null); // null | 'loading' | 'ok' | string
   // notifIssue: null | 'ios-not-installed' | 'permission-default' | 'permission-denied' | 'no-tokens'
   // Replaces the old binary showNotifPrompt — captures every failure mode that
@@ -62744,16 +65369,16 @@ function App() {
         const foreman = users.find(u => u.id === matchedUser.foremanId);
         const fname = foreman && foreman.name;
         if (fname) {
-          if (_colorOverrides[fname]) return _colorOverrides[fname];
+          if (_colorOverrides[fname]) return readableInk(_colorOverrides[fname]);
           const ffirst = fname.split(" ")[0];
-          if (_colorOverrides[ffirst]) return _colorOverrides[ffirst];
+          if (_colorOverrides[ffirst]) return readableInk(_colorOverrides[ffirst]);
         }
       }
     }
-    if(_colorOverrides[name]) return _colorOverrides[name];
+    if(_colorOverrides[name]) return readableInk(_colorOverrides[name]);
     const first = (name||"").split(" ")[0];
-    if(_colorOverrides[first]) return _colorOverrides[first];
-    return "#6E7682";
+    if(_colorOverrides[first]) return readableInk(_colorOverrides[first]);
+    return "#5E6670";
   };
 
   // Sync module-level globals (used by legacy code that reads FOREMEN/LEADS directly)
@@ -65220,7 +67845,7 @@ function App() {
 
             <div style={{display:"flex",alignItems:"center",gap:7}}>
 
-              {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
+              {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#fff",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
               {isCommercial(job)&&(()=>{
                 const p=commPhase(job); const st=commOf(job).stage||"";
                 const lbl = p!==null ? `PHASE ${p} · ${COMM_PHASE_BY_N[p].short} · ${commPhaseDone(job,p)}/${COMM_PHASE_BY_N[p].items.length}` : st==="inprogress"?"IN PROGRESS":st==="hold"?"ON HOLD":st==="closeout"?"CLOSEOUT":st==="complete"?"COMPLETE":"READY TO START";
@@ -65412,7 +68037,7 @@ function App() {
             {can(identity,"job.delete")&&(
               <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
 
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
 
                   padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s",display:"inline-flex",alignItems:"center"}}
 
@@ -65620,6 +68245,12 @@ function App() {
         await saveUsers(newList);
       }}
     />;
+  }
+
+  // ── Standalone dashboard (v530): /dashboard, after the PIN gate and every hook ──
+  if (IS_DASH_PAGE) {
+    return <DashPage ok={isDashOwner(myLiveRec)} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
+      identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}/>;
   }
 
   return (
@@ -65838,7 +68469,7 @@ function App() {
                         {simproSyncing ? "Syncing…" : "Refresh"}
                       </button>
                       <button onClick={()=>setSimproInboxOpen(false)}
-                        style={{background:"none",border:"none",color:C.muted,
+                        style={{background:"none",border:"none",color:C.faint,
                           fontSize:18,cursor:"pointer",padding:"4px 8px",lineHeight:1}}>×</button>
                     </div>
                   </div>
@@ -65858,7 +68489,7 @@ function App() {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:13,fontWeight:700,color:C.text,lineHeight:1.3}}>
                               {c.name}
-                              <span style={{fontSize:10,fontWeight:600,color:C.muted,marginLeft:6}}>
+                              <span style={{fontSize:10,fontWeight:600,color:C.faint,marginLeft:6}}>
                                 #{c.simproId}
                               </span>
                               {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
@@ -65873,7 +68504,7 @@ function App() {
                                 <span style={{opacity:0.7}}>Customer:</span> {c.customer}
                               </div>
                             )}
-                            <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                            <div style={{fontSize:10,color:C.faint,marginTop:4,fontStyle:"italic"}}>
                               First seen {(() => {
                                 const t = new Date(c.firstSeenAt||c.lastSeenAt||Date.now());
                                 const days = Math.floor((Date.now()-t.getTime())/(24*3600*1000));
@@ -65917,7 +68548,7 @@ function App() {
                     {/* Ignored — collapsed by default */}
                     {ignoredCount > 0 && (
                       <details style={{marginTop:12}}>
-                        <summary style={{fontSize:11,fontWeight:700,color:C.muted,
+                        <summary style={{fontSize:11,fontWeight:700,color:C.faint,
                           letterSpacing:"0.06em",cursor:"pointer",padding:"6px 4px",
                           textTransform:"uppercase"}}>
                           Ignored ({ignoredCount})
@@ -65930,9 +68561,9 @@ function App() {
                                 display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontSize:12,fontWeight:600,color:C.dim}}>
-                                  {c.name} <span style={{fontSize:10,color:C.muted}}>#{c.simproId}</span>
+                                  {c.name} <span style={{fontSize:10,color:C.faint}}>#{c.simproId}</span>
                                 </div>
-                                {c.customer && <div style={{fontSize:10,color:C.muted}}>{c.customer}</div>}
+                                {c.customer && <div style={{fontSize:10,color:C.faint}}>{c.customer}</div>}
                               </div>
                               <button onClick={()=>unignoreSimproCandidate(c)}
                                 title="Move back to pending"
@@ -65949,7 +68580,7 @@ function App() {
                   </div>
                   {/* Footer */}
                   <div style={{padding:"10px 16px",borderTop:`1px solid ${C.border}`,
-                    background:C.surface,fontSize:10,color:C.muted,textAlign:"center"}}>
+                    background:C.surface,fontSize:10,color:C.faint,textAlign:"center"}}>
                     Auto-refreshes every 4 hours from Simpro · Pending stage only
                   </div>
                 </div>
@@ -66178,7 +68809,7 @@ function App() {
                   const openMsg = (id) => { setInboxOpen(false); setAnnounceOpen(id); };
                   return (
                     <>
-                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"4px 8px 4px",display:"flex"}}>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"4px 8px 4px",display:"flex"}}>
                         <span style={{flex:1}}>FROM THE OFFICE</span>{need.length>0 && <span>{need.length} need{need.length===1?"s":""} you</span>}
                       </div>
                       {need.length===0 && <div style={{fontSize:12,color:C.dim,padding:"2px 10px 6px"}}>Nothing from the office needs you right now.</div>}
@@ -66246,7 +68877,7 @@ function App() {
                   );
                 })()}
                 {officeMsgs.length > 0 && inboxItems.some(i=>!i.kind) && (
-                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.muted,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
                 )}
                 {inboxItems.filter(i=>!i.kind).map(item=>(
                   <button key={item.id} onClick={()=>openInboxItem(item)}
@@ -66585,7 +69216,7 @@ function App() {
                   + Temp Ped
                 </button>
                 <button onClick={()=>{const j=stampDivision(blankJob());j.foreman="Unassigned";setAllJobs(js=>[j,...js]);setSelected(j);}}
-                  style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                  style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
                   + New Job
@@ -66627,7 +69258,7 @@ function App() {
                       ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                       : <JobRow key={job.id} job={job} fc={_foremanColors[job.foreman]||"#6E7682"} showForeman={true}/>
                   ))}
-                  {hits.length===0 && <div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
+                  {hits.length===0 && <div style={{textAlign:"center",color:C.faint,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
                 </div>
               );
             })()}
@@ -66822,7 +69453,7 @@ function App() {
                       {/* slim crew access */}
                       <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
                         style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
-                        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.muted}}>Crew Access</span>
+                        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.faint}}>Crew Access</span>
                         <span style={{fontSize:10,color:C.dim}}>→</span>
                       </div>
                     </div>
@@ -66852,11 +69483,11 @@ function App() {
                       </div>
                       <div style={{display:"flex",gap:6,marginBottom:10}}>
                         <div style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1}}>
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.muted,lineHeight:1}}>{uCOs}</div>
+                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.faint,lineHeight:1}}>{uCOs}</div>
                           <div style={{fontSize:9,color:C.dim,marginTop:1}}>COs</div>
                         </div>
                       </div>
-                      <div style={{fontSize:10,color:C.dim,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
+                      <div style={{fontSize:10,color:C.dim,fontWeight:600,textAlign:"right"}}>View →</div>
                     </div>
                   </div>
                   </Fragment>
@@ -67041,7 +69672,7 @@ function App() {
 
                 <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
-                  style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
+                  style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#fff",
 
                     fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
 
@@ -67161,10 +69792,10 @@ function App() {
 
               <div style={{padding:"0 26px 14px"}}>
                 {filtered.length===0?(
-                  <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                  <div style={{textAlign:"center",padding:"60px 0",color:C.faint}}>
                     <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
                     <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
-                      style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#000",
+                      style={{background:_foremanColors[activeForeman]||"#6E7682",border:"none",borderRadius:9,color:"#fff",
                         fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                       + Add First Job
                     </button>
@@ -67241,7 +69872,7 @@ function App() {
               {(() => {
                 if(assignedToActive.length === 0 && punchLinger.length === 0) {
                   return (
-                    <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                    <div style={{textAlign:"center",padding:"60px 0",color:C.faint}}>
                       <div style={{fontSize:13,marginBottom:6}}>Nothing assigned to {activeForeman} yet.</div>
                       <div style={{fontSize:11}}>Open a job's punch list and pick {activeForeman} from the Assigned dropdown.</div>
                     </div>
@@ -67314,7 +69945,7 @@ function App() {
                                 />
                                 <div style={{flex:1,minWidth:0}}>
                                   <HeStrikeSpan tag="div" done={_lingerIds.has(it.id)}
-                                    style={{color:_lingerIds.has(it.id)?C.muted:"var(--text)",textDecoration:_lingerIds.has(it.id)?"line-through":"none"}}>
+                                    style={{color:_lingerIds.has(it.id)?C.faint:"var(--text)",textDecoration:_lingerIds.has(it.id)?"line-through":"none"}}>
                                     <RichText html={it.text}/>
                                   </HeStrikeSpan>
                                   <div style={{fontSize:9,color:C.dim,marginTop:3,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
@@ -67550,7 +70181,7 @@ function App() {
                 setAllJobs(js=>[j,...js]);
                 setSelected(j);
               }}
-                style={{marginLeft:"auto",background:C.accent,color:"#000",border:"none",borderRadius:8,
+                style={{marginLeft:"auto",background:C.accent,color:"#fff",border:"none",borderRadius:8,
                   padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                   letterSpacing:"0.03em"}}>+ New Quote</button>
             )}

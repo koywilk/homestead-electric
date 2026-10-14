@@ -2,7 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      /* Pinch-to-zoom stays on everywhere (axe audit 2026-10-08). On iPhone/iPad
+         only, maximum-scale=1 stops Safari jumping in when a small text box is
+         tapped; iOS still lets you pinch-zoom with it set. */
+      (function(){var ua=navigator.userAgent||"";if(/iP(hone|od|ad)/.test(ua)||(/Macintosh/.test(ua)&&navigator.maxTouchPoints>1)){var m=document.querySelector('meta[name=viewport]');if(m)m.setAttribute("content","width=device-width, initial-scale=1, maximum-scale=1");}})();
+    </script>
     <meta name="theme-color" content="#09090f" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -20,11 +26,15 @@
 <title>Homestead Electric</title>
     <style>
       body { margin: 0; background: #09090f; }
+      .he-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
       * { -webkit-tap-highlight-color: transparent; }
     </style>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
+    <main>
+      <h1 class="he-sr-only">Homestead Electric</h1>
+      <div id="root"></div>
+    </main>
   </body>
 </html>
