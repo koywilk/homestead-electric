@@ -26,6 +26,9 @@
 <title>Homestead Electric</title>
     <style>
       body { margin: 0; background: #09090f; }
+      /* v537: a touch screen gets finger-sized buttons; body text sits at 500 weight so 12-13 px type holds up in sunlight. */
+      body { font-weight: 500; }
+      @media (pointer: coarse) { button { min-height: 40px; } }
       .he-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
       * { -webkit-tap-highlight-color: transparent; }
     </style>
