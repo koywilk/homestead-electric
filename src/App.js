@@ -8105,7 +8105,7 @@ function NeedsAttention({jobs, onSelectJob}) {
     const finPOs   = matsHidden ? [] : (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
     if(roughPOs.length) unsentPOs.push({job, name, count:roughPOs.length, phase:'Rough', orders:roughPOs});
     if(finPOs.length)   unsentPOs.push({job, name, count:finPOs.length, phase:'Finish', orders:finPOs});
-    const commPOs = matsHidden ? [] : (job.commMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp); // v527
+    const commPOs = matsHidden ? [] : (job.commMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp); // v539
     if(commPOs.length)    unsentPOs.push({job, name, count:commPOs.length, phase:'Materials', orders:commPOs});
 
     // Waiting punch items
@@ -13615,7 +13615,7 @@ const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").r
 const poTodayMDY = () => new Date().toLocaleDateString("en-US");
 const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
 
-// v527: Material Tracking runs in three places — residential Rough / Finish and the
+// v539: Material Tracking runs in three places — residential Rough / Finish and the
 // commercial Materials tab (job.commMaterials, phase "comm"; each card picks the
 // Simpro cost center it is charged to, sent to sendMaterialPO as ccId).
 const matPhaseLabel = (ph) => ph === "finish" ? "Finish" : ph === "comm" ? "Materials" : "Rough-In";
@@ -14043,7 +14043,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
         const busy = !!sendSheet.busy, done = sendSheet.done;
         const close = () => { if (!busy) setSendSheet(null); };
         const phaseLabel = matPhaseLabel(phase);
-        // v527: commercial Materials tab — each card picks the Simpro cost center it's charged to.
+        // v539: commercial Materials tab — each card picks the Simpro cost center it's charged to.
         const isComm = phase === "comm";
         const ccOpts = (bid && Array.isArray(bid.costCenters) ? bid.costCenters : []).filter(c => c && c.ccId != null)
           .map(c => ({ id: String(c.ccId), label: [c.sectionName, String(c.ccName || "").trim()].filter(Boolean).join(" · ") }));
@@ -28400,7 +28400,7 @@ const normalizeJob = (raw) => ({
   roughMaterials: raw?.roughMaterials || [],
   roughUpdates:   raw?.roughUpdates   || [],
   finishMaterials:raw?.finishMaterials|| [],
-  commMaterials: raw?.commMaterials || [], // v527: commercial Underground tab
+  commMaterials: raw?.commMaterials || [], // v539: commercial Underground tab
   finishUpdates:  raw?.finishUpdates  || [],
   roughPunch:  raw?.roughPunch  || {},
   finishPunch: raw?.finishPunch || {},
@@ -32927,7 +32927,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <JobStartCard job={job} identity={identity} users={users} onPatch={(patch)=>u(patch)} onOpenTab={(t)=>setTab(t)} ctx="drawer"/>
             </div>
           )}
-          {/* v527 (Braden, Koy): a Materials tab on commercial job cards — the residential
+          {/* v539 (Braden, Koy): a Materials tab on commercial job cards — the residential
               Material Tracking, one list for the job (job.commMaterials). Each card picks the
               Simpro cost center it's charged to; Order from the bid charges each line's own. */}
           {tab==="Materials" && isCommercial(job) && (
@@ -33035,7 +33035,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&(tabsFor(job).includes("Rough")||isCommercial(job))&&(
             <JobOrdersSummary job={job} phases={isCommercial(job) ? ["comm"] : ["rough","finish"]} onOrder={(ph)=>{
               // v523: a fresh card on the right phase, reconciled against the live job copy.
-              // v527: commercial jobs order onto their Materials tab.
+              // v539: commercial jobs order onto their Materials tab.
               const key = ph==="finish" ? "finishMaterials" : ph==="comm" ? "commMaterials" : "roughMaterials";
               const cur = Array.isArray(jobRef.current[key]) ? jobRef.current[key] : [];
               setTab(ph==="finish" ? "Finish" : ph==="comm" ? "Materials" : "Rough");
@@ -55434,9 +55434,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-13 · App SW version: v538
+**Last manifest update:** 2026-10-13 · App SW version: v539
 
 ---
+
+- **Tasks: "Working on it" status, and sort / group the Needs tab and My Day by job or person** · 'shipped 2026-10-13' · 'SW v539' · Koy: *"I would like to be able to set status and sort needs or tasks, so when im working on something it shows them im working on it, and i can organize them a bit better. would be helpful if in the needs drop they were sorted by job or person as well"* (signed off a clickable mockup first). **Working on it:** every task / need on your list gets a **▶ Working on it** chip (My Day rows, and your own cards on the Needs board); tap it again to stop. It writes 'startedBy' / 'startedAt' on the doc; everyone else sees a blue **Working · Koy · 12m ago** pill on that task (Needs board Mine + All, the sender's My Day **Sent**, the head's Person view). The order is Open → Working on it → Waiting on… → Done: a "Waiting on…" posted after the start shows Waiting instead ('needWorking'). **No push** — 'onNeedWrite' only fires on assign / done / send-back / new updates, so no function deploy. The patch funnel ('patchNeed' → pure 'needWorkReset') clears the start on a hand-off to another person, Done, Void or Reopen, so every writer (board To:, My Day pick, batch push, Edit) obeys; Undo after Done puts it back. My Day **Sent** rows now say where each ask stands: Working, Waiting on…, or **Not started yet**. Time-off decision rows and auto office rows (QC walks, invoicing, start POs) don't take the chip. **Order:** working rows ride on top everywhere ('compareMyDayRows', new 'compareNeedsBoard': working → urgent → Tomorrow lane → oldest → low). **Needs tab Group switch:** **Due** (the Tomorrow / This week lanes, now sorted) · **Job** · **Person** — Job / Person fold everything into one group per job or person ('bunchRows', A–Z, No job / Unassigned last), every group starts folded with its count and **N working · N urgent · N waiting** badges; under All, Person = who it's on; under Mine, Person = who sent it to you. Remembered per device ('needs.group'). **My Day Sort switch:** **Urgency** (today's order) · **Job** · **Person** orders the rows *inside* every fold, with a small label over each bunch ('myday.sort', per device; Person = "From <who>" on your rows, "To <who>" on Sent). The Mine/All buttons read white on blue now (were black). New chips and switches follow the v537 type floor. vm-tested in 'scripts/needs-dryrun.js' (working / reset / board order / bunching, mutation-checked). Guides updated: 'public/sops/needs.html', 'public/sops/myday.html'. **Why it won't lose data:** two additive string fields inside 'data', written only through the existing field-surgical 'patchNeed' (dotted paths, build stamp kept); the sort and group switches are display-only and stored on the phone; no rules, loader or functions change.
 
 - **Dashboard visual audit fixes: blank tiles filled, worst-first attention list, phone tabs that wrap, quiet zeros, one name per person** · 'shipped 2026-10-13' · 'SW v538' · 'OfficeDash' · 'OdMini' · 'ICON_PATHS' · Audit of the live '/dashboard' page from real screenshots at desktop, tablet and phone ('homestead-command-center/docs/visual-audit-2026-10-09/OFFICE-DASHBOARD-REPORT.md'), Koy: *"do all recs and deploy."* **Blank icon tiles:** the change-order, return-trip and punch lines in Needs attention, Schedule and Quality drew empty coloured squares because 'changeorders', 'returntrips' and 'openitems' existed only as SOP keys, never in 'ICON_PATHS'; three icons added. **Needs attention** sorts worst first (red: overdue dates, failed items, serious punch, and now change orders waiting on the GC 60+ days as money at risk; then orange dates, gold stale, blue to-do, green ready to invoice) and a line whose rows carry an age shows *oldest N d*. **Phone:** under 600 px the tab strip wraps to two rows instead of hiding Quality / People / Automations off the right edge. **Zeros are quiet:** a mini card at 0 or — goes grey instead of an alarm-coloured icon; Inspections turns red with a warning icon when 0 of N passed and names the failed count. **One name per person:** the Activity person filter folds nicknames, first names and initials into the team member's full name (abe / Abe / Abraham Tristan; Ds / Daegan Smith). **Right rail** on Overview shows *Dated, next 7 d* instead of repeating the Active-jobs number that heads the page. **Names for VoiceOver:** mini cards, attention lines, foreman cards and calendar days carry aria-labels (20+ buttons had none). Captions under the mini-card bars say what they are; dim timestamps lifted from 42 % to 55 % opacity at 11.5 px. Guide 'public/sops/dashboard.html' updated (Overview paragraph). **Why it won't lose data:** read-only page; icons, order, colour, labels and CSS only; no Firestore write, loader, rule or function touched.
 
@@ -60476,6 +60478,49 @@ function needUpdateLine(u) {
   if (u.kind === "void") return u.text ? `voided — ${u.text}` : "voided"; // v434
   return u.kind === "waiting" ? `waiting on ${u.text}${u.until ? " · back " + md(u.until) : ""}` : String(u.text || "");
 }
+// ── Working on it (v539) ─────────────────────────────────────────────────────
+// Koy, 2026-10-09: "set status … so when im working on something it shows them
+// im working on it". Open → Working on it → Waiting on… → Done. `startedBy` /
+// `startedAt` live on the doc; a "waiting" update posted AFTER the start wins
+// (on hold, not working). No push: onNeedWrite only reacts to assign / done /
+// send-back / new updates, and starting or stopping writes none of those.
+function needWorking(n) {
+  if (!n || n.status === "done" || !n.startedBy || !n.startedAt) return null;
+  const u = lastNeedUpdate(n);
+  if (u && u.kind === "waiting" && String(u.at || "") > String(n.startedAt)) return null;
+  return { by: String(n.startedBy), at: String(n.startedAt) };
+}
+// The patch funnel's rule: handing a task to someone else, closing it or
+// reopening it ends "Working" (the new person hasn't started; a closed task
+// isn't being worked). A patch that sets startedBy itself is left alone, and
+// a same-person / same-status patch (an Edit re-save) changes nothing.
+function needWorkReset(patch, current) {
+  if (!patch || "startedBy" in patch) return {};
+  const handOff = "assignedTo" in patch && !(current && sameName(needAssignee(current), patch.assignedTo));
+  const statusFlip = "status" in patch && !(current && current.status === patch.status);
+  // Always clear on a real flip, even when this copy shows no start — another
+  // phone may have started it since this copy was taken (two blank fields cost nothing).
+  return handOff || statusFlip ? { startedBy: "", startedAt: "" } : {};
+}
+// Needs board order inside every lane / group (v539): Working → urgent →
+// normal → low → the Tomorrow lane → oldest first.
+function compareNeedsBoard(a, b) {
+  const w = (needWorking(b) ? 1 : 0) - (needWorking(a) ? 1 : 0); if (w) return w;
+  const pr = prioRank(needPriority(a)) - prioRank(needPriority(b)); if (pr) return pr;
+  const lane = (n) => (n && n.dueBucket === "tomorrow" ? 0 : 1);
+  const lr = lane(a) - lane(b); if (lr) return lr;
+  return String((a && a.createdAt) || "").localeCompare(String((b && b.createdAt) || ""));
+}
+// Bunch a sorted list by a label (v539 — the Needs board's Job / Person groups
+// and My Day's Sort: Job / Person). Bunches go A–Z with the blank-label bunch
+// ("No job", "Automatic") last; rows keep their incoming order inside a bunch.
+function bunchRows(rows, labelOf, emptyLabel) {
+  const m = new Map();
+  (rows || []).forEach(r => { const k = String(labelOf(r) || "").trim(); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+  return [...m.entries()]
+    .map(([k, rs]) => ({ key: k || "_none", label: k || emptyLabel, rows: rs }))
+    .sort((a, b) => ((a.key === "_none") - (b.key === "_none")) || a.label.localeCompare(b.label));
+}
 // SENT: a not-done doc I asked for that sits on someone else — the requester's
 // side of the loop. Snoozed docs stay in (that's where "waiting on" shows).
 function sentByMe(n, identity) {
@@ -60580,6 +60625,8 @@ function rowPriority(row, prioMap) {
 // inside a lane; pre-v446 sorted them A–Z, so the next thing due was buried)
 // → title. Pure; extracted by scripts/needs-dryrun.js.
 function compareMyDayRows(a, b) {
+  // v539: a task someone marked Working on it rides above everything.
+  const wk = (b && b.working ? 1 : 0) - (a && a.working ? 1 : 0); if (wk) return wk;
   const pr = prioRank(a && a.prio) - prioRank(b && b.prio); if (pr) return pr;
   const lane = (r) => { const i = MYDAY_ORDER.indexOf(r && r.bucket); return i < 0 ? MYDAY_ORDER.length : i; };
   const lr = lane(a) - lane(b); if (lr) return lr;
@@ -62181,6 +62228,9 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   // v429 Ship 2 UI state: search, view (per-device), batch select, stale footer.
   const [q, setQ] = useState("");
   const [viewPref, setViewPref] = useState(() => { try { return localStorage.getItem("myday.view") || "cat"; } catch { return "cat"; } });
+  // v539 (Koy 2026-10-09: "sorted by job or person"): order of rows INSIDE each fold, per device.
+  const [sortPref, setSortPref] = useState(() => { try { const v = localStorage.getItem("myday.sort"); return v === "job" || v === "person" ? v : "urgency"; } catch { return "urgency"; } });
+  const pickSort = (v) => { setSortPref(v); try { localStorage.setItem("myday.sort", v); } catch {} };
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [showStale, setShowStale] = useState(false);
@@ -62292,7 +62342,17 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       snoozedUntil: isSnoozed(n, todayYmd) ? n.snoozedUntil : "", audience: needUpdateAudience(n, me),
       // v431: photos. Requester can add from Sent too; ✕ = uploader or the head board.
       by: from, photos: needPhotos(n), canPhoto: !!onAddNeedPhotos && (!readOnly || sentByMe(n, identity)), canRmPhotos: !!onRemoveNeedPhoto,
-      onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "" }, n)); },
+      // v539: Working on it — whoever has the row on their list (not read-only,
+      // not a time-off decision) can start / stop it. Everyone else sees the pill.
+      working: needWorking(n), canWork: !readOnly && !isTimeOff,
+      onWork: () => {
+        if (needWorking(n)) { onPatchNeed(n.id, { startedBy: "", startedAt: "" }, n); toast.info("Stopped — back to open"); }
+        else { onPatchNeed(n.id, { startedBy: me, startedAt: new Date().toISOString() }, n); toast.success(needRequester(n) && !sameName(needRequester(n), me) ? `Working on it — ${first(needRequester(n))} can see that` : "Working on it"); }
+      },
+      // v539 Sort: Person — "To <who>" on rows I sent, "From <who>" on rows on me.
+      sortWho: readOnly && sentByMe(n, identity) ? (assignee ? `To ${first(assignee)}` : "Unassigned") : `From ${from ? first(from) : "you"}`,
+      // v539: Undo after Done puts the Working mark back (the funnel clears it on close).
+      onDone: () => { onPatchNeed(n.id, { status: "done", doneAt: new Date().toISOString(), doneBy: me }, n); stage("Done", () => onPatchNeed(n.id, { status: "open", doneAt: "", doneBy: "", startedBy: n.startedBy || "", startedAt: n.startedAt || "" }, n)); },
       onSnooze: (ymd) => { const prev = n.snoozedUntil || ""; onPatchNeed(n.id, { snoozedUntil: ymd }, n); stage("Snoozed", () => onPatchNeed(n.id, { snoozedUntil: prev }, n)); },
       // v434: Edit + Void — the sender (assignedBy/createdBy me) or whoever
       // runs the head board. The assignee alone never gets Void (Done/Snooze).
@@ -62701,7 +62761,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   // — dropping the old `&& !onHead(...)` exclusion is what makes a foreman's ask
   // to the head (and its waiting-on line) show up in Sent where the requester
   // actually looks.
-  const sentRows = liveNeeds.filter(n => sentByMe(n, identity)).map(n => needRow(n, true));
+  // v539: Sent rows also say where each ask stands (Working / Waiting / Not started yet).
+  const sentRows = liveNeeds.filter(n => sentByMe(n, identity)).map(n => ({ ...needRow(n, true), showStatus: true }));
   const sentWaiting = sentRows.filter(r => r.snoozedUntil || (r.latest && r.latest.kind === "waiting")).length;
   // v426: "Done" — task cards I finished or that finished on me in the last 30
   // days (Koy: "a spot where i can see all my completed tasks"). Read-only rows
@@ -62951,6 +63012,23 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                 To: {r.assignee ? (sameName(r.assignee, me) ? "me" : first(r.assignee)) : "unassigned"}
                 <Icon name="chevronDown" size={11} stroke={2.5} />
               </button>
+            )}
+            {/* v539 Working on it: a toggle for whoever has the row; a read-only pill for everyone else. */}
+            {r.canWork && r.onWork && !selectMode && (
+              <button onClick={e => { e.stopPropagation(); r.onWork(); }} aria-pressed={!!r.working}
+                title={r.working ? "Working on it — tap to stop" : "Let everyone see you're on it"}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "2px 9px", minHeight: 24, borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap",
+                  color: r.working ? "#fff" : C.accent, border: `1px solid ${C.accent}`, background: r.working ? C.accent : "transparent" }}>
+                {r.working ? <><span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "#fff" }} />Working · {timeAgo(r.working.at)}</> : <>▶ Working on it</>}
+              </button>
+            )}
+            {!(r.canWork && r.onWork && !selectMode) && r.working && (
+              <span title={`${r.working.by} started this`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 999, whiteSpace: "nowrap", color: C.accent, background: `${C.accent}1F` }}>
+                <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {first(r.working.by)} · {timeAgo(r.working.at)}
+              </span>
+            )}
+            {r.showStatus && !r.working && !r.snoozedUntil && !(r.latest && r.latest.kind === "waiting") && (
+              <span style={{ fontSize: 12.5, color: C.faint }}>Not started yet</span>
             )}
           </div>
           {r.latest && (
@@ -63259,6 +63337,21 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       </div>
     );
   };
+  // v539 Sort switch: Urgency keeps the list as sorted; Job / Person bunch the
+  // rows with a small label above each bunch. `skip` = the mode already shown
+  // by the container (a Job-view line is one job, so Sort: Job adds nothing).
+  const sortLabelOf = (r) => sortPref === "job"
+    ? ((r.jobId && jobById(r.jobId) && jobById(r.jobId).name) || "")
+    : (r.sortWho || (r.by ? `From ${first(r.by)}` : ""));
+  const rowsSorted = (rows, RowIn, skip) => {
+    if (sortPref === "urgency" || sortPref === skip || rows.length < 2) return rows.map(RowIn);
+    return bunchRows(rows, sortLabelOf, sortPref === "job" ? "No job" : "Automatic").map(b => (
+      <Fragment key={"sb_" + b.key}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "4px 2px 0" }}>{b.label} · {b.rows.length}</div>
+        {b.rows.map(RowIn)}
+      </Fragment>
+    ));
+  };
   const Group = (g) => {
     const RowIn = (!g.main && g.key !== "foryou") ? ((r) => Row({ ...r, side: true })) : Row;
     const isOpen = g.key === "foryou" || openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
@@ -63295,7 +63388,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 12, fontWeight: 700, color: C.red, background: "#C6282818", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
                       {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.scheduled > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "#2F5BD9", background: "#2F5BD918", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.scheduled} scheduled</span>}
                     </div>
-                    {open && <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{c.rows.map(RowIn)}{g.key === "mine" && c.key === "qc" && qcTracker}</HeUnfold>}
+                    {open && <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{rowsSorted(c.rows, RowIn)}{g.key === "mine" && c.key === "qc" && qcTracker}</HeUnfold>}
                   </div>
                 );
               })}
@@ -63325,7 +63418,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                       </div>
                       {open && (
                         <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
-                          {rows.map(RowIn)}
+                          {rowsSorted(rows, RowIn, "job")}
                           {isHead && canCreate && openQuickAdd && (
                             <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
                               style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
@@ -63340,7 +63433,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               </div>
             : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 14, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)
           : (g.rows.length
-            ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>{g.rows.map(RowIn)}</HeUnfold>
+            ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>{(g.key === "foryou" || g.key === "new") ? g.rows.map(RowIn) : rowsSorted(g.rows, RowIn)}</HeUnfold>
             : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 14, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>))}
       </div>
     );
@@ -63477,10 +63570,17 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", alignItems: narrow ? "stretch" : "center", gap: 8, marginBottom: 10 }}>
         <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs…"
           style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", fontSize: 14, padding: "9px 12px", minHeight: 38, borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
             {[["cat", "Category"], ["job", "Job"], ...(iRunHead ? [["person", "Person"]] : [])].map(([k, l]) => (
               <button key={k} onClick={() => pickView(k)} aria-pressed={view === k} style={segBtn(view === k)}>{l}</button>
+            ))}
+          </div>
+          {/* v539: Sort — the order of rows inside each fold. */}
+          <div role="group" aria-label="Sort inside each fold" style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "0 6px 0 9px" }}>Sort</span>
+            {[["urgency", "Urgency"], ["job", "Job"], ["person", "Person"]].map(([k, l]) => (
+              <button key={k} onClick={() => pickSort(k)} aria-pressed={sortPref === k} style={segBtn(sortPref === k)}>{l}</button>
             ))}
           </div>
           <button onClick={toggleSelectMode} aria-pressed={selectMode}
@@ -63582,6 +63682,12 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   const narrow = winW < 640;
 
   const [scope, setScope]   = useState("mine");      // mine | all
+  // v539 (Koy 2026-10-09: "sorted by job or person"): Due = the two lanes;
+  // Job / Person = one folded group each. Remembered per device.
+  const [groupBy, setGroupBy] = useState(() => { try { const v = localStorage.getItem("needs.group"); return v === "job" || v === "person" ? v : "due"; } catch { return "due"; } });
+  const pickGroup = (v) => { setGroupBy(v); try { localStorage.setItem("needs.group", v); } catch {} };
+  const [openGroups, setOpenGroups] = useState(() => new Set());   // everything starts folded
+  const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
   const startToday = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const todayYmd = localYmd();
@@ -63589,7 +63695,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
 
   const open    = (needs || []).filter(n => needIsOpen(n, todayYmd));
   const scoped  = scope === "all" ? open : open.filter(mine);
-  const lane    = (b) => scoped.filter(n => (b === "tomorrow" ? n.dueBucket === "tomorrow" : n.dueBucket !== "tomorrow"));
+  const lane    = (b) => scoped.filter(n => (b === "tomorrow" ? n.dueBucket === "tomorrow" : n.dueBucket !== "tomorrow")).sort(compareNeedsBoard);
   const tomorrow = lane("tomorrow");
   const week     = lane("week");
   const doneToday = (needs || []).filter(n =>
@@ -63602,6 +63708,24 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   // Field-surgical when the funnel offers it (two devices editing different
   // fields of one need can't revert each other); falls back to a full save.
   const patch     = (n, p) => onPatchNeed ? onPatchNeed(n.id, p, n) : (onSaveNeed && onSaveNeed({ ...n, ...p }));
+  // v539 Working on it — only the person it's on starts / stops it here.
+  const canWork   = (n) => canAdd && !!myName && sameName(needAssignee(n), myName);
+  const toggleWork = (n) => needWorking(n) ? patch(n, { startedBy: "", startedAt: "" }) : patch(n, { startedBy: myName, startedAt: new Date().toISOString() });
+  const workChip  = (n) => {
+    const w = needWorking(n);
+    if (canWork(n)) return (
+      <button onClick={() => toggleWork(n)} aria-pressed={!!w} title={w ? "Working on it — tap to stop" : "Let everyone see you're on it"}
+        style={{ fontSize: 13, fontWeight: 700, minHeight: 30, padding: "4px 11px", borderRadius: 99, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+          border: `1px solid ${C.accent}`, background: w ? C.accent : C.card, color: w ? "#fff" : C.accent }}>
+        {w ? <><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 99, background: "#fff" }} />Working · {timeAgo(w.at)}</> : <>▶ Working on it</>}
+      </button>
+    );
+    return w ? (
+      <span title={`${w.by} started this`} style={{ fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 99, background: `${C.accent}1F`, color: C.accent, display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+        <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {String(w.by).split(" ")[0]} · {timeAgo(w.at)}
+      </span>
+    ) : null;
+  };
   const markDone  = (n) => patch(n, { status: "done", doneAt: new Date().toISOString(), doneBy: myName });
   // v434: a VOIDED doc reopens with its void flags cleared (a stale voided:true
   // on an open doc would later swallow the requester's "Task done" push), and
@@ -63634,6 +63758,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
     <div data-hekey={"need_"+n.id} key={n.id}
       style={{ background: C.card, border: `1px solid ${C.border}`,
         borderLeft: aged(n) ? `3px solid ${C.red}` : `1px solid ${C.border}`,
+        boxShadow: needWorking(n) ? `inset 3px 0 0 ${C.accent}` : "none",
         borderRadius: 10, padding: "12px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, lineHeight: 1.45, color: C.text, marginBottom: 8, wordBreak: "break-word" }}>{n.text}</div>
@@ -63645,7 +63770,8 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {n.jobName
             ? pill(n.jobName, C.bg, C.dim, "mapPin", n.jobId && onSelectJob ? () => { const j = (jobs || []).find(x => x.id === n.jobId); if (j) onSelectJob(j); } : null)
-            : pill("No job", C.bg, C.muted)}
+            : pill("No job", C.bg, C.faint)}
+          {workChip(n)}
           {aged(n) && pill("Carried over", "#F6EAEA", C.red, "flag")}
           {needPriority(n) === "urgent" && pill("Urgent", C.red, "#fff", "flag")}
           {needPriority(n) === "low" && pill("Low", C.bg, C.muted)}
@@ -63700,6 +63826,35 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
     </div>
   );
 
+  // v539 Job / Person groups. Person = who it's on (All) or who sent it (Mine).
+  const groupLabelOf = groupBy === "job"
+    ? (n => n.jobName || "")
+    : scope === "all"
+      ? (n => needAssignee(n) ? `On ${needAssignee(n)}` : "")
+      : (n => { const r = needRequester(n); return r && !sameName(r, myName) ? `From ${r}` : "From you"; });
+  const groups = groupBy === "due" ? [] : bunchRows(scoped.slice().sort(compareNeedsBoard), groupLabelOf, groupBy === "job" ? "No job" : "Unassigned");
+  const badge = (text, bg, fg) => <span style={{ fontSize: 12.5, fontWeight: 700, borderRadius: 99, padding: "2px 8px", background: bg, color: fg }}>{text}</span>;
+  const FoldGroup = (g) => {
+    const k = groupBy + ":" + scope + ":" + g.key;
+    const open = openGroups.has(k);
+    const w = g.rows.filter(needWorking).length, u = g.rows.filter(n => needPriority(n) === "urgent").length;
+    const wt = g.rows.filter(n => !needWorking(n) && lastNeedUpdate(n) && lastNeedUpdate(n).kind === "waiting").length;
+    return (
+      <div key={k} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+        <div role="button" tabIndex={0} aria-expanded={open} onClick={() => toggleGroup(k)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroup(k); } }}
+          style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "11px 14px", minHeight: 44, cursor: "pointer", userSelect: "none" }}>
+          <span style={{ display: "inline-flex", transition: "transform .2s", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={15} stroke={2.25} /></span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{g.label}</span>
+          <span style={{ fontSize: 13, color: C.dim }}>{g.rows.length}</span>
+          {w > 0 && badge(`${w} working`, `${C.accent}1F`, C.accent)}
+          {u > 0 && badge(`${u} urgent`, C.red, "#fff")}
+          {wt > 0 && badge(`${wt} waiting`, `${C.orange}1F`, C.orange)}
+        </div>
+        {open && <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "0 12px 12px" }}>{g.rows.map(Card)}</div>}
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: narrow ? "12px 12px 110px" : "20px 26px", maxWidth: 1000, margin: "0 auto" }}>
       {/* Header */}
@@ -63709,12 +63864,21 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
           <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Needs</span>
           <HelpDot section="needs" />
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {/* v539: Group — Due (the two lanes) / Job / Person. */}
+          <div role="group" aria-label="Group by" style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "0 6px 0 10px" }}>Group</span>
+            {[["due", "Due"], ["job", "Job"], ["person", "Person"]].map(([k, l]) => (
+              <button key={k} onClick={() => pickGroup(k)} aria-pressed={groupBy === k}
+                style={{ padding: "7px 14px", fontSize: 13, fontFamily: "inherit", border: "none", cursor: "pointer",
+                  background: groupBy === k ? C.accent : "transparent", color: groupBy === k ? "#fff" : C.dim, fontWeight: groupBy === k ? 700 : 500 }}>{l}</button>
+            ))}
+          </div>
           <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
             {["mine", "all"].map(s => (
               <button key={s} onClick={() => setScope(s)}
                 style={{ padding: "7px 16px", fontSize: 13, fontFamily: "inherit", border: "none", cursor: "pointer",
-                  background: scope === s ? C.accent : "transparent", color: scope === s ? "#000" : C.dim,
+                  background: scope === s ? C.accent : "transparent", color: scope === s ? "#fff" : C.dim,
                   fontWeight: scope === s ? 700 : 500 }}>
                 {s === "mine" ? "Mine" : "All"}
               </button>
@@ -63738,11 +63902,17 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
         </div>
       )}
 
-      {/* Lanes */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-        {Lane("Tomorrow", "clock", C.red, tomorrow, scope === "mine" ? "Nothing owed tomorrow — nice." : "No needs due tomorrow.")}
-        {Lane("This week", "calendar", C.dim, week, "Clear.")}
-      </div>
+      {/* Lanes (Due) or folded groups (Job / Person, v539) */}
+      {groupBy === "due" ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+          {Lane("Tomorrow", "clock", C.red, tomorrow, scope === "mine" ? "Nothing owed tomorrow — nice." : "No needs due tomorrow.")}
+          {Lane("This week", "calendar", C.dim, week, "Clear.")}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {groups.length ? groups.map(FoldGroup) : <div style={{ fontSize: 14, color: C.faint, padding: "8px 2px" }}>{scope === "mine" ? "Nothing open on you — nice." : "No open needs."}</div>}
+        </div>
+      )}
 
       {/* Done today */}
       <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
@@ -66796,7 +66966,9 @@ function App() {
   // atomic write, so onNeedWrite sees the flag and its entry together (no push
   // race, no half-applied void).
   const patchNeed = async (id, patch, current, note) => {
-    const p = { ...patch };
+    // v539: a hand-off / close / reopen ends "Working on it" — here in the
+    // funnel so every writer (board To:, My Day pick, batch push, Edit) obeys.
+    const p = { ...patch, ...needWorkReset(patch, current) };
     const nowIso = new Date().toISOString();
     if ("assignedTo" in p) { p.assignedBy = identity?.name || ""; p.assignedAt = nowIso; }
     if (p.dueDate) { const b = dueBucketFromDate(p.dueDate); if (b) p.dueBucket = b; }

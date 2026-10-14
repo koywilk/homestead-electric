@@ -67,6 +67,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "taskPhotoPath","needPhotos","teamPulse",
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
+  "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "loadsListRows","loadsListCsv",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -711,5 +712,46 @@ eq([full.placed, full.skipped, full.loads[0].assign], [0, 1, null], "full panel 
 const leg = H.lutronLegacyModules(panels[0], loads);
 eq(leg.map(m => `${m.modNum}:${m.moduleType}:${m.loads.map(l => l.ch + l.name).join("|")}`), ["1:LQSE-4A5-120-D:1Cans|2Pendants", "2:LQSE-4S8-120-D:", "—:No module yet:Garage"], "legacy modules for print");
 eq(leg[0].loads[0], { id:"1", num:1, name:"Cans", ch:"1", loadType:"Dimming", watts:"900", keypad:"", pulled:false }, "row shape printPanelSchedule reads");
+
+// ── v527 — Working on it + Group / Sort ─────────────────────────────────────
+{
+  const T0 = "2026-10-09T15:00:00.000Z", T1 = "2026-10-09T16:00:00.000Z";
+  eq(H.needWorking({ status:"open", startedBy:"Koy Wilkinson", startedAt:T0 }), { by:"Koy Wilkinson", at:T0 }, "started → working");
+  eq(H.needWorking({ status:"open" }), null, "never started → not working (every pre-v527 doc)");
+  eq(H.needWorking({ status:"open", startedBy:"", startedAt:"" }), null, "stopped (blank fields) → not working");
+  eq(H.needWorking({ status:"done", startedBy:"Koy Wilkinson", startedAt:T0 }), null, "a done task is never working");
+  eq(H.needWorking({ status:"open", startedBy:"Koy Wilkinson", startedAt:T0, updates:[{ kind:"waiting", at:T1, text:"Lutron" }] }), null, "waiting posted AFTER the start wins");
+  eq(!!H.needWorking({ status:"open", startedBy:"Koy Wilkinson", startedAt:T1, updates:[{ kind:"waiting", at:T0, text:"Lutron" }] }), true, "started again after a wait → working");
+  eq(!!H.needWorking({ status:"open", startedBy:"Koy Wilkinson", startedAt:T0, updates:[{ kind:"note", at:T1, text:"on it" }] }), true, "a plain reply doesn't end working");
+
+  const cur = { assignedTo:"Koy Wilkinson", status:"open", startedBy:"Koy Wilkinson", startedAt:T0 };
+  const CLR = { startedBy:"", startedAt:"" };
+  eq(H.needWorkReset({ assignedTo:"Josh Cloward" }, cur), CLR, "hand-off clears working");
+  eq(H.needWorkReset({ assignedTo:"koy wilkinson " }, cur), {}, "same person (Edit re-save) keeps it");
+  eq(H.needWorkReset({ status:"done", doneBy:"Koy Wilkinson" }, cur), CLR, "Done clears it");
+  eq(H.needWorkReset({ status:"open" }, { ...cur, status:"done" }), CLR, "reopen clears it");
+  eq(H.needWorkReset({ status:"open" }, cur), {}, "same status keeps it");
+  eq(H.needWorkReset({ status:"open", startedBy:"Koy Wilkinson", startedAt:T0 }, { ...cur, status:"done" }), {}, "Undo that restores the start is left alone");
+  eq(H.needWorkReset({ priority:"urgent" }, cur), {}, "unrelated patch keeps it");
+  eq(H.needWorkReset({ assignedTo:"Josh Cloward" }, { assignedTo:"Koy Wilkinson", status:"open" }), CLR, "clears even when this copy shows no start (another phone may have started it)");
+  eq(H.needWorkReset({ status:"done" }, undefined), CLR, "no copy → clear on a status write");
+
+  const board = [
+    { id:"low",   priority:"low",    dueBucket:"tomorrow", createdAt:"2026-10-01" },
+    { id:"wk",    dueBucket:"week",  createdAt:"2026-10-08" },
+    { id:"tmNew", dueBucket:"tomorrow", createdAt:"2026-10-08" },
+    { id:"tmOld", dueBucket:"tomorrow", createdAt:"2026-10-02" },
+    { id:"urg",   priority:"urgent", dueBucket:"week", createdAt:"2026-10-07" },
+    { id:"work",  priority:"low", dueBucket:"week", createdAt:"2026-10-09", status:"open", startedBy:"Josh Cloward", startedAt:T0 },
+  ];
+  eq(board.slice().sort(H.compareNeedsBoard).map(n => n.id), ["work", "urg", "tmOld", "tmNew", "wk", "low"],
+    "board order: working → urgent → tomorrow lane → oldest → low last");
+  const rows = [{ id:1, sortWho:"From Josh" }, { id:2, sortWho:"" }, { id:3, sortWho:"From Brady" }, { id:4, sortWho:"From Josh" }];
+  eq(H.bunchRows(rows, r => r.sortWho, "Automatic").map(b => [b.label, b.rows.map(r => r.id)]),
+    [["From Brady", [3]], ["From Josh", [1, 4]], ["Automatic", [2]]], "bunches A–Z, blank label last, rows keep order");
+  eq(H.bunchRows([], r => r.x, "No job"), [], "empty in → empty out");
+  // compareMyDayRows: a working row beats even an urgent one.
+  eq([{ key:"u", bucket:"today", prio:"urgent", title:"a" }, { key:"w", bucket:"later", prio:"low", title:"b", working:{ by:"x", at:T0 } }].sort(H.compareMyDayRows).map(r => r.key), ["w", "u"], "working rides above urgent");
+}
 
 console.log("needs-dryrun ok");
