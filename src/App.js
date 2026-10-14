@@ -6991,6 +6991,10 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 // Usage: <Icon name="bell" size={14}/> or <Icon name="x" size={12} color={C.dim}/>
 // All icons share 24×24 viewBox and currentColor stroke so they scale + inherit color.
 const ICON_PATHS = {
+  // v538: the dashboard's change-order, return-trip and punch tiles rendered blank because these names only existed as SOP keys.
+  changeorders: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9.5 17 .8-2.6 4.6-4.6 1.8 1.8-4.6 4.6z"/></>,
+  returntrips:  <><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></>,
+  openitems:    <><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="m3 6 1.5 1.5L7 5"/><path d="m3 12 1.5 1.5L7 11"/><path d="m3 18 1.5 1.5L7 17"/></>,
   x:            <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
   check:        <path d="M20 6 9 17l-5-5"/>,
   plus:         <><path d="M5 12h14"/><path d="M12 5v14"/></>,
@@ -45699,15 +45703,20 @@ function OdRing({ pct, color, size = 36, label }) {
   );
 }
 // A stat card. With onClick it becomes a button that opens the list behind the number.
-function OdMini({ title, color, icon, value, sub, children, onClick }) {
+function OdMini({ title, color, icon, value, sub, hint, children, onClick }) {
+  // v538: a zero (or nothing logged) is quiet grey, never an alarm-coloured icon with a 0 under it.
+  const zero = value === 0 || value === "0" || value === "—";
+  const c = zero ? "#A39B94" : color;
   const inner = (<>
     <div className="t">{title}<i><Icon name={icon} size={12} stroke={2.4}/></i></div>
     <div className="b"><div className="v">{value}{sub ? <small>{sub}</small> : null}</div>{children}</div>
+    {hint ? <small className="cap">{hint}</small> : null}
     {onClick && <span className="more">See the list<Icon name="chevronRight" size={11}/></span>}
   </>);
+  const name = `${title}: ${value}${sub ? " " + sub : ""}${onClick ? ". See the list" : ""}`;
   return onClick
-    ? <button type="button" className="od-white od-mini od-tap" style={{ "--c": color }} onClick={onClick}>{inner}</button>
-    : <div className="od-white od-mini" style={{ "--c": color }}>{inner}</div>;
+    ? <button type="button" className="od-white od-mini od-tap" style={{ "--c": c }} aria-label={name} onClick={onClick}>{inner}</button>
+    : <div className="od-white od-mini" style={{ "--c": c }} role="group" aria-label={name}>{inner}</div>;
 }
 // Area line chart. vals may hold nulls. Tap or hover a point to select it (sel/onSel);
 // the selected point gets the label pill from tip(v, i).
@@ -46090,7 +46099,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_GOLD })) },
       { k: "invoice", label: "Ready to invoice", color: OD_G, icon: "dollarSign",
         rows: live.filter(j => j.readyToInvoice && !j.invoiceDismissed).map(j => ({ title: j.name, sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo].filter(Boolean).join(" · "), job: j, color: OD_G })) },
-      { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_B, icon: "changeorders",
+      { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_R, icon: "changeorders",
         rows: openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: odDate(x.co.submittedAt || x.co.createdAt || x.co.date) })).filter(x => x.at && now - x.at > 60*OD_DAY)
           .sort((a, b) => a.at - b.at).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, job: x.job, color: OD_B })) },
       { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_GOLD, icon: "checkCircle",
@@ -46116,6 +46125,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
         rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
     ].filter(a => a.rows.length);
+    // v538: worst first — red (overdue, money at risk), then orange (dates), gold (stale), blue (to do), green (money in).
+    const ATTN_SEV = { [OD_R]: 0, [OD_O]: 1, [OD_GOLD]: 2, [OD_B]: 3, [OD_G]: 4 };
+    attn.sort((a, b) => (ATTN_SEV[a.color] ?? 5) - (ATTN_SEV[b.color] ?? 5));
 
     // People
     const accRank = { admin: 0, manager: 1, standard: 2 };
@@ -46194,7 +46206,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     for (let k = 1; k <= days; k++) {
       const list = byDay[k];
       cells.push(<div key={k}>{list
-        ? <button type="button" className={"d m" + (k === d.now.getDate() ? " today" : "")} style={{ background: color(list) }} title={odPlural(list.length, "item")}
+        ? <button type="button" className={"d m" + (k === d.now.getDate() ? " today" : "")} style={{ background: color(list) }} title={odPlural(list.length, "item")} aria-label={`${new Date(y, m, k).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}: ${odPlural(list.length, "dated item")}`}
             onClick={() => openList(new Date(y, m, k).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }), odPlural(list.length, "dated item"), list.map(schedRow))}>{k}</button>
         : <span className={"d" + (k === d.now.getDate() ? " today" : "")}>{k}</span>}</div>);
     }
@@ -46241,11 +46253,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     main = (<>
       <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {odPlural(d.evToday.length, "update")} today across {odPlural(new Set(d.evToday.map(e => e.job.id)).size, "job")}{foreman ? ` · ${foreman}'s jobs only` : ""}</p></div></div>
       <div className="od-minis">
-        <OdMini title="Active jobs" color={OD_O} icon="hardHat" value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
+        <OdMini title="Active jobs" color={OD_O} icon="hardHat" hint="bars: jobs by stage" value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
           onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
           <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_O} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
         </OdMini>
-        <OdMini title="Inspections, 30 days" color={OD_G} icon="checkCircle" value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed` : "none logged"}
+        <OdMini title="Inspections, 30 days" color={!d.insp30.length ? OD_G : insPass === 0 ? OD_R : insPass < d.insp30.length ? OD_GOLD : OD_G} icon={d.insp30.length && insPass === 0 ? "alertTriangle" : "checkCircle"} value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed${d.insp30.length - insPass ? ` · ${d.insp30.length - insPass} failed` : ""}` : "none logged"}
           onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed`, d.insp30.map(a => ({ title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job })))}>
           <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
         </OdMini>
@@ -46253,7 +46265,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           onClick={() => openList("Open change orders", `${d.coWaiting} waiting on the GC`, d.openCOs.slice().sort((a, b) => String(a.co.coStatus).localeCompare(String(b.co.coStatus))).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_GOLD : OD_B, job: x.job })))}>
           <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
         </OdMini>
-        <OdMini title="Open punch items" color={OD_R} icon="openitems" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
+        <OdMini title="Open punch items" color={OD_R} icon="openitems" hint="bars: by foreman, most first" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
           onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}>
           <OdBars vals={Object.values(d.byForeman).map(f => f.open).sort((a, b) => b - a).slice(0, 6)} color={OD_R} hi={0} label="Open punch items by foreman"/>
         </OdMini>
@@ -46275,11 +46287,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <div className="od-ct">Needs attention<small>{d.attn.length ? "tap a line" : ""}</small></div>
           {d.attn.length ? (
             <div className="od-attn">
-              {d.attn.map(a => (
-                <button type="button" key={a.k} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}>
-                  <span className="ic" style={{ "--c": a.color }}><Icon name={a.icon} size={14}/></span><span className="lb">{a.label}</span><span className="n" style={{ color: a.color }}>{a.rows.length}</span><Icon name="chevronRight" size={13}/>
+              {d.attn.map(a => {
+                const ages = a.rows.map(r => parseInt(r.right, 10)).filter(n => !isNaN(n));
+                const oldest = ages.length ? Math.max(...ages) : 0;
+                return (
+                <button type="button" key={a.k} aria-label={`${a.label}: ${odPlural(a.rows.length, "item")}${oldest ? `, oldest ${oldest} days` : ""}. Open the list`} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}>
+                  <span className="ic" style={{ "--c": a.color }}><Icon name={a.icon} size={14}/></span><span className="lb">{a.label}{oldest ? <small className="age"> · oldest {oldest} d</small> : null}</span><span className="n" style={{ color: a.color }}>{a.rows.length}</span><Icon name="chevronRight" size={13}/>
                 </button>
-              ))}
+                );
+              })}
             </div>
           ) : <div className="od-empty">Nothing flagged. Every inspection has a result, every start is confirmed and every job has had an update this week.</div>}
           {d.busy && <div className="od-busy">
@@ -46294,7 +46310,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           const fj = d.active.filter(j => sameName(j.foreman, p.name));
           const op = fj.reduce((n, j) => n + d.info[j.id].punch.length, 0);
           return (
-            <button type="button" className={"od-white od-crew od-tap" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
+            <button type="button" className={"od-white od-crew od-tap" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name} aria-label={`${p.name}: ${odPlural(fj.length, "active job")}, ${op} open punch${p.status === "active" ? `, ${odPlural(p.todayN, "update")} today` : ""}. Open their panel`} onClick={() => openPerson(p.name)}>
               <div><b>{p.name}</b><p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
                 <span className="day">{p.status === "active" ? `${odPlural(p.todayN, "update")} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
               <OdBars vals={p.days7} color={i === 0 && p.todayN ? "#fff" : OD_O} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
@@ -46312,7 +46328,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
     right = (<>
       <Me sub={`${mode === "commercial" ? "Commercial" : "Residential"}${foreman ? " · " + foreman : ""}`}/>
-      <Stats items={[[d.active.length, "Active jobs", () => pickTab("jobs")], [onApp, "On app today", () => pickTab("people")], [d.openNeeds.length, "Open tasks", () => pickTab("people")]]}/>
+      <Stats items={[[next7.length, "Dated, next 7 d", () => pickTab("schedule")], [onApp, "On app today", () => pickTab("people")], [d.openNeeds.length, "Open tasks", () => pickTab("people")]]}/>
       <Cal/>
       <Sec right="see all" onRight={() => pickTab("schedule")}>Next 14 days</Sec>
       <div className="od-list">{next14.slice(0, 7).map(schedItem)}{!next14.length && <div className="od-empty dark">Nothing dated in the next 14 days.</div>}</div>
@@ -46367,8 +46383,18 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const aq = actQ.trim().toLowerCase();
     const base = actDay ? d.events.filter(e => localYmd(e.at) === actDay) : d.inRange;
     const typeCounts = Object.keys(TYPE_NAME).map(k => ({ k, n: base.filter(e => e.type === k).length }));
-    const personNames = [...new Set(base.map(e => e.who).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-    const list = base.filter(e => (actFilter === "all" || e.type === actFilter) && (!actPerson || sameName(e.who, actPerson)) &&
+    // v538: nicknames, first names and initials fold into the team member's full name (abe / Abe → Abraham Tristan, Ds → Daegan Smith).
+    const staffNames = d.people.map(p => p.name);
+    const canon = (who) => {
+      const w = String(who || "").trim(); if (!w) return "";
+      const wl = w.toLowerCase();
+      const full = staffNames.find(n => sameName(w, n)); if (full) return full;
+      if (wl.length >= 3) { const f = staffNames.find(n => n.toLowerCase().split(/\s+/)[0].startsWith(wl)); if (f) return f; }
+      if (wl.length === 2) { const f = staffNames.find(n => n.toLowerCase().split(/\s+/).map(x => x[0]).join("") === wl); if (f) return f; }
+      return w;
+    };
+    const personNames = [...new Set(base.map(e => canon(e.who)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const list = base.filter(e => (actFilter === "all" || e.type === actFilter) && (!actPerson || canon(e.who) === actPerson) &&
       (!aq || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(aq))).slice(0, 200);
     const groups = []; list.forEach(e => { const k = localYmd(e.at); if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, at: e.at, list: [] }); groups[groups.length - 1].list.push(e); });
     const topJobs = d.busyRange.slice(0, 8);
@@ -46765,7 +46791,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   return (
     <div className="odash">
       <style>{`
-        .odash{--pan:rgba(40,33,30,.62);--inset:rgba(0,0,0,.22);--line:rgba(255,255,255,.09);--ink:#F5F1EC;--dim:rgba(245,241,236,.64);--faint:rgba(245,241,236,.42);
+        .odash{--pan:rgba(40,33,30,.62);--inset:rgba(0,0,0,.22);--line:rgba(255,255,255,.09);--ink:#F5F1EC;--dim:rgba(245,241,236,.7);--faint:rgba(245,241,236,.55);
           --card:#fff;--cink:#1E1A17;--cdim:#7C736C;--cline:#ECE7E2;--o:${OD_O};
           color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:dark;
           background:radial-gradient(55% 45% at 12% 6%,rgba(214,150,92,.34),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(170,100,55,.3),transparent 70%),linear-gradient(180deg,#241B16,#120E0C)}
@@ -46886,7 +46912,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-item em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
         .odash .od-item b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-item small{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-item .when{font-size:10.5px;color:var(--faint);white-space:nowrap;flex:none}
+        .odash .od-item .when{font-size:11.5px;color:var(--dim);white-space:nowrap;flex:none}
+        .odash .od-mini .cap{font-size:10.5px;color:var(--cdim);margin-top:-4px}
+        .odash .od-attn .lb .age{font-size:11px;font-weight:600;color:var(--cdim)}
         .odash .od-item .chev{color:var(--faint);flex:none;display:grid}
         .odash .od-filters{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
         .odash .od-filters.left{margin-left:0}
@@ -47039,6 +47067,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           .od-sheet .od-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @keyframes odUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}}
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
+        @media (max-width:600px){.odash .od-tabs{flex-wrap:wrap;border-radius:18px;overflow:visible}.odash .od-tabs button{padding:8px 12px}}
         @media (prefers-reduced-motion:reduce){.odash *,.od-sheet{transition:none!important;animation:none!important}.odash .od-tap:hover{transform:none}}
       `}</style>
       <div className="od-top">
@@ -55405,9 +55434,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-13 · App SW version: v537
+**Last manifest update:** 2026-10-13 · App SW version: v538
 
 ---
+
+- **Dashboard visual audit fixes: blank tiles filled, worst-first attention list, phone tabs that wrap, quiet zeros, one name per person** · 'shipped 2026-10-13' · 'SW v538' · 'OfficeDash' · 'OdMini' · 'ICON_PATHS' · Audit of the live '/dashboard' page from real screenshots at desktop, tablet and phone ('homestead-command-center/docs/visual-audit-2026-10-09/OFFICE-DASHBOARD-REPORT.md'), Koy: *"do all recs and deploy."* **Blank icon tiles:** the change-order, return-trip and punch lines in Needs attention, Schedule and Quality drew empty coloured squares because 'changeorders', 'returntrips' and 'openitems' existed only as SOP keys, never in 'ICON_PATHS'; three icons added. **Needs attention** sorts worst first (red: overdue dates, failed items, serious punch, and now change orders waiting on the GC 60+ days as money at risk; then orange dates, gold stale, blue to-do, green ready to invoice) and a line whose rows carry an age shows *oldest N d*. **Phone:** under 600 px the tab strip wraps to two rows instead of hiding Quality / People / Automations off the right edge. **Zeros are quiet:** a mini card at 0 or — goes grey instead of an alarm-coloured icon; Inspections turns red with a warning icon when 0 of N passed and names the failed count. **One name per person:** the Activity person filter folds nicknames, first names and initials into the team member's full name (abe / Abe / Abraham Tristan; Ds / Daegan Smith). **Right rail** on Overview shows *Dated, next 7 d* instead of repeating the Active-jobs number that heads the page. **Names for VoiceOver:** mini cards, attention lines, foreman cards and calendar days carry aria-labels (20+ buttons had none). Captions under the mini-card bars say what they are; dim timestamps lifted from 42 % to 55 % opacity at 11.5 px. Guide 'public/sops/dashboard.html' updated (Overview paragraph). **Why it won't lose data:** read-only page; icons, order, colour, labels and CSS only; no Firestore write, loader, rule or function touched.
 
 - **Readable in sunlight: bigger type, louder status colours, finger-sized buttons, and a sign-in that remembers you** · 'shipped 2026-10-13' · 'SW v537' · 'UserPicker' · 'src/App.js' · 'public/index.html' · From the 2026-10-09 visual audit of all three apps ('homestead-command-center/docs/visual-audit-2026-10-09/REPORT.md'), Koy: *"do the recs."* The app used 11 px type over a thousand times and 10 px over eight hundred; a 44 px touch height appeared three times. **Type floor:** every inline size below 14 moved up one step (9.5→11, 10→12, 10.5→12.5, 11→12.5, 11.5→13, 12→13, 12.5→13.5, 13→14; 3,140 edits by one regex; 9 px legends, ternary sizes and the Savant print CSS left alone). **Daylight status colours** across the whole file, incl. the 'C' palette and the rough / finish / CO status lists: blue #3B5BA5→#2F5BD9, green #3E7D5A→#1F7A3F, red #B23A3A→#C62828, gold #B0892C→#B7791F, purple #6A5E97→#6A3FB5, orange #B06A2C→#C2410C, complete-green #46916A→#2E8B57 — same roles, more saturation so blue, in-progress and purple stop blurring together outdoors; labels stay on every pill. **Touch:** nav tabs and More are 44 px tall; 'index.html' gives every button a 40 px minimum on a touch screen and sets body weight 500 (DM Sans 400 at small sizes was thin on a bright screen). **Sign-in:** the device remembers the last person who entered a PIN ('he_last_user') and shows *Continue as <name>* as one big tile; a *Type your name* box filters the roster when it is longer than six; rows are 52 px; the longhorn watermark behind the keypad is gone; Back is a 44 px button. **Left alone on purpose:** cutting the field nav to five tabs — the v433 usage counter (Settings → App usage) is there to measure before anything is cut. **Why it won't lose data:** display only — type sizes, colours and heights, plus one new localStorage key read only by the sign-in screen; no Firestore write, loader, rule or save path changed.
 
