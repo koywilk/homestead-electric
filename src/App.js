@@ -13829,6 +13829,11 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
                   draftKey={`po_${jobId||'nojob'}_${phase||'nophase'}_${o.id}`}
                   placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
+                {o.poCustom && (
+                  <div style={{fontSize:13,color:C.text,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",marginTop:6}}>
+                    <b style={{color:C.dim,fontWeight:700}}>Told {o.source || "CED"}:</b> {o.poCustom}
+                  </div>
+                )}
 
                 {/* v523: Send from the app. Shows for CED (email) and store runs
                     (number only) until the card is ordered/picked up; a send
@@ -14110,20 +14115,26 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
           const me = getIdentity();
           if (!me) { setSendSheet(s=>({...s, error:"Sign in again, then send."})); return; }
           if (needCc) { setSendSheet(s=>({...s, error:"Pick which cost center this order is charged to."})); return; }
+          // Custom "Get it" (Koy 2026-10-15): their own words replace will call / deliver.
+          const isCustom = kind === "email" && sendSheet.get === "custom";
+          const customText = String(sendSheet.custom || "").trim();
+          if (isCustom && !customText) { setSendSheet(s=>({...s, error:"Type what CED should do in the Custom box."})); return; }
           setSendSheet(s=>({...s, busy:true, error:""}));
           try {
             const r = await memberCallable("sendMaterialPO", me)({ jobId, phase, orderId:o.id, source:o.source,
-              items:o.items||"", get:sendSheet.get, date:sendSheet.date||"", clientTest:MATERIAL_PO_TEST,
+              items:o.items||"", get:sendSheet.get, date:isCustom ? "" : (sendSheet.date||""), clientTest:MATERIAL_PO_TEST,
+              ...(isCustom ? { custom: customText } : {}),
               ...(isComm ? { ccId: ccPick.id } : {}) });
             const res = (r && r.data) || {};
             if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
             const patch = { po:String(res.poNo), simproPoId:String(res.poNo), poSentVia:"app", poSentMode:res.mode||"",
               poSentBy:me.name||"", poSentAt:poTodayMDY(), poCostCenter:res.costCenter||"",
               poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", "),
+              ...(isCustom ? { poCustom: customText } : {}),
               ...(isComm ? { chargeCcId: ccPick.id, chargeCcName: ccPick.label } : {}) };
             if (res.kind !== "email" || res.emailOk) Object.assign(patch, { ordered:true, orderedBy:me.name||"", orderedAt:poTodayMDY() });
             // Dates fill only if still empty on the LIVE card (someone may have typed one meanwhile).
-            const pickDate = sendSheet.date;
+            const pickDate = isCustom ? "" : sendSheet.date;
             onPatchOrder(o.id, (cur) => ({ ...patch,
               ...(cur.date ? {} : { date: poTodayMDY() }),
               ...(cur.pickupDate || !pickDate ? {} : { pickupDate: pickDate }) }));
@@ -14198,12 +14209,16 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 {kind === "email" && (<>
                   <div style={{display:"grid",gap:6}}>
                     <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</span>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{chip("willcall","Will call")}{chip("deliver","Deliver to job")}</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{chip("willcall","Will call")}{chip("deliver","Deliver to job")}{chip("custom","Custom")}</div>
                   </div>
+                  {sendSheet.get === "custom" ? (
+                    <PoCustomBox value={sendSheet.custom||""} onChange={v=>setSendSheet(s=>({...s, custom:v, error:""}))}/>
+                  ) : (
                   <div style={{display:"grid",gap:6}}>
                     <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>{sendSheet.get==="deliver"?"Deliver on":"Pick up on"}</span>
                     <DateInp value={sendSheet.date} onChange={e=>setSendSheet(s=>({...s, date:e.target.value}))}/>
                   </div>
+                  )}
                   <div style={{display:"grid",gap:6}}>
                     <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Material list · {lines.length} line{lines.length===1?"":"s"}</span>
                     <div style={{fontSize:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",
@@ -14219,10 +14234,12 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 {sendSheet.error && (
                   <div style={{fontSize:14,color:"#C62828",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>{sendSheet.error}</div>
                 )}
-                <button onClick={send} disabled={busy || needCc} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
-                  padding:14,background:(busy || needCc)?C.border:C.accent,color:"#fff",cursor:(busy || needCc)?"default":"pointer"}}>
+                {(() => { const customEmpty = kind === "email" && sendSheet.get === "custom" && !String(sendSheet.custom||"").trim(); const off = busy || needCc || customEmpty; return (
+                <button onClick={send} disabled={off} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
+                  padding:14,background:off?C.border:C.accent,color:"#fff",cursor:off?"default":"pointer"}}>
                   {busy ? "Sending…" : kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? "Resend email" : `Send to ${o.source}`) : "Get a PO number"}
                 </button>
+                ); })()}
                 <button onClick={close} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,
                   borderRadius:12,padding:11,background:C.card,color:C.text,cursor:busy?"default":"pointer"}}>Cancel</button>
               </>)}
@@ -14335,8 +14352,25 @@ function PoQtyInput({ value, onCommit, label }) {
   );
 }
 
+// Custom "Get it" box (Koy 2026-10-15: "i just want a custom box option"):
+// the sender's own words go to CED instead of the will call / deliver line —
+// in the email, on the PO form and in Simpro's Supplier Notes. 500 characters,
+// same cap the server enforces (functions/materialPO/rules.js cleanCustom).
+const PO_CUSTOM_MAX = 500;
+function PoCustomBox({ value, onChange }) {
+  return (
+    <label style={{display:"grid",gap:6}}>
+      <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>What should CED do?</span>
+      <textarea value={value} onChange={e=>onChange(e.target.value.slice(0, PO_CUSTOM_MAX))} rows={3} maxLength={PO_CUSTOM_MAX}
+        placeholder="e.g. Not stock: please order in 4 of the 20A dimmers and call Brady with an ETA"
+        style={{fontFamily:"inherit",fontSize:15,lineHeight:1.4,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.card,color:C.text,resize:"vertical",minHeight:84}}/>
+      <span style={{fontSize:12.5,color:C.faint}}>Goes in the email, on the PO form and in Simpro's supplier notes instead of a pickup date.{value.length > PO_CUSTOM_MAX - 60 ? ` ${PO_CUSTOM_MAX - value.length} characters left.` : ""}</span>
+    </label>
+  );
+}
+
 // Cards for every PO in a sendMaterialOrder answer (shared by the order screen and Finish sending on a card).
-function poOrderCards(res, orderId, date, me) {
+function poOrderCards(res, orderId, date, me, custom = "") {
   const today = poTodayMDY(); const sent = !!(res.ok && res.emailOk);
   return (res.pos || []).map(p => ({
     id: uid(), date: today, po: String(p.poNo), pickupDate: date || "", source: "CED",
@@ -14345,6 +14379,7 @@ function poOrderCards(res, orderId, date, me) {
     simproPoId: String(p.poNo), poSentVia: "app", poSentMode: res.mode || "", poSentBy: (me && me.name) || "", poSentAt: today,
     poCostCenter: p.costCenter || "", poEmailOk: sent, poEmailedTo: (res.emailedTo || []).join(", "),
     poOrderId: orderId, poCcId: p.ccId,
+    ...(custom ? { poCustom: custom } : {}),
   }));
 }
 const PO_ORDER_CALL = { timeout: 300000 }; // one Simpro PO per cost center + PDFs + email can take a while
@@ -14398,10 +14433,14 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     if (!me) { setError("Sign in again, then send."); return; }
     setBusy(true); setError("");
     try {
-      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: draft.date,
+      const isCustom = draft.get === "custom";
+      const customText = String(draft.custom || "").trim();
+      if (isCustom && !customText) { setError("Type what CED should do in the Custom box."); setBusy(false); return; }
+      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: isCustom ? "" : draft.date,
+        ...(isCustom ? { custom: customText } : {}),
         clientTest: MATERIAL_PO_TEST, groups: groups.map(g => ({ ccId: g.ccId, items: g.items, typed: g.typed })) });
       const res = (r && r.data) || {};
-      const cards = poOrderCards(res, draft.orderId, draft.date, me);
+      const cards = poOrderCards(res, draft.orderId, isCustom ? "" : draft.date, me, isCustom ? customText : "");
       if (cards.length && onUpsertCards) onUpsertCards(cards);
       setResult(res);
       if (res.ok && res.emailOk) {
@@ -14552,9 +14591,11 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Supplier</div>
       <div style={{display:"flex",gap:6,marginTop:6}}>{chip(true, "CED", () => {})}</div></div>
     <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</div>
-      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>{chip(draft.get === "willcall", "Will call", () => setDraft(d => ({ ...d, get: "willcall" })))}{chip(draft.get === "deliver", "Deliver to job", () => setDraft(d => ({ ...d, get: "deliver" })))}</div></div>
-    <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",marginBottom:6}}>{draft.get === "deliver" ? "Deliver on" : "Pick up on"}</div>
-      <DateInp value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}/></div>
+      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>{chip(draft.get === "willcall", "Will call", () => setDraft(d => ({ ...d, get: "willcall" })))}{chip(draft.get === "deliver", "Deliver to job", () => setDraft(d => ({ ...d, get: "deliver" })))}{chip(draft.get === "custom", "Custom", () => setDraft(d => ({ ...d, get: "custom" })))}</div></div>
+    {draft.get === "custom"
+      ? <PoCustomBox value={draft.custom || ""} onChange={v => { setError(""); setDraft(d => ({ ...d, custom: v })); }}/>
+      : <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",marginBottom:6}}>{draft.get === "deliver" ? "Deliver on" : "Pick up on"}</div>
+      <DateInp value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}/></div>}
     {groups.length > 1 && box(<><b>{groups.length} cost centers = {groups.length} POs.</b> Each PO is charged to its own cost center. CED gets them together in one email.</>)}
     {groups.map((g, i) => (
       <div key={g.ccId} style={{border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",background:C.card,display:"flex",flexDirection:"column",gap:4}}>
@@ -14574,7 +14615,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     {secondary("Add from another cost center", () => setStep("cc"))}
     {box(<>One email to <b>CED's Homestead inbox</b> with {groups.length === 1 ? "the PO form" : `all ${groups.length} PO forms`}. bids@ and you are copied, so CED's reply reaches both.</>)}
     {error && box(<span style={{color:"#C62828"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
-  </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10));
+  </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10 || (draft.get === "custom" && !String(draft.custom || "").trim())));
 }
 
 // ── Material Tally ────────────────────────────────────────────
@@ -55557,9 +55598,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-14 · App SW version: v540
+**Last manifest update:** 2026-10-15 · App SW version: v541
 
 ---
+
+- **Crew POs: a Custom option — tell CED exactly what you need** · 'shipped 2026-10-15' · 'SW v541' · Koy: *"there is no way to order something that they dont stock. I need to be able to put a custom message in the email. right now there is only for pick up or deleivery … those arent helpful options for that"* — then *"i dont like the special order option. i just want a custom box option"*. "Get it" on both send screens (the Material Tracking card's **Send to CED** sheet and **New order from the bid** → Review) is now **Will call · Deliver to job · Custom**. Custom swaps the date for a **What should CED do?** box (500 characters; Send stays grey until it has text); the sender's words replace the will-call / deliver line everywhere it went before: bold in the email, the PO form's *Delivery & Special Instructions*, and the top of Simpro's Supplier Notes. No due date is set on the Simpro PO for a Custom send. The card keeps the words as 'poCustom' and shows them as **Told CED: …**; a bid order's cards each carry them. Server: 'functions/materialPO/rules.js' 'getMode' / 'cleanCustom' (one line, control characters out, capped at 500) and 'pickupLine({get, date, custom})'; 'sendMaterialPO' and 'sendMaterialOrder' accept 'get:"custom"' + 'custom' and refuse an empty Custom box before any PO exists (Finish sending on an order is never blocked by it). The words are written to the send record before the PO is made, so a retried email carries the first words and never makes a second PO or a second email. Tests: 'scripts/materialpo-test.js' (modes, cleanup, cap, escaping in Supplier Notes and the email) and 'scripts/materialpo-sim.js' +4 scenarios (custom card send end to end with no DueDate, empty box refused from both screens, custom order across two POs, failed email retried keeps the first words); both mutation-checked. Guides: 'rough.html', 'finish.html'. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder'** (backward compatible: older app versions never send 'custom'). **Why it won't lose data:** one additive card field ('poCustom') through the existing order-card save; the function changes only choose the wording of the pickup line; no rules, loaders or other save paths touched.
 
 - **Design pass: one look for the app and the dashboard — readable type, no amber, steel-blue dashboard, tidier tabs, and a build gate that stops the drift** · 'shipped 2026-10-14' · 'SW v540' · Koy: *"do all recomended"* after a live design critique of the CC app, the /dashboard and FieldInk (vault: '05-Decisions/One Look Across All Three Apps.md'). **Bugs that made it look unfinished:** the page's base font was **Times**, so anything without its own font (the More menu) rendered serif — DM Sans is now set on body, buttons and inputs; the longhorn **watermark** was a fixed layer painting *on top of* cards and text — it now sits behind everything; **App Map** said "SW v181 · 0 shipped" (its parser never stripped the quotes) and showed raw '**markdown**' and developer tags — it now shows the real version and counts, clean bold text, plain dates, and a "Latest releases" area for the newest entries. **Phones:** the header is one row under 600px (flag mark, live status, Resi/Commercial; wordmark, job count, weather and the guide hint hidden — the ? stays). The **Notifications blocked** banner is never dismissible: full on My Day and on desktop, a one-line "Notifications blocked — fix" (tap to expand) on other tabs on phones. **Tabs:** COs columns with nothing in them fold to a 44px strip with their count (tap to open); Forecast drops the planner's duplicate Book row and shortens crew names to "Keegan W."; Huddle shows folded sections per person with counts and full job names (**Copy text / Send to my phone are byte-for-byte unchanged**; "Show as text" shows the raw view); Contractors, Today, Needs, Huddle, Settings and App Map share one 'PageHeader' (Settings no longer says SETTINGS twice). The **Working · 14h ago** pill is now a light steel tint instead of solid blue, so URGENT is louder. Opening a job no longer flashes "Saving…" for the background presence ping (the write is unchanged; errors still show). **Colour and type:** the amber family (#B7791F etc.) is replaced by a slate family ('C.slate' / 'slateBg' / 'slateLine' / 'slateInk' / 'steelBg' / 'steelLine') — Awaiting Start Date, On Hold (still dashed), CO Pending Approval, waiting chips, owed rings; due-in-3-days uses 'C.orange'; Scoreboard champion row and Adjust scoring are steel blue; 'C.amber' (referenced but undefined) fixed. 144 low-contrast greys used as text now use 'C.faint'; 236 references to never-defined CSS variables ('--text', '--dim', '--card'…) now resolve (borders were vanishing, one modal was see-through); 334 font sizes raised to the 11px floor; emoji replaced by 'Icon'. **Tap targets:** 'Btn' is 40px with primary/secondary/quiet variants; 18 small inline heights become 40 on touch via '--he-tap'; 79 ✕ close buttons get 32px width (40 on touch); the touch rule covers '[role=button]'. **/dashboard:** re-skinned from warm brown + orange to the app's navy and steel blue (#66A8FF, dark text on it), dark raised cards (the highlighted look is kept), no amber (stale / past-date warnings use rose), punch age 0–7 green · 8–14 slate · 15–30 orange · 30+ red, monotone charts that can't dip below zero, 11.5px text floor, the guide is a ? button, job names wrap to two lines, and on phones foreman / 7-14-30 / search sit behind one **Filters** button (tabs still wrap, as in v538). **Guardrail:** 'scripts/design-lint.js' runs in prebuild and fails the build on text under 11px, emoji in UI, or more hand-typed copies of token colours than the baseline in 'scripts/design-lint-baseline.json' (1177 — it may only go down). Guides updated in 'public/sops/'. **Why it won't lose data:** layout, colour and copy only — no save path, listener, merge, rules, function or data shape changed; the build stamp is on every save as before; the Huddle text that gets copied/sent is unchanged; the presence ping still writes, it just doesn't show the pill.
 - **Tasks: "Working on it" status, and sort / group the Needs tab and My Day by job or person** · 'shipped 2026-10-13' · 'SW v539' · Koy: *"I would like to be able to set status and sort needs or tasks, so when im working on something it shows them im working on it, and i can organize them a bit better. would be helpful if in the needs drop they were sorted by job or person as well"* (signed off a clickable mockup first). **Working on it:** every task / need on your list gets a **▶ Working on it** chip (My Day rows, and your own cards on the Needs board); tap it again to stop. It writes 'startedBy' / 'startedAt' on the doc; everyone else sees a blue **Working · Koy · 12m ago** pill on that task (Needs board Mine + All, the sender's My Day **Sent**, the head's Person view). The order is Open → Working on it → Waiting on… → Done: a "Waiting on…" posted after the start shows Waiting instead ('needWorking'). **No push** — 'onNeedWrite' only fires on assign / done / send-back / new updates, so no function deploy. The patch funnel ('patchNeed' → pure 'needWorkReset') clears the start on a hand-off to another person, Done, Void or Reopen, so every writer (board To:, My Day pick, batch push, Edit) obeys; Undo after Done puts it back. My Day **Sent** rows now say where each ask stands: Working, Waiting on…, or **Not started yet**. Time-off decision rows and auto office rows (QC walks, invoicing, start POs) don't take the chip. **Order:** working rows ride on top everywhere ('compareMyDayRows', new 'compareNeedsBoard': working → urgent → Tomorrow lane → oldest → low). **Needs tab Group switch:** **Due** (the Tomorrow / This week lanes, now sorted) · **Job** · **Person** — Job / Person fold everything into one group per job or person ('bunchRows', A–Z, No job / Unassigned last), every group starts folded with its count and **N working · N urgent · N waiting** badges; under All, Person = who it's on; under Mine, Person = who sent it to you. Remembered per device ('needs.group'). **My Day Sort switch:** **Urgency** (today's order) · **Job** · **Person** orders the rows *inside* every fold, with a small label over each bunch ('myday.sort', per device; Person = "From <who>" on your rows, "To <who>" on Sent). The Mine/All buttons read white on blue now (were black). New chips and switches follow the v537 type floor. vm-tested in 'scripts/needs-dryrun.js' (working / reset / board order / bunching, mutation-checked). Guides updated: 'public/sops/needs.html', 'public/sops/myday.html'. **Why it won't lose data:** two additive string fields inside 'data', written only through the existing field-surgical 'patchNeed' (dotted paths, build stamp kept); the sort and group switches are display-only and stored on the phone; no rules, loader or functions change.

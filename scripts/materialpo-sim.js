@@ -415,6 +415,44 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     assert.strictEqual(simpro.pos.length, 0);
   });
 
+  await t("custom Get it: their words in the email, Supplier Notes and the PO form; no due date", async () => {
+    const { db, simpro, send } = setup("test");
+    const words = "Not stock: order in 4x 20A Lutron dimmers, call Brady with an ETA";
+    const r = await send({ get: "custom", custom: "  " + words + "\n", date: "10/9/2026" });
+    assert(r.emailOk, "emailed"); assert.strictEqual(simpro.pos.length, 1, "one PO");
+    assert(mails[0].html.includes(words), "in the email");
+    assert(!/will call|deliver to the job/i.test(mails[0].html), "no will-call / deliver wording");
+    assert(simpro.pos[0].VendorNotes.includes(words), "in Simpro's Supplier Notes");
+    assert.strictEqual(simpro.pos[0].DueDate, undefined, "custom sets no due date");
+    const log = [...db.store.entries()].find(([k]) => k.startsWith("material_po_log/"));
+    assert(log && log[1].pickup === words && log[1].get === "custom", "kept on the send record (the PO form's instructions come from it)");
+  });
+
+  await t("custom Get it with an empty box is refused before anything happens", async () => {
+    const { simpro, send, order } = setup("test");
+    await rejects(send({ get: "custom", custom: "   " }), "invalid-argument", "empty custom from a card");
+    await rejects(order({ get: "custom", custom: "" }), "invalid-argument", "empty custom from an order");
+    assert.strictEqual(simpro.pos.length, 0, "no PO"); assert.strictEqual(mails.length, 0, "no email");
+  });
+
+  await t("order: custom words ride the one email and every PO's Supplier Notes", async () => {
+    const { simpro, order } = setup("test");
+    const r = await order({ get: "custom", custom: "Hold at the counter until Jeff calls" });
+    assert(r.ok, "ok"); assert.strictEqual(simpro.pos.length, 2, "two POs");
+    for (const po of simpro.pos) { assert(po.VendorNotes.includes("Hold at the counter until Jeff calls"), "each PO"); assert.strictEqual(po.DueDate, undefined, "no due date"); }
+    assert.strictEqual(mails.length, 1, "one email"); assert(mails[0].html.includes("Hold at the counter until Jeff calls"), "in the email");
+  });
+
+  await t("email fails on a custom send: the retry keeps the first words, no second PO", async () => {
+    const { simpro, send } = setup("test");
+    failMail = 1;
+    const r1 = await send({ get: "custom", custom: "First words" });
+    assert.strictEqual(r1.emailOk, false);
+    const r2 = await send({ get: "custom", custom: "Edited words" });
+    assert.strictEqual(r2.emailOk, true); assert.strictEqual(simpro.pos.length, 1, "no second PO");
+    assert(mails[0].html.includes("First words") && !mails[0].html.includes("Edited words"), "the PO already made carries its first words");
+  });
+
   console.log(`materialpo-sim: ${n} scenarios passed (${HAS_PDF ? "with" : "without"} the PDF library)`);
   process.exit(0);
 })().catch((e) => { console.error("materialpo-sim FAILED:", e.message); process.exit(1); });

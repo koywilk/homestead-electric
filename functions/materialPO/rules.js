@@ -104,7 +104,18 @@ function addressLines(a) {
   return [street, city].filter(Boolean);
 }
 
-function pickupLine({ get, date }) {
+// Custom "Get it" (Koy 2026-10-15: "i just want a custom box option"): the
+// sender's own words replace the will-call / deliver line everywhere it shows
+// (email, PO form instructions, Supplier Notes). One line, control characters
+// out, capped so a pasted essay can't swamp the PO.
+const CUSTOM_MAX = 500;
+function cleanCustom(text) {
+  return String(text == null ? "" : text).replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim().slice(0, CUSTOM_MAX);
+}
+function getMode(v) { return v === "deliver" || v === "custom" ? v : "willcall"; }
+
+function pickupLine({ get, date, custom }) {
+  if (get === "custom") return cleanCustom(custom);
   const when = shortDate(date);
   if (get === "deliver") return when ? `Please deliver to the job on ${when}.` : "Please deliver to the job.";
   return when ? `For will call on ${when} please.` : "For will call please.";
@@ -221,5 +232,5 @@ function logKey(jobId, phase, orderId) {
 }
 
 module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
-  pickupLine, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
+  pickupLine, cleanCustom, getMode, CUSTOM_MAX, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
   poList, cleanOrderGroups, orderLine, groupKey };

@@ -183,4 +183,19 @@ t("Gmail MIME: headers, attachments, no header injection", () => {
   assert(/^Subject: Plain$/m.test(plain.replace(/\r/g, "")), "ASCII subject stays plain");
 });
 
+t("custom Get it (Koy 2026-10-15: \"i just want a custom box option\")", () => {
+  eq([R.getMode("custom"), R.getMode("deliver"), R.getMode("willcall"), R.getMode("junk"), R.getMode(undefined)], ["custom", "deliver", "willcall", "willcall", "willcall"], "get modes; junk → will call");
+  eq(R.cleanCustom("  Not stock:\n  order in 4x 20A\tdimmers  "), "Not stock: order in 4x 20A dimmers", "whitespace folded to one line");
+  eq(R.cleanCustom("a\u0000b\u0007c"), "a b c", "control characters out");
+  eq(R.cleanCustom("x".repeat(600)).length, 500, "capped at 500");
+  eq(R.cleanCustom(null), "", "null → empty");
+  eq(R.pickupLine({ get: "custom", date: "2026-10-09", custom: " Hold at the counter for Jeff " }), "Hold at the counter for Jeff", "their words replace the line; the date is ignored");
+  eq(R.pickupLine({ get: "custom", custom: "   " }), "", "empty custom → no line");
+  const h = R.vendorNotesHtml(["10x spanners"], R.pickupLine({ get: "custom", custom: "<i>call</i> Brady & co" }));
+  assert(h.startsWith("<div>&lt;i&gt;call&lt;/i&gt; Brady &amp; co</div><div>&nbsp;</div>"), "escaped, first in Supplier Notes");
+  const e = R.buildPoEmail({ mode: "live", poNo: "7241", jobName: "Miller", supplierName: "CED", lines: ["x"], pickup: R.pickupLine({ get: "custom", custom: "Order in <b>4</b> & call" }), sender: { name: "K" } });
+  assert(e.html.includes('<p style="margin:0 0 12px"><b>Order in &lt;b&gt;4&lt;/b&gt; &amp; call</b></p>'), "bold and escaped in the email");
+  assert(e.text.includes("Order in <b>4</b> & call"), "plain-text email keeps it as typed");
+});
+
 console.log(`materialpo-test: ${n} groups passed`);
