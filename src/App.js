@@ -60957,7 +60957,9 @@ function myDaySections(rows, mode, labelOf) {
   return bunchRows(rows, r => labelOf(r, mode), emptyLabel)
     .map(b => ({ key: mode + ":" + b.key, label: b.label, lane: "", rows: b.rows, openByDefault: false }));
 }
+let _mdMsgsJumpSeen = 0;   // last office-message jump this session already honoured
 // Waiting on others: Not started (oldest first — chase these) → Waiting → Working.
+const CHASE_KEYS = ["none", "wait", "work"];   // Waiting on others sections, in chase order
 function sentChaseState(r) {
   if (r && r.working) return "work";
   if (r && (r.snoozedUntil || (r.latest && r.latest.kind === "waiting"))) return "wait";
@@ -62542,7 +62544,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -63253,12 +63255,58 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   // section's "N new" badge) until acknowledged on this device. Redesign: the
   // separate New-for-you / New-since boxes are gone; the flags ride on the rows.
   mineRows.forEach(r => { if (!r) return; const other = r.fromOther === true || (r.by && !sameName(r.by, me)); r.unseen = !!(other && !ackRef.current[r.key] && r.state !== "with"); });
-  // v446: a push / inbox tap carries the task id (`?view=myday&need=<id>`).
+  // v446 / My Day redesign: a push / inbox tap carries the task id
+  // (`?view=myday&need=<id>`). Find the row on whichever tab holds it, switch to
+  // that tab, open its section, expand the row, scroll to it and flash it for a
+  // few seconds. Waits while `needs` is still empty (cold start); clears the
+  // request once needs are loaded even when the doc isn't found. The places are
+  // built from the UNFILTERED rows so an active search can't hide the target
+  // (the search is cleared on a hit). The scroll / flash timers live in a ref and
+  // are NOT cancelled when onJumped() clears the request (that re-runs this effect
+  // and would cancel the scroll before it fires); they clear on unmount instead.
+  const jumpTimers = useRef({ scroll: null, flash: null });
+  useEffect(() => () => { clearTimeout(jumpTimers.current.scroll); clearTimeout(jumpTimers.current.flash); }, []);
+  const scrollToSoon = (domId) => {
+    clearTimeout(jumpTimers.current.scroll);
+    jumpTimers.current.scroll = setTimeout(() => { const el = document.getElementById(domId); if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" }); }, 80);
+  };
   useEffect(() => {
-    // replaced in Task 6 (deep-link across the new tabs). Until then the request
-    // is still cleared so a push never sticks.
-    if (jumpNeedId && onJumped) onJumped();
+    if (!jumpNeedId) return;
+    const mineAll = sortRows(freshMine.filter(r => !pinnedSet.has(r.key)));
+    const places = [
+      { tab: "todo", sectionKey: "pinned", rows: pinnedRows },
+      ...myDaySections(mineAll, groupPref, groupLabelOf).map(s => ({ tab: "todo", sectionKey: s.key, rows: s.rows })),
+      { tab: "todo", sectionKey: "snoozed", rows: snoozedRows },
+      { tab: "todo", sectionKey: "stale", rows: staleRows },
+      ...CHASE_KEYS.map(st => ({ tab: "sent", sectionKey: "chase:" + st, rows: sentRows.filter(r => sentChaseState(r) === st) })),
+      { tab: "sent", sectionKey: "onhead", rows: headRows },
+      ...(iRunHead ? personGroups.map(g => ({ tab: "team", sectionKey: "team:" + g.key.slice(2), rows: g.rows })) : []),   // personGroups is empty unless the Team tab is showing
+      { tab: "done", sectionKey: "done", rows: mergeDoneRows(doneRows, finishedRows) },
+    ];
+    const hit = myDayJumpTarget(jumpNeedId, places);
+    if (!hit) { if ((needs || []).length && onJumped) onJumped(); return; }
+    if (qOn) { setQ(""); setSearchOpen(false); }
+    if (selectMode) { setSelectMode(false); setSelected(new Set()); }   // a row only expands outside select mode
+    setTab(hit.tab);
+    const openKeys = [hit.sectionKey];
+    if (hit.sectionKey === "onhead") { const hr = headRows.find(r => r.key === hit.rowKey); openKeys.push("onhead:" + ((hr && hr.jobId) || "_none")); }   // the per-job line inside "On <head>"
+    setSecOpen(m => { const n = new Map(m); openKeys.forEach(k => { if (k) n.set(k, true); }); return n; });
+    setMoreKey(null);
+    setExpKey(hit.rowKey);
+    setFlashKey(hit.rowKey);
+    scrollToSoon("mdrow_" + hit.rowKey);
+    clearTimeout(jumpTimers.current.flash);
+    jumpTimers.current.flash = setTimeout(() => setFlashKey(null), 4000);
+    if (onJumped) onJumped();
   }, [jumpNeedId, needs]); // eslint-disable-line
+  // The bell's "See all in My Day" lands here: open To do, unfold the Office messages section, scroll to it.
+  useEffect(() => {
+    if (!msgsJump || !msgsJump.at || msgsJump.at <= _mdMsgsJumpSeen) return;   // App keeps the request: a later remount must not replay it
+    _mdMsgsJumpSeen = msgsJump.at;
+    setTab("todo");
+    setSecOpen(m => { const n = new Map(m); n.set("msgs", true); return n; });
+    scrollToSoon("md_sec_msgs");
+  }, [msgsJump && msgsJump.at]); // eslint-disable-line
   // v421 update panel state (Row is a plain render fn, so state lives here).
   const [updFor, setUpdFor] = useState(null);
   // v482: inline Answer box on a job-question row (writes the answer into the job).
@@ -63735,15 +63783,15 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const rowsCard = (rows, empty) => (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
       {rows && rows.length ? rows.map((r, i) => <div key={r.key} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>{Row(r)}</div>)
-        : <div style={{ padding: 16, textAlign: "center", color: C.faint, fontSize: 14 }}>{empty || "Nothing here."}</div>}
+        : <div style={{ padding: 16, textAlign: "center", color: C.faint, fontSize: 14 }}>{qOn ? "No matches" : (empty || "Nothing here.")}</div>}
     </div>
   );
   const Section = ({ k, label, color, rows, defaultOpen, extra, children, empty }) => {
     const open = isSecOpen(k, defaultOpen);
     return (
-      <div key={k} style={{ marginTop: 14 }}>
+      <div key={k} id={"md_sec_" + k} style={{ marginTop: 14 }}>
         <div role="button" tabIndex={0} aria-expanded={open} onClick={() => toggleSec(k, defaultOpen)}
-          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSec(k, defaultOpen); } }}
+          onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSec(k, defaultOpen); } }}
           style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 40, padding: "4px 2px", cursor: "pointer", userSelect: "none" }}>
           <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.faint }}><Icon name="chevronRight" size={14} stroke={2.6} /></span>
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: color || C.text }}>{label}</span>
@@ -63784,7 +63832,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const sentBody = (
     <>
       <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Everything you asked someone for. Not started first: those are the ones to chase.</div>
-      {sentSorted.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>Nothing you asked for is still open.</div>}
+      {sentSorted.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>{qOn ? "No matches" : "Nothing you asked for is still open."}</div>}
       {CHASE.map(([st, label, color]) => { const rs = sentSorted.filter(r => sentChaseState(r) === st); return rs.length ? Section({ k: "chase:" + st, label, color, rows: rs, defaultOpen: true }) : null; })}
       {!iRunHead && headRowsQ.length > 0 && Section({ k: "onhead", label: `On ${headFirst}`, color: C.text, rows: headRowsQ, defaultOpen: false,
         children: <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>{headByJob.map(({ jobId, job, rows }) =>
@@ -63797,7 +63845,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const teamBody = (
     <>
       <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Who has what open right now. Tap a person to see their list.</div>
-      {teamGroups.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>Nobody has anything open right now.</div>}
+      {teamGroups.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>{qOn ? "No matches" : "Nobody has anything open right now."}</div>}
       {teamGroups.map(g => {
         const nm = g.key.slice(2); const p = pulse.find(x => sameName(x.name, nm));
         return Section({ k: "team:" + nm, label: g.title, color: C.text, rows: g.rows, defaultOpen: false, empty: g.empty,
@@ -70805,7 +70853,7 @@ function App() {
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
-          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}
+          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)} msgsJump={officeJump}
           pinsSlot={announcePins.length > 0 ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}
           messagesSlot={(officeMsgs.length || canBroadcast(identity)) ? <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/> : null}/>
       )}
