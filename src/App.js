@@ -65976,6 +65976,8 @@ function GCPortalDetail({ job, link, P, livePlans, initialSection, onClose }) {
   );
 }
 
+function ProjectSheet(){ return null; }   // TEMP stub — Task 5 replaces it
+
 function App() {
   // Link opens: count this load if it's a share link (no-op for the app itself).
   recordLinkOpen();
@@ -66451,6 +66453,8 @@ function App() {
   const [upcomingOpenId, setUpcomingOpenId] = useState(null);
   const clearUpcomingOpen = useCallback(()=>setUpcomingOpenId(null),[]);
   const [needs, setNeeds] = useState([]);
+  const [projects, setProjects] = useState([]);           // Projects spec 2026-10-15
+  const [openProjectId, setOpenProjectId] = useState(null);
   const [needPhotoBusy, setNeedPhotoBusy] = useState({});   // v431: { needId: in-flight upload count } — hides that row's 📷 while uploading
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
@@ -66878,6 +66882,14 @@ function App() {
       (err) => { console.error("Needs snapshot error:",err); }
     );
 
+    // Projects (spec 2026-10-15) — /projects, same `data` envelope as needs.
+    // Until the rule is deployed this errors with permission-denied: we log and
+    // keep going, and every building simply shows as a normal job row.
+    const unsubProjects = onSnapshot(collection(db,"projects"),
+      (snap) => { setProjects(snap.docs.map(d => d.data().data).filter(Boolean)); },
+      (err) => { console.warn("Projects snapshot error (rule not deployed yet?):", err && err.code); }
+    );
+
 
     // Redline walks — same top-level collection + `data` envelope as quoteWalks.
     const unsubRedlineWalks = onSnapshot(collection(db,"redlineWalks"),
@@ -66941,7 +66953,7 @@ function App() {
       window.removeEventListener('focus', onReturn);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('online', onNetUp);
-      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubMydayPrio(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
+      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubProjects(); unsubRedlineWalks(); unsubMydayFocus(); unsubMydayPrio(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
     }; // cleanup on unmount
 
   },[]);
@@ -67745,6 +67757,52 @@ function App() {
     // "?" for every need before); the loader returns `data` and ignores it.
     try { await setDoc(doc(db,"needs",n.id),stampWrite({data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""})); } catch(e){ console.error("saveNeed error:",e); reportWriteDenied(e, "needs", n.id); }
   };
+  // ── Projects funnels (spec 2026-10-15 §6) ── create = one stamped setDoc;
+  // edits = dotted data.<field> updateDoc (field-surgical, like patchNeed) so two
+  // people editing different fields never last-write-wins each other.
+  const canManageProjects = ["admin","manager"].includes(getAccess(identity));
+  const saveNewProject = async (p) => {
+    setProjects(prev => [...(prev||[]).filter(x => x.id !== p.id), p]);
+    try { await setDoc(doc(db,"projects",p.id), stampWrite({ data: sanitize(p), updated_at: new Date().toISOString(), saved_by: identity?.name || "" })); return true; }
+    catch (e) { console.error("saveNewProject error:", e); if (!(await reportWriteDenied(e, "projects", p.id))) toast.error(`Couldn't save the project: ${e.message || e}`); setProjects(prev => (prev||[]).filter(x => x.id !== p.id)); return false; }
+  };
+  const patchProject = async (id, patch) => {
+    setProjects(prev => (prev||[]).map(p => p.id === id ? { ...p, ...patch } : p));
+    const upd = { updated_at: new Date().toISOString(), saved_by: identity?.name || "" };
+    Object.keys(patch).forEach(k => { upd["data." + k] = patch[k]; });
+    try { await updateDoc(doc(db,"projects",id), stampWrite(upd)); return true; }
+    catch (e) { console.error("patchProject error:", e); if (!(await reportWriteDenied(e, "projects", id))) toast.error(`Couldn't save the project: ${e.message || e}`); return false; }
+  };
+  const createBuilding = async (project, opts) => {
+    if (!canManageProjects) { toast.error("Adding a building is office-only."); return null; }
+    const short = String(opts.name || "").trim();
+    if (!short) { toast.error("Name the building first."); return null; }
+    const siblings = projectBuildings(allJobs, project.id);
+    const ownNo = String(opts.ownSimproNo || "").replace(/^#/, "").trim();
+    if (!opts.shareSimpro && ownNo) { const clash = simproNoConflict(allJobs, ownNo, project.id); if (clash) { toast.error(`Simpro #${ownNo} already belongs to ${clash.name}. Make that job part of the project instead.`); return null; } }
+    if (siblings.some(b => buildingShortName(b, project).toLowerCase() === short.toLowerCase())) { toast.error(`${project.name} already has a ${short}.`); return null; }
+    const src = siblings.find(b => b.projectRole === "site") || siblings[0] || null;
+    const pick = (k) => (src && src[k] !== undefined && src[k] !== "") ? src[k] : (project[k] !== undefined ? project[k] : undefined);
+    const j = blankJob();
+    if (project.division === "commercial") j.division = "commercial"; else delete j.division;
+    j.name = buildingJobName(project.name, short);
+    j.projectGroupId = project.id;
+    j.simproNo = opts.shareSimpro ? String(project.simproNo || "") : ownNo;
+    j.simproFolder = opts.shareSimpro && project.simproNo ? String(opts.simproFolder || short).trim() : "";
+    if (j.simproFolder && !siblings.some(b => isSimproJoinable(b) && String(b.simproNo || "") === String(project.simproNo || ""))) j.simproLead = true;
+    ["address","gc","phone","gcContacts","gcContactLead","gcContactLead2","gcContact2","phone2","gcContactLabels","customer"].forEach(k => { const v = pick(k); if (v !== undefined) j[k] = v; });
+    j.foreman = (src && src.foreman) || "Unassigned";
+    j.hiddenSections = { ...(opts.hiddenSections || {}) };
+    try {
+      await setDoc(doc(db,"jobs",j.id), stampWrite({ data: sanitize(j), updated_at: new Date().toISOString() }));
+      setAllJobs(js => [j, ...js]);
+      toast.success(`${short} added to ${project.name}`);
+      return j;
+    } catch (e) { console.error("createBuilding error:", e); if (!(await reportWriteDenied(e, "jobs", j.id))) toast.error(`Couldn't add the building: ${e.message || e}`); return null; }
+  };
+  const openProject = (id) => { if (selected) flushJob(selected); setSelected(null); setOpenTab(null); setOpenProjectId(id); };
+  const openJobFromProject = (j) => { if (selected) flushJob(selected); setOpenProjectId(null); setOpenTab(null); setSelected(allJobs.find(x => x.id === j.id) || j); };
+  const projectsCtx = { projects, allJobs, identity, canManage: canManageProjects, saveNewProject, patchProject, createBuilding, openProject, openJob: openJobFromProject };
   // Field-surgical update: dotted `data.<field>` paths so two devices editing
   // different fields of one need can't last-write-wins each other. `current`
   // (the caller's copy) lets us fall back to the full funnel if the doc doesn't
@@ -69278,7 +69336,7 @@ function App() {
   }
 
   return (
-
+    <ProjectsCtx.Provider value={projectsCtx}>
     <div style={{minHeight:"100vh",background:"transparent",fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
       {/* Page backdrop + longhorn watermark (design pass 2026-10-14). It used to be a
           z-index 0 layer that painted OVER every non-positioned card. Now it is one
@@ -71536,8 +71594,11 @@ function App() {
       )}
 
       <Analytics />
+      {openProjectId && !selected && (
+        <ProjectSheet projectId={openProjectId} onClose={() => setOpenProjectId(null)} />
+      )}
     </div>
-
+    </ProjectsCtx.Provider>
   );
 
 }
