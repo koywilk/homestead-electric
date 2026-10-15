@@ -26876,7 +26876,7 @@ async function runDriveChain(jobId, by) {
   return { folderId, created: !r1?.data?.alreadyLinked, pull: r2?.data || {} };
 }
 
-function DriveFilesSection({ job, onUpdate }) {
+function DriveFilesSection({ job, onUpdate, onCount = null }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -26892,7 +26892,7 @@ function DriveFilesSection({ job, onUpdate }) {
   const folderId = extractDriveFolderId(job.driveFolderId);
 
   useEffect(() => {
-    if (!folderId) { setDriveFiles([]); setTreeFolderIds([]); return; }
+    if (!folderId) { setDriveFiles([]); setTreeFolderIds([]); if (onCount) onCount(0); return; }
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -26901,6 +26901,7 @@ function DriveFilesSection({ job, onUpdate }) {
       .then(allFiles => {
         if (cancelled) return;
         setDriveFiles(allFiles);
+        if (onCount) onCount(allFiles.length);
         setTreeFolderIds([...fids]);
         // Auto-collapse any Archive folders
         const archiveFolders = [...new Set(allFiles.map(f => f._folder))].filter(isArchiveFolder);
@@ -27040,6 +27041,11 @@ function DriveFilesSection({ job, onUpdate }) {
 
   return (
     <div style={{ marginBottom: 24 }}>
+      {job.projectGroupId && !job.driveFolderId && (
+        <div style={{fontSize:13,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:10,lineHeight:1.4}}>
+          This building's Drive folder gets made inside the project's folder in the next step of Projects. Until then its plans live on the project page and in Project-wide plans.
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>GOOGLE DRIVE PLANS</div>
         {folderId && !editingFolder && (
@@ -27129,15 +27135,17 @@ function DriveFilesSection({ job, onUpdate }) {
               Folders are no longer auto-created while you're still typing. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
             <span style={{ fontSize: 12.5, color: C.dim }}>No folder yet?</span>
-            <button onClick={handleCreateFolder} disabled={creating || !String(job.name || "").trim()}
-              style={{ background: "none", border: `1px solid ${C.green}55`, borderRadius: 7, color: C.green,
-                fontSize: 12.5, fontWeight: 600, padding: "6px 12px", fontFamily: "inherit",
-                cursor: creating ? "wait" : "pointer",
-                opacity: (creating || !String(job.name || "").trim()) ? 0.5 : 1,
-                display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Icon name="folder" size={12} />
-              {creating ? "Creating…" : "Create Drive folder"}
-            </button>
+            {!job.projectGroupId && (
+              <button onClick={handleCreateFolder} disabled={creating || !String(job.name || "").trim()}
+                style={{ background: "none", border: `1px solid ${C.green}55`, borderRadius: 7, color: C.green,
+                  fontSize: 12.5, fontWeight: 600, padding: "6px 12px", fontFamily: "inherit",
+                  cursor: creating ? "wait" : "pointer",
+                  opacity: (creating || !String(job.name || "").trim()) ? 0.5 : 1,
+                  display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <Icon name="folder" size={12} />
+                {creating ? "Creating…" : "Create Drive folder"}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -27565,11 +27573,17 @@ function FileUploadSection({ jobId, files, onChange }) {
 }
 
 function PlansTab({job, onUpdate, onOpenBidItems=null}) {
-
+  // v542 (Projects spec §4): every block starts folded with a count on its header.
+  const [driveCount, setDriveCount] = useState(null);
+  const pctx = useContext(ProjectsCtx);
+  const project = job.projectGroupId && pctx ? (pctx.projects || []).find(p => p.id === job.projectGroupId && !p.archived) : null;
+  const linkKeys = LINK_FIELDS.filter(([k])=>!(LINK_FIELD_SECTION[k] && isSectionHidden(job, LINK_FIELD_SECTION[k])));
+  const linksSet = linkKeys.filter(([k]) => ((job.linkSections?.[k]) || (job[k] ? [{url:job[k]}] : [])).some(l => l && l.url)).length;
+  const uploads = (job.planFiles || []).length;
+  const customs = (job.customLinks || []).length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   return (
-
     <div>
-
       {/* Bid Items used to be a folded section right here; it has its own tab
           now (next one over). This line catches anyone whose thumb still
           comes here first. */}
@@ -27582,25 +27596,26 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
         </button>
       )}
 
-      {/* Google Drive Plans */}
-      <DriveFilesSection job={job} onUpdate={onUpdate} />
+      <FoldSection label="Drive Plans" color={C.blue} keepMounted
+        meta={driveCount == null ? "loading…" : `${plural(driveCount, "file")}${project ? ` · ${buildingShortName(job, project)} folder` : ""}`}>
+        <DriveFilesSection job={job} onUpdate={onUpdate} onCount={setDriveCount} />
+      </FoldSection>
 
-      {/* Divider between Drive and uploads */}
-      <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 16, paddingTop: 16 }}>
-        {/* File Uploads — Firebase Storage */}
-        <FileUploadSection
-          jobId={job.id}
-          files={job.planFiles || []}
-          onChange={v => onUpdate({ planFiles: v })}
-        />
-      </div>
+      {project && (
+        <FoldSection label="Project-wide plans" color={PROJECT_COLOR} badge={{text:"NEW",color:C.blue}}
+          meta={project.wideFolderId ? `every building · ${project.name}` : "made with the project folders"}>
+          <div style={{fontSize:13,color:C.dim,lineHeight:1.4}}>
+            Site, civil and shared sheets for every building in {project.name} live in one Project-wide Drive folder, so a revision gets replaced once and every building sees it. The folder gets made in the next step of Projects.
+          </div>
+        </FoldSection>
+      )}
 
-      <div style={{ fontSize: 12, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 12,
-        paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-        LINKS
-      </div>
+      <FoldSection label="Uploaded Files" color={C.blue} meta={plural(uploads, "file")}>
+        <FileUploadSection jobId={job.id} files={job.planFiles || []} onChange={v => onUpdate({ planFiles: v })} />
+      </FoldSection>
 
-      {LINK_FIELDS.filter(([k])=>!(LINK_FIELD_SECTION[k] && isSectionHidden(job, LINK_FIELD_SECTION[k]))).map(([k,l])=>{
+      <FoldSection label="Links" color={C.blue} meta={`${linksSet} of ${linkKeys.length} set`}>
+      {linkKeys.map(([k,l])=>{
 
         const links = (job.linkSections?.[k]) || (job[k] ? [{id:k+"-0", url:job[k]}] : []);
 
@@ -27699,9 +27714,9 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
         );
 
       })}
+      </FoldSection>
 
-
-      {/* Custom named link sections */}
+      <FoldSection label="Custom Sections" color={C.blue} meta={plural(customs, "section")}>
 
       <div style={{marginTop:8}}>
 
@@ -27809,10 +27824,9 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
       </div>
 
+      </FoldSection>
     </div>
-
   );
-
 }
 
 
