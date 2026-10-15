@@ -50034,6 +50034,16 @@ const BC_TABS = [
   { key: "announcement", label: "Announcements", needLbl: "Not opened yet",    doneLbl: "Read" },
   { key: "discussion",   label: "Discussions",   needLbl: "New replies",       doneLbl: "Caught up" },
 ];
+// What still needs this person, by kind — the OfficeMessages header chips and the
+// My Day "Office messages" fold badges both read this one function so they can't drift.
+function officeMsgCounts(msgs) {
+  const list = Array.isArray(msgs) ? msgs : [];
+  return {
+    gotit: list.filter(m => m && m.kind === "important" && m.needs).length,
+    unread: list.filter(m => m && m.kind === "announcement" && m.needs).length,
+    replies: list.filter(m => m && m.kind === "discussion").reduce((n, m) => n + (m.needs ? Math.max(1, m.newReplies || 0) : 0), 0),
+  };
+}
 function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
   const office = canBroadcast(identity);
   const [open, setOpen] = useState(false);
@@ -50041,11 +50051,8 @@ function OfficeMessages({ msgs = [], identity, onOpen, jump = null }) {
   const [more, setMore] = useState({});
   const [busy, setBusy] = useState("");
   useEffect(() => { if (jump) { setOpen(true); setTab(null); } }, [jump]);
-  const counts = {
-    important: msgs.filter(m => m.kind === "important" && m.needs).length,
-    announcement: msgs.filter(m => m.kind === "announcement" && m.needs).length,
-    discussion: msgs.filter(m => m.kind === "discussion").reduce((n, m) => n + (m.needs ? Math.max(1, m.newReplies) : 0), 0),
-  };
+  const _mc = officeMsgCounts(msgs);
+  const counts = { important: _mc.gotit, announcement: _mc.unread, discussion: _mc.replies };
   if (!msgs.length && !office) return null;
   const cur = tab || (counts.important ? "important" : counts.discussion ? "discussion" : counts.announcement ? "announcement" : "important");
   const ack = async (m) => {
@@ -55564,7 +55571,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ---
 
-- **My Day redesign: four tabs, quiet rows, and a Snoozed fold — one place for everything, nothing shown twice** · 'shipped 2026-10-14' · 'SW v541' · 'MyDay' · 'myDaySections' · 'taskSnoozes' · Koy: *"im still getting lost here in the my day sections. too messy and hard to tell whats going on…"*, *"snoozed items hidden or collapsed somewhere until they un snooze"*, *"make sure this is the most logical and best way to display info."* He approved a clickable mockup first (vault: '08-Specs/My Day Redesign Spec.md'). **What changed:** My Day is now **four tabs — To do · Waiting on others · Team (head or covering only) · Done**. **To do** is one list in time order: **Pinned** (only when something is pinned), then **Overdue · Today** (open) and **This week · Later** (folded), each header with its count and 'N urgent' / 'N working' / 'N new' badges; a **Group** menu (sliders icon) switches the list to **Time / Job / Type / Who sent it** and holds **Select several…**; a search icon opens the search box. Bottom folds, all closed: **Snoozed** (with **Wake now**), **Older reminders**, **QC tracker**, **Office messages**. Every row is quiet — a circle to finish, the title, one grey line (job link · from · kind · due) — and **tapping a row opens it**: Working on it · Reply/Note · Snooze (the choices open inside the row) · Open job · the decision buttons; **More…** holds Mark urgent, Pin, Photo, Move/Push to…, Edit, Void, Nudge. Swipe right = done, swipe left = snooze. The job name is a link. **Waiting on others** is in chase order — Not started → Waiting → Working, all open — and non-head people get a folded **On <head>** (one fold per job, "+ Add for <head>"). **Team** has one folded section per person with overdue and done-this-week badges (the old Team pulse, Person view and "With others" in one place). **Done** is one list, last 30 days, with "you asked" on things others finished for you and Reopen where allowed. Pushes open the right tab and row ('myDayJumpTarget'); the bell's "See all in My Day" opens the Office messages fold. **Removed or moved:** the **View** switch (Category / Job / Person) and the **Sort** switch (v539) → replaced by the Group menu; the **job-chip strip** → gone (Group: Job); **Focus today** → **Pinned**; **New for you** and **New since** → a blue dot on the row plus 'N new' badges; **Sent** and **Sent · finished** → **Waiting on others** and **Done**; **Team pulse**, **Person view** and **With others** → **Team**; the hidden-stale strip → **Older reminders**; the office message history → the **Office messages** fold; the two-column desktop layout and the right column of buttons → one centred column. **Snooze now really hides:** a snoozed automatic reminder used to only move its due date, so it kept showing. Snooze now also writes 'job.taskSnoozes[taskId] = ymd' in the same 'onUpdateJob' patch as 'taskDueDates', and the row sits in **Snoozed** until that day; **Wake now** sets the marker back to empty and the due date to today in one patch; Undo restores both maps. Snoozed task docs ('snoozedUntil') now show in Snoozed instead of vanishing. A snooze from an old build (due date only, no marker) never hides a row. **Tests:** new pure helpers 'myDaySections', 'isAutoSnoozed', 'autoSnoozePatch', 'autoWakePatch', 'sentChaseOrder', 'mergeDoneRows', 'myDayGroupPref' (reads the old 'myday.view' / 'myday.sort' once and maps them), 'myDayJumpTarget', vm-tested in 'scripts/needs-dryrun.js' (mutation-checked); the built app was render-checked headless at phone and desktop width. **Guide updated:** 'public/sops/myday.html' rewritten for the new layout (and the Sent mention in 'public/sops/needs.html'). **Why it won't lose data:** 'taskSnoozes' is an additive optional map written together with 'taskDueDates' through the existing 'onUpdateJob' save path (version-lock stamp kept; 'normalizeJob' keeps unknown fields); every other change is presentation — row builders, routing, hats, delegation, stale rules, the batch engine, pushes, save paths and the Needs tab are untouched.
+- **My Day redesign: four tabs, quiet rows, and a Snoozed fold — one place for everything, nothing shown twice** · 'shipped 2026-10-14' · 'SW v541' · 'MyDay' · 'myDaySections' · 'taskSnoozes' · Koy: *"im still getting lost here in the my day sections. too messy and hard to tell whats going on…"*, *"snoozed items hidden or collapsed somewhere until they un snooze"*, *"make sure this is the most logical and best way to display info."* He approved a clickable mockup first (vault: '08-Specs/My Day Redesign Spec.md'). **What changed:** My Day is now **four tabs — To do · Waiting on others · Team (head or covering only) · Done**. **To do** is one list in time order: **Pinned** (only when something is pinned), then **Overdue · Today** (open) and **This week · Later** (folded), each header with its count and 'N urgent' / 'N working' / 'N new' badges; a **Group** menu (sliders icon) switches the list to **Time / Job / Type / Who sent it** and holds **Select several…**; a search icon opens the search box. Bottom folds, all closed: **Snoozed** (with **Wake now**), **Older reminders**, **QC tracker**, **Office messages**. Every row is quiet — a circle to finish, the title, one grey line (job link · from · kind · due) — and **tapping a row opens it**: Working on it · Reply/Note · Snooze (the choices open inside the row) · Open job · the decision buttons; **More…** holds Mark urgent, Pin, Photo, Move/Push to…, Edit, Void, Nudge. Swipe right = done, swipe left = snooze. The job name is a link. **Waiting on others** is in chase order — Not started → Waiting → Working, all open — and non-head people get a folded **On <head>** (one fold per job, "+ Add for <head>"). **Team** has one folded section per person with overdue and done-this-week badges (the old Team pulse, Person view and "With others" in one place). **Done** is one list, last 30 days, with "you asked" on things others finished for you and Reopen where allowed. Pushes open the right tab and row ('myDayJumpTarget'); the bell's "See all in My Day" opens the Office messages fold. Each **Waiting on others** row names who it's on (**To Gage** / **Unassigned**, and the letter circle reads that name aloud) and a **Not started** row has **Nudge** one tap away in the open row; the **Office messages** fold header shows unread / new replies / need Got it (one helper, 'officeMsgCounts', feeds both that header and the office card); while searching only sections with a match show and the tab numbers count matches; a "done by X · verify" reminder is never hidden by a snooze. **Removed or moved:** the **View** switch (Category / Job / Person) and the **Sort** switch (v539) → replaced by the Group menu; the **job-chip strip** → gone (Group: Job); **Focus today** → **Pinned**; **New for you** and **New since** → a blue dot on the row plus 'N new' badges; **Sent** and **Sent · finished** → **Waiting on others** and **Done**; **Team pulse**, **Person view** and **With others** → **Team**; the hidden-stale strip → **Older reminders**; the office message history → the **Office messages** fold; the two-column desktop layout and the right column of buttons → one centred column. **Snooze now really hides:** a snoozed automatic reminder used to only move its due date, so it kept showing. Snooze now also writes 'job.taskSnoozes[taskId] = ymd' in the same 'onUpdateJob' patch as 'taskDueDates', and the row sits in **Snoozed** until that day; **Wake now** sets the marker back to empty and the due date to today in one patch; Undo restores both maps. Snoozed task docs ('snoozedUntil') now show in Snoozed instead of vanishing. A snooze from an old build (due date only, no marker) never hides a row. **Tests:** new pure helpers 'myDaySections', 'isAutoSnoozed', 'autoSnoozePatch', 'autoWakePatch', 'sentChaseOrder', 'mergeDoneRows', 'myDayGroupPref' (reads the old 'myday.view' / 'myday.sort' once and maps them), 'myDayJumpTarget', vm-tested in 'scripts/needs-dryrun.js' (mutation-checked); the built app was render-checked headless at phone and desktop width. **Guide updated:** 'public/sops/myday.html' rewritten for the new layout (and the Sent mention in 'public/sops/needs.html'). **Why it won't lose data:** 'taskSnoozes' is an additive optional map written together with 'taskDueDates' through the existing 'onUpdateJob' save path (version-lock stamp kept; 'normalizeJob' keeps unknown fields); every other change is presentation — row builders, routing, hats, delegation, stale rules, the batch engine, pushes, save paths and the Needs tab are untouched.
 - **Design pass: one look for the app and the dashboard — readable type, no amber, steel-blue dashboard, tidier tabs, and a build gate that stops the drift** · 'shipped 2026-10-14' · 'SW v540' · Koy: *"do all recomended"* after a live design critique of the CC app, the /dashboard and FieldInk (vault: '05-Decisions/One Look Across All Three Apps.md'). **Bugs that made it look unfinished:** the page's base font was **Times**, so anything without its own font (the More menu) rendered serif — DM Sans is now set on body, buttons and inputs; the longhorn **watermark** was a fixed layer painting *on top of* cards and text — it now sits behind everything; **App Map** said "SW v181 · 0 shipped" (its parser never stripped the quotes) and showed raw '**markdown**' and developer tags — it now shows the real version and counts, clean bold text, plain dates, and a "Latest releases" area for the newest entries. **Phones:** the header is one row under 600px (flag mark, live status, Resi/Commercial; wordmark, job count, weather and the guide hint hidden — the ? stays). The **Notifications blocked** banner is never dismissible: full on My Day and on desktop, a one-line "Notifications blocked — fix" (tap to expand) on other tabs on phones. **Tabs:** COs columns with nothing in them fold to a 44px strip with their count (tap to open); Forecast drops the planner's duplicate Book row and shortens crew names to "Keegan W."; Huddle shows folded sections per person with counts and full job names (**Copy text / Send to my phone are byte-for-byte unchanged**; "Show as text" shows the raw view); Contractors, Today, Needs, Huddle, Settings and App Map share one 'PageHeader' (Settings no longer says SETTINGS twice). The **Working · 14h ago** pill is now a light steel tint instead of solid blue, so URGENT is louder. Opening a job no longer flashes "Saving…" for the background presence ping (the write is unchanged; errors still show). **Colour and type:** the amber family (#B7791F etc.) is replaced by a slate family ('C.slate' / 'slateBg' / 'slateLine' / 'slateInk' / 'steelBg' / 'steelLine') — Awaiting Start Date, On Hold (still dashed), CO Pending Approval, waiting chips, owed rings; due-in-3-days uses 'C.orange'; Scoreboard champion row and Adjust scoring are steel blue; 'C.amber' (referenced but undefined) fixed. 144 low-contrast greys used as text now use 'C.faint'; 236 references to never-defined CSS variables ('--text', '--dim', '--card'…) now resolve (borders were vanishing, one modal was see-through); 334 font sizes raised to the 11px floor; emoji replaced by 'Icon'. **Tap targets:** 'Btn' is 40px with primary/secondary/quiet variants; 18 small inline heights become 40 on touch via '--he-tap'; 79 ✕ close buttons get 32px width (40 on touch); the touch rule covers '[role=button]'. **/dashboard:** re-skinned from warm brown + orange to the app's navy and steel blue (#66A8FF, dark text on it), dark raised cards (the highlighted look is kept), no amber (stale / past-date warnings use rose), punch age 0–7 green · 8–14 slate · 15–30 orange · 30+ red, monotone charts that can't dip below zero, 11.5px text floor, the guide is a ? button, job names wrap to two lines, and on phones foreman / 7-14-30 / search sit behind one **Filters** button (tabs still wrap, as in v538). **Guardrail:** 'scripts/design-lint.js' runs in prebuild and fails the build on text under 11px, emoji in UI, or more hand-typed copies of token colours than the baseline in 'scripts/design-lint-baseline.json' (1177 — it may only go down). Guides updated in 'public/sops/'. **Why it won't lose data:** layout, colour and copy only — no save path, listener, merge, rules, function or data shape changed; the build stamp is on every save as before; the Huddle text that gets copied/sent is unchanged; the presence ping still writes, it just doesn't show the pill.
 - **Tasks: "Working on it" status, and sort / group the Needs tab and My Day by job or person** · 'shipped 2026-10-13' · 'SW v539' · Koy: *"I would like to be able to set status and sort needs or tasks, so when im working on something it shows them im working on it, and i can organize them a bit better. would be helpful if in the needs drop they were sorted by job or person as well"* (signed off a clickable mockup first). **Working on it:** every task / need on your list gets a **▶ Working on it** chip (My Day rows, and your own cards on the Needs board); tap it again to stop. It writes 'startedBy' / 'startedAt' on the doc; everyone else sees a blue **Working · Koy · 12m ago** pill on that task (Needs board Mine + All, the sender's My Day **Sent**, the head's Person view). The order is Open → Working on it → Waiting on… → Done: a "Waiting on…" posted after the start shows Waiting instead ('needWorking'). **No push** — 'onNeedWrite' only fires on assign / done / send-back / new updates, so no function deploy. The patch funnel ('patchNeed' → pure 'needWorkReset') clears the start on a hand-off to another person, Done, Void or Reopen, so every writer (board To:, My Day pick, batch push, Edit) obeys; Undo after Done puts it back. My Day **Sent** rows now say where each ask stands: Working, Waiting on…, or **Not started yet**. Time-off decision rows and auto office rows (QC walks, invoicing, start POs) don't take the chip. **Order:** working rows ride on top everywhere ('compareMyDayRows', new 'compareNeedsBoard': working → urgent → Tomorrow lane → oldest → low). **Needs tab Group switch:** **Due** (the Tomorrow / This week lanes, now sorted) · **Job** · **Person** — Job / Person fold everything into one group per job or person ('bunchRows', A–Z, No job / Unassigned last), every group starts folded with its count and **N working · N urgent · N waiting** badges; under All, Person = who it's on; under Mine, Person = who sent it to you. Remembered per device ('needs.group'). **My Day Sort switch:** **Urgency** (today's order) · **Job** · **Person** orders the rows *inside* every fold, with a small label over each bunch ('myday.sort', per device; Person = "From <who>" on your rows, "To <who>" on Sent). The Mine/All buttons read white on blue now (were black). New chips and switches follow the v537 type floor. vm-tested in 'scripts/needs-dryrun.js' (working / reset / board order / bunching, mutation-checked). Guides updated: 'public/sops/needs.html', 'public/sops/myday.html'. **Why it won't lose data:** two additive string fields inside 'data', written only through the existing field-surgical 'patchNeed' (dotted paths, build stamp kept); the sort and group switches are display-only and stored on the phone; no rules, loader or functions change.
 
@@ -62545,7 +62552,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null }) {
+function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -62618,9 +62625,11 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const [groupPref, setGroupPref] = useState(() => { try { return myDayGroupPref(localStorage.getItem("myday.group"), localStorage.getItem("myday.view"), localStorage.getItem("myday.sort")); } catch { return "time"; } });
   const pickGroup = (v) => { setGroupPref(v); setGmenu(false); try { localStorage.setItem("myday.group", v); } catch {} };
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef(null);
   const [secOpen, setSecOpen] = useState(() => new Map());   // explicit toggles; default comes from the section
   const isSecOpen = (k, def) => (qOn ? true : secOpen.has(k) ? secOpen.get(k) : !!def);
-  const toggleSec = (k, def) => { if (qOn) return; setSecOpen(m => { const n = new Map(m); n.set(k, !(n.has(k) ? n.get(k) : !!def)); return n; }); };   // searching forces every section open; leave the stored state alone
+  // Searching opens every section that has a match (the rest hide — see Section); the stored state is left alone.
+  const toggleSec = (k, def) => { if (qOn) return; setSecOpen(m => { const n = new Map(m); n.set(k, !(n.has(k) ? n.get(k) : !!def)); return n; }); };
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   // Batch runs ONE row per render (see the batch effect below): each step reads
@@ -63054,10 +63063,11 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const stampPrio = (rows) => rows.forEach(r => { if (r.kind !== "need") r.prio = rowPriority(r, prioMap); });
   stampPrio(mineRows); stampPrio(othersRows);
   // Redesign: snoozed rows leave To do for the folded Snoozed spot until their day.
+  // A "done by X · verify" row is never hidden — it needs the head's check now.
   const snoozedRows = [];
   for (let i = mineRows.length - 1; i >= 0; i--) {
     const r = mineRows[i];
-    if (r && r.kind === "auto" && isAutoSnoozed(r.snoozeYmd, todayYmd)) { snoozedRows.unshift({ ...r, snoozeBack: r.snoozeYmd }); mineRows.splice(i, 1); }
+    if (r && r.kind === "auto" && r.state !== "verify" && isAutoSnoozed(r.snoozeYmd, todayYmd)) { snoozedRows.unshift({ ...r, snoozeBack: r.snoozeYmd }); mineRows.splice(i, 1); }
   }
   snoozedMineNeeds(needs, [identity, ...coverees.map(name => ({ name }))], todayYmd).filter(n => !absorbedDocIds.has(n.id)).forEach(n => {
     snoozedRows.push({ ...needRow(n, false), snoozeBack: n.snoozedUntil, onWake: () => onPatchNeed(n.id, { snoozedUntil: "" }, n) });
@@ -63110,8 +63120,8 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   };
   const rePin = () => onSaveFocus({ date: todayYmd, keys: [...pinnedRows.map(r => r.key), ...carryKeys].slice(0, 3), prevDate: "", prevKeys: [] });
   const fq = (rows) => qOn ? rows.filter(r => rowMatches(r, q)) : rows;
-  // Redesign: "person" = the head's Team tab; job / cat only feed what still reads `view`.
-  const view = curTab === "team" ? "person" : (groupPref === "job" ? "job" : "cat");
+  // Redesign: the person groups are only built while the head's Team tab is showing (or a search runs).
+  const teamOn = curTab === "team" || (qOn && iRunHead);   // searching: Team's chip shows its match count
   const sortRows =(rs) => rs.slice().sort(compareMyDayRows);   // v446: urgency → lane → due date → title
   // To do Group: Job / Type / Who sent it — the label each row bunches under (myDaySections).
   const groupLabelOf = (r, mode) => mode === "job" ? ((r.jobId && jobById(r.jobId) && jobById(r.jobId).name) || "")
@@ -63193,7 +63203,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   // v429 Person view (head only): one group per owner — me = my Mine rows;
   // others = With-others rows (by their owners) + open task docs on someone
   // else, read-only. Every person group starts folded.
-  const personGroups = view !== "person" ? [] : (() => {
+  const personGroups = !teamOn ? [] : (() => {
     const m = new Map();
     const add = (name, r) => { const nm = String(name || "").trim(); if (!nm) return; const k = nm.toLowerCase(); if (!m.has(k)) m.set(k, { name: nm, rows: [] }); m.get(k).rows.push(r); };
     const meKey = String(me).trim().toLowerCase();
@@ -63361,9 +63371,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
     toast.success(next ? "Marked urgent" : "Urgent cleared");
   };
   const canMarkUrgent = (r) => !r.readOnly && (r.sel || r.canReassign) && (r.kind === "need" ? !!(r.need && onPatchNeed) : !!onSetPrio);
-  const Row = (r, opts) => {
-    // My Day redesign: Row is also handed straight to .map(), so `opts` can be the index.
-    const lead = (opts && typeof opts === "object" && opts.readOnlyLead) || "avatar";
+  const Row = (r) => {
     // v429 select mode: a row never opens its job or a panel — tapping a
     // selectable row toggles it; per-row buttons / panels are hidden.
     const caps = batchCaps(r);
@@ -63389,8 +63397,9 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
               style={{ position: "relative", width: 28, height: 28, borderRadius: 99, border: `2px solid ${C.muted}`, background: C.card, color: C.green, flexShrink: 0, marginTop: 1, padding: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <span aria-hidden="true" style={{ position: "absolute", inset: -8 }} />
             </button>
-          : (r.onWake || lead === "none") ? null
-          : <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: 99, flexShrink: 0, background: C.surface, border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{first(r.assignee || r.by || r.who || "").slice(0, 1)}</span>)}
+          : r.onWake ? null
+          : (() => { const who = r.assignee || r.by || r.who || ""; const nm = r.showStatus ? (who ? `To ${who}` : "Unassigned") : who;
+              return <span {...(nm ? { role: "img", "aria-label": nm, title: nm } : { "aria-hidden": "true" })} style={{ width: 28, height: 28, borderRadius: 99, flexShrink: 0, background: C.surface, border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{first(who).slice(0, 1)}</span>; })())}
         <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } toggleExp(r.key); }}
           onKeyDown={e => { if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return; e.preventDefault(); if (selectMode) { if (canPick) toggleSel(r.key); return; } toggleExp(r.key); }}
           role="button" tabIndex={0} aria-expanded={expKey === r.key}
@@ -63406,6 +63415,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
               return <>
                 {jn ? <span role="link" tabIndex={0} onClick={openJob} onKeyDown={e => { if (e.key === "Enter") openJob(e); }} style={{ textDecoration: "underline", textDecorationColor: C.muted, textUnderlineOffset: 2, cursor: "pointer" }}>{jn}</span> : null}
                 {rest.length > 0 && <span>{(jn ? "· " : "") + rest.join(" · ")}</span>}
+                {r.showStatus && <span style={{ fontWeight: 700, color: C.text }}>{((jn || rest.length) ? "· " : "") + (r.assignee ? `To ${first(r.assignee)}` : "Unassigned")}</span>}
               </>; })()}
             <span style={{ fontSize: 12, fontWeight: 700, color: C.faint }}>{r.tag === "Auto" ? (MYDAY_CAT_LABELS[myDayCategoryOf(r)] || "Auto") : r.tag}</span>
             {myDayDueWord(r, todayYmd) && <span style={{ fontSize: 12, fontWeight: 700, color: r.bucket === "overdue" ? C.red : C.dim }}>{myDayDueWord(r, todayYmd)}</span>}
@@ -63424,7 +63434,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
             <div onClick={e => { if (selectMode) return; e.stopPropagation(); if (expKey !== r.key) { toggleExp(r.key); setHistFor(r.key); return; } setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
               style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 13, marginTop: 4, cursor: "pointer" }}>
               <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
-              <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : r.latest.kind === "void" ? C.red : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
+              <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.slateInk : r.latest.kind === "void" ? C.red : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
               <span style={{ color: C.faint }}>{timeAgo(r.latest.at)}{r.latest.editedAt ? " (edited)" : ""}</span>
               {/* v444 (Koy: "its hard to tell that you can click on the '2 updates'"):
                   a real outlined button, not grey text — tap to open/close the thread. */}
@@ -63475,19 +63485,24 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
               </div>
             );
           })()}
-          {!r.latest && r.snoozedUntil && <div style={{ fontSize: 13, color: C.orange, fontWeight: 600, marginTop: 4 }}>on hold · back {mdOf(r.snoozedUntil)}</div>}
+          {!r.latest && r.snoozedUntil && !r.snoozeBack && <div style={{ fontSize: 13, color: C.slateInk, fontWeight: 600, marginTop: 4 }}>on hold · back {mdOf(r.snoozedUntil)}</div>}
           {exp && (() => {
             const btn = (on) => ({ fontFamily: "inherit", fontSize: 14, fontWeight: 600, minHeight: 44, padding: "0 13px", borderRadius: 10, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
               border: `1px solid ${on ? C.blue : C.border}`, background: on ? C.blue : C.surface, color: on ? "#fff" : C.text });
             // Decision actions (Answer/Reply, Approve/Deny, Take back, Send back, → foreman…) stay in
             // the main row; only Edit / Void go on the More shelf. "Pick person ▾" / "Re-push ▾" are
             // the same control as Push to… so they are dropped here.
-            const acts = (r.actions || []).filter(a => !(r.onTogglePick && a.onClick === r.onTogglePick));
+            const openJobBtn = !!(r.jobId && onOpenJob);
+            // The fixed Open job button below covers an "Open job" action (redline CO fallback).
+            const acts = (r.actions || []).filter(a => !(r.onTogglePick && a.onClick === r.onTogglePick) && !(openJobBtn && a.label === "Open job"));
             const isShelf = (a) => a.label === "Edit" || a.label === "Void";
             const main = acts.filter(a => !isShelf(a));
             const shelf = acts.filter(isShelf);
             const more = moreKey === r.key;
-            const hasMore = !!(canMarkUrgent(r) || (r.sel && onSaveFocus) || r.canPhoto || (r.onTogglePick && (r.canReassign || r.roster)) || shelf.length || r.nudge);
+            // Waiting on others → Not started: Nudge is one tap (main row), not under More….
+            const nudgeMain = !!(r.nudge && r.showStatus && sentChaseState(r) === "none");
+            const nudgeBtn = r.nudge ? <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} /> : null;
+            const hasMore = !!(canMarkUrgent(r) || (r.sel && onSaveFocus) || r.canPhoto || (r.onTogglePick && (r.canReassign || r.roster)) || shelf.length || (r.nudge && !nudgeMain));
             return (
               <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10, cursor: "default" }}>
                 {r.onWake && <button style={btn(true)} onClick={() => { r.onWake(); toast.success("Back on your list"); }}>Wake now</button>}
@@ -63495,7 +63510,8 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
                 {main.map(a => <button key={a.label} title={a.title} style={btn(a.tone === "primary")} onClick={() => a.onClick()}>{a.label}</button>)}
                 {r.canUpdate && <button style={btn(updFor === r.key)} title={r.audience ? `Reply to ${first(r.audience)}` : "Add a note"} onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); closePanels(); setUpdFor(r.key); } }}>{r.need ? "Reply" : "Note"}</button>}
                 {r.canSnooze && !r.onWake && <button style={btn(snoozeFor === r.key)} onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)}>Snooze</button>}
-                {r.jobId && onOpenJob && <button style={btn(false)} onClick={() => onOpenJob(r.jobId, r.section)}>Open job</button>}
+                {nudgeMain && nudgeBtn}
+                {openJobBtn && <button style={btn(false)} onClick={() => onOpenJob(r.jobId, r.section)}>Open job</button>}
                 {hasMore && <button style={btn(false)} aria-expanded={more} onClick={() => setMoreKey(more ? null : r.key)}>{more ? "Less" : "More…"}</button>}
                 {more && <>
                   {canMarkUrgent(r) && <button style={{ ...btn(r.prio === "urgent"), ...(r.prio === "urgent" ? { background: C.red, borderColor: C.red } : {}) }} aria-pressed={r.prio === "urgent"} onClick={() => toggleUrgent(r)}>{r.prio === "urgent" ? "Urgent · clear" : "Mark urgent"}</button>}
@@ -63521,7 +63537,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
                   {r.onTogglePick && (r.canReassign || r.roster) && <button style={btn(!!r.pushOpen)} aria-expanded={!!r.pushOpen} title="Change who this is on" onClick={() => r.onTogglePick()}>{r.kind === "need" ? "Move to…" : "Push to…"}</button>}
                   {shelf.map(a => <button key={a.label} title={a.title} style={btn(false)} onClick={() => a.onClick()}>{a.label}</button>)}
                   {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
-                  {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
+                  {!nudgeMain && nudgeBtn}
                 </>}
               </div>
             );
@@ -63788,6 +63804,8 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
     </div>
   );
   const Section = ({ k, label, color, rows, defaultOpen, extra, children, empty }) => {
+    // Searching: only sections with a match show (QC tracker / Office messages have no rows to match).
+    if (qOn && !(rows && rows.length)) return null;
     const open = isSecOpen(k, defaultOpen);
     return (
       <div key={k} id={"md_sec_" + k} style={{ marginTop: 14 }}>
@@ -63810,11 +63828,13 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const LANE_COLOR = { overdue: C.red, today: C.blue, week: C.dim, later: C.faint };
   // Group: Type puts the QC tracker inside the "QC walks" section, so the bottom fold steps aside.
   const qcInType = !!qcTracker && todoSections.some(s => s.key === "type:QC walks");
+  // Search match counts per tab (the tab chips show these while searching).
+  const todoMatchN = fq(pinnedRows).length + todoRows.length + fq(snoozedRows).length + fq(staleRows).length;
   const todoBody = (
     <>
       {pinnedRows.length > 0 && Section({ k: "pinned", label: "Pinned", color: C.blue, rows: fq(pinnedRows), defaultOpen: true })}
-      {carryKeys.length > 0 && <div style={{ fontSize: 13, color: C.dim, margin: "8px 2px 0" }}>From {mdOf(carrySrc.date)}: {carryKeys.length} pinned still open · {link("Re-pin", rePin)}</div>}
-      {todoSections.length === 0 && pinnedRows.length === 0 && <div style={{ marginTop: 14 }}>{rowsCard([], "Nothing on your list.")}</div>}
+      {carryKeys.length > 0 && !qOn && <div style={{ fontSize: 13, color: C.dim, margin: "8px 2px 0" }}>From {mdOf(carrySrc.date)}: {carryKeys.length} pinned still open · {link("Re-pin", rePin)}</div>}
+      {(qOn ? todoMatchN === 0 : todoSections.length === 0 && pinnedRows.length === 0) && <div style={{ marginTop: 14 }}>{rowsCard([], "Nothing on your list.")}</div>}
       {todoSections.map(s => Section({ k: s.key, label: s.label, color: s.lane ? LANE_COLOR[s.lane] : C.text, rows: s.rows, defaultOpen: s.openByDefault,
         empty: s.lane === "today" ? "Nothing due today." : "Nothing here.",
         extra: <>{!s.lane && s.rows.some(r => r.bucket === "overdue") ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>overdue</span> : null}
@@ -63825,16 +63845,20 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       {qcTracker && !qcInType && Section({ k: "qct", label: "QC tracker", color: C.faint, rows: null, defaultOpen: false,
         extra: qcCounts && qcCounts.needAction > 0 ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>{qcCounts.needAction} need action</span> : null,
         children: <div style={{ marginTop: 6 }}>{qcTracker}</div> })}
-      {messagesSlot && Section({ k: "msgs", label: "Office messages", color: C.faint, rows: null, defaultOpen: false, children: <div style={{ marginTop: 6 }}>{messagesSlot}</div> })}
+      {messagesSlot && Section({ k: "msgs", label: "Office messages", color: C.faint, rows: null, defaultOpen: false,
+        extra: msgCounts ? <>{msgCounts.gotit > 0 && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: `${C.red}14`, color: C.red }}>{msgCounts.gotit} need Got it</span>}
+          {msgCounts.replies > 0 && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: `${C.purple}14`, color: C.purple }}>{msgCounts.replies} new {msgCounts.replies === 1 ? "reply" : "replies"}</span>}
+          {msgCounts.unread > 0 && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: `${C.blue}1F`, color: C.blue }}>{msgCounts.unread} unread</span>}</> : null,
+        children: <div style={{ marginTop: 6 }}>{messagesSlot}</div> })}
     </>
   );
   // ── Waiting on others: chase order, three sections that start open (flagged exception), then "On <head>" folded ──
   const sentSorted = sentChaseOrder(fq(sentRows));
-  const CHASE = [["none", "Not started", C.red], ["wait", "Waiting", C.orange], ["work", "Working", C.blue]];
+  const CHASE = [["none", "Not started", C.red], ["wait", "Waiting", C.slateInk], ["work", "Working", C.blue]];
   const sentBody = (
     <>
       <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Everything you asked someone for. Not started first: those are the ones to chase.</div>
-      {sentSorted.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>{qOn ? "No matches" : "Nothing you asked for is still open."}</div>}
+      {sentSorted.length === 0 && !(qOn && !iRunHead && headRowsQ.length) && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>{qOn ? "No matches" : "Nothing you asked for is still open."}</div>}
       {CHASE.map(([st, label, color]) => { const rs = sentSorted.filter(r => sentChaseState(r) === st); return rs.length ? Section({ k: "chase:" + st, label, color, rows: rs, defaultOpen: true }) : null; })}
       {!iRunHead && headRowsQ.length > 0 && Section({ k: "onhead", label: `On ${headFirst}`, color: C.text, rows: headRowsQ, defaultOpen: false,
         children: <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>{headByJob.map(({ jobId, job, rows }) =>
@@ -63867,7 +63891,8 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const doneBody = (
     <>
       <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Last 30 days, newest first: what you finished and what others finished for you.</div>
-      {Section({ k: "done", label: "Done", color: C.green, rows: doneMerged, defaultOpen: true, empty: "Nothing finished in the last 30 days." })}
+      {qOn && doneMerged.length === 0 ? <div style={{ marginTop: 14 }}>{rowsCard([])}</div>
+        : Section({ k: "done", label: "Done", color: C.green, rows: doneMerged, defaultOpen: true, empty: "Nothing finished in the last 30 days." })}
     </>
   );
   // ── Header + tabs ──
@@ -63875,7 +63900,13 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const iconBtn = (on) => ({ width: 44, height: 44, borderRadius: 10, border: `1px solid ${on ? C.blue : C.border}`, background: C.card, color: on ? C.blue : C.text, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 });
   const menuItem = (on) => ({ display: "flex", width: "100%", justifyContent: "space-between", gap: 10, textAlign: "left", border: "none", background: on ? C.surface : "none", padding: "10px 12px", borderRadius: 8, fontSize: 14, fontWeight: on ? 700 : 500, cursor: "pointer", color: C.text, fontFamily: "inherit" });
   const overdueN = freshMine.filter(r => r.bucket === "overdue").length;
-  const TABS = [
+  // Searching: every chip shows its tab's match count (fq-filtered), never red.
+  const TABS = qOn ? [
+    ["todo", "To do", String(todoMatchN), false],
+    ["sent", "Waiting on others", String(sentSorted.length + (iRunHead ? 0 : headRowsQ.length)), false],
+    ...(iRunHead ? [["team", "Team", String(teamGroups.reduce((n, g) => n + g.rows.length, 0)), false]] : []),
+    ["done", "Done", String(doneMerged.length), false],
+  ] : [
     ["todo", "To do", String(freshMine.length), overdueN > 0],   // freshMine already includes pinned rows
     ["sent", "Waiting on others", String(sentRows.length), false],
     ...(iRunHead ? [["team", "Team", "", false]] : []),
@@ -63895,7 +63926,8 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-          <button aria-label="Search" aria-pressed={searchOpen || qOn} onClick={() => { setSearchOpen(s => !s); if (searchOpen) setQ(""); }} style={iconBtn(searchOpen || qOn)}><Icon name="search" size={17} stroke={2.4} /></button>
+          <button aria-label={searchOpen ? "Clear and close search" : "Search"} aria-pressed={searchOpen || qOn}
+            onClick={() => { if (searchOpen) { setQ(""); setSearchOpen(false); return; } setSearchOpen(true); setTimeout(() => { const el = searchRef.current; if (el && el.focus) el.focus(); }, 0); }} style={iconBtn(searchOpen || qOn)}><Icon name="search" size={17} stroke={2.4} /></button>
           {curTab === "todo" && <div style={{ position: "relative" }}>
             <button aria-label={`Group by ${GROUP_LABEL[groupPref]}`} aria-expanded={gmenu} onClick={e => { e.stopPropagation(); setGmenu(g => !g); }} style={iconBtn(groupPref !== "time")}><Icon name="sliders" size={18} stroke={2.4} /></button>
             {gmenu && <div role="menu" onClick={e => e.stopPropagation()} style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 10px 28px rgba(20,30,50,.14)", padding: 6, minWidth: 210 }}>
@@ -63909,7 +63941,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
           {canCreate && !ON_MOBILE && openQuickAdd && <button onClick={() => openQuickAdd({})} style={{ background: C.blue, border: "none", borderRadius: 10, color: "#fff", fontWeight: 700, padding: "0 16px", minHeight: 44, fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" size={14} stroke={2.5} />Need</button>}
         </div>
       </div>
-      {(searchOpen || qOn) && <input type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs" aria-label="Search tasks or jobs"
+      {(searchOpen || qOn) && <input ref={searchRef} type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs" aria-label="Search tasks or jobs"
         style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, marginBottom: 8 }} />}
       {pinsSlot}
       <div role="tablist" style={{ background: C.bg, display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto", scrollbarWidth: "none" }}>
@@ -70861,7 +70893,7 @@ function App() {
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
-          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)} msgsJump={officeJump}
+          jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)} msgsJump={officeJump} msgCounts={officeMsgCounts(officeMsgs)}
           pinsSlot={announcePins.length > 0 ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}
           messagesSlot={(officeMsgs.length || canBroadcast(identity)) ? <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/> : null}/>
       )}
