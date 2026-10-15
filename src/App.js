@@ -36050,7 +36050,7 @@ const buildingStage = (b) => { const f = effFS(b), r = effRS(b); const active = 
 
 // One folded PROJECTS group at the top of the board (plan deviation 3): its
 // buildings are taken out of the stage groups, so no job shows twice.
-function ProjectsBoardSection({ byProject, ctx, JobRow, fc, startCollapsed = true }) {
+function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed = true }) {
   const [collapsed, setCollapsed] = useState(startCollapsed);
   const list = Object.keys(byProject).map(id => (ctx.projects || []).find(p => p.id === id)).filter(Boolean)
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
@@ -36065,12 +36065,12 @@ function ProjectsBoardSection({ byProject, ctx, JobRow, fc, startCollapsed = tru
         <div style={{background:`${PROJECT_COLOR}18`,border:`1px solid ${PROJECT_COLOR}33`,borderRadius:99,padding:"2px 10px",fontSize:12.5,color:ink,fontWeight:700}}>{list.length}</div>
         <div style={{marginLeft:"auto",color:ink,fontSize:14,fontWeight:700}}>{collapsed ? "▸" : "▾"}</div>
       </div>
-      {!collapsed && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} fc={fc}/>)}
+      {!collapsed && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc}/>)}
     </div>
   );
 }
 
-function ProjectGroupRow({ project, visible, ctx, JobRow, fc }) {
+function ProjectGroupRow({ project, visible, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc }) {
   const all = projectBuildings(ctx.allJobs, project.id);
   const shown = projectBuildings(visible, project.id);
   const narrowed = shown.length < all.length;           // a search / filter is on → open by itself
@@ -36093,11 +36093,19 @@ function ProjectGroupRow({ project, visible, ctx, JobRow, fc }) {
       </div>
       {open && (
         <div style={{margin:"6px 0 4px 14px",paddingLeft:10,borderLeft:`2px solid ${PROJECT_COLOR}55`}}>
-          <div onClick={() => ctx.openProject(project.id)} role="button"
-            style={{display:"flex",alignItems:"center",minHeight:48,padding:"0 12px",marginBottom:6,borderRadius:10,border:`1px solid ${PROJECT_COLOR}66`,background:`${PROJECT_COLOR}0D`,color:ink,fontWeight:800,cursor:"pointer"}}>
-            <span style={{flex:1}}>Project page</span><span>›</span>
-          </div>
-          {shown.map(job => <JobRow key={job.id} job={job} fc={fc || undefined} showForeman={!fc}/>)}
+          {ctx.canSeeAll && (
+            <div onClick={() => ctx.openProject(project.id)} role="button"
+              style={{display:"flex",alignItems:"center",minHeight:48,padding:"0 12px",marginBottom:6,borderRadius:10,border:`1px solid ${PROJECT_COLOR}66`,background:`${PROJECT_COLOR}0D`,color:ink,fontWeight:800,cursor:"pointer"}}>
+              <span style={{flex:1}}>Project page</span><span>›</span>
+            </div>
+          )}
+          {shown.map(job => (
+            job.quickJob
+              ? <QuickJobCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
+              : job.tempPed
+              ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
+              : <JobRow key={job.id} job={job} fc={fc || undefined} showForeman={!fc}/>
+          ))}
         </div>
       )}
     </div>
@@ -36109,6 +36117,8 @@ function ProjectGroupRow({ project, visible, ctx, JobRow, fc }) {
 // back to a typed name with a plain warning (Review Focus 4).
 function SimproFolderPicker({ simproNo, value, onChange, usedBy = {} }) {
   const [state, setState] = useState({ loading: !!simproNo, folders: null, error: "" });
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => { setDraft(value || ""); }, [value]);
   useEffect(() => {
     if (!simproNo) { setState({ loading: false, folders: null, error: "" }); return; }
     let live = true;
@@ -36124,7 +36134,9 @@ function SimproFolderPicker({ simproNo, value, onChange, usedBy = {} }) {
   if (state.loading) return <div style={{fontSize:13,color:C.dim,marginTop:6}}>Reading Simpro folders…</div>;
   if (!state.folders) return (
     <div>
-      <input value={value} onChange={e => onChange(e.target.value)} placeholder="Simpro folder name, e.g. House 3" style={field}/>
+      <input value={draft} onChange={e => setDraft(e.target.value)} onBlur={() => { if (draft.trim() !== String(value || "").trim()) onChange(draft.trim()); }}
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
+        placeholder="Simpro folder name, e.g. House 3" style={field}/>
       <div style={warn}><b>Couldn't read Simpro's folders</b> ({state.error}). Type the folder name exactly as it is in Simpro. If it doesn't match, this building's plans land in Shared / Unsorted.</div>
     </div>
   );
@@ -36204,7 +36216,7 @@ function ProjectSheet({ projectId, onClose }) {
   const [adding, setAdding] = useState(false);
   const [notes, setNotes] = useState(null);   // null = not editing
   const project = ctx && (ctx.projects || []).find(p => p.id === projectId);
-  if (!ctx || !project) return null;
+  if (!ctx || !ctx.canSeeAll || !project) return null;
   const bl = projectBuildings(ctx.allJobs, project.id);
   const r = projectRollup(bl, buildingStage);
   const chip = { background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:10,cursor:"pointer",minHeight:76 };
@@ -36268,7 +36280,7 @@ function ProjectSheet({ projectId, onClose }) {
 // Breadcrumb + labeled hops at the top of a building's job card (spec §6.2).
 function ProjectCrumb({ job, ctx }) {
   const project = (ctx.projects || []).find(p => p.id === job.projectGroupId && !p.archived);
-  if (!project) return null;
+  if (!ctx.canSeeAll || !project) return null;
   const { prev, next } = buildingHops(projectBuildings(ctx.allJobs, project.id), job.id);
   const hop = { flex:1,minWidth:0,minHeight:40,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontWeight:700,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 10px",cursor:"pointer",fontFamily:"inherit" };
   return (
@@ -36293,12 +36305,13 @@ function JobProjectSection({ job, ctx, onPatch }) {
   const [busy, setBusy] = useState(false);
   const project = job.projectGroupId ? (ctx.projects || []).find(p => p.id === job.projectGroupId && !p.archived) : null;
   const btn = { minHeight:44,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontWeight:700,fontSize:14,padding:"0 14px",cursor:"pointer",fontFamily:"inherit" };
+  if (!ctx.canSeeAll) return null;
   if (project) return (
     <FoldSection label="Project" color={PROJECT_COLOR} badge={{text:"NEW",color:C.blue}} meta={`${project.name}${job.simproFolder ? ` · folder ${job.simproFolder}` : ""}`}>
       <div style={{fontSize:14}}>{project.name}{job.projectRole === "site" ? " · Site / Shared (the original job)" : ""}</div>
-      {job.simproFolder
+      {(job.simproFolder || (project.simproNo && job.projectRole !== "site" && String(job.simproNo || "") === String(project.simproNo)))
         ? <div style={{marginTop:6}}><div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>SIMPRO FOLDER FOR PLANS</div>
-            <SimproFolderPicker simproNo={project.simproNo} value={job.simproFolder} onChange={(v) => onPatch({ simproFolder: String(v || "").trim() })}/></div>
+            <SimproFolderPicker simproNo={project.simproNo} value={job.simproFolder || ""} onChange={(v) => onPatch({ simproFolder: String(v || "").trim() })}/></div>
         : <div style={{fontSize:13,color:C.dim,marginTop:6}}>{job.simproNo && String(job.simproNo) !== String(project.simproNo || "") ? `Own Simpro #${job.simproNo} — pulls plans like any job.` : "Plans come from this job's own Drive folder."}</div>}
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
         <button type="button" style={btn} onClick={() => ctx.openProject(project.id)}>Open project page</button>
@@ -36310,7 +36323,7 @@ function JobProjectSection({ job, ctx, onPatch }) {
       <div style={{fontSize:13,color:C.dim,marginTop:6}}>Leaving never deletes anything — this job just becomes standalone again.</div>
     </FoldSection>
   );
-  if (!ctx.canManage) return null;
+  if (!ctx.canManage || job.tempPed || job.quickJob || job.type === "quote") return null;
   return (
     <FoldSection label="Project" color={PROJECT_COLOR} meta="not part of a project">
       {pname === null ? (
@@ -36357,7 +36370,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
     <div>
 
       {pctx && Object.keys(byProject).length > 0 && (
-        <ProjectsBoardSection byProject={byProject} ctx={pctx} JobRow={JobRow} fc={fc} startCollapsed={startCollapsed}/>
+        <ProjectsBoardSection byProject={byProject} ctx={pctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc} startCollapsed={startCollapsed}/>
       )}
       {sections.map(sec => {
 
@@ -68106,7 +68119,7 @@ function App() {
   };
   const openProject = (id) => { if (selected) flushJob(selected); setSelected(null); setOpenTab(null); setOpenProjectId(id); };
   const openJobFromProject = (j) => { if (selected) flushJob(selected); setOpenProjectId(null); setOpenTab(null); setSelected(allJobs.find(x => x.id === j.id) || j); };
-  const projectsCtx = { projects, allJobs, identity, canManage: canManageProjects, saveNewProject, patchProject, createBuilding, openProject, openJob: openJobFromProject };
+  const projectsCtx = { projects, allJobs, identity, canManage: canManageProjects, canSeeAll: getAccess(identity) !== "contractor", saveNewProject, patchProject, createBuilding, openProject, openJob: openJobFromProject };
   // Field-surgical update: dotted `data.<field>` paths so two devices editing
   // different fields of one need can't last-write-wins each other. `current`
   // (the caller's copy) lets us fall back to the full funnel if the doc doesn't
