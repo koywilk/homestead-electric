@@ -62904,7 +62904,9 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       const _an = ((job.autoNotes || {})[t.id] || []);
       const row = { key: "auto_" + t.id, kind: "auto", autoId: t.id, canUpdate: true, latest: _an.length ? _an[_an.length - 1] : null, nUpdates: _an.length, autoCategory: t.category, bucket: autoBucket(t), title: t.title, tag: "Auto", tagColor: C.dim, staleJob: job, staleDate, staleMoney, owners, dueYmd: ymdOf(staleDate),
         sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
-        onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
+        snoozeYmd: (job.taskSnoozes || {})[t.id] || "",
+        onSnooze: (ymd) => { const prev = { taskDueDates: { ...(job.taskDueDates || {}) }, taskSnoozes: { ...(job.taskSnoozes || {}) } }; const p = autoSnoozePatch(job, t.id, ymd); onUpdateJob({ ...job, ...p }, p); stage("Snoozed", () => onUpdateJob({ ...job, ...prev }, prev)); },
+        onWake: () => { const p = autoWakePatch(job, t.id, todayYmd); onUpdateJob({ ...job, ...p }, p); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
         pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
       if (st.state === "none") {
@@ -62972,7 +62974,9 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
         tag: "Scan", tagColor: C.rough,
         sub: [prevStatus === "scheduled" && prevDate ? `Scan scheduled ${fmtDisplay(prevDate)}` : (prevDate ? `Needs by ${fmtDisplay(prevDate)}` : "Rough complete — scan before drywall")].filter(Boolean),
         jobId: t.jobId, section: "Plans & Links", canSnooze: true,
-        onSnooze: (ymd) => { const prev = { ...(job.taskDueDates || {}) }; const next = { ...prev, [t.id]: ymd }; onUpdateJob({ ...job, taskDueDates: next }, { taskDueDates: next }); stage("Snoozed", () => onUpdateJob({ ...job, taskDueDates: prev }, { taskDueDates: prev })); },
+        snoozeYmd: (job.taskSnoozes || {})[t.id] || "",
+        onSnooze: (ymd) => { const prev = { taskDueDates: { ...(job.taskDueDates || {}) }, taskSnoozes: { ...(job.taskSnoozes || {}) } }; const p = autoSnoozePatch(job, t.id, ymd); onUpdateJob({ ...job, ...p }, p); stage("Snoozed", () => onUpdateJob({ ...job, ...prev }, prev)); },
+        onWake: () => { const p = autoWakePatch(job, t.id, todayYmd); onUpdateJob({ ...job, ...p }, p); },
         scan: {
           status: prevStatus, scheduledDate: prevDate,
           // Pasting the link IS the completion: saves the walkthrough to the job
@@ -63032,6 +63036,16 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   // carry the doc's own priority).
   const stampPrio = (rows) => rows.forEach(r => { if (r.kind !== "need") r.prio = rowPriority(r, prioMap); });
   stampPrio(mineRows); stampPrio(othersRows);
+  // Redesign: snoozed rows leave To do for the folded Snoozed spot until their day.
+  const snoozedRows = [];
+  for (let i = mineRows.length - 1; i >= 0; i--) {
+    const r = mineRows[i];
+    if (r && r.kind === "auto" && isAutoSnoozed(r.snoozeYmd, todayYmd)) { snoozedRows.unshift({ ...r, snoozeBack: r.snoozeYmd }); mineRows.splice(i, 1); }
+  }
+  snoozedMineNeeds(needs, [identity, ...coverees.map(name => ({ name }))], todayYmd).forEach(n => {
+    snoozedRows.push({ ...needRow(n, false), snoozeBack: n.snoozedUntil, onWake: () => onPatchNeed(n.id, { snoozedUntil: "" }, n) });
+  });
+  snoozedRows.sort((a, b) => String(a.snoozeBack).localeCompare(String(b.snoozeBack)));
   const freshMine = keepFresh(mineRows);
   const freshOthers = keepFresh(othersRows);
   // v431: Team pulse (head only) — ownedRows are the derived rows (auto / duty /
@@ -63256,6 +63270,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     ]),
     ...(iRunHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRowsQ, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
     // v421: what I asked others for, with their latest update. Starts folded.
+    ...(snoozedRows.length ? [{ key: "snoozed", title: "Snoozed", rows: fq(snoozedRows), empty: "" }] : []),
     { key: "sent", title: "Sent", rows: sortRows(fq(sentRows)), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
     // v429: docs I sent that someone else finished, last 30 days. Folded.
     { key: "sentDone", title: "Sent · finished", rows: fq(finishedRows), empty: "Nothing you sent was finished in the last 30 days." },
