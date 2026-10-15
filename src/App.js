@@ -36232,6 +36232,7 @@ function ProjectSheet({ projectId, onClose }) {
       <div style={{maxWidth:900,margin:"0 auto",padding:"14px 16px 80px"}}>
         <button type="button" onClick={onClose} style={{background:"none",border:"none",color:C.accent,fontWeight:700,fontSize:14,minHeight:40,padding:0,cursor:"pointer",fontFamily:"inherit"}}>‹ Job Board</button>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.06em",lineHeight:1,color:C.text}}>{project.name}</div>
+        <div style={{marginTop:6}}><HelpDot section="projects" label="How projects work" color={PROJECT_COLOR}/></div>
         <div style={{fontSize:13,color:C.faint,marginTop:4}}>{project.division === "commercial" ? "Commercial" : "Residential"} project · {r.houses} {project.division === "commercial" ? "building" : "house"}{r.houses === 1 ? "" : "s"}{bl.some(b => b.projectRole === "site") ? " + site" : ""}{project.simproNo ? ` · shares Simpro #${project.simproNo}` : ""}</div>
         <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.1em",color:C.dim,margin:"16px 2px 6px"}}>BUILDINGS</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8}}>
