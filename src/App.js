@@ -62932,7 +62932,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
         sub: [t.jobName, t.desc, owners.length > 1 ? `with ${owners.filter(o => !sameName(o, me)).map(first).join(" + ")}` : ""].filter(Boolean), jobId: t.jobId, section: null, canSnooze: true,
         snoozeYmd: (job.taskSnoozes || {})[t.id] || "",
         onSnooze: (ymd) => { const prev = { taskDueDates: { ...(job.taskDueDates || {}) }, taskSnoozes: { ...(job.taskSnoozes || {}) } }; const p = autoSnoozePatch(job, t.id, ymd); onUpdateJob({ ...job, ...p }, p); stage("Snoozed", () => onUpdateJob({ ...job, ...prev }, prev)); },
-        onWake: () => { const p = autoWakePatch(job, t.id, todayYmd); onUpdateJob({ ...job, ...p }, p); },
+        wake: () => { const p = autoWakePatch(job, t.id, todayYmd); onUpdateJob({ ...job, ...p }, p); },
         state: st.state, who: st.who, age: st.doc ? timeAgo(st.state === "verify" ? st.doc.doneAt : (st.doc.assignedAt || st.doc.createdAt)) : "",
         pushOpen: pushFor === t.id, roster, onPick: (who) => pushTo(t, job, who), onTogglePick: () => setPushFor(p => p === t.id ? null : t.id) };
       if (st.state === "none") {
@@ -63002,7 +63002,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
         jobId: t.jobId, section: "Plans & Links", canSnooze: true,
         snoozeYmd: (job.taskSnoozes || {})[t.id] || "",
         onSnooze: (ymd) => { const prev = { taskDueDates: { ...(job.taskDueDates || {}) }, taskSnoozes: { ...(job.taskSnoozes || {}) } }; const p = autoSnoozePatch(job, t.id, ymd); onUpdateJob({ ...job, ...p }, p); stage("Snoozed", () => onUpdateJob({ ...job, ...prev }, prev)); },
-        onWake: () => { const p = autoWakePatch(job, t.id, todayYmd); onUpdateJob({ ...job, ...p }, p); },
+        wake: () => { const p = autoWakePatch(job, t.id, todayYmd); onUpdateJob({ ...job, ...p }, p); },
         scan: {
           status: prevStatus, scheduledDate: prevDate,
           // Pasting the link IS the completion: saves the walkthrough to the job
@@ -63067,7 +63067,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const snoozedRows = [];
   for (let i = mineRows.length - 1; i >= 0; i--) {
     const r = mineRows[i];
-    if (r && r.kind === "auto" && r.state !== "verify" && isAutoSnoozed(r.snoozeYmd, todayYmd)) { snoozedRows.unshift({ ...r, snoozeBack: r.snoozeYmd }); mineRows.splice(i, 1); }
+    if (r && r.kind === "auto" && r.state !== "verify" && isAutoSnoozed(r.snoozeYmd, todayYmd)) { snoozedRows.unshift({ ...r, snoozeBack: r.snoozeYmd, onWake: r.wake }); mineRows.splice(i, 1); }
   }
   snoozedMineNeeds(needs, [identity, ...coverees.map(name => ({ name }))], todayYmd).filter(n => !absorbedDocIds.has(n.id)).forEach(n => {
     snoozedRows.push({ ...needRow(n, false), snoozeBack: n.snoozedUntil, onWake: () => onPatchNeed(n.id, { snoozedUntil: "" }, n) });
@@ -63291,7 +63291,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       { tab: "todo", sectionKey: "stale", rows: staleRows },
       ...CHASE_KEYS.map(st => ({ tab: "sent", sectionKey: "chase:" + st, rows: sentRows.filter(r => sentChaseState(r) === st) })),
       { tab: "sent", sectionKey: "onhead", rows: headRows },
-      ...(iRunHead ? personGroups.map(g => ({ tab: "team", sectionKey: "team:" + g.key.slice(2), rows: g.rows })) : []),   // personGroups is empty unless the Team tab is showing
+      ...(iRunHead ? personGroups.map(g => ({ tab: "team", sectionKey: "team:" + g.key.slice(2), rows: g.rows })) : []),   // personGroups is built only while the Team tab shows or the head is searching (teamOn)
       { tab: "done", sectionKey: "done", rows: mergeDoneRows(doneRows, finishedRows) },
     ];
     const hit = myDayJumpTarget(jumpNeedId, places);
@@ -63398,7 +63398,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
               <span aria-hidden="true" style={{ position: "absolute", inset: -8 }} />
             </button>
           : r.onWake ? null
-          : (() => { const who = r.assignee || r.by || r.who || ""; const nm = r.showStatus ? (who ? `To ${who}` : "Unassigned") : who;
+          : (() => { const who = r.showStatus ? (r.assignee || "") : (r.assignee || r.by || r.who || ""); const nm = r.showStatus ? (who ? `To ${who}` : "Unassigned") : who;
               return <span {...(nm ? { role: "img", "aria-label": nm, title: nm } : { "aria-hidden": "true" })} style={{ width: 28, height: 28, borderRadius: 99, flexShrink: 0, background: C.surface, border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{first(who).slice(0, 1)}</span>; })())}
         <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } toggleExp(r.key); }}
           onKeyDown={e => { if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return; e.preventDefault(); if (selectMode) { if (canPick) toggleSel(r.key); return; } toggleExp(r.key); }}
