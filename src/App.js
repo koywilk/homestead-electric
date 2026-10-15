@@ -45534,7 +45534,13 @@ function odAgo(at, now) {
   if (h < 36) return `${h} h ago`;
   return `${Math.round(h / 24)} d ago`;
 }
-const OD_O = "#F2702A", OD_G = "#2FBF71", OD_R = "#E5484D", OD_B = "#3B6FE0", OD_P = "#8F7EE0", OD_GOLD = "#C99A2E";
+// v540 palette: app dark navy + steel blue lead (Koy: no yellow/amber, no orange lead).
+// Each hue is lightened to read >= 4.5:1 on the dark cards. OD_A is the accent (tabs,
+// buttons, neutral counts); OD_O stays as the orange category (starts, punch). OD_WARN is
+// the caution colour that replaced amber. Every value must stay distinct from OD_R/OD_O/OD_G
+// because ATTN_SEV keys severity by colour.
+const OD_O = "#F08A55", OD_G = "#45D483", OD_R = "#FF7B7B", OD_B = "#66A8FF", OD_P = "#B1A4F4", OD_WARN = "#F28BA8";
+const OD_A = "#66A8FF", OD_SLATE = "#9FB0C8", OD_CYAN = "#5CC8E0", OD_GREY = "#8B95A7", OD_ON_A = "#0B1526";
 const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
 const OD_DAY = 24*60*60*1000;
 // Calendar days, not 24-hour steps: the fall-back Sunday is 25 hours long.
@@ -45697,7 +45703,7 @@ function OdRing({ pct, color, size = 36, label }) {
   const r = size/2 - 4, C2 = 2*Math.PI*r, p = Math.max(0, Math.min(1, pct || 0));
   return (
     <svg className="spark" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#F2EEEA" strokeWidth="5"/>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="5"/>
       {p > 0 && <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" strokeDasharray={`${(C2*p).toFixed(1)} ${C2.toFixed(1)}`} transform={`rotate(-90 ${size/2} ${size/2})`}/>}
     </svg>
   );
@@ -45706,7 +45712,7 @@ function OdRing({ pct, color, size = 36, label }) {
 function OdMini({ title, color, icon, value, sub, hint, children, onClick }) {
   // v538: a zero (or nothing logged) is quiet grey, never an alarm-coloured icon with a 0 under it.
   const zero = value === 0 || value === "0" || value === "—";
-  const c = zero ? "#A39B94" : color;
+  const c = zero ? OD_GREY : color;
   const inner = (<>
     <div className="t">{title}<i><Icon name={icon} size={12} stroke={2.4}/></i></div>
     <div className="b"><div className="v">{value}{sub ? <small>{sub}</small> : null}</div>{children}</div>
@@ -45725,30 +45731,41 @@ function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel
   const x = (i) => L + (vals.length < 2 ? 0 : i*(W-L-R)/(vals.length-1));
   const y = (v) => T + (1 - (v-min)/(max-min || 1))*(H-T-B);
   const pts = vals.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
+  // v540: monotone cubic (same rule as d3's curveMonotoneX). The old spline could
+  // swing below 0 or above the top between points; this one never leaves the range
+  // of its two neighbouring points, so a 0 day draws flat on the floor.
+  const sl = pts.map((p, i) => i < pts.length - 1 ? (pts[i+1][1]-p[1]) / ((pts[i+1][0]-p[0]) || 1) : 0);
+  const tg = pts.map((p, i) => {
+    if (pts.length < 2) return 0;
+    if (i === 0) return sl[0];
+    if (i === pts.length - 1) return sl[i-1];
+    const s0 = sl[i-1], s1 = sl[i], h0 = p[0]-pts[i-1][0], h1 = pts[i+1][0]-p[0], q = (s0*h1 + s1*h0) / ((h0+h1) || 1);
+    return ((Math.sign(s0) + Math.sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5*Math.abs(q))) || 0;
+  });
   let d = "";
   pts.forEach((p, i) => {
     if (!i) { d = `M${p[0].toFixed(1)} ${p[1].toFixed(1)}`; return; }
-    const p0 = pts[i-2] || pts[i-1], p1 = pts[i-1], p2 = p, p3 = pts[i+1] || p;
-    d += ` C${(p1[0]+(p2[0]-p0[0])/6).toFixed(1)} ${(p1[1]+(p2[1]-p0[1])/6).toFixed(1)} ${(p2[0]-(p3[0]-p1[0])/6).toFixed(1)} ${(p2[1]-(p3[1]-p1[1])/6).toFixed(1)} ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+    const p1 = pts[i-1], h = (p[0]-p1[0])/3;
+    d += ` C${(p1[0]+h).toFixed(1)} ${(p1[1]+h*tg[i-1]).toFixed(1)} ${(p[0]-h).toFixed(1)} ${(p[1]-h*tg[i]).toFixed(1)} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`;
   });
   let hi = sel != null && vals[sel] != null ? sel : -1;
   if (hi < 0) vals.forEach((v, i) => { if (v != null && (hi < 0 || v >= vals[hi])) hi = i; });
   const gid = "odg" + String(color).replace(/[^a-z0-9]/gi, "");
   const step = vals.length > 1 ? (W-L-R)/(vals.length-1) : W-L-R;
   const pill = hi >= 0 && tip ? tip(vals[hi], hi) : "";
-  const pw = Math.max(54, pill.length * 6.2 + 16);
+  const pw = Math.max(58, pill.length * 6.8 + 18);
   const px = hi >= 0 ? Math.min(W - R - pw/2, Math.max(L + pw/2, x(hi))) : 0;
   return (
     <svg className="od-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} fontFamily="inherit">
       <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".26"/><stop offset="1" stopColor={color} stopOpacity="0"/></linearGradient></defs>
-      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="#EFEAE5"/><text x={L-8} y={y(t)+3.5} textAnchor="end" fontSize="10" fill="#9A918A">{fmt(t)}</text></g>)}
-      {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="10" fill={OD_B}>{targetLabel}</text></g>}
+      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="rgba(255,255,255,.08)"/><text x={L-8} y={y(t)+4} textAnchor="end" fontSize="11.5" fill="#A3ADBD">{fmt(t)}</text></g>)}
+      {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="11.5" fill={OD_B}>{targetLabel}</text></g>}
       {pts.length > 1 && <path d={`${d} L${pts[pts.length-1][0]} ${y(min)} L${pts[0][0]} ${y(min)}Z`} fill={`url(#${gid})`}/>}
       {pts.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>}
       {hi >= 0 && <line x1={x(hi)} x2={x(hi)} y1={y(vals[hi])} y2={y(min)} stroke={color} strokeWidth="1" strokeDasharray="2 3"/>}
-      {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#fff" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
-      {pill && <g><rect x={px-pw/2} y={y(vals[hi])-27} width={pw} height="18" rx="9" fill="#FFF3EA" stroke={color}/><text x={px} y={y(vals[hi])-14.5} textAnchor="middle" fontSize="10.5" fontWeight="700" fill="#1E1A17">{pill}</text></g>}
-      {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="10" fill="#9A918A">{l}</text> : null)}
+      {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#141821" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
+      {pill && <g><rect x={px-pw/2} y={y(vals[hi])-29} width={pw} height="20" rx="10" fill="#0F131B" stroke={color}/><text x={px} y={y(vals[hi])-15} textAnchor="middle" fontSize="11.5" fontWeight="700" fill="#E6EAF1">{pill}</text></g>}
+      {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="11.5" fill="#A3ADBD">{l}</text> : null)}
       {onSel && vals.map((v, i) => <rect key={"h" + i} x={x(i) - step/2} y={T - 10} width={step} height={H - T - B + 10} fill="transparent" style={{ cursor: "pointer" }}
         onMouseEnter={() => onSel(i)} onClick={() => onSel(i)}><title>{labels[i] || ""}</title></rect>)}
     </svg>
@@ -45772,7 +45789,7 @@ function OdHBars({ rows, max, empty }) {
 function OdItem({ color, icon, tag, title, sub, when, onClick }) {
   return (
     <button type="button" className="od-item" onClick={onClick} disabled={!onClick}>
-      <span className="th" style={{ background: color }}><Icon name={icon} size={16} color="#fff"/></span>
+      <span className="th" style={{ "--c": color }}><Icon name={icon} size={16} color={color}/></span>
       <span className="tx"><em style={{ color }}>{tag}</em><b>{title}</b>{sub ? <small>{sub}</small> : null}</span>
       {when ? <span className="when">{when}</span> : null}
       {onClick ? <span className="chev"><Icon name="chevronRight" size={14}/></span> : null}
@@ -45854,24 +45871,24 @@ function odJobInfo(j, now) {
 // status wins; unfinished prep is a separate flag, and a start date that has
 // passed without the status moving gets its own honest label.
 const OD_PHASES = [
-  { key: "finish",     label: "Finish in progress",       color: "#3B6FE0" },
-  { key: "finishDue",  label: "Finish start date passed", color: "#C99A2E" },
-  { key: "finishHold", label: "Finish on hold",           color: "#B7791F" },
-  { key: "between",    label: "Rough done, finish next",  color: "#E8A020" },
-  { key: "rough",      label: "Rough in progress",        color: "#F2702A" },
-  { key: "roughDue",   label: "Rough start date passed",  color: "#C99A2E" },
-  { key: "roughHold",  label: "Rough on hold",            color: "#B7791F" },
-  { key: "roughNext",  label: "Rough not started",        color: "#8C847D" },
-  { key: "noStatus",   label: "No status set",            color: "#6E6660" },
-  { key: "prep",       label: "Job prep",                 color: "#3E9D98" },
-  { key: "commPrecon", label: "Pre-Con",                  color: "#3E9D98" },
-  { key: "commReady",  label: "Ready to start",           color: "#8C847D" },
-  { key: "commInProgress", label: "In progress",          color: "#F2702A" },
-  { key: "commHold",   label: "On hold",                  color: "#B7791F" },
-  { key: "commCloseout", label: "Closeout",               color: "#8F7EE0" },
-  { key: "quick",      label: "Quick job",                color: "#8F7EE0" },
-  { key: "ped",        label: "Temp ped",                 color: "#8F7EE0" },
-  { key: "complete",   label: "Complete",                 color: "#2FBF71" },
+  { key: "finish",     label: "Finish in progress",       color: "#66A8FF" },
+  { key: "finishDue",  label: "Finish start date passed", color: "#F28BA8" },
+  { key: "finishHold", label: "Finish on hold",           color: "#9FB0C8" },
+  { key: "between",    label: "Rough done, finish next",  color: "#5CC8E0" },
+  { key: "rough",      label: "Rough in progress",        color: "#F08A55" },
+  { key: "roughDue",   label: "Rough start date passed",  color: "#F28BA8" },
+  { key: "roughHold",  label: "Rough on hold",            color: "#9FB0C8" },
+  { key: "roughNext",  label: "Rough not started",        color: "#A3ADBD" },
+  { key: "noStatus",   label: "No status set",            color: "#9AA4B6" },
+  { key: "prep",       label: "Job prep",                 color: "#4FBFB8" },
+  { key: "commPrecon", label: "Pre-Con",                  color: "#4FBFB8" },
+  { key: "commReady",  label: "Ready to start",           color: "#A3ADBD" },
+  { key: "commInProgress", label: "In progress",          color: "#F08A55" },
+  { key: "commHold",   label: "On hold",                  color: "#9FB0C8" },
+  { key: "commCloseout", label: "Closeout",               color: "#B1A4F4" },
+  { key: "quick",      label: "Quick job",                color: "#B1A4F4" },
+  { key: "ped",        label: "Temp ped",                 color: "#B1A4F4" },
+  { key: "complete",   label: "Complete",                 color: "#45D483" },
 ];
 const OD_PHASE = Object.fromEntries(OD_PHASES.map((p, i) => [p.key, { ...p, i }]));
 const OD_NOT_STARTED = ["", "waiting_date", "date_confirmed", "scheduled"];
@@ -45949,6 +45966,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [range, setRange] = useState(() => Number(read("he_odash_range", v => ["7","14","30"].includes(v), "14")));
   const pickRange = (r) => { setRange(r); keep("he_odash_range", String(r)); };
   const [q, setQ] = useState("");
+  // v540: on a phone the foreman / range / search controls fold behind one Filters button (starts closed).
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [sheet, setSheet] = useState(null);
   const [actFilter, setActFilter] = useState("all");
   const [actQ, setActQ] = useState("");
@@ -46095,15 +46114,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
 
     // Needs attention
     const attn = [
-      { k: "stale", label: "Status is behind the work logged", color: OD_GOLD, icon: "alertTriangle",
-        rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_GOLD })) },
+      { k: "stale", label: "Status is behind the work logged", color: OD_WARN, icon: "alertTriangle",
+        rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_WARN })) },
       { k: "invoice", label: "Ready to invoice", color: OD_G, icon: "dollarSign",
         rows: live.filter(j => j.readyToInvoice && !j.invoiceDismissed).map(j => ({ title: j.name, sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo].filter(Boolean).join(" · "), job: j, color: OD_G })) },
       { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_R, icon: "changeorders",
         rows: openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: odDate(x.co.submittedAt || x.co.createdAt || x.co.date) })).filter(x => x.at && now - x.at > 60*OD_DAY)
           .sort((a, b) => a.at - b.at).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, job: x.job, color: OD_B })) },
-      { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_GOLD, icon: "checkCircle",
-        rows: overdue.filter(s => s.type === "insp" && now - s.at > 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_GOLD })) },
+      { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_WARN, icon: "checkCircle",
+        rows: overdue.filter(s => s.type === "insp" && now - s.at > 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_WARN })) },
       { k: "overdue", label: "Inspection date passed, no result logged", color: OD_R, icon: "alertTriangle",
         rows: overdue.filter(s => s.type === "insp" && now - s.at <= 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_R })) },
       { k: "startsPast", label: "Start date passed, phase not started", color: OD_O, icon: "flag",
@@ -46116,17 +46135,17 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
       { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
         rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
-      { k: "rtNoDate", label: "Return trips with no date", color: OD_GOLD, icon: "returntrips",
-        rows: openRTs.filter(x => !x.rt.scheduledDate && !x.rt.date && !x.rt.rtStatusDate).map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_GOLD })) },
-      { k: "quiet", label: "In progress, no update in 5+ days", color: OD_GOLD, icon: "clock",
+      { k: "rtNoDate", label: "Return trips with no date", color: OD_WARN, icon: "returntrips",
+        rows: openRTs.filter(x => !x.rt.scheduledDate && !x.rt.date && !x.rt.rtStatusDate).map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_WARN })) },
+      { k: "quiet", label: "In progress, no update in 5+ days", color: OD_WARN, icon: "clock",
         rows: active.filter(j => secOf(j) && OD_UNDERWAY.includes(secOf(j).key) && !secOf(j).stale && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
           .sort((a, b) => (lastAct[a.id] || 0) - (lastAct[b.id] || 0))
-          .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_GOLD })) },
+          .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_WARN })) },
       { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
         rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
     ].filter(a => a.rows.length);
     // v538: worst first — red (overdue, money at risk), then orange (dates), gold (stale), blue (to do), green (money in).
-    const ATTN_SEV = { [OD_R]: 0, [OD_O]: 1, [OD_GOLD]: 2, [OD_B]: 3, [OD_G]: 4 };
+    const ATTN_SEV = { [OD_R]: 0, [OD_O]: 1, [OD_WARN]: 2, [OD_B]: 3, [OD_G]: 4 };
     attn.sort((a, b) => (ATTN_SEV[a.color] ?? 5) - (ATTN_SEV[b.color] ?? 5));
 
     // People
@@ -46180,7 +46199,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
   const TONE = { good: OD_G, bad: OD_R };
   const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera", question: "help", note: "fileText" };
-  const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_GOLD, question: "#3E9D98", note: "#8C847D" };
+  const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_CYAN, question: "#4FBFB8", note: "#A3ADBD" };
   const TYPE_NAME = { punch: "Punch", co: "Change orders", insp: "Inspections", rt: "Return trips", update: "Updates", photo: "Photos", question: "Questions", note: "Job notes" };
   const punchRows = (list) => list.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, job: p.job, tag: [p.who && `On ${odFirst(p.who)}`, p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · ") }));
   const schedRow = (s) => ({ title: s.name, sub: `${s.label}${s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""}${s.detail ? " · " + s.detail : ""}`, right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job });
@@ -46222,7 +46241,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     <div className="od-rows">
       {rows.map((r, i) => (
         <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
-          <span className="k" style={{ "--c": r.color || OD_O }}><Icon name={r.icon || "activity"} size={15}/></span>
+          <span className="k" style={{ "--c": r.color || OD_A }}><Icon name={r.icon || "activity"} size={15}/></span>
           <span className="m"><b>{r.title}</b>{r.tag ? <em>{r.tag}</em> : null}<small>{r.sub}</small></span>
           <span className="t">{r.right || ""}</span>
         </button>
@@ -46235,12 +46254,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <button type="button" className="od-person" key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
           <i className="av sm">{(p.name[0] || "?").toUpperCase()}</i>
           <div><b>{odFirst(p.name)}</b><small>{p.status === "active" ? `${odPlural(p.todayN, "update")} · ${odPlural(p.jobsToday, "job")} touched today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</small></div>
-          <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_GOLD : "#B9B0A8" }}/>
+          <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_B : "#7F8AA0" }}/>
         </button>
       ))}
     </div>
   );
   const search = q.trim().toLowerCase();
+  const nFilters = (foreman ? 1 : 0) + (range !== 14 ? 1 : 0) + (search ? 1 : 0);
   const searchHits = search ? d.allLive.filter(j => `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(search)).slice(0, 8) : [];
 
   let main = null, right = null;
@@ -46253,16 +46273,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     main = (<>
       <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {odPlural(d.evToday.length, "update")} today across {odPlural(new Set(d.evToday.map(e => e.job.id)).size, "job")}{foreman ? ` · ${foreman}'s jobs only` : ""}</p></div></div>
       <div className="od-minis">
-        <OdMini title="Active jobs" color={OD_O} icon="hardHat" hint="bars: jobs by stage" value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
+        <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint="bars: jobs by stage" value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
           onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
-          <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_O} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
+          <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_A} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
         </OdMini>
-        <OdMini title="Inspections, 30 days" color={!d.insp30.length ? OD_G : insPass === 0 ? OD_R : insPass < d.insp30.length ? OD_GOLD : OD_G} icon={d.insp30.length && insPass === 0 ? "alertTriangle" : "checkCircle"} value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed${d.insp30.length - insPass ? ` · ${d.insp30.length - insPass} failed` : ""}` : "none logged"}
+        <OdMini title="Inspections, 30 days" color={!d.insp30.length ? OD_G : insPass === 0 ? OD_R : insPass < d.insp30.length ? OD_WARN : OD_G} icon={d.insp30.length && insPass === 0 ? "alertTriangle" : "checkCircle"} value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed${d.insp30.length - insPass ? ` · ${d.insp30.length - insPass} failed` : ""}` : "none logged"}
           onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed`, d.insp30.map(a => ({ title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job })))}>
           <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
         </OdMini>
         <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`}
-          onClick={() => openList("Open change orders", `${d.coWaiting} waiting on the GC`, d.openCOs.slice().sort((a, b) => String(a.co.coStatus).localeCompare(String(b.co.coStatus))).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_GOLD : OD_B, job: x.job })))}>
+          onClick={() => openList("Open change orders", `${d.coWaiting} waiting on the GC`, d.openCOs.slice().sort((a, b) => String(a.co.coStatus).localeCompare(String(b.co.coStatus))).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_WARN : OD_B, job: x.job })))}>
           <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
         </OdMini>
         <OdMini title="Open punch items" color={OD_R} icon="openitems" hint="bars: by foreman, most first" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
@@ -46273,7 +46293,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-row2">
         <div className="od-white od-pad">
           <div className="od-ct">Updates per day<small>all jobs, last {range} days · tap a day</small></div>
-          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => (range > 14 ? i % 5 === 0 : i % 2 === 0) || i === d.perDay.length - 1 ? odShort(p.d) : "")} color={OD_O} min={0} max={Math.ceil(actMax*1.2) || 1}
+          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => (range > 14 ? i % 5 === 0 : i % 2 === 0) || i === d.perDay.length - 1 ? odShort(p.d) : "")} color={OD_A} min={0} max={Math.ceil(actMax*1.2) || 1}
             ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Updates per day: ${d.perDay.map(p => p.n).join(", ")}`}
             sel={chartSel} onSel={setChartSel} tip={(v, i) => `${v} · ${odDow(d.perDay[i].d)} ${odShort(d.perDay[i].d)}`}/>
           {selDay ? (
@@ -46313,12 +46333,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             <button type="button" className={"od-white od-crew od-tap" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name} aria-label={`${p.name}: ${odPlural(fj.length, "active job")}, ${op} open punch${p.status === "active" ? `, ${odPlural(p.todayN, "update")} today` : ""}. Open their panel`} onClick={() => openPerson(p.name)}>
               <div><b>{p.name}</b><p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
                 <span className="day">{p.status === "active" ? `${odPlural(p.todayN, "update")} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
-              <OdBars vals={p.days7} color={i === 0 && p.todayN ? "#fff" : OD_O} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
+              <OdBars vals={p.days7} color={i === 0 && p.todayN ? OD_ON_A : OD_A} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
             </button>
           );
         })}
         {d.noForemanJobs.length > 0 && (
-          <button type="button" className="od-white od-crew od-tap" onClick={() => openList("Jobs with no active foreman", "Blank, Unassigned, a contractor, or someone no longer on the team", d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman ? `Foreman: ${j.foreman}` : "No foreman", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_GOLD, job: j })))}>
+          <button type="button" className="od-white od-crew od-tap" onClick={() => openList("Jobs with no active foreman", "Blank, Unassigned, a contractor, or someone no longer on the team", d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman ? `Foreman: ${j.foreman}` : "No foreman", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_WARN, job: j })))}>
             <div><b>No active foreman</b><p>{odPlural(d.noForemanJobs.length, "active job")} · {d.noForemanJobs.reduce((n, j) => n + d.info[j.id].punch.length, 0)} open punch</p>
               <span className="day">Tap for the list</span></div>
           </button>
@@ -46359,7 +46379,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               <button type="button" className="tr" key={j.id} onClick={() => openJob(j)}>
                 <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small></span>
                 <span className="c">{j.foreman || "—"}</span>
-                <span className="c st"><em className="pill" style={{ "--c": s ? s.color : "#8C847D" }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
+                <span className="c st"><em className="pill" style={{ "--c": s ? s.color : "#A3ADBD" }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
                 <span className="c num">{d.info[j.id].punch.length || "—"}</span>
                 <span className="c num">{d.info[j.id].openCos.length || "—"}</span>
                 <span className="c">{nx ? <>{odShort(nx.at)} <small>{nx.label}</small></> : "—"}</span>
@@ -46377,7 +46397,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Sec>Where the work is</Sec>
       <div className="od-box light"><OdHBars rows={d.bySec.map(s => ({ name: s.label, note: s.jobs.length, v: s.jobs.length, color: s.color, on: jobsStage === s.key, onClick: () => setJobsStage(jobsStage === s.key ? "" : s.key) }))} empty="No active jobs."/></div>
       <Sec>By foreman</Sec>
-      <div className="od-box light"><OdHBars rows={d.foremen.map(fm => ({ name: fm, note: d.active.filter(j => sameName(j.foreman, fm)).length, v: d.active.filter(j => sameName(j.foreman, fm)).length, color: OD_O, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) })).filter(r => r.v)} empty="No foremen set on jobs."/></div>
+      <div className="od-box light"><OdHBars rows={d.foremen.map(fm => ({ name: fm, note: d.active.filter(j => sameName(j.foreman, fm)).length, v: d.active.filter(j => sameName(j.foreman, fm)).length, color: OD_A, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) })).filter(r => r.v)} empty="No foremen set on jobs."/></div>
     </>);
   } else if (tab === "activity") {
     const aq = actQ.trim().toLowerCase();
@@ -46402,9 +46422,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-head"><div><h1>Activity</h1><p>{actDay ? `Everything logged on ${odDow(odDate(actDay))} ${odShort(odDate(actDay))}` : `Everything logged in the last ${range} days`} · tap a row for the job</p></div>
         {actDay && <button type="button" className="od-clear" onClick={() => setActDay("")}>Show all {range} days</button>}</div>
       <div className="od-minis">
-        <OdMini title="Updates" color={OD_O} icon="activity" value={base.length} sub={actDay ? "that day" : `last ${range} days`}><OdBars vals={d.perDay.slice(-7).map(p => p.n)} color={OD_O} hi={6} label="Updates per day, last 7 days"/></OdMini>
+        <OdMini title="Updates" color={OD_A} icon="activity" value={base.length} sub={actDay ? "that day" : `last ${range} days`}><OdBars vals={d.perDay.slice(-7).map(p => p.n)} color={OD_A} hi={6} label="Updates per day, last 7 days"/></OdMini>
         <OdMini title="Punch closed" color={OD_G} icon="openitems" value={base.filter(e => e.type === "punch" && e.tone === "good").length} sub="items" onClick={() => setActFilter("punch")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={OD_G} hi={6} label="Punch items closed per day"/></OdMini>
-        <OdMini title="Photo uploads" color={OD_GOLD} icon="camera" value={base.filter(e => e.type === "photo").length} sub="batches" onClick={() => setActFilter("photo")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_GOLD} hi={6} label="Photo uploads per day"/></OdMini>
+        <OdMini title="Photo uploads" color={OD_CYAN} icon="camera" value={base.filter(e => e.type === "photo").length} sub="batches" onClick={() => setActFilter("photo")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_WARN} hi={6} label="Photo uploads per day"/></OdMini>
         <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={base.filter(e => e.type === "insp" && e.tone === "bad").length} sub={actDay ? "that day" : `last ${range} days`} onClick={() => setActFilter("insp")}><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f._at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day"/></OdMini>
       </div>
       <div className="od-white od-pad">
@@ -46435,7 +46455,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Sec>What kind</Sec>
       <div className="od-box light"><OdHBars rows={typeCounts.filter(t => t.n).map(t => ({ name: TYPE_NAME[t.k], note: t.n, v: t.n, color: TYPE_COLOR[t.k], on: actFilter === t.k, onClick: () => setActFilter(actFilter === t.k ? "all" : t.k) }))} empty="Nothing logged."/></div>
       <Sec>Most active jobs</Sec>
-      <div className="od-list">{topJobs.map((t, i) => <OdItem key={i} color={OD_O} icon="hardHat" tag={odPlural(t.n, "update")} title={t.job.name} sub={t.job.foreman || ""} onClick={() => openJob(t.job)}/>)}{!topJobs.length && <div className="od-empty dark">No updates in this range.</div>}</div>
+      <div className="od-list">{topJobs.map((t, i) => <OdItem key={i} color={OD_A} icon="hardHat" tag={odPlural(t.n, "update")} title={t.job.name} sub={t.job.foreman || ""} onClick={() => openJob(t.job)}/>)}{!topJobs.length && <div className="od-empty dark">No updates in this range.</div>}</div>
       <Sec>Team pulse</Sec>
       <Pulse list={d.people.slice(0, 10)}/>
     </>);
@@ -46449,7 +46469,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
         <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" onClick={() => openList("Inspections in the next 7 days", "", insp7.map(schedRow))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
         <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" onClick={() => openList("Needs a date", "", d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what + (n.job && n.job.foreman ? " · " + n.job.foreman : ""), color: OD_R, job: n.job })))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
-        <OdMini title="Past their date" color={OD_GOLD} icon="alertTriangle" value={d.overdue.length} sub="no result yet" onClick={() => openList("Past their date", "Dated work with no result", d.overdue.map(schedRow))}><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_GOLD} label="Share of dated items past due"/></OdMini>
+        <OdMini title="Past their date" color={OD_WARN} icon="alertTriangle" value={d.overdue.length} sub="no result yet" onClick={() => openList("Past their date", "Dated work with no result", d.overdue.map(schedRow))}><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_WARN} label="Share of dated items past due"/></OdMini>
       </div>
       <div className="od-white od-pad">
         <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(odAddDays(ws, 6))}`}<small>tap an item for the job</small>
@@ -46495,9 +46515,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const fRows = Object.entries(d.byForeman).filter(([n]) => n !== "No foreman").map(([n, v]) => ({ n, ...v })).sort((a, b) => b.open - a.open);
     const fMax = Math.max(1, ...fRows.map(r => r.open + r.closed));
     const fpLo = d.months.every(m => m.v == null || m.v >= 50) ? 50 : 0;
-    const buckets = [["0–7 days", 0, 7, OD_G], ["8–14 days", 8, 14, OD_GOLD], ["15–30 days", 15, 30, OD_O], ["Over 30 days", 31, 1e9, OD_R]].map(([l, a, b, c]) => ({ l, c, items: d.openPunch.filter(p => p.age != null && p.age >= a && p.age <= b) }));
+    const buckets = [["0–7 days", 0, 7, OD_G], ["8–14 days", 8, 14, OD_SLATE], ["15–30 days", 15, 30, OD_O], ["Over 30 days", 31, 1e9, OD_R]].map(([l, a, b, c]) => ({ l, c, items: d.openPunch.filter(p => p.age != null && p.age >= a && p.age <= b) }));
     const noAge = d.openPunch.filter(p => p.age == null);
-    if (noAge.length) buckets.push({ l: "No date", c: "#B9B0A8", items: noAge });
+    if (noAge.length) buckets.push({ l: "No date", c: OD_GREY, items: noAge });
     const serious = d.openPunch.filter(p => p.serious);
     main = (<>
       <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase</p></div></div>
@@ -46553,8 +46573,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${OD_QC_BUCKET[r.st]}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
   } else if (tab === "people") {
-    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_O, onClick: () => n === "Unassigned"
-      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_O })))
+    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_A, onClick: () => n === "Unassigned"
+      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_A })))
       : openPerson(n) })).sort((a, b) => b.v - a.v).slice(0, 10);
     const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 10);
     const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
@@ -46573,7 +46593,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-minis">
         <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.people.length}`} onClick={() => openList("On the app today", "", d.people.filter(p => p.status === "active").map(p => ({ title: p.name, sub: `${odPlural(p.todayN, "update")} · opened ${odPlural(p.openedN, "job")}`, right: p.last ? odTime(p.last) : "", color: OD_G, onClick: () => openPerson(p.name) })))}><OdRing pct={d.people.length ? onApp/d.people.length : 0} color={OD_G} label={`${onApp} of ${d.people.length} on the app today`}/></OdMini>
         <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`} onClick={() => openList("Open My Day tasks", `${urgentN} urgent`, d.openNeeds.slice().sort((a, b) => (needPriority(a) === "urgent" ? 0 : 1) - (needPriority(b) === "urgent" ? 0 : 1)).map(t => ({ title: odText(t.text) || "Task", sub: [needAssignee(t) && "On " + odFirst(needAssignee(t)), t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B })))}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label="Share of open tasks that are urgent"/></OdMini>
-        <OdMini title="Time off waiting" color={OD_O} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Decide these on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
+        <OdMini title="Time off waiting" color={OD_A} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Decide these on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
         <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => setShowAllDevices(true)}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
       </div>
       <div className="od-row2">
@@ -46585,7 +46605,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{odFirst(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
                 return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "update")}`}
                   onClick={() => openList(`${odFirst(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, odPlural(v, "update"), p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
-                  style={{ background: v ? `rgba(242,112,42,${(0.14 + a*0.86).toFixed(2)})` : "#F6F2EE", color: a > 0.55 ? "#fff" : "#7C736C" }}>{v || "–"}</button>; })])}
+                  style={{ background: v ? `rgba(102,168,255,${(0.12 + a*0.4).toFixed(2)})` : "rgba(255,255,255,.04)", color: v ? "#fff" : "#8B95A7", boxShadow: v && a > 0.75 ? "inset 0 0 0 1.5px #66A8FF" : "none" }}>{v || "–"}</button>; })])}
             </div>
           ) : <div className="od-empty">No updates logged this week.</div>}
         </div>
@@ -46601,7 +46621,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Me sub="Team"/>
       <Stats items={[[d.people.length, "Team"], [d.foremenP.length, "Foremen"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days", () => openList("Quiet for 3+ days", "No updates or job opens", d.people.filter(p => p.status === "quiet").map(p => ({ title: p.name, sub: p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days", color: "#8C847D", onClick: () => openPerson(p.name) })))]]}/>
       <Sec right={`${d.timeOff.length}`}>Time off waiting</Sec>
-      <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_O} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub="Decide it on My Day" when={at ? `${odDow(at)} ${odShort(at)}` : ""}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
+      <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_A} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub="Decide it on My Day" when={at ? `${odDow(at)} ${odShort(at)}` : ""}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
       <Sec right={showAllDevices ? "behind only" : "show all"} onRight={() => setShowAllDevices(s => !s)}>{showAllDevices ? "All devices" : "Devices behind"}</Sec>
       <div className="od-box">
         {devices == null ? <div className="od-empty dark">Loading devices…</div> : shownDevices.map(v => (
@@ -46624,13 +46644,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const folders = fl.filter(f => OD_PLAN_FOLDER.includes(f.type));
     const walks = fl.filter(f => OD_PLAN_WALK.includes(f.type));
     const lastPlan = fl.length ? fl[0]._at : null;
-    const planColor = (f) => PLAN_NEEDS.includes(f.type) ? (f.seen ? OD_GOLD : OD_R) : f.type === "plans_filed" ? OD_G : OD_B;
+    const planColor = (f) => PLAN_NEEDS.includes(f.type) ? (f.seen ? OD_WARN : OD_R) : f.type === "plans_filed" ? OD_G : OD_B;
     const planIcon = (f) => f.type === "plans_filed" ? "fileText" : OD_PLAN_WALK.includes(f.type) ? "mapPin" : OD_PLAN_FOLDER.includes(f.type) ? "folder" : "alertTriangle";
     const planOpen = (f) => { const j = jobByNo(f.number); openList(`${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, at2(f._at), [
       { title: odText(f.summary) || "—", sub: [f.from && "From " + f.from, f.bestGuess && "Best guess: " + f.bestGuess, f.seen && f.seenBy && "Seen by " + odFirst(f.seenBy)].filter(Boolean).join(" · "), color: planColor(f), icon: planIcon(f) },
       ...(f.links || []).filter(l => l && l.url).map(l => ({ title: `Open ${String(l.label || "link").toLowerCase()}`, sub: l.label === "Email" ? "Gmail" : l.label === "Simpro" ? "Simpro" : "Google Drive", color: OD_B, icon: "external", onClick: () => go(l.url) })),
-      ...(j ? [{ title: `Open ${j.name}`, sub: "Job panel", color: OD_O, icon: "hardHat", job: j }] : []),
-      ...(f.canFile && !f.seen ? [{ title: "File it from Today → Plans in the app", sub: "The Plans card has the File it form for this plan", color: OD_GOLD, icon: "info" }] : []),
+      ...(j ? [{ title: `Open ${j.name}`, sub: "Job panel", color: OD_A, icon: "hardHat", job: j }] : []),
+      ...(f.canFile && !f.seen ? [{ title: "File it from Today → Plans in the app", sub: "The Plans card has the File it form for this plan", color: OD_WARN, icon: "info" }] : []),
     ]); };
     const pNum = (n) => /^#?Q?\d+$/i.test(String(n || "").trim()) ? planNum(String(n).trim()) : "No number";
     const planRow = (f) => ({ title: `${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, sub: odText(f.summary), right: at2(f._at), color: planColor(f), icon: planIcon(f), onClick: () => planOpen(f) });
@@ -46646,9 +46666,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     ajobs.sort((a, b) => (b.notIn + b.likely + b.tbd) - (a.notIn + a.likely + a.tbd) || Number(b.no) - Number(a.no));
     const aSum = (k) => ajobs.reduce((n, g) => n + g[k], 0);
     const applItem = (r) => ({ title: r.item + (r.qty && r.qty !== "1" ? ` × ${r.qty}` : ""), sub: [r.loc, r.model, r.inCC.startsWith("not") ? "Not in CC yet" : r.inCC === "likely" ? `Likely in CC as ${r.cc || "?"}` : r.cc && `In CC as ${r.cc}`, isTbd(r) && "no amps found"].filter(Boolean).join(" · "),
-      right: isTbd(r) ? "TBD" : r.load ? `${r.load} A` : "", color: r.inCC.startsWith("not") ? OD_R : r.inCC === "likely" ? OD_GOLD : isTbd(r) ? OD_R : OD_G, icon: "zap", onClick: r.link ? () => go(r.link) : undefined });
+      right: isTbd(r) ? "TBD" : r.load ? `${r.load} A` : "", color: r.inCC.startsWith("not") ? OD_R : r.inCC === "likely" ? OD_WARN : isTbd(r) ? OD_R : OD_G, icon: "zap", onClick: r.link ? () => go(r.link) : undefined });
     const applOpen = (g) => openList(g.label, `${odPlural(g.rows.length, "item")} · ${Math.round(g.amps)} A connected · tap an item for its source file`, [
-      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: "Job panel", color: OD_O, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_GOLD, icon: "info" }]),
+      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: "Job panel", color: OD_A, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_WARN, icon: "info" }]),
       ...g.rows.filter(r => r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r)).map(applItem),
       ...g.rows.filter(r => !(r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r))).map(applItem),
     ]);
@@ -46661,7 +46681,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdMini title="Plans filed, 14 days" color={OD_G} icon="fileText" value={findings === undefined ? "…" : filesN} sub={`${filed.length} ${filed.length === 1 ? "batch" : "batches"}`} onClick={() => setPlanShow("filed")}><OdBars vals={[13,12,11,10,9,8,7,6,5,4,3,2,1,0].map(i => filed.filter(f => localYmd(f._at) === localYmd(odAddDays(d.t0, -i))).length)} color={OD_G} hi={13} label="Plan filings per day, last 14 days"/></OdMini>
         <OdMini title="Plans need you" color={OD_R} icon="alertTriangle" value={findings === undefined ? "…" : needs.length} sub="not seen yet" onClick={() => setPlanShow("needs")}><OdRing pct={fl.length ? needs.length/fl.length : 0} color={OD_R} label="Share of plan findings that need you"/></OdMini>
         <OdMini title="Not in CC yet" color={OD_O} icon="zap" value={appl === undefined ? "…" : aSum("notIn")} sub={`${aSum("likely")} likely`} onClick={() => applList("Appliances not in CC Home Runs yet", r => r.inCC.startsWith("not") || r.inCC === "likely")}><OdRing pct={arows.length ? (aSum("notIn") + aSum("likely"))/arows.length : 0} color={OD_O} label="Share of appliances not confirmed in Home Runs"/></OdMini>
-        <OdMini title="Appliances, no amps" color={OD_GOLD} icon="help" value={appl === undefined ? "…" : aSum("tbd")} sub={`of ${arows.length}`} onClick={() => applList("Appliances with no amps found", isTbd)}><OdRing pct={arows.length ? aSum("tbd")/arows.length : 0} color={OD_GOLD} label="Share of appliances with no amps"/></OdMini>
+        <OdMini title="Appliances, no amps" color={OD_WARN} icon="help" value={appl === undefined ? "…" : aSum("tbd")} sub={`of ${arows.length}`} onClick={() => applList("Appliances with no amps found", isTbd)}><OdRing pct={arows.length ? aSum("tbd")/arows.length : 0} color={OD_WARN} label="Share of appliances with no amps"/></OdMini>
       </div>
       <div className="od-white od-pad">
         <div className="od-ct">Automated docs<small>tap to open in Google Drive</small></div>
@@ -46699,7 +46719,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
                 <span className="c nm"><b>{g.label}</b><small>{g.job ? g.job.name : "no app job with this number"}</small></span>
                 <span className="c num">{g.rows.length}</span><span className="c num">{Math.round(g.amps * 10) / 10}</span>
                 <span className="c num" style={g.notIn ? { color: OD_R, fontWeight: 700 } : null}>{g.notIn || "—"}</span>
-                <span className="c num" style={g.likely ? { color: OD_GOLD, fontWeight: 700 } : null}>{g.likely || "—"}</span>
+                <span className="c num" style={g.likely ? { color: OD_WARN, fontWeight: 700 } : null}>{g.likely || "—"}</span>
                 <span className="c num" style={g.tbd ? { color: OD_R, fontWeight: 700 } : null}>{g.tbd || "—"}</span>
                 <span className="c num">{g.typical || "—"}</span>
               </button>
@@ -46791,10 +46811,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   return (
     <div className="odash">
       <style>{`
-        .odash{--pan:rgba(40,33,30,.62);--inset:rgba(0,0,0,.22);--line:rgba(255,255,255,.09);--ink:#F5F1EC;--dim:rgba(245,241,236,.7);--faint:rgba(245,241,236,.55);
-          --card:#fff;--cink:#1E1A17;--cdim:#7C736C;--cline:#ECE7E2;--o:${OD_O};
+        .odash{--pan:rgba(27,32,48,.8);--inset:rgba(8,11,18,.42);--line:rgba(255,255,255,.08);--ink:#E6EAF1;--dim:#A3ADBD;--faint:#8F9AAD;
+          --card:linear-gradient(180deg,#222839,#1C2130);--card-solid:#20263A;--cink:#E6EAF1;--cdim:#A3ADBD;--cline:#2E3548;--hov:rgba(255,255,255,.05);--trk:rgba(255,255,255,.09);
+          --o:${OD_A};--on-o:${OD_ON_A};--o-soft:rgba(102,168,255,.14);--o-ink:#8EC0FF;
           color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:dark;
-          background:radial-gradient(55% 45% at 12% 6%,rgba(214,150,92,.34),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(170,100,55,.3),transparent 70%),linear-gradient(180deg,#241B16,#120E0C)}
+          background:radial-gradient(55% 45% at 12% 6%,rgba(47,91,217,.2),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(102,168,255,.1),transparent 70%),linear-gradient(180deg,#1B2030,#141821)}
         .odash *{box-sizing:border-box}
         .odash button{font:inherit;color:inherit}
         .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
@@ -46802,82 +46823,91 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-tabs::-webkit-scrollbar{display:none}
         .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
         .odash .od-tabs button:hover{color:var(--ink)}
-        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:#fff;box-shadow:0 6px 14px -6px rgba(242,112,42,.8)}
-        .odash .od-help{display:inline-flex;align-items:center;background:rgba(255,255,255,.92);border-radius:999px;padding:3px 8px;color:#1B1F24}
-        .odash .od-top .live{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim)}
-        .odash .od-top .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#2FBF71;box-shadow:0 0 0 4px rgba(47,191,113,.2)}
+        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:var(--on-o);box-shadow:0 6px 14px -6px rgba(102,168,255,.6)}
+        .odash .od-help{display:inline-flex;align-items:center}
+        .odash .od-help > span > span{display:none}
+        .odash .od-help button{width:34px;height:34px;justify-content:center;background:var(--inset)!important;border:1px solid var(--line)!important;color:var(--o)!important}
+        .odash .od-help button:hover{border-color:rgba(102,168,255,.5)!important}
+        .odash .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);white-space:nowrap}
+        .odash .od-top .live{margin-left:auto}
+        .odash .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#34D17F;box-shadow:0 0 0 4px rgba(52,209,127,.2)}
+        .odash .od-ctrl .live{display:none}
+        .odash .od-fpanel{display:contents}
+        .odash .od-fbtn{display:none;align-items:center;gap:7px;border:1px solid var(--line);background:var(--inset);color:var(--ink);border-radius:999px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer}
+        .odash .od-fbtn[aria-expanded="true"]{border-color:rgba(102,168,255,.5);color:var(--o-ink)}
+        .odash .od-fbtn .ct{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--o);color:var(--on-o);font-size:11.5px;font-weight:800}
         .odash .od-ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
         .odash .od-sel{background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;max-width:220px}
-        .odash .od-sel.light{background:#F8F5F2;border-color:var(--cline);color:var(--cink);color-scheme:light}
+        .odash .od-sel.light{background:var(--inset);border-color:var(--cline);color:var(--cink);color-scheme:dark}
         .odash .od-seg{display:inline-flex;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
         .odash .od-seg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-seg button[aria-pressed="true"]{background:rgba(255,255,255,.14);color:var(--ink)}
         .odash .od-find{position:relative;flex:1;min-width:200px;max-width:380px;margin-left:auto}
         .odash .od-find input{width:100%;background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:12.5px;outline:none}
         .odash .od-find input::placeholder{color:var(--faint)}
-        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:#fff;color:var(--cink);border-radius:14px;box-shadow:0 18px 40px -12px rgba(0,0,0,.6);overflow:hidden}
+        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:#1E2433;color:var(--cink);border:1px solid var(--cline);border-radius:14px;box-shadow:0 18px 40px -12px rgba(0,0,0,.6);overflow:hidden}
         .odash .od-find .hits button{display:flex;flex-direction:column;align-items:flex-start;width:100%;border:0;background:transparent;padding:9px 14px;text-align:left;cursor:pointer;border-bottom:1px solid var(--cline)}
-        .odash .od-find .hits button:hover{background:#FBF5F0}
+        .odash .od-find .hits button:hover{background:var(--hov)}
         .odash .od-find .hits b{font-size:13px}.odash .od-find .hits small{font-size:11.5px;color:var(--cdim)}
         .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:start}
         .odash .od-panel{background:var(--pan);border:1px solid var(--line);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
         .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
         .odash .od-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
         .odash .od-head p{margin:3px 0 0;font-size:12.5px;color:var(--dim)}
-        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFD3B8;background:rgba(242,112,42,.18);border:1px solid rgba(242,112,42,.4);border-radius:12px;padding:5px 10px;max-width:420px}
+        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFC4A6;background:rgba(240,138,85,.14);border:1px solid rgba(240,138,85,.4);border-radius:12px;padding:5px 10px;max-width:420px}
         .odash .od-clear{margin-left:auto;border:1px solid var(--line);background:var(--inset);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
-        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:0;text-align:left}
+        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:1px solid var(--cline);text-align:left;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 14px 28px -18px rgba(0,0,0,.85)}
         .odash .od-pad{padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
         .odash .od-minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
         .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),box-shadow .25s}
         .odash .od-tap{cursor:pointer}
-        .odash .od-tap:hover{transform:translateY(-4px);box-shadow:0 16px 28px -16px rgba(0,0,0,.7)}
+        .odash .od-tap:hover{transform:translateY(-4px);border-color:rgba(102,168,255,.35);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 20px 32px -16px rgba(0,0,0,.9)}
         .odash .od-mini .t{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:700}
-        .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
+        .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
         .odash .od-mini .b{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:auto;flex-wrap:wrap}
         .odash .od-mini .v{font-size:22px;font-weight:800;line-height:1;color:var(--c);font-variant-numeric:tabular-nums}
-        .odash .od-mini .v small{font-size:11px;font-weight:500;color:var(--cdim);margin-left:4px}
-        .odash .od-mini .more{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;font-weight:700;color:var(--cdim);margin-top:-2px}
+        .odash .od-mini .v small{font-size:11.5px;font-weight:500;color:var(--cdim);margin-left:4px}
+        .odash .od-mini .more{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:700;color:var(--cdim);margin-top:-2px}
         .odash .spark{flex:none}
         .odash .od-row2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
         .odash .od-ct{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:14px}
         .odash .od-ct small{font-weight:500;color:var(--cdim);font-size:12px}
         .odash .od-svg{width:100%;height:auto;display:block}
         .odash .od-hint{font-size:11.5px;color:var(--cdim)}
-        .odash .od-daysum{display:flex;align-items:center;gap:10px;background:#FBF5F0;border-radius:12px;padding:9px 12px}
+        .odash .od-daysum{display:flex;align-items:center;gap:10px;background:var(--hov);border-radius:12px;padding:9px 12px}
         .odash .od-daysum div{flex:1;min-width:0;display:flex;flex-direction:column}
         .odash .od-daysum b{font-size:12.5px}.odash .od-daysum small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-daysum button{border:0;background:var(--o);color:#fff;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-daysum button{border:0;background:var(--o);color:var(--on-o);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
         .odash .od-attn{display:flex;flex-direction:column}
         .odash .od-attn button{display:flex;align-items:center;gap:10px;border:0;border-bottom:1px solid var(--cline);background:transparent;padding:10px 2px;text-align:left;cursor:pointer;color:var(--cdim)}
-        .odash .od-attn button:hover{background:#FBF8F5}
-        .odash .od-attn .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);flex:none}
+        .odash .od-attn button:hover{background:var(--hov)}
+        .odash .od-attn .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
         .odash .od-attn .lb{flex:1;font-size:12.5px;font-weight:600;color:var(--cink)}
         .odash .od-attn .n{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
         .odash .od-busy{margin-top:auto;display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--cline);padding-top:10px}
-        .odash .od-busy small{font-size:11px;color:var(--cdim)}
+        .odash .od-busy small{font-size:11.5px;color:var(--cdim)}
         .odash .od-link{all:unset;cursor:pointer;font-size:13px;color:var(--cink)}
         .odash .od-link:hover b{text-decoration:underline}
-        .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:#FDECEC;color:#B4262B;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:rgba(255,123,123,.14);color:#FF9A9A;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-sec{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;color:var(--ink)}
         .odash .od-sec span::before{content:"";display:inline-block;width:3px;height:15px;border-radius:2px;background:var(--o);margin-right:9px;vertical-align:-2px}
         .odash .od-sec small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--dim)}
-        .odash .od-sec button{margin-left:auto;border:0;background:transparent;color:#FFB585;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-sec button{margin-left:auto;border:0;background:transparent;color:var(--o-ink);font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
         .odash .od-crew{padding:14px;display:flex;gap:10px;align-items:center;min-width:0;transition:transform .25s}
         .odash .od-crew > div{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
         .odash .od-crew b{font-size:13.5px}
         .odash .od-crew p{margin:0;font-size:11.5px;color:var(--cdim);line-height:1.35}
-        .odash .od-crew .day{align-self:flex-start;margin-top:5px;font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 9px;background:#F2EEEA}
-        .odash .od-crew.hot{background:var(--o);color:#fff}
-        .odash .od-crew.hot p{color:rgba(255,255,255,.86)}
-        .odash .od-crew.hot .day{background:rgba(255,255,255,.25)}
+        .odash .od-crew .day{align-self:flex-start;margin-top:5px;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 9px;background:var(--trk)}
+        .odash .od-crew.hot{background:var(--o);color:var(--on-o);border-color:transparent}
+        .odash .od-crew.hot p{color:#14243D}
+        .odash .od-crew.hot .day{background:rgba(11,21,38,.16)}
         .odash .od-start{padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0}
-        .odash .od-start .dd{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-start .dd{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-start b{font-size:14px}
         .odash .od-start p{margin:0;font-size:11.5px;color:var(--cdim)}
-        .odash .od-start.hot{background:var(--o);color:#fff}
-        .odash .od-start.hot .dd,.odash .od-start.hot p{color:rgba(255,255,255,.86)}
+        .odash .od-start.hot{background:var(--o);color:var(--on-o);border-color:transparent}
+        .odash .od-start.hot .dd,.odash .od-start.hot p{color:#14243D}
         .odash .od-me{display:flex;align-items:center;gap:10px}
         .odash .av{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#2F5BD9;color:#fff;font-style:normal;font-weight:800;font-size:14px;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.22)}
         .odash .av.sm{width:30px;height:30px;font-size:12px;box-shadow:none}
@@ -46886,20 +46916,20 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:6px 4px;text-align:center}
         .odash .od-stats > *{border:0;background:transparent;padding:6px 2px;border-radius:12px}
         .odash .od-stats > * + *{border-left:1px solid var(--line);border-radius:0}
-        .odash .od-stats button{cursor:pointer}.odash .od-stats button:hover b{color:#FFB585}
+        .odash .od-stats button{cursor:pointer}.odash .od-stats button:hover b{color:var(--o-ink)}
         .odash .od-stats b{display:block;font-size:16px;font-variant-numeric:tabular-nums}
-        .odash .od-stats small{font-size:10.5px;color:var(--dim)}
+        .odash .od-stats small{font-size:11.5px;color:var(--dim)}
         .odash .od-cal{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:12px}
         .odash .od-cal .h{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:13px;margin-bottom:8px}
-        .odash .od-cal .h small{margin-left:auto;font-weight:500;font-size:10.5px;color:var(--faint)}
-        .odash .od-cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px 0;text-align:center;font-size:11px}
-        .odash .od-cal .dow{color:var(--faint);font-size:10px;padding-bottom:4px}
-        .odash .od-cal .d{width:26px;height:26px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums;border:0;background:transparent;font-size:11px}
-        .odash .od-cal button.d{cursor:pointer;color:#fff;font-weight:800}
+        .odash .od-cal .h small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--faint)}
+        .odash .od-cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px 0;text-align:center;font-size:11.5px}
+        .odash .od-cal .dow{color:var(--faint);font-size:11.5px;padding-bottom:4px}
+        .odash .od-cal .d{width:28px;height:28px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums;border:0;background:transparent;font-size:11.5px}
+        .odash .od-cal button.d{cursor:pointer;color:#0B1526;font-weight:800}
         .odash .od-cal button.d:hover{transform:scale(1.12)}
         .odash .od-cal .d.today{box-shadow:inset 0 0 0 1.5px var(--ink);color:var(--ink);font-weight:800}
-        .odash .od-cal button.d.today{color:#fff;box-shadow:0 0 0 2px var(--ink)}
-        .odash .od-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:10.5px;color:var(--dim)}
+        .odash .od-cal button.d.today{color:#0B1526;box-shadow:0 0 0 2px var(--ink)}
+        .odash .od-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--dim)}
         .odash .od-legend.light{color:var(--cdim);margin-top:0}
         .odash .od-legend span{display:inline-flex;align-items:center;gap:5px}
         .odash .od-legend span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c)}
@@ -46907,158 +46937,158 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-item{display:flex;align-items:center;gap:10px;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:14px;padding:9px 10px;text-align:left;cursor:pointer;min-width:0}
         .odash .od-item:disabled{cursor:default}
         .odash .od-item:not(:disabled):hover{background:rgba(255,255,255,.07)}
-        .odash .od-item .th{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center}
+        .odash .od-item .th{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center;background:color-mix(in srgb,var(--c) 16%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 28%,transparent)}
         .odash .od-item .tx{min-width:0;flex:1;display:flex;flex-direction:column}
-        .odash .od-item em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
-        .odash .od-item b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-item small{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-item em{font-style:normal;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+        .odash .od-item b{font-size:12.5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+        .odash .od-item small{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-item .when{font-size:11.5px;color:var(--dim);white-space:nowrap;flex:none}
-        .odash .od-mini .cap{font-size:10.5px;color:var(--cdim);margin-top:-4px}
-        .odash .od-attn .lb .age{font-size:11px;font-weight:600;color:var(--cdim)}
+        .odash .od-mini .cap{font-size:11.5px;color:var(--cdim);margin-top:-4px}
+        .odash .od-attn .lb .age{font-size:11.5px;font-weight:600;color:var(--cdim)}
         .odash .od-item .chev{color:var(--faint);flex:none;display:grid}
         .odash .od-filters{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
         .odash .od-filters.left{margin-left:0}
         .odash .od-filters button{border:1px solid var(--cline);background:transparent;color:var(--cdim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-filters button span{opacity:.7;margin-left:2px}
-        .odash .od-filters button[aria-pressed="true"]{background:#FFF0E6;border-color:transparent;color:#C2511A}
+        .odash .od-filters button[aria-pressed="true"]{background:var(--o-soft);border-color:transparent;color:var(--o-ink)}
         .odash .od-chips{display:flex;gap:6px;flex-wrap:wrap}
         .odash .od-chips button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--inset);color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-chips button i{width:8px;height:8px;border-radius:50%;background:var(--c)}
         .odash .od-chips button span{opacity:.7}
-        .odash .od-chips button[aria-pressed="true"]{background:var(--o);border-color:transparent;color:#fff}
+        .odash .od-chips button[aria-pressed="true"]{background:var(--o);border-color:transparent;color:var(--on-o)}
         .odash .od-frow{display:flex;gap:8px;flex-wrap:wrap}
         .odash .od-frow .od-q{flex:1;min-width:180px}
-        .odash .od-q{width:100%;border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none;color-scheme:light}
+        .odash .od-q{width:100%;border:1px solid var(--cline);background:var(--inset);border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none;color-scheme:dark}
         .odash .od-q:focus{border-color:var(--o)}
-        .odash .od-dayh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cdim);padding:12px 0 2px;border-bottom:1px solid var(--cline)}
+        .odash .od-dayh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cdim);padding:12px 0 2px;border-bottom:1px solid var(--cline)}
         .odash .od-dayh span{margin-left:auto;font-weight:600;letter-spacing:0;text-transform:none}
         .odash .od-rows{display:flex;flex-direction:column}
         .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%;color:var(--cink)}
         .odash .od-row:disabled{cursor:default}
-        .odash .od-row:not(:disabled):hover{background:#FBF8F5}
-        .odash .od-row .k{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
+        .odash .od-row:not(:disabled):hover{background:var(--hov)}
+        .odash .od-row .k{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
         .odash .od-row .m{min-width:0;display:flex;flex-direction:column}
         .odash .od-row .m b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-row .m em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#C2511A}
+        .odash .od-row .m em{font-style:normal;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--o-ink)}
         .odash .od-row .m small{font-size:12px;color:var(--cdim);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
         .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
         .odash .od-pulse{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:0;text-align:left;cursor:pointer}
-        .odash .od-person:hover{background:#FBF5F0}
+        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:1px solid var(--cline);box-shadow:inset 0 1px 0 rgba(255,255,255,.05);text-align:left;cursor:pointer}
+        .odash .od-person:hover{background:var(--hov)}
         .odash .od-person > div{min-width:0;flex:1}
         .odash .od-person b{display:block;font-size:13px}
         .odash .od-person small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .beat{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
         .odash .od-nav{margin-left:auto;display:inline-flex;gap:4px}
-        .odash .od-nav button{border:1px solid var(--cline);background:#F8F5F2;border-radius:999px;min-width:30px;height:28px;padding:0 10px;display:grid;place-items:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--cink)}
+        .odash .od-nav button{border:1px solid var(--cline);background:var(--inset);border-radius:999px;min-width:30px;height:28px;padding:0 10px;display:grid;place-items:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--cink)}
         .odash .od-weekwrap{overflow-x:auto}
         .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
-        .odash .od-week .col{background:#F8F5F2;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
-        .odash .od-week .col.today{background:#FFF1E7}
-        .odash .od-week .dh{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
-        .odash .od-week .col.today .dh{color:#C2511A}
+        .odash .od-week .col{background:var(--inset);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+        .odash .od-week .col.today{background:var(--o-soft)}
+        .odash .od-week .dh{font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-week .col.today .dh{color:var(--o-ink)}
         .odash .od-week .dh span{font-weight:600;margin-left:3px}
-        .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 14%,#fff);min-width:0;color:var(--cink)}
-        .odash .od-week .blk b{display:block;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-week .blk small{display:block;font-size:10.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-week .none{color:#C9C1BA;font-size:12px;text-align:center;margin-top:20px}
+        .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);min-width:0;color:var(--cink)}
+        .odash .od-week .blk b{font-size:12px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+        .odash .od-week .blk small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-week .none{color:var(--faint);font-size:12px;text-align:center;margin-top:20px}
         .odash .od-board{display:flex;flex-direction:column}
         .odash .od-board .r{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(80px,40%);gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;color:var(--cink)}
-        .odash .od-board .r:hover{background:#FBF8F5}
+        .odash .od-board .r:hover{background:var(--hov)}
         .odash .od-board .nm b{display:block;font-size:13px}
-        .odash .od-board .nm small{display:block;font-size:11px;color:var(--cdim)}
-        .odash .od-board .bar{display:flex;height:8px;border-radius:99px;background:#F2EEEA;overflow:hidden;gap:2px}
+        .odash .od-board .nm small{display:block;font-size:11.5px;color:var(--cdim)}
+        .odash .od-board .bar{display:flex;height:8px;border-radius:99px;background:var(--trk);overflow:hidden;gap:2px}
         .odash .od-board .bar i{display:block;height:100%}
         .odash .od-hb{display:flex;flex-direction:column;gap:4px}
         .odash .od-hb .r{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;font-size:12px;padding:5px 6px;border-radius:10px;border:0;background:transparent;text-align:left;color:var(--cink);width:100%}
-        .odash .od-hb .r.tap{cursor:pointer}.odash .od-hb .r.tap:hover,.odash .od-hb .r.on{background:#FBF2EA}
+        .odash .od-hb .r.tap{cursor:pointer}.odash .od-hb .r.tap:hover,.odash .od-hb .r.on{background:var(--o-soft)}
         .odash .od-hb .r span{color:var(--cdim);font-variant-numeric:tabular-nums}
-        .odash .od-hb .r i{grid-column:1/-1;height:7px;border-radius:99px;background:#F2EEEA;overflow:hidden}
+        .odash .od-hb .r i{grid-column:1/-1;height:7px;border-radius:99px;background:var(--trk);overflow:hidden}
         .odash .od-hb .r i::after{content:"";display:block;height:100%;width:var(--w);background:var(--c);border-radius:inherit}
-        .odash .od-heat{display:grid;gap:4px;align-items:center;font-size:11px}
-        .odash .od-heat .h{text-align:center;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-heat{display:grid;gap:4px;align-items:center;font-size:11.5px}
+        .odash .od-heat .h{text-align:center;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-heat .n{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--cink);padding:0}
         .odash .od-heat .c{height:28px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-variant-numeric:tabular-nums;border:0;cursor:pointer}
         .odash .od-heat .c:disabled{cursor:default}
         .odash .od-box{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:4px 12px}
-        .odash .od-box.light{background:var(--card);border:0;padding:8px}
+        .odash .od-box.light{background:var(--card);border:1px solid var(--cline);padding:8px}
         .odash .od-dev{display:flex;align-items:center;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
         .odash .od-dev:last-child{border-bottom:0}
         .odash .od-dev .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-        .odash .od-dev .sn{color:var(--dim);font-size:11px;white-space:nowrap}
-        .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
+        .odash .od-dev .sn{color:var(--dim);font-size:11.5px;white-space:nowrap}
+        .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11.5px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
         .odash .od-dev em.ok{color:#5FE0A0;background:rgba(47,191,113,.16)}
         .odash .od-tablewrap{overflow-x:auto}
         .odash .od-table{min-width:760px;display:flex;flex-direction:column}
         .odash .od-table .tr{display:grid;grid-template-columns:minmax(180px,2fr) 1fr 1.2fr 64px 56px 1.1fr 1fr;gap:8px;align-items:center;padding:9px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;width:100%;color:var(--cink);font-size:12.5px}
-        .odash .od-table button.tr{cursor:pointer}.odash .od-table button.tr:hover{background:#FBF8F5}
-        .odash .od-table .hd{position:sticky;top:0;background:#fff}
-        .odash .od-table .th{border:0;background:transparent;text-align:left;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);cursor:pointer;padding:0}
-        .odash .od-table .th.on{color:#C2511A}
+        .odash .od-table button.tr{cursor:pointer}.odash .od-table button.tr:hover{background:var(--hov)}
+        .odash .od-table .hd{position:sticky;top:0;background:var(--card-solid)}
+        .odash .od-table .th{border:0;background:transparent;text-align:left;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);cursor:pointer;padding:0}
+        .odash .od-table .th.on{color:var(--o-ink)}
         .odash .od-table .c{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-table.appl{min-width:620px}
         .odash .od-table.appl .tr{grid-template-columns:minmax(170px,2.2fr) repeat(6,minmax(54px,1fr))}
-        .odash .od-table.appl .hd .c{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-table.appl .hd .c{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-ct-actions{margin-left:auto;display:flex;gap:6px}
         .odash .od-docs{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:10px}
-        .odash .od-doc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 6px 4px 4px;border:1px solid var(--cline);border-radius:12px;background:#fff}
+        .odash .od-doc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 6px 4px 4px;border:1px solid var(--cline);border-radius:12px;background:var(--inset)}
         .odash .od-doc .go{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;padding:6px 8px;border-radius:9px;color:var(--cink);text-decoration:none;min-width:0}
-        .odash .od-doc .go:hover{background:#FBF8F5}
+        .odash .od-doc .go:hover{background:var(--hov)}
         .odash .od-doc .fold{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;color:var(--cdim)}
-        .odash .od-doc a.fold:hover{background:#FBF8F5;color:var(--cink)}
-        .odash .od-doc .k{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:#EEF3FD;color:#3B6FE0}
+        .odash .od-doc a.fold:hover{background:var(--hov);color:var(--cink)}
+        .odash .od-doc .k{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:var(--o-soft);color:var(--o)}
         .odash .od-doc .m{min-width:0;display:flex;flex-direction:column;gap:1px}
         .odash .od-doc .m b{font-size:13px}
         .odash .od-doc .m small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-doc .m small.w{color:#C2511A;font-weight:600}
-        .odash .od-mini-btn{border:1px solid var(--cline);background:#fff;color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
-        .odash .od-mini-btn:hover{background:#FBF8F5}
-        .odash .od-table .c small{color:var(--cdim);font-size:11px}
+        .odash .od-doc .m small.w{color:#F5A57E;font-weight:600}
+        .odash .od-mini-btn{border:1px solid var(--cline);background:var(--inset);color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+        .odash .od-mini-btn:hover{background:var(--hov)}
+        .odash .od-table .c small{color:var(--cdim);font-size:11.5px}
         .odash .od-table .c.st small{display:block;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .nm{display:flex;flex-direction:column}
         .odash .od-table .nm b{overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .num{font-weight:700;font-variant-numeric:tabular-nums}
-        .odash .pill{font-style:normal;font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,#fff);white-space:nowrap}
+        .odash .pill{font-style:normal;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 9px;color:var(--c);background:color-mix(in srgb,var(--c) 13%,transparent);white-space:nowrap}
         .odash .od-sgroup{display:flex;flex-direction:column}
-        .odash .od-sgroup .sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--c);padding:10px 0 4px}
+        .odash .od-sgroup .sh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--c);padding:10px 0 4px}
         .odash .od-sgroup .sh span{color:var(--cdim);font-weight:700}
         .odash .od-sess{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--cline);color:var(--cink);text-decoration:none}
-        .odash .od-sess:hover{background:#FBF8F5}
+        .odash .od-sess:hover{background:var(--hov)}
         .odash .od-sess .m{min-width:0;display:flex;flex-direction:column}
         .odash .od-sess b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-sess small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-sess .t{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--cdim);white-space:nowrap}
         .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
         .odash .od-empty.dark{color:var(--dim)}
-        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(10,8,7,.55);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
-        .od-sheet{width:min(560px,100%);height:100%;background:#FBF8F5;color:#1E1A17;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
+        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(5,8,14,.62);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+        .od-sheet{width:min(560px,100%);height:100%;background:#181D29;color:#E6EAF1;border-left:1px solid #2E3548;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
         @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
-        .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid #ECE7E2;background:#fff}
+        .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid #2E3548;background:#1E2433}
         .od-sheet-h .tt{flex:1;min-width:0;display:flex;flex-direction:column}
-        .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:#7C736C}
-        .od-sheet-h .x{border:0;background:#F2EEEA;border-radius:999px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;flex:none;color:#1E1A17}
-        .od-sheet-h .go{border:0;background:#F2702A;color:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
+        .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:#A3ADBD}
+        .od-sheet-h .x{border:0;background:rgba(255,255,255,.08);border-radius:999px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;flex:none;color:#E6EAF1}
+        .od-sheet-h .go{border:0;background:#66A8FF;color:#0B1526;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
         .od-sheet-b{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
         .odash .od-facts,.od-sheet .od-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:6px}
-        .od-sheet .od-facts div{background:#fff;border-radius:12px;padding:8px 10px;min-width:0}
-        .od-sheet .od-facts small{display:block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7C736C}
+        .od-sheet .od-facts div{background:#20263A;border:1px solid #2E3548;border-radius:12px;padding:8px 10px;min-width:0}
+        .od-sheet .od-facts small{display:block;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#A3ADBD}
         .od-sheet .od-facts b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .od-sheet .od-note{background:#FFF5EC;border-radius:12px;padding:9px 12px;font-size:13px;margin:6px 0}
-        .od-sheet .od-note small{display:block;font-size:10.5px;font-weight:700;color:#C2511A;text-transform:uppercase;letter-spacing:.05em}
-        .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#7C736C;padding:16px 0 4px;border-bottom:1px solid #ECE7E2}
+        .od-sheet .od-note{background:var(--o-soft);border-radius:12px;padding:9px 12px;font-size:13px;margin:6px 0}
+        .od-sheet .od-note small{display:block;font-size:11.5px;font-weight:700;color:var(--o-ink);text-transform:uppercase;letter-spacing:.05em}
+        .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#A3ADBD;padding:16px 0 4px;border-bottom:1px solid #2E3548}
         .od-sheet .od-sh span{margin-left:auto;font-weight:700}
         .od-sheet .od-rows{display:flex;flex-direction:column}
-        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #ECE7E2;background:transparent;text-align:left;cursor:pointer;width:100%;color:#1E1A17;font:inherit}
+        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #2E3548;background:transparent;text-align:left;cursor:pointer;width:100%;color:#E6EAF1;font:inherit}
         .od-sheet .od-row:disabled{cursor:default}
-        .od-sheet .od-row:not(:disabled):hover{background:#fff}
-        .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#fff)}
+        .od-sheet .od-row:not(:disabled):hover{background:rgba(255,255,255,.05)}
+        .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
         .od-sheet .od-row .m{min-width:0;display:flex;flex-direction:column}
         .od-sheet .od-row .m b{font-size:13px;overflow:hidden;text-overflow:ellipsis}
-        .od-sheet .od-row .m em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#C2511A}
-        .od-sheet .od-row .m small{font-size:12px;color:#7C736C}
-        .od-sheet .od-row .t{font-size:11.5px;color:#7C736C;white-space:nowrap}
-        .od-sheet .od-empty{color:#7C736C;font-size:12.5px;padding:10px 2px}
-        .odash button:focus-visible,.odash input:focus-visible,.odash select:focus-visible,.od-sheet button:focus-visible{outline:2px solid var(--o, #F2702A);outline-offset:2px}
+        .od-sheet .od-row .m em{font-style:normal;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--o-ink)}
+        .od-sheet .od-row .m small{font-size:12px;color:#A3ADBD}
+        .od-sheet .od-row .t{font-size:11.5px;color:#A3ADBD;white-space:nowrap}
+        .od-sheet .od-empty{color:#A3ADBD;font-size:12.5px;padding:10px 2px}
+        .odash button:focus-visible,.odash input:focus-visible,.odash select:focus-visible,.od-sheet button:focus-visible{outline:2px solid var(--o, #66A8FF);outline-offset:2px}
         @media (max-width:1100px){.odash .od-grid{grid-template-columns:minmax(0,1fr)}.odash .od-minis{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media (max-width:700px){.odash{padding:10px;border-radius:16px}.odash .od-panel{padding:14px}.odash .od-row2,.odash .od-plan{grid-template-columns:minmax(0,1fr)}
           .odash .od-find{max-width:none;margin-left:0;flex-basis:100%}
@@ -47067,27 +47097,44 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           .od-sheet .od-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @keyframes odUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}}
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
-        @media (max-width:600px){.odash .od-tabs{flex-wrap:wrap;border-radius:18px;overflow:visible}.odash .od-tabs button{padding:8px 12px}}
+        @media (max-width:600px){
+          .odash .od-top{flex-wrap:nowrap}
+          .odash .od-tabs{flex:1 1 auto;min-width:0;-webkit-mask-image:linear-gradient(90deg,#000 86%,transparent);mask-image:linear-gradient(90deg,#000 86%,transparent)}
+          .odash .od-tabs button{padding:8px 12px}
+          .odash .od-top .live{display:none}
+          .odash .od-ctrl .od-fbtn,.odash .od-ctrl .live{display:inline-flex}
+          .odash .od-ctrl .live{margin-left:auto}
+          .odash .od-ctrl:not(.open) .od-fpanel{display:none}
+          .odash .od-ctrl.open .od-fpanel{display:flex;flex-direction:column;align-items:stretch;gap:8px;flex-basis:100%;background:var(--pan);border:1px solid var(--line);border-radius:16px;padding:10px}
+          .odash .od-fpanel .od-sel{max-width:none}
+          .odash .od-fpanel .od-seg{align-self:flex-start}
+          .odash .od-fpanel .od-find{min-width:0;max-width:none;margin-left:0;flex:none}}
         @media (prefers-reduced-motion:reduce){.odash *,.od-sheet{transition:none!important;animation:none!important}.odash .od-tap:hover{transform:none}}
       `}</style>
       <div className="od-top">
         <div className="od-tabs" role="tablist" aria-label="Dashboard views">
           {OD_TABS.map(([k, l]) => <button type="button" role="tab" key={k} aria-selected={tab === k} onClick={() => pickTab(k)}>{l}</button>)}
         </div>
-        <span className="od-help"><HelpDot section="dashboard"/></span>
+        <span className="od-help"><HelpDot section="dashboard" color={OD_A}/></span>
         <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
       </div>
       {tab !== "cc" && (
-        <div className="od-ctrl">
-          <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Foreman">
-            <option value="">All foremen</option>{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
-          <span className="od-seg" role="group" aria-label="Date range">{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} onClick={() => pickRange(r)}>{r} days</button>)}</span>
-          <div className="od-find">
-            <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
-            {searchHits.length > 0 && <div className="hits">{searchHits.map(j => (
-              <button type="button" key={j.id} onClick={() => { setQ(""); openJob(j); }}><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.foreman, d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · ")}</small></button>
-            ))}</div>}
+        <div className={"od-ctrl" + (filtersOpen ? " open" : "")}>
+          <button type="button" className="od-fbtn" aria-expanded={filtersOpen} aria-controls="od-fpanel" onClick={() => setFiltersOpen(o => !o)}>
+            <Icon name="filter" size={14}/>Filters{nFilters ? <span className="ct" aria-label={`${nFilters} on`}>{nFilters}</span> : null}
+          </button>
+          <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"}</span>
+          <div className="od-fpanel" id="od-fpanel">
+            <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Foreman">
+              <option value="">All foremen</option>{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <span className="od-seg" role="group" aria-label="Date range">{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} onClick={() => pickRange(r)}>{r} days</button>)}</span>
+            <div className="od-find">
+              <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
+              {searchHits.length > 0 && <div className="hits">{searchHits.map(j => (
+                <button type="button" key={j.id} onClick={() => { setQ(""); openJob(j); }}><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.foreman, d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · ")}</small></button>
+              ))}</div>}
+            </div>
           </div>
         </div>
       )}
@@ -47124,33 +47171,49 @@ if (IS_DASH_PAGE) {
 function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
   const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
-  const segBtn = (on) => ({ border: 0, borderRadius: 999, padding: "6px 12px", fontFamily: "inherit", fontSize: 13, fontWeight: 700, cursor: "pointer",
-    background: on ? "#F2702A" : "transparent", color: on ? "#fff" : "rgba(245,241,236,.7)" });
   return (
-    <div style={{ minHeight: "100vh", background: "#120E0C", color: "#F5F1EC", fontFamily: "'DM Sans',sans-serif",
-      padding: "calc(12px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px))" }}>
-      <div style={{ maxWidth: 1400, margin: "0 auto 12px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 800, fontSize: 15 }}>
-          <span style={{ width: 30, height: 30, borderRadius: 9, background: "#F2702A", display: "grid", placeItems: "center" }}><Icon name="zap" size={16} color="#fff"/></span>
-          Homestead <span style={{ color: "rgba(245,241,236,.6)", fontWeight: 600 }}>Dashboard</span>
+    <div className="od-page">
+      <style>{`
+        .od-page{min-height:100vh;background:#141821;color:#E6EAF1;font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
+        .od-page-h{max-width:1400px;margin:0 auto 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+        .od-brand{display:inline-flex;align-items:center;gap:9px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:23px;letter-spacing:.04em;line-height:1;color:#E6EAF1}
+        .od-brand .mk{width:32px;height:32px;border-radius:10px;background:#66A8FF;display:grid;place-items:center;flex:none;box-shadow:0 6px 14px -8px rgba(102,168,255,.8)}
+        .od-brand .sub{color:#A3ADBD}
+        .od-page-r{margin-left:auto;display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .od-mode{display:inline-flex;background:rgba(8,11,18,.42);border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:3px;gap:2px}
+        .od-mode button{border:0;border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:transparent;color:#A3ADBD}
+        .od-mode button[aria-pressed="true"]{background:#66A8FF;color:#0B1526}
+        .od-app{color:#E6EAF1;font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
+        .od-app:hover{border-color:rgba(102,168,255,.5)}
+        .od-app .s{display:none}
+        .od-page-h button:focus-visible,.od-page-h a:focus-visible{outline:2px solid #66A8FF;outline-offset:2px}
+        .od-private{max-width:520px;margin:40px auto;background:linear-gradient(180deg,#222839,#1C2130);border:1px solid #2E3548;color:#E6EAF1;border-radius:16px;padding:20px}
+        .od-private div{font-size:14px;color:#A3ADBD;margin-top:6px}
+        .od-private a{display:inline-block;margin-top:12px;color:#8EC0FF;font-weight:700}
+        @media (max-width:600px){.od-brand .sub,.od-app .l{display:none}.od-app .s{display:inline}.od-mode button{padding:6px 10px}}
+      `}</style>
+      <div className="od-page-h">
+        <span className="od-brand">
+          <span className="mk"><Icon name="zap" size={16} color="#0B1526"/></span>
+          Homestead <span className="sub">Dashboard</span>
         </span>
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span className="od-page-r">
           {canCommercial && (
-            <span style={{ display: "inline-flex", background: "rgba(0,0,0,.3)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 999, padding: 3, gap: 2 }}>
-              <button type="button" style={segBtn(mode !== "commercial")} onClick={() => setMode("resi")}>Resi</button>
-              <button type="button" style={segBtn(mode === "commercial")} onClick={() => setMode("commercial")}>Commercial</button>
+            <span className="od-mode" role="group" aria-label="Job type">
+              <button type="button" aria-pressed={mode !== "commercial"} onClick={() => setMode("resi")}>Resi</button>
+              <button type="button" aria-pressed={mode === "commercial"} onClick={() => setMode("commercial")}>Commercial</button>
             </span>
           )}
-          <a href="/" style={{ color: "#F5F1EC", fontSize: 13.5, fontWeight: 700, textDecoration: "none", border: "1px solid rgba(255,255,255,.18)", borderRadius: 999, padding: "6px 12px" }}>Open the app</a>
+          <a href="/" className="od-app" aria-label="Open the app"><span className="l">Open the app</span><span className="s">App</span></a>
         </span>
       </div>
       {ok ? (
         <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob}/></OdBoundary>
       ) : (
-        <div style={{ maxWidth: 520, margin: "40px auto", background: "#fff", color: "#1B1F24", borderRadius: 16, padding: 20 }}>
+        <div className="od-private">
           <b>This page is private.</b>
-          <div style={{ fontSize: 14, color: "#5E6670", marginTop: 6 }}>It only opens for Koy's login.</div>
-          <a href="/" style={{ display: "inline-block", marginTop: 12, color: "#2F5BD9", fontWeight: 700 }}>Open the app</a>
+          <div>It only opens for Koy's login.</div>
+          <a href="/">Open the app</a>
         </div>
       )}
     </div>
