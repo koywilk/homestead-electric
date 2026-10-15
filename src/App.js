@@ -60930,6 +60930,82 @@ function compareMyDayRows(a, b) {
   if (da !== dueB) { if (!da) return 1; if (!dueB) return -1; return da < dueB ? -1 : 1; }
   return String((a && a.title) || "").localeCompare(String((b && b.title) || ""));
 }
+// ── My Day redesign (Koy 2026-10-14: "make it extremely clean and easy to use
+// and very organized"). Pure; extracted by scripts/needs-dryrun.js. ──────────
+// One per-device Group pref replaces myday.view + myday.sort (read once).
+function myDayGroupPref(group, view, sort) {
+  if (["time", "job", "type", "from"].includes(group)) return group;
+  if (view === "job" || sort === "job") return "job";
+  if (sort === "person") return "from";
+  return "time";
+}
+// To do sections. Rows arrive sorted (compareMyDayRows). "time" = the four
+// lanes (empty lanes drop; Today always shows; Overdue + Today start open);
+// job / type / from = folded bunches (bunchRows: A–Z, blank last).
+function myDaySections(rows, mode, labelOf) {
+  if (mode === "time") {
+    const LABEL = { overdue: "Overdue", today: "Today", week: "This week", later: "Later" };
+    const laneOf = (r) => (MYDAY_ORDER.includes(r && r.bucket) ? r.bucket : "later");
+    return MYDAY_ORDER
+      .map(k => ({ key: "lane:" + k, label: LABEL[k], lane: k, rows: (rows || []).filter(r => laneOf(r) === k), openByDefault: k === "overdue" || k === "today" }))
+      .filter(s => s.rows.length || s.lane === "today");
+  }
+  const emptyLabel = mode === "job" ? "No job" : mode === "from" ? "Automatic" : "Other";
+  return bunchRows(rows, r => labelOf(r, mode), emptyLabel)
+    .map(b => ({ key: mode + ":" + b.key, label: b.label, lane: "", rows: b.rows, openByDefault: false }));
+}
+// Waiting on others: Not started (oldest first — chase these) → Waiting → Working.
+function sentChaseState(r) {
+  if (r && r.working) return "work";
+  if (r && (r.snoozedUntil || (r.latest && r.latest.kind === "waiting"))) return "wait";
+  return "none";
+}
+function sentChaseOrder(rows) {
+  const rank = { none: 0, wait: 1, work: 2 };
+  const age = (r) => String((r && r.need && (r.need.assignedAt || r.need.createdAt)) || "");
+  return (rows || []).slice().sort((a, b) => (rank[sentChaseState(a)] - rank[sentChaseState(b)]) || age(a).localeCompare(age(b)));
+}
+// Done tab: my Done + Sent · finished as one newest-first list, one row per doc.
+function mergeDoneRows(done, finished) {
+  const seen = new Set(), out = [];
+  [...(done || []).map(r => ({ ...r })), ...(finished || []).map(r => ({ ...r, youAsked: true }))].forEach(r => {
+    const id = r.need ? r.need.id : r.key; if (seen.has(id)) return; seen.add(id); out.push(r);
+  });
+  const at = (r) => String((r.need && (r.need.voidedAt || r.need.doneAt)) || "");
+  return out.sort((a, b) => at(b).localeCompare(at(a)));
+}
+// Automatic-row snooze: `taskDueDates` keeps moving the due date for every
+// other screen; `taskSnoozes` is the marker that hides the row until then.
+// A snooze from an old build (no marker) is never hidden — no row is lost.
+function isAutoSnoozed(snoozeYmd, todayYmd) { return !!snoozeYmd && String(snoozeYmd) > String(todayYmd); }
+function autoSnoozePatch(job, taskId, ymd) {
+  return { taskDueDates: { ...((job && job.taskDueDates) || {}), [taskId]: ymd }, taskSnoozes: { ...((job && job.taskSnoozes) || {}), [taskId]: ymd } };
+}
+function autoWakePatch(job, taskId, todayYmd) {
+  return { taskDueDates: { ...((job && job.taskDueDates) || {}), [taskId]: todayYmd }, taskSnoozes: { ...((job && job.taskSnoozes) || {}), [taskId]: "" } };
+}
+// Task docs on me (or on anyone I'm covering) that are snoozed into the future.
+function snoozedMineNeeds(needs, whoList, todayYmd) {
+  return (needs || []).filter(n => n && n.status !== "done" && isSnoozed(n, todayYmd) && (whoList || []).some(w => isMine(n, w)));
+}
+// The small due word on a row: red "Due 10/13" when overdue, weekday this week, M/D later.
+function myDayDueWord(r, todayYmd) {
+  const y = (r && r.dueYmd) || "";
+  const md = (s) => { const p = String(s).split("-"); return p.length === 3 ? `${+p[1]}/${+p[2]}` : ""; };
+  if (r && r.bucket === "overdue") return y ? "Due " + md(y) : "Overdue";
+  if (!y || !r || r.bucket === "today") return "";
+  if (r.bucket === "week") { const d = new Date(y + "T00:00:00"); return isNaN(d) ? "" : ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()]; }
+  return md(y);
+}
+// Push deep-link: which tab + section holds this task doc.
+function myDayJumpTarget(needId, places) {
+  if (!needId) return null;
+  for (const p of places || []) {
+    const r = (p.rows || []).find(x => x && x.need && x.need.id === needId);
+    if (r) return { tab: p.tab, sectionKey: p.sectionKey || "", rowKey: r.key };
+  }
+  return null;
+}
 // The My Day tab badge: open task docs on me that are overdue, due today, or
 // urgent. Docs only (punch / auto rows would need the whole board's math).
 function mydayBadgeCount(needs, identity, todayYmd) {

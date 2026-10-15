@@ -68,6 +68,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
+  "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
   "loadsListRows","loadsListCsv",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -752,6 +753,68 @@ eq(leg[0].loads[0], { id:"1", num:1, name:"Cans", ch:"1", loadType:"Dimming", wa
   eq(H.bunchRows([], r => r.x, "No job"), [], "empty in → empty out");
   // compareMyDayRows: a working row beats even an urgent one.
   eq([{ key:"u", bucket:"today", prio:"urgent", title:"a" }, { key:"w", bucket:"later", prio:"low", title:"b", working:{ by:"x", at:T0 } }].sort(H.compareMyDayRows).map(r => r.key), ["w", "u"], "working rides above urgent");
+}
+
+// ── My Day redesign ─────────────────────────────────────────────────────────
+{
+  eq([H.myDayGroupPref("type","cat","urgency"), H.myDayGroupPref(null,"job","urgency"), H.myDayGroupPref(null,"cat","person"), H.myDayGroupPref(null,"cat","job"), H.myDayGroupPref(null,"cat","urgency"), H.myDayGroupPref("junk","person","")],
+     ["type","job","from","job","time","time"], "group pref: saved wins; old view/sort migrate; junk → time");
+  const rows = [
+    { key:"a", bucket:"overdue", jobId:"j1", by:"Josh Cloward" }, { key:"b", bucket:"today" },
+    { key:"c", bucket:"week", jobId:"j2" }, { key:"d", bucket:"nope" },
+  ];
+  const lanes = H.myDaySections(rows, "time", () => "");
+  eq(lanes.map(s => [s.key, s.rows.map(r => r.key), s.openByDefault]),
+     [["lane:overdue",["a"],true],["lane:today",["b"],true],["lane:week",["c"],false],["lane:later",["d"],false]], "time: four lanes, unknown bucket → Later, Overdue/Today open");
+  eq(H.myDaySections([{ key:"x", bucket:"week" }], "time", () => "").map(s => s.key), ["lane:today","lane:week"], "empty lanes drop, Today always stays");
+  const byJob = H.myDaySections(rows, "job", r => r.jobId === "j1" ? "Miller" : r.jobId === "j2" ? "Kweller" : "");
+  eq(byJob.map(s => [s.label, s.rows.map(r => r.key), s.openByDefault]), [["Kweller",["c"],false],["Miller",["a"],false],["No job",["b","d"],false]], "job: A–Z, No job last, all folded");
+  eq(H.myDaySections(rows, "from", r => r.by ? "From Josh" : "").map(s => s.label), ["From Josh","Automatic"], "from: blank → Automatic, last");
+
+  const T0 = "2026-10-01T10:00:00Z", T1 = "2026-10-05T10:00:00Z";
+  const sent = [
+    { key:"w", working:{ by:"Josh", at:T1 }, need:{ createdAt:T0 } },
+    { key:"n2", need:{ createdAt:T1 } },
+    { key:"h", snoozedUntil:"2026-10-20", need:{ createdAt:T0 } },
+    { key:"n1", need:{ createdAt:T0 } },
+    { key:"q", latest:{ kind:"waiting" }, need:{ createdAt:T1 } },
+  ];
+  eq(sent.map(H.sentChaseState), ["work","none","wait","none","wait"], "chase states");
+  eq(H.sentChaseOrder(sent).map(r => r.key), ["n1","n2","h","q","w"], "Not started oldest first → Waiting → Working");
+
+  const done = [{ key:"d1", need:{ id:"1", doneAt:"2026-10-10" } }, { key:"d2", need:{ id:"2", doneAt:"2026-10-12" } }];
+  const fin = [{ key:"f1", need:{ id:"3", doneAt:"2026-10-11" } }, { key:"f2", need:{ id:"2", doneAt:"2026-10-12" } }];
+  eq(H.mergeDoneRows(done, fin).map(r => [r.key, !!r.youAsked]), [["d2",false],["f1",true],["d1",false]], "done merge: newest first, dedupe by doc id, finished marked youAsked");
+
+  eq([H.isAutoSnoozed("2026-10-20","2026-10-14"), H.isAutoSnoozed("2026-10-14","2026-10-14"), H.isAutoSnoozed("","2026-10-14"), H.isAutoSnoozed(undefined,"2026-10-14")], [true,false,false,false], "auto snooze only while the date is in the future; old-build snoozes (no marker) never hide");
+  const job = { taskDueDates:{ t1:"2026-10-01" }, taskSnoozes:{ t9:"2026-10-30" } };
+  eq(H.autoSnoozePatch(job, "t2", "2026-10-20"), { taskDueDates:{ t1:"2026-10-01", t2:"2026-10-20" }, taskSnoozes:{ t9:"2026-10-30", t2:"2026-10-20" } }, "snooze writes both maps, keeps other keys");
+  eq(H.autoSnoozePatch({}, "t2", "2026-10-20"), { taskDueDates:{ t2:"2026-10-20" }, taskSnoozes:{ t2:"2026-10-20" } }, "snooze on a job with neither map");
+  eq(H.autoWakePatch(job, "t9", "2026-10-14"), { taskDueDates:{ t1:"2026-10-01", t9:"2026-10-14" }, taskSnoozes:{ t9:"" } }, "wake: due today, marker blanked");
+
+  const me = { name:"Koy Wilkinson" };
+  const needs = [
+    { id:"s1", status:"open", assignedTo:"Koy Wilkinson", snoozedUntil:"2026-10-20" },
+    { id:"s2", status:"open", assignedTo:"Koy Wilkinson", snoozedUntil:"2026-10-10" },
+    { id:"s3", status:"done", assignedTo:"Koy Wilkinson", snoozedUntil:"2026-10-20" },
+    { id:"s4", status:"open", assignedTo:"Josh Cloward", snoozedUntil:"2026-10-20" },
+    { id:"s5", status:"open", assignedTo:"Josh Cloward", snoozedUntil:"2026-10-20" },
+  ];
+  eq(H.snoozedMineNeeds(needs, [me], "2026-10-14").map(n => n.id), ["s1"], "snoozed mine: future date, open, mine");
+  eq(H.snoozedMineNeeds(needs, [me, { name:"Josh Cloward" }], "2026-10-14").map(n => n.id), ["s1","s4","s5"], "covering adds the covered person's");
+
+  eq([H.myDayDueWord({ bucket:"overdue", dueYmd:"2026-10-13" }, "2026-10-14"), H.myDayDueWord({ bucket:"overdue" }, "2026-10-14"),
+      H.myDayDueWord({ bucket:"week", dueYmd:"2026-10-16" }, "2026-10-14"), H.myDayDueWord({ bucket:"later", dueYmd:"2026-11-02" }, "2026-10-14"),
+      H.myDayDueWord({ bucket:"today", dueYmd:"2026-10-14" }, "2026-10-14"), H.myDayDueWord({ bucket:"week" }, "2026-10-14")],
+     ["Due 10/13","Overdue","Fri","11/2","",""], "due word per lane (2026-10-16 is a Friday)");
+
+  const places = [
+    { tab:"todo", sectionKey:"lane:today", rows:[{ key:"need_a", need:{ id:"a" } }] },
+    { tab:"todo", sectionKey:"snoozed", rows:[{ key:"need_b", need:{ id:"b" } }] },
+    { tab:"done", sectionKey:"", rows:[{ key:"done_c", need:{ id:"c" } }] },
+  ];
+  eq([H.myDayJumpTarget("b", places), H.myDayJumpTarget("c", places), H.myDayJumpTarget("zz", places), H.myDayJumpTarget("", places)],
+     [{ tab:"todo", sectionKey:"snoozed", rowKey:"need_b" }, { tab:"done", sectionKey:"", rowKey:"done_c" }, null, null], "jump target finds the tab + section, null when missing");
 }
 
 console.log("needs-dryrun ok");
