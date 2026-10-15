@@ -63395,8 +63395,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
           role="button" tabIndex={0} aria-expanded={expKey === r.key}
           style={{ flex: 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : "pointer" }}>
           <div style={{ display: "flex", gap: 7, alignItems: "baseline", fontSize: 15, fontWeight: 600, color: r.state === "with" || r.onWake ? C.dim : C.text, lineHeight: 1.35, wordBreak: "break-word" }}>
-            {(r.unseen || r.isNew || r.newReply) && <span title={r.unseen ? "Sent to you, not opened yet" : r.newReply ? "New reply since you last looked" : "New since you last looked"} style={{ width: 8, height: 8, borderRadius: 99, background: C.blue, flexShrink: 0, transform: "translateY(-1px)" }} />}
-            {r.prio === "urgent" && <Icon name="flag" size={13} color={C.red} stroke={2.4} aria-label="Urgent" />}
+            {(r.unseen || r.isNew || r.newReply) && (() => { const nt = r.unseen ? "Sent to you, not opened yet" : r.newReply ? "New reply since you last looked" : "New since you last looked"; return <span role="img" aria-label={nt} title={nt} style={{ width: 8, height: 8, borderRadius: 99, background: C.blue, flexShrink: 0, transform: "translateY(-1px)" }} />; })()}
+            {r.prio === "urgent" && <Icon name="flag" size={13} color={C.red} stroke={2.4} role="img" aria-label="Urgent" />}
             <span>{r.title}</span>
           </div>
           <div style={{ display: "flex", gap: "4px 8px", flexWrap: "wrap", alignItems: "center", fontSize: 13, color: C.dim, marginTop: 3 }}>
@@ -63478,19 +63478,24 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
           {exp && (() => {
             const btn = (on) => ({ fontFamily: "inherit", fontSize: 14, fontWeight: 600, minHeight: 44, padding: "0 13px", borderRadius: 10, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
               border: `1px solid ${on ? C.blue : C.border}`, background: on ? C.blue : C.surface, color: on ? "#fff" : C.text });
-            const prim = (r.actions || []).filter(a => a.tone === "primary");
-            const rest = (r.actions || []).filter(a => a.tone !== "primary");
+            // Decision actions (Answer/Reply, Approve/Deny, Take back, Send back, → foreman…) stay in
+            // the main row; only Edit / Void go on the More shelf. "Pick person ▾" / "Re-push ▾" are
+            // the same control as Push to… so they are dropped here.
+            const acts = (r.actions || []).filter(a => !(r.onTogglePick && a.onClick === r.onTogglePick));
+            const isShelf = (a) => a.label === "Edit" || a.label === "Void";
+            const main = acts.filter(a => !isShelf(a));
+            const shelf = acts.filter(isShelf);
             const more = moreKey === r.key;
-            const hasMore = !!(canMarkUrgent(r) || (r.sel && onSaveFocus) || r.canPhoto || (r.onTogglePick && (r.canReassign || r.roster)) || rest.length || r.nudge);
+            const hasMore = !!(canMarkUrgent(r) || (r.sel && onSaveFocus) || r.canPhoto || (r.onTogglePick && (r.canReassign || r.roster)) || shelf.length || r.nudge);
             return (
               <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10, cursor: "default" }}>
                 {r.onWake && <button style={btn(true)} onClick={() => { r.onWake(); toast.success("Back on your list"); }}>Wake now</button>}
                 {r.canWork && r.onWork && <button style={btn(!!r.working)} aria-pressed={!!r.working} title={r.working ? "Working on it — tap to stop" : "Let everyone see you're on it"} onClick={() => r.onWork()}><Icon name="play" size={12} />{r.working ? "Working · stop" : "Working on it"}</button>}
-                {prim.map(a => <button key={a.label} title={a.title} style={btn(true)} onClick={() => a.onClick()}>{a.label}</button>)}
+                {main.map(a => <button key={a.label} title={a.title} style={btn(a.tone === "primary")} onClick={() => a.onClick()}>{a.label}</button>)}
                 {r.canUpdate && <button style={btn(updFor === r.key)} title={r.audience ? `Reply to ${first(r.audience)}` : "Add a note"} onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); closePanels(); setUpdFor(r.key); } }}>{r.need ? "Reply" : "Note"}</button>}
                 {r.canSnooze && !r.onWake && <button style={btn(snoozeFor === r.key)} onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)}>Snooze</button>}
                 {r.jobId && onOpenJob && <button style={btn(false)} onClick={() => onOpenJob(r.jobId, r.section)}>Open job</button>}
-                {!more && hasMore && <button style={btn(false)} aria-expanded={false} onClick={() => setMoreKey(r.key)}>More…</button>}
+                {hasMore && <button style={btn(false)} aria-expanded={more} onClick={() => setMoreKey(more ? null : r.key)}>{more ? "Less" : "More…"}</button>}
                 {more && <>
                   {canMarkUrgent(r) && <button style={{ ...btn(r.prio === "urgent"), ...(r.prio === "urgent" ? { background: C.red, borderColor: C.red } : {}) }} aria-pressed={r.prio === "urgent"} onClick={() => toggleUrgent(r)}>{r.prio === "urgent" ? "Urgent · clear" : "Mark urgent"}</button>}
                   {r.sel && onSaveFocus && <button style={btn(pinned)} aria-pressed={pinned} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} onClick={() => toggleFocus(r.key)}><Icon name="star" size={13} />{pinned ? "Pinned" : "Pin"}</button>}
@@ -63513,7 +63518,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                     </label>
                   ))}
                   {r.onTogglePick && (r.canReassign || r.roster) && <button style={btn(!!r.pushOpen)} aria-expanded={!!r.pushOpen} title="Change who this is on" onClick={() => r.onTogglePick()}>{r.kind === "need" ? "Move to…" : "Push to…"}</button>}
-                  {rest.map(a => <button key={a.label} title={a.title} style={btn(false)} onClick={() => a.onClick()}>{a.label}</button>)}
+                  {shelf.map(a => <button key={a.label} title={a.title} style={btn(false)} onClick={() => a.onClick()}>{a.label}</button>)}
                   {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
                   {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
                 </>}
@@ -63521,7 +63526,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             );
           })()}
           {expKey === r.key && r.photos && r.photos.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               {r.photos.map(p => {
                 const img = <img src={p.url} alt={p.name || "photo"} loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}`, display: "block", background: C.bg }} />;
                 return (
