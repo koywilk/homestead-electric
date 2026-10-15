@@ -6123,6 +6123,88 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 
 }
 
+// Folded section with a count / meta line on the header — Koy's standing rule:
+// everything starts collapsed, counts + badges on the header (Projects spec
+// 2026-10-15). Controlled when `open` is passed (so a header button can open
+// it). keepMounted renders children hidden while folded so they still load and
+// report counts (the Drive listing).
+function FoldSection({label, color=C.dim, meta=null, badge=null, action=null, open: openProp, onToggle, defaultOpen=false, keepMounted=false, children}) {
+  const [openState, setOpenState] = useState(defaultOpen);
+  const open = openProp !== undefined ? openProp : openState;
+  const toggle = () => { if (onToggle) onToggle(!open); else setOpenState(o => !o); };
+  const ink = readableInk(color, C.bg);
+  return (
+    <div style={{marginBottom:4}}>
+      <div onClick={toggle} role="button" aria-expanded={open}
+        style={{display:"flex",alignItems:"center",gap:8,minHeight:46,borderBottom:`2px solid ${color}44`,
+          marginTop:4,marginBottom:open?14:0,cursor:"pointer",userSelect:"none"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color:ink,whiteSpace:"nowrap"}}>{label}</div>
+        {badge && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:badge.color,borderRadius:4,padding:"1px 5px"}}>{badge.text}</span>}
+        <div style={{flex:1,minWidth:0,textAlign:"right",fontSize:13,fontWeight:600,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{meta}</div>
+        {action && <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:6}}>{action}</div>}
+        <span style={{color:ink,fontSize:15,fontWeight:700}}>{open?"▾":"▸"}</span>
+      </div>
+      {keepMounted ? <div style={{display:open?"block":"none"}}>{children}</div> : (open && <div>{children}</div>)}
+    </div>
+  );
+}
+
+// Field milestones (Projects spec §5): an add-only note list on every job. It
+// starts empty and folded; each entry is stamped who + M/D/YYYY; Remove sets
+// removed:true (never deleted) with an inline Undo. patchList(fn) hands fn the
+// job's FRESHEST list (JobDetail's jobRef) — never this render's copy — and the
+// save transaction's three-way merge keeps another phone's adds (items have ids).
+function FieldMilestones({ list, patchList, identity, color = C.teal, badge = null }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [undo, setUndo] = useState(null); // { id, text }
+  const inputRef = useRef(null);
+  useEffect(() => { if (!undo) return; const t = setTimeout(() => setUndo(null), 6000); return () => clearTimeout(t); }, [undo]);
+  const live = liveMilestones(list);
+  const stamp = () => new Date().toLocaleDateString("en-US");
+  const who = identity?.name || "";
+  const ink = readableInk(color, C.bg);
+  const openAndFocus = () => { setOpen(true); setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0); };
+  const add = () => {
+    if (!String(text).trim()) { toast.info("Type a milestone first"); return; }
+    patchList(cur => milestoneAdd(cur, text, who, stamp(), uid()));
+    setText("");
+  };
+  const remove = (m) => { patchList(cur => milestoneSetRemoved(cur, m.id, true, who, stamp())); setUndo({ id: m.id, text: m.text }); };
+  const restore = () => { if (!undo) return; const id = undo.id; patchList(cur => milestoneSetRemoved(cur, id, false)); setUndo(null); };
+  const btn = { fontFamily:"inherit", cursor:"pointer", minHeight:40, borderRadius:8, fontWeight:700, fontSize:13 };
+  return (
+    <FoldSection label="Milestones" color={color} badge={badge} meta={milestoneHeaderMeta(list)} open={open} onToggle={setOpen}
+      action={<button type="button" onClick={openAndFocus} style={{...btn, border:`1px solid ${ink}`, background:"#fff", color:ink, padding:"0 12px", fontWeight:800}}>+ Add</button>}>
+      {live.length === 0 && <div style={{fontSize:13,color:C.dim,marginBottom:6}}>Nothing logged yet. Add the first one when it happens in the field.</div>}
+      {live.map(m => (
+        <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 6px 6px 10px",marginBottom:6}}>
+          <span style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:14.5,color:C.text}}>{m.text}</div>
+            <div style={{fontSize:13,color:C.faint}}>{m.by}{m.at ? ` · ${m.at}` : ""}</div>
+          </div>
+          <button type="button" onClick={() => remove(m)} style={{...btn, marginLeft:"auto", background:"none", border:`1px solid ${C.border}`, color:C.dim, padding:"0 12px"}}>Remove</button>
+        </div>
+      ))}
+      {undo && (
+        <div style={{display:"flex",alignItems:"center",gap:10,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"4px 6px 4px 10px",marginBottom:6,fontSize:13,color:C.dim}}>
+          <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Removed “{undo.text}”</span>
+          <button type="button" onClick={restore} style={{...btn, marginLeft:"auto", background:"none", border:"none", color:C.accent, fontWeight:800, padding:"0 12px"}}>Undo</button>
+        </div>
+      )}
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <input ref={inputRef} value={text} maxLength={140} onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="e.g. Blockouts in, UFR in…"
+          style={{flex:1,minWidth:0,minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit",color:C.text,background:"#fff"}}/>
+        <button type="button" onClick={add} style={{...btn, minHeight:44, border:"none", padding:"0 16px", fontSize:14, background:color, color:"#fff"}}>Add</button>
+      </div>
+      <div style={{fontSize:13,color:C.dim,marginTop:6}}>Stamped with your name and today's date. No due dates yet.</div>
+    </FoldSection>
+  );
+}
+
 
 // Detect mobile once at module level
 const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
@@ -29538,6 +29620,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     onUpdate(updated, finalPatch);
   };
 
+  // Field milestones: fn gets the FRESHEST list (jobRef), never a render copy
+  // (stale-copy rule, v473) — the save transaction merges by item id.
+  const patchMilestones = (fn) => u({ fieldMilestones: fn(jobRef.current.fieldMilestones) });
+
   // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
   // name/address/gc/phone from Simpro. Never overwrites typed text.
   const { simproPulling, doPullSimpro } = useSimproAutoPull(jobRef, u);
@@ -34113,6 +34199,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
+              {!isCommercial(job) && (
+                <FieldMilestones list={job.fieldMilestones} patchList={patchMilestones} identity={identity} color={C.teal} badge={{text:"NEW",color:C.blue}}/>
+              )}
               </>)}
 
               {isCommercial(job) && (()=>{
@@ -34175,14 +34264,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                   <div style={{fontSize:12,color:C.dim,marginTop:8}}>What this job has (not a checklist). The gear log and the on-site phases group by system; an off system just doesn't appear. The pre-con checklist is on the Job Start tab.</div>
                 </Section>
-                <Section label="Milestones" color={C.teal} defaultOpen={false}>
+                <FoldSection label="GC Schedule Dates" color={C.teal} badge={{text:"MOVED",color:C.dim}}
+                  meta={`${COMM_MILESTONES.filter(([k]) => ms[k]).length} of ${COMM_MILESTONES.length} set`}>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:"10px 14px"}}>
                     {COMM_MILESTONES.map(([k,l]) => (
                       <div key={k}>{lbl(l)}<DateInp value={ms[k]||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, milestones:{...(x.milestones||{}), [k]:v}})); }}/></div>
                     ))}
                   </div>
-                  <div style={{fontSize:12,color:C.dim,marginTop:8}}>The dates the Forecast shows for a commercial job and the Ufer / underground reminders key on (from the GC schedule — phases 2 and 6).</div>
-                </Section>
+                  <div style={{fontSize:13,color:C.dim,marginTop:8}}>The dates the Forecast shows for a commercial job and the Ufer / underground reminders key on (from the GC schedule — phases 2 and 6). Same dates as before — they just moved out of Milestones.</div>
+                </FoldSection>
+                <FieldMilestones list={job.fieldMilestones} patchList={patchMilestones} identity={identity} color={C.teal}/>
                 </>);
               })()}
               {can(identity,"job.division") && (
