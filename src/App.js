@@ -46869,8 +46869,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   return (
     <div className="odash">
       <style>{`
-        .odash{--pan:rgba(27,32,48,.8);--inset:rgba(8,11,18,.42);--line:rgba(255,255,255,.08);--ink:#E6EAF1;--dim:#A3ADBD;--faint:#8F9AAD;
-          --card:linear-gradient(180deg,#222839,#1C2130);--card-solid:#20263A;--cink:#E6EAF1;--cdim:#A3ADBD;--cline:#2E3548;--hov:rgba(255,255,255,.05);--trk:rgba(255,255,255,.09);
+        .odash{--pan:rgba(27,32,48,.8);--inset:rgba(8,11,18,.42);--line:rgba(255,255,255,.08);--ink:${D.textBright};--dim:#A3ADBD;--faint:#8F9AAD;
+          --card:linear-gradient(180deg,#222839,#1C2130);--card-solid:#20263A;--cink:${D.textBright};--cdim:#A3ADBD;--cline:#2E3548;--hov:rgba(255,255,255,.05);--trk:rgba(255,255,255,.09);
           --o:${OD_A};--on-o:${OD_ON_A};--o-soft:rgba(102,168,255,.14);--o-ink:#8EC0FF;
           color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:dark;
           background:radial-gradient(55% 45% at 12% 6%,rgba(47,91,217,.2),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(102,168,255,.1),transparent 70%),linear-gradient(180deg,#1B2030,#141821)}
@@ -46888,7 +46888,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-help button:hover{border-color:rgba(102,168,255,.5)!important}
         .odash .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);white-space:nowrap}
         .odash .od-top .live{margin-left:auto}
-        .odash .live::before{content:"";width:8px;height:8px;border-radius:50%;background:#34D17F;box-shadow:0 0 0 4px rgba(52,209,127,.2)}
+        .odash .live::before{content:"";width:8px;height:8px;border-radius:50%;background:${D.live};box-shadow:0 0 0 4px rgba(52,209,127,.2)}
         .odash .od-ctrl .live{display:none}
         .odash .od-fpanel{display:contents}
         .odash .od-fbtn{display:none;align-items:center;gap:7px;border:1px solid var(--line);background:var(--inset);color:var(--ink);border-radius:999px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer}
@@ -47119,12 +47119,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
         .odash .od-empty.dark{color:var(--dim)}
         .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(5,8,14,.62);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
-        .od-sheet{width:min(560px,100%);height:100%;background:#181D29;color:#E6EAF1;border-left:1px solid #2E3548;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
+        .od-sheet{width:min(560px,100%);height:100%;background:#181D29;color:${D.textBright};border-left:1px solid #2E3548;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
         @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
         .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid #2E3548;background:#1E2433}
         .od-sheet-h .tt{flex:1;min-width:0;display:flex;flex-direction:column}
         .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:#A3ADBD}
-        .od-sheet-h .x{border:0;background:rgba(255,255,255,.08);border-radius:999px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;flex:none;color:#E6EAF1}
+        .od-sheet-h .x{border:0;background:rgba(255,255,255,.08);border-radius:999px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;flex:none;color:${D.textBright}}
         .od-sheet-h .go{border:0;background:#66A8FF;color:#0B1526;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
         .od-sheet-b{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
         .odash .od-facts,.od-sheet .od-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:6px}
@@ -47136,7 +47136,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#A3ADBD;padding:16px 0 4px;border-bottom:1px solid #2E3548}
         .od-sheet .od-sh span{margin-left:auto;font-weight:700}
         .od-sheet .od-rows{display:flex;flex-direction:column}
-        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #2E3548;background:transparent;text-align:left;cursor:pointer;width:100%;color:#E6EAF1;font:inherit}
+        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #2E3548;background:transparent;text-align:left;cursor:pointer;width:100%;color:${D.textBright};font:inherit}
         .od-sheet .od-row:disabled{cursor:default}
         .od-sheet .od-row:not(:disabled):hover{background:rgba(255,255,255,.05)}
         .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
@@ -47232,20 +47232,20 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
   return (
     <div className="od-page">
       <style>{`
-        .od-page{min-height:100vh;background:#141821;color:#E6EAF1;font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
+        .od-page{min-height:100vh;background:${D.bg1};color:${D.textBright};font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
         .od-page-h{max-width:1400px;margin:0 auto 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-        .od-brand{display:inline-flex;align-items:center;gap:9px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:23px;letter-spacing:.04em;line-height:1;color:#E6EAF1}
+        .od-brand{display:inline-flex;align-items:center;gap:9px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:23px;letter-spacing:.04em;line-height:1;color:${D.textBright}}
         .od-brand .mk{width:32px;height:32px;border-radius:10px;background:#66A8FF;display:grid;place-items:center;flex:none;box-shadow:0 6px 14px -8px rgba(102,168,255,.8)}
         .od-brand .sub{color:#A3ADBD}
         .od-page-r{margin-left:auto;display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
         .od-mode{display:inline-flex;background:rgba(8,11,18,.42);border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:3px;gap:2px}
         .od-mode button{border:0;border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:transparent;color:#A3ADBD}
         .od-mode button[aria-pressed="true"]{background:#66A8FF;color:#0B1526}
-        .od-app{color:#E6EAF1;font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
+        .od-app{color:${D.textBright};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
         .od-app:hover{border-color:rgba(102,168,255,.5)}
         .od-app .s{display:none}
         .od-page-h button:focus-visible,.od-page-h a:focus-visible{outline:2px solid #66A8FF;outline-offset:2px}
-        .od-private{max-width:520px;margin:40px auto;background:linear-gradient(180deg,#222839,#1C2130);border:1px solid #2E3548;color:#E6EAF1;border-radius:16px;padding:20px}
+        .od-private{max-width:520px;margin:40px auto;background:linear-gradient(180deg,#222839,#1C2130);border:1px solid #2E3548;color:${D.textBright};border-radius:16px;padding:20px}
         .od-private div{font-size:14px;color:#A3ADBD;margin-top:6px}
         .od-private a{display:inline-block;margin-top:12px;color:#8EC0FF;font-weight:700}
         @media (max-width:600px){.od-brand .sub,.od-app .l{display:none}.od-app .s{display:inline}.od-mode button{padding:6px 10px}}
@@ -55557,10 +55557,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-13 · App SW version: v539
+**Last manifest update:** 2026-10-14 · App SW version: v540
 
 ---
 
+- **Design pass: one look for the app and the dashboard — readable type, no amber, steel-blue dashboard, tidier tabs, and a build gate that stops the drift** · 'shipped 2026-10-14' · 'SW v540' · Koy: *"do all recomended"* after a live design critique of the CC app, the /dashboard and FieldInk (vault: '05-Decisions/One Look Across All Three Apps.md'). **Bugs that made it look unfinished:** the page's base font was **Times**, so anything without its own font (the More menu) rendered serif — DM Sans is now set on body, buttons and inputs; the longhorn **watermark** was a fixed layer painting *on top of* cards and text — it now sits behind everything; **App Map** said "SW v181 · 0 shipped" (its parser never stripped the quotes) and showed raw '**markdown**' and developer tags — it now shows the real version and counts, clean bold text, plain dates, and a "Latest releases" area for the newest entries. **Phones:** the header is one row under 600px (flag mark, live status, Resi/Commercial; wordmark, job count, weather and the guide hint hidden — the ? stays). The **Notifications blocked** banner is never dismissible: full on My Day and on desktop, a one-line "Notifications blocked — fix" (tap to expand) on other tabs on phones. **Tabs:** COs columns with nothing in them fold to a 44px strip with their count (tap to open); Forecast drops the planner's duplicate Book row and shortens crew names to "Keegan W."; Huddle shows folded sections per person with counts and full job names (**Copy text / Send to my phone are byte-for-byte unchanged**; "Show as text" shows the raw view); Contractors, Today, Needs, Huddle, Settings and App Map share one 'PageHeader' (Settings no longer says SETTINGS twice). The **Working · 14h ago** pill is now a light steel tint instead of solid blue, so URGENT is louder. Opening a job no longer flashes "Saving…" for the background presence ping (the write is unchanged; errors still show). **Colour and type:** the amber family (#B7791F etc.) is replaced by a slate family ('C.slate' / 'slateBg' / 'slateLine' / 'slateInk' / 'steelBg' / 'steelLine') — Awaiting Start Date, On Hold (still dashed), CO Pending Approval, waiting chips, owed rings; due-in-3-days uses 'C.orange'; Scoreboard champion row and Adjust scoring are steel blue; 'C.amber' (referenced but undefined) fixed. 144 low-contrast greys used as text now use 'C.faint'; 236 references to never-defined CSS variables ('--text', '--dim', '--card'…) now resolve (borders were vanishing, one modal was see-through); 334 font sizes raised to the 11px floor; emoji replaced by 'Icon'. **Tap targets:** 'Btn' is 40px with primary/secondary/quiet variants; 18 small inline heights become 40 on touch via '--he-tap'; 79 ✕ close buttons get 32px width (40 on touch); the touch rule covers '[role=button]'. **/dashboard:** re-skinned from warm brown + orange to the app's navy and steel blue (#66A8FF, dark text on it), dark raised cards (the highlighted look is kept), no amber (stale / past-date warnings use rose), punch age 0–7 green · 8–14 slate · 15–30 orange · 30+ red, monotone charts that can't dip below zero, 11.5px text floor, the guide is a ? button, job names wrap to two lines, and on phones foreman / 7-14-30 / search sit behind one **Filters** button (tabs still wrap, as in v538). **Guardrail:** 'scripts/design-lint.js' runs in prebuild and fails the build on text under 11px, emoji in UI, or more hand-typed copies of token colours than the baseline in 'scripts/design-lint-baseline.json' (1177 — it may only go down). Guides updated in 'public/sops/'. **Why it won't lose data:** layout, colour and copy only — no save path, listener, merge, rules, function or data shape changed; the build stamp is on every save as before; the Huddle text that gets copied/sent is unchanged; the presence ping still writes, it just doesn't show the pill.
 - **Tasks: "Working on it" status, and sort / group the Needs tab and My Day by job or person** · 'shipped 2026-10-13' · 'SW v539' · Koy: *"I would like to be able to set status and sort needs or tasks, so when im working on something it shows them im working on it, and i can organize them a bit better. would be helpful if in the needs drop they were sorted by job or person as well"* (signed off a clickable mockup first). **Working on it:** every task / need on your list gets a **▶ Working on it** chip (My Day rows, and your own cards on the Needs board); tap it again to stop. It writes 'startedBy' / 'startedAt' on the doc; everyone else sees a blue **Working · Koy · 12m ago** pill on that task (Needs board Mine + All, the sender's My Day **Sent**, the head's Person view). The order is Open → Working on it → Waiting on… → Done: a "Waiting on…" posted after the start shows Waiting instead ('needWorking'). **No push** — 'onNeedWrite' only fires on assign / done / send-back / new updates, so no function deploy. The patch funnel ('patchNeed' → pure 'needWorkReset') clears the start on a hand-off to another person, Done, Void or Reopen, so every writer (board To:, My Day pick, batch push, Edit) obeys; Undo after Done puts it back. My Day **Sent** rows now say where each ask stands: Working, Waiting on…, or **Not started yet**. Time-off decision rows and auto office rows (QC walks, invoicing, start POs) don't take the chip. **Order:** working rows ride on top everywhere ('compareMyDayRows', new 'compareNeedsBoard': working → urgent → Tomorrow lane → oldest → low). **Needs tab Group switch:** **Due** (the Tomorrow / This week lanes, now sorted) · **Job** · **Person** — Job / Person fold everything into one group per job or person ('bunchRows', A–Z, No job / Unassigned last), every group starts folded with its count and **N working · N urgent · N waiting** badges; under All, Person = who it's on; under Mine, Person = who sent it to you. Remembered per device ('needs.group'). **My Day Sort switch:** **Urgency** (today's order) · **Job** · **Person** orders the rows *inside* every fold, with a small label over each bunch ('myday.sort', per device; Person = "From <who>" on your rows, "To <who>" on Sent). The Mine/All buttons read white on blue now (were black). New chips and switches follow the v537 type floor. vm-tested in 'scripts/needs-dryrun.js' (working / reset / board order / bunching, mutation-checked). Guides updated: 'public/sops/needs.html', 'public/sops/myday.html'. **Why it won't lose data:** two additive string fields inside 'data', written only through the existing field-surgical 'patchNeed' (dotted paths, build stamp kept); the sort and group switches are display-only and stored on the phone; no rules, loader or functions change.
 
 - **Dashboard visual audit fixes: blank tiles filled, worst-first attention list, phone tabs that wrap, quiet zeros, one name per person** · 'shipped 2026-10-13' · 'SW v538' · 'OfficeDash' · 'OdMini' · 'ICON_PATHS' · Audit of the live '/dashboard' page from real screenshots at desktop, tablet and phone ('homestead-command-center/docs/visual-audit-2026-10-09/OFFICE-DASHBOARD-REPORT.md'), Koy: *"do all recs and deploy."* **Blank icon tiles:** the change-order, return-trip and punch lines in Needs attention, Schedule and Quality drew empty coloured squares because 'changeorders', 'returntrips' and 'openitems' existed only as SOP keys, never in 'ICON_PATHS'; three icons added. **Needs attention** sorts worst first (red: overdue dates, failed items, serious punch, and now change orders waiting on the GC 60+ days as money at risk; then orange dates, gold stale, blue to-do, green ready to invoice) and a line whose rows carry an age shows *oldest N d*. **Phone:** under 600 px the tab strip wraps to two rows instead of hiding Quality / People / Automations off the right edge. **Zeros are quiet:** a mini card at 0 or — goes grey instead of an alarm-coloured icon; Inspections turns red with a warning icon when 0 of N passed and names the failed count. **One name per person:** the Activity person filter folds nicknames, first names and initials into the team member's full name (abe / Abe / Abraham Tristan; Ds / Daegan Smith). **Right rail** on Overview shows *Dated, next 7 d* instead of repeating the Active-jobs number that heads the page. **Names for VoiceOver:** mini cards, attention lines, foreman cards and calendar days carry aria-labels (20+ buttons had none). Captions under the mini-card bars say what they are; dim timestamps lifted from 42 % to 55 % opacity at 11.5 px. Guide 'public/sops/dashboard.html' updated (Overview paragraph). **Why it won't lose data:** read-only page; icons, order, colour, labels and CSS only; no Firestore write, loader, rule or function touched.
@@ -56812,7 +56813,7 @@ function AppMapSharePage({ identity = null } = {}) {
                   <span style={{fontSize:11, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
                   <div style={{flex:1, minWidth:0}}>
                     <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? <><AmInline text={n.parent}/>: </> : null}<AmInline text={n.name}/></span>
-                    <span style={{fontSize:12.5, color:C.faint, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
+                    <span style={{fontSize:12.5, color:C.faint, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : (n.section === "Latest releases" ? "" : n.section)}</span>
                   </div>
                   <span style={{fontSize:12.5, color:C.dim, flexShrink:0, fontVariantNumeric:"tabular-nums"}}>{n.date}</span>
                 </div>
@@ -58051,7 +58052,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
         </button>
         <a href={smsHref}
           style={{fontSize:13, fontWeight:700, padding:"9px 18px", borderRadius:8,
-            background:"#2E8B57", color:"#000", textDecoration:"none", fontFamily:"inherit",
+            background:C.green, color:"#fff", textDecoration:"none", fontFamily:"inherit",
             display:"inline-flex", alignItems:"center"}}>
           Send to my phone
         </a>
