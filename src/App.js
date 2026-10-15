@@ -63105,7 +63105,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const toggleFocus = (key) => {
     const cur = pinnedRows.map(r => r.key);
     const next = cur.includes(key) ? cur.filter(k => k !== key) : [...cur, key];
-    if (next.length > 3) { toast.info("Focus holds 3 — unpin one first."); return; }
+    if (next.length > 3) { toast.info("Pinned holds 3 — unpin one first."); return; }
     onSaveFocus({ date: todayYmd, keys: next, prevDate: carrySrc ? carrySrc.date : "", prevKeys: carrySrc ? carrySrc.keys : [] });
   };
   const rePin = () => onSaveFocus({ date: todayYmd, keys: [...pinnedRows.map(r => r.key), ...carryKeys].slice(0, 3), prevDate: "", prevKeys: [] });
@@ -63499,7 +63499,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
                 {hasMore && <button style={btn(false)} aria-expanded={more} onClick={() => setMoreKey(more ? null : r.key)}>{more ? "Less" : "More…"}</button>}
                 {more && <>
                   {canMarkUrgent(r) && <button style={{ ...btn(r.prio === "urgent"), ...(r.prio === "urgent" ? { background: C.red, borderColor: C.red } : {}) }} aria-pressed={r.prio === "urgent"} onClick={() => toggleUrgent(r)}>{r.prio === "urgent" ? "Urgent · clear" : "Mark urgent"}</button>}
-                  {r.sel && onSaveFocus && <button style={btn(pinned)} aria-pressed={pinned} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} onClick={() => toggleFocus(r.key)}><Icon name="star" size={13} />{pinned ? "Pinned" : "Pin"}</button>}
+                  {r.sel && onSaveFocus && <button style={btn(pinned)} aria-pressed={pinned} title={pinned ? "Unpin from the top of To do" : "Pin to the top of To do"} onClick={() => toggleFocus(r.key)}><Icon name="star" size={13} />{pinned ? "Pinned" : "Pin"}</button>}
                   {r.canPhoto && (photoBusyIds && photoBusyIds[r.need.id] ? (
                     <span title="Uploading photos…" aria-busy="true" style={{ ...btn(false), boxSizing: "border-box", opacity: 0.45, cursor: "default" }}>
                       <Icon name="camera" size={15} stroke={2} />Photo
@@ -63706,7 +63706,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
           })()}
           {expKey === r.key && voidFor === r.key && r.need && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 8, padding: 8 }}>
-              <div style={{ fontSize: 13, color: C.dim, marginBottom: 6 }}>Void this task? It leaves every list{needAssignee(r.need) && !sameName(needAssignee(r.need), me) ? ` and ${first(needAssignee(r.need))} gets a push` : ""}. You'll still see it under Sent · finished.</div>
+              <div style={{ fontSize: 13, color: C.dim, marginBottom: 6 }}>Void this task? It leaves every list{needAssignee(r.need) && !sameName(needAssignee(r.need), me) ? ` and ${first(needAssignee(r.need))} gets a push` : ""}. You'll still see it under Done.</div>
               <input type="text" value={voidReason} autoFocus onChange={e => setVoidReason(e.target.value)} onKeyDown={e => { if (e.key === "Enter") voidNeed(r.need, voidReason); }}
                 placeholder="Reason (optional)"
                 style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 14, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
@@ -63843,14 +63843,20 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
     </>
   );
   // ── Team (head only): one folded section per person; header carries overdue + done-this-week ──
-  const teamGroups = personGroups.filter(g => g.rows.length || g.title.endsWith("(you)"));
+  // Every person on the team numbers shows, even with nothing open (union of pulse names and personGroups).
+  const teamGroups = (() => {
+    const out = personGroups.map(g => ({ name: g.key.slice(2), title: g.title, rows: g.rows, you: g.title.endsWith("(you)") }));
+    pulse.forEach(p => { if (p && p.name && !out.some(g => sameName(g.name, p.name))) out.push({ name: p.name, title: p.name, rows: [], you: sameName(p.name, me) }); });
+    return out.filter(g => !qOn || g.rows.length)
+      .sort((a, b) => (a.you ? -1 : b.you ? 1 : a.name.localeCompare(b.name)));
+  })();
   const teamBody = (
     <>
       <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Who has what open right now. Tap a person to see their list.</div>
-      {teamGroups.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>{qOn ? "No matches" : "Nobody has anything open right now."}</div>}
+      {teamGroups.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>{qOn ? "No matches" : "Nobody on the team yet."}</div>}
       {teamGroups.map(g => {
-        const nm = g.key.slice(2); const p = pulse.find(x => sameName(x.name, nm));
-        return Section({ k: "team:" + nm, label: g.title, color: C.text, rows: g.rows, defaultOpen: false, empty: g.empty,
+        const p = pulse.find(x => sameName(x.name, g.name));
+        return Section({ k: "team:" + g.name, label: g.title, color: C.text, rows: g.rows, defaultOpen: false, empty: "Nothing open right now.",
           extra: p ? <>{p.overdue > 0 && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: C.red, color: "#fff" }}>{p.overdue} overdue</span>}
             {p.doneWeek > 0 && <span style={{ fontSize: 12, color: C.faint, fontWeight: 600 }}>{p.doneWeek} done this week</span>}</> : null });
       })}
