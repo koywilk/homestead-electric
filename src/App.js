@@ -2551,6 +2551,27 @@ let _uid = Date.now();
 
 const uid = () => String(++_uid);
 
+// ── Projects + field milestones (spec 2026-10-15, docs/superpowers/specs/2026-10-15-projects-field-milestones-design.md) ──
+// A project groups normal jobs ("buildings") through job.projectGroupId; the
+// project record lives in /projects (same {data, updated_at} envelope as
+// /needs). Buildings that SHARE the project's Simpro # carry simproFolder (the
+// Simpro attachment folder that feeds them); exactly one may carry simproLead.
+// Pure one-liners — scripts/projects-dryrun.js extracts and tests them verbatim.
+const PROJECT_COLOR = "#3D6FA8";
+const ProjectsCtx = createContext(null);
+const isSimproJoinable = (j) => !(j && j.projectGroupId && j.simproFolder) || !!(j && j.simproLead);
+const projectBuildings = (jobs, pid) => (jobs || []).filter(j => j && pid && j.projectGroupId === pid && !j.archived && !j.deleted).sort((a, b) => ((a.projectRole === "site") !== (b.projectRole === "site")) ? (a.projectRole === "site" ? -1 : 1) : String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
+const projectRollup = (buildings, stageOf) => { const h = (buildings || []).filter(b => b && b.projectRole !== "site"); const st = h.map(b => stageOf(b)); return { houses: h.length, rough: st.filter(s => s === "rough").length, finish: st.filter(s => s === "finish").length, flagged: h.filter(b => b.flagged).length }; };
+const splitProjectJobs = (jobs, projects) => { const live = new Set((projects || []).filter(p => p && p.id && !p.archived).map(p => p.id)); const rest = [], byProject = {}; (jobs || []).forEach(j => { if (j && j.projectGroupId && live.has(j.projectGroupId)) (byProject[j.projectGroupId] = byProject[j.projectGroupId] || []).push(j); else rest.push(j); }); return { rest, byProject }; };
+const buildingHops = (buildings, id) => { const list = buildings || []; const i = list.findIndex(b => b && b.id === id); return { prev: i > 0 ? list[i - 1] : null, next: i >= 0 && i < list.length - 1 ? list[i + 1] : null }; };
+const buildingJobName = (projectName, buildingName) => `${String(projectName || "").trim()} · ${String(buildingName || "").trim()}`;
+const buildingShortName = (job, project) => { const n = String((job && job.name) || ""); const p = String((project && project.name) || "").trim(); return p && n.startsWith(p + " · ") ? n.slice(p.length + 3) : n; };
+const simproNoConflict = (jobs, no, pid) => { const n = String(no || "").replace(/^#/, "").trim(); if (!n) return null; return (jobs || []).find(j => j && !j.archived && !j.deleted && String(j.simproNo || "").replace(/^#/, "").trim() === n && (!pid || j.projectGroupId !== pid)) || null; };
+const liveMilestones = (list) => (Array.isArray(list) ? list : []).filter(m => m && !m.removed);
+const milestoneAdd = (list, text, by, at, id) => { const base = Array.isArray(list) ? list : []; const t = String(text || "").trim().slice(0, 140); return t ? [...base, { id, text: t, by: by || "", at: at || "" }] : base; };
+const milestoneSetRemoved = (list, id, removed, by, at) => (Array.isArray(list) ? list : []).map(m => (!m || m.id !== id) ? m : (removed ? { ...m, removed: true, removedBy: by || "", removedAt: at || "" } : { ...m, removed: false }));
+const milestoneHeaderMeta = (list) => { const l = liveMilestones(list); if (!l.length) return "none yet"; const last = l[l.length - 1]; return `${l.length} · latest: ${last.text}${last.at ? ` (${String(last.at).replace(/\/\d{4}$/, "")})` : ""}`; };
+
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 
