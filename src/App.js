@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment, Component } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, Component, createContext, useContext } from "react";
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
@@ -5083,6 +5083,7 @@ const NOTIF_CATEGORIES = [
     { key:"job_question",      label:"New question on job",                  roles:["admin","manager","foreman","lead"] },
     { key:"daily_update",      label:"Daily update added",                   roles:["admin","manager"] },
     { key:"question_answered", label:"Question answered",                    roles:["admin","manager","foreman","lead"] },
+    { key:"punch_note",        label:"Note left on a punch share link",      roles:["admin","manager","foreman","lead"] },
   ]},
   { label:"Time Off", items:[
     { key:"timeoff_requested", label:"Time off requested (your crew)",        roles:["admin","manager","foreman"] },
@@ -11901,6 +11902,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
 function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
 
   const safeItems = Array.isArray(items) ? items : [];
+  const pn = useContext(PunchNotesCtx); // recipient notes from the punch share link (JobDetail only)
 
   const [addHtml,       setAddHtml]       = useState('');
   const [addOpen,       setAddOpen]       = useState(false);
@@ -12335,6 +12337,33 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               </button>
             </div>
           )}
+          {/* ── Notes left on the share link (e.g. "ready now") ── */}
+          {pn && (() => {
+            const notes = punchNoteList(pn.notes, punchNoteKey(pn.punchKey, item.id));
+            if (!notes.length) return null;
+            const unseen = unseenPunchNotes(notes);
+            const shown = unseen.length ? unseen : notes.slice(-1); // seen: just the latest, quietly
+            const when = (iso) => { try { return new Date(iso).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch { return ''; } };
+            return (
+              <div style={{ marginLeft:22, marginTop:4, display:'flex', flexDirection:'column', gap:4,
+                ...(unseen.length ? { background:C.steelBg, border:`1px solid ${C.steelLine}`, borderRadius:8, padding:'7px 10px' } : {}) }}>
+                {unseen.length > 0 && <div style={{ fontSize:11, fontWeight:700, color:C.accent, letterSpacing:'0.06em' }}>NOTE FROM THE SHARE LINK</div>}
+                {shown.map(n => (
+                  <div key={n.id} style={{ fontSize:13, color: unseen.length ? C.text : C.faint, lineHeight:1.45, wordBreak:'break-word', whiteSpace:'pre-wrap' }}>
+                    <b>{n.by || 'Link'}:</b> {n.text}
+                    <span style={{ fontSize:12, color:C.faint }}> · {when(n.at)}{n.ackAt ? ` · seen by ${n.ackBy || 'office'}` : ''}</span>
+                  </div>
+                ))}
+                {unseen.length > 0 && (
+                  <button onClick={() => pn.onAck(item.id)}
+                    style={{ alignSelf:'flex-start', minHeight:'var(--he-tap, 32px)', padding:'0 14px', borderRadius:8, border:'none',
+                      background:C.accent, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                    Got it
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           {item.materialNeeded && !item.done && (
             <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
               <span style={{fontSize:12,fontWeight:600,background:'#EAEEF6',color:'#34507F',
@@ -12620,6 +12649,9 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   ) : null;
 
 
+  const pnF = useContext(PunchNotesCtx);
+  const noteCount = !pnF ? 0 : unseenNoteCount(pnF.notes, pnF.punchKey,
+    [...data.general, ...(showHotcheck ? data.hotcheck : []), ...data.rooms.flatMap(r => Array.isArray(r.items) ? r.items : [])]);
   const openCount    = data.general.filter(i => !i.done).length +
     (showHotcheck ? data.hotcheck.filter(i => !i.done).length : 0) +
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
@@ -12685,6 +12717,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
         {openCount > 0 && <Pill label={`${openCount} open`} color={C.red}/>}
         {waitingCount > 0 && <Pill label={`${waitingCount} waiting`} color="#56657A"/>}
+        {noteCount > 0 && <Pill label={`${noteCount} note${noteCount !== 1 ? 's' : ''}`} color={C.accent}/>}
         {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}>
           <Pill label={`${mineCount} for you`} color="#34507F"/>
         </span>}
@@ -12739,6 +12772,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             const waitN = items.filter(i => !i.done && i.waiting).length;
             const totalN = items.length;
             const mineN = !myName ? 0 : items.filter(i => !i.done && i.assignedTo === myName).length;
+            const noteN = !pnF ? 0 : unseenNoteCount(pnF.notes, pnF.punchKey, items);
             return (
               <div key={room.id} style={{ marginTop: 12, background: C.surface,
                 border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
@@ -12758,6 +12792,11 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                     <span style={{ fontSize: 12, background: C.slateBg, color: C.slateInk,
                       borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #C9D1DC' }}>
                       {waitN} waiting
+                    </span>}
+                  {noteN > 0 &&
+                    <span style={{ fontSize: 12, background: C.steelBg, color: C.accent,
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: `1px solid ${C.steelLine}` }}>
+                      {noteN} note{noteN !== 1 ? 's' : ''}
                     </span>}
                   {!open && openN===0 && totalN>0 &&
                     <span style={{ fontSize: 12, background: '#DEEFE6', color: '#2C5C40',
@@ -20925,6 +20964,51 @@ const postThreadMessage = async (jobId, jobName, itemId, msg) => {
     return true;
   } catch(e) { return false; }
 };
+
+// ── Punch-item notes from share-link recipients (2026-10-15) ──────────────
+// Koy: "need the recipient to be able to leave a note on a punch item, like if
+// we have something we say we are waiting on they can say its ready now."
+// homeowner_requests/{jobId}.punchNotes = { "<punchKey>_<itemId>": [
+//   { id, text, by, share, at, ackBy?, ackAt? } ] }
+// punchKey = roughPunch | finishPunch | qcPunch. The public punch share page
+// APPENDS; the office's "Got it" stamps ackBy/ackAt (the note is kept). Both
+// go through saveHomeownerRequest (locked prev + version snapshot) — never
+// jobs/{id}, the Kweller rule for outside-party writes. `share` = the link's
+// ?s= id ("" for a legacy link) so one recipient never reads another's notes.
+// A new note pushes the job's lead + foreman (onQuestionAnswered trigger,
+// functions/punchNotes.js, pref "punch_note").
+const PUNCH_NOTE_MAX = 500;
+const punchNoteKey = (punchKey, itemId) => `${punchKey}_${itemId}`;
+const punchNoteList = (map, key) => {
+  const v = map && typeof map === 'object' ? map[key] : null;
+  return Array.isArray(v) ? v.filter(n => n && typeof n === 'object') : [];
+};
+// Returns the next punchNotes map, or null when there's nothing to write (an
+// empty note, or a retry of a send that already landed — same note id).
+function appendPunchNote(prevMap, key, note) {
+  const text = String((note && note.text) || '').trim().slice(0, PUNCH_NOTE_MAX);
+  if (!key || !text || !note.id) return null;
+  const map = prevMap && typeof prevMap === 'object' ? prevMap : {};
+  const cur = punchNoteList(map, key);
+  if (cur.some(n => n.id === note.id)) return null;
+  return { ...map, [key]: [...cur, { id: note.id, text, by: String(note.by || '').slice(0, 80), share: String(note.share || ''), at: note.at }] };
+}
+// "Got it": stamps every unseen note on one item. null = nothing unseen.
+function ackPunchNotes(prevMap, key, by, at) {
+  const map = prevMap && typeof prevMap === 'object' ? prevMap : {};
+  const cur = punchNoteList(map, key);
+  if (!cur.some(n => !n.ackAt)) return null;
+  return { ...map, [key]: cur.map(n => n.ackAt ? n : { ...n, ackBy: by || '', ackAt: at }) };
+}
+const unseenPunchNotes = (list) => (Array.isArray(list) ? list : []).filter(n => n && !n.ackAt);
+const punchNotesForShare = (list, share) => (Array.isArray(list) ? list : []).filter(n => n && String(n.share || '') === String(share || ''));
+// Unseen notes across a list of punch items (floor / room header badges).
+const unseenNoteCount = (map, punchKey, items) => (Array.isArray(items) ? items : [])
+  .reduce((a, i) => a + (i && i.id ? unseenPunchNotes(punchNoteList(map, punchNoteKey(punchKey, i.id))).length : 0), 0);
+// Office side: JobDetail provides { punchKey, notes, onAck } around each
+// PunchSection; PunchItems / PunchFloor read it. Absent (return trips,
+// commercial buildings) → nothing renders.
+const PunchNotesCtx = createContext(null);
 
 function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
   const rooms = job.panelizedLighting?.lutronRooms || [];
@@ -29817,6 +29901,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [planChangeAcks, setPlanChangeAcks] = useState(null); // Tech Lighting "incorporated" acks from ?lutronshare=
   const [planChangeThreads, setPlanChangeThreads] = useState(null); // per-item discussion threads (Tech Lighting ↔ Homestead)
   const [questionThreads, setQuestionThreads] = useState(null); // Q&A discussion replies (side-doc, Kweller hardening Layer 2)
+  const [punchNotes, setPunchNotes] = useState(null); // notes share-link recipients left on punch items (homeowner_requests.punchNotes)
   const questionThreadsRef = useRef(null); questionThreadsRef.current = questionThreads;   // v466: read by the ccquestions listener (stale-closure-safe)
 
   const [refreshing, setRefreshing] = useState(false);
@@ -29981,6 +30066,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   }, [job.simproNo, simproCostCentersTick]);
 
 
+  // "Got it" on a recipient's punch note — stamps who saw it, keeps the note.
+  // Rides the saveHomeownerRequest funnel against the LOCKED server copy.
+  const ackPunchNote = async (punchKey, itemId) => {
+    const key = punchNoteKey(punchKey, itemId);
+    try {
+      await saveHomeownerRequest(job.id, (prev) => {
+        const next = ackPunchNotes((prev||{}).punchNotes, key, identity?.name || '', new Date().toISOString());
+        return next ? { punchNotes: next } : null;
+      }, 'punchNoteAck');
+    } catch(e) { toast.error("Couldn't mark that note as seen. Check your connection and try again."); }
+  };
+  const punchNotesCtx = (punchKey) => ({ punchKey, notes: punchNotes, onAck: (itemId) => ackPunchNote(punchKey, itemId) });
+
   // Live listener for GC question answers + LV lighting collab + plan-change acks
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
@@ -29994,6 +30092,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       else setPlanChangeThreads(null);
       if(snap.exists() && snap.data().questionThreads) setQuestionThreads(snap.data().questionThreads);
       else setQuestionThreads(null);
+      setPunchNotes(snap.exists() && snap.data().punchNotes ? snap.data().punchNotes : null);
       // v466: a new discussion message (office, share page, or an adopted
       // FieldInk reply) republishes the ccquestions mirror so the pin in
       // FieldInk shows it. Hash-gated inside, so an unchanged list never writes.
@@ -31243,6 +31342,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
 
                 {coPunchPhase(job) === "rough" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.rough} phaseLabel="Rough"/>}
+                <PunchNotesCtx.Provider value={punchNotesCtx('roughPunch')}>
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
@@ -31271,6 +31371,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     u({roughQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
                   jobId={job.id}/>
+                </PunchNotesCtx.Provider>
 
               </Section>
 
@@ -31568,6 +31669,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   shares={job.finishPunchShares||[]} onSaveShares={v=>u({finishPunchShares:v})}/>
               }>
                 {coPunchPhase(job) === "finish" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.finish} phaseLabel="Finish"/>}
+                <PunchNotesCtx.Provider value={punchNotesCtx('finishPunch')}>
                 <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapFinish}
@@ -31595,6 +31697,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     u({finishQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
                   jobId={job.id}/>
+                </PunchNotesCtx.Provider>
               </Section>
 
               {(job.finishPunchExternal?.length>0)&&(
@@ -33541,10 +33644,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
               {job.qcPunch&&punchOpen(job.qcPunch)>0&&(
                 <Section label="Legacy QC Items" color={C.teal} defaultOpen={false}>
+                  <PunchNotesCtx.Provider value={punchNotesCtx('qcPunch')}>
                   <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC"
                     onEmail={({subject,body})=>{openEmail("",subject,body);}} showHotcheck={true} jobId={job.id}
                     assigneeOptions={punchAssigneeOptions}
                     myName={identity?.name}/>
+                  </PunchNotesCtx.Provider>
                 </Section>
               )}
 
@@ -52852,6 +52957,52 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
 // for a section turned off in Job Info → Job Sections. Same wording as the
 // Tech Lighting page when a job is pulled off their link. Read-only — the
 // section's data is untouched, and turning it back on revives the same link.
+// Share pages (no login — GCs, PMs, homeowners, often on job-site signal):
+// what a jobs/{id} snapshot actually proves. The app runs Firestore's
+// persistent local cache, so when the phone can't reach the server the SDK
+// hands back a CACHE-ONLY snapshot (metadata.fromCache). For a job this phone
+// never downloaded, that snapshot says exists() === false — which only means
+// "not downloaded yet", NOT "deleted". 2026-10-15: Justin (commercial PM) got
+// "This punch list is not available." in the field on a link Koy opened fine.
+// Only a server-confirmed miss (fromCache === false) is "missing"; listeners
+// subscribe with { includeMetadataChanges: true } so that confirmation arrives
+// even when nothing about the (absent) doc changes. Display only.
+// Also takes a query snapshot (GC portal jobs): there "nothing" is an empty
+// result, and a cache-only empty result is just as unproven.
+function shareDocState(snap) {
+  if (!snap) return 'loading';
+  const has = typeof snap.exists === 'function' ? snap.exists() : !snap.empty;
+  if (has) return 'ok';
+  return snap.metadata && snap.metadata.fromCache === false ? 'missing' : 'loading';
+}
+
+// Calm "weak signal" screen for a share page that has nothing from the server
+// yet. The page's listener stays attached, so it fills in by itself the moment
+// signal comes back. Retry reloads for a fresh connection — but only when the
+// phone says it's online, so a dead connection can't swap this page for the
+// browser's own offline error.
+function ShareWeakSignal() {
+  const [noSignal, setNoSignal] = useState(false);
+  const retry = () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) { setNoSignal(true); return; }
+    window.location.reload();
+  };
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:C.dim,background:C.bg,boxSizing:'border-box'}}>
+      <div style={{fontSize:16,fontWeight:700,color:C.text}}>Weak signal — still loading…</div>
+      <div style={{fontSize:14,maxWidth:340,lineHeight:1.6}}>
+        {noSignal
+          ? "Still no signal on this phone. This page will open by itself when it comes back."
+          : "This page needs a little signal to download. It will open by itself when your connection comes back."}
+      </div>
+      <button onClick={retry}
+        style={{minHeight:40,minWidth:120,padding:'0 22px',borderRadius:10,border:'none',background:C.text,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
 function SectionNotSharedPage() {
   return (
     <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:'#5E6670',background:'#EEF0F3',boxSizing:'border-box'}}>
@@ -53204,17 +53355,20 @@ function HomeRunsSharePage({ jobId }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [weak, setWeak] = useState(false); // cache-only miss: still waiting on signal
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
   }, [jobId]);
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14}}>{error}</div>;
   if(job && isSectionHidden(job,"liveView")) return <SectionNotSharedPage/>; // v440
 
@@ -53293,16 +53447,19 @@ function LoadsSharePage({ jobId }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [weak, setWeak] = useState(false); // cache-only miss: still waiting on signal
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
   }, [jobId]);
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14}}>{error}</div>;
   if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"loadsShare"))) return <SectionNotSharedPage/>; // v440
 
@@ -53391,6 +53548,7 @@ function LightingSharePage({ jobId }) {
   const [job,        setJob]       = useState(null);
   const [loading,    setLoading]   = useState(true);
   const [error,      setError]     = useState(null);
+  const [weak,       setWeak]      = useState(false); // cache-only miss: still waiting on signal
   const [collab,     setCollab]    = useState({sections:{},notes:'',submittedBy:''});
   const [saving,     setSaving]    = useState(false);
   const [savedAt,    setSavedAt]   = useState(null);
@@ -53405,9 +53563,11 @@ function LightingSharePage({ jobId }) {
   const collabBase = useRef(null);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
@@ -53504,7 +53664,7 @@ function LightingSharePage({ jobId }) {
   const inputStyle = {background:SP.bg,border:`1px solid ${SP.border}`,borderRadius:6,padding:'5px 8px',fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',color:SP.text};
   const lvRowStyle = {background:SP.accentBg,border:`1px solid ${SP.accentBorder}55`,borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828'}}>{error}</div>;
   if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"lvCollab"))) return <SectionNotSharedPage/>; // v440
 
@@ -53824,6 +53984,7 @@ function LutronAdditionsSharePage({ jobId }) {
   const [job, setJob]         = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
+  const [weak, setWeak]       = useState(false); // cache-only miss: still waiting on signal
   const [acks, setAcks]       = useState({}); // planChangeAcks map from homeowner_requests
   const [drafts, setDrafts]   = useState({}); // {itemId: note text typed before "Mark incorporated"}
   const [threads, setThreads] = useState({}); // planChangeThreads map (itemId or "_general" → messages)
@@ -53831,9 +53992,11 @@ function LutronAdditionsSharePage({ jobId }) {
   useEffect(() => { try { if (tlName.trim()) localStorage.setItem('he_tl_name', tlName.trim()); } catch {} }, [tlName]);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
@@ -53875,7 +54038,7 @@ function LutronAdditionsSharePage({ jobId }) {
     if (!ok) throw new Error('send failed');
   };
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828'}}>{error}</div>;
 
   // Honor the office's "On Tech Lighting's link" switch on DIRECT links too —
@@ -54569,16 +54732,35 @@ function PunchSharePage({ jobId, stage }) {
   const [job,          setJob]          = useState(null);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState(null);
+  const [weak,         setWeak]         = useState(false); // cache-only miss: still waiting on signal
+  const [cached,       setCached]       = useState(false); // showing this phone's saved copy, server not reached yet
   const [newItemText,  setNewItemText]  = useState('');
   const [addingItem,   setAddingItem]   = useState(false);
   const [addedCount,   setAddedCount]   = useState(0);
+  // Notes on items (2026-10-15) — e.g. "ready now" on something Homestead is
+  // waiting on. Saved to homeowner_requests.punchNotes, never the job doc.
+  const [punchNotes,   setPunchNotes]   = useState({});
+  const [noteOpenId,   setNoteOpenId]   = useState(null);
+  const [noteDraft,    setNoteDraft]    = useState('');
+  const [noteSending,  setNoteSending]  = useState(false);
+  const noteIdRef = useRef(null); // one id per note until it lands, so a retry can't post it twice
+  const preview = new URLSearchParams(window.location.search).get('preview') === '1'; // office preview: never write
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('This punch list is not available.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('This punch list is not available.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'homeowner_requests',jobId), snap => {
+      setPunchNotes(snap.exists() ? (snap.data().punchNotes || {}) : {});
+    }, () => {});
     return () => unsub();
   }, [jobId]);
 
@@ -54602,6 +54784,27 @@ function PunchSharePage({ jobId, stage }) {
     return new Set(raw);
   })();
   const shareLabel = shareObj?.name || job?.[punchKey+'FilterLabel'] || '';
+
+  const sendNote = async (itemId) => {
+    const text = noteDraft.trim();
+    if (!text || preview) return;
+    if (!noteIdRef.current) noteIdRef.current = uid() + Math.random().toString(36).slice(2, 8); // random tail: ids must be unique across phones
+    const note = { id: noteIdRef.current, text, by: shareLabel || 'GC', share: shareParam, at: new Date().toISOString() };
+    setNoteSending(true);
+    try {
+      await saveHomeownerRequest(jobId, (prev) => {
+        const next = appendPunchNote((prev||{}).punchNotes, punchNoteKey(punchKey, itemId), note);
+        return next ? { punchNotes: next, jobName: (prev && prev.jobName) || job?.name || '' } : null;
+      }, 'punchNote');
+      noteIdRef.current = null;
+      setNoteDraft(''); setNoteOpenId(null);
+      toast.success('Note sent — Homestead will see it right away.');
+    } catch(e) {
+      if (await reportWriteDenied(e, 'homeowner_requests', jobId)) toast.error('This page is out of date — reload it and send again. Your note is still in the box.');
+      else toast.error("Couldn't send the note. Check your connection and try again — your note is still in the box.");
+    }
+    setNoteSending(false);
+  };
 
   const normF = (f) => f && typeof f==='object' ? f : {};
   const FLOOR_KEYS = [
@@ -54643,11 +54846,64 @@ function PunchSharePage({ jobId, stage }) {
           </span>
         </div>
       )}
+      {(() => {
+        const mine = punchNotesForShare(punchNoteList(punchNotes, punchNoteKey(punchKey, item.id)), shareParam);
+        const open = noteOpenId === item.id;
+        const when = (iso) => { try { return new Date(iso).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch { return ''; } };
+        return (
+          <div style={{marginLeft:24,marginTop:4}}>
+            {mine.map(n => (
+              <div key={n.id} style={{fontSize:13,color:'#2E3640',lineHeight:1.45,marginBottom:3,wordBreak:'break-word',whiteSpace:'pre-wrap'}}>
+                <b>Your note:</b> {n.text}
+                <span style={{fontSize:12,color:n.ackAt?C.green:C.faint}}> · {when(n.at)}{n.ackAt ? ' · Seen by Homestead' : ''}</span>
+              </div>
+            ))}
+            {!item.done && !preview && !open && (
+              <button onClick={() => { setNoteOpenId(item.id); setNoteDraft(''); noteIdRef.current = null; }}
+                style={{minHeight:32,padding:'0 2px',background:'none',border:'none',color:stageColor,fontSize:13,fontWeight:600,
+                  cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'}}>
+                {item.waiting ? 'Ready now? Leave a note' : 'Leave a note'}
+              </button>
+            )}
+            {open && (
+              <div style={{marginTop:4,background:'#F7F8FA',border:`1px solid ${C.border}`,borderRadius:8,padding:10}}>
+                {item.waiting && (
+                  <button onClick={() => setNoteDraft('Ready now')}
+                    style={{minHeight:32,padding:'0 12px',marginBottom:8,borderRadius:99,border:`1px solid ${stageColor}`,
+                      background:noteDraft==='Ready now'?stageColor:'#fff',color:noteDraft==='Ready now'?'#fff':stageColor,
+                      fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                    Ready now
+                  </button>
+                )}
+                <textarea value={noteDraft} onChange={e=>setNoteDraft(e.target.value.slice(0, PUNCH_NOTE_MAX))} rows={2} autoFocus
+                  placeholder={item.waiting ? 'e.g. Ready now, cabinets are in' : 'Your note for Homestead…'}
+                  style={{width:'100%',boxSizing:'border-box',border:`1px solid ${C.border}`,borderRadius:8,padding:'8px 10px',
+                    fontSize:14,fontFamily:'system-ui,sans-serif',color:C.text,resize:'vertical',outline:'none',lineHeight:1.45,background:'#fff'}}/>
+                <div style={{display:'flex',gap:8,marginTop:8}}>
+                  <button onClick={() => sendNote(item.id)} disabled={noteSending || !noteDraft.trim()}
+                    style={{flex:1,minHeight:40,borderRadius:8,border:'none',background:noteDraft.trim()?stageColor:C.muted,color:'#fff',
+                      fontSize:14,fontWeight:700,cursor:noteDraft.trim()?'pointer':'not-allowed',fontFamily:'inherit',opacity:noteSending?0.6:1}}>
+                    {noteSending ? 'Sending…' : 'Send note'}
+                  </button>
+                  <button onClick={() => { setNoteOpenId(null); setNoteDraft(''); }} disabled={noteSending}
+                    style={{minHeight:40,padding:'0 16px',borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',color:C.dim,
+                      fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   ));
 
-  if(loading) return <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
   if(error)   return <div style={{textAlign:'center',padding:60,color:'#C62828',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
+  // A saved copy from an earlier visit may predate this link — wait for the
+  // server before calling it closed.
+  if(linkRevoked && cached) return <ShareWeakSignal/>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
@@ -54822,6 +55078,8 @@ function QuestionsSharePage({ jobId }) {
   const [job,            setJob]           = useState(null);
   const [loading,        setLoading]       = useState(true);
   const [error,          setError]         = useState(null);
+  const [weak,           setWeak]          = useState(false); // cache-only miss: still waiting on signal
+  const [cached,         setCached]        = useState(false); // showing this phone's saved copy, server not reached yet
   const shareParam = new URLSearchParams(window.location.search).get('s') || '';
   // Office-side read-only PREVIEW (?preview=1) — the page renders exactly as the
   // recipient sees it, but wrapped in a disabled <fieldset> so no input/button/
@@ -54936,9 +55194,11 @@ function QuestionsSharePage({ jobId }) {
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('This questions form is not available.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('This questions form is not available.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
@@ -55255,8 +55515,11 @@ function QuestionsSharePage({ jobId }) {
   const newCount   = [...roughQs, ...finishQs].filter(q=>isNewQ(q)||newReplyQ(q)).length;
   const taStyle = {width:'100%',border:'1px solid #CDD3DB',borderRadius:7,padding:'8px 10px',fontSize:14,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
+  // A saved copy from an earlier visit may predate this link — wait for the
+  // server before calling it closed.
+  if(linkRevoked && cached) return <ShareWeakSignal/>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
@@ -55420,14 +55683,18 @@ function JobNoteSharePage({ param }) {
   const [job,     setJob]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
+  const [weak,    setWeak]    = useState(false); // cache-only miss: still waiting on signal
+  const [cached,  setCached]  = useState(false); // showing this phone's saved copy, server not reached yet
 
   useEffect(() => {
     if (!jobId || !noteId || !token) {
       setError('This link is malformed.'); setLoading(false); return;
     }
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if (!snap.exists()) { setError('This note is not available.'); setLoading(false); return; }
-      setJob(snap.data()?.data || null); setLoading(false);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
+      if (st === 'loading') { setWeak(true); return; }
+      if (st === 'missing') { setError('This note is not available.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data || null); setCached(!!snap.metadata.fromCache); setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
   }, [jobId, noteId, token]);
@@ -55435,6 +55702,7 @@ function JobNoteSharePage({ param }) {
   const cardPageBg = '#EEF0F3';
   const headerBg = '#1e3a5f';
 
+  if (loading && weak) return <ShareWeakSignal/>;
   if (loading) return (
     <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>
   );
@@ -55445,6 +55713,9 @@ function JobNoteSharePage({ param }) {
   const notes = Array.isArray(job?.jobNotes) ? job.jobNotes : [];
   const note = notes.find(n => n && n.id === noteId);
 
+  // A saved copy from an earlier visit may predate this note or its link —
+  // wait for the server before calling it gone or revoked.
+  if (cached && (!note || note.deleted || !note.shareToken || note.shareToken !== token)) return <ShareWeakSignal/>;
   if (!note || note.deleted) {
     return (
       <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>
@@ -64414,6 +64685,11 @@ function GCPortalPage({ token, deepJobId }) {
   // dropped connection.
   const [linkErr, setLinkErr] = useState(false);
   const [jobsErr, setJobsErr] = useState(false);
+  // Weak signal (2026-10-15): a cache-only miss is "not downloaded yet", never
+  // "revoked" or "no jobs" — see shareDocState. Only a server-confirmed miss
+  // flips link to null / jobs to [].
+  const [linkWeak, setLinkWeak] = useState(false);
+  const [jobsWeak, setJobsWeak] = useState(false);
 
   // Reset the broken-logo Set when the link/token or logoUrl changes so a
   // repaired same-URL or new custom URL isn't stuck skipped for the session
@@ -64425,9 +64701,12 @@ function GCPortalPage({ token, deepJobId }) {
   useEffect(() => {
     if(!token) { setLink(null); return; }
     setLinkErr(false);
-    const unsub = onSnapshot(doc(db,"gc_links",token), snap => {
+    const unsub = onSnapshot(doc(db,"gc_links",token), { includeMetadataChanges:true }, snap => {
       setLinkErr(false);
-      if(!snap.exists() || snap.data()?.revoked === true) { setLink(null); return; }
+      const st = shareDocState(snap);
+      if(st === 'loading') { setLinkWeak(true); return; }
+      setLinkWeak(false);
+      if(st === 'missing' || snap.data()?.revoked === true) { setLink(null); return; }
       setLink(snap.data());
     }, () => setLinkErr(true));
     return unsub;
@@ -64438,8 +64717,10 @@ function GCPortalPage({ token, deepJobId }) {
     if(link === undefined) return;             // link still loading
     if(!portalId) { setJobs([]); return; }     // live link but no mirror → empty state, never stuck loading
     setJobsErr(false);
-    const unsub = onSnapshot(collection(db,"gc_portal",portalId,"jobs"), snap => {
+    const unsub = onSnapshot(collection(db,"gc_portal",portalId,"jobs"), { includeMetadataChanges:true }, snap => {
       setJobsErr(false);
+      if(shareDocState(snap) === 'loading') { setJobsWeak(true); return; } // cache-only empty ≠ "no jobs"
+      setJobsWeak(false);
       setJobs(snap.docs.map(d => d.data()).filter(Boolean));
     }, () => setJobsErr(true));
     return unsub;
@@ -64486,6 +64767,7 @@ function GCPortalPage({ token, deepJobId }) {
       <div style={{fontSize:14,color:P.dim}}>This usually clears up with a refresh. If it keeps happening — {_gcContactLine(P, "")}</div>
     </div>
   );
+  if(link === undefined && linkWeak) return <ShareWeakSignal/>;
   if(link === undefined) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading your portal…</div>);
   if(link === null) return wrap(
     <div style={{padding:"120px 0",textAlign:"center"}}>
@@ -64499,6 +64781,7 @@ function GCPortalPage({ token, deepJobId }) {
       <div style={{fontSize:14,color:P.dim}}>This usually clears up with a refresh. If it keeps happening — {_gcContactLine(P, "")}</div>
     </div>
   );
+  if(jobs === null && jobsWeak) return <ShareWeakSignal/>;
   if(jobs === null) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading jobs…</div>);
   // Data already loaded once, but the live listener has since dropped —
   // keep showing the last-known-good board instead of yanking it away, with
