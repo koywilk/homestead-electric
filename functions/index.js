@@ -2914,6 +2914,16 @@ exports.weeklyCommercialDocPull = functions
     return null;
   });
 
+// Read-only: the attachment folder NAMES on one Simpro job — feeds the Add
+// Building "Simpro folder" picker (Projects spec 2026-10-15 §6.2). No writes,
+// no file contents; same open posture as getSimproJobBasics.
+exports.listSimproJobFolders = functions.https.onCall(async (data) => {
+  const no = String((data && data.simproNo) || "").replace(/^#/, "").trim();
+  if (!/^\d+$/.test(no)) throw new functions.https.HttpsError("invalid-argument", "simproNo must be a Simpro job number");
+  const folders = await DOC_PROVIDERS.simpro.listFolders(no);
+  return { folders: (folders || []).filter(f => f && f.name).map(f => ({ id: f.id, name: f.name })) };
+});
+
 // ─── Get Simpro Job Financials ────────────────────────────────────────────────
 exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
     requireAppKey(data);
@@ -5394,6 +5404,7 @@ function _jobFolderName(job) {
 // - Not a quote
 // - Doesn't already have a driveFolderId
 function _needsDriveFolder(job) {
+  if (job.projectGroupId) return false; // Projects (spec 2026-10-15): a building's folder is made INSIDE its project folder (Phase 2), never at the top level
   const name = String(job.name || "").trim();
   if (!name || name.length < 3) return false;
   if (/^(new job|untitled|unnamed|test)$/i.test(name)) return false;

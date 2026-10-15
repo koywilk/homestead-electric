@@ -479,7 +479,9 @@ function buildModel(inputs) {
   try {
     const jobById = new Map(activeJobs.map(j => [j.id, j]));
     const jobBySimproNo = new Map();
-    activeJobs.forEach(j => { if (j.simproNo) jobBySimproNo.set(String(j.simproNo), j); });
+    // Projects (spec 2026-10-15 §6.3): buildings sharing one Simpro # → only the lead answers for it.
+    const simproJoinable = (j) => !(j.projectGroupId && j.simproFolder) || !!j.simproLead;
+    activeJobs.forEach(j => { if (j.simproNo && simproJoinable(j)) jobBySimproNo.set(String(j.simproNo), j); });
 
     // Per job per day: manual planner people first (lead, then crew), then
     // Simpro extras — deduped by lowercased first name (the Huddle's merge

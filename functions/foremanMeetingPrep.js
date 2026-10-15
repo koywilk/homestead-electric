@@ -231,8 +231,10 @@ function buildModel(inputs) {
   const live = arr(jobs).filter(isActive);
   const res = live.filter(j => isResJob(j, crew));
   const byId = new Map(res.map(j => [j.id, j]));
-  const bySimpro = new Map(res.filter(j => j.simproNo).map(j => [snOf(j), j]));
-  const byAnySimpro = new Map(live.filter(j => j.simproNo).map(j => [snOf(j), j]));   // any active job, for schedule labels
+  // Projects (spec 2026-10-15 §6.3): buildings sharing one Simpro # → only the lead answers for it.
+  const simproJoinable = (j) => !(j.projectGroupId && j.simproFolder) || !!j.simproLead;
+  const bySimpro = new Map(res.filter(j => j.simproNo && simproJoinable(j)).map(j => [snOf(j), j]));
+  const byAnySimpro = new Map(live.filter(j => j.simproNo && simproJoinable(j)).map(j => [snOf(j), j]));   // any active job, for schedule labels
 
   // Carried action items
   try {

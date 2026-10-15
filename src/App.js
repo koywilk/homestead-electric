@@ -39274,7 +39274,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
     const map = {};
-    jobs.forEach(j => { if (j.simproNo) map[String(j.simproNo)] = j; });
+    jobs.forEach(j => { if (j.simproNo && isSimproJoinable(j)) map[String(j.simproNo)] = j; });
     return map;
   }, [jobs]);
 
@@ -43794,7 +43794,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             if(first && (pf === first || p === first || pf === name)) { matchedAs = p; break; }
                           }
                           if(!matchedAs) continue;
-                          const matchedJob = jobs.find(j => String(j.simproNo||"") === String(pid));
+                          const matchedJob = jobs.find(j => isSimproJoinable(j) && String(j.simproNo||"") === String(pid));
                           if(matchedJob && matchedJob.id === jid) continue;
                           // Pull this person's specific time on the matched
                           // Simpro entry. Falls back to null when Simpro has
@@ -47284,7 +47284,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
   } else {
     // ── Automations: Plan Intake + Appliance Loads ──
-    const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
+    const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => isSimproJoinable(j) && String(j.simproNo || "").trim() === k) || null) : null; };
     const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
     const go = (url) => { try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {} };
     // Plan Intake
@@ -49268,7 +49268,7 @@ const sb4Agg = (js, cfg) => {
     // "appVolume-per-job" over the eligible set, so the two app numbers on the
     // stat card can never drift apart under a different counting rule.
     const punch0 = punch, updates0 = updates, questions0 = questions;
-    const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
+    const m = isSimproJoinable(j) ? _sb4Num(j.simproMargin) : null, sp = _sb4Special(j.name); // a shared Simpro # counts its margin once
     if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
     if (m != null && !_sb3Completed(j)) live.push({ job: String(j.name || "?").trim(), m: Math.round(m * 10) / 10, stage: _sb4Stage(j), special: sp }); // watch: live jobs
     let missCount = 0, minorCount = 0, qcWalk = false;
@@ -62150,7 +62150,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
     return () => { dead = true; };
   }, [tick]);
 
-  const ccFor = (no) => (jobs||[]).find(j => String(j.simproNo||"").trim() === String(no));
+  const ccFor = (no) => (jobs||[]).find(j => isSimproJoinable(j) && String(j.simproNo||"").trim() === String(no));
 
   // Rows with the CC link a person set by hand count as "in CC" (green) even when the names differ.
   const rowsEff = useMemo(() => st.rows.map(r => {
