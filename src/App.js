@@ -63778,10 +63778,42 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       {messagesSlot && Section({ k: "msgs", label: "Office messages", color: C.faint, rows: null, defaultOpen: false, children: <div style={{ marginTop: 6 }}>{messagesSlot}</div> })}
     </>
   );
-  // Placeholders until Task 5 (Waiting on others in chase order, Team, Done).
-  const sentBody = Section({ k: "chase:none", label: "Waiting on others", rows: sentChaseOrder(fq(sentRows)), defaultOpen: true });
-  const teamBody = personGroups.length ? <>{personGroups.map(g => Section({ k: "team:" + g.key.slice(2), label: g.title, rows: g.rows, defaultOpen: false, empty: g.empty }))}</> : null;
-  const doneBody = Section({ k: "done", label: "Done", rows: mergeDoneRows(fq(doneRows), fq(finishedRows)), defaultOpen: true });
+  // ── Waiting on others: chase order, three sections that start open (flagged exception), then "On <head>" folded ──
+  const sentSorted = sentChaseOrder(fq(sentRows));
+  const CHASE = [["none", "Not started", C.red], ["wait", "Waiting", C.orange], ["work", "Working", C.blue]];
+  const sentBody = (
+    <>
+      <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Everything you asked someone for. Not started first: those are the ones to chase.</div>
+      {sentSorted.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>Nothing you asked for is still open.</div>}
+      {CHASE.map(([st, label, color]) => { const rs = sentSorted.filter(r => sentChaseState(r) === st); return rs.length ? Section({ k: "chase:" + st, label, color, rows: rs, defaultOpen: true }) : null; })}
+      {!iRunHead && headRowsQ.length > 0 && Section({ k: "onhead", label: `On ${headFirst}`, color: C.text, rows: headRowsQ, defaultOpen: false,
+        children: <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>{headByJob.map(({ jobId, job, rows }) =>
+          Section({ k: "onhead:" + jobId, label: `${(job && job.name) || "No job"}`, color: C.text, rows, defaultOpen: false,
+            extra: canCreate && openQuickAdd ? <button onClick={e => { e.stopPropagation(); openQuickAdd({ job, assignedTo: headName }); }} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "4px 10px", minHeight: 32, borderRadius: 8, cursor: "pointer", background: "transparent", color: C.blue, border: `1px dashed ${C.blue}` }}>+ Add for {headFirst}</button> : null }))}</div> })}
+    </>
+  );
+  // ── Team (head only): one folded section per person; header carries overdue + done-this-week ──
+  const teamGroups = personGroups.filter(g => g.rows.length || g.title.endsWith("(you)"));
+  const teamBody = (
+    <>
+      <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Who has what open right now. Tap a person to see their list.</div>
+      {teamGroups.length === 0 && <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: C.faint, fontSize: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 14 }}>Nobody has anything open right now.</div>}
+      {teamGroups.map(g => {
+        const nm = g.key.slice(2); const p = pulse.find(x => sameName(x.name, nm));
+        return Section({ k: "team:" + nm, label: g.title, color: C.text, rows: g.rows, defaultOpen: false, empty: g.empty,
+          extra: p ? <>{p.overdue > 0 && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: C.red, color: "#fff" }}>{p.overdue} overdue</span>}
+            {p.doneWeek > 0 && <span style={{ fontSize: 12, color: C.faint, fontWeight: 600 }}>{p.doneWeek} done this week</span>}</> : null });
+      })}
+    </>
+  );
+  // ── Done: my Done + Sent · finished, newest first, one list ──
+  const doneMerged = mergeDoneRows(fq(doneRows), fq(finishedRows));
+  const doneBody = (
+    <>
+      <div style={{ fontSize: 14, color: C.dim, margin: "8px 2px 0" }}>Last 30 days, newest first: what you finished and what others finished for you.</div>
+      {Section({ k: "done", label: "Done", color: C.green, rows: doneMerged, defaultOpen: true, empty: "Nothing finished in the last 30 days." })}
+    </>
+  );
   // ── Header + tabs ──
   const GROUP_LABEL = { time: "Time", job: "Job", type: "Type", from: "Who sent it" };
   const iconBtn = (on) => ({ width: 44, height: 44, borderRadius: 10, border: `1px solid ${on ? C.blue : C.border}`, background: C.card, color: on ? C.blue : C.text, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 });
