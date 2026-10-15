@@ -62604,13 +62604,20 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const [q, setQ] = useState("");
   const qOn = !!String(q || "").trim();
   const [tab, setTab] = useState("todo");
+  const curTab = tab === "team" && !iRunHead ? "todo" : tab;   // coverage ended mid-visit → never a blank page
   const [gmenu, setGmenu] = useState(false);
+  useEffect(() => {   // Escape closes the Group menu
+    if (!gmenu) return undefined;
+    const h = (e) => { if (e.key === "Escape") setGmenu(false); };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [gmenu]);
   const [groupPref, setGroupPref] = useState(() => { try { return myDayGroupPref(localStorage.getItem("myday.group"), localStorage.getItem("myday.view"), localStorage.getItem("myday.sort")); } catch { return "time"; } });
   const pickGroup = (v) => { setGroupPref(v); setGmenu(false); try { localStorage.setItem("myday.group", v); } catch {} };
   const [searchOpen, setSearchOpen] = useState(false);
   const [secOpen, setSecOpen] = useState(() => new Map());   // explicit toggles; default comes from the section
   const isSecOpen = (k, def) => (qOn ? true : secOpen.has(k) ? secOpen.get(k) : !!def);
-  const toggleSec = (k, def) => setSecOpen(m => { const n = new Map(m); n.set(k, !(n.has(k) ? n.get(k) : !!def)); return n; });
+  const toggleSec = (k, def) => { if (qOn) return; setSecOpen(m => { const n = new Map(m); n.set(k, !(n.has(k) ? n.get(k) : !!def)); return n; }); };   // searching forces every section open; leave the stored state alone
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   // Batch runs ONE row per render (see the batch effect below): each step reads
@@ -63101,7 +63108,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
   const rePin = () => onSaveFocus({ date: todayYmd, keys: [...pinnedRows.map(r => r.key), ...carryKeys].slice(0, 3), prevDate: "", prevKeys: [] });
   const fq = (rows) => qOn ? rows.filter(r => rowMatches(r, q)) : rows;
   // Redesign: "person" = the head's Team tab; job / cat only feed what still reads `view`.
-  const view = tab === "team" && iRunHead ? "person" : (groupPref === "job" ? "job" : "cat");
+  const view = curTab === "team" ? "person" : (groupPref === "job" ? "job" : "cat");
   const sortRows =(rs) => rs.slice().sort(compareMyDayRows);   // v446: urgency → lane → due date → title
   // To do Group: Job / Type / Who sent it — the label each row bunches under (myDaySections).
   const groupLabelOf = (r, mode) => mode === "job" ? ((r.jobId && jobById(r.jobId) && jobById(r.jobId).name) || "")
@@ -63470,6 +63477,24 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
               </div>
             );
           })()}
+          {expKey === r.key && snoozeFor === r.key && (() => {
+            // In flow, under the action buttons (an absolute dropdown was clipped by the
+            // section card's overflow:hidden). v432: clicks inside must not bubble — the
+            // page container closes the snooze choices on ANY click, which unmounted the
+            // date input the moment it was tapped.
+            const snzBtn = { fontFamily: "inherit", fontSize: 14, fontWeight: 600, minHeight: 44, padding: "0 13px", borderRadius: 10, cursor: "pointer", border: `1px solid ${C.border}`, background: C.card, color: C.text };
+            return (
+              <div onClick={e => e.stopPropagation()} role="group" aria-label="Snooze until" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 8, padding: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, cursor: "default" }}>
+                <div style={{ width: "100%", fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.dim }}>Snooze until</div>
+                {[["3 days", 3], ["1 week", 7]].map(([lbl, d]) => (
+                  <button key={lbl} onClick={() => { setSnoozeFor(null); r.onSnooze(addDaysYmd(todayYmd, d)); }} style={snzBtn}>{lbl}</button>
+                ))}
+                <input type="date" min={todayYmd} aria-label="Snooze until a date" onChange={e => { const v = e.target.value; if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v >= todayYmd) { setSnoozeFor(null); r.onSnooze(v); } }}
+                  style={{ fontFamily: "inherit", fontSize: 14, minHeight: 44, boxSizing: "border-box", padding: "0 10px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
+                <button onClick={() => setSnoozeFor(null)} style={{ ...snzBtn, background: "none", border: "none", color: C.dim }}>Cancel</button>
+              </div>
+            );
+          })()}
           {expKey === r.key && r.photos && r.photos.length > 0 && (
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               {r.photos.map(p => {
@@ -63653,19 +63678,6 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
             </div>
           )}
         </div>
-        {expKey === r.key && snoozeFor === r.key && (
-          // v432: clicks inside the snooze menu must not bubble — the page
-          // container closes the menu on ANY click, which unmounted the date
-          // input the moment Koy tapped it (so "pick a date" never worked).
-          <div onClick={e => e.stopPropagation()} style={{ position: "absolute", right: 10, top: "calc(100% + 4px)", zIndex: 5, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(20,30,50,.12)", padding: 6, display: "flex", flexDirection: "column", minWidth: 170 }}>
-            {[["3 days", 3], ["1 week", 7]].map(([lbl, d]) => (
-              <button key={lbl} onClick={() => { setSnoozeFor(null); r.onSnooze(addDaysYmd(todayYmd, d)); }}
-                style={{ textAlign: "left", fontFamily: "inherit", fontSize: 14, background: "none", border: "none", padding: "9px 10px", borderRadius: 7, cursor: "pointer", color: C.text }}>{lbl}</button>
-            ))}
-            <input type="date" min={todayYmd} onChange={e => { const v = e.target.value; if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v >= todayYmd) { setSnoozeFor(null); r.onSnooze(v); } }}
-              style={{ fontFamily: "inherit", fontSize: 14, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.bg, color: C.text, margin: "2px 4px 4px" }} />
-          </div>
-        )}
       </div>
     );
   };
@@ -63755,7 +63767,8 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       {carryKeys.length > 0 && <div style={{ fontSize: 13, color: C.dim, margin: "8px 2px 0" }}>From {mdOf(carrySrc.date)}: {carryKeys.length} pinned still open · {link("Re-pin", rePin)}</div>}
       {todoSections.map(s => Section({ k: s.key, label: s.label, color: s.lane ? LANE_COLOR[s.lane] : C.text, rows: s.rows, defaultOpen: s.openByDefault,
         empty: s.lane === "today" ? "Nothing due today." : "Nothing here.",
-        extra: !s.lane && s.rows.some(r => r.bucket === "overdue") ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>overdue</span> : null,
+        extra: <>{!s.lane && s.rows.some(r => r.bucket === "overdue") ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>overdue</span> : null}
+          {qcInType && s.key === "type:QC walks" && qcCounts && qcCounts.needAction > 0 ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>{qcCounts.needAction} need action</span> : null}</>,
         children: qcInType && s.key === "type:QC walks" ? <>{rowsCard(s.rows)}<div style={{ marginTop: 6 }}>{qcTracker}</div></> : undefined }))}
       {snoozedRows.length > 0 && Section({ k: "snoozed", label: "Snoozed", color: C.faint, rows: fq(snoozedRows), defaultOpen: false })}
       {staleRows.length > 0 && Section({ k: "stale", label: "Older reminders", color: C.faint, rows: fq(sortRows(staleRows)), defaultOpen: false })}
@@ -63794,18 +63807,18 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-          {<button aria-label="Search" aria-pressed={searchOpen || qOn} onClick={() => { setSearchOpen(s => !s); if (searchOpen) setQ(""); }} style={iconBtn(searchOpen || qOn)}><Icon name="search" size={17} stroke={2.4} /></button>}
-          {tab === "todo" && <div style={{ position: "relative" }}>
+          <button aria-label="Search" aria-pressed={searchOpen || qOn} onClick={() => { setSearchOpen(s => !s); if (searchOpen) setQ(""); }} style={iconBtn(searchOpen || qOn)}><Icon name="search" size={17} stroke={2.4} /></button>
+          {curTab === "todo" && <div style={{ position: "relative" }}>
             <button aria-label={`Group by ${GROUP_LABEL[groupPref]}`} aria-expanded={gmenu} onClick={e => { e.stopPropagation(); setGmenu(g => !g); }} style={iconBtn(groupPref !== "time")}><Icon name="sliders" size={18} stroke={2.4} /></button>
             {gmenu && <div role="menu" onClick={e => e.stopPropagation()} style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 10px 28px rgba(20,30,50,.14)", padding: 6, minWidth: 210 }}>
               <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.faint, padding: "8px 12px 4px" }}>Group by</div>
               {[["time","Time","overdue first"],["job","Job",""],["type","Type","Punch, QC walks…"],["from","Who sent it",""]].map(([k,l,s]) => (
                 <button key={k} role="menuitemradio" aria-checked={groupPref === k} onClick={() => pickGroup(k)} style={menuItem(groupPref === k)}>{l}<span style={{ color: C.faint, fontWeight: 500 }}>{s}</span></button>))}
               <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
-              <button onClick={() => { setGmenu(false); toggleSelectMode(); }} style={menuItem(false)}>{selectMode ? "Stop selecting" : "Select several…"}<span style={{ color: C.faint, fontWeight: 500 }}>done / snooze / push</span></button>
+              <button role="menuitem" onClick={() => { setGmenu(false); toggleSelectMode(); }} style={menuItem(false)}>{selectMode ? "Stop selecting" : "Select several…"}<span style={{ color: C.faint, fontWeight: 500 }}>done / snooze / push</span></button>
             </div>}
           </div>}
-          {canCreate && openQuickAdd && <button onClick={() => openQuickAdd({})} style={{ background: C.blue, border: "none", borderRadius: 10, color: "#fff", fontWeight: 700, padding: "0 16px", minHeight: 44, fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" size={14} stroke={2.5} />Need</button>}
+          {canCreate && !ON_MOBILE && openQuickAdd && <button onClick={() => openQuickAdd({})} style={{ background: C.blue, border: "none", borderRadius: 10, color: "#fff", fontWeight: 700, padding: "0 16px", minHeight: 44, fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" size={14} stroke={2.5} />Need</button>}
         </div>
       </div>
       {(searchOpen || qOn) && <input type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs" aria-label="Search tasks or jobs"
@@ -63813,14 +63826,14 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       {pinsSlot}
       <div role="tablist" style={{ position: "sticky", top: "env(safe-area-inset-top, 0px)", zIndex: 4, background: C.bg, display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto", scrollbarWidth: "none" }}>
         {TABS.map(([k, l, n, hot]) => (
-          <button key={k} role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setExpKey(null); setGmenu(false); if (selectMode && k !== "todo") toggleSelectMode(); }}
+          <button key={k} role="tab" aria-selected={curTab === k} onClick={() => { setTab(k); setExpKey(null); setGmenu(false); if (selectMode && k !== "todo") toggleSelectMode(); }}
             style={{ flex: "1 0 auto", minHeight: 44, padding: "0 12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
-              border: `1px solid ${tab === k ? C.text : C.border}`, background: tab === k ? C.text : C.card, color: tab === k ? "#fff" : C.dim }}>
-            {l}{n !== "" && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 7px", background: hot ? C.red : tab === k ? "rgba(255,255,255,.18)" : C.bg, color: hot || tab === k ? "#fff" : C.dim }}>{n}</span>}
+              border: `1px solid ${curTab === k ? C.text : C.border}`, background: curTab === k ? C.text : C.card, color: curTab === k ? "#fff" : C.dim }}>
+            {l}{n !== "" && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 7px", background: hot ? C.red : curTab === k ? "rgba(255,255,255,.18)" : C.bg, color: hot || curTab === k ? "#fff" : C.dim }}>{n}</span>}
           </button>
         ))}
       </div>
-      {tab === "todo" ? todoBody : tab === "sent" ? sentBody : tab === "team" ? teamBody : doneBody}
+      {curTab === "todo" ? todoBody : curTab === "sent" ? sentBody : curTab === "team" ? teamBody : doneBody}
       {/* v429 batch action bar (Command Deck dark, steel blue accent). */}
       {selectMode && (
         <div onClick={e => e.stopPropagation()} style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${(ON_MOBILE ? 92 : 24) + (undo ? 56 : 0)}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8996, background: "#1B2030", color: "#E6EAF1", borderRadius: 12, padding: "10px 12px", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 14, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 640, margin: "0 auto" }}>
