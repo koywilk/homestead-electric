@@ -25,10 +25,26 @@
     <link rel="manifest" href="/manifest.json" />
 <title>Homestead Electric</title>
     <style>
+      /* Design pass 2026-10-14: ~240 inline styles in src/App.js use var(--text),
+         var(--dim), var(--card), var(--surface), var(--muted), var(--border), left
+         over from an old dark theme that no longer defines them. Undefined, a border
+         vanished, a modal background went see-through, and fallbacks like
+         var(--text,#ddd) drew light grey on white. They now resolve to the light
+         palette — a copy of `const C` in src/App.js (keep in step). --muted is text
+         here, so it maps to C.faint. The /dashboard page (.odash) sets its own. */
+      :root {
+        --text: #1B1F24; --dim: #5E6670; --muted: #666E79; --faint: #666E79;
+        --card: #FFFFFF; --surface: #F4F6F8; --bg: #EEF0F3; --border: #E1E4E9;
+        --accent: #2F5BD9;
+      }
       body { margin: 0; background: #09090f; }
+      /* Design pass 2026-10-14: the page used to fall back to the browser's serif
+         (Times) for anything without its own font, e.g. the More menu. One base
+         font for the whole app; headings that set Bebas Neue inline still win. */
+      body, button, input, select, textarea { font-family: "DM Sans", system-ui, -apple-system, sans-serif; }
       /* v537: a touch screen gets finger-sized buttons; body text sits at 500 weight so 12-13 px type holds up in sunlight. */
       body { font-weight: 500; }
-      @media (pointer: coarse) { button { min-height: 40px; } }
+      @media (pointer: coarse) { button, [role="button"] { min-height: 40px; } }
       .he-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
       * { -webkit-tap-highlight-color: transparent; }
     </style>

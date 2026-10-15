@@ -1915,7 +1915,16 @@ const C = {
   faint:"#666E79", // text that used C.muted (1.4:1) — 4.5:1 on every page background
   blue:"#2F5BD9", green:"#1F7A3F", red:"#C62828", purple:"#6A3FB5",
   orange:"#C2410C", teal:"#3E7D7A", rough:"#2F5BD9", finish:"#6A7BAA",
+  // Design pass 2026-10-14: the amber/yellow family (B7791F and friends) is retired as a
+  // lead colour (Koy hates yellow). "Waiting" states (Awaiting Start Date, On Hold,
+  // Pending) use this slate family instead. slate is text-safe (5.9:1 on white,
+  // 5.0:1 on slateBg). Genuine "needs attention" uses C.orange, sparingly.
+  slate:"#56657A", slateBg:"#E8ECF2", slateLine:"#C9D1DC", slateInk:"#3F4B5C",
+  steelBg:"#EAF0FC", steelLine:"#C7D5F5", // light steel-blue tint (highlight rows)
 };
+// Job fields whose background writes don't flash the Saving… pill (the write
+// itself is unchanged). Only the open-a-job presence ping today.
+const HE_QUIET_SAVE_KEYS = new Set(["presence"]);
 // ── Dark command-header tokens (Slate + Flag redesign) ──
 const D = {
   bg1:"#141821", bg2:"#1B2030", hair:"#2A2F3A",
@@ -1927,11 +1936,11 @@ const D = {
 
 const ROUGH_STATUSES = [
   {value:"",           label:"— set status —",                        color:null},
-  {value:"waiting_date",label:"Awaiting Start Date",                  color:"#B7791F"},
+  {value:"waiting_date",label:"Awaiting Start Date",                  color:C.slate},
   {value:"date_confirmed",label:"Start Date Set",                     color:"#C2410C", hasDate:true},
   {value:"scheduled",  label:"Scheduled",                            color:"#2F5BD9", hasDate:true},
   {value:"inprogress", label:"In Progress",                          color:"#6A7BAA", hasDate:true},
-  {value:"waiting",    label:"On Hold",                              color:"#B7791F", dashed:true},
+  {value:"waiting",    label:"On Hold",                              color:C.slate, dashed:true},
   {value:"complete",   label:"Complete",                             color:"#2E8B57"},
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
@@ -1943,7 +1952,7 @@ const CO_STATUSES_NEW = [
   // coStatus:"simpro_task" will render with no active pill until the
   // user clicks any other status — chose graceful degradation over a
   // bulk migration write to avoid surprise updates on historical jobs.
-  {value:"pending",       label:"Sent — Pending Approval", color:"#B7791F"},
+  {value:"pending",       label:"Sent — Pending Approval", color:C.slate},
   {value:"approved",      label:"Approved",                color:"#1F7A3F"},
   {value:"scheduled",     label:"Scheduled",               color:"#2F5BD9", hasDate:true},
   {value:"completed",     label:"Work Completed",          color:"#2E8B57"},
@@ -1961,7 +1970,7 @@ const REDLINE_STATUSES = [
   // holds walks that are actually ready to write up.
   {value:"plans_prep", label:"Walk Done — Cleaning Plans", color:"#C2410C"},
   {value:"co_owed",   label:"Walk Done — CO Owed",  color:"#C62828", hasDate:true},
-  {value:"co_sent",   label:"Redline CO Sent",      color:"#B7791F"},
+  {value:"co_sent",   label:"Redline CO Sent",      color:C.slate},
   {value:"signed",    label:"CO Signed",            color:"#2E8B57"},
 ];
 // ── One CO board: red line walks live on the change-order kanban ────────────
@@ -2058,7 +2067,7 @@ const QC_STATUSES = [
   // when the walk turned up something); derived automatically by
   // deriveQcVerdict (beside sb4Agg below) and offered as a confirmable
   // suggestion in the QC tab's status pickers — never auto-written.
-  {value:"passed_items", label:"QC Passed with Items", color:"#B7791F"},
+  {value:"passed_items", label:"QC Passed with Items", color:C.slate},
   {value:"fail",      label:"QC Fail",               color:"#C62828"},
 ];
 const MATTERPORT_STATUSES = [
@@ -2069,7 +2078,7 @@ const MATTERPORT_STATUSES = [
 ];
 const TEMP_PED_STATUSES = [
   {value:"",          label:"— set status —",       color:null},
-  {value:"ready",     label:"Ready to Schedule",    color:"#B7791F"},
+  {value:"ready",     label:"Ready to Schedule",    color:C.slate},
   {value:"scheduled", label:"Scheduled",            color:"#2F5BD9", hasDate:true},
   {value:"completed", label:"Completed",            color:"#2E8B57"},
 ];
@@ -4975,7 +4984,7 @@ function UserPicker({ users, onSelect, onSavePin }) {
                     fontFamily:"inherit",color:C.text,textAlign:"left",
                     display:"flex",alignItems:"center",justifyContent:"space-between",
                     transition:"all 0.15s"}}
-                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background="#F6F1E6";}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background="#E8ECF2";}}
                   onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.card;}}>
                   <span>{u.name}</span>
                   <span style={{fontSize:12.5,color:C.dim,fontWeight:400,background:C.surface,
@@ -5426,8 +5435,8 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                       </button>
                     ):(
                       <button onClick={()=>deactivate(u.id)}
-                        style={{background:"none",border:"1px solid #B7791F55",borderRadius:8,
-                          color:"#B7791F",fontSize:13,fontWeight:600,padding:"8px 14px",
+                        style={{background:"none",border:"1px solid #56657A55",borderRadius:8,
+                          color:C.slate,fontSize:13,fontWeight:600,padding:"8px 14px",
                           cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
                         Deactivate access
                       </button>
@@ -5900,6 +5909,21 @@ function wxCondition(c){
   if(c<=99) return "Storm";
   return "";
 }
+// The header's flag mark: 3 · 2 · 3 white stars, drawn as SVG (design pass
+// 2026-10-14) so it scales with the mark instead of being 7px text glyphs.
+const _heStar = (cx, cy, r) => {
+  const pts = [];
+  for (let k = 0; k < 10; k++) {
+    const a = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? r * 0.45 : r;
+    pts.push((cx + rr * Math.cos(a)).toFixed(2) + "," + (cy + rr * Math.sin(a)).toFixed(2));
+  }
+  return "M" + pts.join("L") + "Z";
+};
+const HE_FLAG_STARS_D = [[11,8],[20,8],[29,8],[15.5,17],[24.5,17],[11,26],[20,26],[29,26]].map(([x,y]) => _heStar(x, y, 3.6)).join("");
+function HeFlagStars() {
+  return <svg viewBox="0 0 40 34" width="100%" height="100%" aria-hidden="true" style={{display:"block"}}><path d={HE_FLAG_STARS_D} fill="#fff"/></svg>;
+}
+
 function HeaderDateWeather(){
   const [wx,setWx]=useState(null);
   useEffect(()=>{
@@ -6248,7 +6272,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
             <label onMouseDown={e => e.preventDefault()} title="Add a photo"
               style={{ fontSize: 14, padding: "8px 12px", minHeight: 36, boxSizing: "border-box", display: "inline-flex", alignItems: "center", borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
                 border: `1px ${pics.length ? "solid" : "dashed"} ${pics.length ? C.accent : C.border}`, background: pics.length ? C.accent : C.card, color: pics.length ? "#fff" : C.dim, fontWeight: pics.length ? 700 : 500 }}>
-              {pics.length ? `📷 ${pics.length}` : "📷 Photo"}
+              <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="camera" size={14} stroke={2.25}/>{pics.length ? pics.length : "Photo"}</span>
               <input type="file" accept="image/*" multiple style={{ display: "none" }}
                 onChange={e => { addPics(e.target.files); e.target.value = ""; }} />
             </label>
@@ -6600,7 +6624,7 @@ const PILL_VARIANTS = {
   info:       { bg:"#3E7D7A22", fg:"#3E7D7A", border:"#3E7D7A66" },
   scheduled:  { bg:"#6A3FB522", fg:"#6A3FB5", border:"#6A3FB566" },
   neutral:    { bg:"#5E667022", fg:"#5E6670", border:"#5E667066" },
-  accent:     { bg:"#d9770618", fg:"#d97706", border:"#d9770644" },
+  accent:     { bg:"#C2410C18", fg:"#C2410C", border:"#C2410C44" },
 };
 
 // statusStripe — returns the { border, borderLeft } pair for the
@@ -6950,13 +6974,21 @@ const AddressLink = ({address, children, style={}}) => {
   );
 };
 
-const Btn = ({onClick,children,variant="ghost",style={}}) => {
+// Shared button. Design pass 2026-10-14: 40px minimum height (finger-sized on
+// every screen) and three plain variants for new work — primary (solid steel
+// blue), secondary (outlined) and quiet (text only). The older variants stay for
+// the screens that already use them.
+const Btn = ({onClick,children,variant="ghost",style={},title,disabled,type,"aria-label":ariaLabel}) => {
 
   const vs = {
 
     ghost:  {background:"none",border:`1px solid ${C.border}`,color:C.dim},
 
-    primary:{background:C.accent,border:"none",color:"#fff",fontWeight:700},
+    primary:{background:C.accent,border:`1px solid ${C.accent}`,color:"#fff",fontWeight:700},
+
+    secondary:{background:C.card,border:`1px solid ${C.accent}55`,color:C.accent,fontWeight:700},
+
+    quiet:  {background:"none",border:"1px solid transparent",color:C.dim,fontWeight:600},
 
     add:    {background:`${C.green}15`,border:`1px dashed ${C.green}55`,color:C.green},
 
@@ -6968,15 +7000,17 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
   return (
 
-    <button onClick={onClick}
+    <button type={type} onClick={onClick} title={title} disabled={disabled} aria-label={ariaLabel}
 
-      style={{borderRadius:7,padding:"6px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit",
+      style={{borderRadius:8,padding:"8px 14px",minHeight:40,fontSize:13,cursor:disabled?"default":"pointer",fontFamily:"inherit",
 
-        transition:"opacity 0.15s",...vs[variant],...style}}
+        display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,
 
-      onMouseEnter={e=>e.currentTarget.style.opacity=".7"}
+        transition:"opacity 0.15s",opacity:disabled?.55:1,...(vs[variant]||vs.ghost),...style}}
 
-      onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+      onMouseEnter={e=>{ if(!disabled) e.currentTarget.style.opacity=".7"; }}
+
+      onMouseLeave={e=>{ e.currentTarget.style.opacity=disabled?".55":"1"; }}>
 
       {children}
 
@@ -6985,6 +7019,26 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
   );
 
 };
+
+// One page header for every tab (design pass 2026-10-14). Same look as MY DAY:
+// Bebas caps title with the section's "?" guide beside it, an optional one-line
+// summary under it, and a right-hand slot for actions (use <Btn>). Sits inside
+// the tab's own padded container.
+function PageHeader({ title, subtitle, help, actions, badge, style }) {
+  return (
+    <div style={{marginBottom:12,...style}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontWeight:400,fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1,margin:0}}>
+          {String(title||"").toUpperCase()}
+        </h2>
+        {help && <HelpDot section={help}/>}
+        {badge}
+        {actions && <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginLeft:"auto"}}>{actions}</div>}
+      </div>
+      {subtitle && <div style={{fontSize:13,color:C.dim,marginTop:5,lineHeight:1.4}}>{subtitle}</div>}
+    </div>
+  );
+}
 
 
 // ── Icon component (Lucide-style, stroke-based SVG, replaces emoji chrome) ──
@@ -7304,7 +7358,7 @@ function HelpDot({ section, label = "", color = C.blue }) {
       {/* One layout unit regardless of what the parent flex looks like. */}
       <span style={{display:"inline-flex",alignItems:"center",gap:7}}>
         {!label&&showHint&&(
-          <span style={{fontSize:12.5,color:C.dim,fontStyle:"italic",whiteSpace:"nowrap"}}>
+          <span className="he-helpdot-hint" style={{fontSize:12.5,color:C.dim,fontStyle:"italic",whiteSpace:"nowrap"}}>
             new — tap for the guide
           </span>
         )}
@@ -7516,16 +7570,16 @@ function StatusUpdateHover({ statusUpdate, anchor = "right", children = null }) 
       onMouseLeave={()=>setHover(false)}>
       {children || (
         <span title="Has a status update — hover to read"
-          style={{width:7,height:7,borderRadius:99,background:"#B7791F",
-            boxShadow:"0 0 0 2px #B7791F22",cursor:"help"}}/>
+          style={{width:7,height:7,borderRadius:99,background:C.slate,
+            boxShadow:"0 0 0 2px #56657A22",cursor:"help"}}/>
       )}
       {hover && (
         <div onClick={e=>e.stopPropagation()}
           style={{position:"absolute",top:"100%",
             ...(anchor === "right" ? {right:0} : {left:0}),
             marginTop:6,zIndex:9999,
-            background:"#ffffff",border:`1px solid #B7791F66`,
-            borderLeft:`4px solid #B7791F`,borderRadius:8,
+            background:"#ffffff",border:`1px solid #56657A66`,
+            borderLeft:`4px solid #56657A`,borderRadius:8,
             padding:"7px 12px",maxWidth:420,minWidth:200,
             fontSize:13,color:"#1B1F24",lineHeight:1.4,fontWeight:500,
             whiteSpace:"normal",
@@ -9004,7 +9058,7 @@ function JobNoteLine({
             } else if(status === 'pending' || status === 'needs_sending' || status === 'converted') {
               // Orange = converted, in flight (the most common state right after
               // promote — shows the line moved into a CO that's awaiting reply).
-              pillBg = '#ffedd5'; pillFg = '#c2410c'; pillBorder = '#D9BC9B';
+              pillBg = '#ffedd5'; pillFg = '#c2410c'; pillBorder = '#C9D1DC';
               statusLabel = status === 'needs_sending' ? 'NEEDS SEND'
                           : status === 'converted' ? 'CONVERTED'
                           : 'PENDING';
@@ -9641,7 +9695,7 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
                     {jobNotePlain(rt.scope) || 'Return Trip'}
                   </div>
                   <div style={{ fontSize:12, color: C.dim, marginTop:1, display:'flex', gap:8 }}>
-                    <span>{scheduled && d ? `📅 ${d}` : (scheduled ? '📅 scheduled' : '◇ unscheduled')}</span>
+                    <span style={{display:'inline-flex',alignItems:'center',gap:4}}>{scheduled ? <><Icon name="calendar" size={12}/>{d || 'scheduled'}</> : '◇ unscheduled'}</span>
                     {rt.assignedTo && <span>· {rt.assignedTo}</span>}
                     {(rt.punch||[]).length > 0 && <span>· {(rt.punch||[]).length} item{(rt.punch||[]).length!==1?'s':''}</span>}
                   </div>
@@ -9821,7 +9875,7 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
     });
   };
 
-  const pillStyle = (active, color='#B7791F') => ({
+  const pillStyle = (active, color='#56657A') => ({
     fontSize:12.5, fontWeight:700,
     background: active ? color : 'transparent',
     color: active ? '#fff' : color,
@@ -9909,7 +9963,7 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
 
       <button onClick={promote} disabled={!canPromote}
         style={{
-          width:'100%', background: canPromote ? '#B7791F' : '#E1E4E9',
+          width:'100%', background: canPromote ? C.accent : '#E1E4E9',
           color: canPromote ? '#fff' : C.dim,
           border:'none', borderRadius:8,
           padding:'9px 0', fontSize:14, fontWeight:800,
@@ -11221,7 +11275,7 @@ function JobNoteCard({
             {/* v440: no PO chip when Material Tracking is hidden (Job Sections) */}
             {['punch','rt','co','po','question'].filter(t => t !== 'po' || !isSectionHidden(job, 'materials')).map(t => {
               const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO', question:'Question' };
-              const colors = { punch:'#6A3FB5', rt:'#3E7D7A', co:'#B7791F', call:'#2F5BD9', po:'#C2410C', question:'#6A7BAA' };
+              const colors = { punch:'#6A3FB5', rt:'#3E7D7A', co:C.slate, call:'#2F5BD9', po:'#C2410C', question:'#6A7BAA' };
               const count = tally[t] || 0;
               const isTop = topType === t;
               return (
@@ -11347,7 +11401,7 @@ function JobNoteCard({
             }}
             style={{
               fontSize:12.5, fontWeight:800, letterSpacing:'0.04em',
-              background:'#B7791F', color:'#1B1F24',
+              background:C.slate, color:'#fff',
               border:'none', borderRadius:99,
               padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
             }}>
@@ -11824,7 +11878,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
   }
   const fs = size === 'xs' ? 9 : 10;
   const pad = size === 'xs' ? '1px 5px' : '2px 6px';
-  const label = count > 1 ? `📝 from ${count} notes` : `📝 from note · ${title}`;
+  const label = count > 1 ? `from ${count} notes` : `from note · ${title}`;
   return (
     <span
       title={label}
@@ -11838,7 +11892,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
         maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
         flexShrink:0,
       }}>
-      {label}
+      <Icon name="note" size={11}/>{label}
     </span>
   );
 }
@@ -12013,7 +12067,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   applySelectionAssign(v === '__clear__' ? '' : v);
                 }}
                 style={{background:selectedIds.size===0?'var(--surface)':'#F4ECE2',
-                  border:`1px solid ${selectedIds.size===0?C.border:'#D9BC9B'}`,
+                  border:`1px solid ${selectedIds.size===0?C.border:C.slateLine}`,
                   borderRadius:99,padding:'2px 8px',fontSize:12,fontWeight:700,
                   color:selectedIds.size===0?C.faint:'#c2410c',
                   fontFamily:'inherit',outline:'none',
@@ -12153,7 +12207,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                         style={{fontSize:9,fontWeight:700,background:'#EAEEF6',color:'#34507F',
                           borderRadius:99,padding:'1px 7px',border:'1px solid #CDD9EC',lineHeight:1.6,
                           cursor: onJumpToRT ? 'pointer':'default',whiteSpace:'nowrap'}}>
-                        📅 {scheduledRTMap[item.id].date || 'scheduled'}{scheduledRTMap[item.id].crew?` · ${scheduledRTMap[item.id].crew}`:''}
+                        <Icon name="calendar" size={11} style={{verticalAlign:'-1px',marginRight:3}}/>{scheduledRTMap[item.id].date || 'scheduled'}{scheduledRTMap[item.id].crew?` · ${scheduledRTMap[item.id].crew}`:''}
                       </span>
                     )}
                     {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
@@ -12187,10 +12241,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               <button
                 onClick={() => item.waiting ? clearWaiting(item.id) : (setWaitingEditId(item.id), setWaitingText(''))}
                 title={item.waiting ? "Clear waiting status" : "Mark as waiting on something"}
-                style={{ background: item.waiting ? '#F3E9CF' : 'none',
-                  border: item.waiting ? '1px solid #D9BC6B' : '1px solid transparent',
+                style={{ background: item.waiting ? C.slateBg : 'none',
+                  border: item.waiting ? '1px solid #C9D1DC' : '1px solid transparent',
                   borderRadius: 4, cursor:'pointer', fontSize:12, flexShrink:0,
-                  padding:'1px 6px', color: item.waiting ? '#6E5212' : C.faint,
+                  padding:'1px 6px', color: item.waiting ? C.slateInk : C.faint,
                   fontFamily:'inherit', fontWeight: item.waiting ? 700 : 400 }}>
                 {item.waiting ? 'Waiting ×' : 'Wait'}
               </button>
@@ -12271,8 +12325,8 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           {/* ── Waiting badges ── */}
           {item.waiting && !item.done && (
             <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-              <span style={{fontSize:12,fontWeight:700,background:'#F3E9CF',color:'#6E5212',
-                borderRadius:99,padding:'2px 8px',border:'1px solid #D9BC6B'}}>
+              <span style={{fontSize:12,fontWeight:700,background:C.slateBg,color:C.slateInk,
+                borderRadius:99,padding:'2px 8px',border:'1px solid #C9D1DC'}}>
                 {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
               </span>
               <button onClick={()=>{setWaitingEditId(item.id);setWaitingText(item.waitingOn||'');}}
@@ -12344,13 +12398,13 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           {/* ── Inline waiting reason input ── */}
           {waitingEditId === item.id && (
             <div style={{display:'flex',gap:6,alignItems:'center',marginTop:4,marginLeft:22,
-              borderLeft:`2px solid #B7791F`,paddingLeft:8}}>
+              borderLeft:`2px solid #56657A`,paddingLeft:8}}>
               <input autoFocus value={waitingText} onChange={e=>setWaitingText(e.target.value)}
                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();commitWaiting(item.id,waitingText);} if(e.key==='Escape') setWaitingEditId(null); }}
                 onBlur={()=>commitWaiting(item.id,waitingText)}
                 placeholder="What are you waiting on?"
-                style={{flex:1,fontSize:12.5,border:`1px solid #B7791F`,borderRadius:5,padding:'5px 8px',
-                  background:'#F6F1E6',color:'#78350f',outline:'none',fontFamily:'inherit'}}/>
+                style={{flex:1,fontSize:12.5,border:`1px solid #56657A`,borderRadius:5,padding:'5px 8px',
+                  background:C.slateBg,color:C.slateInk,outline:'none',fontFamily:'inherit'}}/>
             </div>
           )}
 
@@ -12630,7 +12684,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
         <span style={{ fontWeight: 700, fontSize: 14, color: floorColor, flex: 1 }}>{floorLabel}</span>
 
         {openCount > 0 && <Pill label={`${openCount} open`} color={C.red}/>}
-        {waitingCount > 0 && <Pill label={`${waitingCount} waiting`} color="#B7791F"/>}
+        {waitingCount > 0 && <Pill label={`${waitingCount} waiting`} color="#56657A"/>}
         {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}>
           <Pill label={`${mineCount} for you`} color="#34507F"/>
         </span>}
@@ -12701,8 +12755,8 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                       {openN} open
                     </span>}
                   {waitN > 0 &&
-                    <span style={{ fontSize: 12, background: '#F3E9CF', color: '#6E5212',
-                      borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #D9BC6B' }}>
+                    <span style={{ fontSize: 12, background: C.slateBg, color: C.slateInk,
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #C9D1DC' }}>
                       {waitN} waiting
                     </span>}
                   {!open && openN===0 && totalN>0 &&
@@ -12870,8 +12924,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             </span>
           )}
           {totalWaiting > 0 && (
-            <span style={{fontSize:12,fontWeight:700,background:'#F3E9CF',color:'#6E5212',
-              borderRadius:99,padding:'2px 8px',border:'1px solid #D9BC6B'}}>
+            <span style={{fontSize:12,fontWeight:700,background:C.slateBg,color:C.slateInk,
+              borderRadius:99,padding:'2px 8px',border:'1px solid #C9D1DC'}}>
               {totalWaiting} waiting
             </span>
           )}
@@ -15561,11 +15615,11 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
 
   const kindPill = (k) => {
     const bg = k==="catalog" ? "#6A7BAA22"
-            : k==="oneOff" ? "#B7791F22"
+            : k==="oneOff" ? "#56657A22"
             : k==="prebuild" ? "#6A3FB522"
             : "#88888822";
     const fg = k==="catalog" ? "#6A7BAA"
-            : k==="oneOff" ? "#B7791F"
+            : k==="oneOff" ? C.slate
             : k==="prebuild" ? "#6A3FB5"
             : "#888";
     const label = k==="catalog" ? "Catalog"
@@ -16232,8 +16286,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                     if(!await showConfirm("Undo the conversion? This CO goes back to Approved — the Return Trip it created stays on the Return Trips tab.")) return;
                     upd(o.id,{coStatus:"approved", convertUndoneAt:new Date().toISOString()});
                   }}
-                  style={{background:"none",border:"1px solid #B7791F55",borderRadius:7,
-                    color:"#B7791F",fontSize:12.5,padding:"4px 10px",cursor:"pointer",
+                  style={{background:"none",border:"1px solid #56657A55",borderRadius:7,
+                    color:C.slate,fontSize:12.5,padding:"4px 10px",cursor:"pointer",
                     fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
                   ↩ Undo Convert
                 </button>
@@ -16302,8 +16356,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                   return (
                     <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
                       padding:"10px 12px",borderRadius:8,marginTop:2,
-                      background:"#B7791F0a",border:"1px dashed #B7791F55"}}>
-                      <span style={{fontSize:12.5,color:"#B7791F",fontWeight:600}}>
+                      background:"#56657A0a",border:"1px dashed #56657A55"}}>
+                      <span style={{fontSize:12.5,color:C.slate,fontWeight:600}}>
                         {hasDesc?"Ready — submit so the office picks it up.":"Draft — add a description, then submit."}
                       </span>
                       <button
@@ -16483,7 +16537,7 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
                       <div style={{fontSize:13,color: it.done?C.dim:C.text, textDecoration: it.done?"line-through":"none"}}>{it.text}</div>
                       <div style={{fontSize:12,color:C.dim,marginTop:2}}>
                         {it.floor} · {it.room}
-                        {it.fromQC && <span style={{color:"#B7791F",fontWeight:700,marginLeft:6}}>QC</span>}
+                        {it.fromQC && <span style={{color:C.slate,fontWeight:700,marginLeft:6}}>QC</span>}
                         {it.done && <span style={{color:C.green,marginLeft:6}}>✓ done</span>}
                       </div>
                     </div>
@@ -17720,7 +17774,7 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, ampOvr, 
               {items.map((p,i)=>(
                 <div key={i} style={{display:"flex",gap:8,fontSize:12.5,padding:"4px 6px",borderBottom:i<items.length-1?`0.5px solid ${C.border}`:"none"}}>
                   <span style={{minWidth:54,color:C.faint,fontSize:12}}>{FL[p.fk]}</span>
-                  <span style={{minWidth:64,fontSize:9,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:"#B7791F"}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
+                  <span style={{minWidth:64,fontSize:9,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:C.slate}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
                   <span style={{minWidth:36,fontSize:12,color:C.dim,fontFamily:"monospace"}}>{p.wire||"—"}</span>
                   <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:12,color:C.faint}}>{p.note}</span></span>
                 </div>
@@ -18404,9 +18458,9 @@ function GenPanelGrid({ circuits, slotCount }) {
     const sibSplit = sibA.splitTandem || sibB.splitTandem;
     const isTandem = !!(sibA.name && sibB.name && !sib2P && !sibQuad && !sibSplit);
     const cont = (c.name||'').includes('(240V cont.');
-    const bg = isSplit ? '#F6EAEA' : isQuad ? '#ECE6F4' : isTandem ? '#F3E9CF' : C.bg;
-    const bd = isSplit ? '#C62828' : isQuad ? '#574A7A' : isTandem ? '#B7791F' : C.border;
-    const fg = cont ? C.dim : (isSplit ? '#7A2A2A' : isQuad ? '#581C87' : isTandem ? '#6E5212' : C.text);
+    const bg = isSplit ? '#F6EAEA' : isQuad ? '#ECE6F4' : isTandem ? C.slateBg : C.bg;
+    const bd = isSplit ? '#C62828' : isQuad ? '#574A7A' : isTandem ? C.slate : C.border;
+    const fg = cont ? C.dim : (isSplit ? '#7A2A2A' : isQuad ? '#581C87' : isTandem ? C.slateInk : C.text);
     const showAmp = c.amps && c.amps !== '0';
     return (
       <td style={{...base, background:bg, border:`${isSplit?2:1}px solid ${bd}`, color:fg,
@@ -18786,11 +18840,11 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                         // at a glance.
                         const bg = isSplit ? "#F6EAEA"
                                  : isQuad  ? "#ECE6F4"
-                                 : isTandem ? "#F3E9CF"
+                                 : isTandem ? C.slateBg
                                  : C.bg;
-                        const borderColor = isSplit ? "#C62828" : isQuad ? "#574A7A" : isTandem ? "#B7791F" : C.border;
+                        const borderColor = isSplit ? "#C62828" : isQuad ? "#574A7A" : isTandem ? C.slate : C.border;
                         const borderWidth = isSplit ? 2 : isQuad ? 1 : isTandem ? 1 : 1;
-                        const textColor = isSplit ? "#7A2A2A" : isQuad ? "#581c87" : isTandem ? "#6E5212" : C.text;
+                        const textColor = isSplit ? "#7A2A2A" : isQuad ? "#581c87" : isTandem ? C.slateInk : C.text;
                         // Right-edge amp pill — always visible when c.amps
                         // is set, so Koy can scan amps down a column without
                         // hovering. SPLIT/QUAD badges sit just left of it.
@@ -18823,7 +18877,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                               <span title={c.notes||"split tandem"}
                                 style={{position:"absolute",right:badgeOffset,top:1,fontSize:8,fontWeight:800,
                                   color:"#C62828",letterSpacing:"0.05em",pointerEvents:"none"}}>
-                                ⚠ SPLIT
+                                <Icon name="alertTriangle" size={10} stroke={2.5} style={{verticalAlign:'-1px',marginRight:2}}/>SPLIT
                               </span>
                             )}
                             {isQuadOuter && (
@@ -19362,8 +19416,8 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                         matches what FILL would actually produce. */}
                     {driftFromAuto !== 0 && (
                       <div style={{marginBottom:7,padding:'5px 8px',
-                        background:'#F3E9CF',border:`1px solid ${C.orange}55`,
-                        borderRadius:6,fontSize:12,lineHeight:1.4,color:'#6E5212'}}>
+                        background:C.slateBg,border:`1px solid ${C.orange}55`,
+                        borderRadius:6,fontSize:12,lineHeight:1.4,color:C.slateInk}}>
                         <div style={{fontWeight:700,marginBottom:2}}>
                           <Icon name="alertTriangle" size={9} stroke={2.5}/> Manual count is stale
                         </div>
@@ -19387,10 +19441,10 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                         what to order. */}
                     {tandemInfo && (tandemInfo.quadsNeeded > 0 || tandemInfo.tandemsNeeded > 0 || tandemInfo.stillOver > 0) && (
                       <div style={{marginBottom:7,padding:'5px 8px',
-                        background: tandemInfo.stillOver>0 ? '#F6EAEA' : '#F3E9CF',
-                        border: `1px solid ${tandemInfo.stillOver>0 ? '#EAD2D2' : '#D9BC6B'}`,
+                        background: tandemInfo.stillOver>0 ? '#F6EAEA' : C.slateBg,
+                        border: `1px solid ${tandemInfo.stillOver>0 ? '#EAD2D2' : C.slateLine}`,
                         borderRadius:6, fontSize:12, lineHeight:1.4}}>
-                        <div style={{color:'#6E5212',fontWeight:700,marginBottom:2}}>
+                        <div style={{color:C.slateInk,fontWeight:700,marginBottom:2}}>
                           <Icon name="alertTriangle" size={9} stroke={2.5}/> {tandemInfo.slotsNeeded} circuits in a {tandemInfo.slotCap}-space panel — need:
                         </div>
                         {/* Banner shows the ACTUAL tandem/quad counts (from
@@ -19399,15 +19453,15 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                             the PO numbers, which use the same poTandems /
                             poQuads values. */}
                         {poTandems > 0 && (
-                          <div style={{color:'#6E5212',fontWeight:700,paddingLeft:14}}>
+                          <div style={{color:C.slateInk,fontWeight:700,paddingLeft:14}}>
                             • <b>{poTandems} tandem breaker{poTandems===1?'':'s'}</b>
-                            <span style={{color:'#8A6A1E',fontWeight:500}}> (each holds 2 single-pole circuits)</span>
+                            <span style={{color:C.slateInk,fontWeight:500}}> (each holds 2 single-pole circuits)</span>
                           </div>
                         )}
                         {poQuads > 0 && (
-                          <div style={{color:'#6E5212',fontWeight:700,paddingLeft:14}}>
+                          <div style={{color:C.slateInk,fontWeight:700,paddingLeft:14}}>
                             • <b>{poQuads} quad breaker{poQuads===1?'':'s'}</b>
-                            <span style={{color:'#8A6A1E',fontWeight:500}}> (1-poles on the outer, 2-pole on the inner)</span>
+                            <span style={{color:C.slateInk,fontWeight:500}}> (1-poles on the outer, 2-pole on the inner)</span>
                           </div>
                         )}
                         {tandemInfo.stillOver > 0 && (
@@ -19664,7 +19718,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                             el.scrollIntoView({behavior:"smooth", block:"center"});
                             const orig = el.style.background;
                             el.style.transition = "background 0.4s";
-                            el.style.background = "#F3E9CF33";
+                            el.style.background = "#E8ECF233";
                             setTimeout(()=>{ el.style.background = orig||""; }, 1400);
                           }
                         }, 60);
@@ -19917,18 +19971,18 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
               <div key={it.id||idx} style={{background:'#F4F6F8',border:'0.5px solid #E1E4E9',
                 borderRadius:8,padding:'9px 12px',marginBottom:5}}>
                 <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <div style={{width:20,height:20,borderRadius:'50%',background:'#F3E9CF',
-                    border:'0.5px solid #EAD9A6',display:'flex',alignItems:'center',
-                    justifyContent:'center',fontSize:12,fontWeight:600,color:'#8A6A1E',flexShrink:0}}>
+                  <div style={{width:20,height:20,borderRadius:'50%',background:C.slateBg,
+                    border:'0.5px solid #C9D1DC',display:'flex',alignItems:'center',
+                    justifyContent:'center',fontSize:12,fontWeight:600,color:C.slateInk,flexShrink:0}}>
                     {it.priority||idx+1}
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:14,fontWeight:500,color:'#1B1F24',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B7791F',background:'#FBF3E2',
-                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
-                      {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:'#8A6A1E',
-                        background:'#F3E9CF',borderRadius:99,padding:'1px 6px',border:'0.5px solid #EAD9A6'}}>★ REC</span>}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
+                      {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:C.slateInk,
+                        background:C.slateBg,borderRadius:99,padding:'1px 6px',border:'0.5px solid #C9D1DC'}}>★ REC</span>}
                     </div>
                     <div style={{fontSize:12.5,color:'#8A929D',marginTop:2}}>
                       {wireAmpsVolts(it.wire, it.v240)}
@@ -20165,7 +20219,7 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
           <div style={{marginTop:12,marginBottom:12,fontSize:12.5,color:C.dim}}>
             <strong style={{color:fresh.length>0?C.green:C.faint}}>{fresh.length} rows detected</strong>
             {dupes > 0 && (
-              <span style={{marginLeft:8,color:"#B7791F",fontWeight:700}}>
+              <span style={{marginLeft:8,color:C.slate,fontWeight:700}}>
                 · {dupes} already on this list — skipped
               </span>
             )}
@@ -20187,7 +20241,7 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
                 <span style={{minWidth:26,color:C.faint,fontFamily:"monospace"}}>{p.num||"·"}</span>
                 <span style={{flex:1,color:C.text,textDecoration:p.dupe?"line-through":"none"}}>{p.name}</span>
                 {p.dupe
-                  ? <span style={{fontSize:9,color:"#B7791F",fontWeight:700,padding:"1px 6px"}}>already added</span>
+                  ? <span style={{fontSize:9,color:C.slate,fontWeight:700,padding:"1px 6px"}}>already added</span>
                   : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#C62828":C.faint,
                       background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                       padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>}
@@ -22293,7 +22347,7 @@ function SavantPanelSchedule({
             fontStyle:"italic", cursor:"pointer",
             background: isMoveTarget ? "#E0E8F3" : (armed
               ? "#DEEFE6"
-              : (isAddingHere ? "#F3E9CF" : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)")),
+              : (isAddingHere ? C.slateBg : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)")),
             borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
             fontWeight: isMoveTarget || armed || isAddingHere ? 700 : 400,
           }}>
@@ -22322,7 +22376,7 @@ function SavantPanelSchedule({
                             placeholder, onClickRest, onDelete, onMove, withDatalist = false,
                             armedMode = false }) => {
       const hasFeeder = !!color;
-      const fillBg = isSelected ? "#F3E9CF" : (hasFeeder ? `${color}1f` : "#fff");
+      const fillBg = isSelected ? C.slateBg : (hasFeeder ? `${color}1f` : "#fff");
       const ampPad = ampLabel ? 30 : 4;
       const delPad = onDelete ? 22 : 0;
       const movePad = onMove ? 22 : 0;
@@ -22552,7 +22606,7 @@ function SavantPanelSchedule({
       return (
         <div style={{
           minHeight: 24, display:"flex", flexDirection:"column",
-          background: isSelected ? "#F3E9CF" : (feederColor ? `${feederColor}1f` : "#fff"),
+          background: isSelected ? C.slateBg : (feederColor ? `${feederColor}1f` : "#fff"),
           borderLeft: `3px solid ${feederColor || (isSelected ? C.accent : "transparent")}`,
           borderRight:`1px solid ${C.border}`, position:"relative",
         }}>
@@ -22885,7 +22939,7 @@ function SavantPanelSchedule({
             if (named.length === 0) {
               return (
                 <div style={{padding:"6px 10px",fontSize:12.5,color:C.dim,
-                  fontStyle:"italic",background:"#fffbe6",border:"1px solid #EAD9A6",
+                  fontStyle:"italic",background:C.slateBg,border:"1px solid #C9D1DC",
                   borderRadius:6,marginBottom:8}}>
                   No master loads to pick from yet. Add loads in the "All Loads" section
                   at the top of the Panelized Lighting tab, then come back here to assign them.
@@ -23076,7 +23130,7 @@ function SavantPanelSchedule({
               tandem is false. */}
           {r.tandem && (
             <div style={{
-              marginTop:10, padding:"10px 12px", background:"#F3E9CF",
+              marginTop:10, padding:"10px 12px", background:C.slateBg,
               border:`1px dashed ${C.accent}55`, borderRadius:7,
             }}>
               <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
@@ -23402,7 +23456,7 @@ function SavantPanelSchedule({
         if (unplaced.length === 0) return null;
         return (
           <div style={{
-            padding:"10px 14px", background:"#fffbe6", border:`1px solid #EAD9A6`,
+            padding:"10px 14px", background:C.slateBg, border:`1px solid #C9D1DC`,
             borderTop:"none",
           }}>
             <div style={{fontSize:12,fontWeight:700,letterSpacing:"0.06em",
@@ -23570,7 +23624,7 @@ function SavantPanelSchedule({
                 style={{background:`${C.blue}15`,border:`1px solid ${C.blue}`,
                   color:C.blue,borderRadius:5,padding:"4px 10px",fontSize:12.5,fontWeight:700,
                   cursor:"pointer",fontFamily:"inherit"}}>
-                ⚡ AUTO-FILL FROM LOADS
+                <Icon name="zap" size={12} stroke={2.5} style={{verticalAlign:'-2px',marginRight:4}}/>AUTO-FILL FROM LOADS
               </button>
               <button onClick={()=>setSimpleMode(false)}
                 style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
@@ -23629,7 +23683,7 @@ function SavantPanelSchedule({
             {sortedMods.length === 0 ? (
               <div style={{padding:"16px 14px",fontSize:13,color:C.dim,fontStyle:"italic",
                 background:"#F7F8FA",border:`1px dashed ${C.border}`,borderRadius:8,textAlign:"center"}}>
-                No modules yet. Click + APD MODULE, + RELAY MODULE, or ⚡ AUTO-FILL FROM LOADS to start.
+                No modules yet. Click + APD MODULE, + RELAY MODULE, or AUTO-FILL FROM LOADS to start.
               </div>
             ) : (
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -23755,8 +23809,8 @@ function SavantPanelSchedule({
           old behavior that silently showed wrong-panel loads. */}
       {!simpleMode && unassignedLoads.length === 0 && _otherPanelNames.length > 0 && (
         <div style={{
-          padding:"10px 12px", marginBottom:8, background:"#fffbe6",
-          border:`1px solid #EAD9A6`, borderRadius:8, fontSize:12.5, color:"#6E5212",
+          padding:"10px 12px", marginBottom:8, background:C.slateBg,
+          border:`1px solid #C9D1DC`, borderRadius:8, fontSize:12.5, color:C.slateInk,
         }}>
           <b>No loads tagged for "{panelLabel}".</b> {_otherPanelNames.length} other panel name{_otherPanelNames.length===1?"":"s"} found in the loads list: {_otherPanelNames.map(n=>`"${n}"`).join(", ")}.
           <br/>
@@ -23832,7 +23886,7 @@ function SavantPanelSchedule({
               style={{marginLeft:"auto",background:C.green,border:`1px solid ${C.green}`,
                 color:"#fff",borderRadius:5,padding:"2px 8px",fontSize:12,fontWeight:700,
                 cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
-              ⚡ AUTO-FILL
+              <Icon name="zap" size={11} stroke={2.5} style={{verticalAlign:'-2px',marginRight:3}}/>AUTO-FILL
             </button>
             <button onClick={()=>setChipsExpanded(!chipsExpanded)}
               style={{background:"#fff",border:`1px solid ${C.purple}`,
@@ -23911,7 +23965,7 @@ function SavantPanelSchedule({
                 when popup is closed. */}
             <div style={{
               padding:"8px 10px", marginBottom:8,
-              background: armedLoad ? (isPairing ? "#F3E9CF" : "#DEEFE6") : "#F7F8FA",
+              background: armedLoad ? (isPairing ? C.slateBg : "#DEEFE6") : "#F7F8FA",
               border:`1px ${armedLoad ? "solid" : "dashed"} ${armedLoad ? (isPairing ? C.accent : C.green) : C.border}`,
               borderRadius:8,
             }}>
@@ -23948,7 +24002,7 @@ function SavantPanelSchedule({
                   }}>
                   <div style={{
                     padding:"10px 14px", borderBottom:`1px solid ${C.border}`,
-                    background: armedLoad ? (isPairing ? "#F3E9CF" : "#DEEFE6") : "#F7F8FA",
+                    background: armedLoad ? (isPairing ? C.slateBg : "#DEEFE6") : "#F7F8FA",
                   }}>
                     {renderHeader()}
                   </div>
@@ -24498,8 +24552,8 @@ function SavantSlotFirstTab({ job, u }) {
             background: color ? color.fill : "#EEF0F3",
             borderLeft:`3px solid ${color ? color.chip : C.border}`}}>
             <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.04em",
-              padding:"1px 6px",borderRadius:99,background:"#6E521218",color:"#6E5212",
-              border:"1px solid #6E521244",textTransform:"uppercase",flexShrink:0}}>
+              padding:"1px 6px",borderRadius:99,background:"#3F4B5C18",color:C.slateInk,
+              border:"1px solid #3F4B5C44",textTransform:"uppercase",flexShrink:0}}>
               {feeder.label || "F?"}{feeder.tandem ? ` / ${feeder.labelB||"?"}` : ""}
             </span>
             <span style={{fontSize:14,fontWeight:600,color:C.text,flex:1,minWidth:0,
@@ -24511,7 +24565,7 @@ function SavantSlotFirstTab({ job, u }) {
                   : `${feeder.amps||"20"}A${(feeder.poles||1)===2?" · 2P":""}`}
               {feeder.tandem && !isCont && (
                 <span style={{marginLeft:6,fontSize:9,fontWeight:800,padding:"1px 5px",
-                  background:"#F3E9CF",color:"#6E5212",border:"1px solid #D9BC6B",
+                  background:C.slateBg,color:C.slateInk,border:"1px solid #C9D1DC",
                   borderRadius:3,letterSpacing:"0.04em"}}>TANDEM</span>
               )}
             </span>
@@ -24772,7 +24826,7 @@ function SavantSheetBody({ sheet, setSheet, v2, floor, panels,
       <>
         <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Slot {slot} · what goes here?</h2>
         <div style={{fontSize:13,color:C.dim,marginBottom:14}}>Pick one — the form pre-fills slot {slot}.</div>
-        {choice("⚡","Feeder breaker","Single 15A / 20A / 30A breaker powering smart breakers downstream.","add-feeder")}
+        {choice(<Icon name="zap" size={20} stroke={2.25}/>,"Feeder breaker","Single 15A / 20A / 30A breaker powering smart breakers downstream.","add-feeder")}
         {choice("≡","Tandem feeder","Two 1-pole feeders sharing this slot.","add-tandem")}
         {choice("▦","Smart breaker (module)","Savant module — uses slots " + slot + " (A) and " + (slot+2) + " (B).","add-module")}
         <button onClick={()=>setSheet(null)}
@@ -26816,8 +26870,8 @@ function DriveFilesSection({ job, onUpdate }) {
           input below opens automatically in this case so they can fix
           it without hunting for a hidden "Edit" button. */}
       {job.driveFolderId && !folderId && (
-        <div style={{ fontSize: 12.5, color: "#6E5212", padding: "8px 12px",
-          background: "#F3E9CF", border: "1px solid #EAD9A6", borderRadius: 8, marginBottom: 10,
+        <div style={{ fontSize: 12.5, color: C.slateInk, padding: "8px 12px",
+          background: C.slateBg, border: "1px solid #C9D1DC", borderRadius: 8, marginBottom: 10,
           display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="alertTriangle" size={12} stroke={2.25}/>
           <span>The saved Drive folder link couldn't be read. Paste a fresh folder URL below to re-link.</span>
@@ -27554,7 +27608,7 @@ const COMM_TABS = ["Job Info","Activity","Photos","Plans & Links","Bid Items","M
 // keeps its own items under each (commercial.phases[key].punch[bkey]).
 const COMM_PHASE_TABS = {
   "Power":       { key:"power",       color:"#2F5BD9", punch:true },
-  "Lighting":    { key:"lighting",    color:"#B7791F", punch:true },
+  "Lighting":    { key:"lighting",    color:C.slate, punch:true },
   "Gear":        { key:"gear",        color:"#6A3FB5" },
   "Underground": { key:"underground", color:"#3E7D7A", punch:true, subs:[["utility","Utility work"],["site","Building site work"],["building","Building underground"]] },
 };
@@ -28628,7 +28682,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
               <textarea value={job.accessNote || ""} onChange={e => u({ accessNote: e.target.value })}
                 placeholder="e.g. Gate code: 1234 · Keybox on front door"
                 rows={2} style={{ width: "100%", boxSizing: "border-box", background: C.surface,
-                  border: `1px solid ${job.accessNote ? "#B7791F" : C.border}`,
+                  border: `1px solid ${job.accessNote ? C.slate : C.border}`,
                   borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
                   color: C.text, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
             </div>
@@ -30565,7 +30619,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const hc = over ? C.red : "#6A3FB5";
                 return (
                   <span title="Total labor hours: used / estimated">
-                    <Pill label={`⏱ ${ha != null ? `${Math.round(ha)}` : "?"}h / ${he != null ? `${Math.round(he)}` : "?"}h est`} color={hc}/>
+                    <Pill label={`Labor ${ha != null ? `${Math.round(ha)}` : "?"}h / ${he != null ? `${Math.round(he)}` : "?"}h est`} color={hc}/>
                   </span>
                 );
               })()}
@@ -30640,8 +30694,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             })()}
             {job.accessNote&&(
               <div style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:4,
-                fontSize:12.5,color:"#6E5212",background:"#F3E9CF",
-                border:"1px solid #EAD9A6",borderRadius:7,padding:"3px 9px"}}>
+                fontSize:12.5,color:C.slateInk,background:C.slateBg,
+                border:"1px solid #C9D1DC",borderRadius:7,padding:"3px 9px"}}>
                 <RichText html={job.accessNote}/>
               </div>
             )}
@@ -30666,7 +30720,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             )}
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red} onClick={()=>setTab(punchTab)}/>}
             {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue} onClick={()=>setTab("Questions")}/>}
-            {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#B7791F"/>}
+            {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#56657A"/>}
 
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange} onClick={()=>setTab("Change Orders")}/>}
 
@@ -30870,7 +30924,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               style={{fontSize:12.5,fontWeight:800,color:hc,background:`${hc}18`,
                                 border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 8px",
                                 fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
-                              ⏱ {ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
+                              <Icon name="clock" size={11} stroke={2.25} style={{verticalAlign:"-1px",marginRight:3}}/>{ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
                             </span>
                           );
                         })()}
@@ -31264,7 +31318,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               style={{fontSize:12.5,fontWeight:800,color:hc,background:`${hc}18`,
                                 border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 8px",
                                 fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
-                              ⏱ {ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
+                              <Icon name="clock" size={11} stroke={2.25} style={{verticalAlign:"-1px",marginRight:3}}/>{ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
                             </span>
                           );
                         })()}
@@ -33738,7 +33792,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{position:"relative"}}>
                   {job.statusUpdate && (
                     <div style={{position:"absolute",left:0,top:0,bottom:0,width:3,
-                      background:"#B7791F",borderTopLeftRadius:8,borderBottomLeftRadius:8}}/>
+                      background:C.slate,borderTopLeftRadius:8,borderBottomLeftRadius:8}}/>
                   )}
                   <StatusUpdateTextarea
                     job={job}
@@ -33764,7 +33818,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {suHist && (
                       <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:5,maxHeight:260,overflowY:"auto"}}>
                         {[...job.statusUpdateHistory].reverse().map((h, i) => (
-                          <div key={i} style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,borderLeft:"3px solid #B7791F",background:C.card}}>
+                          <div key={i} style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,borderLeft:"3px solid #56657A",background:C.card}}>
                             <div style={{fontSize:12,color:C.faint,marginBottom:2}}>{(() => { const d = h.at ? new Date(h.at) : null; return d && !isNaN(d) ? d.toLocaleString("en-US", { month:"short", day:"numeric", year:"numeric", hour:"numeric", minute:"2-digit" }) : ""; })()}{h.by ? ` · ${h.by}` : ""}</div>
                             <div style={{fontSize:13,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{h.text}</div>
                           </div>
@@ -33790,7 +33844,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   placeholder="e.g. Gate code: 1234 · Keybox on front door knob"
                   rows={2}
                   style={{width:"100%",boxSizing:"border-box",background:C.surface,
-                    border:`1px solid ${job.accessNote?"#B7791F":C.border}`,
+                    border:`1px solid ${job.accessNote?C.slate:C.border}`,
                     borderRadius:8,padding:"8px 10px",fontSize:13,fontFamily:"inherit",
                     color:C.text,resize:"vertical",outline:"none",lineHeight:1.5,
                     transition:"border-color 0.15s"}}/>
@@ -33919,7 +33973,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                   <div style={{marginTop:14}}>
                     {lbl("Blue Stakes (811)")}
-                    {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?"#B7791F":bs.state==="active"?C.green:C.dim; return (
+                    {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?C.slate:bs.state==="active"?C.green:C.dim; return (
                       <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
                         <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
                         <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
@@ -34756,19 +34810,19 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         if(d && d.answer===(late.answer||'') && d.photos===(late.photos||[]).length) return null;
         const latePhotos = (late.photos||[]).filter(p=>p&&p.url);
         return (
-          <div style={{marginLeft:22,marginTop:6,background:"#FFF7E8",border:"1px solid #E8C97A",borderRadius:8,padding:"7px 9px"}}>
-            <div style={{fontSize:9,fontWeight:700,color:"#8A6D1F",letterSpacing:"0.04em",marginBottom:3}}>
+          <div style={{marginLeft:22,marginTop:6,background:C.slateBg,border:"1px solid #C9D1DC",borderRadius:8,padding:"7px 9px"}}>
+            <div style={{fontSize:9,fontWeight:700,color:C.slateInk,letterSpacing:"0.04em",marginBottom:3}}>
               LINK ANSWER CAME IN AFTER THIS WAS CLOSED{gcAnsweredBy?` — ${gcAnsweredBy}`:''}
             </div>
             {String(late.answer||'').trim()!==''&&<div style={{fontSize:12.5,fontStyle:"italic",color:"#5B5E66",lineHeight:1.5}}>{late.answer}</div>}
-            {late.clarify&&<div style={{fontSize:12,color:"#8A6D1F",marginTop:2}}>Note: {late.clarify}</div>}
+            {late.clarify&&<div style={{fontSize:12,color:C.slateInk,marginTop:2}}>Note: {late.clarify}</div>}
             {latePhotos.length>0&&(
               <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5}}>
                 {latePhotos.map(p=>{
                   const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
                   return isImg
-                    ? <img key={p.id||p.url} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #E8C97A",cursor:"pointer",display:"block"}}/>
-                    : <a key={p.id||p.url} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:12,fontWeight:600,color:"#8A6D1F",background:"#FFFDF7",border:"1px solid #E8C97A",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+                    ? <img key={p.id||p.url} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #C9D1DC",cursor:"pointer",display:"block"}}/>
+                    : <a key={p.id||p.url} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:12,fontWeight:600,color:C.slateInk,background:"#FFFDF7",border:"1px solid #C9D1DC",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
                 })}
               </div>
             )}
@@ -34790,8 +34844,8 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   answeredAt: q.answeredAt || new Date().toISOString(),
                   ...(late.clarify ? {answerNote: q.answerNote || late.clarify} : {}),
                 });
-              }} style={{fontSize:12,fontWeight:700,color:"#fff",background:"#8A6D1F",border:"none",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>Adopt answer</button>
-              <button onClick={()=>upd(q.id,{lateGcDismissed:{answer:late.answer||'',photos:(late.photos||[]).length}})} style={{fontSize:12,fontWeight:700,color:"#8A6D1F",background:"transparent",border:"1px solid #E8C97A",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>Dismiss</button>
+              }} style={{fontSize:12,fontWeight:700,color:"#fff",background:C.slateInk,border:"none",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>Adopt answer</button>
+              <button onClick={()=>upd(q.id,{lateGcDismissed:{answer:late.answer||'',photos:(late.photos||[]).length}})} style={{fontSize:12,fontWeight:700,color:C.slateInk,background:"transparent",border:"1px solid #C9D1DC",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>Dismiss</button>
             </div>
           </div>
         );
@@ -34872,9 +34926,9 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
       )}
 
       {(gcNoteMap[q.id]||"").trim()&&(
-        <div style={{marginLeft:22,marginTop:6,background:"#FCF6E7",border:"1px solid #E3D3A6",borderRadius:6,padding:"6px 10px",fontSize:12.5}}>
-          <span style={{fontSize:9,fontWeight:700,color:"#8A6A1E",background:"#F3E9CF",borderRadius:4,padding:"1px 5px",marginRight:6}}>{(gcAnsweredBy||'GC').toUpperCase()} ASKED</span>
-          <span style={{color:"#6E5212",fontStyle:"italic"}}>{gcNoteMap[q.id]}</span>
+        <div style={{marginLeft:22,marginTop:6,background:C.slateBg,border:"1px solid #C9D1DC",borderRadius:6,padding:"6px 10px",fontSize:12.5}}>
+          <span style={{fontSize:9,fontWeight:700,color:C.slateInk,background:C.slateBg,borderRadius:4,padding:"1px 5px",marginRight:6}}>{(gcAnsweredBy||'GC').toUpperCase()} ASKED</span>
+          <span style={{color:C.slateInk,fontStyle:"italic"}}>{gcNoteMap[q.id]}</span>
         </div>
       )}
 
@@ -35112,7 +35166,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
           {needsCount>0 && (
             <button key="__stNeeds" type="button" onClick={()=>setStatusFilter('needs')}
               style={{fontSize:12.5,fontWeight:700,padding:"4px 11px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
-                border:`1px solid ${statusFilter==='needs'?'#B7791F':'#E3D3A6'}`,background:statusFilter==='needs'?'#F3E9CF':'#FCF8EE',color:'#8A6A1E'}}>
+                border:`1px solid ${statusFilter==='needs'?C.slate:C.slateLine}`,background:statusFilter==='needs'?C.slateBg:C.slateBg,color:C.slateInk}}>
               Needs reply ({needsCount})
             </button>
           )}
@@ -35132,7 +35186,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
               // so "assigned" isn't silently mistaken for "on their link".
               const noLink = shareNames && shareNames.size>0 && !shareNames.has(r.trim().toLowerCase());
               return chip(recipFilter===r,
-                <>{r} ({countFor(r)}){noLink && <Icon name="alertTriangle" size={9} color="#B7791F" style={{marginLeft:4}}/>}</>,
+                <>{r} ({countFor(r)}){noLink && <Icon name="alertTriangle" size={9} color="#56657A" style={{marginLeft:4}}/>}</>,
                 ()=>setRecipFilter(r), r);
             })}
             {unassignedCount>0 && chip(recipFilter==="__unassigned__", `Unassigned (${unassignedCount})`, ()=>setRecipFilter("__unassigned__"), "__un")}
@@ -35182,15 +35236,15 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
         const nIncoming = incomingByFloor.upper.length + incomingByFloor.main.length + incomingByFloor.basement.length;
         if(!nIncoming) return null;
         return (
-          <div style={{background:"#FCF8EE",border:"1px solid #E3D3A6",borderRadius:12,padding:"12px 12px 4px",marginBottom:18}}>
+          <div style={{background:C.slateBg,border:"1px solid #C9D1DC",borderRadius:12,padding:"12px 12px 4px",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
-              <Icon name="external" size={13} color="#8A6A1E"/>
-              <span style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.1em",color:"#8A6A1E"}}>INCOMING FROM LINKS ({nIncoming})</span>
-              <span style={{fontSize:12,color:"#B7791F"}}>— waiting on the crew</span>
+              <Icon name="external" size={13} color="#3F4B5C"/>
+              <span style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.1em",color:C.slateInk}}>INCOMING FROM LINKS ({nIncoming})</span>
+              <span style={{fontSize:12,color:C.slate}}>— waiting on the crew</span>
             </div>
             {[["upper","Upper Level"],["main","Main Level"],["basement","Basement"]].map(([k,l])=> incomingByFloor[k].length>0 && (
               <div key={"in_"+k} style={{marginBottom:6}}>
-                <div style={{fontSize:12,color:"#B7791F",fontWeight:700,marginBottom:6}}>{l}</div>
+                <div style={{fontSize:12,color:C.slate,fontWeight:700,marginBottom:6}}>{l}</div>
                 <QAList
                   questions={Array.isArray(questions[k]) ? questions[k] : []}
                   onChange={v=>onChange({...questions,[k]:v})}
@@ -35497,7 +35551,7 @@ const applyScheduleMode = (job, phase, next) => {
 // JobDetail). Click the text to edit; Enter saves, Escape cancels, blur saves.
 // `onSave(patch)` should apply the patch to the job (same shape as elsewhere:
 // statusUpdate/statusUpdateBy/statusUpdateAt).
-function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=280, stripeColor="#B7791F", style={}, showEmpty=false, placeholder="Add status note…" }) {
+function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=280, stripeColor=C.slate, style={}, showEmpty=false, placeholder="Add status note…" }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(job.statusUpdate || "");
   const inputRef = useRef(null);
@@ -35544,7 +35598,7 @@ function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=
           fontSize, fontWeight: 500, color: "var(--text)",
           borderLeft: `3px solid ${stripeColor}`,
           padding: "3px 8px 3px 8px",
-          background: "#F6F1E6",
+          background: C.slateBg,
           borderTop: `1px solid ${stripeColor}55`,
           borderRight: `1px solid ${stripeColor}55`,
           borderBottom: `1px solid ${stripeColor}55`,
@@ -35679,16 +35733,16 @@ const STAGE_SECTIONS = [
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#5E6670",
     test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && prepClearedToStart(j) && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
-  { key:"roughHold",    label:"Rough — On Hold",           color:"#B7791F",
+  { key:"roughHold",    label:"Rough — On Hold",           color:C.slate,
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2F5BD9",
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "inprogress" },
 
-  { key:"between",      label:"In Between",                color:"#e8a020",
+  { key:"between",      label:"In Between",                color:"#6A3FB5",
     test: j => { if(j.tempPed||j.quickJob) return false; const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
 
-  { key:"finishHold",   label:"Finish — On Hold",          color:"#B7791F",
+  { key:"finishHold",   label:"Finish — On Hold",          color:C.slate,
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#6A7BAA",
@@ -35707,7 +35761,7 @@ const COMM_STAGE_SECTIONS = [
   { key:"commPrecon",     label:"Pre-Con",        color:"#3E7D7A", test: j => !j.tempPed && !j.quickJob && commPhase(j) !== null },
   { key:"commReady",      label:"Ready to Start", color:"#1F7A3F", test: j => !j.tempPed && !j.quickJob && commPhase(j) === null && !(commOf(j).stage) },
   { key:"commInProgress", label:"In Progress",    color:"#2F5BD9", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "inprogress" },
-  { key:"commHold",       label:"On Hold",        color:"#B7791F", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "hold" },
+  { key:"commHold",       label:"On Hold",        color:C.slate, test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "hold" },
   { key:"commCloseout",   label:"Closeout",       color:"#6A3FB5", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "closeout" },
   { key:"completed",      label:"Complete",       color:"#1F7A3F", test: j => !j.tempPed && !j.quickJob && commOf(j).stage === "complete" },
 ];
@@ -36348,7 +36402,7 @@ function commercialTasks(job, tasks) {
     const due = p === 9 ? (ms.footing || "") : (p === 11 || p === 12) ? (ms.slab || "") : p === 8 ? (ms.tempPower || "") : "";
     tasks.push({ ...base, id: job.id + "_comm_phase", route: ph.owner === "site" ? "commsite" : "commstart",
       title: `Phase ${p} · ${ph.label}: ${job.name || "Untitled"}`, desc: `${done}/${ph.items.length} done${nxt ? ` — NEXT: ${nxt[1]}` : ""}`, dueDate: due });
-    commOwedItems(job).forEach(o => tasks.push({ ...base, id: `${job.id}_comm_owed_${o.n}_${o.k}`, route: COMM_PHASE_BY_N[o.n].owner === "site" ? "commsite" : "commstart", color: "#B7791F",
+    commOwedItems(job).forEach(o => tasks.push({ ...base, id: `${job.id}_comm_owed_${o.n}_${o.k}`, route: COMM_PHASE_BY_N[o.n].owner === "site" ? "commsite" : "commstart", color: C.slate,
       title: `Owed: ${o.label} (phase ${o.n}) on ${job.name || "Untitled"}`, desc: "Moved on with this item still open — check it when it's done", dueDate: "" }));
     if (ms.footing && within(ms.footing, 7) && !commPhaseClosed(job, 9)) tasks.push({ ...base, id: job.id + "_comm_ufer", route: "commstart", color: C.red, title: `Ufer before pour: ${job.name || "Untitled"}`, desc: `Footing ${ms.footing} — phase 9 not closed`, dueDate: ms.footing });
     if (ms.slab && within(ms.slab, 7) && !commPhaseClosed(job, 11)) tasks.push({ ...base, id: job.id + "_comm_underground", route: "commstart", color: C.red, title: `Underground before slab: ${job.name || "Untitled"}`, desc: `Slab ${ms.slab} — phase 11 not closed`, dueDate: ms.slab });
@@ -36821,7 +36875,7 @@ const URGENCY = (dueDateStr) => {
   if(diff < 0)  return {label:"OVERDUE", color:"#C62828", bg:"#C6282818", level:"overdue", days: diff};
   if(diff === 0) return {label:"DUE TODAY", color:"#C62828", bg:"#C6282818", level:"critical", days: 0};
   if(diff === 1) return {label:"DUE TOMORROW", color:"#C2410C", bg:"#C2410C15", level:"critical", days: 1};
-  if(diff <= 3) return {label:`DUE IN ${diff} DAYS`, color:"#B7791F", bg:"#B7791F18", level:"warning", days: diff};
+  if(diff <= 3) return {label:`DUE IN ${diff} DAYS`, color:C.orange, bg:"#C2410C18", level:"warning", days: diff};
   if(diff <= 7) return {label:`DUE IN ${diff} DAYS`, color:"#2F5BD9", bg:"#2F5BD910", level:"soon", days: diff};
   return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6E7682", bg:"transparent", level:"fine", days: diff};
 };
@@ -36858,21 +36912,21 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
       style={{
       display:"flex", alignItems:"flex-start", gap:12,
       padding:"12px 14px", borderRadius:11, marginBottom:6,
-      background: isOverdue||isCritical ? "#C6282810" : isWarning ? "#B7791F10" : "var(--card)",
-      border:`1px solid ${isOverdue||isCritical?"#C6282844":isWarning?"#B7791F44":task.color+"22"}`,
-      borderLeft:`4px solid ${isOverdue||isCritical?"#C62828":isWarning?"#B7791F":task.color}`,
-      boxShadow: isOverdue||isCritical?"0 0 12px #C6282822, 0 2px 8px #C6282814":isWarning?"0 0 10px #B7791F20, 0 2px 6px #B7791F12":"none",
+      background: isOverdue||isCritical ? "#C6282810" : isWarning ? "#56657A10" : "var(--card)",
+      border:`1px solid ${isOverdue||isCritical?"#C6282844":isWarning?"#56657A44":task.color+"22"}`,
+      borderLeft:`4px solid ${isOverdue||isCritical?"#C62828":isWarning?C.slate:task.color}`,
+      boxShadow: isOverdue||isCritical?"0 0 12px #C6282822, 0 2px 8px #C6282814":isWarning?"0 0 10px #56657A20, 0 2px 6px #56657A12":"none",
       transition:"transform 0.12s, box-shadow 0.12s",
     }}
     onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px ${task.color}18`;}}
-    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue||isCritical?"0 0 12px #C6282822, 0 2px 8px #C6282814":isWarning?"0 0 10px #B7791F20, 0 2px 6px #B7791F12":"none";}}>
+    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue||isCritical?"0 0 12px #C6282822, 0 2px 8px #C6282814":isWarning?"0 0 10px #56657A20, 0 2px 6px #56657A12":"none";}}>
 
       {/* Color dot / urgency indicator */}
       <div style={{width: isCritical||isOverdue?10:isWarning?9:8, height: isCritical||isOverdue?10:isWarning?9:8,
         borderRadius:"50%",
-        background:isOverdue||isCritical?"#C62828":isWarning?"#B7791F":task.color,
+        background:isOverdue||isCritical?"#C62828":isWarning?C.slate:task.color,
         flexShrink:0, marginTop:4,
-        boxShadow: isCritical||isOverdue?"0 0 6px #C62828":isWarning?"0 0 5px #B7791F":"none"}}/>
+        boxShadow: isCritical||isOverdue?"0 0 6px #C62828":isWarning?"0 0 5px #56657A":"none"}}/>
 
       <div style={{flex:1,minWidth:0}}>
         {/* Category + urgency row */}
@@ -36953,9 +37007,9 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
         {task.windowLabel&&(
           <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4,marginBottom:2}}>
             <span style={{fontSize:12,fontWeight:800,
-              color:task.needsHardDate?"#C62828":"#B7791F",
-              background:task.needsHardDate?"#C6282815":"#B7791F15",
-              border:`1px solid ${task.needsHardDate?"#C6282844":"#B7791F44"}`,
+              color:task.needsHardDate?"#C62828":C.slate,
+              background:task.needsHardDate?"#C6282815":"#56657A15",
+              border:`1px solid ${task.needsHardDate?"#C6282844":"#56657A44"}`,
               borderRadius:99,padding:"2px 10px",letterSpacing:"0.04em",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5}}>
               <Icon name={task.needsHardDate?"lock":"calendar"} size={10}/> {task.windowLabel}
             </span>
@@ -37498,7 +37552,7 @@ function JobActivity({ job, onSetTab }) {
                       display:"inline-flex", alignItems:"center", gap:6}}>
                       <span>{g.items.length} open</span>
                       {g.waitingCount > 0 && (
-                        <Pill label={`${g.waitingCount} waiting`} color="#B7791F"/>
+                        <Pill label={`${g.waitingCount} waiting`} color="#56657A"/>
                       )}
                     </span>
                   </button>
@@ -37516,9 +37570,9 @@ function JobActivity({ job, onSetTab }) {
                             {it.label}
                             {it.waiting && (
                               <span style={{fontSize:9, fontWeight:700,
-                                background:"#F3E9CF", color:"#6E5212",
+                                background:C.slateBg, color:C.slateInk,
                                 borderRadius:99, padding:"1px 6px",
-                                border:"1px solid #D9BC6B", letterSpacing:"0.04em"}}>
+                                border:"1px solid #C9D1DC", letterSpacing:"0.04em"}}>
                                 WAITING
                               </span>
                             )}
@@ -37900,7 +37954,7 @@ function JobOpenItems({ job, foremenList, jobs, onUpdateJob, onGoToReturnTrips, 
                     </div>
                     <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:3}}>
                       {t.requestedBy && <span style={{fontSize:12,color:"var(--dim)"}}>via {t.requestedBy}</span>}
-                      {t.dueDate && <span style={{fontSize:12,color:"var(--dim)"}}>{isRT ? (t.__rtStatus === "scheduled" ? "📅 " : "") : "Due "}{t.dueDate}</span>}
+                      {t.dueDate && <span style={{fontSize:12,color:"var(--dim)",display:"inline-flex",alignItems:"center",gap:3}}>{isRT ? (t.__rtStatus === "scheduled" ? <Icon name="calendar" size={11}/> : "") : "Due "}{t.dueDate}</span>}
                       {t.foreman && <span style={{fontSize:12,color:"var(--dim)"}}>{t.foreman}</span>}
                       {isRT && t.__rtPunchCount > 0 && <span style={{fontSize:12,color:"var(--dim)"}}>{t.__rtPunchCount} punch item{t.__rtPunchCount===1?"":"s"}</span>}
                       {isRT && t.__rtPhotoCount > 0 && <span style={{fontSize:12,color:"var(--dim)"}}>{t.__rtPhotoCount} photo{t.__rtPhotoCount===1?"":"s"}</span>}
@@ -37958,7 +38012,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
     if(stage === "Job Prep Complete") return "#1F7A3F";
     const idx = PREP_STAGES.indexOf(stage);
     const pct = idx / (PREP_STAGES.length - 1);
-    if(pct < 0.3) return "#B7791F";
+    if(pct < 0.3) return C.slate;
     if(pct < 0.7) return "#2F5BD9";
     return "#3E7D7A";
   };
@@ -37998,7 +38052,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
                 <select value={stage} onChange={e=>onUpdateJob(job.id,{prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
                   style={{background:sc+"12",border:`1px solid ${sc}55`,borderRadius:7,color:sc,padding:"5px 8px",fontSize:12.5,fontFamily:"inherit",fontWeight:700,outline:"none",cursor:"pointer",maxWidth:200}}>
                   <option value="">— select —</option>
-                  {PREP_STAGES.map(s=><option key={s} value={s}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</option>)}
+                  {PREP_STAGES.map(s=><option key={s} value={s}>{s===PREP_STAGE_ALERT?s+" (alert)":s}</option>)}
                 </select>
                 <button onClick={()=>onSelectJob(job)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:12.5,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open →</button>
               </div>
@@ -38056,7 +38110,7 @@ function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, onSelectJob, onUpdate
             overdue={0}
             open={prepOpen}
             onToggle={()=>setPrepOpen(v=>!v)}
-            color="#B7791F"
+            color="#56657A"
           />
           {prepOpen && (
             <div style={{padding:"12px 14px",borderBottom:"1px solid #dc262322"}}>
@@ -38210,7 +38264,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
     const d=(str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(due);
     if(!d) return null;
     const days=Math.floor((d-new Date().setHours(0,0,0,0))/(1000*60*60*24));
-    return {days,color:days<0?"#C62828":days<=3?"#C2410C":days<=7?"#B7791F":"#1F7A3F",label:days<0?`${Math.abs(days)}d overdue`:days===0?"Due today":days===1?"Due tomorrow":`Due in ${days}d`};
+    return {days,color:days<0?"#C62828":days<=3?"#C2410C":days<=7?C.slate:"#1F7A3F",label:days<0?`${Math.abs(days)}d overdue`:days===0?"Due today":days===1?"Due tomorrow":`Due in ${days}d`};
   };
 
   // Separate invoice tasks from regular tasks
@@ -38938,8 +38992,8 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
   const bucketOf = (r) => qcBucketOf(r, todayYmd);
   const BUCKETS = [
     {key:"failed",    label:"Failed — needs return", color:"#C62828"},
-    {key:"overdue",   label:"Past due — log result", color:"#B7791F"},
-    {key:"needs",     label:"Needs scheduling",      color:"#B7791F"},
+    {key:"overdue",   label:"Past due — log result", color:C.slate},
+    {key:"needs",     label:"Needs scheduling",      color:C.slate},
     {key:"scheduled", label:"Scheduled",             color:"#2F5BD9"},
     {key:"other",     label:"Has QC items",          color:C.dim},
     {key:"done",      label:"Passed / done",         color:"#2E8B57"},
@@ -39137,7 +39191,7 @@ function jobHasLoggedWork(j){
 const _startPhaseDone = st => st==="complete" || st==="invoice";
 // The app's own "Awaiting Start Date" gold (ROUGH_STATUSES.waiting_date), reused
 // so the Needs Date section reads as the same concept the status pills already use.
-const _STARTS_GOLD = "#B7791F";
+const _STARTS_GOLD = "#56657A";
 
 function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
   const [filter,setFilter]=useState("all"); // all | proj | conf
@@ -39376,6 +39430,9 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
       .filter(u => u.active !== false && (u.title||u.role)==="foreman" && u.coordinator)
       .map(u => u.coordinator))].sort()
   , [users]);
+  // The Forecast header's "Book:" row renders whenever there are books; the
+  // embedded Crew Planner hides its duplicate row while that one is showing.
+  const forecastBookRowShown = coordinatorNames.length > 0;
   const _myName = identity?.name || "";
   const _iAmCoordinator = coordinatorNames.includes(_myName);
   const [coordFilter, setCoordFilter] = useState(() => {
@@ -40288,7 +40345,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         } else if(s==="date_confirmed") {
           if(1<best.score) best={score:1,label:"NEEDS SCHED",color:"#C2410C",date:d};
         } else if(s==="waiting_date") {
-          if(2<best.score) best={score:2,label:"NO DATE",color:"#B7791F",date:""};
+          if(2<best.score) best={score:2,label:"NO DATE",color:C.slate,date:""};
         } else if(s==="scheduled" && parsed && parsed>=wkStart && parsed<=wkEnd) {
           if(3<best.score) best={score:3,label:"THIS WEEK",color:C.green,date:d};
         } else if(s==="inprogress") {
@@ -40698,7 +40755,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
     {key:"thisWeek", label:"This Week",  color:C.green},
     {key:"nextWeek", label:"Next Week",  color:C.blue},
     {key:"later",    label:"Later",      color:C.dim},
-    {key:"nodate",   label:"Needs Date", color:"#B7791F"},
+    {key:"nodate",   label:"Needs Date", color:C.slate},
   ];
 
   // Type sub-sections inside each Kanban column (v393). Order = planning-first,
@@ -40707,7 +40764,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   const FORECAST_TYPE_META={
     rough:  {label:"Rough",           color:"#2F5BD9"},
     finish: {label:"Finish",          color:"#6A7BAA"},
-    quick:  {label:"Quick Jobs",      color:"#B7791F"},
+    quick:  {label:"Quick Jobs",      color:C.slate},
     qc:     {label:"QC Walks",        color:"#3E7D7A"},
     rt:     {label:"Return Trips",    color:"#6A3FB5"},
     co:     {label:"Change Orders",   color:"#1F7A3F"},
@@ -40785,7 +40842,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
           </div>
         ) : ev.job.statusUpdate && (
           <div style={{fontSize:12.5,color:"var(--text)",marginBottom:4,fontWeight:500,
-            borderLeft:"3px solid #B7791F",paddingLeft:7,paddingRight:2,
+            borderLeft:"3px solid #56657A",paddingLeft:7,paddingRight:2,
             display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.35}}>
             <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.statusUpdate}</span>
           </div>
@@ -41196,7 +41253,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       <div style={{display:"flex",gap:4,flex:1,flexWrap:"wrap"}}>
                         {Object.entries(typeCounts).map(([type,count])=>{
                           const chipColor=type==="Rough"?C.rough||"#2F5BD9":type==="Finish"?C.finish||"#1F7A3F":
-                            type==="Quick"?"#B7791F":type==="RT"?"#6A3FB5":type==="CO"?C.accent:
+                            type==="Quick"?C.slate:type==="RT"?"#6A3FB5":type==="CO"?C.accent:
                             type==="QC"?C.teal:type==="Invoice"?"#C2410C":"var(--dim)";
                           return (
                             <span key={type} style={{fontSize:12,fontWeight:700,color:chipColor,
@@ -41293,7 +41350,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         const sections=[
           {key:"overdue",label:"OVERDUE",icon:"alertTriangle",color:C.red,
             desc:"Past the start date with no completion",items:overdueItems},
-          {key:"needsDate",label:"NEEDS DATE",icon:"calendar",color:"#B7791F",
+          {key:"needsDate",label:"NEEDS DATE",icon:"calendar",color:C.slate,
             desc:"Waiting for a start date or date confirmation",items:needsDateItems},
           {key:"needsSched",label:"READY TO SCHEDULE",icon:"clipboard",color:"#C2410C",
             desc:"Date confirmed — needs to be put on the schedule",items:needsScheduling},
@@ -41334,7 +41391,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:20}}>
               {[
                 {label:"Overdue",count:overdueItems.length,color:C.red},
-                {label:"Needs Date",count:needsDateItems.length,color:"#B7791F"},
+                {label:"Needs Date",count:needsDateItems.length,color:C.slate},
                 {label:"Ready to Schedule",count:needsScheduling.length,color:"#C2410C"},
                 {label:"Ready to Invoice",count:invoiceItems.length,color:"#C2410C"},
                 {label:"Pending COs",count:pendingCOs.length,color:C.accent},
@@ -41562,7 +41619,8 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             <div key={person} style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
               <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 6px",background:"var(--card)",paddingLeft:isLead?6:16}}>
                 <span style={{width:7,height:7,borderRadius:99,background:personColor(person),flexShrink:0}}/>
-                <span style={{fontSize:12.5,fontWeight:isLead?700:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{displayName(person)}</span>
+                {/* 108px column: first name + last initial ("Keegan W.") so names fit; full name on hover. */}
+                <span title={displayName(person)} style={{fontSize:12.5,fontWeight:isLead?700:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{(()=>{ const parts=String(displayName(person)||"").trim().split(/\s+/); return parts.length>1 ? `${parts[0]} ${parts[parts.length-1].charAt(0)}.` : parts[0]; })()}</span>
               </div>
               {personCells(person)}
             </div>
@@ -41600,8 +41658,11 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                 </div>
               </div>
 
-              {/* Book selector (coordinator scope). Pick "All books" for free cross-book borrowing. */}
-              {coordinatorNames.length>0 && (
+              {/* Book selector (coordinator scope). Design pass 2026-10-14: the planner
+                  lives inside the Forecast tab, whose own "Book:" row above sets this
+                  same coordFilter — so this second row is hidden (pick "All" up there
+                  for cross-book borrowing). Shown only if that outer row ever isn't. */}
+              {coordinatorNames.length>0 && !forecastBookRowShown && (
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
                   <span style={{fontSize:12,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>BOOK</span>
                   {["all",...coordinatorNames].map(c=>{
@@ -41609,7 +41670,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     return (
                       <button key={c} onClick={()=>pickCoord(c)}
                         style={{background:active?C.accent:"none",border:`1px solid ${active?C.accent:C.border}`,
-                          borderRadius:99,color:active?"#000":C.dim,padding:"3px 11px",cursor:"pointer",
+                          borderRadius:99,color:active?"#fff":C.dim,padding:"3px 11px",cursor:"pointer",
                           fontSize:12.5,fontFamily:"inherit",fontWeight:active?700:500}}>
                         {c==="all"?"All books":c}
                       </button>
@@ -41670,9 +41731,9 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           </div>
                           <button onClick={(e)=>{e.stopPropagation(); setMatchNoteJob(matchNoteJob===j.id?null:j.id);}}
                             title={j.statusUpdate?"View / edit status note":"Add a status note"}
-                            style={{flexShrink:0,background:j.statusUpdate?"#B7791F18":"none",
-                              border:`1px solid ${j.statusUpdate?"#B7791F":C.border}`,borderRadius:6,
-                              color:j.statusUpdate?"#8A6A1E":C.dim,padding:"3px 8px",cursor:"pointer",
+                            style={{flexShrink:0,background:j.statusUpdate?"#56657A18":"none",
+                              border:`1px solid ${j.statusUpdate?C.slate:C.border}`,borderRadius:6,
+                              color:j.statusUpdate?C.slateInk:C.dim,padding:"3px 8px",cursor:"pointer",
                               fontSize:12,fontFamily:"inherit",fontWeight:700}}>
                             {matchNoteJob===j.id?"Close":j.statusUpdate?"Note":"+ Note"}
                           </button>
@@ -41709,7 +41770,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                     <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:7,overflow:"hidden"}}>
                       {["people","teams"].map(v=>(
                         <button key={v} onClick={()=>setMatchRightView(v)}
-                          style={{background:matchRightView===v?C.accent:"transparent",color:matchRightView===v?"#000":C.dim,
+                          style={{background:matchRightView===v?C.accent:"transparent",color:matchRightView===v?"#fff":C.dim,
                             border:"none",padding:"4px 14px",cursor:"pointer",fontSize:12.5,fontFamily:"inherit",fontWeight:matchRightView===v?700:500}}>
                           {v==="people"?"People":"Teams"}
                         </button>
@@ -41941,7 +42002,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         boxShadow:isSel?`0 2px 8px ${col}44`:"none"}}>
                       {isFM&&<Icon name="star" size={10} stroke={2.5}/>}
                       {crewDisplayName(name)}
-                      {ptoThisWeek && <span style={{fontSize:8,fontWeight:700,color:"#6E5212",background:"#F3E9CF",
+                      {ptoThisWeek && <span style={{fontSize:8,fontWeight:700,color:C.slateInk,background:C.slateBg,
                         padding:"1px 4px",borderRadius:3}}>PTO</span>}
                       {dayCount>0&&!ptoThisWeek&&<span style={{fontSize:8,opacity:0.7}}>({dayCount}d)</span>}
                     </div>
@@ -42675,9 +42736,9 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   const met = target != null && sched >= target;
                                   const partial = target != null && sched > 0 && sched < target;
                                   const empty = target == null;
-                                  const bg = empty ? "transparent" : met ? "#DEEFE6" : partial ? "#F3E9CF" : "#F3E2E2";
-                                  const fg = empty ? C.muted : met ? "#2C5C40" : partial ? "#6E5212" : "#9A3030";
-                                  const bd = empty ? C.border : met ? "#86efac" : partial ? "#D9BC6B" : "#fca5a5";
+                                  const bg = empty ? "transparent" : met ? "#DEEFE6" : partial ? C.slateBg : "#F3E2E2";
+                                  const fg = empty ? C.muted : met ? "#2C5C40" : partial ? C.slateInk : "#9A3030";
+                                  const bd = empty ? C.border : met ? "#86efac" : partial ? C.slateLine : "#fca5a5";
                                   const editKey = `${job.id}_${_activePhaseKey}`;
                                   const isEditing = hrsEditing === editKey;
                                   const baseStyle = {
@@ -42754,15 +42815,15 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 {job.statusUpdate && !isHover && (
                                   <span title="Has a status update — hover to read"
                                     style={{width:6,height:6,borderRadius:99,
-                                      background:"#B7791F",flexShrink:0,
-                                      boxShadow:"0 0 0 2px #B7791F22",marginRight:2}}/>
+                                      background:C.slate,flexShrink:0,
+                                      boxShadow:"0 0 0 2px #56657A22",marginRight:2}}/>
                                 )}
                                 {isHover && job.statusUpdate && (
                                   <div style={{position:"absolute",left:"100%",top:"50%",
                                     transform:"translateY(-50%)",marginLeft:8,zIndex:9999,
                                     background:"#ffffff",
-                                    border:`1px solid #B7791F66`,
-                                    borderLeft:`4px solid #B7791F`,
+                                    border:`1px solid #56657A66`,
+                                    borderLeft:`4px solid #56657A`,
                                     borderRadius:8,
                                     padding:"7px 12px",maxWidth:420,minWidth:200,
                                     fontSize:13,color:"#1B1F24",lineHeight:1.4,fontWeight:500,
@@ -42896,9 +42957,9 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                       title={`Scheduled in Simpro · ${rawName}${timeLabel?" · "+timeLabel:""}${ptoToday?" · on PTO this day":""}`}
                                       style={{display:"inline-flex",alignItems:"center",gap:3,
                                         padding:"2px 7px",borderRadius:99,fontSize:12,fontWeight:700,
-                                        color: ptoToday ? "#6E5212" : "#2A406F",
-                                        background: ptoToday ? "#F3E9CF" : "#E0E8F3",
-                                        border: `1.5px solid ${ptoToday?"#d97706":"#2F5BD9"}`,
+                                        color: ptoToday ? C.slateInk : "#2A406F",
+                                        background: ptoToday ? C.slateBg : "#E0E8F3",
+                                        border: `1.5px solid ${ptoToday?C.orange:"#2F5BD9"}`,
                                         cursor:"default",userSelect:"none",whiteSpace:"nowrap",
                                         textDecoration: ptoToday ? "line-through" : "none"}}>
                                       <span style={{fontSize:7,fontWeight:800,letterSpacing:"0.05em",
@@ -42928,16 +42989,16 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
                                       }}
                                       onClick={e=>e.stopPropagation()}
-                                      title={ptoToday ? `⚠ ${name} is on PTO this day${ptoToday.note?" — "+ptoToday.note:""}` : "Drag to move to another cell"}
+                                      title={ptoToday ? `${name} is on PTO this day${ptoToday.note?" — "+ptoToday.note:""}` : "Drag to move to another cell"}
                                       style={{display:"inline-flex",alignItems:"center",gap:2,
                                         padding:"2px 7px",borderRadius:99,fontSize:12,fontWeight:700,
-                                        color:ptoToday ? "#6E5212" : (isLead?"#fff":pc),
-                                        background:ptoToday ? "#F3E9CF" : (isLead?pc:pc+"18"),
-                                        border:`1.5px ${ptoToday?"dashed":"solid"} ${ptoToday?"#d97706":(isLead?pc:pc+"44")}`,
+                                        color:ptoToday ? C.slateInk : (isLead?"#fff":pc),
+                                        background:ptoToday ? C.slateBg : (isLead?pc:pc+"18"),
+                                        border:`1.5px ${ptoToday?"dashed":"solid"} ${ptoToday?C.orange:(isLead?pc:pc+"44")}`,
                                         cursor:"grab",userSelect:"none",whiteSpace:"nowrap",
                                         textDecoration: ptoToday ? "line-through" : "none",
                                         boxShadow:isLead&&!ptoToday?`0 1px 4px ${pc}33`:"none"}}>
-                                      {ptoToday && <span style={{fontSize:12}}>⚠</span>}
+                                      {ptoToday && <Icon name="alertTriangle" size={11} stroke={2.5}/>}
                                       {isLead&&!ptoToday&&<Icon name="star" size={8} stroke={3}/>}
                                       {crewDisplayName(name)}
                                       <span onClick={e=>{e.stopPropagation();
@@ -43201,9 +43262,9 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         // Red styling for fully-booked people so the conflict is unmissable.
                         // Partial-day shows amber. Free shows the person's own color.
                         const fullyBooked = busy; // busy kind = no free hours
-                        const baseColor = pto ? "#6E5212" : fullyBooked ? "#9A3030" : partial ? "#8A6A1E" : pc;
-                        const baseBg    = pto ? "#F3E9CF" : fullyBooked ? "#F3E2E2" : partial ? "#F3E9CF" : pc+"20";
-                        const border    = pto ? "#d97706" : fullyBooked ? "#C62828" : partial ? "#d97706" : pc+"77";
+                        const baseColor = pto ? C.slateInk : fullyBooked ? "#9A3030" : partial ? C.slateInk : pc;
+                        const baseBg    = pto ? C.slateBg : fullyBooked ? "#F3E2E2" : partial ? C.slateBg : pc+"20";
+                        const border    = pto ? C.orange : fullyBooked ? "#C62828" : partial ? C.orange : pc+"77";
                         // Actual scheduled range — show it directly on the chip instead of
                         // a vague "Xh left" summary.
                         const timeRange = (s.time?.start && s.time?.end)
@@ -43227,8 +43288,8 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             {crewDisplayName(name)}
                             {(busy || partial) && timeRange && (
                               <span style={{fontSize:9,fontWeight:700,
-                                background: fullyBooked ? "#C6282822" : "#d9770622",
-                                color: fullyBooked ? "#9A3030" : "#8A6A1E",
+                                background: fullyBooked ? "#C6282822" : "#C2410C22",
+                                color: fullyBooked ? "#9A3030" : C.slateInk,
                                 padding:"1px 5px",borderRadius:5,letterSpacing:"0.02em",whiteSpace:"nowrap"}}>
                                 {timeRange}
                               </span>
@@ -43289,8 +43350,8 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                       <div style={{fontSize:9,fontWeight:800,color:allFree?"#2C5C40":tc,letterSpacing:"0.06em",marginBottom:3,display:"flex",gap:6,alignItems:"center"}}>
                                         <span>TEAM · {allNames.length}</span>
                                         {allFree && <span style={{color:"#2C5C40"}}>✓ ALL FREE</span>}
-                                        {conflicts > 0 && <span style={{color:"#d97706"}}>{conflicts} BUSY</span>}
-                                        {ptoCount > 0 && <span style={{color:"#d97706"}}>{ptoCount} PTO</span>}
+                                        {conflicts > 0 && <span style={{color:C.orange}}>{conflicts} BUSY</span>}
+                                        {ptoCount > 0 && <span style={{color:C.orange}}>{ptoCount} PTO</span>}
                                       </div>
                                       <div>{allNames.map(n=>crewDisplayName(n)).join(", ")}</div>
                                     </button>
@@ -43313,7 +43374,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
 
                           {byKind.partial.length > 0 && (
                             <div style={{marginBottom:10}}>
-                              <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.1em",color:"#d97706",marginBottom:6}}>
+                              <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.1em",color:C.orange,marginBottom:6}}>
                                 PART-DAY AVAILABLE · {byKind.partial.length}
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -43616,11 +43677,11 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   ? (crewFindPersonOnDay(wiz.name, di, job.id) ? 1 : 0)
                                   : teamNames.reduce((n, nm) => n + (crewFindPersonOnDay(nm, di, job.id) ? 1 : 0), 0);
                                 const bg = checked ? titleColor + "30"
-                                         : onPTO ? "#F3E9CF"
+                                         : onPTO ? C.slateBg
                                          : dirty ? C.border + "20"
                                          : "var(--surface)";
                                 const border = checked ? titleColor
-                                             : onPTO ? "#d97706"
+                                             : onPTO ? C.orange
                                              : dirty ? C.dim
                                              : C.border;
                                 return (
@@ -43643,7 +43704,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         style={{background:"none",border:"none",cursor:"pointer",
                                           fontFamily:"inherit",padding:0,width:"100%",lineHeight:1.1}}>
                                         <div style={{fontSize:12.5,fontWeight:700,
-                                          color:checked?titleColor:onPTO?"#6E5212":C.dim}}>
+                                          color:checked?titleColor:onPTO?C.slateInk:C.dim}}>
                                           {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
                                         </div>
                                         {!checked && anotherCells > 0 && (
@@ -44200,7 +44261,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         <div style={{fontSize:12,fontWeight:700,color:"var(--dim)",letterSpacing:"0.1em",marginBottom:12}}>COLOR KEY</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
           {[
-            {color:"#B7791F", label:"Waiting for Date",       desc:"Waiting for start date confirmation from GC/homeowner"},
+            {color:C.slate, label:"Waiting for Date",       desc:"Waiting for start date confirmation from GC/homeowner"},
             {color:"#C2410C", label:"Date Confirmed",         desc:"Start date confirmed — needs to be scheduled"},
             {color:"#2F5BD9", label:"Scheduled",              desc:"Rough or finish is scheduled with a date set"},
             {color:"#6A7BAA", label:"In Progress",            desc:"Crew is actively working on rough or finish"},
@@ -44208,7 +44269,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             {color:"#C62828", label:"Needs Scheduling (RT)",  desc:"Return trip needs to be scheduled"},
             {color:"#6A3FB5", label:"RT Scheduled",           desc:"Return trip has been scheduled"},
             {color:"#C62828", label:"CO — Needs Sending",     desc:"Change order drafted but not sent yet"},
-            {color:"#B7791F", label:"CO — Pending Approval",  desc:"Change order sent, waiting for approval"},
+            {color:C.slate, label:"CO — Pending Approval",  desc:"Change order sent, waiting for approval"},
             {color:"#1F7A3F", label:"CO — Approved",          desc:"Change order approved, awaiting completion"},
             {color:C.teal,    label:"QC Walk",                desc:"Quality control walk needs to be scheduled or is scheduled"},
             {color:C.red,     label:"Overdue",                desc:"Start date has passed with no completion"},
@@ -47304,7 +47365,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
     // 3, 5, 7, 8, 9 — punch item events (some have addedAt, some only checkedAt)
     forEachPunch(j, (item, ctx) => {
       // created — needs item.addedAt
-      if (item?.addedAt) push(item.addedAt, item.addedBy, j, "punch", "created", `Punch item added`, "#8A6A1E", _cleanHtml(item.text).slice(0,80));
+      if (item?.addedAt) push(item.addedAt, item.addedBy, j, "punch", "created", `Punch item added`, C.slateInk, _cleanHtml(item.text).slice(0,80));
       // closed — prefer real ISO timestamp (checkedAtTs, added 2026-05-21).
       // Fall back to midday of checkedAt for items closed BEFORE the field
       // existed; that still lands them in the right day bucket but they'll
@@ -47329,7 +47390,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
       });
       // comment / note on punch item
       if (item?.noteUpdatedAt || (item?.note && item?.noteAt)) {
-        push(item.noteUpdatedAt || item.noteAt, item.noteBy||item.assignedBy, j, "punch", "noted", `Punch note added`, "#8A6A1E", _cleanHtml(item.note).slice(0,80));
+        push(item.noteUpdatedAt || item.noteAt, item.noteBy||item.assignedBy, j, "punch", "noted", `Punch note added`, C.slateInk, _cleanHtml(item.note).slice(0,80));
       }
     });
     // 10-15 — change orders
@@ -47444,7 +47505,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
     const hr = j.homeRuns || {};
     ["upper","main","basement"].forEach(floor => {
       (hr[floor]||[]).forEach(r => {
-        if (r?.addedAt) push(r.addedAt, r.addedBy, j, "homerun", "added", `Home run added (${floor})`, "#B7791F", r.label||r.tag||"");
+        if (r?.addedAt) push(r.addedAt, r.addedBy, j, "homerun", "added", `Home run added (${floor})`, C.slate, r.label||r.tag||"");
         if (r?.labeledAt) push(r.labeledAt, r.labeledBy, j, "homerun", "labeled", `Home run labeled`, "#1F7A3F", r.label||r.tag||"");
       });
     });
@@ -47606,18 +47667,12 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
     <div style={{padding:"16px 20px", maxWidth: 1240, margin:"0 auto"}}>
 
       {/* Title bar */}
-      <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <div>
-          <div style={{fontSize:22, fontWeight:600, color:C.text}}>Today</div>
-          <div style={{fontSize:13, color:C.dim}}>
-            {now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})} · live
-          </div>
-        </div>
-        <div style={{fontSize:12.5, color:C.dim, display:"flex",alignItems:"center",gap:6}}>
+      <PageHeader title="Today" style={{marginBottom:14}}
+        subtitle={<>{now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})} · live</>}
+        actions={<div style={{fontSize:12.5, color:C.dim, display:"flex",alignItems:"center",gap:6}}>
           <span style={{width:8,height:8,borderRadius:99,background:C.green,display:"inline-block"}}/>
           Auto-refreshing
-        </div>
-      </div>
+        </div>}/>
 
       {/* Plan intake — Head of Residential only (renders nothing for anyone else). */}
       <PlansCard identity={identity} users={users}/>
@@ -47984,7 +48039,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
         ) : (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
             {heartbeats.map(h => {
-              const dot = h.status==="active" ? C.green : h.status==="earlier" ? "#B7791F" : C.muted;
+              const dot = h.status==="active" ? C.green : h.status==="earlier" ? C.slate : C.muted;
               const sub = h.status==="active" ? `active · ${fmtTime(h.lastSeen)}`
                         : h.status==="earlier" ? `last seen ${fmtTime(h.lastSeen)}`
                         : "not on app today";
@@ -48123,7 +48178,7 @@ function ScoreboardV3({ jobs, users = [], identity }) {
   return (
     <div className="sb3">
       <style>{`
-        .sb3{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-blue:#2F5BD9;--c-good:#1F7A3F;--c-gold:#B7791F;--c-gbg:#F6EDCF;--c-gln:#E3D097;--c-track:#E9ECF1;--c-navy:#1E2C44;font-family:inherit;color:var(--c-ink)}
+        .sb3{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-blue:#2F5BD9;--c-good:#1F7A3F;--c-gold:#2F5BD9;--c-gbg:#EAF0FC;--c-gln:#C7D5F5;--c-track:#E9ECF1;--c-navy:#1E2C44;font-family:inherit;color:var(--c-ink)}
         .sb3 *{box-sizing:border-box}
         .sb3 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:16px 18px;color:#fff;display:flex;align-items:center;gap:12px}
         .sb3 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
@@ -48162,7 +48217,7 @@ function ScoreboardV3({ jobs, users = [], identity }) {
         .sb3 .met{display:flex;align-items:center;gap:11px;flex:0 0 auto}
         .sb3 .bar{width:74px;height:7px;border-radius:99px;background:var(--c-track);overflow:hidden}
         .sb3 .bar i{display:block;height:100%;border-radius:99px;background:var(--c-good)}
-        .sb3 .bar.b i{background:var(--c-blue)}.sb3 .bar.go i{background:var(--c-gold)}.sb3 .bar.nv i{background:var(--c-navy)}
+        .sb3 .bar.b i{background:var(--c-blue)}.sb3 .bar.go i{background:#56657A}.sb3 .bar.nv i{background:var(--c-navy)}
         .sb3 .big{font-size:18px;font-weight:800;min-width:42px;text-align:right}.sb3 .big u{font-size:10px;color:var(--c-faint);font-style:normal;margin-left:1px}
         .sb3 .seclbl{font-size:10px;letter-spacing:.11em;text-transform:uppercase;font-weight:800;color:var(--c-faint);margin:20px 4px 0}
         .sb3 .empty{padding:24px;text-align:center;color:var(--c-faint);font-size:13px}
@@ -48837,7 +48892,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   return (
     <div className="sb4">
       <style>{`
-        .sb4{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-good:#2F7A4F;--c-goodbd:#BFE0CC;--c-warn:#916A16;--c-warnbd:#E7D49A;--c-bad:#C62828;--c-badbd:#EBC4C4;--c-badbg:#FBEDED;--c-gold:#916A16;--c-gbg:#F6EDCF;--c-gln:#E3D097;font-family:inherit;color:var(--c-ink)}
+        .sb4{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-good:#2F7A4F;--c-goodbd:#BFE0CC;--c-warn:#3F4B5C;--c-warnbd:#C9D1DC;--c-bad:#C62828;--c-badbd:#EBC4C4;--c-badbg:#FBEDED;--c-gold:#2F5BD9;--c-gbg:#EAF0FC;--c-gln:#C7D5F5;font-family:inherit;color:var(--c-ink)}
         .sb4 *{box-sizing:border-box}
         .sb4 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:15px 16px;color:#fff}
         .sb4 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
@@ -49013,7 +49068,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
   const P = {
     navy:"#1E2C44", navy2:"#162134", ink:"#171B21", dim:"#5C6470", faint:"#8A929C",
     border:"#E2E5EA", panel:"#FFFFFF", panel2:"#F5F7F9", good:"#1F7A3F", blue:"#2F5BD9",
-    gold:"#8A6B16", gold2:"#B7791F", goldBg:"#F6EDCF", goldLine:"#E3D097", track:"#E9ECF1",
+    gold:C.accent, gold2:C.slate, goldBg:C.steelBg, goldLine:C.steelLine, // champion = light steel blue (was pale yellow) track:"#E9ECF1",
   };
   const AVCOL = ["#2F5BD9","#C2410C","#2E8B57","#6A3FB5","#3E7D7A","#2F6DB0","#8A5AA0","#C58A4C"];
   const color = (nm) => AVCOL[[...String(nm)].reduce((a,c)=>a+c.charCodeAt(0),0) % AVCOL.length];
@@ -49091,7 +49146,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
         {combined.map((r,i)=>(
           <div key={r.name} style={{ display:"flex", alignItems:"center", gap:12, padding:"11px 14px",
             borderTop: i===0?"none":`1px solid ${P.border}`, background: i===0?`linear-gradient(90deg,${P.goldBg},transparent 70%)`:"transparent" }}>
-            <span style={{ width:22, textAlign:"center", fontSize:15, fontWeight:800, color: i===0?P.gold2:P.faint }}>{i+1}</span>
+            <span style={{ width:22, textAlign:"center", fontSize:15, fontWeight:800, color: i===0?P.gold:P.faint }}>{i+1}</span>
             <span style={{ width:38, height:38, borderRadius:11, flex:"0 0 auto", display:"grid", placeItems:"center",
               color:"#fff", fontWeight:800, fontSize:14, background:color(r.name) }}>{initials(r.name)}</span>
             <span style={{ minWidth:0, flex:1 }}>
@@ -49121,7 +49176,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
                 return (
                   <div key={r.name} style={{ borderTop: i===0?"none":`1px solid ${P.border}` }}>
                     <div style={{ display:"flex", alignItems:"center", gap:9, padding:"9px 11px" }}>
-                      <span style={{ width:15, textAlign:"center", fontSize:13, fontWeight:800, color:i===0?P.gold2:P.faint }}>{i+1}</span>
+                      <span style={{ width:15, textAlign:"center", fontSize:13, fontWeight:800, color:i===0?P.gold:P.faint }}>{i+1}</span>
                       <span style={{ width:28, height:28, borderRadius:8, flex:"0 0 auto", display:"grid", placeItems:"center", color:"#fff", fontWeight:800, fontSize:12.5, background:color(r.name) }}>{initials(r.name)}</span>
                       <span style={{ minWidth:0, flex:1 }}>
                         <span style={{ display:"block", fontSize:13.5, fontWeight:700, letterSpacing:"-0.01em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{r.name}</span>
@@ -49260,7 +49315,7 @@ function ScoreboardV2Champions({ jobs }) {
   const cards = [
     { sub: "Last Month",    label: monthW.label,   res: mRes, accent: "#2E8B57" },
     { sub: "Last Quarter",  label: quarterW.label, res: qRes, accent: "#2F5BD9" },
-    { sub: "Year-to-Date",  label: yearW.label,    res: yRes, accent: "#eab308" },
+    { sub: "Year-to-Date",  label: yearW.label,    res: yRes, accent: "#3E7D7A" },
   ];
 
   const renderName = (row, accent) => row ? (
@@ -50724,7 +50779,7 @@ function NotifDoctor({ identity }) {
         setTestResult({
           kind: "warn",
           data: r.data,
-          summary: `⚠ Server delivered the push but THIS browser never received it (waited 15s). Most likely: (1) Notifications blocked for this site at OS level — check System Settings → Notifications → Chrome. (2) Stale service worker — try clicking "Re-run checks", "Enable notifications", then test again. (3) macOS Focus mode / Do Not Disturb.`,
+          summary: `Server delivered the push but THIS browser never received it (waited 15s). Most likely: (1) Notifications blocked for this site at OS level — check System Settings → Notifications → Chrome. (2) Stale service worker — try clicking "Re-run checks", "Enable notifications", then test again. (3) macOS Focus mode / Do Not Disturb.`,
         });
       }
     } catch(e) {
@@ -50784,7 +50839,7 @@ function NotifDoctor({ identity }) {
                       </span>
                       <span style={{ color: C.dim, flexShrink: 0 }}>{it.createdAt ? timeAgo(it.createdAt) : ""}</span>
                     </div>
-                    <div style={{ color: st === "legacy" ? C.dim : (GOOD[st] || (st === "partial" && shown)) ? "#1F7A3F" : (st === "pending" || st === "retrying") ? "#B7791F" : "#C62828" }}>
+                    <div style={{ color: st === "legacy" ? C.dim : (GOOD[st] || (st === "partial" && shown)) ? "#1F7A3F" : (st === "pending" || st === "retrying") ? C.slate : "#C62828" }}>
                       {st === "legacy" ? "Sent before delivery tracking" : LABEL[st] || st}
                       {d.tokenCount ? ` · ${d.okCount || 0}/${d.tokenCount} devices` : ""}
                       {d.attempts > 1 ? ` · ${d.attempts} tries` : ""}
@@ -50831,8 +50886,8 @@ function NotifDoctor({ identity }) {
 
       {testResult && (
         <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8,
-          background: testResult.kind === "ok" ? "#DEEFE6" : testResult.kind === "err" ? "#F3E2E2" : testResult.kind === "warn" ? "#F3E9CF" : "#E0E8F3",
-          color: testResult.kind === "ok" ? "#2C5C40" : testResult.kind === "err" ? "#7A2A2A" : testResult.kind === "warn" ? "#6E5212" : "#2E477D",
+          background: testResult.kind === "ok" ? "#DEEFE6" : testResult.kind === "err" ? "#F3E2E2" : testResult.kind === "warn" ? C.slateBg : "#E0E8F3",
+          color: testResult.kind === "ok" ? "#2C5C40" : testResult.kind === "err" ? "#7A2A2A" : testResult.kind === "warn" ? C.slateInk : "#2E477D",
           fontSize: 13, lineHeight: 1.5 }}>
           {testResult.summary && <div style={{ fontWeight: 600, marginBottom: 8 }}>{testResult.summary}</div>}
           {testResult.text || ""}
@@ -51196,7 +51251,7 @@ function FleetHealth({ identity }) {
   );
 }
 
-function SettingsSection({ title, accent, defaultOpen = false, children }) {
+function SettingsSection({ title, accent, defaultOpen = false, count, countLabel = "", children }) {
   const [open, setOpen] = useState(defaultOpen);
   const c = accent || { bg: "#F4F6F8", border: "#E1E4E9", text: "#1B1F24" };
   return (
@@ -51211,11 +51266,19 @@ function SettingsSection({ title, accent, defaultOpen = false, children }) {
           fontFamily: "inherit", display: "flex", alignItems: "center",
           justifyContent: "space-between", color: c.text,
         }}>
-        <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16,
-                       letterSpacing: "0.06em" }}>
-          {title}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16,
+                         letterSpacing: "0.06em" }}>
+            {title}
+          </span>
+          {count != null && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: c.text, background: C.card,
+                           border: `1px solid ${c.border}`, borderRadius: 99, padding: "2px 9px", whiteSpace: "nowrap" }}>
+              {count}{countLabel ? " " + countLabel : ""}
+            </span>
+          )}
         </span>
-        <span style={{ fontSize: 14, transition: "transform 0.15s",
+        <span aria-hidden="true" style={{ fontSize: 14, transition: "transform 0.15s",
                        transform: open ? "rotate(90deg)" : "none",
                        display: "inline-block" }}>▶</span>
       </button>
@@ -51512,7 +51575,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob, onSelectJob }) {
           ) : null}
           {r.status==="new" ? (() => { const p = previewOf(r); const job = (jobs||[]).find(j => j.id === r.jobId); return (
             <Fragment>
-              {p.warn ? <div style={{fontSize:13,color:"#8A2A2A",marginBottom:6}}>⚠ {p.warn}</div>
+              {p.warn ? <div style={{fontSize:13,color:"#8A2A2A",marginBottom:6,display:"flex",alignItems:"center",gap:5}}><Icon name="alertTriangle" size={13} stroke={2.25}/>{p.warn}</div>
                       : <div style={{fontSize:13,color:"#5E6670",marginBottom:6}}>{p.text}</div>}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
                 <button disabled={busy===r.id||!!p.warn} onClick={()=>apply(r)} style={{...B.btn,opacity:(busy===r.id||p.warn)?0.5:1}}>{busy===r.id?"…":applyLabel(r.type)}</button>
@@ -51678,7 +51741,7 @@ function GCOfficeSuperAssign({ link, jobs, allJobs, busy, onSave }) {
   const chip = (key, label, on, onClick, legacy) => (
     <button key={key} onClick={onClick||undefined} disabled={!onClick}
       title={legacy ? "Old entry — not one of this link's contacts. Turn it off and pick the right person." : undefined}
-      style={{border:"1px solid "+(on?(legacy?"#B7791F":"#2E477D"):"#CDD9EC"), background:on?(legacy?"#FBF3E3":"#E9EEF8"):"#fff", color:on?(legacy?"#8A6A1C":"#2E477D"):"#5E6670",
+      style={{border:"1px solid "+(on?(legacy?C.slate:"#2E477D"):"#CDD9EC"), background:on?(legacy?C.slateBg:"#E9EEF8"):"#fff", color:on?(legacy?C.slateInk:"#2E477D"):"#5E6670",
         borderRadius:999, fontSize:13, fontWeight:700, padding:"3px 10px", cursor:onClick?"pointer":"default", fontFamily:"inherit"}}>{label}{legacy?" · old entry":""}</button>
   );
   const start = (jobId) => { setDraft(new Set(idsOf(jobId))); setErr(""); setEditJob(jobId); };
@@ -51720,7 +51783,7 @@ function GCOfficeSuperAssign({ link, jobs, allJobs, busy, onSave }) {
   );
 }
 
-function GCPortalManager({ jobs, identity }) {
+function GCPortalManager({ jobs, identity, onCount }) {
   const [links, setLinks] = useState(null);   // null=loading
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");        // token (or token+"_test"/"create") while a call is in flight
@@ -51742,7 +51805,7 @@ function GCPortalManager({ jobs, identity }) {
   const gc = (name, payload) => gcAdminCallable(name, identity)(payload);
 
   const refresh = () => gc("gcPortalListLinks",{})
-    .then(r => { setLinks(r.data.links||[]); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null }); })
+    .then(r => { setLinks(r.data.links||[]); if (onCount) onCount((r.data.links||[]).filter(l => l && !l.revoked).length); setDigestInfo({ byPortal: r.data.lastDigestByPortal||{}, health: r.data.mailHealth||null, soakLive: r.data.soakLive||null }); })
     .catch(e => { setErr(e.message||"Failed to load links"); setLinks([]); });
   // v405.1: mirror auto-heal runs AFTER the list loads, in its own long-timeout
   // callable (running it inside gcPortalListLinks timed that call out at 60s on
@@ -52052,7 +52115,7 @@ function GCPortalManager({ jobs, identity }) {
                   ))}
                 </div>
               </Fragment>
-            ) : <div style={{color:"#B7791F"}}>No jobs match "{gcName.trim()}" yet — check the spelling against the GC field on the jobs, or create the link now and jobs will appear as they're added.</div>}
+            ) : <div style={{color:C.slate}}>No jobs match "{gcName.trim()}" yet — check the spelling against the GC field on the jobs, or create the link now and jobs will appear as they're added.</div>}
 
             {/* Force-include picker (review finding: jobIdsInclude had no UI) —
                 merges a job filed under a different GC spelling into THIS portal
@@ -52083,7 +52146,7 @@ function GCPortalManager({ jobs, identity }) {
         {/* accent */}
         <div style={{display:"flex",alignItems:"center",gap:8,margin:"12px 0"}}>
           <span style={{fontSize:13.5,color:"#1B1F24",fontWeight:600}}>Accent:</span>
-          {["#2F5BD9","#4A5D3A","#2E3440","#7A5C14","#6A2C2C"].map(c=>(
+          {["#2F5BD9","#4A5D3A","#2E3440",C.slateInk,"#6A2C2C"].map(c=>(
             <button key={c} onClick={()=>setAccent(c)} title={c} style={{width:22,height:22,borderRadius:"50%",background:c,border:accent===c?"3px solid #1B1F24":"2px solid #CDD9EC",cursor:"pointer"}}/>
           ))}
         </div>
@@ -52138,7 +52201,7 @@ function GCPortalManager({ jobs, identity }) {
                 snapshot, so it's correct the moment soak flips either way. */}
             {!l.revoked ? (
               digestInfo.soakLive && digestInfo.soakLive.soak ? (
-                <div style={{marginTop:5,fontSize:13,color:"#B7791F"}}>
+                <div style={{marginTop:5,fontSize:13,color:C.slate}}>
                   Digests: soak mode — nightly copy goes to {digestInfo.soakLive.soakTo || "the soak inbox"}; delivery to this contractor (and this timer) starts when the soak ends
                 </div>
               ) : (
@@ -52251,7 +52314,7 @@ function GCPortalManager({ jobs, identity }) {
 
                 <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 12px"}}>
                   <span style={{fontSize:13.5,color:"#1B1F24",fontWeight:600}}>Accent:</span>
-                  {["#2F5BD9","#4A5D3A","#2E3440","#7A5C14","#6A2C2C"].map(c=>(
+                  {["#2F5BD9","#4A5D3A","#2E3440",C.slateInk,"#6A2C2C"].map(c=>(
                     <button key={c} onClick={()=>setEditDraft({...editDraft,accentColor:c})} title={c} style={{width:22,height:22,borderRadius:"50%",background:c,border:editDraft.accentColor===c?"3px solid #1B1F24":"2px solid #CDD9EC",cursor:"pointer"}}/>
                   ))}
                 </div>
@@ -52332,8 +52395,8 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
 
   return (
     <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
-        color:"#1B1F24",marginBottom:6}}>SETTINGS</div>
+      {/* Design pass 2026-10-14: the page title lives in the PageHeader above
+          (it used to say SETTINGS twice). */}
       <div style={{fontSize:13,color:"#5E6670",marginBottom:24,lineHeight:1.5}}>
         Team members are grouped by role. Assign a color to each person — it appears on their card and throughout the app.
         To add or remove people, use the <strong>Team Members</strong> section below.
@@ -52417,8 +52480,8 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
       )}
 
       {/* Notification Test — verify per-device that pushes deliver and deep-link works */}
-      <SettingsSection title="NOTIFICATIONS" accent={{bg:"#F3E9CF", border:"#EAD9A6", text:"#6E5212"}}>
-        <div style={{fontSize:12.5,color:"#8A6A1E",marginBottom:12,lineHeight:1.5}}>
+      <SettingsSection title="NOTIFICATIONS" accent={{bg:C.slateBg, border:C.slateLine, text:C.slateInk}}>
+        <div style={{fontSize:12.5,color:C.slateInk,marginBottom:12,lineHeight:1.5}}>
           Send a test push to this device. Use it on each phone to confirm notifications arrive once (not duplicated) and that tapping one opens the right job.
         </div>
         <button onClick={async()=>{
@@ -52437,7 +52500,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
             toast.success(`Sent ${d.sent} test push${d.sent===1?"":"es"}${pruned} — check your phone.`);
           } catch(e) { toast.error("Test failed: "+(e.message||"unknown")); }
         }} style={{padding:"10px 20px",borderRadius:8,fontSize:14,fontWeight:700,cursor:"pointer",
-          fontFamily:"inherit",background:"#d97706",color:"#fff",border:"none",
+          fontFamily:"inherit",background:C.accent,color:"#fff",border:"none",
           display:"inline-flex",alignItems:"center",gap:8}}>
           <Icon name="bell" size={14}/> Send Test Notification
         </button>
@@ -52664,8 +52727,8 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
       )}
 
       <button onClick={save}
-        style={{width:"100%",background:saved?"#1F7A3F":"#d97706",border:"none",borderRadius:10,
-          color:saved?"#fff":"#000",fontSize:15,fontWeight:700,padding:"14px",
+        style={{width:"100%",background:saved?"#1F7A3F":C.accent,border:"none",borderRadius:10,
+          color:"#fff",fontSize:15,fontWeight:700,padding:"14px",
           cursor:"pointer",fontFamily:"inherit",transition:"background 0.3s"}}>
         {saved?"✓ Saved!":"Save Changes"}
       </button>
@@ -52854,7 +52917,7 @@ function HomeownerPage({ jobId }) {
           </div>
           {genOver
             ? <div style={{fontSize:12.5,color:'#C62828',marginTop:6,fontWeight:600}}>That's more than a {genSlotBudget}-space panel holds — Homestead will confirm the panel size.</div>
-            : genUse.provisional>0 && <div style={{fontSize:12.5,color:'#B7791F',marginTop:6}}>{genUse.provisional} still needs specs — counted as 1 space for now.</div>}
+            : genUse.provisional>0 && <div style={{fontSize:12.5,color:C.slate,marginTop:6}}>{genUse.provisional} still needs specs — counted as 1 space for now.</div>}
         </div>
       )}
 
@@ -52888,8 +52951,8 @@ function HomeownerPage({ jobId }) {
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                   {it.name||'Unnamed'}{hrNoteEl(it)}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B7791F',background:'#FBF3E2',
-                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
                   {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                     borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                 </div>
@@ -52926,8 +52989,8 @@ function HomeownerPage({ jobId }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}{hrNoteEl(it)}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B7791F',background:'#FBF3E2',
-                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
                       <span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                         borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>
                     </div>
@@ -52963,8 +53026,8 @@ function HomeownerPage({ jobId }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:14,fontWeight:500,color:'#5E6670',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}{hrNoteEl(it)}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B7791F',background:'#FBF3E2',
-                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
                       {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                         borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                     </div>
@@ -53152,7 +53215,7 @@ function LoadsSharePage({ jobId }) {
   const flag = (f) => f==='new'
     ? <span style={{fontSize:12,fontWeight:800,background:'#E6F6EE',color:'#2E9E6B',borderRadius:5,padding:'2px 7px'}}>NEW</span>
     : f==='changed'
-    ? <span style={{fontSize:12,fontWeight:800,background:'#FBF3E0',color:'#B7791F',borderRadius:5,padding:'2px 7px'}}>CHANGED</span>
+    ? <span style={{fontSize:12,fontWeight:800,background:C.slateBg,color:C.slate,borderRadius:5,padding:'2px 7px'}}>CHANGED</span>
     : null;
   const newCount = baseline ? loads.filter(l=>flagOf(l)==='new').length : 0;
   const chgCount = baseline ? loads.filter(l=>flagOf(l)==='changed').length : 0;
@@ -53168,11 +53231,11 @@ function LoadsSharePage({ jobId }) {
       <div style={{background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:'12px 16px',marginBottom:16,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
         {baseline ? (
           <>
-            <span style={{fontSize:13.5,fontWeight:700,color:'#1F7A3F'}}>🔒 Baseline locked — {(baseline.lockedAt||'').slice(0,10)}</span>
+            <span style={{fontSize:13.5,fontWeight:700,color:'#1F7A3F',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="lock" size={13} stroke={2.25}/>Baseline locked — {(baseline.lockedAt||'').slice(0,10)}</span>
             <span style={{fontSize:13,color:'#6E7682'}}>{(baseline.loads||[]).length} loads captured</span>
             <span style={{flex:1}}/>
             {newCount>0&&<span style={{fontSize:13,fontWeight:700,color:'#2E9E6B'}}>{newCount} new</span>}
-            {chgCount>0&&<span style={{fontSize:13,fontWeight:700,color:'#B7791F'}}>{chgCount} changed</span>}
+            {chgCount>0&&<span style={{fontSize:13,fontWeight:700,color:C.slate}}>{chgCount} changed</span>}
           </>
         ) : (
           <span style={{fontSize:13,color:'#6E7682'}}>No baseline set — showing the full current load list ({loads.length}).</span>
@@ -53192,7 +53255,7 @@ function LoadsSharePage({ jobId }) {
             <div style={{padding:'0 4px'}}>
               {rows.map((l,i) => {
                 const f = flagOf(l);
-                const bg = f==='new'?'#E6F6EE':f==='changed'?'#FBF3E0':'#fff';
+                const bg = f==='new'?'#E6F6EE':f==='changed'?C.slateBg:'#fff';
                 return (
                   <div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #EEF0F3':'none',background:bg}}>
                     <span style={{fontSize:12.5,fontFamily:'ui-monospace,monospace',color:'#99A0AA',width:24,flexShrink:0,textAlign:'center'}}>{l.assignedTo?.output||''}</span>
@@ -53326,7 +53389,7 @@ function LightingSharePage({ jobId }) {
   // different app; it doesn't anymore.
   const SP = { accent:'#2F5BD9', accentDark:'#2E477D', accentBg:'#EAEEF6', accentBorder:'#2F5BD9',
                bg:'#EEF0F3', card:'#ffffff', border:'#E1E4E9', text:'#1B1F24', dim:'#5E6670', muted:'#8A929D',
-               green:'#1F7A3F', amber:'#d97706' };
+               green:'#1F7A3F', amber:'#C2410C' }; // "amber" key kept; now C.orange (no yellow)
   const inputStyle = {background:SP.bg,border:`1px solid ${SP.border}`,borderRadius:6,padding:'5px 8px',fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',color:SP.text};
   const lvRowStyle = {background:SP.accentBg,border:`1px solid ${SP.accentBorder}55`,borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
 
@@ -54009,7 +54072,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                       <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:13.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:12,fontWeight:600,color:color,marginLeft:6}}>editing</span>}</div>
-                          <div style={{fontSize:12,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:'#B7791F'}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
+                          <div style={{fontSize:12,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:C.slate}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
                           <LinkOpensLine opens={linkOpens} linkKey={`questions:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:12.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
@@ -54463,8 +54526,8 @@ function PunchSharePage({ jobId, stage }) {
       </div>
       {item.waiting && !item.done && (
         <div style={{marginLeft:24,marginTop:4}}>
-          <span style={{fontSize:12.5,fontWeight:700,background:'#F3E9CF',color:'#6E5212',
-            borderRadius:99,padding:'2px 9px',border:'1px solid #D9BC6B',display:'inline-flex',alignItems:'center',gap:5}}>
+          <span style={{fontSize:12.5,fontWeight:700,background:C.slateBg,color:C.slateInk,
+            borderRadius:99,padding:'2px 9px',border:'1px solid #C9D1DC',display:'inline-flex',alignItems:'center',gap:5}}>
             <Icon name="clock" size={11}/> {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
           </span>
         </div>
@@ -54476,7 +54539,7 @@ function PunchSharePage({ jobId, stage }) {
   if(error)   return <div style={{textAlign:'center',padding:60,color:'#C62828',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
-      <div style={{marginBottom:16,color:'#B7791F',display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
+      <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
       <div style={{fontSize:20,fontWeight:700,color:'#111',marginBottom:8}}>This link is no longer active</div>
       <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>This punch list link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
     </div>
@@ -54998,7 +55061,7 @@ function QuestionsSharePage({ jobId }) {
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3,flexWrap:'wrap'}}>
           <div style={{fontSize:12,color:'#99A0AA',fontWeight:600}}>{phaseLabel} · {q.floor}{(q.room||'').trim()?` · ${q.room.trim()}`:''}</div>
           {isAns&&<div style={{fontSize:12,fontWeight:700,color:'#1F7A3F',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
-          {isNewQ(q)&&<div style={{fontSize:12,fontWeight:800,color:'#8A6A1E',background:'#F3E9CF',border:'1px solid #E3D3A6',borderRadius:99,padding:'1px 8px'}}>NEW</div>}
+          {isNewQ(q)&&<div style={{fontSize:12,fontWeight:800,color:C.slateInk,background:C.slateBg,border:'1px solid #C9D1DC',borderRadius:99,padding:'1px 8px'}}>NEW</div>}
           {!isNewQ(q)&&newReplyQ(q)&&<div style={{fontSize:12,fontWeight:800,color:'#2F5BD9',background:'#E7ECF7',border:'1px solid #2F5BD944',borderRadius:99,padding:'1px 8px'}}>New reply from Homestead</div>}
           {!isNewQ(q)&&!newReplyQ(q)&&newAnswerQ(q)&&<div style={{fontSize:12,fontWeight:800,color:'#1F7A3F',background:'#DEEFE6',border:'1px solid #1F7A3F44',borderRadius:99,padding:'1px 8px'}}>Updated</div>}
         </div>
@@ -55038,14 +55101,14 @@ function QuestionsSharePage({ jobId }) {
         </div>
         {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
           <div style={{marginTop:8}}>
-            <div style={{fontSize:12.5,fontWeight:700,color:'#B7791F',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
+            <div style={{fontSize:12.5,fontWeight:700,color:C.slate,marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
             <textarea value={notes[q.id]||''} onChange={e=>{ userEditedRef.current=true; setNotes(n=>({...n,[q.id]:e.target.value})); }}
               placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
-              rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
+              rows={2} style={{...taStyle,borderColor:C.slateLine,background:C.slateBg}}/>
           </div>
         ) : (
           <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
-            style={{marginTop:8,fontSize:12.5,fontWeight:600,color:'#B7791F',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
+            style={{marginTop:8,fontSize:12.5,fontWeight:600,color:C.slate,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
         )}
         {threadOfShare(q).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
         <QAThread messages={threadOfShare(q)} jobId={jobId} qid={q.id} color="#2F5BD9" photoBase="question-threads"
@@ -55085,7 +55148,7 @@ function QuestionsSharePage({ jobId }) {
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
-      <div style={{marginBottom:16,color:'#B7791F',display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
+      <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
       <div style={{fontSize:20,fontWeight:700,color:'#111',marginBottom:8}}>This link is no longer active</div>
       <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>This questions link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
     </div>
@@ -55116,7 +55179,7 @@ function QuestionsSharePage({ jobId }) {
         </div>
       </div>
 
-      {showPriorBanner&&<div style={{background:'#F3E9CF',border:'1px solid #B7791F',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:13,color:'#6E5212',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>{iSubmittedBefore ? <Fragment>You previously submitted answers as <b>{_priorSubmit.name}</b>. You can update them below and resubmit.</Fragment> : <Fragment>Some of these were already answered{priorName?<Fragment> by <b>{priorName}</b></Fragment>:null}. Answer anything still open — put <b>your own name</b> at the bottom and your answers are filed under you.</Fragment>}</span></div>}
+      {showPriorBanner&&<div style={{background:C.slateBg,border:'1px solid #56657A',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:13,color:C.slateInk,display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>{iSubmittedBefore ? <Fragment>You previously submitted answers as <b>{_priorSubmit.name}</b>. You can update them below and resubmit.</Fragment> : <Fragment>Some of these were already answered{priorName?<Fragment> by <b>{priorName}</b></Fragment>:null}. Answer anything still open — put <b>your own name</b> at the bottom and your answers are filed under you.</Fragment>}</span></div>}
 
       {!hasQs ? (
         <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
@@ -55142,7 +55205,7 @@ function QuestionsSharePage({ jobId }) {
               {needCount>0 ? `${needCount} need${needCount===1?'s':''} your answer` : 'All questions answered — thank you!'}
             </div>
             {newCount>0&&(
-              <div style={{fontSize:13,fontWeight:800,color:'#8A6A1E',background:'#F3E9CF',border:'1px solid #E3D3A6',borderRadius:99,padding:'4px 12px'}}>
+              <div style={{fontSize:13,fontWeight:800,color:C.slateInk,background:C.slateBg,border:'1px solid #C9D1DC',borderRadius:99,padding:'4px 12px'}}>
                 {newCount} new since your last visit
               </div>
             )}
@@ -55178,8 +55241,8 @@ function QuestionsSharePage({ jobId }) {
               list so it's obvious nothing is expected of them here yet. */}
           {waitQs.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:12.5,fontWeight:700,color:'#8A6A1E',letterSpacing:'0.08em',marginBottom:4,paddingBottom:6,borderBottom:'2px solid #E3D3A6',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="external" size={12}/> WAITING ON HOMESTEAD ({waitQs.length})</div>
-              <div style={{fontSize:12.5,color:'#8A6A1E',marginBottom:10}}>You asked for more info or replied last — our team is on it. You can still answer or add to the discussion any time.</div>
+              <div style={{fontSize:12.5,fontWeight:700,color:C.slateInk,letterSpacing:'0.08em',marginBottom:4,paddingBottom:6,borderBottom:'2px solid #C9D1DC',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="external" size={12}/> WAITING ON HOMESTEAD ({waitQs.length})</div>
+              <div style={{fontSize:12.5,color:C.slateInk,marginBottom:10}}>You asked for more info or replied last — our team is on it. You can still answer or add to the discussion any time.</div>
               {waitQs.map(({q,accent,ph},i)=>renderShareCard(q,i,accent,ph))}
             </div>
           )}
@@ -56041,6 +56104,44 @@ If you spot a feature missing, just tell me and I'll add it.
 
 `;
 
+// ── App Map text helpers (design pass 2026-10-14) ──
+// A " · " segment that is only quoted code names ('OfficeDash', 'DashPage' +
+// 'OfficeDash', 'src/App.js') is a developer tag: the App Map hides it.
+function amIsDevTag(seg) {
+  const t = String(seg || "").trim();
+  return /^'[^']+'(\s*(\+|,|&|\/|and)?\s*'[^']+')*$/.test(t);
+}
+// Clean one manifest line for display: drops dev tags, turns 'shipped
+// YYYY-MM-DD' into the date and 'SW vNNN' into the version.
+function amCleanLine(str) {
+  let date = null, sw = null;
+  const keep = [];
+  String(str || "").split(" · ").forEach(seg => {
+    const p = seg.replace(/^['"`]+|['"`]+$/g, "").trim();
+    const m = p.match(/^(shipped|in-flight|planned)(?:\s+(\d{4}-\d{2}-\d{2}))?$/i);
+    if (m) { if (m[2] && !date) date = m[2]; return; }
+    if (/^sw\s*v?\d+$/i.test(p)) { if (!sw) sw = "v" + p.replace(/\D+/g, ""); return; }
+    if (amIsDevTag(seg)) return;
+    keep.push(seg.trim());
+  });
+  return { text: keep.join(" · "), date, sw };
+}
+// The app version the manifest was last updated for ("App SW version: v539").
+function amManifestVersion(md) {
+  const m = String(md || "").match(/App SW version:\s*v?(\d+)/i);
+  return m ? "v" + m[1] : "";
+}
+// Safe inline markdown for the App Map: **bold** and *italic* only, as React
+// elements (no HTML injection). Everything else stays plain text.
+function AmInline({ text }) {
+  const parts = stripEmoji(text).split(/(\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g);
+  return <>{parts.map((p, i) => {
+    if (/^\*\*[^*]+\*\*$/.test(p)) return <strong key={i} style={{fontWeight:700}}>{p.slice(2, -2)}</strong>;
+    if (/^\*[^*\s][^*]*\*$/.test(p)) return <em key={i}>{p.slice(1, -1)}</em>;
+    return p ? <Fragment key={i}>{p}</Fragment> : null;
+  })}</>;
+}
+
 // Minimal markdown parser tuned to FEATURES_MD_INLINE structure.
 // Returns: [{title, items: [{name, status, date, sw, desc, subs: []}]}, ...]
 function parseAppMapManifest(md) {
@@ -56063,14 +56164,19 @@ function parseAppMapManifest(md) {
       const parts = rest.split("·").map(s => s.trim()).filter(Boolean);
       let status = null, date = null, sw = null;
       const descParts = [];
-      for (const p of parts) {
+      for (const praw of parts) {
+        // The build sync turns markdown backticks into single quotes, so a tag
+        // reads 'shipped 2026-10-13' / 'SW v539'. Strip them before matching
+        // (this is why the header used to count 0 shipped).
+        const p = praw.replace(/^['"`]+|['"`]+$/g, "").trim();
         const lower = p.toLowerCase();
         if (!status && /^(shipped|in-flight|planned)\b/.test(lower)) {
           const m = p.match(/^(shipped|in-flight|planned)(?:\s+(\d{4}-\d{2}-\d{2}))?/i);
           if (m) { status = m[1].toLowerCase(); if (m[2]) date = m[2]; continue; }
         }
         if (!sw && /^sw\s+v?\d/i.test(p)) { sw = p.replace(/^SW\s*/i, "").trim(); continue; }
-        descParts.push(p);
+        if (amIsDevTag(praw)) continue; // 'OfficeDash' · 'src/App.js' — developer tags, not for the crew
+        descParts.push(praw);
       }
       curItem = { name, status, date, sw, desc: descParts.join(" · "), subs: [] };
       curSection.items.push(curItem);
@@ -56228,7 +56334,7 @@ function TimeOffPage({ identity = null, users = [] }) {
   const decided = requests.filter(r => r.status !== "pending" && canApproveReq(r));
   const fmtRange = (r) => (r.end && r.end !== r.start) ? `${r.start} → ${r.end}` : r.start;
   const STATUS = {
-    pending: { bg:"#F3E9CF", color:"#8A6A1E", border:"#EAD9A6", label:"pending" },
+    pending: { bg:C.slateBg, color:C.slateInk, border:C.slateLine, label:"pending" },
     approved:{ bg:"#DEEFE6", color:"#2C5C40", border:"#CDE6D7", label:"approved" },
     denied:  { bg:"#F3E2E2", color:"#9A3030", border:"#EAD2D2", label:"denied" },
   };
@@ -56282,7 +56388,7 @@ function TimeOffPage({ identity = null, users = [] }) {
             style={{width:"100%", padding:"7px 10px", fontSize:14, border:`1px solid ${C.border}`, borderRadius:7, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}/>
         </div>
         <button onClick={submitRequest} disabled={!draft.start||submitting}
-          style={{padding:"8px 18px", fontSize:14, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#000":C.faint, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
+          style={{padding:"8px 18px", fontSize:14, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#fff":C.faint, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
           {submitting?"Submitting…":"Submit request"}
         </button>
       </div>
@@ -56292,7 +56398,7 @@ function TimeOffPage({ identity = null, users = [] }) {
         <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"14px 16px", marginBottom:16}}>
           <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:6}}>
             <span style={{fontSize:14, fontWeight:600}}>Pending approvals</span>
-            <span style={{fontSize:12.5, color:"#8A6A1E", background:"#F3E9CF", border:"1px solid #EAD9A6", borderRadius:99, padding:"1px 8px"}}>{pending.length}</span>
+            <span style={{fontSize:12.5, color:C.slateInk, background:C.slateBg, border:"1px solid #C9D1DC", borderRadius:99, padding:"1px 8px"}}>{pending.length}</span>
             <span style={{fontSize:12.5, color:C.faint}}>{isAdmin?"all crew":"your book"}</span>
           </div>
           {pending.length===0 ? <div style={{fontSize:14, color:C.dim, padding:"8px 0"}}>Nothing waiting on you.</div> : pending.map(r=>card(r, true))}
@@ -56392,7 +56498,7 @@ function AppMapSharePage({ identity = null } = {}) {
   const renderSuggestionCard = (s) => {
     const statusColor = {
       "new":      { bg:"#E0E8F3", color:"#34507F", border:"#CDD9EC" },
-      "reviewing":{ bg:"#F3E9CF", color:"#8A6A1E", border:"#EAD9A6" },
+      "reviewing":{ bg:C.slateBg, color:C.slate, border:C.slateLine },
       "planned":  { bg:"#E6E2F0", color:"#574A7A", border:"#DAD3EC" },
       "built":    { bg:"#DEEFE6", color:"#2C5C40", border:"#CDE6D7" },
       "declined": { bg:"#EEF0F3", color:"#475569", border:"#CDD3DB" },
@@ -56461,9 +56567,8 @@ function AppMapSharePage({ identity = null } = {}) {
       for (const sub of (it.subs || [])) {
         const m = sub.match(dateRe);
         if (m && isNewDate(m[1])) {
-          const swm = sub.match(/SW\s*v?(\d+)/i);
-          const clean = sub.replace(/·\s*shipped\s*\d{4}-\d{2}-\d{2}.*$/i, "").replace(/·\s*SW\s*v?\d+.*$/i, "").trim();
-          out.push({ name: clean || it.name, section: s.title, parent: it.name, date: m[1], sw: swm ? ("v" + swm[1]) : null });
+          const cl = amCleanLine(sub);
+          out.push({ name: cl.text || it.name, section: s.title, parent: it.name, date: cl.date || m[1], sw: cl.sw });
         }
       }
     }
@@ -56504,7 +56609,7 @@ function AppMapSharePage({ identity = null } = {}) {
   const collapseAll= () => setCollapsed(new Set(sections.map(s => s.title)));
 
   const SHIPPED = { bg:"#ECF2EE", color:"#2C5C40", border:"#CDE6D7" };
-  const INFLIGHT = { bg:"#F6F1E6", color:"#8A6A1E", border:"#EAD9A6" };
+  const INFLIGHT = { bg:C.slateBg, color:C.slate, border:C.slateLine };
   const PLANNED = { bg:"#EEF0F3", color:"#475569", border:"#CDD3DB" };
   const badgeStyle = (status) => {
     const c = status === "shipped" ? SHIPPED : status === "in-flight" ? INFLIGHT : PLANNED;
@@ -56513,19 +56618,19 @@ function AppMapSharePage({ identity = null } = {}) {
   const metaBadge = { background:"transparent", color:C.dim, border:`1px solid ${C.border}`, padding:"1px 8px", borderRadius:99, fontSize:12.5, display:"inline-block", fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap" };
 
   return (
-    <div style={{minHeight:"100vh", background:C.bg, color:C.text, fontFamily:"-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif"}}>
+    <div style={{minHeight:"100vh", background:C.bg, color:C.text, fontFamily:"'DM Sans', system-ui, sans-serif"}}>
       <header style={{position:"sticky", top:0, zIndex:10, background:C.bg, borderBottom:`1px solid ${C.border}`, padding:"14px 18px"}}>
-        <h1 style={{fontSize:20, fontWeight:600, margin:"0 0 6px 0", letterSpacing:"-0.01em"}}>Homestead Electric — App Map</h1>
+        <PageHeader title={isInApp ? "App Map" : "Homestead Electric — App Map"} style={{marginBottom:8}}/>
         <div style={{display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", fontSize:13, color:C.dim}}>
-          <span>App SW v181 · {counts.total} features tracked</span>
+          <span>{amManifestVersion(FEATURES_MD_INLINE) ? `App ${amManifestVersion(FEATURES_MD_INLINE)} · ` : ""}{counts.total} features tracked</span>
           <span style={badgeStyle("shipped")}><span style={{width:6,height:6,borderRadius:99,background:SHIPPED.color,display:"inline-block"}}/>{counts.shipped} shipped</span>
           <span style={badgeStyle("in-flight")}><span style={{width:6,height:6,borderRadius:99,background:INFLIGHT.color,display:"inline-block"}}/>{counts["in-flight"]} in-flight</span>
           <span style={badgeStyle("planned")}><span style={{width:6,height:6,borderRadius:99,background:PLANNED.color,display:"inline-block"}}/>{counts.planned} planned</span>
           <span style={{flex:1}}/>
           <input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter features…"
             style={{flex:"0 1 200px", padding:"6px 10px", fontSize:14, border:`1px solid ${C.border}`, borderRadius:6, background:C.card, color:C.text}}/>
-          <button onClick={expandAll}  style={{padding:"6px 12px", fontSize:13, background:C.card, color:C.text, border:`1px solid ${C.border}`, borderRadius:6, cursor:"pointer"}}>Expand all</button>
-          <button onClick={collapseAll} style={{padding:"6px 12px", fontSize:13, background:C.card, color:C.text, border:`1px solid ${C.border}`, borderRadius:6, cursor:"pointer"}}>Collapse all</button>
+          <Btn variant="secondary" onClick={expandAll}>Expand all</Btn>
+          <Btn variant="secondary" onClick={collapseAll}>Collapse all</Btn>
         </div>
       </header>
       <main style={{padding:"12px 18px 60px", maxWidth:1100, margin:"0 auto"}}>
@@ -56640,9 +56745,9 @@ function AppMapSharePage({ identity = null } = {}) {
             <div style={{padding:"2px 14px 8px"}}>
               {whatsNew.slice(0,12).map((n, i) => (
                 <div key={(n.id||n.name)+i} style={{display:"flex", alignItems:"baseline", gap:8, padding:"7px 0", borderBottom: i < Math.min(whatsNew.length,12)-1 ? `1px solid ${C.border}` : "none"}}>
-                  <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
+                  <span style={{fontSize:11, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
                   <div style={{flex:1, minWidth:0}}>
-                    <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? `${n.parent}: ` : ""}{n.name}</span>
+                    <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? <><AmInline text={n.parent}/>: </> : null}<AmInline text={n.name}/></span>
                     <span style={{fontSize:12.5, color:C.faint, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
                   </div>
                   <span style={{fontSize:12.5, color:C.dim, flexShrink:0, fontVariantNumeric:"tabular-nums"}}>{n.date}</span>
@@ -56672,16 +56777,20 @@ function AppMapSharePage({ identity = null } = {}) {
                   {visibleItems.map((it, i) => (
                     <div key={it.name+i} style={{padding:"8px 0", borderBottom: i < visibleItems.length-1 ? `1px solid ${C.border}` : "none"}}>
                       <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:7}}>
-                        <span title={it.status||""} style={{width:7,height:7,borderRadius:99,flexShrink:0,background: it.status==="shipped"?"#2E8B57": it.status==="in-flight"?"#B7791F": it.status==="planned"?"#8A929D":"#CDD3DB"}}/>
-                        <span style={{fontWeight:500}}>{it.name}</span>
-                        {isNewDate(it.date) && <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"1px 6px"}}>NEW</span>}
+                        <span title={it.status||""} style={{width:7,height:7,borderRadius:99,flexShrink:0,background: it.status==="shipped"?"#2E8B57": it.status==="in-flight"?C.slate: it.status==="planned"?"#8A929D":"#CDD3DB"}}/>
+                        <span style={{fontWeight:500}}><AmInline text={it.name}/></span>
+                        {isNewDate(it.date) && <span style={{fontSize:11, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"1px 6px"}}>NEW</span>}
                         {it.status && it.status!=="shipped" && <span style={badgeStyle(it.status)}>{it.status}</span>}
                         {it.date && <span style={{fontSize:12.5, color:C.faint, fontVariantNumeric:"tabular-nums"}}>{it.date}</span>}
                       </div>
-                      {it.desc && <div style={{color:C.dim, fontSize:14, marginTop:2}}>{it.desc}</div>}
+                      {it.desc && <div style={{color:C.dim, fontSize:14, marginTop:2}}><AmInline text={it.desc}/></div>}
                       {it.subs && it.subs.length > 0 && (
                         <div style={{marginTop:6, paddingLeft:18, borderLeft:`2px solid ${C.border}`}}>
-                          {it.subs.map((s, j) => <div key={j} style={{fontSize:13.5, color:C.dim, padding:"2px 0"}}>{s}</div>)}
+                          {it.subs.map((s, j) => { const cl = amCleanLine(s); return (
+                            <div key={j} style={{fontSize:13.5, color:C.dim, padding:"2px 0"}}>
+                              <AmInline text={cl.text}/>{cl.date && <span style={{fontSize:12.5, color:C.faint, marginLeft:6, fontVariantNumeric:"tabular-nums"}}>{cl.date}</span>}
+                            </div>
+                          ); })}
                         </div>
                       )}
                     </div>
@@ -56697,6 +56806,93 @@ function AppMapSharePage({ identity = null } = {}) {
           {isInApp ? "App Map · always current with the live app" : "Share-only page · always current with the live app · no auth required"}
         </div>
       </main>
+    </div>
+  );
+}
+
+// Huddle on-screen view (design pass 2026-10-14). Reads the generated huddle
+// text and lays it out as folded sections: one fold per person (the "=== NAME ==="
+// blocks) plus "Out" for time off, each collapsed with its item count on the
+// header. Read-only; the text itself is untouched.
+function parseHuddleText(text) {
+  const lines = String(text || "").split("\n");
+  const groups = [];
+  let title = "", cur = null, sec = null;
+  const newGroup = (name) => { cur = { name, sections: [] }; groups.push(cur); sec = null; };
+  lines.forEach((ln, i) => {
+    if (i === 0 && /^HUDDLE/.test(ln)) { title = ln; return; }
+    const sep = ln.match(/^=== (.*) ===$/);
+    if (sep) { newGroup(sep[1]); return; }
+    if (!ln.trim()) { sec = null; return; }
+    if (ln.startsWith("- ")) {
+      if (!cur) newGroup("");
+      if (!sec) { sec = { head: "", items: [] }; cur.sections.push(sec); }
+      sec.items.push(ln.slice(2));
+      return;
+    }
+    if (/^\(nothing to report\)$/.test(ln.trim())) return;
+    if (/^OUT /.test(ln) && !cur) newGroup("__out");
+    else if (!cur || cur.name === "__out") newGroup("");
+    sec = { head: ln, items: [] }; cur.sections.push(sec);
+  });
+  return { title, groups };
+}
+function HuddleFolded({ text }) {
+  const { title, groups } = useMemo(() => parseHuddleText(text), [text]);
+  const [open, setOpen] = useState({});
+  const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
+  const scopeName = ((title.match(/\(([^)]+)\)\s*$/) || [])[1]) || "";
+  const cap = (n) => n.split(" ").map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
+  const nice = (n) => n === "__out" ? "Out" : n ? cap(n) : (scopeName && scopeName !== "ALL" ? cap(scopeName) : "Huddle");
+  const headOf = (h) => { const m = h.match(/^(.*?)\s*\((\d+)\)$/); return m ? { label: m[1], n: +m[2] } : { label: h, n: null }; };
+  if (!groups.length) return <div style={{fontSize:14, color:C.dim, padding:"12px 2px"}}>Nothing to report.</div>;
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:8}}>
+      {title && <div style={{fontSize:12.5, fontWeight:700, letterSpacing:"0.06em", color:C.faint}}>{title}</div>}
+      {groups.map((g, gi) => {
+        const k = g.name + "|" + gi;
+        const items = g.sections.reduce((t, s) => t + s.items.length, 0);
+        const isOpen = !!open[k];
+        return (
+          <div key={k} style={{border:`1px solid ${C.border}`, borderRadius:10, background:C.card, overflow:"hidden"}}>
+            <button onClick={() => toggle(k)} aria-expanded={isOpen}
+              style={{display:"flex", alignItems:"center", gap:10, width:"100%", padding:"11px 14px", minHeight:44,
+                background:"none", border:"none", cursor:"pointer", fontFamily:"inherit", textAlign:"left", color:C.text}}>
+              <Icon name={isOpen ? "chevronDown" : "chevronRight"} size={14} stroke={2.25}/>
+              <span style={{fontSize:14, fontWeight:700, flex:1, minWidth:0}}>{nice(g.name)}</span>
+              <span style={{fontSize:12.5, color:C.dim, whiteSpace:"nowrap"}}>
+                {g.sections.filter(s => s.head).length} section{g.sections.filter(s => s.head).length === 1 ? "" : "s"} · {items} item{items === 1 ? "" : "s"}
+              </span>
+            </button>
+            {isOpen && (
+              <div style={{padding:"2px 14px 12px", display:"flex", flexDirection:"column", gap:10}}>
+                {g.sections.map((s, si) => {
+                  const h = headOf(s.head);
+                  return (
+                    <div key={si}>
+                      {s.head && (
+                        <div style={{fontSize:12.5, fontWeight:800, letterSpacing:"0.05em", color:C.dim, marginBottom:4}}>
+                          {h.label}{h.n != null && <span style={{fontWeight:700, color:C.faint}}> · {h.n}</span>}
+                        </div>
+                      )}
+                      {s.items.length > 0 && (
+                        <ul style={{listStyle:"none", margin:0, padding:0, display:"flex", flexDirection:"column", gap:3}}>
+                          {s.items.map((it, ii) => (
+                            <li key={ii} style={{fontSize:14, lineHeight:1.45, color:C.text, paddingLeft:12, position:"relative"}}>
+                              <span aria-hidden="true" style={{position:"absolute", left:0, top:"0.6em", width:5, height:5, borderRadius:99, background:C.muted}}/>
+                              {it}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -56720,6 +56916,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
   }, []);
   const [targetDate, setTargetDate] = useState(initialDate);
   const [copied, setCopied] = useState(false);
+  const [showRaw, setShowRaw] = useState(false); // on-screen view only; never changes the text
   // Crew Planner data is persisted at settings/schedule_<mondayYMD> by the
   // planner UI in SchedulingForecast. We subscribe directly here so the huddle
   // works without needing the planner state passed down through props. The
@@ -57378,7 +57575,10 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
   // another with a "=== NAME ===" separator. Each foreman block reads
   // top-to-bottom like their personal version — sections are NOT mixed across
   // foremen. Unassigned leads so anything without an owner surfaces first.
-  const text = useMemo(() => {
+  // Design pass 2026-10-14: built twice. `text` (full=false) is the message
+  // EXACTLY as before — Copy text / Send to my phone use it unchanged. `fullText`
+  // (full=true) only skips the name truncation, for the folded on-screen view.
+  const [text, fullText] = useMemo(() => { const buildText = (full) => {
     const dateLabel = targetDate.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
     const scopeLabel = scope ? scope.split(" ")[0].toUpperCase() : "ALL";
     const recapDow = (() => {
@@ -57431,8 +57631,8 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
           }
         }
       }
-      const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
-      const title = (t.title || "(no title)").substring(0, 44);
+      const job = t.jobName ? ` [${full ? t.jobName : t.jobName.substring(0,18)}]` : "";
+      const title = full ? (t.title || "(no title)") : (t.title || "(no title)").substring(0, 44);
       return `${title}${job}${due}`;
     };
 
@@ -57482,7 +57682,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
         });
         rtItems.forEach(r => blk.push(`- ${r.jobName} — RT past due ${r.days}d`));
         taskItems.forEach(t => {
-          const ttl = (t.title || "(task)").substring(0, 30);
+          const ttl = full ? (t.title || "(task)") : (t.title || "(task)").substring(0, 30);
           blk.push(`- ${t.jobName} — ${ttl} (${t.days}d overdue)`);
         });
         blk.push("");
@@ -57673,6 +57873,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
     if(blocksRendered === 0) out.push("(nothing to report)");
 
     return out.join("\n");
+  }; return [buildText(false), buildText(true)];
   }, [data, targetDate, targetYMD, yesterdayYMD, scope, jobs]);
 
   // Copy: prefer Clipboard API, fall back to legacy textarea hack on older browsers
@@ -57717,9 +57918,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
 
   return (
     <div style={{maxWidth:680, margin:"0 auto", padding:"16px", color:C.text}}>
-      <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
-        <h2 style={{fontSize:18, fontWeight:700, color:C.text, margin:0}}>End-of-Day Huddle</h2>
-        <div style={{display:"flex", alignItems:"center", gap:6, marginLeft:"auto", flexWrap:"wrap"}}>
+      <PageHeader title="Huddle" subtitle="End-of-day huddle for the next workday" style={{marginBottom:14}} actions={<>
           <button onClick={()=>stepDay(-1)}
             style={{fontSize:12.5, padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`,
               background:C.surface, color:C.text, cursor:"pointer", fontFamily:"inherit"}}>
@@ -57736,8 +57935,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
               background:C.surface, color:C.text, cursor:"pointer", fontFamily:"inherit"}}>
             ▶
           </button>
-        </div>
-      </div>
+      </>}/>
 
       {/* Coordinator book filter — defaults to the signed-in coordinator's
           book; "All" shows the whole company. Narrows the foreman pills + every
@@ -57751,7 +57949,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
               <button key={opt.label} onClick={()=>{ setBook(opt.value); setScope(null); }}
                 style={{fontSize:12.5, fontWeight:active?700:500, padding:"5px 11px", borderRadius:99,
                   border:`1px solid ${active?C.accent:C.border}`, background:active?C.accent:C.surface,
-                  color:active?"#000":C.text, cursor:"pointer", fontFamily:"inherit"}}>
+                  color:active?"#fff":C.text, cursor:"pointer", fontFamily:"inherit"}}>
                 {opt.label}
               </button>
             );
@@ -57772,7 +57970,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
                 fontSize:12.5, fontWeight: active?700:500, padding:"6px 12px",
                 borderRadius:99, border:`1px solid ${active?C.accent:C.border}`,
                 background: active ? C.accent : C.surface,
-                color: active ? "#000" : C.text, cursor:"pointer", fontFamily:"inherit",
+                color: active ? "#fff" : C.text, cursor:"pointer", fontFamily:"inherit",
                 letterSpacing:"0.02em",
               }}>
               {opt.label}
@@ -57795,11 +57993,24 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
         </a>
       </div>
 
-      <pre style={{
-        whiteSpace:"pre-wrap", fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize:14, lineHeight:1.55, color:C.text, background:C.surface,
-        border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", margin:0,
-      }}>{text}</pre>
+      {/* On screen: folded sections (one per person, collapsed). "Show as text"
+          shows the exact message Copy / Send use. */}
+      <div style={{display:"flex", justifyContent:"flex-end", marginBottom:8}}>
+        <button onClick={()=>setShowRaw(r=>!r)} aria-pressed={showRaw}
+          style={{fontSize:12.5, fontWeight:600, color:C.accent, background:"none", border:"none",
+            cursor:"pointer", fontFamily:"inherit", padding:"6px 4px", minHeight:32}}>
+          {showRaw ? "Show as sections" : "Show as text"}
+        </button>
+      </div>
+      {showRaw ? (
+        <pre style={{
+          whiteSpace:"pre-wrap", fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize:14, lineHeight:1.55, color:C.text, background:C.surface,
+          border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", margin:0,
+        }}>{text}</pre>
+      ) : (
+        <HuddleFolded text={fullText}/>
+      )}
 
       <div style={{fontSize:12, color:C.dim, marginTop:10, lineHeight:1.5}}>
         Read-only. Pulled live from current job state — no writes. Default day is
@@ -58023,7 +58234,7 @@ const prepStageColor = (stage) => {
   const idx = PREP_STAGES.indexOf(stage);
   if (idx === -1) return "#5E6670";                 // unset/unknown → gray
   const pct = idx / (PREP_STAGES.length - 1);
-  if (pct < 0.3) return "#B7791F";
+  if (pct < 0.3) return C.slate;
   if (pct < 0.7) return "#2F5BD9";
   return "#3E7D7A";
 };
@@ -58184,7 +58395,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
     const missing = prepMissingItems(job);
     const next = missing[0];
     const ovrOn = !!(job.prepOverride && job.prepOverride.on);
-    const edge = done ? "#2E8B57" : (ovrOn ? "#B7791F" : C.red);
+    const edge = done ? "#2E8B57" : (ovrOn ? C.slate : C.red);
     return (
       <div data-hekey={"prep_"+job.id} style={jobPrepRowStyle(edge)}>
         <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
@@ -58233,7 +58444,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
         </div>
         <div style={{display:"flex", alignItems:"center", gap:8, marginLeft:"auto", flexWrap:"wrap"}}>
           {ovrOn && !done && (
-            <span style={{background:"#B7791F18", border:"1px solid #B7791F55", color:"#B7791F", borderRadius:99,
+            <span style={{background:"#56657A18", border:"1px solid #56657A55", color:C.slate, borderRadius:99,
               padding:"3px 10px", fontSize:11, fontWeight:800, letterSpacing:"0.07em", whiteSpace:"nowrap"}}>
               OVERRIDE · READY TO START
             </span>
@@ -58263,7 +58474,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
                   fontFamily:"inherit", whiteSpace:"nowrap"}}>UNDO OVERRIDE</button>
             : <button onClick={onStartOverride}
                 style={{padding:"8px 13px", borderRadius:99, fontSize:12, fontWeight:700, letterSpacing:"0.05em",
-                  border:"1px solid #B7791F66", background:"#B7791F0D", color:"#B7791F", cursor:"pointer",
+                  border:"1px solid #56657A66", background:"#56657A0D", color:C.slate, cursor:"pointer",
                   fontFamily:"inherit", whiteSpace:"nowrap"}}>START WITHOUT FULL PREP</button>)}
           {/* Undo an accidental PREP NOT NEEDED: once a job is complete via N/A the
               row's other controls (all gated on !done) vanish, so a fully-skipped
@@ -58283,7 +58494,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
         {ovrOn && !done && (
           <div style={{flexBasis:"100%", fontSize:12.5, color:C.dim, fontStyle:"italic",
             borderTop:`1px dashed ${C.border}`, paddingTop:7, marginTop:2}}>
-            <b style={{color:"#B7791F", fontStyle:"normal"}}>Override by {job.prepOverride.by||"?"} · {job.prepOverride.at||""}</b>
+            <b style={{color:C.slate, fontStyle:"normal"}}>Override by {job.prepOverride.by||"?"} · {job.prepOverride.at||""}</b>
             {job.prepOverride.note ? ` — ${job.prepOverride.note}` : ""} · job shows as Rough — Not Started on Upcoming Jobs
           </div>
         )}
@@ -58301,7 +58512,7 @@ function JobPrepDrawerOverride({ job, identity, u }) {
   const ovrOn = !!(job.prepOverride && job.prepOverride.on);
   if (ovrOn) return (
     <div style={{marginTop:10, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
-      <span style={{background:"#B7791F18", border:"1px solid #B7791F55", color:"#B7791F", borderRadius:99,
+      <span style={{background:"#56657A18", border:"1px solid #56657A55", color:C.slate, borderRadius:99,
         padding:"3px 10px", fontSize:11, fontWeight:800, letterSpacing:"0.07em"}}>OVERRIDE · READY TO START</span>
       <span style={{fontSize:12.5, color:C.dim, fontStyle:"italic"}}>
         by {job.prepOverride.by||"?"} · {job.prepOverride.at||""}{job.prepOverride.note?` — ${job.prepOverride.note}`:""}
@@ -58314,12 +58525,12 @@ function JobPrepDrawerOverride({ job, identity, u }) {
   if (!confirming) return (
     <button onClick={()=>{ setConfirming(true); setNote(""); }}
       style={{marginTop:10, padding:"8px 13px", borderRadius:99, fontSize:12, fontWeight:700, letterSpacing:"0.05em",
-        border:"1px solid #B7791F66", background:"#B7791F0D", color:"#B7791F", cursor:"pointer", fontFamily:"inherit"}}>
+        border:"1px solid #56657A66", background:"#56657A0D", color:C.slate, cursor:"pointer", fontFamily:"inherit"}}>
       START WITHOUT FULL PREP</button>
   );
   const missing = prepMissingItems(job);   // N/A items are not outstanding
   return (
-    <div data-hekey={"walk_"+(job&&job.id)} style={{marginTop:10, border:"1px solid #B7791F55", borderRadius:9, padding:"10px 12px", background:"#B7791F08"}}>
+    <div data-hekey={"walk_"+(job&&job.id)} style={{marginTop:10, border:"1px solid #56657A55", borderRadius:9, padding:"10px 12px", background:"#56657A08"}}>
       <div style={{fontSize:11, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5}}>
         Still outstanding — stays tracked</div>
       {missing.map(i=><div key={i.key} style={{fontSize:13, color:C.text, marginLeft:4}}>· {i.label}</div>)}
@@ -58335,8 +58546,8 @@ function JobPrepDrawerOverride({ job, identity, u }) {
             toast.success(`${job.name||"Job"} — cleared to start. Outstanding prep items stay tracked on the Job Prep tab.`);
             setConfirming(false);
           }}
-          style={{padding:"7px 14px", borderRadius:8, border:"1px solid #B7791F88", background:"#B7791F18",
-            color:"#B7791F", fontWeight:700, fontSize:13, fontFamily:"inherit", cursor:"pointer"}}>Mark Ready to Start</button>
+          style={{padding:"7px 14px", borderRadius:8, border:"1px solid #56657A88", background:"#56657A18",
+            color:C.slate, fontWeight:700, fontSize:13, fontFamily:"inherit", cursor:"pointer"}}>Mark Ready to Start</button>
       </div>
     </div>
   );
@@ -58799,12 +59010,12 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
   const chip = (n, k, label, kind) => {
     const state = commItemState(job, n, k); const K = commItemKey(n, k);
     const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
-    const col = isOwed ? "#B7791F" : state === "done" ? "#2E8B57" : state === "na" ? C.dim : C.red;
+    const col = isOwed ? C.slate : state === "done" ? "#2E8B57" : state === "na" ? C.dim : C.red;
     const title = kind === "trk" ? "Derived from the Gear & Submittals / RFI logs — fill the log and this checks itself" : kind === "auto" ? (canEdit ? "Tap: ○ → ✓ → N/A — also checks itself when the log is filled in" : "Read-only") : kind === "photo" ? "Photo item — tap to check, add photos below" : kind === "date" ? "Check + date" : (canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only");
     return (
       <span key={K} onClick={(e) => { e.stopPropagation(); if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }} title={title}
         style={{ display:"inline-flex", alignItems:"center", gap:6, borderRadius:99, fontSize:12, fontWeight:700, letterSpacing:"0.05em", cursor: !canEdit ? "default" : "pointer", userSelect:"none", minHeight:30, padding:"0 11px",
-          border:`1px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${col}`, color: col, background: state === "done" ? "#2E8B570F" : isOwed ? "#B7791F0F" : state === "na" ? C.surface : "#fff" }}>
+          border:`1px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${col}`, color: col, background: state === "done" ? "#2E8B570F" : isOwed ? "#56657A0F" : state === "na" ? C.surface : "#fff" }}>
         <span>{state === "done" ? "✓" : state === "na" ? "—" : "○"}</span>{label}{state === "na" ? " · N/A" : ""}{isOwed ? " · OWED" : ""}{kind === "photo" ? " · PHOTO" : ""}
         {(() => { const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K; const lit = hasNote || nDocs > 0 || on;
           return (
@@ -58866,11 +59077,11 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
             {nxt && <span style={{ fontSize:12.5, color:C.orange, fontWeight:600 }}>NEXT: {nxt[1]}</span>}
             <input value={(st.notes || {})[n] || ""} placeholder="Phase note…" onChange={e => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, notes: { ...(x.notes || {}), [n]: v } })); }} readOnly={!canEdit}
               style={{ flex:"1 1 200px", padding:"6px 9px", border:`1px solid ${C.border}`, borderRadius:7, fontSize:13, fontFamily:"inherit", color:C.text, background:"#fff" }}/>
-            {canEdit && <button onClick={(e) => { e.stopPropagation(); setOv({ n, note:"" }); }} style={{ padding:"5px 10px", borderRadius:7, fontSize:12, fontWeight:700, letterSpacing:"0.04em", border:"1px solid #B7791F", background:"#fff", color:"#B7791F", cursor:"pointer", fontFamily:"inherit" }}>MOVE ON WITH ITEMS OWED</button>}
+            {canEdit && <button onClick={(e) => { e.stopPropagation(); setOv({ n, note:"" }); }} style={{ padding:"5px 10px", borderRadius:7, fontSize:12, fontWeight:700, letterSpacing:"0.04em", border:"1px solid #56657A", background:"#fff", color:C.slate, cursor:"pointer", fontFamily:"inherit" }}>MOVE ON WITH ITEMS OWED</button>}
           </div>
         )}
         {o && (
-          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:12.5, color:"#B7791F", fontWeight:600 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:12.5, color:C.slate, fontWeight:600 }}>
             Moved on {o.at} by {o.by}{o.note ? ` — ${o.note}` : ""}
             {canEdit && <button onClick={(e) => { e.stopPropagation(); undoMoveOn(n); }} style={{ padding:"3px 8px", borderRadius:7, fontSize:12, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, cursor:"pointer", fontFamily:"inherit" }}>↩ Undo</button>}
           </div>
@@ -58885,7 +59096,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
     const state = commItemState(job, n, k); const K = commItemKey(n, k);
     const isOwed = state === "todo" && !!(st.overrides && st.overrides[n]);
     const rec = (st.items || {})[K];
-    const ring = state === "done" ? "#2E8B57" : isOwed ? "#B7791F" : state === "na" ? C.muted : "#9AA3AE";
+    const ring = state === "done" ? "#2E8B57" : isOwed ? C.slate : state === "na" ? C.muted : "#9AA3AE";
     const hasNote = !!itemNote(K); const nDocs = itemDocs(K).length; const on = openItem === K;
     const sub = [kind === "trk" ? trkLabel(K) : null, kind === "auto" ? `or ${trkLabel(K)}` : null, kind === "photo" ? "photo" : null, kind === "date" ? "date" : null,
       state === "done" && rec && rec.by ? `done ${rec.at || ""} by ${String(rec.by).split(" ")[0]}`.replace("  ", " ") : null,
@@ -58893,10 +59104,10 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
     return (
       <div key={K} onClick={(e) => { e.stopPropagation(); if (kind === "trk") { if (onOpenTab) onOpenTab(K.startsWith("4.rfis") ? "RFIs" : K === "2.folders" ? "Plans & Links" : "Gear & Submittals"); return; } tapChip(n, k); }}
         title={kind === "trk" ? "Checks itself from the log — tap to open it" : canEdit ? "Tap: ○ → ✓ → N/A" : "Read-only"}
-        style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderTop:`1px solid ${C.border}`, cursor: canEdit || kind === "trk" ? "pointer" : "default", userSelect:"none", background: isOwed ? "#B7791F08" : "transparent" }}>
+        style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderTop:`1px solid ${C.border}`, cursor: canEdit || kind === "trk" ? "pointer" : "default", userSelect:"none", background: isOwed ? "#56657A08" : "transparent" }}>
         <span style={{ width:22, height:22, borderRadius:6, flexShrink:0, display:"grid", placeItems:"center", fontSize:13, fontWeight:800, border:`2px ${state === "na" ? "dashed" : kind === "trk" ? "double" : "solid"} ${ring}`, background: state === "done" ? "#2E8B57" : "#fff", color: state === "done" ? "#fff" : C.dim }}>{state === "done" ? "✓" : state === "na" ? "—" : ""}</span>
         <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ fontSize:13, fontWeight:700, letterSpacing:"0.03em", color: state === "todo" ? (isOwed ? "#B7791F" : C.text) : C.dim, textDecoration: state === "na" ? "line-through" : "none", overflowWrap:"anywhere" }}>{label}</div>
+          <div style={{ fontSize:13, fontWeight:700, letterSpacing:"0.03em", color: state === "todo" ? (isOwed ? C.slate : C.text) : C.dim, textDecoration: state === "na" ? "line-through" : "none", overflowWrap:"anywhere" }}>{label}</div>
           {sub && <div style={{ fontSize:12, color:C.faint, marginTop:1 }}>{sub}</div>}
         </div>
         <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? "Has a note / docs — tap to open" : "Add a note or attach a doc to this item"}
@@ -58912,7 +59123,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
     const isOpen = phOpen[n] !== undefined ? phOpen[n] : left;
     const o = st.overrides && st.overrides[n];
     const owedHere = o ? ph.items.filter(([k]) => commItemState(job, n, k) === "todo").length : 0;
-    const pill = !left ? ["DONE", C.green] : owedHere ? [`${owedHere} OWED`, "#B7791F"] : n === cur ? ["CURRENT", C.blue] : null;
+    const pill = !left ? ["DONE", C.green] : owedHere ? [`${owedHere} OWED`, C.slate] : n === cur ? ["CURRENT", C.blue] : null;
     const head = !left ? C.teal : n === cur ? C.blue : C.text;
     return (
       <div key={n} style={{ border:`1px solid ${n === cur ? "#2F5BD955" : C.border}`, borderRadius:9, overflow:"hidden", background:"#fff" }}>
@@ -58941,7 +59152,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       <div key={n} style={{ marginTop: 10 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
           <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:"0.08em", color: kind === "cur" ? C.blue : kind === "past" ? C.teal : C.dim }}>PHASE {n} · {ph.label.toUpperCase()}</span>
-          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? "#B7791F" : C.green, background: owedHere.length ? "#B7791F15" : "#1F7A3F15", border:`1px solid ${owedHere.length ? "#B7791F40" : "#1F7A3F40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
+          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? C.slate : C.green, background: owedHere.length ? "#56657A15" : "#1F7A3F15", border:`1px solid ${owedHere.length ? "#56657A40" : "#1F7A3F40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
             : kind === "future" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
             : <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#2F5BD915", border:"1px solid #2F5BD940" }}>CURRENT</span>}
           <span style={{ marginLeft:"auto", fontSize:12, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
@@ -58954,14 +59165,14 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
   };
   const show = []; if (peek && peek !== cur) show.push(peek); if (cur !== null) show.push(cur); show.sort((a, b) => a - b);
   const ms = commOf(job).milestones || {};
-  const edge = owed.length ? "#B7791F" : cur !== null ? C.blue : C.green;
+  const edge = owed.length ? C.slate : cur !== null ? C.blue : C.green;
   if (!open) return (
     <div role="button" tabIndex={0} onClick={() => setOpen(true)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(true); } }} title="Open this job's checklist"
       style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${edge}`, borderRadius:10, padding:"9px 12px", marginBottom:6, cursor:"pointer", userSelect:"none" }}>
       <span style={{ fontSize:12, color:C.dim, width:10 }}>▶</span>
       <span style={{ fontWeight:700, fontSize:14, color:C.text, flex:"1 1 160px", minWidth:0, overflowWrap:"anywhere" }}>{job.name || "Untitled"}</span>
       {job.foreman && job.foreman !== "Unassigned" && <span style={{ fontSize:12.5, color:C.dim, fontWeight:600 }}>{job.foreman}</span>}
-      {owed.length > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:"#B7791F", background:"#B7791F15", border:"1px solid #B7791F40" }}>{owed.length} OWED</span>}
+      {owed.length > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.slate, background:"#56657A15", border:"1px solid #56657A40" }}>{owed.length} OWED</span>}
       {g.late > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.red, background:"#C6282815", border:"1px solid #C6282840" }}>GEAR LATE</span>}
       <span style={{ display:"inline-flex", alignItems:"center", gap:6 }} title={`${prog.done} of ${prog.total} items done or N/A`}>
         <span style={{ width:64, height:5, borderRadius:99, background:C.border, overflow:"hidden", display:"inline-block" }}><span style={{ display:"block", width:`${prog.pct}%`, height:"100%", background: prog.pct === 100 ? C.green : C.blue }}/></span>
@@ -58993,7 +59204,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         </div>
         <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"flex-start" }}>
           <span onClick={() => onOpenTab && onOpenTab("Gear & Submittals")} title="Gear & Submittals log" style={{ fontSize:12, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", cursor: onOpenTab ? "pointer" : "default", color: g.late ? C.red : g.n ? C.teal : C.dim, background: g.late ? "#C6282815" : g.n ? "#3E7D7A15" : "#5E667015", border:`1px solid ${g.late ? "#C6282840" : g.n ? "#3E7D7A40" : "#5E667040"}` }}>GEAR · {g.appr} approved · {g.rel} released{g.late ? ` · ${g.late} LATE` : ""}</span>
-          {owed.length > 0 && <span style={{ fontSize:12, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", color:"#B7791F", background:"#B7791F15", border:"1px solid #B7791F40" }}>{owed.length} OWED IN EARLIER PHASES</span>}
+          {owed.length > 0 && <span style={{ fontSize:12, fontWeight:700, letterSpacing:"0.05em", borderRadius:99, padding:"2px 10px", color:C.slate, background:"#56657A15", border:"1px solid #56657A40" }}>{owed.length} OWED IN EARLIER PHASES</span>}
         </div>
       </div>
       <div style={{ display:"flex", justifyContent:"flex-end", marginTop:10 }}>
@@ -59005,7 +59216,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       </div>
       <div style={{ display:"flex", gap:3, margin:"8px 0 4px" }}>
         {COMM_START_STEPS.map(ph => { const n = ph.n; const cls = cur === null || n < cur ? ((st.overrides && st.overrides[n] && !commPhaseChecked(job, n)) ? "owed" : "done") : n === cur ? "cur" : "up";
-          const bg = cls === "done" ? C.teal : cls === "cur" ? C.blue : cls === "owed" ? "#B7791F" : C.muted;
+          const bg = cls === "done" ? C.teal : cls === "cur" ? C.blue : cls === "owed" ? C.slate : C.muted;
           return <div key={n} onClick={(e) => { e.stopPropagation(); if (view === "list") { setPhOpen(p => ({ ...p, [n]: true })); return; } setPeek(peek === n ? null : n); }} title={`Phase ${n}: ${ph.label}`}
             style={{ flex:1, height:22, borderRadius:5, background:bg, color:"#fff", fontSize:12, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", opacity: cls === "up" ? .55 : 1, outline: peek === n ? `2px solid ${C.text}` : "none", boxShadow: cls === "cur" ? "0 0 0 2px #2F5BD940" : "none" }}>{n}</div>; })}
       </div>
@@ -59014,14 +59225,14 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         ? <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:10 }}>{COMM_START_STEPS.map(listPhase)}</div>
         : show.map(phaseBlock)}
       {ov && (
-        <div style={{ marginTop:10, border:"1px solid #B7791F55", borderRadius:9, padding:"10px 12px", background:"#B7791F08" }} onClick={e => e.stopPropagation()}>
+        <div style={{ marginTop:10, border:"1px solid #56657A55", borderRadius:9, padding:"10px 12px", background:"#56657A08" }} onClick={e => e.stopPropagation()}>
           <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.05em", color:C.red, textTransform:"uppercase", marginBottom:5 }}>Move on from Phase {ov.n} — still owed, stays tracked</div>
           {COMM_PHASE_BY_N[ov.n].items.filter(([k]) => commItemState(job, ov.n, k) === "todo").map(([k, l]) => <div key={k} style={{ fontSize:13, color:C.text, marginLeft:4 }}>· {l}</div>)}
           <textarea value={ov.note} onChange={e => setOv({ ...ov, note: e.target.value })} placeholder="Note (optional) — e.g. gear submittal still with the engineer, GC needs us on underground Monday"
             style={{ width:"100%", padding:"7px 9px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:13.5, fontFamily:"inherit", color:C.text, outline:"none", marginTop:8, resize:"vertical", minHeight:44, boxSizing:"border-box" }}/>
           <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
             <button onClick={() => setOv(null)} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${C.border}`, background:"#fff", color:C.dim, fontWeight:600, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>Cancel</button>
-            <button onClick={confirmMoveOn} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #B7791F88", background:"#B7791F18", color:"#B7791F", fontWeight:700, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>Move on</button>
+            <button onClick={confirmMoveOn} style={{ padding:"7px 14px", borderRadius:8, border:"1px solid #56657A88", background:"#56657A18", color:C.slate, fontWeight:700, fontSize:13, fontFamily:"inherit", cursor:"pointer" }}>Move on</button>
           </div>
         </div>
       )}
@@ -59050,7 +59261,7 @@ function JobStartBoard({ jobs = [], identity, users = [], onSelectJob, onUpdateJ
             <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, letterSpacing:"0.06em", color:C.text, lineHeight:1 }}>JOB START</div>
             <HelpDot section="jobstart"/>
           </div>
-          <div style={{ fontSize:13, color:C.dim, marginTop:4 }}><b>{live.length}</b> active · <b style={{ color:"#B7791F" }}>{owedTotal}</b> items owed in earlier phases · <b style={{ color:C.green }}>{past.length}</b> ready to start / on site</div>
+          <div style={{ fontSize:13, color:C.dim, marginTop:4 }}><b>{live.length}</b> active · <b style={{ color:C.slate }}>{owedTotal}</b> items owed in earlier phases · <b style={{ color:C.green }}>{past.length}</b> ready to start / on site</div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search jobs, GC, project #…" style={{ padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, fontSize:13, background:"#fff", color:C.text, fontFamily:"inherit", outline:"none", minWidth:200 }}/>
@@ -59148,7 +59359,7 @@ function CommRfisTab({ job, u, identity }) {
         <div style={{ fontSize:12.5, color:C.dim, marginBottom:10 }}>Anything that needs clarifying before purchasing or underground. Phase 4's RFI LIST item checks itself once there is a row (or tap it to check it by hand); an open RFI that blocks purchasing shows on the gear pill.</div>
         {rows.length === 0 && <div style={{ fontSize:13, color:C.dim, padding:14, border:`1px dashed ${C.muted}`, borderRadius:10, marginBottom:10 }}>No RFIs yet.</div>}
         {rows.map(r => (
-          <div key={r.id} style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 12px", marginBottom:8, background: r.answeredAt ? C.card : "#B7791F06" }}>
+          <div key={r.id} style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 12px", marginBottom:8, background: r.answeredAt ? C.card : "#56657A06" }}>
             <div style={{ display:"grid", gridTemplateColumns:"70px 1fr", gap:"8px 10px", alignItems:"end" }}>
               <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RFI #</div><input value={r.no || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { no: e.target.value })} style={inp}/></div>
               <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>QUESTION</div><input value={r.question || ""} readOnly={!canEdit} placeholder="Electrical room 112 — gear clearance vs. duct at 9 ft 2 in" onChange={e => setRow(r.id, { question: e.target.value })} style={inp}/></div>
@@ -59260,7 +59471,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
             {included.length} active jobs
             {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
-            {onOvr > 0 && <span style={{color:"#B7791F",fontWeight:700}}> · {onOvr} started on override</span>}
+            {onOvr > 0 && <span style={{color:C.slate,fontWeight:700}}> · {onOvr} started on override</span>}
             <span style={{color:"#1F7A3F",fontWeight:700}}> · {cleared} cleared to start</span>
             {pedsOut > 0 && <span style={{color:C.purple,fontWeight:700}}> · {pedsOut} temp ped{pedsOut===1?"":"s"} out</span>}
             {filtered && <span> · totals are all jobs — lanes below are filtered</span>}
@@ -59340,7 +59551,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
             </div>
           : pHeld.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)} walk={walksByJob.get(j.id)||null} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline} onDeleteRedline={onDeleteRedline}/>)}
         <JobPrepCompleteStrip open={ovrOpen || filtered} onToggle={()=>setOvrOpen(v=>!v)} count={pOvr.length}
-          color="#B7791F" label={`CLEARED TO START — ${pOvr.length} with outstanding items`}>
+          color="#56657A" label={`CLEARED TO START — ${pOvr.length} with outstanding items`}>
           {pOvr.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)} walk={walksByJob.get(j.id)||null} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline} onDeleteRedline={onDeleteRedline}/>)}
         </JobPrepCompleteStrip>
         <JobPrepCompleteStrip open={stripOpen.prep} onToggle={()=>setStripOpen(s=>({...s,prep:!s.prep}))} count={pDone.length}>
@@ -59401,8 +59612,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
               <div style={{display:"flex", gap:8, justifyContent:"flex-end", marginTop:14}}>
                 <button onClick={()=>setOvr(null)} style={{padding:"8px 14px", borderRadius:8, border:`1px solid ${C.border}`,
                   background:"#fff", color:C.dim, fontWeight:600, fontSize:13.5, fontFamily:"inherit", cursor:"pointer"}}>Cancel</button>
-                <button onClick={confirmOverride} style={{padding:"9px 16px", borderRadius:8, border:"1px solid #B7791F88",
-                  background:"#B7791F18", color:"#B7791F", fontWeight:700, fontSize:13.5, fontFamily:"inherit", cursor:"pointer"}}>Mark Ready to Start</button>
+                <button onClick={confirmOverride} style={{padding:"9px 16px", borderRadius:8, border:"1px solid #56657A88",
+                  background:"#56657A18", color:C.slate, fontWeight:700, fontSize:13.5, fontFamily:"inherit", cursor:"pointer"}}>Mark Ready to Start</button>
               </div>
               <div style={{fontSize:12.5, color:C.dim, marginTop:10, lineHeight:1.5}}>
                 Stamps your name + date automatically. The job advances to <b>Rough — Not Started</b> on Upcoming Jobs;
@@ -59435,6 +59646,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
 
 function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getPersonColor, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [showClosed, setShowClosed]       = useState(false);
+  const [openEmptyCols, setOpenEmptyCols] = useState(() => new Set()); // empty columns the user tapped open (design pass 2026-10-14)
   const [editingQuote, setEditingQuote]   = useState(null); // co id
   const [quoteDraft, setQuoteDraft]       = useState("");
   const [statusOpen, setStatusOpen]       = useState(null); // co id
@@ -59722,11 +59934,11 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
             {totalCount} total
             {needsSendingCount > 0 && (
               <span style={{color:"#C62828",fontWeight:700}}> · {needsSendingCount} need sending{draftCount > 0 && (
-                <span style={{color:"#B7791F"}}> ({draftCount} unsubmitted crew draft{draftCount!==1?"s":""})</span>
+                <span style={{color:C.slate}}> ({draftCount} unsubmitted crew draft{draftCount!==1?"s":""})</span>
               )}</span>
             )}
             {pendingCount > 0 && (
-              <span style={{color:"#B7791F",fontWeight:700}}> · {pendingCount} pending</span>
+              <span style={{color:C.slate,fontWeight:700}}> · {pendingCount} pending</span>
             )}
             {approvedCount > 0 && (
               <span style={{color:"#1F7A3F",fontWeight:700}}> · {approvedCount} approved</span>
@@ -59815,9 +60027,28 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
       }}>
         {visibleStatuses.map(status => {
           const items = byStatus[status.value] || [];
+          // An empty column folds to a narrow strip (name + 0, read sideways) so
+          // the busy columns get the room. Tap it to open; tap the header to fold.
+          const emptyOpen = items.length === 0 && openEmptyCols.has(status.value);
+          const toggleEmpty = () => setOpenEmptyCols(prev => { const n = new Set(prev); if (n.has(status.value)) n.delete(status.value); else n.add(status.value); return n; });
+          if (items.length === 0 && !emptyOpen) return (
+            <button key={status.value} type="button" onClick={toggleEmpty}
+              title={`${status.label} — none. Tap to open.`} aria-label={`${status.label}, 0 change orders. Open column`}
+              style={{
+                flex:"0 0 44px", width:44, minHeight:180, alignSelf:"stretch",
+                background:"#F7F8FA", border:`1px solid ${C.border}`, borderTop:`3px solid ${status.color}`,
+                borderRadius:10, cursor:"pointer", fontFamily:"inherit", padding:"10px 0",
+                display:"flex", flexDirection:"column", alignItems:"center", gap:8,
+              }}>
+              <span style={{fontSize:12,fontWeight:800,color:status.color,background:`${status.color}1a`,
+                border:`1px solid ${status.color}44`,borderRadius:99,padding:"1px 7px"}}>0</span>
+              <span style={{writingMode:"vertical-rl",fontSize:12,fontWeight:800,color:status.color,
+                letterSpacing:"0.06em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{status.label}</span>
+            </button>
+          );
           return (
             <div key={status.value} style={{
-              flex:"0 0 280px", maxWidth:280,
+              flex:"1 0 280px", maxWidth:360,
               background:"#F7F8FA",
               border:`1px solid ${C.border}`,
               borderRadius:10,
@@ -59826,11 +60057,11 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
               maxHeight:"calc(100vh - 220px)",
             }}>
               {/* Column header */}
-              <div style={{
+              <div onClick={emptyOpen ? toggleEmpty : undefined} title={emptyOpen ? "Tap to fold this empty column" : undefined} style={{
                 padding:"10px 12px",
                 borderBottom:`1px solid ${C.border}`,
                 display:"flex", alignItems:"center", justifyContent:"space-between", gap:8,
-                background:"#fff",
+                background:"#fff", cursor: emptyOpen ? "pointer" : undefined,
                 borderTopLeftRadius:7, borderTopRightRadius:7,
               }}>
                 <div style={{fontSize:12.5,fontWeight:800,color:status.color,
@@ -59940,8 +60171,8 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             dashed language as the in-job draft bar, so the two
                             surfaces read as one state. */}
                         {!isWalk && isUnsubmittedDraft(co) && (
-                          <span style={{fontWeight:800,color:"#B7791F",background:"#B7791F14",
-                            border:"1px dashed #B7791F88",borderRadius:4,padding:"1px 7px",
+                          <span style={{fontWeight:800,color:C.slate,background:"#56657A14",
+                            border:"1px dashed #56657A88",borderRadius:4,padding:"1px 7px",
                             fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase"}}>
                             Draft — not submitted
                           </span>
@@ -60750,7 +60981,7 @@ const applLevelOf = (conf, load, inCC) => {
   if (c==="" || /series|typical|voltage only|circuit only|conflicting|not confirmed|partial|not found/.test(c)) return "yellow";
   return "green";
 };
-const APPL_YELLOW = "#B7791F";
+const APPL_YELLOW = "#56657A";
 const applFmt = (n) => (Math.round(n*10)/10).toLocaleString();
 
 // Likely-match helper: which Home Runs row in the CC job is this appliance probably entered as?
@@ -62980,7 +63211,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     const flashing = flashKey === r.key;   // v446: row a push / inbox tap deep-linked to
     return (
       <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key} onPointerDownCapture={r.unseen ? () => ack(r.key) : undefined}
-        {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#1F7A3F", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: "#B7791F", fn: () => setSnoozeFor(r.key) } : null }))}
+        {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#1F7A3F", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: C.slate, fn: () => setSnoozeFor(r.key) } : null }))}
         ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: tight ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
@@ -63017,13 +63248,14 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             {r.canWork && r.onWork && !selectMode && (
               <button onClick={e => { e.stopPropagation(); r.onWork(); }} aria-pressed={!!r.working}
                 title={r.working ? "Working on it — tap to stop" : "Let everyone see you're on it"}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "2px 9px", minHeight: 24, borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap",
-                  color: r.working ? "#fff" : C.accent, border: `1px solid ${C.accent}`, background: r.working ? C.accent : "transparent" }}>
-                {r.working ? <><span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: "#fff" }} />Working · {timeAgo(r.working.at)}</> : <>▶ Working on it</>}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap",
+                  /* design pass 2026-10-14: a quiet tint, not a solid blue block — it was louder than URGENT */
+                  color: C.accent, border: `1px solid ${r.working ? C.steelLine : C.accent}`, background: r.working ? C.steelBg : "transparent" }}>
+                {r.working ? <><span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {timeAgo(r.working.at)}</> : <>▶ Working on it</>}
               </button>
             )}
             {!(r.canWork && r.onWork && !selectMode) && r.working && (
-              <span title={`${r.working.by} started this`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 999, whiteSpace: "nowrap", color: C.accent, background: `${C.accent}1F` }}>
+              <span title={`${r.working.by} started this`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 999, whiteSpace: "nowrap", color: C.accent, background: C.steelBg, border: `1px solid ${C.steelLine}` }}>
                 <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {first(r.working.by)} · {timeAgo(r.working.at)}
               </span>
             )}
@@ -63715,13 +63947,13 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
     const w = needWorking(n);
     if (canWork(n)) return (
       <button onClick={() => toggleWork(n)} aria-pressed={!!w} title={w ? "Working on it — tap to stop" : "Let everyone see you're on it"}
-        style={{ fontSize: 13, fontWeight: 700, minHeight: 30, padding: "4px 11px", borderRadius: 99, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-          border: `1px solid ${C.accent}`, background: w ? C.accent : C.card, color: w ? "#fff" : C.accent }}>
-        {w ? <><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 99, background: "#fff" }} />Working · {timeAgo(w.at)}</> : <>▶ Working on it</>}
+        style={{ fontSize: 13, fontWeight: 700, padding: "4px 11px", borderRadius: 99, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+          border: `1px solid ${w ? C.steelLine : C.accent}`, background: w ? C.steelBg : C.card, color: C.accent }}>
+        {w ? <><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 99, background: C.accent }} />Working · {timeAgo(w.at)}</> : <>▶ Working on it</>}
       </button>
     );
     return w ? (
-      <span title={`${w.by} started this`} style={{ fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 99, background: `${C.accent}1F`, color: C.accent, display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+      <span title={`${w.by} started this`} style={{ fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 99, background: C.steelBg, border: `1px solid ${C.steelLine}`, color: C.accent, display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
         <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {String(w.by).split(" ")[0]} · {timeAgo(w.at)}
       </span>
     ) : null;
@@ -63858,13 +64090,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   return (
     <div style={{ padding: narrow ? "12px 12px 110px" : "20px 26px", maxWidth: 1000, margin: "0 auto" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Icon name="clipboard" size={22} stroke={2.25} color={C.dim} />
-          <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Needs</span>
-          <HelpDot section="needs" />
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <PageHeader title="Needs" help="needs" style={{ marginBottom: 18 }} actions={<>
           {/* v539: Group — Due (the two lanes) / Job / Person. */}
           <div role="group" aria-label="Group by" style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
             <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "0 6px 0 10px" }}>Group</span>
@@ -63885,15 +64111,11 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
             ))}
           </div>
           {canAdd && !ON_MOBILE && (
-            <button onClick={() => onQuickAdd && onQuickAdd({})}
-              style={{ padding: "7px 14px", fontSize: 13, fontFamily: "inherit", border: "none",
-                borderRadius: 8, background: C.accent, color: "#fff", cursor: "pointer",
-                display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700 }}>
+            <Btn variant="primary" onClick={() => onQuickAdd && onQuickAdd({})}>
               <Icon name="plus" size={14} stroke={2.5} />Need
-            </button>
+            </Btn>
           )}
-        </div>
-      </div>
+        </>} />
 
       {undoDel && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 14 }}>
@@ -64238,7 +64460,7 @@ function GCPortalPage({ token, deepJobId }) {
     return out;
   };
   const chipStyle = (k) => k==="act" ? {border:"1px solid "+accent+"66",background:accent+"14",color:accent,fontWeight:700}
-    : k==="wait" ? {border:"1px solid #D9BC6B",background:"#F3E9CF",color:"#6E5212",fontWeight:700}
+    : k==="wait" ? {border:"1px solid #C9D1DC",background:C.slateBg,color:C.slateInk,fontWeight:700}
     : k==="ok" ? {border:"1px solid #CDE6D7",background:"transparent",color:"#2C5C40",fontWeight:700}
     : k==="muted" ? {border:"1px solid "+P.line,background:"transparent",color:P.muted,fontWeight:600}
     : {border:"1px solid "+P.line,background:"transparent",color:P.dim,fontWeight:700};
@@ -64275,7 +64497,7 @@ function GCPortalPage({ token, deepJobId }) {
   return wrap(
     <Fragment>
       {showStaleBanner ? (
-        <div style={{background:"#FFF6E5",border:"1px solid #E9CE8F",borderRadius:8,padding:"8px 12px",margin:"12px 0",fontSize:13.5,color:"#7A5C14"}}>
+        <div style={{background:C.slateBg,border:"1px solid #C9D1DC",borderRadius:8,padding:"8px 12px",margin:"12px 0",fontSize:13.5,color:C.slateInk}}>
           Having trouble reaching Homestead's servers — showing the last data we loaded. Refresh if this doesn't update.
         </div>
       ) : null}
@@ -64313,9 +64535,9 @@ function GCPortalPage({ token, deepJobId }) {
           ["Need your input", needTotal + rtNeeds, (needTotal + rtNeeds)>0, false],
           ["Waiting on you", punchWaiting, false, punchWaiting>0],
           ["Completed & closed", dones.length, false, false]].map(([lbl,n,hot,warm],i)=>(
-          <div key={i} style={{background:warm?"#F3E9CF":(hot?accent+"0F":P.card),border:"1px solid "+(warm?"#D9BC6B":(hot?accent+"55":P.line)),borderRadius:10,padding:"10px 16px",minWidth:118}}>
-            <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: warm?"#6E5212":(hot?accent:P.ink)}}>{n}</b>
-            <span style={{fontSize:12.5,color:warm?"#6E5212":P.dim,textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>{lbl}</span>
+          <div key={i} style={{background:warm?C.slateBg:(hot?accent+"0F":P.card),border:"1px solid "+(warm?C.slateLine:(hot?accent+"55":P.line)),borderRadius:10,padding:"10px 16px",minWidth:118}}>
+            <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: warm?C.slateInk:(hot?accent:P.ink)}}>{n}</b>
+            <span style={{fontSize:12.5,color:warm?C.slateInk:P.dim,textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>{lbl}</span>
           </div>
         ))}
       </div>
@@ -64562,7 +64784,7 @@ function GCSection({ P, id, title, count, hot, tone, open, onToggle, children })
       <button onClick={onToggle} aria-expanded={!!open} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",textAlign:"left",flexWrap:"wrap"}}>
         <span style={{fontSize:12.5,letterSpacing:".1em",textTransform:"uppercase",color:open?P.ink:P.muted,fontWeight:700}}>{title}</span>
         {count ? <span style={{fontSize:13,fontWeight:600,color:P.dim}}>{count}</span> : null}
-        {hot ? <span style={{fontSize:13,fontWeight:700,color:tone==="wait"?"#6E5212":P.accent}}>{hot}</span> : null}
+        {hot ? <span style={{fontSize:13,fontWeight:700,color:tone==="wait"?C.slateInk:P.accent}}>{hot}</span> : null}
         <span aria-hidden="true" style={{marginLeft:"auto",color:P.muted,fontSize:13,display:"inline-block",transform:open?"rotate(180deg)":"none",transition:"transform .15s"}}>▾</span>
       </button>
       {open ? <div style={{padding:"0 14px 12px"}}>{children}</div> : null}
@@ -64576,7 +64798,7 @@ function GCPunchSection({ P, label, v, gcLabel, flat }) {
   const total = (Number(v.open)||0) + (Number(v.done)||0);
   if (!total) return null;
   const items = Array.isArray(v.items) ? v.items : [];
-  const W = { bg:"#F3E9CF", ink:"#6E5212", line:"#D9BC6B" }, G = "#2C5C40";
+  const W = { bg:C.slateBg, ink:C.slateInk, line:C.slateLine }, G = "#2C5C40";
   const cutoff = Date.now() - 14*86400000;
   const openItems = items.filter(it => it && !it.done);
   const doneAll = items.filter(it => it && it.done);
@@ -66513,7 +66735,12 @@ function App() {
 
     isDirty.current = true;
 
-    setSyncStatus("saving");
+    // Design pass 2026-10-14: opening a job card pings job.presence (the "Koy
+    // opened Forth at 2:14pm" line on Today). That background write still goes
+    // through this exact path; it just doesn't flash "Saving…" at someone who
+    // changed nothing. Any real edit in the same burst shows the pill as before.
+    const _quietPatch = !!patch && Object.keys(patch).length > 0 && Object.keys(patch).every(k => HE_QUIET_SAVE_KEYS.has(k));
+    if (!_quietPatch) setSyncStatus("saving");
 
     // Accumulate patches for this job so we only write changed fields
     if(patch) {
@@ -66729,9 +66956,14 @@ function App() {
 
         isDirty.current = false;
 
-        setSyncStatus("saved");
+        // A presence-only write (job card opened) stays silent — see _quietPatch.
+        if (!(accumulatedKeys.length > 0 && accumulatedKeys.every(k => HE_QUIET_SAVE_KEYS.has(k)))) {
 
-        setTimeout(()=>setSyncStatus("idle"),2000);
+          setSyncStatus("saved");
+
+          setTimeout(()=>setSyncStatus("idle"),2000);
+
+        }
 
       } catch(e){
 
@@ -67794,6 +68026,7 @@ function App() {
   // server mirrors it into settings/gcInbox on every file/handle (gc_requests
   // itself is function-only). Display only — the inbox recounts from source.
   const [gcInboxOpen, setGcInboxOpen] = useState(0);
+  const [gcLinkCount, setGcLinkCount] = useState(null); // Contractors tab header; known once the links list has loaded
   useEffect(() => onSnapshot(doc(db,"settings","gcInbox"), s => setGcInboxOpen((s.exists() && Number(s.data().open)) || 0), () => {}), []);
   // v446: My Day tab badge — my open task docs that are overdue, due today or urgent.
   // Commercial mode (Koy 2026-09-25: "strictly commercial only … no residential"): a need
@@ -68057,9 +68290,9 @@ function App() {
     // whole-row tint was shouting on top. Reds dropped from 18% to 7%,
     // purples/oranges normalized to 5-6%. The result reads as "calm
     // colored row" instead of "alarmed colored row."
-    const BG    = {red:"rgba(178,58,58,0.07)",purple:"rgba(106,94,151,0.05)",invoice:"rgba(176,106,44,0.06)",hold:"rgba(234,179,8,0.06)",sched:"rgba(59,91,165,0.05)",ready:"rgba(202,138,4,0.05)",none:C.card};
-    const LBORD = {red:"#C62828",purple:"#6A3FB5",invoice:"#C2410C",hold:"#B7791F",sched:"#2F5BD9",ready:"#B7791F",none:rowFc};
-    const BORD  = {red:"2px solid #C62828",purple:"2px solid #6A3FB5",invoice:"2px solid #C2410C",hold:"1px dashed #B7791F",sched:"1px dashed #2F5BD9",ready:"1px dashed #B7791F",none:`1px solid ${C.border}`};
+    const BG    = {red:"rgba(178,58,58,0.07)",purple:"rgba(106,94,151,0.05)",invoice:"rgba(176,106,44,0.06)",hold:"rgba(86,101,122,0.07)",sched:"rgba(59,91,165,0.05)",ready:"rgba(86,101,122,0.05)",none:C.card};
+    const LBORD = {red:"#C62828",purple:"#6A3FB5",invoice:"#C2410C",hold:C.slate,sched:"#2F5BD9",ready:C.slate,none:rowFc};
+    const BORD  = {red:"2px solid #C62828",purple:"2px solid #6A3FB5",invoice:"2px solid #C2410C",hold:"1px dashed #56657A",sched:"1px dashed #2F5BD9",ready:"1px dashed #56657A",none:`1px solid ${C.border}`};
     const isQuote  = job.type==="quote";
     const rowBg    = isQuote ? `rgba(232,144,26,0.07)` : BG[priority];
     const rowLbord = isQuote ? C.accent : LBORD[priority];
@@ -68084,7 +68317,7 @@ function App() {
               {isCommercial(job)&&(()=>{
                 const p=commPhase(job); const st=commOf(job).stage||"";
                 const lbl = p!==null ? `PHASE ${p} · ${COMM_PHASE_BY_N[p].short} · ${commPhaseDone(job,p)}/${COMM_PHASE_BY_N[p].items.length}` : st==="inprogress"?"IN PROGRESS":st==="hold"?"ON HOLD":st==="closeout"?"CLOSEOUT":st==="complete"?"COMPLETE":"READY TO START";
-                const col = p!==null?C.teal:st==="inprogress"?C.blue:st==="hold"?"#B7791F":st==="closeout"?C.purple:C.green;
+                const col = p!==null?C.teal:st==="inprogress"?C.blue:st==="hold"?C.slate:st==="closeout"?C.purple:C.green;
                 return <span title={p!==null?COMM_PHASE_BY_N[p].label:"Commercial stage"} style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{lbl}</span>;
               })()}
 
@@ -68121,7 +68354,7 @@ function App() {
 
             {job.flagged&&job.flagNote&&(
               <div style={{fontSize:12.5,color:C.accent,marginTop:4,fontWeight:500,
-                background:"#F6F1E6",border:`1px solid ${C.accent}44`,
+                background:C.slateBg,border:`1px solid ${C.accent}44`,
                 borderRadius:6,padding:"4px 8px",display:"inline-flex",alignItems:"center",gap:5,maxWidth:"100%"}}>
                 <Icon name="flag" size={11}/> {job.flagNote}
               </div>
@@ -68490,7 +68723,14 @@ function App() {
 
   return (
 
-    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
+    <div style={{minHeight:"100vh",background:"transparent",fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
+      {/* Page backdrop + longhorn watermark (design pass 2026-10-14). It used to be a
+          z-index 0 layer that painted OVER every non-positioned card. Now it is one
+          fixed layer at z-index -1, under all content. The page colour (C.bg) lives in
+          the same layer so the watermark is not hidden behind an opaque root
+          background; the 85% C.bg wash over the logo is the old 0.15 opacity. */}
+      <div aria-hidden="true" style={{position:"fixed",inset:0,zIndex:-1,pointerEvents:"none",
+        background:`linear-gradient(rgba(238,240,243,.85),rgba(238,240,243,.85)), url(/icon-192.png) center center / 320px 320px no-repeat, ${C.bg}`}}/>
       <HEConfirmHost/>
       <HEPhotoLightboxHost/>
       <HEToastHost/>
@@ -68729,7 +68969,7 @@ function App() {
                               </span>
                               {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
                               {c.divisionHint==="resi" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>RESI</span>}
-                              {!c.divisionHint && <span title="No Business Group on the Simpro job — imports into whichever mode you're in" style={{fontSize:9,fontWeight:700,color:C.amber,marginLeft:6,verticalAlign:"middle"}}>? group unset — imports as {mode==="commercial"?"Commercial":"Residential"}</span>}
+                              {!c.divisionHint && <span title="No Business Group on the Simpro job — imports into whichever mode you're in" style={{fontSize:11,fontWeight:700,color:C.slate,marginLeft:6,verticalAlign:"middle"}}>? group unset — imports as {mode==="commercial"?"Commercial":"Residential"}</span>}
                             </div>
                             {c.address && (
                               <div style={{fontSize:12.5,color:C.dim,marginTop:3}}>{c.address}</div>
@@ -68845,11 +69085,6 @@ function App() {
         </div>
       )}
 
-      <div style={{position:"fixed",inset:0,backgroundImage:"url(/icon-192.png)",
-
-        backgroundRepeat:"no-repeat",backgroundPosition:"center center",
-
-        backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
 
 
       {/* v497 A (G2): a new version has downloaded — one tap reloads into it. */}
@@ -68859,22 +69094,20 @@ function App() {
         </div>
       )}
       {/* ── COMMAND NAV (dark console) ── */}
-      <div data-he-nav="1" style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
+      <div data-he-nav="1" className="he-hdr" style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
         {/* ROW 1 — flag wordmark + live status */}
-        <div style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
-          <div style={{width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
-            <div style={{color:"#fff",fontSize:7,lineHeight:1,letterSpacing:"2px"}}>★★★</div>
-            <div style={{color:"#fff",fontSize:7,lineHeight:1,letterSpacing:"3px",paddingLeft:2}}>★★</div>
-            <div style={{color:"#fff",fontSize:7,lineHeight:1,letterSpacing:"2px"}}>★★★</div>
+        <div className="he-hdr-row1" style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
+          <div className="he-hdr-mark" onClick={goHome} title="Homestead Electric — Job Board" style={{cursor:"pointer",width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
+            <HeFlagStars/>
           </div>
-          <div onClick={goHome} className="flagtext flag-stripes" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
+          <div onClick={goHome} className="flagtext flag-stripes he-hdr-word" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
-            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#E3B85F";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{syncStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#E3B85F",border:"1px solid #E3B85F66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{syncStatus==="error"&&<span style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
-            <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
-            <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
+            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#66A8FF";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{syncStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#E3B85F",border:"1px solid #E3B85F66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{syncStatus==="error"&&<span style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
+            <span className="he-hdr-jobs" style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
+            <span className="he-hdr-jobs" style={{font:"500 11px system-ui",color:D.text}}>{jobs.length} active jobs</span>
           </div>
           {can(identity,"commercial.view") && (
-            <div style={{display:"flex",alignItems:"center",gap:6}} title="Residential / Commercial — only changes what you see on this device">
+            <div className="he-hdr-mode" style={{display:"flex",alignItems:"center",gap:6}} title="Residential / Commercial — only changes what you see on this device">
               <div style={{display:"flex",border:`1px solid ${D.chipLine}`,borderRadius:99,overflow:"hidden",background:D.chipBg}}>
                 {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => (
                   <button key={k} onClick={()=>{ if (mode!==k) { setMode(k); toast.success(k==="commercial" ? "Commercial — only commercial jobs everywhere" : "Residential"); } }}
@@ -68885,12 +69118,12 @@ function App() {
               <HelpDot section="commercialmode"/>
             </div>
           )}
-          <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
+          <div className="he-hdr-wx" style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
             <HeaderDateWeather/>
           </div>
         </div>
         {/* ROW 2 — nav tabs */}
-        <div style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
+        <div className="he-hdr-tabs" style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
           : NAV_MAIN_TABS.filter(t=>navTabVisible(t,myLiveRec,mode))
@@ -69152,7 +69385,7 @@ function App() {
 
       {/* Offline / stale-data banner */}
       {(!isOnline || (syncHealth.synced && (syncHealth.fromCache || !syncHealth.healthy))) && (
-        <div style={{background:'#B7791F',color:'#000',padding:'8px 16px',
+        <div style={{background:C.slate,color:'#fff',padding:'8px 16px',
           display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:700}}>
           <Icon name="wifiOff" size={14} stroke={2.5}/>
           <span>{!isOnline
@@ -69202,9 +69435,15 @@ function App() {
           actionText = "Reconnect";
           onAction = handleEnableNotifs;
         }
+        // Short wording for the phone's one-line version (design pass 2026-10-14).
+        const shortLabel = notifIssue === 'permission-denied' ? "Notifications blocked"
+          : notifIssue === 'no-tokens' ? "Notifications disconnected"
+          : notifIssue === 'ios-not-installed' ? "Notifications off"
+          : "Notifications not turned on";
+        const fold = view !== "myday"; // My Day always shows the full banner
 
-        return (
-          <div style={{background:bg, borderBottom:`1px solid ${border}`,
+        const fullBanner = (
+          <div className={"he-notif-full" + (fold ? " he-nf-fold" : "")} style={{background:bg, borderBottom:`1px solid ${border}`,
             padding:'10px 16px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
             <div style={{flex:1, minWidth:200}}>
               <div style={{fontSize:13, fontWeight:700, color:C.text, display:"inline-flex", alignItems:"center", gap:8}}>
@@ -69222,6 +69461,31 @@ function App() {
               </button>
             )}
           </div>
+        );
+        if (!fold) return fullBanner;
+        return (
+          <>
+            {fullBanner}
+            <details className="he-notif-compact" style={{background:bg, borderBottom:`1px solid ${border}`}}>
+              <summary style={{display:"flex", alignItems:"center", gap:8, padding:"8px 12px", minHeight:40,
+                fontSize:13, fontWeight:700, color:isCritical ? C.red : C.text}}>
+                <Icon name="bell" size={14} stroke={2.25}/>
+                <span style={{flex:1, minWidth:0}}>{shortLabel} — <span style={{textDecoration:"underline"}}>fix</span></span>
+                <Icon name="chevronDown" size={14} stroke={2.25}/>
+              </summary>
+              <div style={{padding:"0 12px 10px", display:"flex", flexDirection:"column", gap:8, alignItems:"flex-start"}}>
+                <div style={{fontSize:13, fontWeight:700, color:C.text}}>{label}</div>
+                {hint && <div style={{fontSize:12.5, color:C.dim, lineHeight:1.4}}>{hint}</div>}
+                {actionText && (
+                  <button onClick={onAction}
+                    style={{fontSize:13, fontWeight:700, background:C.blue, color:'#fff', border:'none',
+                      borderRadius:7, padding:'8px 16px', minHeight:40, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap'}}>
+                    {actionText}
+                  </button>
+                )}
+              </div>
+            </details>
+          </>
         );
       })()}
 
@@ -69247,7 +69511,7 @@ function App() {
 
         return isIOS && isChrome ? (
 
-          <div style={{background:"#B7791F",color:"#000",padding:"10px 16px",fontSize:13,
+          <div style={{background:C.slateBg,color:C.text,borderBottom:`1px solid ${C.slateLine}`,padding:"10px 16px",fontSize:13,
 
             display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 
@@ -69280,9 +69544,31 @@ function App() {
         .cmd-cta:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(59,91,165,.45)}
         @keyframes cmdPulse{0%{box-shadow:0 0 0 0 rgba(52,209,127,.55)}70%{box-shadow:0 0 0 8px rgba(52,209,127,0)}100%{box-shadow:0 0 0 0 rgba(52,209,127,0)}}
         .cmd-live{animation:cmdPulse 2.2s ease-out infinite}
+        /* ── Phone header (design pass 2026-10-14): one short row — flag mark,
+           live status, Resi/Commercial switch; date/weather and the wordmark
+           drop out, the guide hint becomes just the "?"; tabs stay scrollable. ── */
+        @media (max-width: 599px){
+          .he-hdr .he-hdr-row1{padding:8px 12px 4px !important;gap:10px !important;flex-wrap:nowrap !important}
+          .he-hdr .he-hdr-word,.he-hdr .he-hdr-jobs,.he-hdr .he-hdr-wx{display:none !important}
+          .he-hdr .he-hdr-mark{width:32px !important;height:27px !important}
+          .he-hdr .he-hdr-mode{margin-left:auto}
+          .he-hdr .he-hdr-mode button{padding:5px 9px !important;font-size:11px !important;letter-spacing:.06em !important}
+          .he-hdr .he-helpdot-hint{display:none !important}
+          .he-hdr .he-hdr-tabs{padding:0 8px 6px !important}
+        }
+        /* Notification problem banner: the full banner everywhere on wide screens
+           and on My Day; on phones, other tabs get one tappable line that opens
+           the same instructions. Never dismissible (notifications are critical). */
+        .he-notif-compact{display:none}
+        @media (max-width: 599px){
+          .he-notif-full.he-nf-fold{display:none !important}
+          .he-notif-compact{display:block}
+        }
+        .he-notif-compact > summary{list-style:none;cursor:pointer}
+        .he-notif-compact > summary::-webkit-details-marker{display:none}
         @keyframes taskWarn {
-          0%,100% { box-shadow: 0 0 10px rgba(202,138,4,0.12), 0 2px 6px rgba(202,138,4,0.08); }
-          50%      { box-shadow: 0 0 18px rgba(202,138,4,0.28), 0 2px 10px rgba(202,138,4,0.16); }
+          0%,100% { box-shadow: 0 0 10px rgba(194,65,12,0.12), 0 2px 6px rgba(194,65,12,0.08); }
+          50%      { box-shadow: 0 0 18px rgba(194,65,12,0.24), 0 2px 10px rgba(194,65,12,0.14); }
         }
         .task-pulse { animation: taskPulse 2s ease-in-out infinite; }
         .task-warn  { animation: taskWarn 2.5s ease-in-out infinite; }
@@ -70583,12 +70869,16 @@ function App() {
       )}
 
       {view==="contractors"&&can(identity,"users.manage")&&(
-        <div style={{maxWidth:1120,margin:"0 auto",padding:"14px 12px 60px"}}>
-          <SettingsSection title="CONTRACTOR PORTAL — REQUESTS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
+        <div style={{maxWidth:1120,margin:"0 auto",padding:"16px 18px 60px"}}>
+          <PageHeader title="Contractors" help="gcportal"
+            subtitle="Requests that came in from contractor portals, and the portal links you have shared."/>
+          <SettingsSection title="CONTRACTOR PORTAL — REQUESTS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}
+            count={gcInboxOpen} countLabel="waiting">
             <GCPortalInbox jobs={jobs} identity={identity} onUpdateJob={updateJob} onSelectJob={setSelected}/>
           </SettingsSection>
-          <SettingsSection title="CONTRACTOR PORTAL LINKS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
-            <GCPortalManager jobs={jobs} identity={identity}/>
+          <SettingsSection title="CONTRACTOR PORTAL LINKS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}
+            count={gcLinkCount} countLabel={gcLinkCount==null?"":gcLinkCount===1?"link":"links"}>
+            <GCPortalManager jobs={jobs} identity={identity} onCount={setGcLinkCount}/>
           </SettingsSection>
         </div>
       )}
@@ -70607,10 +70897,8 @@ function App() {
               look at it, but it's still one click away. */}
           <div style={{padding:"20px 26px 0"}}>
             {/* "?" → public/sops/settings.html (version lock, Devices, Force Update, backups). */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.dim}}>SETTINGS</span>
-              <HelpDot section="settings"/>
-            </div>
+            <PageHeader title="Settings" help="settings"
+              subtitle="Team, colours, notifications, devices and backups. Each section opens on tap."/>
             <SettingsSection title="ACTIVITY LOG" defaultOpen={false}>
               <ActivityLog jobs={jobs} embedded={true}/>
             </SettingsSection>
@@ -70625,7 +70913,7 @@ function App() {
               <AppHelpBox/>
             </SettingsSection>
             {getAccess(identity)==="admin" && (
-              <SettingsSection title="FLEET NOTIFICATION HEALTH" accent={{bg:"#F3E9CF", border:"#D9BC6B", text:"#78350f"}} defaultOpen={false}>
+              <SettingsSection title="FLEET NOTIFICATION HEALTH" accent={{bg:C.slateBg, border:C.slateLine, text:C.slateInk}} defaultOpen={false}>
                 <FleetHealth identity={identity}/>
               </SettingsSection>
             )}
