@@ -45,6 +45,10 @@
       /* v537: a touch screen gets finger-sized buttons; body text sits at 500 weight so 12-13 px type holds up in sunlight. */
       body { font-weight: 500; }
       @media (pointer: coarse) { button, [role="button"] { min-height: 40px; } }
+      /* Design pass 2026-10-14: buttons that set a smaller inline minHeight / a
+         close "✕" minWidth use var(--he-tap, <desktop size>). Unset on a mouse
+         (the desktop size holds); 40px on a touch screen. */
+      @media (pointer: coarse) { :root { --he-tap: 40px; } }
       .he-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
       * { -webkit-tap-highlight-color: transparent; }
     </style>

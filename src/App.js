@@ -1922,9 +1922,6 @@ const C = {
   slate:"#56657A", slateBg:"#E8ECF2", slateLine:"#C9D1DC", slateInk:"#3F4B5C",
   steelBg:"#EAF0FC", steelLine:"#C7D5F5", // light steel-blue tint (highlight rows)
 };
-// Job fields whose background writes don't flash the Saving… pill (the write
-// itself is unchanged). Only the open-a-job presence ping today.
-const HE_QUIET_SAVE_KEYS = new Set(["presence"]);
 // ── Dark command-header tokens (Slate + Flag redesign) ──
 const D = {
   bg1:"#141821", bg2:"#1B2030", hair:"#2A2F3A",
@@ -1956,7 +1953,7 @@ const CO_STATUSES_NEW = [
   {value:"approved",      label:"Approved",                color:"#1F7A3F"},
   {value:"scheduled",     label:"Scheduled",               color:"#2F5BD9", hasDate:true},
   {value:"completed",     label:"Work Completed",          color:"#2E8B57"},
-  {value:"converted",     label:"Converted to RT",         color:"#6E7682"},
+  {value:"converted",     label:"Converted to RT",         color:C.faint},
   {value:"denied",        label:"Denied",                  color:"#C62828"},
 ];
 // Redline-walk lifecycle (Jeromy's flow): every job gets a redline walk, then a
@@ -2083,7 +2080,7 @@ const TEMP_PED_STATUSES = [
   {value:"completed", label:"Completed",            color:"#2E8B57"},
 ];
 const QUICK_JOB_STATUSES = [
-  {value:"new",       label:"New",                  color:"#6E7682"},
+  {value:"new",       label:"New",                  color:C.faint},
   {value:"scheduled", label:"Scheduled",            color:"#2F5BD9", hasDate:true},
   {value:"inprogress",label:"In Progress",          color:"#6A7BAA"},
   {value:"complete",  label:"Complete",             color:"#2E8B57"},
@@ -2093,7 +2090,7 @@ const QUICK_JOB_TYPES = [
   {value:"service",    label:"Service Call",    color:"#C2410C"},
   {value:"panel",      label:"Panel Upgrade",   color:"#2F5BD9"},
   {value:"tempped",    label:"Temp Ped Pickup", color:"#6A3FB5"},
-  {value:"other",      label:"Other",           color:"#6E7682"},
+  {value:"other",      label:"Other",           color:C.faint},
 ];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 // Job display label with the Simpro job number in front, so the crew can read
@@ -5391,7 +5388,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         <div style={{padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
                           {NOTIF_CATEGORIES.map(cat=>(
                             <div key={cat.label}>
-                              <div style={{fontSize:9,fontWeight:800,color:C.dim,letterSpacing:"0.1em",
+                              <div style={{fontSize:11,fontWeight:800,color:C.dim,letterSpacing:"0.1em",
                                 textTransform:"uppercase",marginBottom:5}}>{cat.label}</div>
                               <div style={{display:"flex",flexDirection:"column",gap:4}}>
                                 {cat.items.map(item=>{
@@ -5402,8 +5399,8 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                                       <input type="checkbox" checked={on} onChange={e=>setKey(item.key,e.target.checked)}
                                         style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
                                       <span style={{fontSize:12.5,color:on?C.text:C.faint}}>{item.label}</span>
-                                      {!isDefault&&on&&<span style={{fontSize:9,color:C.orange,fontWeight:700}}>custom</span>}
-                                      {isDefault&&!on&&<span style={{fontSize:9,color:C.dim,fontWeight:700}}>off</span>}
+                                      {!isDefault&&on&&<span style={{fontSize:11,color:C.orange,fontWeight:700}}>custom</span>}
+                                      {isDefault&&!on&&<span style={{fontSize:11,color:C.dim,fontWeight:700}}>off</span>}
                                     </label>
                                   );
                                 })}
@@ -5792,7 +5789,7 @@ function EmailModal({ subject, body, onClose }) {
 
               <button onClick={()=>removeCustom(email)}
 
-                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
 
             </div>
 
@@ -5944,7 +5941,7 @@ function HeaderDateWeather(){
     <div style={{textAlign:"right",lineHeight:1}}>
       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:".07em",color:"#F4F1EA",lineHeight:1,whiteSpace:"nowrap"}}>{wd} · {md}</div>
       {wx && (wx.hi!=null || wx.cond) && (
-        <div style={{font:"600 9px system-ui",letterSpacing:".08em",textTransform:"uppercase",color:"#8A93A3",marginTop:3,whiteSpace:"nowrap"}}>
+        <div style={{font:"600 11px system-ui",letterSpacing:".08em",textTransform:"uppercase",color:D.text,marginTop:3,whiteSpace:"nowrap"}}>
           {wx.hi!=null?`${wx.hi}° / ${wx.lo}°`:""}{wx.cond?`${wx.hi!=null?" · ":""}${wx.cond}`:""}
         </div>
       )}
@@ -5969,8 +5966,8 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
   const isUnset = !isScheduled && !isNeedsSched && !isOngoing;
   const color = isScheduled ? "#2F5BD9"
               : isNeedsSched ? "#C2410C"
-              : isOngoing ? "#6E7682"
-              : "#99A0AA";
+              : isOngoing ? C.dim
+              : C.faint;
   const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
   const fmtDay = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return String(dt.getDate()); } catch(_){return "";} };
   const sameMonth = (a, b) => { try { const da=new Date(a), db=new Date(b); return !isNaN(da)&&!isNaN(db) && da.getMonth()===db.getMonth() && da.getFullYear()===db.getFullYear(); } catch(_){return false;} };
@@ -5998,7 +5995,7 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
                   : isOngoing ? "Ongoing"
                   : "Set schedule";
   const pad = size === "sm" ? "1px 7px" : "2px 8px";
-  const fs  = size === "sm" ? 9 : 10;
+  const fs  = 11; // design pass 2026-10-14: 11px floor (was sm 9 / md 10)
   const borderStyle = isOngoing ? "dashed" : "solid";
   const nextTitle = isScheduled ? "Needs Sched" : isNeedsSched ? "Ongoing" : isOngoing ? "On Schedule" : "On Schedule";
   return (
@@ -6040,7 +6037,7 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
           title="Re-sync from Simpro schedule"
           style={{
             background:"none", border:"none", cursor:"pointer",
-            color:"#99A0AA", padding:2, display:"inline-flex", alignItems:"center",
+            color:C.faint, padding:2, display:"inline-flex", alignItems:"center",
             fontSize:12,
           }}>
           <Icon name="rotateCw" size={size==="sm"?9:10}/>
@@ -6224,7 +6221,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
 
   const chip = (label, on, onClick, ghost) => (
     <button onMouseDown={e => e.preventDefault()} onClick={onClick}
-      style={{ fontSize: 14, padding: "8px 12px", minHeight: 36, borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
+      style={{ fontSize: 14, padding: "8px 12px", minHeight:"var(--he-tap, 36px)", borderRadius: 999, fontFamily: "inherit", cursor: "pointer",
         border: `1px ${ghost ? "dashed" : "solid"} ${on ? C.accent : C.border}`, background: on ? C.accent : C.card, color: on ? "#fff" : C.dim, fontWeight: on ? 700 : 500 }}>
       {label}
     </button>
@@ -6244,7 +6241,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
     const on = open === key;
     return (
       <button key={key} onMouseDown={e => e.preventDefault()} onClick={() => setOpen(o => o === key ? null : key)} aria-expanded={on} title={`Change ${lbl.toLowerCase()}`}
-        style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 14, padding: "8px 9px 8px 11px", minHeight: 38, borderRadius: 9, fontFamily: "inherit", cursor: "pointer",
+        style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 14, padding: "8px 9px 8px 11px", minHeight:"var(--he-tap, 38px)", borderRadius: 9, fontFamily: "inherit", cursor: "pointer",
           border: `1px solid ${on ? C.accent : (hot ? C.red : C.border)}`, background: on ? `${C.accent}14` : C.card, color: C.text, boxShadow: "0 1px 2px rgba(20,30,50,.06)" }}>
         <Icon name={iconName} size={13} stroke={2.25} />
         <span style={{ color: C.dim, fontWeight: 500 }}>{lbl}:</span>
@@ -6494,7 +6491,7 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
         <TB label="• List"  title="Bullet list"   action={()=>execList('insertUnorderedList')} on={active.ul}/>
         <TB label="1. List" title="Numbered list" action={()=>execList('insertOrderedList')}   on={active.ol}/>
         <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
-        <span style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>COLOR</span>
+        <span style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>COLOR</span>
         {RICH_COLORS.map(c=>(
           <button key={c} onPointerDown={e=>{e.preventDefault(); e.stopPropagation(); exec('foreColor',c);}}
             style={{width:swatchSize,height:swatchSize,borderRadius:99,background:c,flexShrink:0,
@@ -6502,7 +6499,7 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
               WebkitTapHighlightColor:"transparent"}}/>
         ))}
         <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
-        <TB label="✕ clear" title="Clear formatting" action={()=>exec('removeFormat')} s={{color:C.dim,fontSize:ON_MOBILE?11:10}}/>
+        <TB label="✕ clear" title="Clear formatting" action={()=>exec('removeFormat')} s={{color:C.dim,fontSize:11}}/>
       </div>
       <div style={{position:"relative"}}>
         {empty&&<div style={{position:"absolute",inset:0,padding:"7px 10px",fontSize:13,
@@ -6646,7 +6643,7 @@ const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = fal
   const popRef = useHePop(variant + "|" + (typeof children === "string" ? children : ""));
   const v = PILL_VARIANTS[variant] || PILL_VARIANTS.neutral;
   const sizing = size === "xs"
-    ? { fontSize: 9,  padding: "1px 6px" }
+    ? { fontSize: 11,  padding: "1px 6px" }
     : size === "md"
       ? { fontSize: 12.5, padding: "3px 10px" }
       : { fontSize: 12, padding: "2px 8px" };
@@ -7302,7 +7299,7 @@ function SopModal({ sopKey, onClose }) {
             </a>
           )}
           <button onClick={onClose} aria-label="Close guide"
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:`1px solid ${C.border}`,borderRadius:8,
               color:C.dim,cursor:"pointer",padding:"5px 12px",fontSize:14,fontFamily:"inherit"}}>✕</button>
         </div>
 
@@ -7518,7 +7515,7 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#2F5BD9", 
                     justifyContent:"center",gap:3,background:"#F4F6F8",color:"#475569",
                     padding:"4px",overflow:"hidden",textAlign:"center"}}>
                   <Icon name="fileText" size={20} stroke={1.75}/>
-                  <span style={{fontSize:8,fontWeight:600,lineHeight:1.1,wordBreak:"break-all",
+                  <span style={{fontSize:11,fontWeight:600,lineHeight:1.1,wordBreak:"break-all",
                     overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",
                     WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>
                     {(p.name||"file").length > 18 ? (p.name||"file").slice(0,15)+"…" : (p.name||"file")}
@@ -8088,7 +8085,7 @@ function HEToastHost() {
             <div style={{flex:1,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{t.message}</div>
             <button onClick={()=>setToasts(ts=>ts.filter(x=>x.id!==t.id))}
               aria-label="Dismiss"
-              style={{background:'none',border:'none',color:'#8A929D',cursor:'pointer',
+              style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:D.text,cursor:'pointer',
                 padding:'2px',lineHeight:0,display:'inline-flex'}}><Icon name="x" size={14}/></button>
           </div>
         );
@@ -8340,12 +8337,12 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
           style={{flex:1,background:'transparent',border:'none',outline:'none',
             fontSize:13,fontWeight:700,color:entry.label?C.text:C.dim,fontFamily:'inherit',cursor:'text'}}/>
         {entry.urgent && (
-          <span style={{fontSize:9,fontWeight:800,color:'#C62828',background:'rgba(178,58,58,0.12)',
+          <span style={{fontSize:11,fontWeight:800,color:'#C62828',background:'rgba(178,58,58,0.12)',
             border:'1px solid rgba(178,58,58,0.35)',borderRadius:99,padding:'1px 7px',flexShrink:0,
             whiteSpace:'nowrap',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="alertTriangle" size={9} stroke={2.5}/> Urgent</span>
         )}
         {entry.materialAdded && (
-          <span style={{fontSize:9,fontWeight:700,color:'#1F7A3F',background:'rgba(22,163,74,0.1)',
+          <span style={{fontSize:11,fontWeight:700,color:'#1F7A3F',background:'rgba(22,163,74,0.1)',
             border:'1px solid rgba(22,163,74,0.3)',borderRadius:99,padding:'1px 7px',flexShrink:0,
             whiteSpace:'nowrap',cursor:'pointer'}} title="Click to clear"
             onClick={e=>{e.stopPropagation();onUpd({materialAdded:false});}}
@@ -8361,7 +8358,7 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
           <Icon name="alertTriangle" size={10} stroke={2.5}/> {entry.urgent ? 'Urgent' : ''}
         </button>
         <button onClick={e=>{e.stopPropagation();onDel();}}
-          style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
+          style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',cursor:'pointer',color:C.dim,
             fontSize:14,lineHeight:1,padding:'0 2px',fontFamily:'inherit'}}>×</button>
       </div>
 
@@ -8410,10 +8407,10 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
                   Add to PO
                 </Btn>
                 <button onClick={()=>{setMatOpen(false);setMatText('');setMatSource('');}}
-                  style={{background:'none',border:'none',color:C.dim,cursor:'pointer',
+                  style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:C.dim,cursor:'pointer',
                     fontSize:14,padding:'0 2px',fontFamily:'inherit'}}>✕</button>
               </div>
-              <span style={{fontSize:9,color:C.dim}}>Adds to newest open PO for that source, or creates a new one</span>
+              <span style={{fontSize:11,color:C.dim}}>Adds to newest open PO for that source, or creates a new one</span>
             </div>
           )}
         </div>
@@ -8457,7 +8454,7 @@ function LegacyInstructionsToggle({ items, onChange, color, onAddMaterial }) {
           fontFamily:'inherit', fontSize:12.5, fontWeight:700, color: C.dim,
         }}>
         <span>{open ? '▾' : '▸'} Legacy instructions {list.length > 0 ? `· ${list.length} saved` : ''}</span>
-        <span style={{ fontSize:9, fontWeight:600, color: C.dim, fontStyle:'italic' }}>
+        <span style={{ fontSize:11, fontWeight:600, color: C.dim, fontStyle:'italic' }}>
           archive — new items go in Job Notes
         </span>
       </button>
@@ -8560,7 +8557,7 @@ function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial})
             Undo
           </button>
           <button onClick={()=>{ if(undoToast.timer) clearTimeout(undoToast.timer); setUndoToast(null); }}
-            style={{background:'none',border:'none',color:'#8A929D',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:D.text,cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</button>
         </div>
       )}
     </div>
@@ -8883,7 +8880,7 @@ function JobNoteLine({
                 literal text — no risk of injecting markup via `<` / `>`. */}
             {text
               ? text
-              : <span style={{color:'#8A929D'}}>(empty line)</span>}
+              : <span style={{color:C.faint}}>(empty line)</span>}
           </div>
         )}
 
@@ -9065,7 +9062,7 @@ function JobNoteLine({
             } else if(co == null) {
               // CO not found in the array — likely deleted. Gray + "removed"
               // hint so the user knows the link is broken.
-              pillBg = '#EEF0F3'; pillFg = '#6E7682'; pillBorder = '#E1E4E9';
+              pillBg = '#EEF0F3'; pillFg = C.faint; pillBorder = '#E1E4E9';
               statusLabel = 'CO REMOVED';
             }
           }
@@ -9110,7 +9107,7 @@ function JobNoteLine({
       {editing && !isPromoted && (
         <button onClick={()=>onRemove && onRemove(line.id)}
           title="Remove line"
-          style={{background:'none', border:'none', color:C.dim, cursor:'pointer',
+          style={{minWidth:"var(--he-tap, 32px)",background:'none', border:'none', color:C.dim, cursor:'pointer',
             fontSize:14, lineHeight:1, padding:'2px 4px', fontFamily:'inherit', flexShrink:0}}>×</button>
       )}
     </div>
@@ -9187,7 +9184,7 @@ function JobNoteDestinationPicker({
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
           <div style={{ fontSize:14, fontWeight:800, color: C.text, flex:1 }}>{title}</div>
           <button onClick={onClose}
-            style={{ background:'none', border:'none', color: C.dim, fontSize:20, cursor:'pointer', padding:'0 4px' }}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)", background:'none', border:'none', color: C.dim, fontSize:20, cursor:'pointer', padding:'0 4px' }}>✕</button>
         </div>
 
         {/* Preview of the selected lines */}
@@ -10890,7 +10887,7 @@ function JobNoteCard({
         <span
           title={isSpec ? 'Detail note — reference only (not triageable)' : undefined}
           style={{
-            fontSize:9, fontWeight:800, color: thisPhaseColor, letterSpacing:'0.08em',
+            fontSize:11, fontWeight:800, color: thisPhaseColor, letterSpacing:'0.08em',
             background: thisPhaseColor + '14', border:`1px solid ${thisPhaseColor}44`,
             borderRadius:99, padding:'1px 7px', flexShrink:0, whiteSpace:'nowrap',
             display:'inline-flex', alignItems:'center', gap:3,
@@ -10949,7 +10946,7 @@ function JobNoteCard({
         {migrated && (
           <span title="Migrated from legacy Instructions"
             style={{
-              fontSize:9, fontWeight:700, color:'#6E7682',
+              fontSize:11, fontWeight:700, color:C.faint,
               background:'#EEF0F3', border:`1px solid ${C.border}`,
               borderRadius:99, padding:'1px 6px', flexShrink:0, whiteSpace:'nowrap',
             }}>↪ migrated</span>
@@ -11068,7 +11065,7 @@ function JobNoteCard({
             </span>
             <button onClick={()=>setShareOpen(false)}
               title="Close"
-              style={{
+              style={{minWidth:"var(--he-tap, 32px)",
                 marginLeft:'auto', background:'none', border:'none',
                 color: C.dim, fontSize:14, cursor:'pointer', padding:0, lineHeight:1,
               }}>×</button>
@@ -11296,7 +11293,7 @@ function JobNoteCard({
                       marginLeft:5, display:'inline-block',
                       minWidth:14, height:14, lineHeight:'14px', padding:'0 3px',
                       borderRadius:99, background: colors[t], color:'#fff',
-                      fontSize:9, fontWeight:800, verticalAlign:'middle',
+                      fontSize:11, fontWeight:800, verticalAlign:'middle',
                     }}>
                       {count}
                     </span>
@@ -11401,7 +11398,7 @@ function JobNoteCard({
             }}
             style={{
               fontSize:12.5, fontWeight:800, letterSpacing:'0.04em',
-              background:C.slate, color:'#fff',
+              background:C.accent, color:'#fff',
               border:'none', borderRadius:99,
               padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
             }}>
@@ -11410,8 +11407,8 @@ function JobNoteCard({
           <button
             onClick={()=>{ if (undoToast.timer) clearTimeout(undoToast.timer); setUndoToast(null); }}
             title="Dismiss"
-            style={{
-              background:'transparent', border:'none', color:'#99A0AA',
+            style={{minWidth:"var(--he-tap, 32px)",
+              background:'transparent', border:'none', color:D.text,
               fontSize:14, lineHeight:1, cursor:'pointer', padding:'0 2px',
               fontFamily:'inherit',
             }}>
@@ -11876,7 +11873,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
   } else {
     return null;
   }
-  const fs = size === 'xs' ? 9 : 10;
+  const fs = 11; // 11px floor (was xs 9 / 10)
   const pad = size === 'xs' ? '1px 5px' : '2px 6px';
   const label = count > 1 ? `from ${count} notes` : `from note · ${title}`;
   return (
@@ -11886,7 +11883,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
       style={{
         display:'inline-flex', alignItems:'center', gap:3,
         fontSize:fs, fontWeight:600,
-        color:'#6E7682', background:'#EEF0F3', border:'1px solid #E1E4E9',
+        color:C.faint, background:'#EEF0F3', border:'1px solid #E1E4E9',
         borderRadius:99, padding:pad, lineHeight:1.3,
         cursor: onClick ? 'pointer' : 'default',
         maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
@@ -12190,21 +12187,21 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   <RichText html={item.text}/>
                 </HeStrikeSpan>
                 {(item.addedBy||item.checkedBy||(filterIds!=null)||(scheduledRTMap&&scheduledRTMap[item.id]&&!item.done))&&(
-                  <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+                  <span style={{fontSize:11,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                     {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
                     {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
-                    {item.fromQC&&!item.voided&&<span style={{fontSize:9,fontWeight:700,background:'#F4ECE2',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
-                    {item.fromGC&&!item.voided&&<span title={item.addedBy||"From the general contractor"} style={{fontSize:9,fontWeight:700,background:'#EAEEF6',color:'#2E477D',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD9EC',lineHeight:1.6}}>GC</span>}
+                    {item.fromQC&&!item.voided&&<span style={{fontSize:11,fontWeight:700,background:'#F4ECE2',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
+                    {item.fromGC&&!item.voided&&<span title={item.addedBy||"From the general contractor"} style={{fontSize:11,fontWeight:700,background:'#EAEEF6',color:'#2E477D',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD9EC',lineHeight:1.6}}>GC</span>}
                     {item.voided&&(
                       <span title={item.voidReason ? `Voided: ${item.voidReason}${item.voidedBy?` · ${item.voidedBy}`:''}${item.voidedAt?` · ${item.voidedAt}`:''}` : 'Voided from QC'}
-                        style={{fontSize:9,fontWeight:700,background:'#EEF0F3',color:'#6E7682',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD3DB',lineHeight:1.6}}>
+                        style={{fontSize:11,fontWeight:700,background:'#EEF0F3',color:C.faint,borderRadius:99,padding:'1px 6px',border:'1px solid #CDD3DB',lineHeight:1.6}}>
                         Voided{item.voidReason ? ` — ${item.voidReason.length>28?item.voidReason.slice(0,28)+'…':item.voidReason}` : ''}
                       </span>
                     )}
                     {scheduledRTMap&&scheduledRTMap[item.id]&&!item.done&&(
                       <span onClick={(e)=>{e.stopPropagation(); onJumpToRT && onJumpToRT(scheduledRTMap[item.id].rtId);}}
                         title={`On scheduled Return Trip${scheduledRTMap[item.id].crew?' — '+scheduledRTMap[item.id].crew:''}. Tap to view.`}
-                        style={{fontSize:9,fontWeight:700,background:'#EAEEF6',color:'#34507F',
+                        style={{fontSize:11,fontWeight:700,background:'#EAEEF6',color:'#34507F',
                           borderRadius:99,padding:'1px 7px',border:'1px solid #CDD9EC',lineHeight:1.6,
                           cursor: onJumpToRT ? 'pointer':'default',whiteSpace:'nowrap'}}>
                         <Icon name="calendar" size={11} style={{verticalAlign:'-1px',marginRight:3}}/>{scheduledRTMap[item.id].date || 'scheduled'}{scheduledRTMap[item.id].crew?` · ${scheduledRTMap[item.id].crew}`:''}
@@ -12212,7 +12209,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                     )}
                     {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
                       background:filterIds.has(item.id)?'#DEEFE6':'#EEF0F3',
-                      color:filterIds.has(item.id)?'#1F7A3F':'#99A0AA'}}>
+                      color:filterIds.has(item.id)?'#1F7A3F':C.faint}}>
                       {filterIds.has(item.id)?'Shared':'Not shared'}
                     </span>}
                   </span>
@@ -12262,13 +12259,13 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 <span style={{display:"inline-flex",alignItems:"center",opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
                   color:(item.photos||[]).length>0?C.text:C.dim}}>
                   {uploadingId===item.id ? <Spinner size={14}/> : <Icon name="paperclip" size={14}/>}
-                  {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue,marginLeft:2}}>{(item.photos||[]).length}</sup>}
+                  {(item.photos||[]).length>0&&<sup style={{fontSize:11,fontWeight:700,color:C.blue,marginLeft:2}}>{(item.photos||[]).length}</sup>}
                 </span>
               </label>
             )}
 
             <button onClick={async () => { if(!await showConfirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
-              style={{ background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>✕</button>
+              style={{minWidth:"var(--he-tap, 32px)", background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>✕</button>
 
           </div>
 
@@ -12330,7 +12327,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
               </span>
               <button onClick={()=>{setWaitingEditId(item.id);setWaitingText(item.waitingOn||'');}}
-                style={{fontSize:9,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                style={{fontSize:11,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
             </div>
@@ -12348,7 +12345,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 </span>
               )}
               <button onClick={()=>{setMaterialEditId(item.id);setMaterialText(item.materialNeeded||'');}}
-                style={{fontSize:9,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                style={{fontSize:11,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
             </div>
@@ -12433,7 +12430,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                           color:"#475569",display:"flex",flexDirection:"column",
                           alignItems:"center",justifyContent:"center",gap:3,padding:"4px"}}>
                         <Icon name="fileText" size={22} stroke={1.75}/>
-                        <span style={{fontSize:8,fontWeight:600,lineHeight:1.1,wordBreak:"break-all",
+                        <span style={{fontSize:11,fontWeight:600,lineHeight:1.1,wordBreak:"break-all",
                           overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",
                           WebkitLineClamp:2,WebkitBoxOrient:"vertical",textAlign:"center"}}>
                           {(photo.name||"file").length > 16 ? (photo.name||"file").slice(0,13)+"…" : (photo.name||"file")}
@@ -12594,7 +12591,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   const qBtn = (sectionId) => onAddQuestion ? (
     <button onClick={e=>{e.stopPropagation();setOpenQFor(openQFor===sectionId?null:sectionId);setQuestionDraft('');}}
       style={{background:'none',border:`1px solid ${C.orange}66`,borderRadius:99,cursor:'pointer',
-        color:C.orange,fontSize:9,fontWeight:800,padding:'1px 6px',fontFamily:'inherit',lineHeight:1.4,
+        color:C.orange,fontSize:11,fontWeight:800,padding:'1px 6px',fontFamily:'inherit',lineHeight:1.4,
         opacity: openQFor===sectionId ? 1 : 0.65}}>
       ? Q
     </button>
@@ -12615,7 +12612,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
         Add
       </Btn>
       <button onClick={()=>{setOpenQFor(null);setQuestionDraft('');}}
-        style={{background:'none',border:'none',color:C.dim,cursor:'pointer',fontSize:14,padding:'0 2px'}}>✕</button>
+        style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:C.dim,cursor:'pointer',fontSize:14,padding:'0 2px'}}>✕</button>
     </div>
   ) : null;
 
@@ -12700,7 +12697,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
             <span style={{ fontSize: 12, color: C.dim, fontWeight: 700, letterSpacing: '0.08em' }}>GENERAL</span>
             {qBtn('general')}
-            {qConfirmedFor==='general'&&<span style={{fontSize:9,fontWeight:700,color:'#1F7A3F'}}>✓ added</span>}
+            {qConfirmedFor==='general'&&<span style={{fontSize:11,fontWeight:700,color:'#1F7A3F'}}>✓ added</span>}
           </div>
           {qInput('general')}
           {jobId && (data.photos?.length > 0 || true) && (
@@ -12772,7 +12769,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                     </span>}
                   <div onClick={e=>e.stopPropagation()} style={{display:'flex',alignItems:'center',gap:8,marginLeft:'auto'}}>
                     {qBtn(room.id)}
-                    {qConfirmedFor===room.id&&<span style={{fontSize:9,fontWeight:700,color:'#1F7A3F'}}>✓ added</span>}
+                    {qConfirmedFor===room.id&&<span style={{fontSize:11,fontWeight:700,color:'#1F7A3F'}}>✓ added</span>}
                   </div>
                 </div>
                 {open && (
@@ -12982,7 +12979,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
               fontSize:13,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
           <Btn onClick={addFloor} variant="add" style={{fontSize:12.5,padding:"5px 12px"}}>Add</Btn>
           <button onClick={()=>setAddingFloor(false)}
-            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
         </div>
       ) : (
         <Btn onClick={()=>setAddingFloor(true)} variant="add"
@@ -13363,10 +13360,10 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
           </button>
         )}
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
-          style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:13,flexShrink:0,padding:'0 2px'}}>✕</button>
+          style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:13,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
       {(item.addedBy||item.checkedBy)&&(
-        <div style={{fontSize:9,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
+        <div style={{fontSize:11,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
           {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
           {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?` · ${item.checkedAt}`:''}</span>}
         </div>
@@ -13407,7 +13404,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         </button>
       </div>
       <div style={{fontSize:12,color:C.dim,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
-        <span style={{fontWeight:700,color:'#6E7682'}}>Void reason:</span>
+        <span style={{fontWeight:700,color:C.faint}}>Void reason:</span>
         <span style={{color:C.faint}}>{item.voidReason || '(no reason recorded)'}</span>
         {(item.voidedBy||item.voidedAt) && (
           <span>· by {item.voidedBy || '—'}{item.voidedAt ? ` · ${item.voidedAt}` : ''}</span>
@@ -13633,7 +13630,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
             Undo
           </button>
           <button onClick={()=>{if(undoToast.timer)clearTimeout(undoToast.timer);setUndoToast(null);}}
-            style={{background:'none',border:'none',color:'#8A929D',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:D.text,cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</button>
         </div>
       )}
 
@@ -14027,7 +14024,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                         Picked up
                       </label>
                       {o.pickedUp&&o.pickedUpBy&&(
-                        <span style={{fontSize:9,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
+                        <span style={{fontSize:11,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
                       )}
                     </div>
                   </>) : (<>
@@ -14045,7 +14042,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                         Delivered to shop
                       </label>
                       {o.deliveredToShop&&o.deliveredToShopBy&&(
-                        <span style={{fontSize:9,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>✓ by {o.deliveredToShopBy}{o.deliveredToShopAt?" · "+o.deliveredToShopAt:""}</span>
+                        <span style={{fontSize:11,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>✓ by {o.deliveredToShopBy}{o.deliveredToShopAt?" · "+o.deliveredToShopAt:""}</span>
                       )}
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:2}}>
@@ -14057,7 +14054,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                         Order sent to supplier
                       </label>
                       {o.ordered&&o.orderedBy&&(
-                        <span style={{fontSize:9,color:"#2F5BD9",fontWeight:600,paddingLeft:20}}>✓ by {o.orderedBy}{o.orderedAt?" · "+o.orderedAt:""}</span>
+                        <span style={{fontSize:11,color:"#2F5BD9",fontWeight:600,paddingLeft:20}}>✓ by {o.orderedBy}{o.orderedAt?" · "+o.orderedAt:""}</span>
                       )}
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:2}}>
@@ -14069,7 +14066,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                         Picked up
                       </label>
                       {o.pickedUp&&o.pickedUpBy&&(
-                        <span style={{fontSize:9,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
+                        <span style={{fontSize:11,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
                       )}
                     </div>
                   </>)}
@@ -14642,7 +14639,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
           <button onClick={()=>updCount(item.id,1)}
             style={{...btnBase,border:`1px solid ${C.accent}`,background:`${C.accent}18`,color:C.accent}}>+</button>
           <button onClick={()=>del(item.id)}
-            style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",
               fontSize:16,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
         </div>
       ))}
@@ -15049,7 +15046,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null,homeRuns
                           <div style={{color:"var(--text)"}}>
                             <RichText html={it.text}/>
                           </div>
-                          <div style={{fontSize:9,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
+                          <div style={{fontSize:11,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
                             <span>{it.floor}{it.room && it.room !== "General" ? ` · ${it.room}` : ""}</span>
                             {it.isHotcheck && <span style={{fontWeight:700,color:"#C62828"}}>HOT CHECK</span>}
                             {it.checkedBy && <span>· closed by {it.checkedBy}</span>}
@@ -15086,7 +15083,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null,homeRuns
                         <Icon name="check" size={11} color={col}/>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{color:"var(--text)"}}>{it.name}</div>
-                          <div style={{fontSize:9,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
+                          <div style={{fontSize:11,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
                             {it.meta && <span>{it.meta}</span>}
                             {it.by && <span>· pulled by {it.by}</span>}
                           </div>
@@ -15111,11 +15108,11 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null,homeRuns
                 )}
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",flexShrink:0,gap:2}}>
                   <span style={{fontSize:12.5,color:C.accent,whiteSpace:"nowrap",fontWeight:600}}>{u.date||"—"}</span>
-                  {u.addedBy&&<span style={{fontSize:9,color:C.dim,whiteSpace:"nowrap"}}>by {u.addedBy}</span>}
+                  {u.addedBy&&<span style={{fontSize:11,color:C.dim,whiteSpace:"nowrap"}}>by {u.addedBy}</span>}
                 </div>
                 <span style={{flex:1,fontSize:13,color:C.text,lineHeight:1.5}}>{u.text}</span>
                 {!showPicker&&<button onClick={async ()=>{ if(!await showConfirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
-                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:12.5,flexShrink:0}}>✕</button>}
+                  style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:12.5,flexShrink:0}}>✕</button>}
               </div>
             ))}
           </div>
@@ -15179,7 +15176,7 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
   return (
     <div style={{ marginBottom: 14 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", padding: "6px 2px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", minHeight: 36 }}>
+        style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", padding: "6px 2px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", minHeight:"var(--he-tap, 36px)" }}>
         <span style={{ color: C.dim, fontSize: 12, width: 10, display: "inline-block" }}>{open ? "▾" : "▸"}</span>
         <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.06em", color: C.purple }}>Approved COs</span>
         <span style={{ fontSize: 12.5, color: C.dim }}>{openN} open{doneN ? ` · ${doneN} done` : ""}</span>
@@ -15211,8 +15208,8 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
                   CO #{idx + 1} · {co.desc || "(no description)"}
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 12.5, color: C.dim }}>
-                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: done ? C.green : "#1F7A3F18", color: done ? "#fff" : C.green }}>{done ? "Done" : "Approved"}</span>
-                  {co.quoteNumber && <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: "#6A3FB522", color: C.purple }}>Quote #{co.quoteNumber}</span>}
+                  <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: done ? C.green : "#1F7A3F18", color: done ? "#fff" : C.green }}>{done ? "Done" : "Approved"}</span>
+                  {co.quoteNumber && <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: "#6A3FB522", color: C.purple }}>Quote #{co.quoteNumber}</span>}
                   {co.time && <span style={{ border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 6px", background: C.surface }}>Est. {co.time}</span>}
                   {co.coStatusDate && !done && <span>approved {co.coStatusDate}</span>}
                   <span>{co.createdBy ? `by ${first(co.createdBy)} · ` : ""}{co.createdAt || ""}</span>
@@ -15225,7 +15222,7 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
             {showBody && (
               <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: mats.length || photos.length ? "minmax(0,3fr) minmax(0,2fr)" : "minmax(0,1fr)", gap: 8 }}>
                 <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", background: "#fff", minWidth: 0 }}>
-                  <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, marginBottom: 5 }}>Task</div>
+                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, marginBottom: 5 }}>Task</div>
                   {lines.length === 0 && <div style={{ fontSize: 13, color: C.dim, fontStyle: "italic" }}>No task lines on this CO.</div>}
                   {lines.map((l, i) => l.kind === "head"
                     ? <div key={i} style={{ fontSize: 12.5, fontWeight: 800, color: C.text, margin: i === 0 ? "0 0 2px" : "7px 0 2px" }}>{l.text}</div>
@@ -15240,11 +15237,11 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
                 {(mats.length > 0 || photos.length > 0) && (
                   <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", background: "#fff", minWidth: 0 }}>
                     {mats.length > 0 && <>
-                      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, marginBottom: 5 }}>Material</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, marginBottom: 5 }}>Material</div>
                       <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{mats.map((m, i) => <div key={i}>{m}</div>)}</div>
                     </>}
                     {photos.length > 0 && <>
-                      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, margin: mats.length ? "8px 0 5px" : "0 0 5px" }}>Photos</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.dim, margin: mats.length ? "8px 0 5px" : "0 0 5px" }}>Photos</div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {photos.map(p => <a key={p.id || p.url} href={p.url} target="_blank" rel="noreferrer"><img src={p.url} alt={p.name || "CO photo"} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: `1px solid ${C.border}` }} /></a>)}
                       </div>
@@ -15512,8 +15509,8 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
           {r.name}{r.partNo && <span style={{color:C.dim,fontSize:12,marginLeft:6}}>{r.partNo}</span>}
           {from && <span style={{display:"block",fontSize:12,color:C.dim,whiteSpace:"normal"}}>from {from}</span>}
         </div>
-        <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",textAlign:"right",color:C.dim}}><b style={{color:C.text,fontWeight:600}}>{fmtQty(r.required)}</b><span style={{fontSize:9,marginLeft:3}}>{unit}</span></div>
-        <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",textAlign:"right",color:C.dim}}><b style={{color:C.text,fontWeight:600}}>{fmtQty(r.assigned)}</b><span style={{fontSize:9,marginLeft:3}}>{unit}</span></div>
+        <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",textAlign:"right",color:C.dim}}><b style={{color:C.text,fontWeight:600}}>{fmtQty(r.required)}</b><span style={{fontSize:11,marginLeft:3}}>{unit}</span></div>
+        <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",textAlign:"right",color:C.dim}}><b style={{color:C.text,fontWeight:600}}>{fmtQty(r.assigned)}</b><span style={{fontSize:11,marginLeft:3}}>{unit}</span></div>
         <span style={{fontSize:12,fontWeight:700,borderRadius:5,padding:"2px 7px",whiteSpace:"nowrap",textAlign:"center",justifySelf:"end",background:badge.bg,color:badge.fg}}>{badge.t}</span>
       </div>
     );
@@ -15528,7 +15525,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
     </div>
   );
   const colHead = (
-    <div style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) 82px 82px 104px",gap:8,padding:"2px 2px 4px",fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim}}>
+    <div style={{display:"grid",gridTemplateColumns:"minmax(150px,1fr) 82px 82px 104px",gap:8,padding:"2px 2px 4px",fontSize:11,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim}}>
       <span>Item</span><span style={{textAlign:"right"}}>Required</span><span style={{textAlign:"right"}}>Assigned</span><span/>
     </div>
   );
@@ -15627,7 +15624,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
               : k==="prebuild" ? "Prebuild"
               : k;
     return (
-      <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",
+      <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",
         padding:"1px 6px",borderRadius:99,background:bg,color:fg,marginRight:6}}>{label}</span>
     );
   };
@@ -15710,7 +15707,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
         <div key={sectionName} style={{marginBottom:14}}>
           <button type="button" onClick={()=>toggleSection(sectionName)}
             style={{display:"flex",alignItems:"center",gap:6,width:"100%",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,
-              textAlign:"left",fontFamily:"inherit",padding:"6px 2px 5px",cursor:"pointer",minHeight:36,marginBottom:4,
+              textAlign:"left",fontFamily:"inherit",padding:"6px 2px 5px",cursor:"pointer",minHeight:"var(--he-tap, 36px)",marginBottom:4,
               fontSize:12,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim}}>
             <span style={{fontSize:12,width:10,display:"inline-block"}}>{secOpen ? "▾" : "▸"}</span>
             <span>{sectionName}</span>
@@ -15764,9 +15761,9 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, stock=null
                 {isOpen && rowsToShow.length > 0 && (
                   <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>{stockScroll(<>
                     {colHead}
-                    {wireRows.length > 0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Wire &amp; cable</div>}
+                    {wireRows.length > 0 && <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Wire &amp; cable</div>}
                     {wireRows.map(r => stockRow(r, true))}
-                    {otherRows.length > 0 && wireRows.length > 0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Everything else</div>}
+                    {otherRows.length > 0 && wireRows.length > 0 && <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",textTransform:"uppercase",color:C.dim,margin:"6px 0 2px"}}>Everything else</div>}
                     {otherRows.map(r => stockRow(r, false))}
                   </>)}</div>
                 )}
@@ -16141,7 +16138,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 {ccFieldink[String(o.id)]?.shareId && (
                   <a href={FIELDINK_VIEWER_BASE + ccFieldink[String(o.id)].shareId} target="_blank" rel="noreferrer"
                      onClick={e=>e.stopPropagation()}
-                     style={{fontSize:9,fontWeight:700,color:'#2F5BD9',background:'#E0E8F3',border:'1px solid #2F5BD944',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
+                     style={{fontSize:11,fontWeight:700,color:'#2F5BD9',background:'#E0E8F3',border:'1px solid #2F5BD944',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
                     <Icon name="mapPin" size={10} stroke={2.5}/> Marked up on plan — view
                   </a>
                 )}
@@ -16210,7 +16207,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 {(o.coStatus||"needs_sending")==="needs_sending"&&(
                   <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
                     background:"#C6282808",border:"1px solid #C6282833"}}>
-                    <div style={{fontSize:9,fontWeight:700,color:"#C62828",letterSpacing:"0.08em",marginBottom:6}}>SEND BY DATE</div>
+                    <div style={{fontSize:11,fontWeight:700,color:"#C62828",letterSpacing:"0.08em",marginBottom:6}}>SEND BY DATE</div>
                     <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
                       style={{width:140,fontSize:12.5,borderColor:"#C6282855",background:"#C6282808"}}/>
                   </div>
@@ -16220,7 +16217,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 {o.coStatus==="scheduled"&&(
                   <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
                     background:"#2F5BD908",border:"1px solid #2F5BD933"}}>
-                    <div style={{fontSize:9,fontWeight:700,color:"#2F5BD9",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULED DATE</div>
+                    <div style={{fontSize:11,fontWeight:700,color:"#2F5BD9",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULED DATE</div>
                     <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
                       style={{width:140,fontSize:12.5,borderColor:"#2F5BD955",background:"#2F5BD908"}}/>
                   </div>
@@ -16273,7 +16270,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
             {/* Converted note + undo */}
             {isConverted&&(
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:8,flexWrap:"wrap"}}>
-                <div style={{fontSize:12.5,color:"#6E7682",fontStyle:"italic"}}>
+                <div style={{fontSize:12.5,color:C.faint,fontStyle:"italic"}}>
                   Converted to Return Trip — see Return Trips tab.
                 </div>
                 <button onClick={async ()=>{
@@ -16501,7 +16498,7 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#6A3FB5"}}>LINK PUNCH ITEMS</div>
           <button onClick={onClose}
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,fontSize:14,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,fontSize:14,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
         </div>
         <div style={{fontSize:12.5,color:C.dim,marginBottom:10}}>
           Tick items from this job's punch list to attach them to this return trip. They stay on the punch list — this just references them, so checking them off anywhere flips them everywhere. {selected.size} selected.
@@ -16836,7 +16833,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                         </select>
                         {rtDef.hasDate&&(
                           <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:rtDef.color}}>
+                            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:rtDef.color}}>
                               {t.rtStatus==="needs"?"SCHEDULE BY":"SCHEDULED FOR"}
                             </div>
                             <DateInp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
@@ -16984,10 +16981,10 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                         display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,
                         background:C.surface,color:C.dim,padding:6,textAlign:"center",boxSizing:"border-box"}}>
                       <Icon name="fileText" size={24} stroke={1.75}/>
-                      <span style={{fontSize:9,fontWeight:700,lineHeight:1.15,wordBreak:"break-all",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical"}}>
+                      <span style={{fontSize:11,fontWeight:700,lineHeight:1.15,wordBreak:"break-all",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical"}}>
                         {p.fromInspection ? `${p.fromInspection==="rough"?"4-way":"Final"} inspection report` : (p.name||"file")}
                       </span>
-                      <span style={{fontSize:9,color:C.accent,fontWeight:700}}>Open PDF</span>
+                      <span style={{fontSize:11,color:C.accent,fontWeight:700}}>Open PDF</span>
                     </div>
                     )}
 
@@ -17288,7 +17285,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
           </option>)}
         </select>
         <button onClick={()=>del(r.id)}
-          style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:0}}>✕</button>
+          style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:0}}>✕</button>
       </div>
       {/* Row 2: load name + status */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
@@ -17307,7 +17304,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
       </div>
       {r.status&&r.statusBy&&(
         <div style={{paddingLeft:22,marginTop:2}}>
-          <span style={{fontSize:9,color:r.status==="Pulled"?C.green:C.red,fontWeight:600}}>
+          <span style={{fontSize:11,color:r.status==="Pulled"?C.green:C.red,fontWeight:600}}>
             {r.status==="Pulled"?"✓":"!"} {r.statusBy}{r.statusAt?" · "+r.statusAt:""}
           </span>
         </div>
@@ -17337,11 +17334,11 @@ function HRRow({r, upd, del, addRow, customPanels}) {
         <div style={{paddingLeft:22,marginTop:3,display:"flex",alignItems:"center",gap:6}}>
           <button onClick={()=>upd(r.id,{v240:!r.v240})}
             title={r.v240?"240V 2-pole (2-wire, no neutral) — tap for 120V":"Run as 240V 2-pole (2-wire, no neutral)"}
-            style={{fontSize:9,fontWeight:800,letterSpacing:"0.02em",borderRadius:5,padding:"2px 7px",cursor:"pointer",
+            style={{fontSize:11,fontWeight:800,letterSpacing:"0.02em",borderRadius:5,padding:"2px 7px",cursor:"pointer",
               border:`1px solid ${r.v240?C.blue:C.border}`,background:r.v240?C.blue:"transparent",color:r.v240?"#fff":C.dim,fontFamily:"inherit"}}>
             {r.v240?"240V":"120V"}
           </button>
-          <span style={{fontSize:9,color:C.dim}}>{r.v240?"2-pole · 240V (2-wire)":"1-pole · 120V"}</span>
+          <span style={{fontSize:11,color:C.dim}}>{r.v240?"2-pole · 240V (2-wire)":"1-pole · 120V"}</span>
         </div>
       )}
     </div>
@@ -17352,7 +17349,7 @@ function HRRow({r, upd, del, addRow, customPanels}) {
 const HRColHeaders = () => (
   <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
     {["#","Panel","Wire",""].map((h,i)=>(
-      <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+      <div key={i} style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
     ))}
   </div>
 );
@@ -17397,7 +17394,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
             <>
               <div style={{display:'flex',alignItems:'center',gap:8,margin:'8px 0 6px'}}>
                 <div style={{flex:1,height:1,background:'rgba(62,125,90,0.25)'}}/>
-                <span style={{fontSize:9,fontWeight:700,color:C.green,letterSpacing:'0.08em',textTransform:'uppercase'}}>
+                <span style={{fontSize:11,fontWeight:700,color:C.green,letterSpacing:'0.08em',textTransform:'uppercase'}}>
                   Pulled ({pulled.length})
                 </span>
                 <div style={{flex:1,height:1,background:'rgba(62,125,90,0.25)'}}/>
@@ -17501,7 +17498,7 @@ function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
               const showFloor = x.fk!==lastFk; lastFk = x.fk;
               return (
                 <Fragment key={x.r.id}>
-                  {showFloor&&<div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:C.blue,margin:"6px 0 4px",textTransform:"uppercase"}}>{x.fl}</div>}
+                  {showFloor&&<div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.blue,margin:"6px 0 4px",textTransform:"uppercase"}}>{x.fl}</div>}
                   <HRRow r={x.r} upd={updIn(x.fk)} del={delIn(x.fk)} customPanels={customPanels}/>
                 </Fragment>
               );
@@ -17615,7 +17612,7 @@ function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
                 borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
                 <span style={{minWidth:42,color:C.faint,fontFamily:"monospace"}}>{p.wire}</span>
                 <span style={{flex:1,color:C.text}}>{p.name}</span>
-                <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#C62828":C.faint,
+                <span style={{fontSize:11,color:p.status==="Pulled"?C.green:p.status?"#C62828":C.faint,
                   background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                   padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>
               </div>
@@ -17774,7 +17771,7 @@ function ApplianceImportModal({ jobNumber, jobName, homeRuns, skipKeys, ampOvr, 
               {items.map((p,i)=>(
                 <div key={i} style={{display:"flex",gap:8,fontSize:12.5,padding:"4px 6px",borderBottom:i<items.length-1?`0.5px solid ${C.border}`:"none"}}>
                   <span style={{minWidth:54,color:C.faint,fontSize:12}}>{FL[p.fk]}</span>
-                  <span style={{minWidth:64,fontSize:9,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:C.slate}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
+                  <span style={{minWidth:64,fontSize:11,fontWeight:800,letterSpacing:"0.04em",color:p.level==="green"?C.green:p.level==="red"?C.red:C.slate}}>{p.level==="green"?"READY":p.level==="red"?"NEED SPECS":"CONFIRM"}</span>
                   <span style={{minWidth:36,fontSize:12,color:C.dim,fontFamily:"monospace"}}>{p.wire||"—"}</span>
                   <span style={{flex:1,color:C.text}}>{p.name}<span style={{display:"block",fontSize:12,color:C.faint}}>{p.note}</span></span>
                 </div>
@@ -17824,7 +17821,7 @@ function HRAddFloor({homeRuns, onHRChange}) {
           fontSize:13,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
       <Btn onClick={add} variant="add" style={{fontSize:12.5,padding:"5px 12px"}}>Add</Btn>
       <button onClick={()=>setAdding(false)}
-        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
+        style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
     </div>
   );
 }
@@ -18219,13 +18216,13 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
             ))}
           </select>
           {wireAmpsVolts(load.wire, load.v240)&&(
-            <span style={{fontSize:9,color:C.dim,fontVariantNumeric:'tabular-nums',flexShrink:0,minWidth:52,textAlign:'right'}}>{wireAmpsVolts(load.wire, load.v240)}</span>
+            <span style={{fontSize:11,color:C.dim,fontVariantNumeric:'tabular-nums',flexShrink:0,minWidth:52,textAlign:'right'}}>{wireAmpsVolts(load.wire, load.v240)}</span>
           )}
           {load.needsSpecs&&!load.wire&&(
-            <span title="Needs specs — no wire yet" style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}55`,borderRadius:5,padding:'1px 5px',flexShrink:0}}>specs</span>
+            <span title="Needs specs — no wire yet" style={{fontSize:11,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}55`,borderRadius:5,padding:'1px 5px',flexShrink:0}}>specs</span>
           )}
           {load.orphaned&&(
-            <span title="Removed from Home Runs — keep it or drop it (✕)" style={{fontSize:9,fontWeight:700,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}55`,borderRadius:5,padding:'1px 5px',flexShrink:0}}>orphan</span>
+            <span title="Removed from Home Runs — keep it or drop it (✕)" style={{fontSize:11,fontWeight:700,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}55`,borderRadius:5,padding:'1px 5px',flexShrink:0}}>orphan</span>
           )}
           {/* ★ Recommended — KEY FIX: reads from local `load` which updates immediately */}
           <button onClick={()=>toggle(load.id,'recommended')}
@@ -18238,7 +18235,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
               fontWeight:load.recommended?800:400,transition:'all 0.15s',
             }}>★</button>
           <button onClick={()=>del(load.id)}
-            style={{background:'none',border:'none',color:C.faint,cursor:'pointer',
+            style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:C.faint,cursor:'pointer',
               fontSize:13,flexShrink:0,padding:'0 2px'}}>✕</button>
         </div>
       ))}
@@ -18466,7 +18463,7 @@ function GenPanelGrid({ circuits, slotCount }) {
       <td style={{...base, background:bg, border:`${isSplit?2:1}px solid ${bd}`, color:fg,
         fontStyle:cont?'italic':'normal', fontWeight:(isSplit||isQuad)?700:400, paddingRight:showAmp?26:6}}>
         {c.name}
-        {showAmp && <span style={{position:'absolute',right:4,top:'50%',transform:'translateY(-50%)',fontSize:8.5,fontWeight:700,opacity:0.6}}>{c.amps}A</span>}
+        {showAmp && <span style={{position:'absolute',right:4,top:'50%',transform:'translateY(-50%)',fontSize:11,fontWeight:700,opacity:0.6}}>{c.amps}A</span>}
       </td>
     );
   };
@@ -18800,7 +18797,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                 DOWNLOAD
               </button>
               <button onClick={()=>delPanel(p.id)}
-                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:12.5,flexShrink:0}}>×</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:12.5,flexShrink:0}}>×</button>
             </div>
             {isOpen && (
               <div style={{padding:"8px 12px",overflowX:"auto"}}>
@@ -18867,7 +18864,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                                 paddingRight: showAmp ? 28 : 4}}/>
                             {showAmp && (
                               <span style={{position:"absolute",right:3,top:"50%",
-                                transform:"translateY(-50%)",fontSize:9,fontWeight:700,
+                                transform:"translateY(-50%)",fontSize:11,fontWeight:700,
                                 color:textColor,opacity:0.62,letterSpacing:"0.02em",
                                 pointerEvents:"none"}}>
                                 {c.amps}A
@@ -18875,14 +18872,14 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                             )}
                             {isSplit && (
                               <span title={c.notes||"split tandem"}
-                                style={{position:"absolute",right:badgeOffset,top:1,fontSize:8,fontWeight:800,
+                                style={{position:"absolute",right:badgeOffset,top:1,fontSize:11,fontWeight:800,
                                   color:"#C62828",letterSpacing:"0.05em",pointerEvents:"none"}}>
                                 <Icon name="alertTriangle" size={10} stroke={2.5} style={{verticalAlign:'-1px',marginRight:2}}/>SPLIT
                               </span>
                             )}
                             {isQuadOuter && (
                               <span title="Quad outer (1-pole)"
-                                style={{position:"absolute",right:badgeOffset,top:1,fontSize:8,fontWeight:800,
+                                style={{position:"absolute",right:badgeOffset,top:1,fontSize:11,fontWeight:800,
                                   color:"#574A7A",letterSpacing:"0.05em",pointerEvents:"none"}}>
                                 QUAD
                               </span>
@@ -19394,10 +19391,10 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
                       <span style={{fontSize:12,fontWeight:800,color:C.blue,letterSpacing:'0.08em',textTransform:'uppercase'}}>{p}</span>
                       <div style={{display:'flex',gap:4,alignItems:'center'}}>
-                        {isManual&&<span style={{fontSize:8,fontWeight:700,color:C.orange,background:`${C.orange}18`,
+                        {isManual&&<span style={{fontSize:11,fontWeight:700,color:C.orange,background:`${C.orange}18`,
                           borderRadius:99,padding:'1px 5px'}}>MANUAL</span>}
                         <button onClick={()=>isEditing?setEditingBreakers(null):enterEdit(p,activeGroups)}
-                          style={{fontSize:9,background:'none',border:'none',cursor:'pointer',color:C.dim,padding:'0 2px',display:'inline-flex',alignItems:'center',gap:3}}>
+                          style={{fontSize:11,background:'none',border:'none',cursor:'pointer',color:C.dim,padding:'0 2px',display:'inline-flex',alignItems:'center',gap:3}}>
                           {isEditing?<><Icon name="check" size={10}/> Done</>:<><Icon name="pencil" size={10}/> Edit</>}
                         </button>
                       </div>
@@ -19407,7 +19404,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                     <div style={{fontSize:18,fontWeight:700,color:C.text,lineHeight:1,marginBottom:6}}>
                       {displaySpaces}
                       <span style={{fontSize:12,fontWeight:400,color:C.dim,marginLeft:4}}>spaces</span>
-                      {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>override</span>}
+                      {override&&<span style={{fontSize:11,color:C.orange,marginLeft:4}}>override</span>}
                     </div>
 
                     {/* Drift hint — manual override is stale (auto-derived
@@ -19426,7 +19423,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                         </div>
                         <button onClick={()=>resetBreakers(p)}
                           style={{marginTop:3,marginLeft:14,background:'none',border:`1px solid ${C.orange}66`,
-                            color:C.orange,borderRadius:4,padding:'2px 7px',fontSize:9,fontWeight:700,
+                            color:C.orange,borderRadius:4,padding:'2px 7px',fontSize:11,fontWeight:700,
                             cursor:'pointer',fontFamily:'inherit'}}>
                           Refresh from home runs
                         </button>
@@ -19482,7 +19479,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                               background:`${chipColor}18`,border:`1px solid ${chipColor}55`,
                               borderRadius:5,padding:'3px 7px'}}>
                               <span style={{fontSize:14,fontWeight:800,color:chipColor,lineHeight:1}}>{g.amps}A</span>
-                              <span style={{fontSize:9,fontWeight:600,color:chipColor,opacity:0.7}}>{g.poles===2?'2P':'1P'}</span>
+                              <span style={{fontSize:11,fontWeight:600,color:chipColor,opacity:0.7}}>{g.poles===2?'2P':'1P'}</span>
                               <span style={{fontSize:12,fontWeight:500,color:C.text,marginLeft:1}}>×{g.count}</span>
                             </div>
                           );
@@ -19500,7 +19497,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                                   padding:'3px 4px',fontSize:13,fontWeight:700,color:chipColor,textAlign:'center',fontFamily:'inherit'}}/>
                               <span style={{fontSize:12,color:C.dim}}>A</span>
                               <button onClick={()=>updBreaker(p,g.id,{poles:g.poles===1?2:1})}
-                                style={{fontSize:9,fontWeight:700,padding:'3px 6px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
+                                style={{fontSize:11,fontWeight:700,padding:'3px 6px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
                                   background:`${chipColor}18`,border:`1px solid ${chipColor}55`,color:chipColor}}>
                                 {g.poles===2?'2P':'1P'}
                               </button>
@@ -19510,20 +19507,20 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                                 style={{width:36,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,
                                   padding:'3px 4px',fontSize:13,fontWeight:600,color:C.text,textAlign:'center',fontFamily:'inherit'}}/>
                               <button onClick={()=>delBreaker(p,g.id)}
-                                style={{background:'none',border:'none',cursor:'pointer',color:C.dim,fontSize:14,
+                                style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',cursor:'pointer',color:C.dim,fontSize:14,
                                   lineHeight:1,padding:'0 2px',fontWeight:700,fontFamily:'inherit'}}>×</button>
                             </div>
                           );
                         })}
                         <div style={{display:'flex',gap:5,marginTop:2}}>
                           <button onClick={()=>addBreaker(p,editGroups)}
-                            style={{fontSize:9,fontWeight:700,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
+                            style={{fontSize:11,fontWeight:700,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
                               background:`${C.blue}18`,border:`1px solid ${C.blue}44`,color:C.blue}}>
                             + Add Breaker
                           </button>
                           {isManual&&(
                             <button onClick={()=>{resetBreakers(p);setEditingBreakers(null);}}
-                              style={{fontSize:9,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
+                              style={{fontSize:11,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
                                 background:'none',border:`1px solid ${C.border}`,color:C.dim,display:'inline-flex',alignItems:'center',gap:4}}>
                               <Icon name="refresh" size={10}/> Reset to Auto
                             </button>
@@ -19656,7 +19653,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                         {/* Preview — exactly what gets written to the PO. */}
                         <div style={{marginBottom:6,padding:'6px 8px',background:`${C.blue}08`,
                           border:`1px dashed ${C.blue}55`,borderRadius:5,fontSize:12.5,lineHeight:1.5,color:C.text}}>
-                          <div style={{fontSize:9,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
+                          <div style={{fontSize:11,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
                             textTransform:'uppercase',marginBottom:3}}>Will add to PO</div>
                           <b>Breakers — {p}</b>
                           {poLines.map((line,i) => <div key={i}>{line}</div>)}
@@ -19953,9 +19950,9 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
               <div style={{fontSize:14,fontWeight:600,color:'#1B1F24'}}>Homeowner Selections</div>
               <button onClick={()=>setShowModal(false)}
-                style={{background:'none',border:'none',fontSize:16,cursor:'pointer',color:'#8A929D'}}>✕</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',fontSize:16,cursor:'pointer',color:C.faint}}>✕</button>
             </div>
-            <div style={{fontSize:12.5,color:'#8A929D',marginBottom:14}}>
+            <div style={{fontSize:12.5,color:C.faint,marginBottom:14}}>
               Signed: {hoResponse.signature} · {hoResponse.signedDate}
             </div>
             <button onClick={resend} disabled={sending}
@@ -19964,7 +19961,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
               <Icon name="rotateCw" size={12}/> Reset &amp; Resend
             </button>
 
-                        <div style={{fontSize:12,fontWeight:600,color:'#8A929D',letterSpacing:'0.08em',marginBottom:8}}>
+                        <div style={{fontSize:12,fontWeight:600,color:C.faint,letterSpacing:'0.08em',marginBottom:8}}>
               ON GENERATOR · {(hoResponse.items||[]).filter(i=>i.included).length}
             </div>
             {(hoResponse.items||[]).filter(i=>i.included).map((it,idx)=>(
@@ -19979,12 +19976,12 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   <div style={{flex:1}}>
                     <div style={{fontSize:14,fontWeight:500,color:'#1B1F24',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:11,fontWeight:700,color:C.slate,background:C.slateBg,
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
-                      {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:C.slateInk,
+                      {it.recommended&&<span style={{fontSize:11,fontWeight:800,color:C.slateInk,
                         background:C.slateBg,borderRadius:99,padding:'1px 6px',border:'0.5px solid #C9D1DC'}}>★ REC</span>}
                     </div>
-                    <div style={{fontSize:12.5,color:'#8A929D',marginTop:2}}>
+                    <div style={{fontSize:12.5,color:C.faint,marginTop:2}}>
                       {wireAmpsVolts(it.wire, it.v240)}
                     </div>
                     {it.notes&&<div style={{fontSize:12.5,color:'#5E6670',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
@@ -20067,7 +20064,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                   borderRadius:20,padding:'4px 10px 4px 12px',fontSize:13,color:C.blue,fontWeight:600}}>
                   {p}
                   <button onClick={()=>onHRChange({...homeRuns,customPanels:cP.filter(x=>x!==p)})}
-                    style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
+                    style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',cursor:'pointer',color:C.dim,
                       fontSize:14,lineHeight:1,padding:'0 2px',fontWeight:700}}>×</button>
                 </div>
               ))}
@@ -20241,8 +20238,8 @@ function BulkPasteLoads({ mode = "keypad", color = C.purple, locationOptions = [
                 <span style={{minWidth:26,color:C.faint,fontFamily:"monospace"}}>{p.num||"·"}</span>
                 <span style={{flex:1,color:C.text,textDecoration:p.dupe?"line-through":"none"}}>{p.name}</span>
                 {p.dupe
-                  ? <span style={{fontSize:9,color:C.slate,fontWeight:700,padding:"1px 6px"}}>already added</span>
-                  : <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#C62828":C.faint,
+                  ? <span style={{fontSize:11,color:C.slate,fontWeight:700,padding:"1px 6px"}}>already added</span>
+                  : <span style={{fontSize:11,color:p.status==="Pulled"?C.green:p.status?"#C62828":C.faint,
                       background:p.status==="Pulled"?"rgba(62,125,90,0.12)":"transparent",
                       padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>}
               </div>
@@ -20291,7 +20288,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
   // as well — the loads ran drop down at the top blends in"): the stamp the
   // checkbox tooltip already carried, now visible on the row.
   const ranStamp = (l, extra={}) => (l.pulled && (l.pulledBy || l.pulledAt)) ? (
-    <span title="Marked ran" style={{fontSize:9,fontWeight:700,color:C.green,whiteSpace:"nowrap",flexShrink:0,...extra}}>
+    <span title="Marked ran" style={{fontSize:11,fontWeight:700,color:C.green,whiteSpace:"nowrap",flexShrink:0,...extra}}>
       ✓ {[l.pulledBy, l.pulledAt].filter(Boolean).join(" · ")}
     </span>
   ) : null;
@@ -20374,7 +20371,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
   const assignChip = (l, assignedLabels, extra={}) => {
     if (!onAssignLoad) return assignedLabels ? (
       <span title={assignedLabels.join(", ")}
-        style={{fontSize:9,fontWeight:800,color:color,background:`${color}15`,border:`1px solid ${color}33`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"default",flexShrink:0,...extra}}>
+        style={{fontSize:11,fontWeight:800,color:color,background:`${color}15`,border:`1px solid ${color}33`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"default",flexShrink:0,...extra}}>
         ✓ {assignedLabels[0]}
       </span>) : null;
     const parked = !!(parkedIds && parkedIds.has(l.id));
@@ -20382,7 +20379,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
     const col = parked ? C.orange : has ? color : C.faint;
     return (
       <button onClick={()=>onAssignLoad(l.id)} title={has ? `${assignedLabels[0]} — tap to move, park or clear` : "Tap to put this load on a panel or zone"}
-        style={{fontSize:9,fontWeight:800,color:col,background:has?`${col}15`:"transparent",border:`1px ${has?"solid":"dashed"} ${col}${has?"33":"88"}`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"pointer",fontFamily:"inherit",flexShrink:0,...extra}}>
+        style={{fontSize:11,fontWeight:800,color:col,background:has?`${col}15`:"transparent",border:`1px ${has?"solid":"dashed"} ${col}${has?"33":"88"}`,borderRadius:99,padding:"2px 7px",whiteSpace:"nowrap",cursor:"pointer",fontFamily:"inherit",flexShrink:0,...extra}}>
         {has ? assignedLabels[0] : "Assign"}
       </button>
     );
@@ -20583,7 +20580,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               style={{background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,borderRadius:0,
                                 color:C.text,padding:"4px 2px",fontSize:14,fontFamily:"inherit",outline:"none",
                                 flex:1,minWidth:0,fontWeight:600}}/>
-                            <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                            <button onClick={()=>del(l.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                           </div>
                           {/* Row 2: location + panel + type + watts + assigned badge.
                               Floor/area is where the load physically lives.
@@ -20664,7 +20661,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                           ); })()}
                           <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:12}}/>
                           <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:12}}/>
-                          <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:"0 2px"}}>✕</button>
+                          <button onClick={()=>del(l.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:"0 2px"}}>✕</button>
                         </div>
                       );
                     })}
@@ -21158,7 +21155,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                   <Icon name="pencil" size={12} stroke={2}/>
                 </button>
                 <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
-                  style={{background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
+                  style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",padding:2,flexShrink:0}}>
                   <Icon name="x" size={12} stroke={2}/>
                 </button>
               </div>
@@ -21168,7 +21165,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                     cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
                   <Icon name="help" size={11} stroke={2.25}/>
                   {msgs.length===0 ? "Ask a question" : `${msgs.length} question${msgs.length===1?"":"s"}`}
-                  {awaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                  {awaiting && <span style={{marginLeft:2,fontSize:11,fontWeight:700,color:C.orange,
                     background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
                 </button>
                 {threadOpen && (
@@ -21243,7 +21240,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                 cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
               <Icon name="help" size={11} stroke={2.25}/>
               Job discussion{msgs.length?` (${msgs.length})`:""}
-              {awaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+              {awaiting && <span style={{marginLeft:2,fontSize:11,fontWeight:700,color:C.orange,
                 background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
             </button>
             {open && (
@@ -21526,7 +21523,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                     {onUpdateJob && can(identity,"lutron.manage") && (
                       <button onClick={(e)=>{e.stopPropagation(); setExcluded(job, true);}}
                         title="Not this LV company's job — hide it from their tracking link"
-                        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
+                        style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",
                           padding:2,display:"flex"}}>
                         <Icon name="x" size={13} stroke={2}/>
                       </button>
@@ -21584,7 +21581,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                                   cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
                                 <Icon name="help" size={11} stroke={2.25}/>
                                 {msgs.length===0 ? "Ask a question" : `${msgs.length} question${msgs.length===1?"":"s"}`}
-                                {awaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                                {awaiting && <span style={{marginLeft:2,fontSize:11,fontWeight:700,color:C.orange,
                                   background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
                               </button>
                               {threadOpen && (
@@ -21614,7 +21611,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
                           cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
                         <Icon name="help" size={11} stroke={2.25}/>
                         Job discussion{gMsgs.length?` (${gMsgs.length})`:""}
-                        {gAwaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                        {gAwaiting && <span style={{marginLeft:2,fontSize:11,fontWeight:700,color:C.orange,
                           background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
                       </button>
                       {gOpen && (
@@ -21783,7 +21780,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
 
               <button onClick={()=>delRow(r.id)}
 
-                style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:"0 2px"}}>✕</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:"0 2px"}}>✕</button>
 
             </div>
 
@@ -22391,7 +22388,7 @@ function SavantPanelSchedule({
           }}>
           {leftBadge && (
             <span style={{
-              fontSize:8, fontWeight:800, letterSpacing:"0.05em",
+              fontSize:11, fontWeight:800, letterSpacing:"0.05em",
               color: hasFeeder ? color : C.dim,
               padding:"0 5px", flexShrink:0, textTransform:"uppercase",
             }}>{leftBadge}</span>
@@ -22420,7 +22417,7 @@ function SavantPanelSchedule({
               position:"absolute",
               right: 4 + delPad + movePad,
               top:"50%", transform:"translateY(-50%)",
-              fontSize:9, fontWeight:700, color:C.dim, opacity:0.7,
+              fontSize:11, fontWeight:700, color:C.dim, opacity:0.7,
               letterSpacing:"0.02em", pointerEvents:"none",
             }}>{ampLabel}</span>
           )}
@@ -22639,7 +22636,7 @@ function SavantPanelSchedule({
                 color:C.text,padding:"0 4px",
                 paddingRight: r.amp ? 30 : 4}}/>
             {r.amp && <span style={{position:"absolute",right:4,top:"50%",
-              transform:"translateY(-50%)",fontSize:9,fontWeight:700,color:C.dim,
+              transform:"translateY(-50%)",fontSize:11,fontWeight:700,color:C.dim,
               opacity:0.7,letterSpacing:"0.02em",pointerEvents:"none"}}>{r.amp}A</span>}
           </div>
           <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
@@ -22657,7 +22654,7 @@ function SavantPanelSchedule({
                 color:C.text,padding:"0 4px",
                 paddingRight: r.ampB ? 30 : 4}}/>
             {r.ampB && <span style={{position:"absolute",right:4,top:"50%",
-              transform:"translateY(-50%)",fontSize:9,fontWeight:700,color:C.dim,
+              transform:"translateY(-50%)",fontSize:11,fontWeight:700,color:C.dim,
               opacity:0.7,letterSpacing:"0.02em",pointerEvents:"none"}}>{r.ampB}A</span>}
           </div>
         </div>
@@ -22703,7 +22700,7 @@ function SavantPanelSchedule({
           {r.description || <span style={{color:C.faint,fontStyle:"italic"}}>(unnamed)</span>}
         </span>
         {r.amp && <span style={{
-          fontSize:9, fontWeight:700, color:C.dim, background:"#F4F6F8",
+          fontSize:11, fontWeight:700, color:C.dim, background:"#F4F6F8",
           border:`1px solid ${C.border}`, borderRadius:3, padding:"1px 4px",
           flexShrink:0,
         }}>{r.amp}{/^\d+$/.test(String(r.amp).trim()) ? "A" : ""}</span>}
@@ -22716,7 +22713,7 @@ function SavantPanelSchedule({
             }
           }}
           title="Delete this regular breaker"
-          style={{background:"none",border:"none",color:C.faint,fontSize:14,
+          style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,fontSize:14,
             cursor:"pointer",padding:"0 2px",flexShrink:0,lineHeight:1}}>
           ✕
         </button>
@@ -22769,7 +22766,7 @@ function SavantPanelSchedule({
         }}>
           <span>Add to slot {slot}</span>
           <button onClick={()=>setAddingAtSlot(null)}
-            style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
         </div>
 
         {/* Slot-click picker is breaker-only by design — phase 1 of the
@@ -22784,7 +22781,7 @@ function SavantPanelSchedule({
           Pick a breaker type below. To assign loads, use the armed-loads strip above the schedule.
         </div>
 
-        <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
           color:C.dim,textTransform:"uppercase",marginBottom:6}}>
           Breaker type
         </div>
@@ -22909,7 +22906,7 @@ function SavantPanelSchedule({
                 Remove
               </button>
               <button onClick={()=>setSelectedSlot(null)}
-                style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
           </div>
 
@@ -22963,7 +22960,7 @@ function SavantPanelSchedule({
             };
             return (
               <div style={{marginBottom:10}}>
-                <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
                   color:C.dim,textTransform:"uppercase",marginBottom:6}}>
                   Pick from loads list ({named.length})
                 </div>
@@ -23023,7 +23020,7 @@ function SavantPanelSchedule({
                 {(load.name||"").trim() && (
                   <button onClick={()=>updSmartLoad(m.id,load.id,{name:"",loadType:"",watts:""})}
                     title="Clear this leg"
-                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
+                    style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",
                       fontSize:14,padding:"0 4px",flexShrink:0}}>✕</button>
                 )}
               </div>
@@ -23067,7 +23064,7 @@ function SavantPanelSchedule({
                 Remove
               </button>
               <button onClick={()=>setSelectedSlot(null)}
-                style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
           </div>
           {/* Quick-pick chips for the regular breaker description from the
@@ -23077,7 +23074,7 @@ function SavantPanelSchedule({
             if (named.length === 0) return null;
             return (
               <div style={{marginBottom:10}}>
-                <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
                   color:C.dim,textTransform:"uppercase",marginBottom:6}}>
                   Pick from loads list ({named.length})
                 </div>
@@ -23133,7 +23130,7 @@ function SavantPanelSchedule({
               marginTop:10, padding:"10px 12px", background:C.slateBg,
               border:`1px dashed ${C.accent}55`, borderRadius:7,
             }}>
-              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+              <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
                 color:C.accent,textTransform:"uppercase",marginBottom:8}}>
                 Tandem · second half (same slot {r.slot||"?"})
               </div>
@@ -23180,7 +23177,7 @@ function SavantPanelSchedule({
         border:`1px solid #bae6fd`, borderRadius:8,
         display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:12.5,
       }}>
-        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+        <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
           color:C.purple,textTransform:"uppercase"}}>Wiring diagrams</span>
         <a href="https://sav-documentation.s3.amazonaws.com/Product%20QRGs/009-1484-03%20Dual%2020%20Amp%20Relay%20Companion%20Module%20Installation%20Manual.pdf"
           target="_blank" rel="noopener noreferrer"
@@ -23363,7 +23360,7 @@ function SavantPanelSchedule({
                 {/* Header row */}
                 <div style={{display:"grid",
                   gridTemplateColumns:"36px 110px 50px 1fr 130px 1fr 130px 24px",
-                  gap:6,fontSize:9,fontWeight:700,letterSpacing:"0.05em",color:C.dim,
+                  gap:6,fontSize:11,fontWeight:700,letterSpacing:"0.05em",color:C.dim,
                   textTransform:"uppercase",padding:"0 6px"}}>
                   <span>Mod</span>
                   <span>SKU</span>
@@ -23432,7 +23429,7 @@ function SavantPanelSchedule({
                           if (window.confirm(msg)) delSmart(m.id);
                         }}
                         title="Delete this module"
-                        style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
+                        style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",
                           fontSize:14,padding:0,lineHeight:1}}>×</button>
                     </div>
                   );
@@ -23496,7 +23493,7 @@ function SavantPanelSchedule({
                       if (window.confirm(msg)) delSmart(m.id);
                     }}
                     title={`Delete this smart breaker entirely`}
-                    style={{
+                    style={{minWidth:"var(--he-tap, 32px)",
                       padding:"3px 8px", fontSize:12.5, fontWeight:700,
                       background:"#fff", border:`1px solid ${C.red}55`,
                       color:C.red, borderRadius:"0 5px 5px 0",
@@ -23638,7 +23635,7 @@ function SavantPanelSchedule({
             {(regularBreakers||[]).filter(r=>Number(r.slot)>0).length > 0 && (
               <div style={{marginBottom:10,padding:"6px 10px",background:"#fff",
                 border:`1px solid ${C.border}`,borderRadius:8}}>
-                <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:C.dim,
+                <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:C.dim,
                   textTransform:"uppercase",marginBottom:5}}>
                   Feeder breakers ({(regularBreakers||[]).filter(r=>Number(r.slot)>0).length})
                 </div>
@@ -23670,7 +23667,7 @@ function SavantPanelSchedule({
                           <button onClick={()=>{
                               if (window.confirm(`Delete feeder at slot ${r.slot}?`)) delReg(r.id);
                             }}
-                            style={{background:"none",border:"none",color:C.faint,
+                            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,
                               cursor:"pointer",fontSize:14,padding:"0 4px",lineHeight:1}}>×</button>
                         </div>
                       );
@@ -23726,7 +23723,7 @@ function SavantPanelSchedule({
                             const msg = named>0 ? `Delete this module? ${named} load assignments will be lost.` : "Delete this module?";
                             if (window.confirm(msg)) delSmart(m.id);
                           }}
-                          style={{marginLeft:"auto",background:"none",border:"none",color:C.faint,
+                          style={{minWidth:"var(--he-tap, 32px)",marginLeft:"auto",background:"none",border:"none",color:C.faint,
                             fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
                       </div>
                       {/* Input A row */}
@@ -23952,7 +23949,7 @@ function SavantPanelSchedule({
                 borderRadius:99, cursor:"pointer", fontFamily:"inherit",
               }}>
               {l.name}
-              <span style={{fontSize: opts.large ? 11 : 9,marginLeft:5,opacity:0.65,fontWeight:500}}>
+              <span style={{fontSize: 11,marginLeft:5,opacity:0.65,fontWeight:500}}>
                 {isDim ? "D" : "S"}{isArmedB ? " · B" : ""}
               </span>
             </button>
@@ -24074,7 +24071,7 @@ function SavantPanelSchedule({
                       borderRadius:99, cursor:"pointer", fontFamily:"inherit",
                     }}>
                     Slot {slotN} · {r.amp||"15"}A
-                    {r.description && <span style={{fontSize:9,marginLeft:5,opacity:0.7,fontWeight:500}}>
+                    {r.description && <span style={{fontSize:11,marginLeft:5,opacity:0.7,fontWeight:500}}>
                       {stripHtml(r.description).slice(0,20)}
                     </span>}
                   </button>
@@ -24164,7 +24161,7 @@ function slotNumStyle(selected) {
 function slotNumHeaderStyle() {
   return {
     minHeight: 28, display:"flex", alignItems:"center", justifyContent:"center",
-    fontSize:9, fontWeight:700, letterSpacing:"0.07em", color:C.dim,
+    fontSize:11, fontWeight:700, letterSpacing:"0.07em", color:C.dim,
     background:"#eef2f6", borderBottom:`2px solid ${C.border}`,
     borderRight:`1px solid ${C.border}`, textTransform:"uppercase",
   };
@@ -24172,7 +24169,7 @@ function slotNumHeaderStyle() {
 function slotHeaderStyle(isRight) {
   return {
     minHeight: 28, display:"flex", alignItems:"center",
-    padding:"0 9px", fontSize:9, fontWeight:700, letterSpacing:"0.07em", color:C.dim,
+    padding:"0 9px", fontSize:11, fontWeight:700, letterSpacing:"0.07em", color:C.dim,
     background:"#eef2f6", borderBottom:`2px solid ${C.border}`,
     borderRight: isRight ? "none" : `1px solid ${C.border}`, textTransform:"uppercase",
   };
@@ -24564,7 +24561,7 @@ function SavantSlotFirstTab({ job, u }) {
                   ? `${feeder.amps||"20"}A + ${feeder.ampsB||"20"}A`
                   : `${feeder.amps||"20"}A${(feeder.poles||1)===2?" · 2P":""}`}
               {feeder.tandem && !isCont && (
-                <span style={{marginLeft:6,fontSize:9,fontWeight:800,padding:"1px 5px",
+                <span style={{marginLeft:6,fontSize:11,fontWeight:800,padding:"1px 5px",
                   background:C.slateBg,color:C.slateInk,border:"1px solid #C9D1DC",
                   borderRadius:3,letterSpacing:"0.04em"}}>TANDEM</span>
               )}
@@ -24611,7 +24608,7 @@ function SavantSlotFirstTab({ job, u }) {
                 : (out?.name || "no load yet · tap to assign")}
             </span>
             {!isContCh && fdr && (
-              <span style={{fontSize:9,fontWeight:800,padding:"1px 6px",borderRadius:99,
+              <span style={{fontSize:11,fontWeight:800,padding:"1px 6px",borderRadius:99,
                 background:fdrColor?fdrColor.fill:"#EEF0F3",
                 color:fdrColor?fdrColor.chip:C.dim,
                 border:`1px solid ${fdrColor?fdrColor.chip:C.border}`,
@@ -24620,7 +24617,7 @@ function SavantSlotFirstTab({ job, u }) {
               </span>
             )}
             {!isContCh && !fdr && (
-              <span style={{fontSize:9,fontWeight:700,color:"#C62828",
+              <span style={{fontSize:11,fontWeight:700,color:"#C62828",
                 background:"#F3E2E2",border:"1px solid #EAD2D2",padding:"1px 5px",
                 borderRadius:3,letterSpacing:"0.04em",flexShrink:0}}>no feeder</span>
             )}
@@ -25537,7 +25534,7 @@ function LutronPanelBuilder({ job, u }) {
                           style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", fontFamily: "inherit", background: on ? `${accent}12` : C.surface, border: `1px solid ${on ? accent : C.border}`, borderRadius: 9, padding: "7px 9px", minHeight: 40, color: C.text, cursor: "pointer", marginBottom: 4 }}>
                           {tray.select && <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${on ? accent : C.border}`, background: on ? accent : "transparent", color: "#fff", fontSize: 12.5, lineHeight: "16px", textAlign: "center", flexShrink: 0 }}>{on ? "✓" : ""}</span>}
                           <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
-                          <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: c.col, background: c.bg, whiteSpace: "nowrap" }}>{c.txt}</span>
+                          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: c.col, background: c.bg, whiteSpace: "nowrap" }}>{c.txt}</span>
                           <span style={{ fontSize: 13, color: C.dim, width: 44, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{l.watts ? `${l.watts}W` : ""}</span>
                         </button>
                       ); })}
@@ -25615,7 +25612,7 @@ function LutronPanelBuilder({ job, u }) {
                         options={["", ...Object.keys(LUTRON_MODULES).filter(k => !LUTRON_MODULES[k].legacy || k === lutronNormalizeType(m.type)), ...(t.custom ? [lutronNormalizeType(m.type)] : [])]}
                         style={{ fontSize: 12, fontWeight: 700, color: accent, padding: "3px 6px", maxWidth: 150 }}/>
                       <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.dim, whiteSpace: "nowrap" }}>{on.length}/{t.zones} {t.bus ? "loads" : "zones"}{Array.isArray(t.maxW) ? ` · ≤${t.maxW[0]}/${t.maxW[1]}W` : t.maxA ? ` · ≤${t.maxA}A` : ""}</span>
-                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
+                      <button onClick={() => removeModule(p.id, m.id)} title="Remove this module (its loads stay on the panel)" style={{minWidth:"var(--he-tap, 32px)", background: "none", border: "none", color: C.faint, cursor: "pointer", padding: "0 2px", display: "inline-flex" }}><Icon name="x" size={12} stroke={2.5}/></button>
                     </div>
                     {rows}
                     <div style={{ fontSize: 12.5, color: C.faint, marginTop: 2 }}>{t.label}</div>
@@ -25889,7 +25886,7 @@ function PanelModulesSection({
                 <button onClick={()=>toggleConfirmed(mod.id)}
                   title={isConfirmed?"Switch back to edit mode":"Collapse to a compact read-only list"}
                   style={{
-                    fontSize:9,fontWeight:700,letterSpacing:"0.05em",
+                    fontSize:11,fontWeight:700,letterSpacing:"0.05em",
                     background: isConfirmed ? accentColor : 'transparent',
                     color: isConfirmed ? '#fff' : accentColor,
                     border:`1px solid ${accentColor}`, borderRadius:99,
@@ -25899,7 +25896,7 @@ function PanelModulesSection({
                   {isConfirmed ? '✓ EDIT' : 'CONFIRM'}
                 </button>
               )}
-              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:12.5,padding:"0 2px",flexShrink:0}}>✕</button>
+              <button onClick={()=>delMod(mod.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:12.5,padding:"0 2px",flexShrink:0}}>✕</button>
             </div>
 
             {/* ── Load rows ── */}
@@ -25952,20 +25949,20 @@ function PanelModulesSection({
                         onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
                         style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                           padding:"7px 10px",fontSize:14,fontFamily:"inherit",outline:"none",minWidth:0,boxSizing:"border-box"}}/>
-                      <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                      <button onClick={()=>delLoad(mod.id,load.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                     </div>
                     {/* Row 2: Ch, Load Type, Watts */}
                     <div style={{display:"grid",gridTemplateColumns:"60px 1fr 60px",gap:6,marginBottom:showKeypad||showMove?6:0}}>
                       <div>
-                        <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>CH</div>
+                        <div style={{fontSize:11,color:C.dim,fontWeight:700,marginBottom:2}}>CH</div>
                         <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:13}}/>
                       </div>
                       <div>
-                        <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>LOAD TYPE</div>
+                        <div style={{fontSize:11,color:C.dim,fontWeight:700,marginBottom:2}}>LOAD TYPE</div>
                         <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:13,width:"100%"}}/>
                       </div>
                       <div>
-                        <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>WATTS</div>
+                        <div style={{fontSize:11,color:C.dim,fontWeight:700,marginBottom:2}}>WATTS</div>
                         <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:13}}/>
                       </div>
                     </div>
@@ -25973,11 +25970,11 @@ function PanelModulesSection({
                     {(showKeypad||showMove)&&(
                       <div style={{display:"flex",gap:8}}>
                         {showKeypad&&<div style={{flex:1}}>
-                          <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>KEYPAD</div>
+                          <div style={{fontSize:11,color:C.dim,fontWeight:700,marginBottom:2}}>KEYPAD</div>
                           <Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:13}}/>
                         </div>}
                         {showMove&&<div style={{flex:1}}>
-                          <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>MOVE TO</div>
+                          <div style={{fontSize:11,color:C.dim,fontWeight:700,marginBottom:2}}>MOVE TO</div>
                           <select value={moveValueFor(mod)} onChange={e=>handleRowMove(mod.id,load.id,e.target.value)}
                             style={{fontSize:13,border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 8px",
                               background:C.surface,color:C.text,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
@@ -26025,16 +26022,16 @@ function PanelModulesSection({
                         {showMove&&(
                           <select value={moveValueFor(mod)} onChange={e=>handleRowMove(mod.id,load.id,e.target.value)}
                             title="Move to module (across any panel section)"
-                            style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
+                            style={{fontSize:11,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
                               background:"#fff",color:C.faint,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
                             {renderMoveOptions(mod)}
                           </select>
                         )}
-                        <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:"0 2px"}}>✕</button>
+                        <button onClick={()=>delLoad(mod.id,load.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,padding:"0 2px"}}>✕</button>
                       </div>
                       {load.pulled&&load.pulledBy&&(
                         <div style={{paddingLeft:4,marginTop:1}}>
-                          <span style={{fontSize:9,color:C.green,fontWeight:600}}>✓ pulled by {load.pulledBy}{load.pulledAt?" · "+load.pulledAt:""}</span>
+                          <span style={{fontSize:11,color:C.green,fontWeight:600}}>✓ pulled by {load.pulledBy}{load.pulledAt?" · "+load.pulledAt:""}</span>
                         </div>
                       )}
                     </div>
@@ -26270,7 +26267,7 @@ function TapeLightSection({lights,onChange}) {
                 Driver ordered
               </label>
               {l.driverOrdered&&l.driverOrderedBy&&(
-                <span style={{fontSize:9,color:"#C2410C",fontWeight:600,paddingLeft:20}}>
+                <span style={{fontSize:11,color:"#C2410C",fontWeight:600,paddingLeft:20}}>
                   ✓ by {l.driverOrderedBy}{l.driverOrderedAt?" · "+l.driverOrderedAt:""}
                 </span>
               )}
@@ -26287,7 +26284,7 @@ function TapeLightSection({lights,onChange}) {
                 Driver installed
               </label>
               {l.driverInstalled&&l.driverInstalledBy&&(
-                <span style={{fontSize:9,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>
+                <span style={{fontSize:11,color:"#1F7A3F",fontWeight:600,paddingLeft:20}}>
                   ✓ by {l.driverInstalledBy}{l.driverInstalledAt?" · "+l.driverInstalledAt:""}
                 </span>
               )}
@@ -26949,7 +26946,7 @@ function DriveFilesSection({ job, onUpdate }) {
               Simpro Sync Complete
             </span>
             <button onClick={() => setSimproSync(null)}
-              style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
+              style={{minWidth:"var(--he-tap, 32px)", background: "none", border: "none", color: C.dim, cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
           </div>
           {simproSync.uploaded.length > 0 && (
             <div style={{ fontSize: 12.5, color: C.green, marginBottom: 2 }}>
@@ -27039,14 +27036,14 @@ function DriveFilesSection({ job, onUpdate }) {
               {/* Images grid */}
               {folderImages.length > 0 && (
                 <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+                  <div style={{ fontSize: 11, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
                     {folderImages.map(f => (
                       <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
                         <img src={thumbUrl(f)} alt={f.name}
                           style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
                             border: `1px solid ${C.border}`, background: C.surface }} />
-                        <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                        <div style={{ fontSize: 11, color: C.dim, marginTop: 3, overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
                       </div>
                     ))}
@@ -27057,7 +27054,7 @@ function DriveFilesSection({ job, onUpdate }) {
               {/* Documents list */}
               {folderDocs.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+                  <div style={{ fontSize: 11, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
                   {folderDocs.map(f => (
                     <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
                       background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
@@ -27251,7 +27248,7 @@ function FileUploadSection({ jobId, files, onChange }) {
       {/* Image grid */}
       {(files || []).filter(f => isImage(f)).length > 0 && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+          <div style={{ fontSize: 11, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
             {(files || []).filter(f => isImage(f)).map(f => (
               <div key={f.id} style={{ position: "relative" }}>
@@ -27264,7 +27261,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                     border: "none", borderRadius: "50%", color: "#fff", width: 18, height: 18,
                     fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center",
                     justifyContent: "center", lineHeight: 1 }}>✕</button>
-                <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                <div style={{ fontSize: 11, color: C.dim, marginTop: 3, overflow: "hidden",
                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
               </div>
             ))}
@@ -27275,7 +27272,7 @@ function FileUploadSection({ jobId, files, onChange }) {
       {/* Document list */}
       {(files || []).filter(f => !isImage(f)).length > 0 && (
         <div>
-          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+          <div style={{ fontSize: 11, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
           {(files || []).filter(f => !isImage(f)).map(f => (
             <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
               background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
@@ -27294,7 +27291,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                 Open ↗
               </a>
               <button onClick={() => handleDelete(f)}
-                style={{ background: "none", border: "none", color: C.faint, cursor: "pointer",
+                style={{minWidth:"var(--he-tap, 32px)", background: "none", border: "none", color: C.faint, cursor: "pointer",
                   fontSize: 14, flexShrink: 0 }}>✕</button>
             </div>
           ))}
@@ -27458,7 +27455,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                   <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
 
-                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+                    style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
 
                 </div>
 
@@ -27561,7 +27558,7 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                   <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
 
-                    style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
+                    style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
 
                 </div>
 
@@ -27951,7 +27948,7 @@ const ITEM_TYPES = ["Visit","Purchase","Call","Other"];
 const ITEM_TYPE_COLORS = {
   Visit:    "#2F5BD9",  // blue
   Purchase: "#6A3FB5",  // purple
-  Call:     "#B7791F",  // amber
+  Call:     C.slate,    // was amber (design pass 2026-10-14)
   Other:    "#6E7682",  // gray
 };
 
@@ -28561,7 +28558,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                 border: `1px solid ${typeDef.color}33` }}>
                 {typeDef.label.toUpperCase()}
               </span>
-              <span style={{ fontSize: 12, fontWeight: 800, color: "#6E7682", letterSpacing: "0.08em",
+              <span style={{ fontSize: 12, fontWeight: 800, color: C.faint, letterSpacing: "0.08em",
                 background: "#6E768218", borderRadius: 99, padding: "2px 8px",
                 border: "1px solid #6E768233" }}>
                 QUICK JOB
@@ -28578,7 +28575,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
             </div>
           </div>
           <button onClick={onClose}
-            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8,
+            style={{minWidth:"var(--he-tap, 32px)", background: "none", border: `1px solid ${C.border}`, borderRadius: 8,
               color: C.dim, cursor: "pointer", padding: "5px 14px", fontSize: 14, flexShrink: 0 }}>✕</button>
         </div>
 
@@ -28611,12 +28608,12 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
           <div style={{ padding: "10px 22px", borderBottom: `1px solid ${C.border}`,
             background: `${C.blue}06`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>SCHEDULED DATE</div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>SCHEDULED DATE</div>
               <DateInp value={job.quickJobDate || ""} onChange={e => u({ quickJobDate: e.target.value })}
                 style={{ width: 140, fontSize: 12.5, borderColor: C.blue + "55", background: C.blue + "08" }} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>END DATE</div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>END DATE</div>
               <DateInp value={job.quickJobEndDate || ""} onChange={e => u({ quickJobEndDate: e.target.value })}
                 style={{ width: 140, fontSize: 12.5, borderColor: C.blue + "55", background: C.blue + "08" }} />
             </div>
@@ -28638,7 +28635,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                       <button type="button" onClick={() => doPullSimpro({ force: true })} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
                         style={{ background: "none", border: "none", padding: "0 4px", margin: 0,
-                          color: simproPulling ? C.faint : C.accent, fontSize: 9, fontWeight: 700,
+                          color: simproPulling ? C.faint : C.accent, fontSize: 11, fontWeight: 700,
                           cursor: simproPulling ? "wait" : "pointer", fontFamily: "inherit",
                           letterSpacing: "0.05em", textTransform: "uppercase",
                           display: "inline-flex", alignItems: "center", gap: 3 }}>
@@ -28970,7 +28967,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
             </div>
           </div>
           <button onClick={onClose}
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:`1px solid ${C.border}`,borderRadius:8,
               color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:14,flexShrink:0}}>✕</button>
         </div>
 
@@ -29000,7 +28997,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
           })}
           {job.tempPedStatus==="scheduled"&&(
             <div style={{display:"flex",flexDirection:"column",gap:2}}>
-              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:"#2F5BD9"}}>SCHEDULED DATE</div>
+              <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:"#2F5BD9"}}>SCHEDULED DATE</div>
               <DateInp value={job.tempPedScheduledDate||""} onChange={e=>u({tempPedScheduledDate:e.target.value})}
                 style={{fontSize:12.5,padding:"4px 10px",width:140,
                   borderColor:"#2F5BD955",background:"#2F5BD908"}}/>
@@ -29024,7 +29021,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                       <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
                         style={{background:"none",border:"none",padding:"0 4px",margin:0,
-                          color: simproPulling?C.faint:C.accent, fontSize:9, fontWeight:700,
+                          color: simproPulling?C.faint:C.accent, fontSize:11, fontWeight:700,
                           cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
                           letterSpacing:"0.05em", textTransform:"uppercase",
                           display:"inline-flex", alignItems:"center", gap:3}}>
@@ -30766,7 +30763,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     Convert
                   </button>
                   <button onClick={()=>{ setConvertPrompt(false); setConvertJobNo(""); }}
-                    style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+                    style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
                 </div>
               ) : (
                 <button onClick={()=>setConvertPrompt(true)}
@@ -30828,7 +30825,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <button onClick={onClose} aria-label="Close job" className="he-tap-sq"
 
-              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              style={{minWidth:"var(--he-tap, 32px)",background:"none",border:`1px solid ${C.border}`,borderRadius:8,
 
                 color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:14}}>✕</button>
 
@@ -30858,7 +30855,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               {t}
               {t==="Questions"&&qNewCount>0&&(
-                <span style={{marginLeft:5,fontSize:8,fontWeight:800,background:'#1F7A3F',color:'#fff',borderRadius:99,padding:'1px 6px',verticalAlign:'middle',letterSpacing:'0.03em'}}>{qNewCount} NEW</span>
+                <span style={{marginLeft:5,fontSize:11,fontWeight:800,background:'#1F7A3F',color:'#fff',borderRadius:99,padding:'1px 6px',verticalAlign:'middle',letterSpacing:'0.03em'}}>{qNewCount} NEW</span>
               )}
 
             </button>
@@ -31022,7 +31019,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             u(patch);
                           }} style={{fontSize:12.5,fontWeight:700,borderColor:(job.roughStartConfirmed?"#1F7A3F":C.rough)+"55",background:job.roughStartConfirmed?"#1F7A3F08":`${C.rough}08`,color:job.roughStartConfirmed?"#1F7A3F":C.rough}}/>
                           <button onClick={()=>{const confirm=!job.roughStartConfirmed;u({roughStartConfirmed:confirm,...(confirm?{roughStatus:"date_confirmed"}:(job.roughStatus==="date_confirmed"?{roughStatus:"waiting_date"}:{}))});}}
-                            style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",background:job.roughStartConfirmed?"#1F7A3F18":"#6E768218",color:job.roughStartConfirmed?"#1F7A3F":"#6E7682"}}>
+                            style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",background:job.roughStartConfirmed?"#1F7A3F18":"#6E768218",color:job.roughStartConfirmed?"#1F7A3F":C.faint}}>
                             {job.roughStartConfirmed?"✓ CONFIRMED":"○ CONFIRM"}
                           </button>
                         </div>
@@ -31091,7 +31088,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               }}/>
                               <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
                                 style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                              <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                              <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
                             </div>
                           ))}
                           {/* Inspection report — accepts images and PDFs.
@@ -31100,7 +31097,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               items so the report travels with the RT's
                               punch entries. */}
                           <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed #C6282833`}}>
-                            <div style={{fontSize:9,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:4}}>INSPECTION REPORT</div>
+                            <div style={{fontSize:11,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:4}}>INSPECTION REPORT</div>
                             <PhotoAttacher
                               storagePath={`jobs/${job.id}/inspection-reports/rough`}
                               photos={job.roughInspectionReports||[]}
@@ -31395,7 +31392,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             u(patch);
                           }} style={{fontSize:12.5,fontWeight:700,borderColor:(job.finishStartConfirmed?"#1F7A3F":C.finish)+"55",background:job.finishStartConfirmed?"#1F7A3F08":`${C.finish}08`,color:job.finishStartConfirmed?"#1F7A3F":C.finish}}/>
                           <button onClick={()=>{const confirm=!job.finishStartConfirmed;u({finishStartConfirmed:confirm,...(confirm?{finishStatus:"date_confirmed"}:(job.finishStatus==="date_confirmed"?{finishStatus:"waiting_date"}:{}))});}}
-                            style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",background:job.finishStartConfirmed?"#1F7A3F18":"#6E768218",color:job.finishStartConfirmed?"#1F7A3F":"#6E7682"}}>
+                            style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",background:job.finishStartConfirmed?"#1F7A3F18":"#6E768218",color:job.finishStartConfirmed?"#1F7A3F":C.faint}}>
                             {job.finishStartConfirmed?"✓ CONFIRMED":"○ CONFIRM"}
                           </button>
                         </div>
@@ -31438,7 +31435,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
                               <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
                                 style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                              <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                              <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
                             </div>
                           ))}
                           {/* Inspection report — accepts images and PDFs.
@@ -31447,7 +31444,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               items so the report travels with the RT's
                               punch entries. */}
                           <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed #C6282833`}}>
-                            <div style={{fontSize:9,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:4}}>INSPECTION REPORT</div>
+                            <div style={{fontSize:11,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:4}}>INSPECTION REPORT</div>
                             <PhotoAttacher
                               storagePath={`jobs/${job.id}/inspection-reports/final`}
                               photos={job.finalInspectionReports||[]}
@@ -32904,7 +32901,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   ...(lvCollab.generalNotes?[1]:[]),
                 ].length > 0;
                 if(!hasAny) return null;
-                const LVBadge = ()=><span style={{fontSize:9,fontWeight:800,color:'#2F5BD9',background:'#E6E2F0',borderRadius:4,padding:'1px 5px',marginRight:6,flexShrink:0}}>LV</span>;
+                const LVBadge = ()=><span style={{fontSize:11,fontWeight:800,color:'#2F5BD9',background:'#E6E2F0',borderRadius:4,padding:'1px 5px',marginRight:6,flexShrink:0}}>LV</span>;
                 const renderLVRows = (rows) => rows&&rows.length>0?(
                   <div style={{marginBottom:8}}>
                     {rows.map((r,i)=>(
@@ -33253,7 +33250,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       </select>
                       {qcDef.hasDate&&(
                         <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                          <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:qcDef.color}}>QC DATE</div>
+                          <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:qcDef.color}}>QC DATE</div>
                           <DateInp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
                             style={{width:140,fontSize:13,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
                         </div>
@@ -33343,7 +33340,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       </select>
                       {fDef.hasDate&&(
                         <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                          <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:fDef.color}}>QC DATE</div>
+                          <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:fDef.color}}>QC DATE</div>
                           <DateInp value={job.finishQcStatusDate||""} onChange={e=>u({finishQcStatusDate:e.target.value})} style={{width:140,fontSize:13,borderColor:fDef.color+"55",background:`${fDef.color}08`}}/>
                         </div>
                       )}
@@ -33448,7 +33445,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       onMouseDown={e=>e.currentTarget.style.transform='scale(0.98)'}
                       onMouseUp={e=>e.currentTarget.style.transform='scale(1)'}
                       onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
-                      <div style={{fontSize:9,fontWeight:700,letterSpacing:'0.07em',
+                      <div style={{fontSize:11,fontWeight:700,letterSpacing:'0.07em',
                         color:rqc.done===rqc.total?C.green:C.blue,marginBottom:4}}>ROUGH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
                         color:rqc.done===rqc.total?C.green:C.blue,lineHeight:1}}>
@@ -33469,7 +33466,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       onMouseDown={e=>e.currentTarget.style.transform='scale(0.98)'}
                       onMouseUp={e=>e.currentTarget.style.transform='scale(1)'}
                       onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
-                      <div style={{fontSize:9,fontWeight:700,letterSpacing:'0.07em',
+                      <div style={{fontSize:11,fontWeight:700,letterSpacing:'0.07em',
                         color:fqc.done===fqc.total?C.green:C.purple,marginBottom:4}}>FINISH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
                         color:fqc.done===fqc.total?C.green:C.purple,lineHeight:1}}>
@@ -33606,8 +33603,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       {(k==="simproNo"||k==="simproQuoteNo") && String(job[k]||"").trim() && (
                         <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
                           title="Fill blank fields from Simpro (Site address + Site Contact)"
-                          style={{background:"none",border:"none",padding:"4px 8px",margin:0,minHeight:24,
-                            color: simproPulling?C.faint:C.accent, fontSize:9, fontWeight:700,
+                          style={{background:"none",border:"none",padding:"4px 8px",margin:0,minHeight:"var(--he-tap, 24px)",
+                            color: simproPulling?C.faint:C.accent, fontSize:11, fontWeight:700,
                             cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
                             letterSpacing:"0.05em", textTransform:"uppercase",
                             display:"inline-flex", alignItems:"center", gap:3}}>
@@ -33699,7 +33696,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           {c.name}
                         </button>
                         {isLead && (
-                          <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.04em",
+                          <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.04em",
                             textTransform:"uppercase",color:"#fff",background:"#1F7A3F",
                             borderRadius:4,padding:"1px 6px"}}>Running this job</span>
                         )}
@@ -33707,7 +33704,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             been overridden, so it's clear the app didn't just
                             lose it — and clear which one is Koy's call. */}
                         {c.primary && (
-                          <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.04em",
+                          <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.04em",
                             textTransform:"uppercase",
                             color: anyLead ? C.faint : "#1F7A3F",
                             background: anyLead ? "transparent" : "#E8F1EC",
@@ -33726,7 +33723,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           return (
                             <button key={role} type="button"
                               onClick={()=>u({ gcContactLabels: { ...labels, [k]: on ? "" : role } })}
-                              style={{fontSize:9,fontWeight:700,letterSpacing:"0.03em",textTransform:"uppercase",
+                              style={{fontSize:11,fontWeight:700,letterSpacing:"0.03em",textTransform:"uppercase",
                                 fontFamily:"inherit",cursor:"pointer",borderRadius:4,padding:"2px 6px",
                                 color: on ? "#fff" : "#2F6349",
                                 background: on ? "#1F7A3F" : "transparent",
@@ -33784,7 +33781,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <button onClick={()=>u({statusUpdate:"",statusUpdateBy:"",statusUpdateAt:""})}
                       title="Clear this status update"
                       style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
-                        borderRadius:5,color:C.faint,fontSize:9,fontWeight:600,
+                        borderRadius:5,color:C.faint,fontSize:11,fontWeight:600,
                         padding:"2px 8px",cursor:"pointer",fontFamily:"inherit",
                         letterSpacing:"0.04em",textTransform:"uppercase"}}>Clear</button>
                   )}
@@ -33950,7 +33947,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               {isCommercial(job) && (()=>{
                 const c = commOf(job); const cu = (fn) => u(commPatch(job, fn));
-                const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
+                const lbl = (t) => <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
                 const inp = {width:"100%",padding:"7px 9px",border:`1px solid ${C.border}`,borderRadius:7,fontSize:14,fontFamily:"inherit",color:C.text,background:"#fff",boxSizing:"border-box"};
                 const sys = c.systems || {}; const ms = c.milestones || {};
                 return (<>
@@ -33975,9 +33972,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {lbl("Blue Stakes (811)")}
                     {(() => { const bs = commBlueStakes(c); const colr = bs.state==="expired"?C.red:bs.state==="soon"?C.slate:bs.state==="active"?C.green:C.dim; return (
                       <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
-                        <div style={{minWidth:150}}><div style={{fontSize:9,color:C.faint,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:11,color:C.faint,marginBottom:3}}>TICKET #</div><input value={c.blueStakesTicket||""} placeholder="Ticket #" onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesTicket:v})); }} style={inp}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:11,color:C.faint,marginBottom:3}}>CALLED IN</div><DateInp value={c.blueStakesCalled||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesCalled:v})); }}/></div>
+                        <div style={{minWidth:150}}><div style={{fontSize:11,color:C.faint,marginBottom:3}}>EXPIRES {c.blueStakesExpires?"":"(auto · 14 days)"}</div><DateInp value={c.blueStakesExpires||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, blueStakesExpires:v})); }}/></div>
                         {bs.state!=="none" && <span style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.04em",borderRadius:99,padding:"6px 12px",color:"#fff",background:colr}}>{bs.label}</span>}
                         {bs.state==="none" && <span style={{fontSize:12,color:C.faint}}>No active ticket — enter the called-in date and the expiry fills itself.</span>}
                       </div>); })()}
@@ -34020,7 +34017,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
               {can(identity,"job.division") && (
                 <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",margin:"6px 0 12px"}}>
-                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>DIVISION</span>
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>DIVISION</span>
                   <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
                     {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => {
                       const on = jobDivision(job) === k;
@@ -34314,7 +34311,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#2F5BD9', photoB
     const crew = m.role === 'crew';
     return (
       <div key={m.id} style={{alignSelf: crew?'flex-end':'flex-start', maxWidth:'88%'}}>
-        <div style={{fontSize:9, fontWeight:700, color: crew?color:'#5E6670', marginBottom:2, textAlign: crew?'right':'left'}}>
+        <div style={{fontSize:11, fontWeight:700, color: crew?color:'#5E6670', marginBottom:2, textAlign: crew?'right':'left'}}>
           {crew ? (m.by||'Homestead Electric') : (m.by||'Client')}{m.role === 'field' ? ' · from FieldInk' : ''}{m.at ? ` · ${timeAgo(m.at)}` : ''}
         </div>
         <div style={{background: crew?`${color}14`:'#EEF0F3', border:`1px solid ${crew?color+'33':'#E1E4E9'}`, borderRadius:10, padding:'7px 10px'}}>
@@ -34348,7 +34345,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#2F5BD9', photoB
             <span style={{flex:1}}/>
             <button type="button" onClick={send} disabled={busy || (!text.trim() && photos.length===0)}
               style={{fontSize:13, fontWeight:700, padding:'6px 16px', borderRadius:8, border:'none', fontFamily:'inherit',
-                background:(busy || (!text.trim() && photos.length===0))?'#E1E4E9':color, color:(busy || (!text.trim() && photos.length===0))?'#99A0AA':'#fff', cursor:(busy || (!text.trim() && photos.length===0))?'default':'pointer'}}>
+                background:(busy || (!text.trim() && photos.length===0))?'#E1E4E9':color, color:(busy || (!text.trim() && photos.length===0))?C.faint:'#fff', cursor:(busy || (!text.trim() && photos.length===0))?'default':'pointer'}}>
               {busy?'Sending…':'Send'}
             </button>
           </div>
@@ -34637,9 +34634,9 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
             onSave={v=>upd(q.id,{question:v})}/>
 
-          {newAns(q)&&<span style={{fontSize:9,fontWeight:800,color:'#1F7A3F',background:'#DEEFE6',border:'1px solid #1F7A3F44',borderRadius:99,padding:'1px 8px',alignSelf:'flex-start',letterSpacing:'0.04em'}}>NEW ANSWER</span>}
-          {q.source&&<span style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="mapPin" size={9}/> {q.source}</span>}
-          {(q.addedBy||q.addedAt)&&<span style={{fontSize:9,color:C.dim}}>
+          {newAns(q)&&<span style={{fontSize:11,fontWeight:800,color:'#1F7A3F',background:'#DEEFE6',border:'1px solid #1F7A3F44',borderRadius:99,padding:'1px 8px',alignSelf:'flex-start',letterSpacing:'0.04em'}}>NEW ANSWER</span>}
+          {q.source&&<span style={{fontSize:11,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="mapPin" size={9}/> {q.source}</span>}
+          {(q.addedBy||q.addedAt)&&<span style={{fontSize:11,color:C.dim}}>
             {q.addedBy?`added by ${q.addedBy}`:"added"}{q.addedAt?` · ${new Date(q.addedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} (${timeAgo(q.addedAt)})`:""}
           </span>}
           {(()=>{ const cur=(q.room||"").trim(); const isEd=editRoom===q.id; const others=(roomOptions||[]).filter(r=>r&&r.toLowerCase()!==cur.toLowerCase());
@@ -34649,7 +34646,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                (same trick as the recipient tag above). */
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRoom(q.id)} title="Set which room this question is about"
-                style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
+                style={{alignSelf:'flex-start',fontSize:11,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
                   border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.faint}}>
                 {cur||'+ room'}
               </button>
@@ -34658,20 +34655,20 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:4,alignSelf:'flex-start',marginTop:2}}>
                 {others.map(r=>(
                   <button key={r} type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,r);setEditRoom(null);}}
-                    style={{fontSize:9,fontWeight:600,borderRadius:99,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>{r}</button>
+                    style={{fontSize:11,fontWeight:600,borderRadius:99,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>{r}</button>
                 ))}
                 <input autoFocus defaultValue={cur} placeholder="Type room…"
                   onKeyDown={e=>{ if(e.key==='Enter'){setRoom(q.id,e.currentTarget.value);setEditRoom(null);} else if(e.key==='Escape'){setEditRoom(null);} }}
                   onBlur={e=>{ setRoom(q.id,e.currentTarget.value); setEditRoom(null); }}
                   style={{fontSize:12,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
-                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,'');setEditRoom(null);}} style={{fontSize:9,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();setRoom(q.id,'');setEditRoom(null);}} style={{fontSize:11,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
               </div>
             );
           })()}
           {(()=>{ const cur=(q.for||"").trim(); const isEd=editRecip===q.id; const others=recipients.filter(r=>r&&r!==cur);
             if(!isEd) return (
               <button type="button" onClick={()=>setEditRecip(q.id)} title="Set who this question is for"
-                style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
+                style={{alignSelf:'flex-start',fontSize:11,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
                   border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.faint}}>
                 {cur?`For: ${cur}`:'+ recipient'}
               </button>
@@ -34680,27 +34677,27 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:4,alignSelf:'flex-start',marginTop:2}}>
                 {others.map(r=>(
                   <button key={r} type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:r});setEditRecip(null);}}
-                    style={{fontSize:9,fontWeight:600,borderRadius:99,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>{r}</button>
+                    style={{fontSize:11,fontWeight:600,borderRadius:99,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>{r}</button>
                 ))}
                 <input autoFocus defaultValue={cur} placeholder="Type recipient…"
                   onKeyDown={e=>{ if(e.key==='Enter'){upd(q.id,{for:e.currentTarget.value.trim()});setEditRecip(null);} else if(e.key==='Escape'){setEditRecip(null);} }}
                   onBlur={e=>{ upd(q.id,{for:e.currentTarget.value.trim()}); setEditRecip(null); }}
                   style={{fontSize:12,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
-                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:9,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:11,color:C.faint,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
               </div>
             );
           })()}
           {q.done&&(q.note||"").trim()&&<span style={{fontSize:12,color:C.dim,fontStyle:'italic',alignSelf:'flex-start'}}>Note: {q.note}</span>}
-          {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:9,
+          {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:11,
             background:filterIds.has(q.id)?'#DEEFE6':'#EEF0F3',
-            color:filterIds.has(q.id)?'#1F7A3F':'#99A0AA',alignSelf:'flex-start'}}>
+            color:filterIds.has(q.id)?'#1F7A3F':C.faint,alignSelf:'flex-start'}}>
             {filterIds.has(q.id)?'Shared':'Not shared'}
           </span>}
         </div>
 
         <button onClick={async ()=>{ if(!await showConfirm("Delete this question?")) return; del(q.id); }}
 
-          style={{background:"none",border:"none",color:C.faint,cursor:"pointer",
+          style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",
 
             fontSize:13,flexShrink:0,padding:"0 2px"}}>✕</button>
 
@@ -34712,7 +34709,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
           {more && (
             <div style={{marginBottom:10}}>
-              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.faint,fontWeight:600}}>(GC sees this)</span></div>
+              <div style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.faint,fontWeight:600}}>(GC sees this)</span></div>
               <input type="text" value={q.note||""} onChange={e=>upd(q.id,{note:e.target.value})}
                 placeholder="e.g. We recommend a 200A panel here"
                 style={{width:"100%",padding:"5px 8px",fontSize:12.5,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
@@ -34729,7 +34726,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
           {/* How answered? — method chips + optional context note (paper trail) */}
           {more && (
           <div style={{marginTop:8}}>
-            <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>HOW ANSWERED?</div>
+            <div style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>HOW ANSWERED?</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
               {ANSWER_METHODS.map(m=>{
                 const sel=q.answeredVia===m.v;
@@ -34761,7 +34758,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
         <div style={{marginLeft:22,marginTop:4}}>
           <div style={{fontSize:12.5,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
-            {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#1F7A3F",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>{q.answeredBy||'Link'}</span>}
+            {q.gcAnswered&&<span style={{fontSize:11,fontWeight:700,color:"#1F7A3F",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>{q.answeredBy||'Link'}</span>}
             <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={safeProps(q.answer||'(answered with attachments)')}/>
           </div>
           {(q.answerPhotos||[]).filter(p=>p&&p.url).length>0&&(
@@ -34790,7 +34787,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         const when = q.answeredAt ? new Date(q.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
         if(!methodLabel && !q.answeredBy && !when && !q.answerNote) return null;
         return (
-          <div style={{marginLeft:22,fontSize:9,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+          <div style={{marginLeft:22,fontSize:11,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
             {methodLabel&&<span style={{fontWeight:700,color:via==='link'?'#1F7A3F':'#2F5BD9',background:via==='link'?'#DEEFE6':'#E0E8F3',borderRadius:4,padding:'1px 5px'}}>{methodLabel}</span>}
             {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when} (${timeAgo(q.answeredAt)})`:''}</span>}
             {q.answerNote&&<span style={{fontStyle:'italic'}}>· {q.answerNote}</span>}
@@ -34811,7 +34808,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         const latePhotos = (late.photos||[]).filter(p=>p&&p.url);
         return (
           <div style={{marginLeft:22,marginTop:6,background:C.slateBg,border:"1px solid #C9D1DC",borderRadius:8,padding:"7px 9px"}}>
-            <div style={{fontSize:9,fontWeight:700,color:C.slateInk,letterSpacing:"0.04em",marginBottom:3}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.slateInk,letterSpacing:"0.04em",marginBottom:3}}>
               LINK ANSWER CAME IN AFTER THIS WAS CLOSED{gcAnsweredBy?` — ${gcAnsweredBy}`:''}
             </div>
             {String(late.answer||'').trim()!==''&&<div style={{fontSize:12.5,fontStyle:"italic",color:"#5B5E66",lineHeight:1.5}}>{late.answer}</div>}
@@ -34862,7 +34859,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         const answered = q.done || String(fi.answer||'').trim();
         const fg = answered ? '#1F7A3F' : '#2F5BD9', bg = answered ? '#DEEFE6' : '#E0E8F3';
         const label = (answered ? 'Answered on plan' : 'Pinned on plan') + (fi.page ? ` · p.${fi.page}` : '');
-        const st = {fontSize:9,fontWeight:700,color:fg,background:bg,border:`1px solid ${fg}44`,borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4};
+        const st = {fontSize:11,fontWeight:700,color:fg,background:bg,border:`1px solid ${fg}44`,borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4};
         return (
           <div style={{marginLeft:22,marginTop:5}}>
             {fi.shareId ? (
@@ -34882,7 +34879,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
       {q.fromFieldNote?.shareId && (
         <div style={{marginLeft:22,marginTop:5}}>
           <a href={FIELDINK_VIEWER_BASE + q.fromFieldNote.shareId} target="_blank" rel="noreferrer"
-             style={{fontSize:9,fontWeight:700,color:'#2F5BD9',background:'#E7ECF7',border:'1px solid #2F5BD944',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
+             style={{fontSize:11,fontWeight:700,color:'#2F5BD9',background:'#E7ECF7',border:'1px solid #2F5BD944',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
             <Icon name="external" size={10} stroke={2.5}/> On plan{q.fromFieldNote.page?` · p.${q.fromFieldNote.page}`:''}{q.fromFieldNote.planName?` · ${q.fromFieldNote.planName}`:''} — view
           </a>
         </div>
@@ -34910,7 +34907,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
           anything cached in an older shape. */}
       {!q.done&&gcAnswerMap[q.id]&&(
         <div style={{marginLeft:22,marginTop:6,background:"#ECF2EE",border:"1px solid #1F7A3F44",borderRadius:6,padding:"6px 10px",fontSize:12.5}}>
-          <span style={{fontSize:9,fontWeight:700,color:"#1F7A3F",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",marginRight:6}}>{gcAnsweredBy||'Link'}</span>
+          <span style={{fontSize:11,fontWeight:700,color:"#1F7A3F",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",marginRight:6}}>{gcAnsweredBy||'Link'}</span>
           <span style={{color:"#2C5C40",fontStyle:"italic"}} dangerouslySetInnerHTML={safeProps((typeof gcAnswerMap[q.id]==='object'?gcAnswerMap[q.id].answer:gcAnswerMap[q.id])||'')}/>
           {typeof gcAnswerMap[q.id]==='object'&&(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).length>0&&(
             <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>
@@ -34927,7 +34924,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       {(gcNoteMap[q.id]||"").trim()&&(
         <div style={{marginLeft:22,marginTop:6,background:C.slateBg,border:"1px solid #C9D1DC",borderRadius:6,padding:"6px 10px",fontSize:12.5}}>
-          <span style={{fontSize:9,fontWeight:700,color:C.slateInk,background:C.slateBg,borderRadius:4,padding:"1px 5px",marginRight:6}}>{(gcAnsweredBy||'GC').toUpperCase()} ASKED</span>
+          <span style={{fontSize:11,fontWeight:700,color:C.slateInk,background:C.slateBg,borderRadius:4,padding:"1px 5px",marginRight:6}}>{(gcAnsweredBy||'GC').toUpperCase()} ASKED</span>
           <span style={{color:C.slateInk,fontStyle:"italic"}}>{gcNoteMap[q.id]}</span>
         </div>
       )}
@@ -34940,7 +34937,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
           doc; the render below merges legacy + side-doc messages. */}
       {jobId && (threadOf(q).length>0 || (!q.done && more)) && (
         <div style={{marginLeft:22,marginTop:8}}>
-          {threadOf(q).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,marginBottom:2}}>DISCUSSION</div>}
+          {threadOf(q).length>0 && <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",color:C.dim,marginBottom:2}}>DISCUSSION</div>}
           <QAThread
             messages={threadOf(q)}
             jobId={jobId}
@@ -35015,7 +35012,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               background:"none",border:"none",borderBottom:`1px solid ${C.green}33`,padding:0,paddingBottom:4,marginBottom:8,
               cursor:statusFilter==='answered'?"default":"pointer",fontFamily:"inherit"}}>
             ✓ ANSWERED ({answered.length})
-            {newAnsCount>0&&<span style={{marginLeft:8,fontSize:9,fontWeight:800,color:'#fff',background:'#1F7A3F',borderRadius:99,padding:'1px 8px',letterSpacing:'0.04em',verticalAlign:'middle'}}>{newAnsCount} NEW</span>}
+            {newAnsCount>0&&<span style={{marginLeft:8,fontSize:11,fontWeight:800,color:'#fff',background:'#1F7A3F',borderRadius:99,padding:'1px 8px',letterSpacing:'0.04em',verticalAlign:'middle'}}>{newAnsCount} NEW</span>}
             {statusFilter==='answered'?'':(answeredExpanded?' ▴':' ▾')}
           </button>
 
@@ -35171,7 +35168,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             </button>
           )}
           {chip(statusFilter==='answered',
-            <>Answered ({ansCount}){newAnsTotal>0&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:'#fff',background:'#1F7A3F',borderRadius:99,padding:'1px 7px',verticalAlign:'middle'}}>{newAnsTotal} NEW</span>}</>,
+            <>Answered ({ansCount}){newAnsTotal>0&&<span style={{marginLeft:6,fontSize:11,fontWeight:800,color:'#fff',background:'#1F7A3F',borderRadius:99,padding:'1px 7px',verticalAlign:'middle'}}>{newAnsTotal} NEW</span>}</>,
             ()=>setStatusFilter('answered'), "__stAns")}
         </div>
       )}
@@ -35337,7 +35334,7 @@ function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
             <span style={{ fontSize: 12, fontWeight: 800, color: typeDef.color, letterSpacing: "0.06em",
               background: typeDef.color + "18", borderRadius: 99, padding: "1px 7px",
               border: `1px solid ${typeDef.color}33` }}>{typeDef.label.toUpperCase()}</span>
-            <span style={{ fontSize: 9, fontWeight: 700, color: "#6E7682", background: "#6E768215",
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.faint, background: "#6E768215",
               borderRadius: 99, padding: "1px 6px", border: "1px solid #6E768222" }}>QUICK</span>
           </div>
           <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 2 }}>{job.name || "Untitled Job"}</div>
@@ -35710,7 +35707,7 @@ function StatusUpdateTextarea({ job, identity, onCommit, styleVars }) {
 const STAGE_SECTIONS = [
 
   // Quick Jobs
-  { key:"quickNew",        label:"Quick Jobs — New",              color:"#6E7682",
+  { key:"quickNew",        label:"Quick Jobs — New",              color:C.faint,
     test: j => !!j.quickJob && (j.quickJobStatus||"new")==="new" },
 
   { key:"quickScheduled",  label:"Quick Jobs — Scheduled",        color:"#2F5BD9",
@@ -36079,7 +36076,7 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
             <DateInp value={u.projectedStart||""} onChange={e=>upd(u.id,{projectedStart:e.target.value})}/>
             <button type="button" onClick={()=>upd(u.id,{startConfirmed:!u.startConfirmed})}
               title="Mark this projected start as confirmed (crew held)"
-              style={{background:u.startConfirmed?`${C.green}18`:"none",border:`1px solid ${u.startConfirmed?C.green:C.border}`,borderRadius:99,color:u.startConfirmed?C.green:C.dim,fontSize:9,fontWeight:700,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+              style={{background:u.startConfirmed?`${C.green}18`:"none",border:`1px solid ${u.startConfirmed?C.green:C.border}`,borderRadius:99,color:u.startConfirmed?C.green:C.dim,fontSize:11,fontWeight:700,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
               {u.startConfirmed?"✓ CONFIRMED":"○ CONFIRM"}</button>
           </div>
         </div>
@@ -36233,7 +36230,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                             <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:12.5,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
                           </>
                         ) : (
-                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                         )}
                       </div>
                     </div>
@@ -36301,7 +36298,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                     <div style={{flex:2.5,paddingRight:12,overflow:"hidden"}}>
                       <div style={{fontSize:14,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                         {u.name||<span style={{color:C.faint,fontStyle:"italic"}}>Untitled</span>}
-                        {u.foreman&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:getFC(u.foreman)||"#6E7682",background:`${getFC(u.foreman)||"#6E7682"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6E7682"}33`}}>{u.foreman}</span>}
+                        {u.foreman&&<span style={{marginLeft:8,fontSize:12,fontWeight:700,color:getFC(u.foreman)||C.faint,background:`${getFC(u.foreman)||"#6E7682"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6E7682"}33`}}>{u.foreman}</span>}
                       </div>
                       {u.address&&<div style={{marginTop:2,fontSize:12,color:C.faint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
                       {isSigned&&<div style={{marginTop:2}}><SignedBadge/></div>}
@@ -36343,7 +36340,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                           <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:12.5,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
                         </>
                       ) : (
-                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                       )}
                     </div>
                   </>
@@ -36877,7 +36874,7 @@ const URGENCY = (dueDateStr) => {
   if(diff === 1) return {label:"DUE TOMORROW", color:"#C2410C", bg:"#C2410C15", level:"critical", days: 1};
   if(diff <= 3) return {label:`DUE IN ${diff} DAYS`, color:C.orange, bg:"#C2410C18", level:"warning", days: diff};
   if(diff <= 7) return {label:`DUE IN ${diff} DAYS`, color:"#2F5BD9", bg:"#2F5BD910", level:"soon", days: diff};
-  return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6E7682", bg:"transparent", level:"fine", days: diff};
+  return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:C.faint, bg:"transparent", level:"fine", days: diff};
 };
 
 function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualClear, onSignOffRT }) {
@@ -36931,29 +36928,29 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
       <div style={{flex:1,minWidth:0}}>
         {/* Category + urgency row */}
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
-          <span style={{fontSize:9,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
+          <span style={{fontSize:11,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
             {(CATEGORY_LABELS[task.category]||task.category).toUpperCase()}
           </span>
           {task.itemType && ITEM_TYPE_COLORS[task.itemType] && (
-            <span style={{fontSize:9,fontWeight:800,color:ITEM_TYPE_COLORS[task.itemType],background:`${ITEM_TYPE_COLORS[task.itemType]}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${ITEM_TYPE_COLORS[task.itemType]}33`,letterSpacing:"0.07em"}}>
+            <span style={{fontSize:11,fontWeight:800,color:ITEM_TYPE_COLORS[task.itemType],background:`${ITEM_TYPE_COLORS[task.itemType]}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${ITEM_TYPE_COLORS[task.itemType]}33`,letterSpacing:"0.07em"}}>
               {task.itemType.toUpperCase()}
             </span>
           )}
           {task.requestedBy && (
-            <span style={{fontSize:9,fontWeight:600,color:"var(--dim)",letterSpacing:"0.04em"}}>
+            <span style={{fontSize:11,fontWeight:600,color:"var(--dim)",letterSpacing:"0.04em"}}>
               via {task.requestedBy}
             </span>
           )}
           {urg&&!editingDate&&(
             <span onClick={()=>{setEditingDate(true);setDateVal(task.dueDate||"");}}
-              style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4}}
+              style={{fontSize:11,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4}}
               title="Click to edit due date">
               {urg.label} <Icon name="pencil" size={9}/>
             </span>
           )}
           {!urg&&!editingDate&&onSetDueDate&&(
             <span onClick={()=>{setEditingDate(true);setDateVal("");}}
-              style={{fontSize:9,color:"var(--muted)",cursor:"pointer",padding:"2px 6px",borderRadius:99,border:"1px dashed var(--border)"}}
+              style={{fontSize:11,color:"var(--muted)",cursor:"pointer",padding:"2px 6px",borderRadius:99,border:"1px dashed var(--border)"}}
               title="Set due date">
               + due date
             </span>
@@ -36982,13 +36979,13 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
                 </button>
               )}
               <button onClick={()=>setEditingDate(false)}
-                style={{fontSize:12,background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontFamily:"inherit"}}>
+                style={{minWidth:"var(--he-tap, 32px)",fontSize:12,background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontFamily:"inherit"}}>
                 ✕
               </button>
             </div>
           )}
-          {task.foreman&&task.foreman!=="Unassigned"&&(()=>{const fc=getFC(task.foreman)||"#6E7682";return(<span style={{fontSize:9,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"2px 7px",border:`1px solid ${fc}33`,letterSpacing:"0.04em"}}>{task.foreman.split(" ")[0]}</span>);})()}
-          {task.type==="manual"&&<span style={{fontSize:9,color:"#6E7682",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
+          {task.foreman&&task.foreman!=="Unassigned"&&(()=>{const fc=getFC(task.foreman)||"#6E7682";return(<span style={{fontSize:11,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"2px 7px",border:`1px solid ${fc}33`,letterSpacing:"0.04em"}}>{task.foreman.split(" ")[0]}</span>);})()}
+          {task.type==="manual"&&<span style={{fontSize:11,color:C.faint,letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
         </div>
 
         {/* Title */}
@@ -37569,7 +37566,7 @@ function JobActivity({ job, onSetTab }) {
                             display:"inline-flex", alignItems:"center", gap:6}}>
                             {it.label}
                             {it.waiting && (
-                              <span style={{fontSize:9, fontWeight:700,
+                              <span style={{fontSize:11, fontWeight:700,
                                 background:C.slateBg, color:C.slateInk,
                                 borderRadius:99, padding:"1px 6px",
                                 border:"1px solid #C9D1DC", letterSpacing:"0.04em"}}>
@@ -37614,7 +37611,7 @@ function JobActivity({ job, onSetTab }) {
             {chunked.map((row, i) => {
               if (row.kind === "month") {
                 return (
-                  <div key={`m_${i}`} style={{fontSize:9, fontWeight:800, letterSpacing:"0.12em",
+                  <div key={`m_${i}`} style={{fontSize:11, fontWeight:800, letterSpacing:"0.12em",
                     color:C.dim, textTransform:"uppercase", padding:"14px 12px 6px",
                     borderBottom:`1px solid ${C.border}`, marginBottom:6}}>
                     {row.label}
@@ -37946,10 +37943,10 @@ function JobOpenItems({ job, foremenList, jobs, onUpdateJob, onGoToReturnTrips, 
                     <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                       <div style={{fontSize:14,fontWeight:600,color: isDone ? "var(--dim)" : "var(--text)", textDecoration: isDone ? "line-through" : "none"}}>{t.title}</div>
                       {isRT && t.__rtStatus === "scheduled" && (
-                        <span style={{fontSize:9,fontWeight:700,color:"#6A3FB5",background:"#6A3FB515",border:"1px solid #8b5cf533",borderRadius:99,padding:"1px 6px",letterSpacing:"0.04em",textTransform:"uppercase"}}>Scheduled</span>
+                        <span style={{fontSize:11,fontWeight:700,color:"#6A3FB5",background:"#6A3FB515",border:"1px solid #8b5cf533",borderRadius:99,padding:"1px 6px",letterSpacing:"0.04em",textTransform:"uppercase"}}>Scheduled</span>
                       )}
                       {isRT && t.__rtStatus === "needs" && (
-                        <span style={{fontSize:9,fontWeight:700,color:"#C62828",background:"#C6282815",border:"1px solid #C6282833",borderRadius:99,padding:"1px 6px",letterSpacing:"0.04em",textTransform:"uppercase"}}>Needs Schedule</span>
+                        <span style={{fontSize:11,fontWeight:700,color:"#C62828",background:"#C6282815",border:"1px solid #C6282833",borderRadius:99,padding:"1px 6px",letterSpacing:"0.04em",textTransform:"uppercase"}}>Needs Schedule</span>
                       )}
                     </div>
                     <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:3}}>
@@ -38865,7 +38862,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                                     alignItems:"center",marginBottom:1}}>
                                     <span style={{fontSize:12,fontWeight:700,color:nameColor}}>{shortName}</span>
                                     {(eStart||eEnd) && (
-                                      <span style={{fontSize:9,color:C.dim,fontWeight:500}}>
+                                      <span style={{fontSize:11,color:C.dim,fontWeight:500}}>
                                         {eStart}{eEnd?`–${eEnd}`:""}
                                       </span>
                                     )}
@@ -38999,7 +38996,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
     {key:"done",      label:"Passed / done",         color:"#2E8B57"},
   ];
   const stagePill = (stage) => (
-    <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",flexShrink:0,
+    <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",flexShrink:0,
       color:stage==="Finish"?C.finish:C.rough, background:`${stage==="Finish"?C.finish:C.rough}18`, border:`1px solid ${stage==="Finish"?C.finish:C.rough}33`}}>{stage}</span>
   );
   const fmtD = (d) => { if(!d) return ""; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
@@ -39319,7 +39316,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
                     boxShadow:"0 1px 2px rgba(27,31,36,.05)",marginBottom:8,display:"flex",alignItems:"center",gap:11,
                     cursor:canOpen(e)?"pointer":"default"}}>
                   <div style={{flex:"0 0 46px",textAlign:"center"}}>
-                    <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
+                    <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
                     <div style={{fontSize:14,fontWeight:800,color:C.text,fontVariantNumeric:"tabular-nums"}}>{_startFmt(e.date)}</div>
                   </div>
                   <div style={{width:1,alignSelf:"stretch",background:C.border,margin:"1px 0"}}/>
@@ -39327,7 +39324,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
                     <div style={{fontSize:14,fontWeight:700,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.nm}</div>
                     <div style={{fontSize:12.5,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.gc}{e.up?" · in Upcoming":""}</div>
                   </div>
-                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase",whiteSpace:"nowrap",
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase",whiteSpace:"nowrap",
                     color:pill[1],background:`${pill[1]}18`,borderRadius:99,padding:"3px 7px",border:e.up?`1px dashed ${pill[1]}66`:"none"}}>{pill[0]}</span>
                 </div>
               );
@@ -39363,8 +39360,8 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
                   boxShadow:"0 1px 2px rgba(27,31,36,.05)",marginBottom:8,display:"flex",alignItems:"center",gap:11,
                   cursor:canOpen(e)?"pointer":"default"}}>
                 <div style={{flex:"0 0 46px",textAlign:"center"}}>
-                  <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
-                  <div style={{fontSize:bad?10:14,fontWeight:800,color:bad?C.red:C.faint,
+                  <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>{e.phase}</div>
+                  <div style={{fontSize:bad?11:14,fontWeight:800,color:bad?C.red:C.faint,
                     whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{bad?e.date:"—"}</div>
                 </div>
                 <div style={{width:1,alignSelf:"stretch",background:C.border,margin:"1px 0"}}/>
@@ -39373,7 +39370,7 @@ function StartsReport({ jobs=[], upcoming=[], onSelectJob, onSelectUpcoming }){
                   <div style={{fontSize:12.5,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                     {e.gc}{e.gc&&(e.why||bad)?" · ":""}{bad?"Date unreadable":e.why}{e.up?" · in Upcoming":""}</div>
                 </div>
-                <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase",whiteSpace:"nowrap",
+                <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase",whiteSpace:"nowrap",
                   color:_STARTS_GOLD,background:`${_STARTS_GOLD}18`,borderRadius:99,padding:"3px 7px",
                   border:`1px dashed ${_STARTS_GOLD}66`}}>Needs date</span>
               </div>
@@ -40787,14 +40784,14 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         onMouseEnter={e=>e.currentTarget.style.background=col+"30"}
         onMouseLeave={e=>e.currentTarget.style.background=col+"18"}>
         <span style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0,display:"block"}}/>
-        <span style={{fontSize:mini?9:10,fontWeight:700,color:col,flexShrink:0}}>{ev.label}</span>
-        <span style={{fontSize:mini?9:10,color:"var(--text)",fontWeight:600,
+        <span style={{fontSize:11,fontWeight:700,color:col,flexShrink:0}}>{ev.label}</span>
+        <span style={{fontSize:11,color:"var(--text)",fontWeight:600,
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
           {ev.job.name||"Untitled"}
         </span>
-        {inSimpro&&<span title="Scheduled in Simpro" style={{fontSize:7,color:"#2E8B57",
+        {inSimpro&&<span title="Scheduled in Simpro" style={{fontSize:11,color:"#2E8B57",
           fontWeight:800,flexShrink:0,lineHeight:1}}>✓</span>}
-        {notScheduled&&<span title="Not scheduled in Simpro" style={{fontSize:7,color:C.orange,
+        {notScheduled&&<span title="Not scheduled in Simpro" style={{fontSize:11,color:C.orange,
           fontWeight:800,flexShrink:0,lineHeight:1}}>!</span>}
         {ev.hardDate&&<span style={{color:col,flexShrink:0,display:"inline-flex",alignItems:"center"}}><Icon name="lock" size={9} stroke={2.25}/></span>}
       </div>
@@ -40817,18 +40814,18 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${col}18`;}}
         onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap",rowGap:4,paddingRight:canEdit?24:0}}>
-          {over&&<span style={{fontSize:9,fontWeight:800,color:C.red,background:C.red+"18",borderRadius:99,
+          {over&&<span style={{fontSize:11,fontWeight:800,color:C.red,background:C.red+"18",borderRadius:99,
             padding:"2px 8px",border:`1px solid ${C.red}33`,letterSpacing:"0.07em",flexShrink:0,
             whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3}}>
             <Icon name="alertTriangle" size={9} stroke={2.5}/> OVERDUE</span>}
-          <span style={{fontSize:9,fontWeight:800,color:col,background:col+"18",borderRadius:99,
+          <span style={{fontSize:11,fontWeight:800,color:col,background:col+"18",borderRadius:99,
             padding:"2px 8px",border:`1px solid ${col}28`,letterSpacing:"0.07em",flexShrink:0}}>{ev.label}</span>
-          <span style={{fontSize:9,fontWeight:700,color:fc,background:fc+"15",borderRadius:99,
+          <span style={{fontSize:11,fontWeight:700,color:fc,background:fc+"15",borderRadius:99,
             padding:"2px 7px",border:`1px solid ${fc}28`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
-          {inSimpro&&<span title="Scheduled in Simpro" style={{fontSize:9,fontWeight:800,color:"#2E8B57",
+          {inSimpro&&<span title="Scheduled in Simpro" style={{fontSize:11,fontWeight:800,color:"#2E8B57",
             background:"#2E8B5718",borderRadius:99,padding:"2px 7px",border:"1px solid #2E8B5733",
             flexShrink:0}}>✓ Simpro</span>}
-          {notScheduled&&<span title="Has Simpro job # but not scheduled this month" style={{fontSize:9,
+          {notScheduled&&<span title="Has Simpro job # but not scheduled this month" style={{fontSize:11,
             fontWeight:700,color:C.orange,background:`${C.orange}18`,borderRadius:99,
             padding:"2px 7px",border:`1px solid ${C.orange}33`,flexShrink:0}}>Not scheduled</span>}
         </div>
@@ -40856,7 +40853,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             const isSch = ev.inProgressMode === "scheduled";
             const pc = isSch ? "#2F5BD9" : "#6E7682";
             return (
-              <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",padding:"1px 6px",
+              <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",padding:"1px 6px",
                 borderRadius:99, background:`${pc}18`, color:pc,
                 border:`1px ${isSch?"solid":"dashed"} ${pc}55`,
                 display:"inline-flex",alignItems:"center",gap:3,whiteSpace:"nowrap"}}>
@@ -40922,7 +40919,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         alignItems:"center",justifyContent:"center",background:"#C2410C22",color:"#C2410C",
         fontWeight:800,fontSize:14}}>$</span>
       <div style={{minWidth:0,flex:1}}>
-        <div style={{fontSize:8.5,fontWeight:800,letterSpacing:"0.08em",color:"#C2410C"}}>READY TO INVOICE · {ev.job.foreman||"Koy"}</div>
+        <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",color:"#C2410C"}}>READY TO INVOICE · {ev.job.foreman||"Koy"}</div>
         <div style={{fontSize:13,fontWeight:600,color:"var(--text)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
       </div>
       {canEdit && (
@@ -41014,12 +41011,12 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                   <span style={{fontSize:12.5,fontWeight:isToday?800:600,
                     color:isToday?C.accent:isWeekend?"var(--muted)":"var(--text)"}}>{day}</span>
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    {isToday&&<span style={{fontSize:8,color:C.accent,fontWeight:800,letterSpacing:"0.08em"}}>TODAY</span>}
-                    {dayEvs.length>0&&!isToday&&<span style={{fontSize:9,fontWeight:700,color:"var(--dim)"}}>{dayEvs.length}</span>}
+                    {isToday&&<span style={{fontSize:11,color:C.accent,fontWeight:800,letterSpacing:"0.08em"}}>TODAY</span>}
+                    {dayEvs.length>0&&!isToday&&<span style={{fontSize:11,fontWeight:700,color:"var(--dim)"}}>{dayEvs.length}</span>}
                   </div>
                 </div>
                 {dayEvs.slice(0,3).map(ev=><EventPill key={ev.id} ev={ev} mini/>)}
-                {dayEvs.length>3&&<div style={{fontSize:9,color:"var(--muted)",paddingLeft:4}}>+{dayEvs.length-3} more</div>}
+                {dayEvs.length>3&&<div style={{fontSize:11,color:"var(--muted)",paddingLeft:4}}>+{dayEvs.length-3} more</div>}
               </div>
             );
           })}
@@ -41038,7 +41035,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                   letterSpacing:"0.06em",color:C.accent}}>{label.toUpperCase()}</div>
                 <div style={{marginLeft:"auto",fontSize:12.5,color:"var(--dim)"}}>{dayEvs.length} item{dayEvs.length!==1?"s":""}</div>
                 <button onClick={()=>setCalDayDetail(null)}
-                  style={{background:"none",border:"none",color:"var(--muted)",fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+                  style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:"var(--muted)",fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
               </div>
               {dayEvs.length===0
                 ?<div style={{fontSize:13,color:"var(--muted)",fontStyle:"italic"}}>Nothing scheduled this day.</div>
@@ -41064,7 +41061,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             style={{background:C.blue,color:"#fff",border:"none",borderRadius:6,
               padding:"4px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
           <button onClick={()=>{ if(undoToast.timer) clearTimeout(undoToast.timer); setUndoToast(null); }}
-            style={{background:"none",border:"none",color:"#8A929D",cursor:"pointer",fontSize:14,padding:"0 4px"}}>✕</button>
+            style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:D.text,cursor:"pointer",fontSize:14,padding:"0 4px"}}>✕</button>
         </div>
       )}
       {/* ── Header ── */}
@@ -41245,7 +41242,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           color:isToday2?C.accent:"var(--dim)"}}>
                           {dayDate.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
                         </span>
-                        {isToday2&&<span style={{fontSize:9,fontWeight:800,color:C.accent,
+                        {isToday2&&<span style={{fontSize:11,fontWeight:800,color:C.accent,
                           background:C.accent+"18",borderRadius:99,padding:"1px 8px",letterSpacing:"0.08em"}}>TODAY</span>}
                       </div>
 
@@ -41308,7 +41305,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                               const isSch = ev.inProgressMode === "scheduled";
                               const pc = isSch ? "#2F5BD9" : "#6E7682";
                               return (
-                                <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",
+                                <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",
                                   padding:"1px 6px", borderRadius:99, background:`${pc}18`, color:pc,
                                   border:`1px ${isSch?"solid":"dashed"} ${pc}55`, flexShrink:0,
                                   display:"inline-flex",alignItems:"center",gap:3,whiteSpace:"nowrap"}}>
@@ -41317,7 +41314,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 </span>
                               );
                             })()}
-                            <span style={{fontSize:9,fontWeight:700,color:ev.fc,
+                            <span style={{fontSize:11,fontWeight:700,color:ev.fc,
                               background:ev.fc+"15",borderRadius:99,padding:"1px 6px",
                               border:`1px solid ${ev.fc}20`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
                           </div>
@@ -41598,13 +41595,13 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                 onClick={()=>{ if(matchSelJob) assignPerson(matchSelJob,di,person); }}
                 style={{minHeight:28,background:off?"var(--bg)":"var(--card)",padding:"2px 4px",
                   cursor:isTarget?"copy":"default",boxShadow:isTarget?`inset 0 0 0 1.5px ${C.accent}55`:"none",opacity:off?0.45:1}}>
-                {off && <span style={{fontSize:8,color:C.dim,fontWeight:700}}>OFF</span>}
+                {off && <span style={{fontSize:11,color:C.dim,fontWeight:700}}>OFF</span>}
                 {jids.map(jid=>{
                   const jb=jobById[jid]; const nm=jb?.name||"Job"; const inBook=bookJobIds.has(jid);
                   return (
                     <div key={jid} title={`${nm}${jb?.foreman?` · ${jb.foreman}`:""}${inBook?"":" · other book"} — tap to remove`}
                       onClick={e=>{e.stopPropagation(); if(window.confirm(`Remove ${displayName(person)} from ${nm} on ${dayLabels[di]}?`)) unassignPerson(jid,di,person);}}
-                      style={{fontSize:9,fontWeight:600,color:"var(--text)",
+                      style={{fontSize:11,fontWeight:600,color:"var(--text)",
                         background:inBook?C.accent+"1e":"#6E768218",
                         border:`1px ${inBook?"solid":"dashed"} ${inBook?C.accent+"40":"#99A0AA"}`,
                         borderRadius:3,padding:"1px 4px",marginBottom:2,cursor:"pointer",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
@@ -41629,7 +41626,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             <div style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border,marginBottom:1}}>
               <div style={{background:"var(--card)",padding:"3px 6px"}}/>
               {dayLabels.map((l,di)=>(
-                <div key={di} style={{background:"var(--card)",padding:"3px 6px",fontSize:9,fontWeight:700,color:C.dim,letterSpacing:"0.04em"}}>{l}</div>
+                <div key={di} style={{background:"var(--card)",padding:"3px 6px",fontSize:11,fontWeight:700,color:C.dim,letterSpacing:"0.04em"}}>{l}</div>
               ))}
             </div>
           );
@@ -41741,7 +41738,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         {evs.length>0 && (
                           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
                             {evs.map(ev=>(
-                              <span key={ev.id} style={{fontSize:9,fontWeight:700,color:ev.color,background:ev.color+"18",
+                              <span key={ev.id} style={{fontSize:11,fontWeight:700,color:ev.color,background:ev.color+"18",
                                 border:`1px solid ${ev.color}40`,borderRadius:4,padding:"1px 5px"}}>
                                 {dayLabels[ev.dayIdx]} · {ev.type==="fourway"?"4-WAY":ev.type==="qc"?"QC":ev.type==="rt"?"RT":"INSP"}
                               </span>
@@ -41750,11 +41747,11 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         )}
                         {matchNoteJob===j.id && (
                           <div onClick={e=>e.stopPropagation()} style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",color:C.dim,marginBottom:4}}>STATUS UPDATE</div>
+                            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",color:C.dim,marginBottom:4}}>STATUS UPDATE</div>
                             <StatusUpdateTextarea job={j} identity={identity} styleVars={C}
                               onCommit={patch=>onUpdateJob && onUpdateJob({...j, ...patch}, patch)}/>
                             {j.statusUpdate && j.statusUpdateBy && (
-                              <div style={{fontSize:9,color:C.dim,marginTop:3}}>Set by {j.statusUpdateBy}{j.statusUpdateAt?` · ${timeAgo(j.statusUpdateAt)}`:""}</div>
+                              <div style={{fontSize:11,color:C.dim,marginTop:3}}>Set by {j.statusUpdateBy}{j.statusUpdateAt?` · ${timeAgo(j.statusUpdateAt)}`:""}</div>
                             )}
                           </div>
                         )}
@@ -41813,10 +41810,10 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             <div style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
                               <div style={{background:"var(--card)",padding:"4px 6px",display:"flex",flexDirection:"column",gap:2}}>
                                 <span style={{fontSize:12,fontWeight:700,color:"var(--text)",whiteSpace:"normal",lineHeight:1.25}}>{teamLabel(t)}</span>
-                                <span style={{fontSize:9,color:C.dim}}>{names.length} ppl</span>
+                                <span style={{fontSize:11,color:C.dim}}>{names.length} ppl</span>
                                 <div style={{display:"flex",gap:6}}>
-                                  <button onClick={()=>setMatchTeamModal({idx, members:teamMembers(t)})} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:700,padding:0}}>Edit</button>
-                                  <button onClick={()=>{ if(window.confirm("Delete this team?")) teamRemove(idx); }} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:9,fontFamily:"inherit",padding:0}}>Delete</button>
+                                  <button onClick={()=>setMatchTeamModal({idx, members:teamMembers(t)})} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:700,padding:0}}>Edit</button>
+                                  <button onClick={()=>{ if(window.confirm("Delete this team?")) teamRemove(idx); }} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:11,fontFamily:"inherit",padding:0}}>Delete</button>
                                 </div>
                               </div>
                               {crewDays.map((d,di)=>{
@@ -41828,7 +41825,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                     onClick={()=>{ if(matchSelJob) assignTeam(matchSelJob,di,t); }}
                                     style={{minHeight:34,background:"var(--card)",padding:"3px 5px",cursor:isTarget?"copy":"default",
                                       boxShadow:isTarget?`inset 0 0 0 1.5px ${tc}66`:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                    {isTarget && <span style={{fontSize:9,color:tc,fontWeight:700}}>+ assign</span>}
+                                    {isTarget && <span style={{fontSize:11,color:tc,fontWeight:700}}>+ assign</span>}
                                   </div>
                                 );
                               })}
@@ -42002,9 +41999,9 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                         boxShadow:isSel?`0 2px 8px ${col}44`:"none"}}>
                       {isFM&&<Icon name="star" size={10} stroke={2.5}/>}
                       {crewDisplayName(name)}
-                      {ptoThisWeek && <span style={{fontSize:8,fontWeight:700,color:C.slateInk,background:C.slateBg,
+                      {ptoThisWeek && <span style={{fontSize:11,fontWeight:700,color:C.slateInk,background:C.slateBg,
                         padding:"1px 4px",borderRadius:3}}>PTO</span>}
-                      {dayCount>0&&!ptoThisWeek&&<span style={{fontSize:8,opacity:0.7}}>({dayCount}d)</span>}
+                      {dayCount>0&&!ptoThisWeek&&<span style={{fontSize:11,opacity:0.7}}>({dayCount}d)</span>}
                     </div>
                   );
                 })}
@@ -42165,7 +42162,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                       </span>
                                     );
                                   })}
-                                  {teamUnassigned.length>8&&<span style={{fontSize:9,color:C.faint,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
+                                  {teamUnassigned.length>8&&<span style={{fontSize:11,color:C.faint,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
                                 </div>
                               )}
                             </div>
@@ -42246,7 +42243,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                           onMouseDown={e=>{e.preventDefault();e.stopPropagation();teamAddMember(idx,name);}}
                                           title={`Add ${name}`}
                                           style={{display:"inline-flex",alignItems:"center",gap:2,
-                                            padding:"1px 6px",borderRadius:99,fontSize:9,fontWeight:600,
+                                            padding:"1px 6px",borderRadius:99,fontSize:11,fontWeight:600,
                                             cursor:"pointer",userSelect:"none",
                                             color:nc,background:nc+"12",border:`1px solid ${nc}44`}}>
                                           {crewDisplayName(name)}
@@ -42284,7 +42281,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                   {/* Unassigned people */}
                   {teamUnassigned.length>0&&(
                     <div style={{paddingTop:8,borderTop:`1px solid ${C.border}`}}>
-                      <div style={{fontSize:9,fontWeight:700,color:C.faint,letterSpacing:"0.08em",marginBottom:6}}>
+                      <div style={{fontSize:11,fontWeight:700,color:C.faint,letterSpacing:"0.08em",marginBottom:6}}>
                         NOT ON A TEAM
                       </div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -42333,7 +42330,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                   <Icon name="chevronLeft" size={11}/> Prev
                 </button>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 10px",minWidth:140}}>
-                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",
                     color:crewWeekOff===0?C.accent:crewWeekOff===1?"#2F5BD9":crewWeekOff<0?C.faint:C.dim}}>
                     {crewWeekOff===0?"THIS WEEK":crewWeekOff===1?"NEXT WEEK":crewWeekOff===-1?"LAST WEEK":
                      crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
@@ -42424,7 +42421,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           <div style={{fontSize:13,fontWeight:700,color:isToday3?C.accent:"var(--text)",marginTop:2}}>
                             {d.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
                           </div>
-                          <div style={{fontSize:9,color:isToday3?C.accent:C.faint,fontWeight:700,marginTop:2}}>
+                          <div style={{fontSize:11,color:isToday3?C.accent:C.faint,fontWeight:700,marginTop:2}}>
                             {crewDayTotals[di]} {crewDayTotals[di]===1?"person":"people"}
                           </div>
                         </th>
@@ -42648,7 +42645,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                     look like noise. */}
                                 {job._simproOnly && (
                                   <span title="This row is here because Simpro has someone scheduled on it this week"
-                                    style={{fontSize:8,fontWeight:800,letterSpacing:"0.05em",
+                                    style={{fontSize:11,fontWeight:800,letterSpacing:"0.05em",
                                       background:"#2F5BD9",color:"#fff",borderRadius:3,
                                       padding:"1px 5px",lineHeight:1,flexShrink:0}}>
                                     SIMPRO
@@ -42790,7 +42787,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         <span>SET WK HRS</span>
                                       ) : (
                                         <>
-                                          <span style={{fontSize:8,fontWeight:700,opacity:0.75,letterSpacing:"0.06em"}}>WK HRS</span>
+                                          <span style={{fontSize:11,fontWeight:700,opacity:0.75,letterSpacing:"0.06em"}}>WK HRS</span>
                                           <span>{sched.toFixed(sched<10?1:0)}/{target}h</span>
                                         </>
                                       )}
@@ -42799,7 +42796,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 })()}
                                 {/* Foreman initial — tiny colored chip for glance ID */}
                                 <span title={`Foreman: ${job.foreman||"Koy"}`}
-                                  style={{fontSize:9,fontWeight:800,color:jc,
+                                  style={{fontSize:11,fontWeight:800,color:jc,
                                     background:jc+"20",border:`1px solid ${jc}55`,
                                     borderRadius:99,padding:"1px 6px",flexShrink:0}}>
                                   {(job.foreman||"Koy").charAt(0)}
@@ -42907,7 +42904,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                           style={{cursor:"pointer",borderLeft:`3px solid ${ev.color}`,
                                             padding:"1px 5px",background:ev.color+"12",borderRadius:"0 3px 3px 0",
                                             display:"flex",alignItems:"center",gap:4,minHeight:14}}>
-                                          <span style={{fontSize:8,fontWeight:800,color:ev.color,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>
+                                          <span style={{fontSize:11,fontWeight:800,color:ev.color,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>
                                             {lbl}
                                           </span>
                                         </div>
@@ -42919,7 +42916,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                               {hasAnyPills && (
                                 <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
                                   title={cell.time?.start?"Tap to edit time":"Tap to set time"}
-                                  style={{fontSize:9,fontWeight:700,
+                                  style={{fontSize:11,fontWeight:700,
                                     color:cell.time?.start?"#2F5BD9":C.faint,
                                     background:cell.time?.start?"#2F5BD915":"transparent",
                                     border:`1px ${cell.time?.start?"solid":"dashed"} ${cell.time?.start?"#2F5BD933":C.border}`,
@@ -42962,12 +42959,12 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         border: `1.5px solid ${ptoToday?C.orange:"#2F5BD9"}`,
                                         cursor:"default",userSelect:"none",whiteSpace:"nowrap",
                                         textDecoration: ptoToday ? "line-through" : "none"}}>
-                                      <span style={{fontSize:7,fontWeight:800,letterSpacing:"0.05em",
+                                      <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.05em",
                                         background:"#2F5BD9",color:"#fff",borderRadius:3,
                                         padding:"1px 4px",lineHeight:1}}>SIMPRO</span>
                                       {crewDisplayName(rawName)}
                                       {timeLabel && (
-                                        <span style={{fontSize:8,fontWeight:700,opacity:0.85,
+                                        <span style={{fontSize:11,fontWeight:700,opacity:0.85,
                                           background:"#2F5BD922",borderRadius:3,padding:"1px 4px",
                                           marginLeft:1,letterSpacing:"0.02em"}}>
                                           {timeLabel}
@@ -43007,7 +43004,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         else crewRemove(job.id,di,name);
                                       }}
                                         title={isFM?(isLead?"Remove as lead":"Set as lead"):"Remove"}
-                                        style={{fontSize:isFM&&!isLead?8:10,fontWeight:800,marginLeft:2,
+                                        style={{fontSize:11,fontWeight:800,marginLeft:2,
                                           opacity:0.6,lineHeight:1,cursor:"pointer"}}>
                                         {isFM&&!isLead?"\u2605":"\u00D7"}
                                       </span>
@@ -43287,7 +43284,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             {isFM && <Icon name="star" size={10} stroke={2.5}/>}
                             {crewDisplayName(name)}
                             {(busy || partial) && timeRange && (
-                              <span style={{fontSize:9,fontWeight:700,
+                              <span style={{fontSize:11,fontWeight:700,
                                 background: fullyBooked ? "#C6282822" : "#C2410C22",
                                 color: fullyBooked ? "#9A3030" : C.slateInk,
                                 padding:"1px 5px",borderRadius:5,letterSpacing:"0.02em",whiteSpace:"nowrap"}}>
@@ -43295,7 +43292,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                               </span>
                             )}
                             {(busy || partial) && (
-                              <span style={{fontSize:9,opacity:0.7,fontWeight:500,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              <span style={{fontSize:11,opacity:0.7,fontWeight:500,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                                 {s.jobName}{s.source === "simpro" ? " (Simpro)" : ""}
                               </span>
                             )}
@@ -43347,7 +43344,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         transition:"all 0.12s"}}
                                       onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";}}
                                       onMouseLeave={e=>{e.currentTarget.style.transform="";}}>
-                                      <div style={{fontSize:9,fontWeight:800,color:allFree?"#2C5C40":tc,letterSpacing:"0.06em",marginBottom:3,display:"flex",gap:6,alignItems:"center"}}>
+                                      <div style={{fontSize:11,fontWeight:800,color:allFree?"#2C5C40":tc,letterSpacing:"0.06em",marginBottom:3,display:"flex",gap:6,alignItems:"center"}}>
                                         <span>TEAM · {allNames.length}</span>
                                         {allFree && <span style={{color:"#2C5C40"}}>✓ ALL FREE</span>}
                                         {conflicts > 0 && <span style={{color:C.orange}}>{conflicts} BUSY</span>}
@@ -43643,7 +43640,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 background:"var(--surface)",borderBottom:`1px solid ${C.border}`,
                                 position:"sticky",top:0,zIndex:1,minWidth:90}}>
                                 {["MON","TUE","WED","THU","FRI"][i]}
-                                <div style={{fontSize:9,fontWeight:600,color:C.faint,marginTop:2}}>
+                                <div style={{fontSize:11,fontWeight:600,color:C.faint,marginTop:2}}>
                                   {d.toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}
                                 </div>
                               </th>
@@ -43708,7 +43705,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                           {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
                                         </div>
                                         {!checked && anotherCells > 0 && (
-                                          <div style={{fontSize:9,fontWeight:500,color:C.faint,marginTop:2}}>
+                                          <div style={{fontSize:11,fontWeight:500,color:C.faint,marginTop:2}}>
                                             also elsewhere
                                           </div>
                                         )}
@@ -43722,16 +43719,16 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                               setCrewWizardTimes(t=>({...t, [k]: { start:v, end:(t[k]?.end ?? resolvedTime.end ?? "") }}));
                                             }}
                                             style={{background:"var(--card)",border:`1px solid ${C.border}`,
-                                              borderRadius:4,padding:"1px 3px",fontSize:9,fontFamily:"inherit",
+                                              borderRadius:4,padding:"1px 3px",fontSize:11,fontFamily:"inherit",
                                               color:"var(--text)",width:60}}/>
-                                          <span style={{fontSize:9,color:C.dim}}>–</span>
+                                          <span style={{fontSize:11,color:C.dim}}>–</span>
                                           <input type="time" value={resolvedTime.end||""}
                                             onChange={e=>{
                                               const v = e.target.value;
                                               setCrewWizardTimes(t=>({...t, [k]: { start:(t[k]?.start ?? resolvedTime.start ?? ""), end:v }}));
                                             }}
                                             style={{background:"var(--card)",border:`1px solid ${C.border}`,
-                                              borderRadius:4,padding:"1px 3px",fontSize:9,fontFamily:"inherit",
+                                              borderRadius:4,padding:"1px 3px",fontSize:11,fontFamily:"inherit",
                                               color:"var(--text)",width:60}}/>
                                         </div>
                                       )}
@@ -43806,12 +43803,12 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                       </select>
                       <div style={{display:"flex",gap:8}}>
                         <label style={{flex:1}}>
-                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>FROM</div>
+                          <div style={{fontSize:11,fontWeight:700,color:C.dim,marginBottom:3}}>FROM</div>
                           <DateInp value={crewPTODraft.start}
                             onChange={e=>setCrewPTODraft({...crewPTODraft,start:e.target.value})}/>
                         </label>
                         <label style={{flex:1}}>
-                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.faint,fontWeight:400}}>(optional)</span></div>
+                          <div style={{fontSize:11,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.faint,fontWeight:400}}>(optional)</span></div>
                           <DateInp value={crewPTODraft.end}
                             onChange={e=>setCrewPTODraft({...crewPTODraft,end:e.target.value})}/>
                         </label>
@@ -44184,11 +44181,11 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                 overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{j.name||"Untitled"}</div>
                               <div style={{display:"flex",gap:4,marginTop:2,flexWrap:"wrap"}}>
                                 {pri.label&&(
-                                  <span style={{fontSize:9,fontWeight:800,color:pri.color,
+                                  <span style={{fontSize:11,fontWeight:800,color:pri.color,
                                     background:pri.color+"18",borderRadius:99,padding:"1px 6px",
                                     border:`1px solid ${pri.color}33`}}>{pri.label}{priDateP?` ${priDateP}`:""}</span>
                                 )}
-                                <span style={{fontSize:9,fontWeight:600,color:jcp,background:jcp+"15",
+                                <span style={{fontSize:11,fontWeight:600,color:jcp,background:jcp+"15",
                                   borderRadius:99,padding:"1px 6px"}}>{j.foreman||"Koy"}</span>
                               </div>
                             </div>
@@ -44294,7 +44291,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
 // Three module-level components so React never sees new types mid-render
 function SettingsRoleBadge({label, color}) {
   return (
-    <span style={{fontSize:9,fontWeight:700,color:"#fff",background:color||"#5E6670",
+    <span style={{fontSize:11,fontWeight:700,color:"#fff",background:color||"#5E6670",
       borderRadius:99,padding:"2px 8px",letterSpacing:"0.06em",flexShrink:0}}>
       {label}
     </span>
@@ -48095,7 +48092,7 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
                 }}>
                 <div style={{
                   position:"absolute",bottom:0,left:0,right:0,
-                  fontSize:9, color:"#fff", padding:"2px 4px",
+                  fontSize:11, color:"#fff", padding:"2px 4px",
                   background:"linear-gradient(transparent, rgba(0,0,0,0.7))",
                   borderBottomLeftRadius:6, borderBottomRightRadius:6,
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
@@ -48181,14 +48178,14 @@ function ScoreboardV3({ jobs, users = [], identity }) {
         .sb3{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-blue:#2F5BD9;--c-good:#1F7A3F;--c-gold:#2F5BD9;--c-gbg:#EAF0FC;--c-gln:#C7D5F5;--c-track:#E9ECF1;--c-navy:#1E2C44;font-family:inherit;color:var(--c-ink)}
         .sb3 *{box-sizing:border-box}
         .sb3 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:16px 18px;color:#fff;display:flex;align-items:center;gap:12px}
-        .sb3 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
+        .sb3 .top .co{font-size:11px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
         .sb3 .top .ti{font-size:18px;font-weight:800}
-        .sb3 .top .wt{margin-left:auto;text-align:right;font-size:10px;color:rgba(255,255,255,.66);line-height:1.5;max-width:260px}
+        .sb3 .top .wt{margin-left:auto;text-align:right;font-size:11px;color:rgba(255,255,255,.66);line-height:1.5;max-width:260px}
         .sb3 .ctr{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0 2px}
         .sb3 .seg{display:inline-flex;background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:10px;padding:3px;gap:2px}
         .sb3 .seg button{border:0;background:transparent;color:var(--c-dim);font:inherit;font-size:12px;font-weight:700;padding:6px 12px;border-radius:7px;cursor:pointer}
         .sb3 .seg button.on{background:var(--c-pan);color:var(--c-ink);box-shadow:0 1px 2px rgba(16,24,40,.12)}
-        .sb3 .lbl{font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
+        .sb3 .lbl{font-size:11px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
         .sb3 .editbtn{margin-left:auto;border:1px solid var(--c-gln);background:var(--c-gbg);color:var(--c-gold);font-weight:800;font-size:11px;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
         .sb3 .wedit{margin-top:12px;background:var(--c-pan);border:1px solid var(--c-gln);border-radius:12px;padding:14px 16px}
         .sb3 .wedit h4{margin:0 0 3px;font-size:13px}
@@ -48200,7 +48197,7 @@ function ScoreboardV3({ jobs, users = [], identity }) {
         .sb3 .card{background:var(--c-pan);border:1px solid var(--c-bd);border-radius:14px;box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 26px -14px rgba(16,24,40,.15);padding:6px 6px 8px;margin-top:12px}
         .sb3 .card.gold{border-color:var(--c-gln)}
         .sb3 .bh{display:flex;align-items:baseline;gap:8px;padding:12px 13px 8px}
-        .sb3 .bh .bt{font-size:14px;font-weight:800}.sb3 .bh .bn{margin-left:auto;font-size:10px;color:var(--c-faint);font-weight:600}
+        .sb3 .bh .bt{font-size:14px;font-weight:800}.sb3 .bh .bn{margin-left:auto;font-size:11px;color:var(--c-faint);font-weight:600}
         .sb3 .rw{border-top:1px solid var(--c-bd)}.sb3 .rw:first-child{border-top:0}
         .sb3 .r{display:flex;align-items:center;gap:11px;padding:10px 12px}
         .sb3 .r.t1{background:linear-gradient(90deg,var(--c-gbg),transparent 70%)}
@@ -48208,18 +48205,18 @@ function ScoreboardV3({ jobs, users = [], identity }) {
         .sb3 .av{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11.5px;flex:0 0 auto}
         .sb3 .who{min-width:0;flex:1}
         .sb3 .who .n{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px}
-        .sb3 .bdg{font-size:8.5px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 5px;border-radius:5px}
-        .sb3 .who .s{font-size:10.5px;color:var(--c-faint);font-weight:600;margin-top:1px}
+        .sb3 .bdg{font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 5px;border-radius:5px}
+        .sb3 .who .s{font-size:11px;color:var(--c-faint);font-weight:600;margin-top:1px}
         .sb3 .subs{display:flex;gap:4px}
-        .sb3 .ss{font-size:9px;font-weight:800;color:var(--c-dim);background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:6px;padding:3px 6px;text-align:center;min-width:34px;line-height:1.1}
-        .sb3 .ss em{display:block;font-size:7.5px;letter-spacing:.04em;color:var(--c-faint);font-weight:700;font-style:normal}
+        .sb3 .ss{font-size:11px;font-weight:800;color:var(--c-dim);background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:6px;padding:3px 6px;text-align:center;min-width:34px;line-height:1.1}
+        .sb3 .ss em{display:block;font-size:11px;letter-spacing:.04em;color:var(--c-faint);font-weight:700;font-style:normal}
         @media (max-width:640px){.sb3 .subs{display:none}}
         .sb3 .met{display:flex;align-items:center;gap:11px;flex:0 0 auto}
         .sb3 .bar{width:74px;height:7px;border-radius:99px;background:var(--c-track);overflow:hidden}
         .sb3 .bar i{display:block;height:100%;border-radius:99px;background:var(--c-good)}
         .sb3 .bar.b i{background:var(--c-blue)}.sb3 .bar.go i{background:#56657A}.sb3 .bar.nv i{background:var(--c-navy)}
-        .sb3 .big{font-size:18px;font-weight:800;min-width:42px;text-align:right}.sb3 .big u{font-size:10px;color:var(--c-faint);font-style:normal;margin-left:1px}
-        .sb3 .seclbl{font-size:10px;letter-spacing:.11em;text-transform:uppercase;font-weight:800;color:var(--c-faint);margin:20px 4px 0}
+        .sb3 .big{font-size:18px;font-weight:800;min-width:42px;text-align:right}.sb3 .big u{font-size:11px;color:var(--c-faint);font-style:normal;margin-left:1px}
+        .sb3 .seclbl{font-size:11px;letter-spacing:.11em;text-transform:uppercase;font-weight:800;color:var(--c-faint);margin:20px 4px 0}
         .sb3 .empty{padding:24px;text-align:center;color:var(--c-faint);font-size:13px}
       `}</style>
 
@@ -48895,7 +48892,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-good:#2F7A4F;--c-goodbd:#BFE0CC;--c-warn:#3F4B5C;--c-warnbd:#C9D1DC;--c-bad:#C62828;--c-badbd:#EBC4C4;--c-badbg:#FBEDED;--c-gold:#2F5BD9;--c-gbg:#EAF0FC;--c-gln:#C7D5F5;font-family:inherit;color:var(--c-ink)}
         .sb4 *{box-sizing:border-box}
         .sb4 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:15px 16px;color:#fff}
-        .sb4 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
+        .sb4 .top .co{font-size:11px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
         .sb4 .top .ti{font-size:20px;font-weight:800;margin-top:1px}
         .sb4 .top .wt{font-size:11px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:8px}
         .sb4 .top .wt b{color:#fff}
@@ -48903,7 +48900,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4 .seg{display:inline-flex;background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:10px;padding:3px;gap:2px}
         .sb4 .seg button{border:0;background:transparent;color:var(--c-dim);font:inherit;font-size:13px;font-weight:700;padding:7px 13px;border-radius:7px;cursor:pointer}
         .sb4 .seg button.on{background:var(--c-pan);color:var(--c-ink);box-shadow:0 1px 2px rgba(16,24,40,.12)}
-        .sb4 .lbl{font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
+        .sb4 .lbl{font-size:11px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
         .sb4 .editbtn{border:1px solid var(--c-gln);background:var(--c-gbg);color:var(--c-gold);font-weight:800;font-size:12px;padding:7px 13px;border-radius:8px;cursor:pointer;font-family:inherit}
         .sb4 .wedit{margin-top:12px;background:var(--c-pan);border:1px solid var(--c-gln);border-radius:12px;padding:14px 16px}
         .sb4 .wedit h4{margin:0 0 3px;font-size:14px}
@@ -48931,22 +48928,22 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4 .who{flex:1;min-width:0}
         .sb4 .nm{display:flex;align-items:center;gap:6px;min-width:0}
         .sb4 .nmtxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:15px;font-weight:700}
-        .sb4 .bdg{flex:0 0 auto;font-size:8.5px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 5px;border-radius:5px}
+        .sb4 .bdg{flex:0 0 auto;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 5px;border-radius:5px}
         .sb4 .jb{font-size:11.5px;color:var(--c-faint);font-weight:600;margin-top:2px}
         .sb4 .ov{flex:0 0 auto;text-align:right;padding-left:8px}
         .sb4 .ovv{font-size:24px;font-weight:800;line-height:1}
         .sb4 .trow.t1 .ovv{color:var(--c-gold)}
-        .sb4 .ovl{font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--c-faint);font-weight:800;margin-top:3px}
+        .sb4 .ovl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--c-faint);font-weight:800;margin-top:3px}
         .sb4 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:11px;padding-left:47px}
         .sb4 .stat{background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:9px;padding:7px 9px;min-width:0}
-        .sb4 .stat .sl{font-size:9px;letter-spacing:.03em;text-transform:uppercase;color:var(--c-faint);font-weight:800;line-height:1.3}
+        .sb4 .stat .sl{font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--c-faint);font-weight:800;line-height:1.3}
         .sb4 .stat .sv{font-size:16px;font-weight:800;margin-top:3px;line-height:1}
-        .sb4 .stat .sv .su{font-size:9.5px;font-weight:700;color:var(--c-faint);margin-left:2px;margin-right:5px}
+        .sb4 .stat .sv .su{font-size:11px;font-weight:700;color:var(--c-faint);margin-left:2px;margin-right:5px}
         .sb4 .stat .sv.mgood{color:var(--c-good)}
         .sb4 .stat .sv.mwarn{color:var(--c-warn)}
         .sb4 .stat .sv.mbad{color:var(--c-bad)}
         .sb4 .stat .sv.ind{color:var(--c-dim)}
-        .sb4 .stat .sh{font-size:9px;color:var(--c-faint);font-weight:600;margin-top:3px;line-height:1.3}
+        .sb4 .stat .sh{font-size:11px;color:var(--c-faint);font-weight:600;margin-top:3px;line-height:1.3}
         .sb4 .empty{padding:22px;text-align:center;color:var(--c-faint);font-size:14px}
         .sb4 .note{margin-top:16px;font-size:11.5px;color:#8A929C;text-align:center;line-height:1.6}
         @media (min-width:620px){.sb4 .stats{grid-template-columns:repeat(4,minmax(0,1fr))}}
@@ -49224,7 +49221,7 @@ function ScoreboardV2Drilldown({ row }) {
   const fmt2 = v => (v == null ? "—" : v.toFixed(2));
   const cell = { fontSize: 12.5, color: "var(--text, #ddd)", padding: "6px 10px" };
   const cellDim = { ...cell, color: "var(--dim, #888)" };
-  const cellHead = { ...cell, fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+  const cellHead = { ...cell, fontSize: 11, fontWeight: 700, textTransform: "uppercase",
                      letterSpacing: "0.06em", color: "var(--dim, #888)" };
 
   return (
@@ -49333,7 +49330,7 @@ function ScoreboardV2Champions({ jobs }) {
 
   return (
     <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 9, fontWeight: 800, color: "var(--dim, #888)",
+      <div style={{ fontSize: 11, fontWeight: 800, color: "var(--dim, #888)",
                     textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8,
                     display: "inline-flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontSize: 14 }}>★</span> Champions
@@ -49349,7 +49346,7 @@ function ScoreboardV2Champions({ jobs }) {
               borderRadius: 10, padding: "10px 12px",
               borderLeft: `3px solid ${card.accent}`,
             }}>
-              <div style={{ fontSize: 9, color: card.accent, fontWeight: 800,
+              <div style={{ fontSize: 11, color: card.accent, fontWeight: 800,
                             textTransform: "uppercase", letterSpacing: "0.10em" }}>
                 {card.sub}
               </div>
@@ -49357,14 +49354,14 @@ function ScoreboardV2Champions({ jobs }) {
                 {card.label}
               </div>
               <div style={{ marginTop: 9 }}>
-                <div style={{ fontSize: 9, color: "var(--dim, #888)", fontWeight: 700,
+                <div style={{ fontSize: 11, color: "var(--dim, #888)", fontWeight: 700,
                               textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
                   Foreman
                 </div>
                 {renderName(fr, card.accent)}
               </div>
               <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 9, color: "var(--dim, #888)", fontWeight: 700,
+                <div style={{ fontSize: 11, color: "var(--dim, #888)", fontWeight: 700,
                               textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
                   Lead
                 </div>
@@ -49467,7 +49464,7 @@ function DrillStat({ label, total, score }) {
   const pct = score == null ? 0 : Math.max(0, Math.min(1, score)) * 100;
   return (
     <div style={{ background: "var(--bg, #0f0f0f)", borderRadius: 6, padding: 10 }}>
-      <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
+      <div style={{ fontSize: 11, color: "var(--dim, #888)", textTransform: "uppercase",
                     letterSpacing: "0.06em", fontWeight: 700 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text, #ddd)", marginTop: 4 }}>
         {total ?? 0}
@@ -49780,7 +49777,7 @@ function AnnouncementView({ identity, id, onClose, siblings = [], onStep }) {
               );
             })()}
             <button type="button" onClick={onClose} title="Close"
-              style={{ background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
+              style={{minWidth:"var(--he-tap, 32px)", background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
               <Icon name="x" size={16}/>
             </button>
           </div>
@@ -50271,7 +50268,7 @@ function BroadcastComposer({ identity, users, onClose }) {
           <Icon name="send" size={15} stroke={2.25}/>
           <span style={{ fontSize: 15, fontWeight: 800, color: C.text, flex: 1 }}>Send a notification</span>
           <button type="button" onClick={onClose} title="Close"
-            style={{ background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
+            style={{minWidth:"var(--he-tap, 32px)", background: "none", border: "none", cursor: "pointer", color: C.dim, padding: 4, display: "inline-flex" }}>
             <Icon name="x" size={16}/>
           </button>
         </div>
@@ -50377,7 +50374,7 @@ function BroadcastComposer({ identity, users, onClose }) {
                       color: C.text, borderRadius: 99, padding: "3px 4px 3px 10px", background: `${C.accent}18`, border: `1px solid ${C.accent}55` }}>
                       {u.name}
                       <button type="button" onClick={() => togglePerson(u)} disabled={stage !== "edit"} title={`Remove ${u.name}`}
-                        style={{ border: "none", background: "none", cursor: "pointer", color: C.dim, padding: "0 4px", display: "inline-flex" }}>
+                        style={{minWidth:"var(--he-tap, 32px)", border: "none", background: "none", cursor: "pointer", color: C.dim, padding: "0 4px", display: "inline-flex" }}>
                         <Icon name="x" size={11}/>
                       </button>
                     </span>
@@ -51096,7 +51093,7 @@ function DeviceVersionsCard({ identity }) {
               border:`1px solid ${(stale||below)?"rgba(178,58,58,0.20)":"transparent"}`}}>
               <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
                 color:C.text,fontWeight:(stale||below)?700:500}}>{d.name||d.id}</span>
-              {below && <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:C.red,borderRadius:4,padding:"2px 5px",flexShrink:0}}>BELOW MINIMUM</span>}
+              {below && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:C.red,borderRadius:4,padding:"2px 5px",flexShrink:0}}>BELOW MINIMUM</span>}
               <span style={{fontSize:12,fontWeight:700,color:(stale||below)?"#C62828":C.dim,flexShrink:0}}>{d.version}{d.build ? "" : " (no build)"}</span>
               <span style={{fontSize:12,color:C.dim,minWidth:110,textAlign:"right",flexShrink:0}}>
                 {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : ""}
@@ -51540,7 +51537,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob, onSelectJob }) {
         <button onClick={refresh} style={B.gbtn}>Refresh</button>
       </div>
       {err ? <div style={{color:"#8A2A2A",fontSize:13.5,marginBottom:8}}>{err}</div> : null}
-      {reqs!==null && !openReqs.length ? <div style={{color:"#8A93A3",fontSize:13.5}}>Requests from contractor portals show up here.</div> : null}
+      {reqs!==null && !openReqs.length ? <div style={{color:C.faint,fontSize:13.5}}>Requests from contractor portals show up here.</div> : null}
       {openReqs.map(r => (
         <div data-hekey={"gc_"+r.id} key={r.id} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:r.status==="new"?1:0.6}}>
           <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
@@ -51548,7 +51545,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob, onSelectJob }) {
             <span style={{fontSize:13,color:"#1B1F24"}}>· {TYPE[r.type]||r.type}{anchorOf(r)?" · "+anchorOf(r):""}</span>
             {r.type!=="contact" ? <span style={{fontSize:13,color:"#5E6670"}}>on {r.jobName||r.jobId}</span> : null}
             {r.status!=="new" ? <span style={{fontSize:12.5,fontWeight:700,color:"#5E6670",background:"#F0F1F4",borderRadius:99,padding:"1px 8px"}}>{String(r.status).toUpperCase()}</span> : null}
-            <span style={{marginLeft:"auto",fontSize:12.5,color:"#8A93A3"}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
+            <span style={{marginLeft:"auto",fontSize:12.5,color:C.faint}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
           </div>
           {r.date ? <div style={{fontSize:14,color:"#1B1F24",marginBottom:4}}><b>Date:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
           {r.text ? <div style={{fontSize:13.5,color:"#3A414C",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:"7px 10px",marginBottom:6,whiteSpace:"pre-wrap"}}>{r.text}</div> : null}
@@ -51558,7 +51555,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob, onSelectJob }) {
               {r.contactsProposed.map((c,i)=>(
                 <div key={c.id||i}>{c.name}{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}</div>
               ))}
-              {!r.contactsProposed.length ? <div style={{color:"#8A93A3"}}>(empty roster — this would remove all contacts)</div> : null}
+              {!r.contactsProposed.length ? <div style={{color:C.faint}}>(empty roster — this would remove all contacts)</div> : null}
             </div>
           ) : null}
           {r.fileUrl ? <div style={{marginBottom:6}}><a href={safeUrl(r.fileUrl)} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:13.5}}>{r.fileName||"View file"} ↗</a></div> : null}
@@ -51635,7 +51632,7 @@ function GCContactEditor({ contacts, onChange }) {
                 honors it (emailRecipients skips email===false). */}
             <button onClick={()=>onChange(contacts.map((x,k)=> k===i ? {...x, email: x.email===false} : x))}
               title={c.email===false ? "Email updates are OFF for this contact — tap to turn on" : "Email updates are ON for this contact — tap to mute"}
-              style={{...B.gbtn,padding:"2px 8px",background:c.email===false?"transparent":"#EAF6EE",borderColor:c.email===false?"#CDD3DB":"#9CCFB0",color:c.email===false?"#8A93A3":"#1E8A55"}}>
+              style={{...B.gbtn,padding:"2px 8px",background:c.email===false?"transparent":"#EAF6EE",borderColor:c.email===false?"#CDD3DB":"#9CCFB0",color:c.email===false?C.faint:"#1E8A55"}}>
               {c.email===false?"email off":"email on"}
             </button>
             <button onClick={()=>startEditRow(i,c)} style={{...B.gbtn,padding:"2px 8px"}}>edit</button>
@@ -51650,7 +51647,7 @@ function GCContactEditor({ contacts, onChange }) {
         <input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} placeholder="Phone" style={{...B.field,width:120}}/>
         <button onClick={()=>{ if(draft.name.trim()){ onChange([...(contacts||[]),{name:draft.name.trim(),role:draft.role.trim()||"Super",emailAddr:draft.emailAddr.trim(),phone:draft.phone.trim(),email:true,text:true}]); setDraft({name:"",role:"",emailAddr:"",phone:""}); } }} style={B.gbtn}>+ Add</button>
       </div>
-      <div style={{fontSize:12.5,color:"#8A93A3",marginTop:3}}>Email is where their daily 8 PM update + instant alerts go — use the per-contact "email on/off" to stage who receives them (turn people on one at a time as you hand the link over). Phone is for texts (coming soon).</div>
+      <div style={{fontSize:12.5,color:C.faint,marginTop:3}}>Email is where their daily 8 PM update + instant alerts go — use the per-contact "email on/off" to stage who receives them (turn people on one at a time as you hand the link over). Phone is for texts (coming soon).</div>
     </Fragment>
   );
 }
@@ -51690,7 +51687,7 @@ function GCLogoFinder({ contacts, value, onPick, gcCall, B }) {
         <button disabled={!domain.trim()||busy} onClick={find} style={{...B.gbtn,opacity:(!domain.trim()||busy)?0.5:1}}>{busy?"Looking…":"Find their logo"}</button>
         {value ? <button onClick={()=>onPick("")} style={{...B.gbtn,borderColor:"#E5B4B4",color:"#8A2A2A"}}>Clear logo</button> : null}
       </div>
-      {!derived ? <div style={{fontSize:12.5,color:"#8A93A3",marginTop:3}}>Tip: add a contact with an email first and this fills in automatically.</div> : null}
+      {!derived ? <div style={{fontSize:12.5,color:C.faint,marginTop:3}}>Tip: add a contact with an email first and this fills in automatically.</div> : null}
       {err ? <div style={{fontSize:13,color:"#8A2A2A",marginTop:4}}>{err}</div> : null}
       {cands && cands.length ? (
         <div style={{marginTop:7}}>
@@ -51701,7 +51698,7 @@ function GCLogoFinder({ contacts, value, onPick, gcCall, B }) {
                 style={{border:value===c.url?"2px solid #2E477D":"1px solid #CDD9EC",borderRadius:9,padding:6,background:"#fff",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4,width:92}}>
                 <img src={c.url} alt={c.source} style={{width:64,height:64,objectFit:"contain",display:"block"}}
                   onError={e=>{ e.currentTarget.style.opacity=0.25; }}/>
-                <span style={{fontSize:11,color:"#8A93A3",letterSpacing:".02em"}}>{c.source}</span>
+                <span style={{fontSize:11,color:C.faint,letterSpacing:".02em"}}>{c.source}</span>
               </button>
             ))}
           </div>
@@ -51751,7 +51748,7 @@ function GCOfficeSuperAssign({ link, jobs, allJobs, busy, onSave }) {
     try { await onSave(jobId, [...draft]); setEditJob(null); }
     catch (e) { setErr(e.message || "Couldn't save"); }
   };
-  if (!rows.length) return <div style={{color:"#8A93A3"}}>No jobs on this portal yet.</div>;
+  if (!rows.length) return <div style={{color:C.faint}}>No jobs on this portal yet.</div>;
   return (
     <div style={{display:"flex",flexDirection:"column",gap:5}}>
       {rows.map(r => {
@@ -51760,17 +51757,17 @@ function GCOfficeSuperAssign({ link, jobs, allJobs, busy, onSave }) {
         const orphans = editing ? [...draft].filter(isLegacy) : [];
         return (
           <div key={r.id} style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-            <span style={{color:r.stale?"#8A93A3":"#1B1F24",minWidth:120}}>{r.name}{r.stale?" (not on this portal anymore)":""}</span>
+            <span style={{color:r.stale?C.faint:"#1B1F24",minWidth:120}}>{r.name}{r.stale?" (not on this portal anymore)":""}</span>
             {!editing ? (
               <Fragment>
-                {cur.length ? cur.map(id => chip(id, nameOf(id), true, null, isLegacy(id))) : <span style={{color:"#8A93A3"}}>no super</span>}
+                {cur.length ? cur.map(id => chip(id, nameOf(id), true, null, isLegacy(id))) : <span style={{color:C.faint}}>no super</span>}
                 <button disabled={!!busy} onClick={()=>start(r.id)} style={btn(false)}>{cur.length ? "Change" : "Assign"}</button>
               </Fragment>
             ) : (
               <Fragment>
                 {contacts.map(c => chip(c.id, c.name, draft.has(c.id), () => toggle(c.id), false))}
                 {orphans.map(id => chip(id, nameOf(id), true, () => toggle(id), true))}
-                {!contacts.length && !orphans.length ? <span style={{color:"#8A93A3"}}>Add contacts (Edit) first.</span> : null}
+                {!contacts.length && !orphans.length ? <span style={{color:C.faint}}>Add contacts (Edit) first.</span> : null}
                 <button disabled={!!busy} onClick={()=>save(r.id)} style={btn(true)}>{busy ? "Saving…" : "Save"}</button>
                 <button disabled={!!busy} onClick={()=>{ setEditJob(null); setErr(""); }} style={btn(false)}>Cancel</button>
                 {err ? <span style={{color:"#8A2A2A"}}>{err}</span> : null}
@@ -52069,7 +52066,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
               <div key={g.key} style={{display:"flex",alignItems:"center",gap:10,background:"#fff",border:"1px solid #E1E4E9",borderRadius:8,padding:"8px 11px"}}>
                 <div style={{minWidth:0,flex:1}}>
                   <div style={{fontWeight:700,fontSize:14,color:"#1B1F24",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.name}</div>
-                  <div style={{fontSize:13,color:"#8A93A3",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.jobs.slice(0,4).join(" · ")}{g.jobs.length>4?" · +"+(g.jobs.length-4)+" more":""}</div>
+                  <div style={{fontSize:13,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.jobs.slice(0,4).join(" · ")}{g.jobs.length>4?" · +"+(g.jobs.length-4)+" more":""}</div>
                 </div>
                 <span style={{fontSize:12.5,fontWeight:700,color:"#2E477D",background:"#EAEEF6",borderRadius:99,padding:"2px 9px",flexShrink:0}}>{g.count} job{g.count===1?"":"s"}</span>
                 <button disabled={!!pullingKey} onClick={()=>pullAndPrefill(g)}
@@ -52123,8 +52120,8 @@ function GCPortalManager({ jobs, identity, onCount }) {
             <div style={{marginTop:8}}>
               {Array.from(includedIds).map(id => { const j = activeJobs.find(x=>x.id===id); return (
                 <span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"#EAEEF6",border:"1px solid #CDD9EC",borderRadius:99,padding:"2px 10px",margin:"0 6px 6px 0",fontSize:13,color:"#2E477D",fontWeight:600}}>
-                  {(j&&j.name)||id}{j&&j.gc?<span style={{color:"#8A93A3",fontWeight:400}}>({j.gc})</span>:null}
-                  <button onClick={()=>{ const n=new Set(includedIds); n.delete(id); setIncludedIds(n); }} style={{border:"none",background:"none",color:"#8A2A2A",cursor:"pointer",fontWeight:700,padding:0,fontSize:14}}>×</button>
+                  {(j&&j.name)||id}{j&&j.gc?<span style={{color:C.faint,fontWeight:400}}>({j.gc})</span>:null}
+                  <button onClick={()=>{ const n=new Set(includedIds); n.delete(id); setIncludedIds(n); }} style={{minWidth:"var(--he-tap, 32px)",border:"none",background:"none",color:"#8A2A2A",cursor:"pointer",fontWeight:700,padding:0,fontSize:14}}>×</button>
                 </span>
               ); })}
               <select value="" onChange={e=>{ const v=e.target.value; if(v){ const n=new Set(includedIds); n.add(v); setIncludedIds(n); } }}
@@ -52134,7 +52131,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
                   <option key={j.id} value={j.id}>{j.gc?j.gc+" — ":""}{j.name}</option>
                 ))}
               </select>
-              <div style={{fontSize:12.5,color:"#8A93A3",marginTop:3}}>Merges near-duplicates — e.g. add the "City Point" job to the "City Point Homes" portal. (Or just fix the job's GC spelling and it flows in on its own.)</div>
+              <div style={{fontSize:12.5,color:C.faint,marginTop:3}}>Merges near-duplicates — e.g. add the "City Point" job to the "City Point Homes" portal. (Or just fix the job's GC spelling and it flows in on its own.)</div>
             </div>
           </div>
         ) : null}
@@ -52173,8 +52170,8 @@ function GCPortalManager({ jobs, identity, onCount }) {
 
       {/* existing links */}
       <div style={{fontWeight:700,marginBottom:6,color:"#1B1F24"}}>Existing links {links?"("+links.filter(x=>x.kind!=="super").length+")":""}</div>
-      {links===null ? <div style={{color:"#8A93A3"}}>Loading…</div> : null}
-      {links && links.length===0 ? <div style={{color:"#8A93A3",fontSize:13.5}}>No portal links yet.</div> : null}
+      {links===null ? <div style={{color:C.faint}}>Loading…</div> : null}
+      {links && links.length===0 ? <div style={{color:C.faint,fontSize:13.5}}>No portal links yet.</div> : null}
       {(links||[]).filter(l=>l.kind!=="super").map(l=>{
         const linkJobs = activeJobs.filter(j=>(_gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id)) && !(l.jobIdsExclude||[]).includes(j.id));
         const count = linkJobs.length;
@@ -52185,7 +52182,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
           <div key={l.token} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:l.revoked?0.6:1}}>
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
               <b style={{color:"#1B1F24"}}>{l.label}</b>
-              <span style={{fontSize:13,color:"#8A93A3"}}>{count} job{count!==1?"s":""}</span>
+              <span style={{fontSize:13,color:C.faint}}>{count} job{count!==1?"s":""}</span>
               {l.revoked ? <span style={{fontSize:12.5,fontWeight:700,color:"#8A2A2A",background:"#FBE9E9",borderRadius:99,padding:"1px 8px"}}>REVOKED</span> : <span style={{fontSize:12.5,fontWeight:700,color:"#2C5C40",background:"#ECF2EE",borderRadius:99,padding:"1px 8px"}}>ACTIVE</span>}
               <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                 {!l.revoked ? <button onClick={()=>copy(urlOf(l.token))} style={B.gbtn}>Copy link</button> : null}
@@ -52205,7 +52202,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
                   Digests: soak mode — nightly copy goes to {digestInfo.soakLive.soakTo || "the soak inbox"}; delivery to this contractor (and this timer) starts when the soak ends
                 </div>
               ) : (
-                <div style={{marginTop:5,fontSize:13,color:"#8A93A3"}}>
+                <div style={{marginTop:5,fontSize:13,color:C.faint}}>
                   Last digest: {digestInfo.byPortal[l.portalId] ? _gcAgo(digestInfo.byPortal[l.portalId]) : "never"}
                 </div>
               )
@@ -52227,7 +52224,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
                           : <button disabled={busy===kb} onClick={()=>makeSuperLink(l,c)} style={{...B.gbtn,padding:"2px 9px",fontSize:13}}>{busy===kb?"…":"Their own link"}</button>) : null}
                       </div>
                     );
-                  }) : <div style={{color:"#8A93A3"}}>No contacts yet — click Edit to add.</div>}
+                  }) : <div style={{color:C.faint}}>No contacts yet — click Edit to add.</div>}
                   {kids.length ? (
                     <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:6}}>
                       {kids.map(k=>(
@@ -52237,7 +52234,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
                             <span style={{fontSize:12.5,fontWeight:700,color:"#2E477D",background:"#E9EEF8",borderRadius:99,padding:"1px 7px"}}>SUPER LINK</span>
                             {k.revoked
                               ? <span style={{fontSize:12.5,fontWeight:700,color:"#8A2A2A",background:"#FBE9E9",borderRadius:99,padding:"1px 8px"}}>REVOKED</span>
-                              : <span style={{fontSize:13,color:"#8A93A3"}}>shows {(k.jobIdsView||[]).length} job{(k.jobIdsView||[]).length===1?"":"s"} · no email</span>}
+                              : <span style={{fontSize:13,color:C.faint}}>shows {(k.jobIdsView||[]).length} job{(k.jobIdsView||[]).length===1?"":"s"} · no email</span>}
                             <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                               {!k.revoked ? <button onClick={()=>copy(urlOf(k.token))} style={B.gbtn}>Copy link</button> : null}
                               <button disabled={busy===k.token} onClick={()=>call("gcPortalSetRevoked",{token:k.token,revoked:!k.revoked},k.token)} style={{...B.gbtn,borderColor:k.revoked?"#CDE6D7":"#E5B4B4",color:k.revoked?"#2C5C40":"#8A2A2A"}}>{k.revoked?"Reactivate":"Revoke"}</button>
@@ -52250,7 +52247,7 @@ function GCPortalManager({ jobs, identity, onCount }) {
                     </div>
                   ) : null}
                   {/* v405: per-job supers are SET here, not just listed — what the office picks is what the portal shows */}
-                  <div style={{fontWeight:600,color:"#1B1F24",margin:"8px 0 4px"}}>Their super on each job <span style={{fontWeight:400,color:"#8A93A3"}}>— what you set here is what their portal shows</span></div>
+                  <div style={{fontWeight:600,color:"#1B1F24",margin:"8px 0 4px"}}>Their super on each job <span style={{fontWeight:400,color:C.faint}}>— what you set here is what their portal shows</span></div>
                   <GCOfficeSuperAssign link={l} jobs={linkJobs} allJobs={jobs} busy={busy===l.token+"_super"} onSave={(jobId, ids)=>saveSupers(l, jobId, ids)}/>
                 </div>
 
@@ -52291,15 +52288,15 @@ function GCPortalManager({ jobs, identity, onCount }) {
                       <span>{j.name}{j.address?" · "+j.address:""}</span>
                     </label>
                   ))}
-                  {!editMatched(l).length ? <div style={{color:"#8A93A3",fontSize:13}}>No jobs currently match this GC.</div> : null}
+                  {!editMatched(l).length ? <div style={{color:C.faint,fontSize:13}}>No jobs currently match this GC.</div> : null}
                   {/* Force-include picker (jobIdsInclude — same mechanism as the
                       create form): pull a job filed under a different GC spelling
                       onto this portal; save triggers a mirror rebuild server-side. */}
                   <div style={{marginTop:8}}>
                     {Array.from(editDraft.jobIdsInclude||[]).map(id => { const j = (jobs||[]).find(x=>x.id===id); return (
                       <span key={id} style={{display:"inline-flex",alignItems:"center",gap:6,background:"#EAEEF6",border:"1px solid #CDD9EC",borderRadius:99,padding:"2px 10px",margin:"0 6px 6px 0",fontSize:13,color:"#2E477D",fontWeight:600}}>
-                        {(j&&j.name)||id}{j&&j.gc?<span style={{color:"#8A93A3",fontWeight:400}}>({j.gc})</span>:null}
-                        <button onClick={()=>{ const n=new Set(editDraft.jobIdsInclude); n.delete(id); setEditDraft({...editDraft, jobIdsInclude:n}); }} style={{border:"none",background:"none",color:"#8A2A2A",cursor:"pointer",fontWeight:700,padding:0,fontSize:14}}>×</button>
+                        {(j&&j.name)||id}{j&&j.gc?<span style={{color:C.faint,fontWeight:400}}>({j.gc})</span>:null}
+                        <button onClick={()=>{ const n=new Set(editDraft.jobIdsInclude); n.delete(id); setEditDraft({...editDraft, jobIdsInclude:n}); }} style={{minWidth:"var(--he-tap, 32px)",border:"none",background:"none",color:"#8A2A2A",cursor:"pointer",fontWeight:700,padding:0,fontSize:14}}>×</button>
                       </span>
                     ); })}
                     <select value="" onChange={e=>{ const v=e.target.value; if(v){ const n=new Set(editDraft.jobIdsInclude||[]); n.add(v); setEditDraft({...editDraft, jobIdsInclude:n}); } }}
@@ -52589,7 +52586,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
       )}
 
       {noUsers && (
-        <div style={{fontSize:14,color:"#8A929D",fontStyle:"italic",marginBottom:24,
+        <div style={{fontSize:14,color:C.faint,fontStyle:"italic",marginBottom:24,
           padding:"16px",background:"#F4F6F8",borderRadius:10,border:"1px dashed #E1E4E9"}}>
           No team members yet. Add people in the Team Members section below, then assign them roles.
         </div>
@@ -52815,7 +52812,7 @@ function HomeownerPage({ jobId }) {
   const hrNotes = {};
   flattenHomeRuns(job && job.homeRuns).forEach(r => { const t = String(r.note || '').trim(); if (r.id && t) hrNotes[r.id] = t; });
   const hrNoteEl = (it) => (it && it.hrId && hrNotes[it.hrId])
-    ? <span style={{flexBasis:'100%',order:99,fontSize:12.5,fontWeight:400,color:'#6E7682',marginTop:1}}>{hrNotes[it.hrId]}</span>
+    ? <span style={{flexBasis:'100%',order:99,fontSize:12.5,fontWeight:400,color:C.faint,marginTop:1}}>{hrNotes[it.hrId]}</span>
     : null;
   // Counter (item 3, client): circuits + slot fill from the REAL placement so
   // tandems/quads are reflected (matches the office panel schedule).
@@ -52864,7 +52861,7 @@ function HomeownerPage({ jobId }) {
   const base={fontFamily:'system-ui,-apple-system,sans-serif',minHeight:'100vh',background:'#EEF0F3',color:'#1B1F24'};
   const card={background:'#fff',border:'0.5px solid #E1E4E9',borderRadius:10,marginBottom:6,padding:'12px 14px'};
 
-  if(loading) return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:14,color:'#8A929D'}}>Loading…</div></div>;
+  if(loading) return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:14,color:C.faint}}>Loading…</div></div>;
   if(error)   return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center',padding:32,textAlign:'center'}}><div style={{fontSize:14,color:'#C62828'}}>{error}</div></div>;
   if(job && isSectionHidden(job,"generator")) return <SectionNotSharedPage/>; // v440
   if(submitted) return (
@@ -52909,8 +52906,8 @@ function HomeownerPage({ jobId }) {
         <div style={{padding:'12px 14px',background:'#fff',border:'0.5px solid #E1E4E9',borderRadius:10,marginTop:8}}>
           <div style={{display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap'}}>
             <span style={{fontSize:20,fontWeight:700,color:genOver?'#C62828':'#1B1F24'}}>{genUse.circuits}</span>
-            <span style={{fontSize:13,color:'#8A929D'}}>circuits on generator</span>
-            <span style={{marginLeft:'auto',fontSize:13,color:'#8A929D'}}>{genSpacesUsed} of {genSlotBudget} spaces</span>
+            <span style={{fontSize:13,color:C.faint}}>circuits on generator</span>
+            <span style={{marginLeft:'auto',fontSize:13,color:C.faint}}>{genSpacesUsed} of {genSlotBudget} spaces</span>
           </div>
           <div style={{height:8,borderRadius:5,background:'#EEF0F3',border:'0.5px solid #E1E4E9',marginTop:8,overflow:'hidden'}}>
             <div style={{height:'100%',width:`${Math.min(100,Math.round(genSpacesUsed/genSlotBudget*100))}%`,background:genOver?'#C62828':'#2F8F5B'}}/>
@@ -52928,7 +52925,7 @@ function HomeownerPage({ jobId }) {
           ON GENERATOR · {chosenItems.length}
         </div>
         {chosenItems.length===0&&(
-          <div style={{textAlign:'center',padding:'18px 16px',fontSize:14,color:'#8A929D',
+          <div style={{textAlign:'center',padding:'18px 16px',fontSize:14,color:C.faint,
             border:'0.5px dashed #CDE6D7',background:'#F7FBF9',borderRadius:10,marginBottom:12}}>
             Confirm the circuits below and they'll appear here — in the order the generator will power them.
           </div>
@@ -52951,19 +52948,19 @@ function HomeownerPage({ jobId }) {
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                   {it.name||'Unnamed'}{hrNoteEl(it)}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:11,fontWeight:700,color:C.slate,background:C.slateBg,
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
-                  {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
+                  {it.recommended&&<span style={{fontSize:11,fontWeight:700,color:A,background:AB,
                     borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                 </div>
-                {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:12.5,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
+                {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:12.5,color:C.faint,marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
               </div>
             </div>
             <div style={{marginTop:10,paddingLeft:42,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
               <span style={{fontSize:12.5,fontWeight:700,color:'#2F8F5B'}}>✓ {it.recommended?'Confirmed':'Added'}</span>
               <button onClick={()=>setStatus(it.id,'off')}
                 style={{marginLeft:'auto',background:'none',border:'0.5px solid #E1E4E9',borderRadius:7,
-                  padding:'6px 12px',fontSize:12.5,cursor:'pointer',color:'#8A929D',flexShrink:0,fontFamily:'inherit'}}>
+                  padding:'6px 12px',fontSize:12.5,cursor:'pointer',color:C.faint,flexShrink:0,fontFamily:'inherit'}}>
                 Remove
               </button>
             </div>
@@ -52989,12 +52986,12 @@ function HomeownerPage({ jobId }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}{hrNoteEl(it)}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:11,fontWeight:700,color:C.slate,background:C.slateBg,
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
-                      <span style={{fontSize:9,fontWeight:700,color:A,background:AB,
+                      <span style={{fontSize:11,fontWeight:700,color:A,background:AB,
                         borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>
                     </div>
-                    {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:12.5,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
+                    {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:12.5,color:C.faint,marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
                   </div>
                 </div>
                 <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -53005,7 +53002,7 @@ function HomeownerPage({ jobId }) {
                   </button>
                   <button onClick={()=>setStatus(it.id,'off')}
                     style={{background:'#fff',border:'0.5px solid #E1E4E9',borderRadius:8,
-                      padding:'9px 15px',fontSize:13,fontWeight:600,cursor:'pointer',color:'#8A929D',fontFamily:'inherit'}}>
+                      padding:'9px 15px',fontSize:13,fontWeight:600,cursor:'pointer',color:C.faint,fontFamily:'inherit'}}>
                     Remove
                   </button>
                 </div>
@@ -53026,12 +53023,12 @@ function HomeownerPage({ jobId }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:14,fontWeight:500,color:'#5E6670',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}{hrNoteEl(it)}
-                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:C.slate,background:C.slateBg,
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:11,fontWeight:700,color:C.slate,background:C.slateBg,
                     borderRadius:99,padding:'1px 7px',border:'0.5px solid #C9D1DC',flexShrink:0}}>Needs specs</span>}
-                      {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
+                      {it.recommended&&<span style={{fontSize:11,fontWeight:700,color:A,background:AB,
                         borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                     </div>
-                    {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:12.5,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
+                    {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:12.5,color:C.faint,marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
                   </div>
                   <button onClick={()=>setStatus(it.id,'chosen')}
                     style={{background:A,border:`0.5px solid ${A}`,borderRadius:8,
@@ -53073,7 +53070,7 @@ function HomeownerPage({ jobId }) {
           <button onClick={submit} disabled={submitting}
             style={{width:'100%',padding:'15px',borderRadius:10,
               background:submitting?'#E1E4E9':'#1B1F24',border:'none',
-              color:submitting?'#8A929D':'#fff',fontSize:14,fontWeight:500,
+              color:submitting?C.faint:'#fff',fontSize:14,fontWeight:500,
               cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit'}}>
             {submitting?'Submitting…':'Submit my selections'}
           </button>
@@ -53103,7 +53100,7 @@ function HomeRunsSharePage({ jobId }) {
     return () => unsub();
   }, [jobId]);
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14}}>{error}</div>;
   if(job && isSectionHidden(job,"liveView")) return <SectionNotSharedPage/>; // v440
 
@@ -53155,12 +53152,12 @@ function HomeRunsSharePage({ jobId }) {
             <div style={{padding:'0 4px'}}>
               {rows.map((r,i) => (
                 <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #EEF0F3':'none',background:r.status==='Pulled'?'#ECF2EE':'#fff'}}>
-                  <span style={{fontSize:12.5,color:'#99A0AA',width:22,flexShrink:0,textAlign:'right'}}>{r.num}.</span>
+                  <span style={{fontSize:12.5,color:C.faint,width:22,flexShrink:0,textAlign:'right'}}>{r.num}.</span>
                   <span style={{flex:1,minWidth:0}}>
-                    <span style={{display:'block',fontSize:14,fontWeight:600,color:'#111'}}>{r.name||<span style={{color:'#99A0AA',fontStyle:'italic'}}>Unnamed</span>}</span>
-                    {(r.note||"").trim()&&<span style={{display:'block',fontSize:12.5,color:'#6E7682',marginTop:1}}>{r.note}</span>}
+                    <span style={{display:'block',fontSize:14,fontWeight:600,color:'#111'}}>{r.name||<span style={{color:C.faint,fontStyle:'italic'}}>Unnamed</span>}</span>
+                    {(r.note||"").trim()&&<span style={{display:'block',fontSize:12.5,color:C.faint,marginTop:1}}>{r.note}</span>}
                   </span>
-                  {r.panel&&<span style={{fontSize:12.5,color:'#6E7682',background:'#EEF0F3',borderRadius:5,padding:'2px 7px'}}>{r.panel}</span>}
+                  {r.panel&&<span style={{fontSize:12.5,color:C.faint,background:'#EEF0F3',borderRadius:5,padding:'2px 7px'}}>{r.panel}</span>}
                   {wireChip(r.wire)}
                   {r.status==='Pulled'&&<span style={{fontSize:12.5,fontWeight:700,color:'#1F7A3F'}}>✓</span>}
                 </div>
@@ -53170,7 +53167,7 @@ function HomeRunsSharePage({ jobId }) {
         );
       })}
 
-      {allRows.length===0&&<div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>No home runs have been added yet.</div>}
+      {allRows.length===0&&<div style={{textAlign:'center',padding:'48px 20px',color:C.faint,background:'#fff',borderRadius:12}}>No home runs have been added yet.</div>}
     </div>
   );
 }
@@ -53191,7 +53188,7 @@ function LoadsSharePage({ jobId }) {
     return () => unsub();
   }, [jobId]);
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14}}>{error}</div>;
   if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"loadsShare"))) return <SectionNotSharedPage/>; // v440
 
@@ -53232,18 +53229,18 @@ function LoadsSharePage({ jobId }) {
         {baseline ? (
           <>
             <span style={{fontSize:13.5,fontWeight:700,color:'#1F7A3F',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="lock" size={13} stroke={2.25}/>Baseline locked — {(baseline.lockedAt||'').slice(0,10)}</span>
-            <span style={{fontSize:13,color:'#6E7682'}}>{(baseline.loads||[]).length} loads captured</span>
+            <span style={{fontSize:13,color:C.faint}}>{(baseline.loads||[]).length} loads captured</span>
             <span style={{flex:1}}/>
             {newCount>0&&<span style={{fontSize:13,fontWeight:700,color:'#2E9E6B'}}>{newCount} new</span>}
             {chgCount>0&&<span style={{fontSize:13,fontWeight:700,color:C.slate}}>{chgCount} changed</span>}
           </>
         ) : (
-          <span style={{fontSize:13,color:'#6E7682'}}>No baseline set — showing the full current load list ({loads.length}).</span>
+          <span style={{fontSize:13,color:C.faint}}>No baseline set — showing the full current load list ({loads.length}).</span>
         )}
       </div>
 
       {loads.length===0 ? (
-        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>No loads have been added yet.</div>
+        <div style={{textAlign:'center',padding:'48px 20px',color:C.faint,background:'#fff',borderRadius:12}}>No loads have been added yet.</div>
       ) : groupKeys.map(gk => {
         const rows = groups[gk];
         return (
@@ -53258,10 +53255,10 @@ function LoadsSharePage({ jobId }) {
                 const bg = f==='new'?'#E6F6EE':f==='changed'?C.slateBg:'#fff';
                 return (
                   <div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #EEF0F3':'none',background:bg}}>
-                    <span style={{fontSize:12.5,fontFamily:'ui-monospace,monospace',color:'#99A0AA',width:24,flexShrink:0,textAlign:'center'}}>{l.assignedTo?.output||''}</span>
-                    <span style={{flex:1,fontSize:14,fontWeight:600,color:'#111'}}>{l.name||<span style={{color:'#99A0AA',fontStyle:'italic'}}>Unnamed</span>}</span>
-                    {l.type&&<span style={{fontSize:12.5,color:'#6E7682'}}>{typeLabel(l.type)}</span>}
-                    {l.wattage&&<span style={{fontSize:13,fontVariantNumeric:'tabular-nums',color:'#6E7682'}}>{l.wattage}W</span>}
+                    <span style={{fontSize:12.5,fontFamily:'ui-monospace,monospace',color:C.faint,width:24,flexShrink:0,textAlign:'center'}}>{l.assignedTo?.output||''}</span>
+                    <span style={{flex:1,fontSize:14,fontWeight:600,color:'#111'}}>{l.name||<span style={{color:C.faint,fontStyle:'italic'}}>Unnamed</span>}</span>
+                    {l.type&&<span style={{fontSize:12.5,color:C.faint}}>{typeLabel(l.type)}</span>}
+                    {l.wattage&&<span style={{fontSize:13,fontVariantNumeric:'tabular-nums',color:C.faint}}>{l.wattage}W</span>}
                     {flag(f)}
                   </div>
                 );
@@ -53270,7 +53267,7 @@ function LoadsSharePage({ jobId }) {
           </div>
         );
       })}
-      <div style={{textAlign:'center',color:'#99A0AA',fontSize:12.5,padding:'14px 0 24px'}}>Homestead Electric · live — updates as loads change</div>
+      <div style={{textAlign:'center',color:C.faint,fontSize:12.5,padding:'14px 0 24px'}}>Homestead Electric · live — updates as loads change</div>
     </div>
   );
 }
@@ -53393,7 +53390,7 @@ function LightingSharePage({ jobId }) {
   const inputStyle = {background:SP.bg,border:`1px solid ${SP.border}`,borderRadius:6,padding:'5px 8px',fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',color:SP.text};
   const lvRowStyle = {background:SP.accentBg,border:`1px solid ${SP.accentBorder}55`,borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828'}}>{error}</div>;
   if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"lvCollab"))) return <SectionNotSharedPage/>; // v440
 
@@ -53456,7 +53453,7 @@ function LightingSharePage({ jobId }) {
                   <div style={{flex:2}}><input value={r.name||''} onChange={e=>updRow(key,r.id,{name:e.target.value})} placeholder="Circuit / button name…" style={inputStyle}/></div>
                   <div style={{flex:1}}><input value={r.module||''} onChange={e=>updRow(key,r.id,{module:e.target.value})} placeholder="Module / channel…" style={inputStyle}/></div>
                   <div style={{flex:2}}><input value={r.notes||''} onChange={e=>updRow(key,r.id,{notes:e.target.value})} placeholder="Notes…" style={inputStyle}/></div>
-                  <button onClick={()=>delRow(key,r.id)} style={{background:'none',border:'none',color:SP.muted,cursor:'pointer',fontSize:14,flexShrink:0}}>✕</button>
+                  <button onClick={()=>delRow(key,r.id)} style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:SP.muted,cursor:'pointer',fontSize:14,flexShrink:0}}>✕</button>
                 </div>
               ))}
               <button onClick={()=>addRow(key)} style={{fontSize:12.5,fontWeight:700,color:SP.accent,background:SP.accentBg,border:`1px dashed ${SP.accentBorder}`,borderRadius:6,padding:'5px 14px',cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:4}}>+ Add Row</button>
@@ -53537,7 +53534,7 @@ function LightingSharePage({ jobId }) {
                   <div style={{flex:2}}><input value={r.name||''} onChange={e=>updRow(lvKey,r.id,{name:e.target.value})} placeholder="Load name…" style={inputStyle}/></div>
                   <div style={{flex:1}}><input value={r.module||''} onChange={e=>updRow(lvKey,r.id,{module:e.target.value})} placeholder="Module…" style={inputStyle}/></div>
                   <div style={{flex:2}}><input value={r.notes||''} onChange={e=>updRow(lvKey,r.id,{notes:e.target.value})} placeholder="Notes…" style={inputStyle}/></div>
-                  <button onClick={()=>delRow(lvKey,r.id)} style={{background:'none',border:'none',color:SP.muted,cursor:'pointer',fontSize:14,flexShrink:0}}>✕</button>
+                  <button onClick={()=>delRow(lvKey,r.id)} style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:SP.muted,cursor:'pointer',fontSize:14,flexShrink:0}}>✕</button>
                 </div>
               ))}
               <button onClick={()=>addRow(lvKey)} style={{fontSize:12.5,fontWeight:700,color:SP.accent,background:SP.accentBg,border:`1px dashed ${SP.accentBorder}`,borderRadius:6,padding:'5px 14px',cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:4}}>+ Add Row</button>
@@ -53639,7 +53636,7 @@ function LightingHubPage() {
       </button>
     </div>
   );
-  if(jobsList===null) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
+  if(jobsList===null) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
@@ -53657,7 +53654,7 @@ function LightingHubPage() {
       </div>
 
       {jobsList.length===0 ? (
-        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>No Lutron jobs yet. Check back later.</div>
+        <div style={{textAlign:'center',padding:'48px 20px',color:C.faint,background:'#fff',borderRadius:12}}>No Lutron jobs yet. Check back later.</div>
       ) : (
         <div style={{display:'flex',flexDirection:'column',gap:8}}>
           {jobsList.map(job => (
@@ -53685,7 +53682,7 @@ function LightingHubPage() {
           ))}
         </div>
       )}
-      <div style={{textAlign:'center',color:'#99A0AA',fontSize:12.5,padding:'20px 0 10px'}}>Homestead Electric · this list updates as new jobs are set to Lutron</div>
+      <div style={{textAlign:'center',color:C.faint,fontSize:12.5,padding:'20px 0 10px'}}>Homestead Electric · this list updates as new jobs are set to Lutron</div>
     </div>
   );
 }
@@ -53764,7 +53761,7 @@ function LutronAdditionsSharePage({ jobId }) {
     if (!ok) throw new Error('send failed');
   };
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828'}}>{error}</div>;
 
   // Honor the office's "On Tech Lighting's link" switch on DIRECT links too —
@@ -53807,11 +53804,11 @@ function LutronAdditionsSharePage({ jobId }) {
         <input value={tlName} onChange={e=>setTlName(e.target.value)} placeholder="Tech Lighting"
           style={{flex:'1 1 160px',minWidth:120,background:'#F7F8FA',border:'1px solid #E1E4E9',borderRadius:6,
             color:'#1B1F24',padding:'6px 9px',fontSize:13,fontFamily:'inherit',outline:'none'}}/>
-        <span style={{fontSize:12,color:'#99A0AA'}}>shown on your questions and comments</span>
+        <span style={{fontSize:12,color:C.faint}}>shown on your questions and comments</span>
       </div>
 
       {rooms.length===0 ? (
-        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
+        <div style={{textAlign:'center',padding:'48px 20px',color:C.faint,background:'#fff',borderRadius:12}}>
           Nothing's changed since bid yet on this job. Check back — this page updates automatically.
         </div>
       ) : (
@@ -53838,12 +53835,12 @@ function LutronAdditionsSharePage({ jobId }) {
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:14,fontWeight:600,color:'#1B1F24'}}>
                           {ct==='Moved' && item.fromLocation
-                            ? <>{item.fromLocation} <span style={{color:'#99A0AA'}}>→</span> {item.location}</>
+                            ? <>{item.fromLocation} <span style={{color:C.faint}}>→</span> {item.location}</>
                             : item.location}
                         </div>
                         {item.notes && <div style={{fontSize:13,color:'#5E6670',marginTop:2}}>{item.notes}</div>}
                       </div>
-                      <span style={{fontSize:12,color:'#99A0AA',flexShrink:0,whiteSpace:'nowrap'}}>{(item.addedAt||'').slice(0,10)}</span>
+                      <span style={{fontSize:12,color:C.faint,flexShrink:0,whiteSpace:'nowrap'}}>{(item.addedAt||'').slice(0,10)}</span>
                     </div>
                     <div style={{marginTop:7,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                       {ack?.ackedAt ? (
@@ -53853,7 +53850,7 @@ function LutronAdditionsSharePage({ jobId }) {
                             Incorporated{ack.note?` — ${ack.note}`:''}
                           </span>
                           <button onClick={()=>unackItem(item.id)}
-                            style={{background:'none',border:'none',color:'#8A929D',fontSize:12.5,
+                            style={{background:'none',border:'none',color:C.faint,fontSize:12.5,
                               cursor:'pointer',fontFamily:'inherit',padding:0}}>
                             Undo
                           </button>
@@ -53892,7 +53889,7 @@ function LutronAdditionsSharePage({ jobId }) {
         <QAThread messages={threads._general||[]} jobId={jobId} qid="_general"
           photoBase="plan-change-threads" onPost={postTL('_general')}/>
       </div>
-      <div style={{textAlign:'center',color:'#99A0AA',fontSize:12.5,padding:'20px 0 10px'}}>Homestead Electric · live — updates as changes are logged</div>
+      <div style={{textAlign:'center',color:C.faint,fontSize:12.5,padding:'20px 0 10px'}}>Homestead Electric · live — updates as changes are logged</div>
     </div>
   );
 }
@@ -53993,7 +53990,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
           borderBottom:`2px solid ${color}33`,paddingBottom:5,marginBottom:8}}>
           <span style={{fontSize:13,fontWeight:800,color:'#1B1F24',letterSpacing:'0.02em',display:'inline-flex',alignItems:'center',gap:6}}>
             <span style={{width:8,height:8,borderRadius:'50%',background:dot,display:'inline-block'}}/>{groupLabel(k)}
-            <span style={{fontSize:12,fontWeight:600,color:'#99A0AA'}}>({qs.length})</span>
+            <span style={{fontSize:12,fontWeight:600,color:C.faint}}>({qs.length})</span>
           </span>
           <button onClick={()=>toggleAll(ids)}
             style={{fontSize:12,color:color,background:'none',border:`1px solid ${color}55`,borderRadius:4,
@@ -54010,10 +54007,10 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
             <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.has(q.id)?color:'#CDD3DB'}`,
               background:selected.has(q.id)?color:'#fff',flexShrink:0,marginTop:1,
               display:'flex',alignItems:'center',justifyContent:'center'}}>
-              {selected.has(q.id)&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
+              {selected.has(q.id)&&<span style={{color:'#fff',fontSize:11,fontWeight:900}}>✓</span>}
             </div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:12,color:'#99A0AA',fontWeight:600,marginBottom:1}}>
+              <div style={{fontSize:12,color:C.faint,fontWeight:600,marginBottom:1}}>
                 <span style={{color:phaseColor[q.phase],fontWeight:700}}>{q.phase==='rough'?'Rough':'Finish'}</span> · {q.floor}
               </div>
               <div style={{fontSize:14,color:'#1B1F24',lineHeight:1.4}}>{q.question}</div>
@@ -54045,12 +54042,12 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
               alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
               <div>
                 <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Share Questions</div>
-                <div style={{fontSize:12.5,color:'#99A0AA',marginTop:2}}>
+                <div style={{fontSize:12.5,color:C.faint,marginTop:2}}>
                   {selected.size} selected · make a separate link per person — they only see the questions you choose
                 </div>
               </div>
               <button onClick={()=>setOpen(false)}
-                style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'#99A0AA',padding:'0 4px',lineHeight:1}}>✕</button>
+                style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.faint,padding:'0 4px',lineHeight:1}}>✕</button>
             </div>
             {/* Body */}
             <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
@@ -54072,13 +54069,13 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                       <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:13.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:12,fontWeight:600,color:color,marginLeft:6}}>editing</span>}</div>
-                          <div style={{fontSize:12,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:C.slate}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
+                          <div style={{fontSize:12,color:C.faint}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:C.slate}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
                           <LinkOpensLine opens={linkOpens} linkKey={`questions:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:12.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>setPreviewId(s.id)} style={{fontSize:12.5,fontWeight:600,color:'#1e3a5f',background:'#fff',border:'1px solid #C3D0E0',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Preview</button>
                         <button onClick={()=>copyLink(s.id)} style={{fontSize:12.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
-                        <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{fontSize:14,color:'#C62828',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
+                        <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{minWidth:"var(--he-tap, 32px)",fontSize:14,color:'#C62828',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
                       </div>
                     );
                   })}
@@ -54113,7 +54110,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                   Share all
                 </button>
                 <button onClick={()=>setOpen(false)}
-                  style={{background:'#EEF0F3',color:'#6E7682',border:'none',borderRadius:8,
+                  style={{background:'#EEF0F3',color:C.faint,border:'none',borderRadius:8,
                     padding:'10px 14px',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
                   Cancel
                 </button>
@@ -54135,11 +54132,11 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                 <div style={{fontSize:13.5,fontWeight:700,color:'#111',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
                   Preview · {(shares.find(s=>s.id===previewId)||{}).name||'Link'}
                 </div>
-                <div style={{fontSize:12.5,color:'#99A0AA',marginTop:1}}>Exactly what your recipient sees — read-only</div>
+                <div style={{fontSize:12.5,color:C.faint,marginTop:1}}>Exactly what your recipient sees — read-only</div>
               </div>
               <div style={{display:'flex',gap:6,flexShrink:0}}>
                 <button onClick={()=>copyLink(previewId)} style={{fontSize:12.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'5px 11px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
-                <button onClick={()=>setPreviewId(null)} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#99A0AA',padding:'0 4px',lineHeight:1}}>✕</button>
+                <button onClick={()=>setPreviewId(null)} style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',fontSize:18,cursor:'pointer',color:C.faint,padding:'0 4px',lineHeight:1}}>✕</button>
               </div>
             </div>
             <iframe title="Share link preview" src={`${window.location.origin}/?questions=${jobId}&s=${previewId}&preview=1`}
@@ -54276,18 +54273,18 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
                 <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Share {stage} Punch List</div>
                 <button onClick={()=>setOpen(false)}
-                  style={{background:'none',border:'none',fontSize:18,cursor:'pointer',
-                    color:'#99A0AA',lineHeight:1,padding:'0 2px'}}>✕</button>
+                  style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',fontSize:18,cursor:'pointer',
+                    color:C.faint,lineHeight:1,padding:'0 2px'}}>✕</button>
               </div>
               <div style={{marginBottom:10}}>
-                <div style={{fontSize:12,color:'#99A0AA',fontWeight:600,letterSpacing:'0.06em',marginBottom:4}}>RECIPIENT NAME</div>
+                <div style={{fontSize:12,color:C.faint,fontWeight:600,letterSpacing:'0.06em',marginBottom:4}}>RECIPIENT NAME</div>
                 <input value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. GC, Smith Framing…"
                   style={{width:'100%',boxSizing:'border-box',border:'1px solid #E1E4E9',borderRadius:7,
                     padding:'7px 10px',fontSize:13,fontFamily:'inherit',outline:'none',color:'#111',
                     background:'#f9fafb'}}/>
-                <div style={{fontSize:12,color:'#99A0AA',marginTop:4}}>This name labels their punch list in the app and on their page.</div>
+                <div style={{fontSize:12,color:C.faint,marginTop:4}}>This name labels their punch list in the app and on their page.</div>
               </div>
-              <div style={{fontSize:13,color:'#99A0AA'}}>
+              <div style={{fontSize:13,color:C.faint}}>
                 {selected.size} of {allItems.length} items selected — recipient sees only what you choose
               </div>
             </div>
@@ -54303,12 +54300,12 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                       <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:13.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:12,fontWeight:600,color,marginLeft:6}}>editing</span>}</div>
-                          <div style={{fontSize:12,color:'#99A0AA'}}>{cnt} item{cnt!==1?'s':''}</div>
+                          <div style={{fontSize:12,color:C.faint}}>{cnt} item{cnt!==1?'s':''}</div>
                           <LinkOpensLine opens={linkOpens} linkKey={`${stageParam}:${s.id}`} createdAt={s.createdAt||null}/>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:12.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>copyLink(s.id)} style={{fontSize:12.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
-                        <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{fontSize:14,color:'#C62828',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
+                        <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{minWidth:"var(--he-tap, 32px)",fontSize:14,color:'#C62828',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
                       </div>
                     );
                   })}
@@ -54345,7 +54342,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                       return (
                         <div key={sec}>
                           {showSec&&(
-                            <div style={{fontSize:12,color:'#99A0AA',fontWeight:600,
+                            <div style={{fontSize:12,color:C.faint,fontWeight:600,
                               letterSpacing:'0.06em',marginBottom:4,marginTop:6}}>
                               {sec.toUpperCase()}
                             </div>
@@ -54361,10 +54358,10 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                                 background:selected.has(item.id)?color:'#fff',
                                 display:'flex',alignItems:'center',justifyContent:'center'}}>
                                 {selected.has(item.id)&&
-                                  <span style={{color:'#fff',fontSize:8,fontWeight:900,lineHeight:1}}>✓</span>}
+                                  <span style={{color:'#fff',fontSize:11,fontWeight:900,lineHeight:1}}>✓</span>}
                               </div>
                               <div style={{flex:1}}>
-                                <span style={{fontSize:13,color:item.done?'#99A0AA':'#1B1F24',
+                                <span style={{fontSize:13,color:item.done?C.faint:'#1B1F24',
                                   textDecoration:item.done?'line-through':'none',lineHeight:1.45}}
                                   dangerouslySetInnerHTML={safeProps(item.text)}/>
                                 {item.done&&<span style={{marginLeft:6,fontSize:12,color:'#6ee7b7',fontWeight:600}}>✓ done</span>}
@@ -54393,7 +54390,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                 Share all
               </button>
               <button onClick={()=>setOpen(false)}
-                style={{background:'#EEF0F3',color:'#6E7682',border:'none',borderRadius:8,
+                style={{background:'#EEF0F3',color:C.faint,border:'none',borderRadius:8,
                   padding:'10px 14px',fontSize:14,cursor:'pointer',fontFamily:'inherit'}}>
                 Cancel
               </button>
@@ -54430,14 +54427,14 @@ function ExternalPunchSection({ items, label, onChange, color }) {
               border:`2px solid ${it.done?color:C.border}`,
               background:it.done?color:'transparent',
               display:'flex',alignItems:'center',justifyContent:'center'}}>
-            {it.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
+            {it.done&&<span style={{color:'#fff',fontSize:11,fontWeight:900}}>✓</span>}
           </div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:14,color:it.done?C.faint:C.text,
               textDecoration:it.done?'line-through':'none',lineHeight:1.45,
               wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{it.text}</div>
 
-            <div style={{fontSize:9,color:C.faint,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+            <div style={{fontSize:11,color:C.faint,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
               <span>added by <b>{it.addedBy||label}</b>{it.addedAt?' · '+it.addedAt:''}</span>
               {it.done&&it.checkedBy&&(
                 <span style={{color:C.green}}>✓ checked by {it.checkedBy}{it.checkedAt?' · '+it.checkedAt:''}</span>
@@ -54445,7 +54442,7 @@ function ExternalPunchSection({ items, label, onChange, color }) {
             </div>
           </div>
           <button onClick={()=>remove(it.id)}
-            style={{background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:14,
+            style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:14,
               flexShrink:0,padding:'0 2px',lineHeight:1}}>✕</button>
         </div>
       ))}
@@ -54520,9 +54517,9 @@ function PunchSharePage({ jobId, stage }) {
       <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
         <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${item.done?stageColor:'#CDD3DB'}`,
           background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
+          {item.done&&<span style={{color:'#fff',fontSize:11,fontWeight:900,lineHeight:1}}>✓</span>}
         </div>
-        <span style={{fontSize:14,color:item.done?'#99A0AA':'#1B1F24',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={safeProps(item.text)}/>
+        <span style={{fontSize:14,color:item.done?C.faint:'#1B1F24',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={safeProps(item.text)}/>
       </div>
       {item.waiting && !item.done && (
         <div style={{marginLeft:24,marginTop:4}}>
@@ -54535,13 +54532,13 @@ function PunchSharePage({ jobId, stage }) {
     </div>
   ));
 
-  if(loading) return <div style={{textAlign:'center',padding:60,color:'#99A0AA',fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
+  if(loading) return <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
   if(error)   return <div style={{textAlign:'center',padding:60,color:'#C62828',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
       <div style={{fontSize:20,fontWeight:700,color:'#111',marginBottom:8}}>This link is no longer active</div>
-      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>This punch list link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
+      <div style={{fontSize:14,color:C.faint,lineHeight:1.6}}>This punch list link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
     </div>
   );
 
@@ -54568,8 +54565,8 @@ function PunchSharePage({ jobId, stage }) {
       </div>
 
       {totalItems===0 ? (
-        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
-          <div style={{marginBottom:12,color:'#99A0AA',display:'flex',justifyContent:'center'}}><Icon name="clipboard" size={32}/></div>
+        <div style={{textAlign:'center',padding:'48px 20px',color:C.faint,background:'#fff',borderRadius:12}}>
+          <div style={{marginBottom:12,color:C.faint,display:'flex',justifyContent:'center'}}><Icon name="clipboard" size={32}/></div>
           No punch list items yet. Check back later — this page updates automatically.
         </div>
       ) : (
@@ -54590,19 +54587,19 @@ function PunchSharePage({ jobId, stage }) {
               <div style={{padding:'4px 16px 10px'}}>
                 {general.length>0&&(
                   <>
-                    {(hotcheck.length>0||rooms.length>0)&&<div style={{fontSize:12,color:'#99A0AA',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>GENERAL</div>}
+                    {(hotcheck.length>0||rooms.length>0)&&<div style={{fontSize:12,color:C.faint,fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>GENERAL</div>}
                     {renderItems(general)}
                   </>
                 )}
                 {hotcheck.length>0&&(
                   <>
-                    <div style={{fontSize:12,color:'#99A0AA',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={10}/> HOT CHECK</div>
+                    <div style={{fontSize:12,color:C.faint,fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={10}/> HOT CHECK</div>
                     {renderItems(hotcheck)}
                   </>
                 )}
                 {rooms.map(room=>(
                   <div key={room.id||room.name}>
-                    <div style={{fontSize:12,color:'#99A0AA',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>{(room.name||'').toUpperCase()}</div>
+                    <div style={{fontSize:12,color:C.faint,fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>{(room.name||'').toUpperCase()}</div>
                     {renderItems(room.items)}
                   </div>
                 ))}
@@ -54611,7 +54608,7 @@ function PunchSharePage({ jobId, stage }) {
           );
         })
       )}
-      <div style={{textAlign:'center',fontSize:12.5,color:'#99A0AA',marginTop:8}}>
+      <div style={{textAlign:'center',fontSize:12.5,color:C.faint,marginTop:8}}>
         This list updates in real time as items are completed.
       </div>
 
@@ -54654,7 +54651,7 @@ function PunchSharePage({ jobId, stage }) {
           <div style={{background:'#fff',borderRadius:12,marginTop:20,padding:'18px 18px',
             boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
             <div style={{fontSize:14,fontWeight:700,color:'#1B1F24',marginBottom:4}}>Add an Item</div>
-            <div style={{fontSize:13,color:'#99A0AA',marginBottom:12}}>
+            <div style={{fontSize:13,color:C.faint,marginBottom:12}}>
               Items you add here will appear as <b style={{color:'#1B1F24'}}>{myLabel}'s Punch List</b> in the app for the Homestead team.
             </div>
             <textarea value={newItemText} onChange={e=>setNewItemText(e.target.value)}
@@ -54678,7 +54675,7 @@ function PunchSharePage({ jobId, stage }) {
             )}
             {existingExternal.length>0&&(
               <div style={{marginTop:16,borderTop:'1px solid #EEF0F3',paddingTop:14}}>
-                <div style={{fontSize:12,fontWeight:700,color:'#99A0AA',letterSpacing:'0.08em',marginBottom:8}}>
+                <div style={{fontSize:12,fontWeight:700,color:C.faint,letterSpacing:'0.08em',marginBottom:8}}>
                   YOUR SUBMITTED ITEMS ({existingExternal.length})
                 </div>
                 {existingExternal.map(it=>(
@@ -54688,10 +54685,10 @@ function PunchSharePage({ jobId, stage }) {
                       border:`2px solid ${it.done?stageColor:'#CDD3DB'}`,
                       background:it.done?stageColor:'transparent',
                       display:'flex',alignItems:'center',justifyContent:'center'}}>
-                      {it.done&&<span style={{color:'#fff',fontSize:7,fontWeight:900}}>✓</span>}
+                      {it.done&&<span style={{color:'#fff',fontSize:11,fontWeight:900}}>✓</span>}
                     </div>
                     <div style={{flex:1}}>
-                      <span style={{fontSize:13,color:it.done?'#99A0AA':'#2E3640',
+                      <span style={{fontSize:13,color:it.done?C.faint:'#2E3640',
                         textDecoration:it.done?'line-through':'none',lineHeight:1.4,
                         whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{it.text}</span>
                       {it.done&&<span style={{marginLeft:6,fontSize:12,color:'#6ee7b7',fontWeight:600}}> ✓ resolved</span>}
@@ -55059,7 +55056,7 @@ function QuestionsSharePage({ jobId }) {
     return (
       <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#1F7A3F':accent}`,transition:'opacity 0.2s,border-color 0.2s'}}>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3,flexWrap:'wrap'}}>
-          <div style={{fontSize:12,color:'#99A0AA',fontWeight:600}}>{phaseLabel} · {q.floor}{(q.room||'').trim()?` · ${q.room.trim()}`:''}</div>
+          <div style={{fontSize:12,color:C.faint,fontWeight:600}}>{phaseLabel} · {q.floor}{(q.room||'').trim()?` · ${q.room.trim()}`:''}</div>
           {isAns&&<div style={{fontSize:12,fontWeight:700,color:'#1F7A3F',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
           {isNewQ(q)&&<div style={{fontSize:12,fontWeight:800,color:C.slateInk,background:C.slateBg,border:'1px solid #C9D1DC',borderRadius:99,padding:'1px 8px'}}>NEW</div>}
           {!isNewQ(q)&&newReplyQ(q)&&<div style={{fontSize:12,fontWeight:800,color:'#2F5BD9',background:'#E7ECF7',border:'1px solid #2F5BD944',borderRadius:99,padding:'1px 8px'}}>New reply from Homestead</div>}
@@ -55075,7 +55072,7 @@ function QuestionsSharePage({ jobId }) {
                 ? <img key={p.id} src={safeImageSrc(p.url)} alt={p.name||'photo'} onClick={()=>openPhoto(p.url, p.name)}
                     style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
                 : <a key={p.id} href={safeUrl(p.url)} target="_blank" rel="noopener noreferrer"
-                    style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
+                    style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
             })}
           </div>
         )}
@@ -55110,7 +55107,7 @@ function QuestionsSharePage({ jobId }) {
           <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
             style={{marginTop:8,fontSize:12.5,fontWeight:600,color:C.slate,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
         )}
-        {threadOfShare(q).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
+        {threadOfShare(q).length>0 && <div style={{fontSize:11,fontWeight:800,letterSpacing:'0.08em',color:C.faint,margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
         <QAThread messages={threadOfShare(q)} jobId={jobId} qid={q.id} color="#2F5BD9" photoBase="question-threads"
           onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
       </div>
@@ -55144,25 +55141,25 @@ function QuestionsSharePage({ jobId }) {
   const newCount   = [...roughQs, ...finishQs].filter(q=>isNewQ(q)||newReplyQ(q)).length;
   const taStyle = {width:'100%',border:'1px solid #CDD3DB',borderRadius:7,padding:'8px 10px',fontSize:14,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
       <div style={{fontSize:20,fontWeight:700,color:'#111',marginBottom:8}}>This link is no longer active</div>
-      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>This questions link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
+      <div style={{fontSize:14,color:C.faint,lineHeight:1.6}}>This questions link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
     </div>
   );
   if(submitted) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:'#1F7A3F',display:'flex',justifyContent:'center'}}><Icon name="checkCircle" size={48} stroke={2}/></div>
       <div style={{fontSize:22,fontWeight:700,color:'#111',marginBottom:8}}>Answers Submitted</div>
-      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6,marginBottom:24}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
+      <div style={{fontSize:14,color:C.faint,lineHeight:1.6,marginBottom:24}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
       <button onClick={()=>setSubmitted(false)}
         style={{padding:'11px 20px',fontSize:14,fontWeight:700,border:'1px solid #CBD6E4',borderRadius:10,background:'#EEF2F7',color:'#1e3a5f',cursor:'pointer',fontFamily:'inherit'}}>
         Review / edit my answers
       </button>
-      <div style={{fontSize:13,color:'#99A0AA',marginTop:12}}>You can update any answer and submit again.</div>
+      <div style={{fontSize:13,color:C.faint,marginTop:12}}>You can update any answer and submit again.</div>
     </div>
   );
 
@@ -55182,15 +55179,15 @@ function QuestionsSharePage({ jobId }) {
       {showPriorBanner&&<div style={{background:C.slateBg,border:'1px solid #56657A',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:13,color:C.slateInk,display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>{iSubmittedBefore ? <Fragment>You previously submitted answers as <b>{_priorSubmit.name}</b>. You can update them below and resubmit.</Fragment> : <Fragment>Some of these were already answered{priorName?<Fragment> by <b>{priorName}</b></Fragment>:null}. Answer anything still open — put <b>your own name</b> at the bottom and your answers are filed under you.</Fragment>}</span></div>}
 
       {!hasQs ? (
-        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
-          <div style={{marginBottom:12,color:'#99A0AA',display:'flex',justifyContent:'center'}}><Icon name="clipboard" size={32}/></div>
+        <div style={{textAlign:'center',padding:'48px 20px',color:C.faint,background:'#fff',borderRadius:12}}>
+          <div style={{marginBottom:12,color:C.faint,display:'flex',justifyContent:'center'}}><Icon name="clipboard" size={32}/></div>
           No questions have been added yet. Check back later — this page updates automatically.
         </div>
       ) : (
         <>
-          <div style={{fontSize:14,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Your answers save automatically as you type</b> — press “Submit Answers” at the bottom when you're completely done, so our team knows you've finished. If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
+          <div style={{fontSize:14,color:C.faint,marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Your answers save automatically as you type</b> — press “Submit Answers” at the bottom when you're completely done, so our team knows you've finished. If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
           <div style={{position:'sticky',top:0,zIndex:50,display:'flex',justifyContent:'flex-end',padding:'2px 4px 8px'}}>
-            <span style={{fontSize:12.5,fontWeight:700,color:saving?'#8A929D':'#1F7A3F',background:'#fff',
+            <span style={{fontSize:12.5,fontWeight:700,color:saving?C.faint:'#1F7A3F',background:'#fff',
               border:'1px solid #E1E4E9',borderRadius:99,padding:'3px 12px',
               visibility:(saving||savedAt)?'visible':'hidden'}}>
               {saving?'Saving…':savedAt?`✓ Saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:'—'}
@@ -55262,14 +55259,14 @@ function QuestionsSharePage({ jobId }) {
             {nameErr&&<div style={{color:'#C62828',fontSize:12.5,marginTop:4}}>Please enter your name</div>}
           </div>
 
-          <div style={{textAlign:'center',fontSize:12.5,fontWeight:600,color:saving?'#8A929D':'#1F7A3F',marginBottom:8}}>
+          <div style={{textAlign:'center',fontSize:12.5,fontWeight:600,color:saving?C.faint:'#1F7A3F',marginBottom:8}}>
             {saving?'Saving…':savedAt?`Answers saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} — press Submit when you're done`:'Answers save automatically as you type'}
           </div>
           <button onClick={handleSubmit} disabled={submitting}
             style={{width:'100%',background:'#1e3a5f',color:'#fff',border:'none',borderRadius:10,padding:14,fontSize:15,fontWeight:700,cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit',opacity:submitting?0.7:1,marginBottom:16}}>
             {submitting?'Submitting…':'Submit Answers'}
           </button>
-          <div style={{textAlign:'center',fontSize:12.5,color:'#99A0AA'}}>Questions update live — new questions added by our team will appear here automatically.</div>
+          <div style={{textAlign:'center',fontSize:12.5,color:C.faint}}>Questions update live — new questions added by our team will appear here automatically.</div>
         </>
       )}
     </div>
@@ -55325,7 +55322,7 @@ function JobNoteSharePage({ param }) {
   const headerBg = '#1e3a5f';
 
   if (loading) return (
-    <div style={{textAlign:'center',padding:60,color:'#99A0AA',fontFamily:'system-ui,sans-serif'}}>Loading…</div>
+    <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>
   );
   if (error) return (
     <div style={{textAlign:'center',padding:60,color:'#C62828',fontFamily:'system-ui,sans-serif'}}>{error}</div>
@@ -55336,14 +55333,14 @@ function JobNoteSharePage({ param }) {
 
   if (!note || note.deleted) {
     return (
-      <div style={{textAlign:'center',padding:60,color:'#99A0AA',fontFamily:'system-ui,sans-serif'}}>
+      <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>
         This note is not available.
       </div>
     );
   }
   if (!note.shareToken || note.shareToken !== token) {
     return (
-      <div style={{textAlign:'center',padding:60,color:'#99A0AA',fontFamily:'system-ui,sans-serif'}}>
+      <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>
         This share link has been revoked or is no longer valid.
       </div>
     );
@@ -55388,7 +55385,7 @@ function JobNoteSharePage({ param }) {
           {title}
         </div>
         {updatedLabel && (
-          <div style={{fontSize:12.5,color:'#99A0AA',marginBottom:14}}>Updated {updatedLabel}</div>
+          <div style={{fontSize:12.5,color:C.faint,marginBottom:14}}>Updated {updatedLabel}</div>
         )}
 
         {/* Note-level photos */}
@@ -55405,7 +55402,7 @@ function JobNoteSharePage({ param }) {
 
         {/* Lines */}
         {lines.length === 0 && (
-          <div style={{fontSize:14,color:'#99A0AA',fontStyle:'italic'}}>(no lines)</div>
+          <div style={{fontSize:14,color:C.faint,fontStyle:'italic'}}>(no lines)</div>
         )}
         <div style={{display:'flex',flexDirection:'column',gap:8}}>
           {lines.map(l => {
@@ -55421,7 +55418,7 @@ function JobNoteSharePage({ param }) {
                 <span style={{flexShrink:0,marginTop:7,width:5,height:5,borderRadius:99,background:phaseColor}}/>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:14,color:'#1B1F24',whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:1.45}}>
-                    {(l?.text || '').trim() || <span style={{color:'#99A0AA'}}>(empty line)</span>}
+                    {(l?.text || '').trim() || <span style={{color:C.faint}}>(empty line)</span>}
                   </div>
                   {lPhotos.length > 0 && (
                     <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:6}}>
@@ -55446,7 +55443,7 @@ function JobNoteSharePage({ param }) {
                     </div>
                   )}
                   {wasPromoted && (
-                    <div style={{marginTop:5,fontSize:12,color:'#99A0AA',fontStyle:'italic'}}>
+                    <div style={{marginTop:5,fontSize:12,color:C.faint,fontStyle:'italic'}}>
                       (handled — promoted internally)
                     </div>
                   )}
@@ -55457,7 +55454,7 @@ function JobNoteSharePage({ param }) {
         </div>
       </div>
 
-      <div style={{textAlign:'center',marginTop:18,fontSize:12.5,color:'#99A0AA'}}>
+      <div style={{textAlign:'center',marginTop:18,fontSize:12.5,color:C.faint}}>
         This is a read-only shared view. Updates appear live.
       </div>
     </div>
@@ -56158,6 +56155,10 @@ function parseAppMapManifest(md) {
     const subMatch = line.match(/^\s{2,}-\s+(.+)$/);
     if (subMatch && curItem) { curItem.subs.push(subMatch[1].trim()); continue; }
     const itemMatch = line.match(/^-\s+\*\*(.+?)\*\*(.*)$/);
+    // The newest entries sit at the top of FEATURES.md, before the first "##"
+    // area heading; they used to be skipped (so What's New missed the latest
+    // ships). They get their own "Latest releases" area now.
+    if (itemMatch && !curSection) { curSection = { title: "Latest releases", items: [] }; sections.push(curSection); }
     if (itemMatch && curSection) {
       const name = itemMatch[1].trim();
       const rest = itemMatch[2].trim().replace(/^[·\s]+/, "");
@@ -57998,7 +57999,7 @@ function HuddleSheet({ jobs, foremen, identity, users = [] }) {
       <div style={{display:"flex", justifyContent:"flex-end", marginBottom:8}}>
         <button onClick={()=>setShowRaw(r=>!r)} aria-pressed={showRaw}
           style={{fontSize:12.5, fontWeight:600, color:C.accent, background:"none", border:"none",
-            cursor:"pointer", fontFamily:"inherit", padding:"6px 4px", minHeight:32}}>
+            cursor:"pointer", fontFamily:"inherit", padding:"6px 4px", minHeight:"var(--he-tap, 32px)"}}>
           {showRaw ? "Show as sections" : "Show as text"}
         </button>
       </div>
@@ -58365,7 +58366,7 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
                 style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
                   textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.chip}</span>
               <span onClick={(e)=>onOpenMenu(e, job.id, item.key)}
-                style={{padding:"9px 10px 9px 5px", opacity:0.55, fontSize:9}}>▾</span>
+                style={{padding:"9px 10px 9px 5px", opacity:0.55, fontSize:11}}>▾</span>
             </span>
           );
         })}
@@ -58428,7 +58429,7 @@ function JobPrepPrepRow({ job, onSelectJob, onUpdateJob, onOpenMenu, canOverride
                         style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
                           textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.label}</span>
                       <span onClick={(e)=>onOpenMenu(e, job.id, item.key, "prep")}
-                        style={{padding:"9px 10px 9px 5px", opacity:0.55, fontSize:9}}>▾</span>
+                        style={{padding:"9px 10px 9px 5px", opacity:0.55, fontSize:11}}>▾</span>
                     </span>
                   );
                 })}
@@ -58608,7 +58609,7 @@ function TempPedsLane({ groups, suggest, filterFn, filtered, open, onToggle, ide
           letterSpacing: "0.04em", color: badge, background: `${badge}12`, border: `1px solid ${badge}44`, borderRadius: 9,
           padding: g.num ? "7px 8px 5px" : "12px 8px 9px" }}>
           {g.num ? `#${g.num}` : "NO #"}
-          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", color: C.dim, marginTop: 2, fontFamily: "inherit" }}>PED</div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", color: C.dim, marginTop: 2, fontFamily: "inherit" }}>PED</div>
         </div>
         <div style={{ flex: "1 1 230px", minWidth: 0 }}>
           <div onClick={() => onSelectJob(j)} style={{ fontWeight: 700, fontSize: 14, color: C.text, cursor: "pointer" }}>{j.name || "Untitled Job"}</div>
@@ -58817,7 +58818,7 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
   const BUILDING_COLORS = [C.blue, C.purple, C.teal, C.accent, C.green];
   const STATUS = [["","Not started"],["inprogress","In progress"],["complete","Complete"]];
   const col = def.color;
-  const lbl = (t) => <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
+  const lbl = (t) => <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>{t.toUpperCase()}</div>;
   const addItem = () => { const t = newItem.trim(); if (!t) return; patch(x => ({ ...x, items: [...(x.items || []), { id: uid(), text: t.slice(0, 300), done: false, by: me, at: commLocalDate() }] })); setNewItem(""); };
   const toggleItem = (id) => patch(x => ({ ...x, items: (x.items || []).map(i => i.id === id ? (i.done ? { ...i, done: false, doneBy: "", doneAt: "" } : { ...i, done: true, doneBy: me, doneAt: commLocalDate() }) : i) }));
   const removeItem = (id) => patch(x => ({ ...x, items: (x.items || []).filter(i => i.id !== id) }));
@@ -58833,7 +58834,7 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
         <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",flexWrap:"wrap",marginBottom:12}}>
           {subs.map(([k,l]) => { const on = sub === k; const n = openCount(`${def.key}.${k}`); const st = (phases[`${def.key}.${k}`] || {}).status || "";
             return <button key={k} onClick={()=>setSub(k)} style={{border:"none",padding:"8px 12px",fontSize:12.5,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",fontFamily:"inherit",background:on?col:"#fff",color:on?"#fff":C.dim,display:"inline-flex",alignItems:"center",gap:6}}>
-              {l}{st==="complete" ? <span style={{fontSize:12}}>✓</span> : n>0 ? <span style={{fontSize:9,fontWeight:800,borderRadius:99,padding:"0 6px",background:on?"#ffffff30":`${col}18`,color:on?"#fff":col}}>{n}</span> : null}
+              {l}{st==="complete" ? <span style={{fontSize:12}}>✓</span> : n>0 ? <span style={{fontSize:11,fontWeight:800,borderRadius:99,padding:"0 6px",background:on?"#ffffff30":`${col}18`,color:on?"#fff":col}}>{n}</span> : null}
             </button>; })}
         </div>
       )}
@@ -58883,7 +58884,7 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
               placeholder="Building / area name (e.g. Building A)…"
               style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 10px",fontSize:14,fontFamily:"inherit",color:C.text,background:"#fff",outline:"none"}}/>
             <Btn onClick={addBuilding} variant="add" style={{fontSize:12.5,padding:"6px 12px"}}>Add</Btn>
-            <button onClick={()=>setAddingBuilding(false)} style={{background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
+            <button onClick={()=>setAddingBuilding(false)} style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14}}>✕</button>
           </div>
         ) : (
           <Btn onClick={()=>setAddingBuilding(true)} variant="add" style={{fontSize:12.5,padding:"5px 12px",marginTop:2}}>+ Add Building / Area</Btn>
@@ -58901,7 +58902,7 @@ function CommPhaseTab({ job, u, identity, tabLabel, assigneeOptions = null }) {
                 <div style={{fontSize:14,color:i.done?C.dim:C.text,textDecoration:i.done?"line-through":"none",wordBreak:"break-word"}}>{i.text}</div>
                 <div style={{fontSize:12,color:C.faint}}>{i.done ? `done ${i.doneAt||""}${i.doneBy?` by ${i.doneBy}`:""}` : `added ${i.at||""}${i.by?` by ${i.by}`:""}`}</div>
               </div>
-              <button onClick={()=>removeItem(i.id)} title="Remove" style={{border:"none",background:"transparent",color:C.faint,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
+              <button onClick={()=>removeItem(i.id)} title="Remove" style={{minWidth:"var(--he-tap, 32px)",border:"none",background:"transparent",color:C.faint,cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
             </div>
           ))}
           <div style={{display:"flex",gap:8}}>
@@ -58946,8 +58947,8 @@ function JobCompletedTab({ job, needs = [] }) {
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:14,fontWeight:600,color:C.text,textDecoration:voided?"line-through":"none",wordBreak:"break-word"}}>{n.text || "(no text)"}</div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",fontSize:12.5,color:C.dim,marginTop:3}}>
-                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",color:k==="task"?C.teal:C.orange,border:`1px solid ${k==="task"?C.teal:C.orange}66`}}>{k==="bodies"?"Bodies":k==="task"?"Task":"Need"}</span>
-                  {voided && <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",borderRadius:4,padding:"1px 6px",color:C.red,border:`1px solid ${C.red}66`}}>VOIDED</span>}
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",color:k==="task"?C.teal:C.orange,border:`1px solid ${k==="task"?C.teal:C.orange}66`}}>{k==="bodies"?"Bodies":k==="task"?"Task":"Need"}</span>
+                  {voided && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",borderRadius:4,padding:"1px 6px",color:C.red,border:`1px solid ${C.red}66`}}>VOIDED</span>}
                   <span>{voided ? "voided" : "done"} by <b style={{color:C.text}}>{n.doneBy || n.voidedBy || "?"}</b>{n.doneAt ? ` · ${fmt(n.doneAt)}` : ""}</span>
                   {(n.assignedTo || n.createdBy) && <span>· was on {first(n.assignedTo || n.createdBy)}{n.assignedBy && !sameName(n.assignedBy, n.assignedTo) ? ` from ${first(n.assignedBy)}` : n.createdBy && !sameName(n.createdBy, n.assignedTo) ? ` from ${first(n.createdBy)}` : ""}</span>}
                   {reps > 0 && <span>· {reps} {reps===1?"reply":"replies"}</span>}
@@ -59021,7 +59022,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
           return (
             <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? `${hasNote ? "Has a note" : ""}${hasNote && nDocs ? " · " : ""}${nDocs ? `${nDocs} doc${nDocs === 1 ? "" : "s"}` : ""} — tap to open` : "Add a note or attach a doc to this item"}
               style={{ display:"inline-flex", alignItems:"center", gap:2, marginLeft:2, paddingLeft:6, borderLeft:`1px solid ${col}55`, color: lit ? col : `${col}77`, cursor:"pointer" }}>
-              <Icon name="note" size={11} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:9 }}>{nDocs}</span>}
+              <Icon name="note" size={11} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:11 }}>{nDocs}</span>}
             </span>
           ); })()}
       </span>
@@ -59038,7 +59039,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
           <span style={{ fontSize:12, fontWeight:800, letterSpacing:"0.1em", color:C.dim, textTransform:"uppercase" }}>{it[1]} — note &amp; docs</span>
           {meta && meta.by && <span style={{ fontSize:12, color:C.faint }}>note by {meta.by}{meta.at ? ` · ${meta.at}` : ""}</span>}
-          <button onClick={() => setOpenItem(null)} title="Close" style={{ marginLeft:"auto", border:"none", background:"transparent", color:C.dim, cursor:"pointer", fontSize:16, lineHeight:1, fontFamily:"inherit" }}>×</button>
+          <button onClick={() => setOpenItem(null)} title="Close" style={{minWidth:"var(--he-tap, 32px)", marginLeft:"auto", border:"none", background:"transparent", color:C.dim, cursor:"pointer", fontSize:16, lineHeight:1, fontFamily:"inherit" }}>×</button>
         </div>
         <textarea value={itemNote(K)} readOnly={!canEdit} placeholder={`Note for ${it[1]}… e.g. "Subcontract 009 sent by Mitch 5/7/26 for $X — signed by Josh"`} rows={2}
           onChange={(e) => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, itemNotes: { ...(x.itemNotes || {}), [K]: v }, itemNotesBy: { ...(x.itemNotesBy || {}), [K]: { by: (identity && identity.name) || "", at: commLocalDate() } } })); }}
@@ -59061,11 +59062,11 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         {(photoItems.length > 0 || dateItems.length > 0) && (
           <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8 }}>
             {dateItems.map(([k, l]) => (
-              <div key={k} style={{ minWidth:180 }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l} — DATE</div>
+              <div key={k} style={{ minWidth:180 }}><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l} — DATE</div>
                 <DateInp value={(st.dates || {})[commItemKey(n, k)] || ""} onChange={e => { const v = e.target.value; if (canEdit) patchStart(x => ({ ...x, dates: { ...(x.dates || {}), [commItemKey(n, k)]: v } })); }}/></div>
             ))}
             {photoItems.map(([k, l]) => (
-              <div key={k} style={{ flex:"1 1 240px" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l}</div>
+              <div key={k} style={{ flex:"1 1 240px" }}><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>{l}</div>
                 <PhotoAttacher storagePath={`jobs/${job.id}/jobstart/${n}_${k}`} photos={(st.photos || {})[commItemKey(n, k)] || []} color={C.teal} label="Add photo"
                   onChange={(next) => { if (canEdit) patchStart(x => ({ ...x, photos: { ...(x.photos || {}), [commItemKey(n, k)]: next } })); }}/></div>
             ))}
@@ -59112,7 +59113,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
         </div>
         <span onClick={(e) => { e.stopPropagation(); setOpenItem(on ? null : K); }} title={hasNote || nDocs ? "Has a note / docs — tap to open" : "Add a note or attach a doc to this item"}
           style={{ display:"inline-flex", alignItems:"center", gap:2, padding:"4px 6px", borderRadius:6, color: hasNote || nDocs || on ? C.blue : C.faint, cursor:"pointer" }}>
-          <Icon name="note" size={13} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:9 }}>{nDocs}</span>}
+          <Icon name="note" size={13} stroke={2.25}/>{nDocs > 0 && <span style={{ fontSize:11 }}>{nDocs}</span>}
         </span>
       </div>
     );
@@ -59131,7 +59132,7 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
           style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", padding:"8px 10px", cursor:"pointer", userSelect:"none", background: n === cur ? "#2F5BD90A" : !left ? "#3E7D7A08" : C.surface }}>
           <span style={{ fontSize:12.5, color:C.dim, width:10, display:"inline-block", transform: isOpen ? "rotate(90deg)" : "none", transition:"transform .15s" }}>▶</span>
           <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:15, letterSpacing:"0.08em", color: head }}>{n} · {ph.label.toUpperCase()}</span>
-          {pill && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 8px", color: pill[1], background:`${pill[1]}15`, border:`1px solid ${pill[1]}40` }}>{pill[0]}</span>}
+          {pill && <span style={{ fontSize:11, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 8px", color: pill[1], background:`${pill[1]}15`, border:`1px solid ${pill[1]}40` }}>{pill[0]}</span>}
           <span style={{ fontSize:12.5, fontWeight:700, color: left ? C.dim : C.green, fontVariantNumeric:"tabular-nums" }}>{done}/{total}</span>
           <span style={{ marginLeft:"auto", fontSize:12, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
         </div>
@@ -59152,9 +59153,9 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       <div key={n} style={{ marginTop: 10 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
           <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:16, letterSpacing:"0.08em", color: kind === "cur" ? C.blue : kind === "past" ? C.teal : C.dim }}>PHASE {n} · {ph.label.toUpperCase()}</span>
-          {kind === "past" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? C.slate : C.green, background: owedHere.length ? "#56657A15" : "#1F7A3F15", border:`1px solid ${owedHere.length ? "#56657A40" : "#1F7A3F40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
-            : kind === "future" ? <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
-            : <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#2F5BD915", border:"1px solid #2F5BD940" }}>CURRENT</span>}
+          {kind === "past" ? <span style={{ fontSize:11, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color: owedHere.length ? C.slate : C.green, background: owedHere.length ? "#56657A15" : "#1F7A3F15", border:`1px solid ${owedHere.length ? "#56657A40" : "#1F7A3F40"}` }}>{owedHere.length ? `${owedHere.length} OWED` : "DONE"}</span>
+            : kind === "future" ? <span style={{ fontSize:11, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.dim, background:"#5E667015", border:"1px solid #5E667040" }}>UP NEXT</span>
+            : <span style={{ fontSize:11, fontWeight:800, letterSpacing:"0.06em", borderRadius:99, padding:"2px 9px", color:C.blue, background:"#2F5BD915", border:"1px solid #2F5BD940" }}>CURRENT</span>}
           <span style={{ marginLeft:"auto", fontSize:12, fontWeight:800, letterSpacing:"0.08em", color:C.dim, textTransform:"uppercase" }}>{ownerLabel(n)}</span>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>{ph.items.map(([k, l, kd]) => chip(n, k, l, kd))}</div>
@@ -59172,8 +59173,8 @@ function JobStartCard({ job, identity, users = [], onPatch, onSelectJob, onOpenT
       <span style={{ fontSize:12, color:C.dim, width:10 }}>▶</span>
       <span style={{ fontWeight:700, fontSize:14, color:C.text, flex:"1 1 160px", minWidth:0, overflowWrap:"anywhere" }}>{job.name || "Untitled"}</span>
       {job.foreman && job.foreman !== "Unassigned" && <span style={{ fontSize:12.5, color:C.dim, fontWeight:600 }}>{job.foreman}</span>}
-      {owed.length > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.slate, background:"#56657A15", border:"1px solid #56657A40" }}>{owed.length} OWED</span>}
-      {g.late > 0 && <span style={{ fontSize:9, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.red, background:"#C6282815", border:"1px solid #C6282840" }}>GEAR LATE</span>}
+      {owed.length > 0 && <span style={{ fontSize:11, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.slate, background:"#56657A15", border:"1px solid #56657A40" }}>{owed.length} OWED</span>}
+      {g.late > 0 && <span style={{ fontSize:11, fontWeight:800, letterSpacing:"0.05em", borderRadius:99, padding:"2px 8px", color:C.red, background:"#C6282815", border:"1px solid #C6282840" }}>GEAR LATE</span>}
       <span style={{ display:"inline-flex", alignItems:"center", gap:6 }} title={`${prog.done} of ${prog.total} items done or N/A`}>
         <span style={{ width:64, height:5, borderRadius:99, background:C.border, overflow:"hidden", display:"inline-block" }}><span style={{ display:"block", width:`${prog.pct}%`, height:"100%", background: prog.pct === 100 ? C.green : C.blue }}/></span>
         <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:17, lineHeight:1, color: prog.pct === 100 ? C.green : C.blue, minWidth:34, textAlign:"right", fontVariantNumeric:"tabular-nums" }}>{prog.pct}%</span>
@@ -59314,21 +59315,21 @@ function CommSubmittalsTab({ job, u, identity }) {
         {rows.map(r => (
           <div key={r.id} style={{ border:`1px solid ${late(r) ? "#C6282855" : C.border}`, background: late(r) ? "#C6282806" : C.card, borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:"8px 10px", alignItems:"end" }}>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ITEM</div>{F(r, "item", "Switchgear")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>VENDOR</div><select value={r.vendor || ""} disabled={!canEdit} onChange={e => setRow(r.id, { vendor: e.target.value })} style={inp}><option value="CED">CED</option><option value="FA Co.">FA Co.</option><option value="Other">Other</option></select></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SYSTEM</div><select value={r.system || ""} disabled={!canEdit} onChange={e => setRow(r.id, { system: e.target.value })} style={inp}><option value="">—</option>{(systems.length ? systems : COMM_SYSTEMS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STATUS</div><select value={r.status || "requested"} disabled={!canEdit} onChange={e => setRow(r.id, { status: e.target.value, ...(e.target.value === "approved" || e.target.value === "approvedAsNoted" ? { approvedAt: r.approvedAt || commLocalDate() } : {}), ...(e.target.value === "submitted" ? { submittedToGcAt: r.submittedToGcAt || commLocalDate() } : {}) })} style={{ ...inp, fontWeight:700, color: r.status === "approved" || r.status === "approvedAsNoted" ? C.green : r.status === "revise" ? C.red : C.blue }}>{COMM_SUBMITTAL_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUESTED</div>{D(r, "requestedAt")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>LEAD (WEEKS)</div>{F(r, "leadTimeWeeks", "22")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ITEM</div>{F(r, "item", "Switchgear")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>VENDOR</div><select value={r.vendor || ""} disabled={!canEdit} onChange={e => setRow(r.id, { vendor: e.target.value })} style={inp}><option value="CED">CED</option><option value="FA Co.">FA Co.</option><option value="Other">Other</option></select></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SYSTEM</div><select value={r.system || ""} disabled={!canEdit} onChange={e => setRow(r.id, { system: e.target.value })} style={inp}><option value="">—</option>{(systems.length ? systems : COMM_SYSTEMS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STATUS</div><select value={r.status || "requested"} disabled={!canEdit} onChange={e => setRow(r.id, { status: e.target.value, ...(e.target.value === "approved" || e.target.value === "approvedAsNoted" ? { approvedAt: r.approvedAt || commLocalDate() } : {}), ...(e.target.value === "submitted" ? { submittedToGcAt: r.submittedToGcAt || commLocalDate() } : {}) })} style={{ ...inp, fontWeight:700, color: r.status === "approved" || r.status === "approvedAsNoted" ? C.green : r.status === "revise" ? C.red : C.blue }}>{COMM_SUBMITTAL_STATUS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUESTED</div>{D(r, "requestedAt")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>LEAD (WEEKS)</div>{F(r, "leadTimeWeeks", "22")}</div>
               <div><label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12.5, color:C.text, cursor:"pointer", paddingBottom:6 }}><input type="checkbox" checked={!!r.priceConfirmed} disabled={!canEdit} onChange={e => setRow(r.id, { priceConfirmed: e.target.checked })}/>Price confirmed</label></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PO #</div>{F(r, "poNo", "PO-…")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RELEASED</div>{D(r, "releasedAt")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PROMISED SHIP {late(r) && <span style={{ color:C.red }}>· LATE</span>}</div>{D(r, "promisedShip")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUIRED ON SITE</div>{D(r, "requiredOnSite")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SHIP</div><select value={r.shipMode || ""} disabled={!canEdit} onChange={e => setRow(r.id, { shipMode: e.target.value })} style={inp}><option value="">—</option><option value="complete">Complete</option><option value="split">Multiple releases</option></select></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>DELIVERED</div>{D(r, "deliveredAt")}</div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STORAGE</div>{F(r, "storage", "laydown / conex")}</div>
-              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>COMMENTS</div>{F(r, "comments", "engineer / GC comments to resolve before release")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PO #</div>{F(r, "poNo", "PO-…")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RELEASED</div>{D(r, "releasedAt")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>PROMISED SHIP {late(r) && <span style={{ color:C.red }}>· LATE</span>}</div>{D(r, "promisedShip")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>REQUIRED ON SITE</div>{D(r, "requiredOnSite")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SHIP</div><select value={r.shipMode || ""} disabled={!canEdit} onChange={e => setRow(r.id, { shipMode: e.target.value })} style={inp}><option value="">—</option><option value="complete">Complete</option><option value="split">Multiple releases</option></select></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>DELIVERED</div>{D(r, "deliveredAt")}</div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>STORAGE</div>{F(r, "storage", "laydown / conex")}</div>
+              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>COMMENTS</div>{F(r, "comments", "engineer / GC comments to resolve before release")}</div>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", marginTop:8, fontSize:12.5, color:C.dim }}>
               {r.lastCheckedAt ? <span>Checked {r.lastCheckedAt}{r.lastCheckedBy ? ` by ${r.lastCheckedBy}` : ""}</span> : <span>Not checked yet</span>}
@@ -59361,15 +59362,15 @@ function CommRfisTab({ job, u, identity }) {
         {rows.map(r => (
           <div key={r.id} style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:"10px 12px", marginBottom:8, background: r.answeredAt ? C.card : "#56657A06" }}>
             <div style={{ display:"grid", gridTemplateColumns:"70px 1fr", gap:"8px 10px", alignItems:"end" }}>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RFI #</div><input value={r.no || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { no: e.target.value })} style={inp}/></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>QUESTION</div><input value={r.question || ""} readOnly={!canEdit} placeholder="Electrical room 112 — gear clearance vs. duct at 9 ft 2 in" onChange={e => setRow(r.id, { question: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>RFI #</div><input value={r.no || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { no: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>QUESTION</div><input value={r.question || ""} readOnly={!canEdit} placeholder="Electrical room 112 — gear clearance vs. duct at 9 ft 2 in" onChange={e => setRow(r.id, { question: e.target.value })} style={inp}/></div>
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:"8px 10px", alignItems:"end", marginTop:8 }}>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT TO</div><input value={r.sentTo || ""} readOnly={!canEdit} placeholder="GC / EOR" onChange={e => setRow(r.id, { sentTo: e.target.value })} style={inp}/></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT</div><DateInp value={r.sentAt || ""} onChange={e => { if (canEdit) setRow(r.id, { sentAt: e.target.value }); }}/></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWERED</div><DateInp value={r.answeredAt || ""} onChange={e => { if (canEdit) setRow(r.id, { answeredAt: e.target.value }); }}/></div>
-              <div><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>BLOCKS</div><select value={r.blocks || ""} disabled={!canEdit} onChange={e => setRow(r.id, { blocks: e.target.value })} style={inp}><option value="">—</option><option value="purchasing">Purchasing</option><option value="underground">Underground</option></select></div>
-              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:9, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWER</div><input value={r.answer || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { answer: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT TO</div><input value={r.sentTo || ""} readOnly={!canEdit} placeholder="GC / EOR" onChange={e => setRow(r.id, { sentTo: e.target.value })} style={inp}/></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>SENT</div><DateInp value={r.sentAt || ""} onChange={e => { if (canEdit) setRow(r.id, { sentAt: e.target.value }); }}/></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWERED</div><DateInp value={r.answeredAt || ""} onChange={e => { if (canEdit) setRow(r.id, { answeredAt: e.target.value }); }}/></div>
+              <div><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>BLOCKS</div><select value={r.blocks || ""} disabled={!canEdit} onChange={e => setRow(r.id, { blocks: e.target.value })} style={inp}><option value="">—</option><option value="purchasing">Purchasing</option><option value="underground">Underground</option></select></div>
+              <div style={{ gridColumn:"1 / -1" }}><div style={{ fontSize:11, fontWeight:800, letterSpacing:"0.1em", color:C.dim, marginBottom:3 }}>ANSWER</div><input value={r.answer || ""} readOnly={!canEdit} onChange={e => setRow(r.id, { answer: e.target.value })} style={inp}/></div>
             </div>
             {canEdit && <div style={{ display:"flex", justifyContent:"flex-end", marginTop:6 }}><button onClick={() => del(r)} style={{ padding:"4px 10px", borderRadius:7, fontSize:12, fontWeight:700, border:`1px solid ${C.border}`, background:"#fff", color:C.red, cursor:"pointer", fontFamily:"inherit" }}>Remove</button></div>}
           </div>
@@ -60165,7 +60166,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         fontSize:12,color:C.dim,marginBottom:5,flexWrap:"wrap",
                       }}>
                         {isWalk
-                          ? <span style={{fontWeight:800,color:"#fff",background:RL_COLOR,borderRadius:4,padding:"1px 7px",fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase"}}>Red Line Walk</span>
+                          ? <span style={{fontWeight:800,color:"#fff",background:RL_COLOR,borderRadius:4,padding:"1px 7px",fontSize:11,letterSpacing:"0.06em",textTransform:"uppercase"}}>Red Line Walk</span>
                           : <span style={{fontWeight:700,color:C.text}}>CO #{co.coIndex}</span>}
                         {/* v367: crew never hit Submit on this one — same amber
                             dashed language as the in-job draft bar, so the two
@@ -60173,7 +60174,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         {!isWalk && isUnsubmittedDraft(co) && (
                           <span style={{fontWeight:800,color:C.slate,background:"#56657A14",
                             border:"1px dashed #56657A88",borderRadius:4,padding:"1px 7px",
-                            fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase"}}>
+                            fontSize:11,letterSpacing:"0.06em",textTransform:"uppercase"}}>
                             Draft — not submitted
                           </span>
                         )}
@@ -60330,7 +60331,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                             textTransform:"uppercase",
                           }}>
                           {pillLabel}
-                          <span style={{fontSize:9}}>▾</span>
+                          <span style={{fontSize:11}}>▾</span>
                         </button>
                         {co.coStatusDate && (
                           <span style={{fontSize:12,color:C.faint,marginLeft:6}}>
@@ -60529,7 +60530,7 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
         background: changed(u) ? `${C.accent}18` : C.surface, border: `1px solid ${changed(u) ? C.accent : C.border}`, color: C.text }}>
       {dot(color(u))}
       <span style={{ flex: 1, fontWeight: 500 }}>{short(u.name)}</span>
-      <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700, color: isLeadTitle(T(u)) ? C.accent : C.dim }}>{label(T(u))}</span>
+      <span style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700, color: isLeadTitle(T(u)) ? C.accent : C.dim }}>{label(T(u))}</span>
     </div>
   );
   const chip = (label, on, onClick, dotColor, ghost) => (
@@ -60559,7 +60560,7 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
               {label(T(open))} · {T(open) === "foreman" ? `${crewOf(open.id).length} crew` : (byId(open.foremanId) && foremanIds.has(open.foremanId)) ? `${first(byId(open.foremanId).name)}'s crew` : "Unassigned"}
             </div>
           </div>
-          <button type="button" onClick={closeSheet} aria-label="Close" style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 4 }}><Icon name="x" size={16}/></button>
+          <button type="button" onClick={closeSheet} aria-label="Close" style={{minWidth:"var(--he-tap, 32px)", background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 4 }}><Icon name="x" size={16}/></button>
         </div>
         {lbl("ROLE")}
         {chips(["foreman", "jrforeman", "lead", "crew"].map(r => chip(label(r), T(open) === r, () => setRole(open.id, r))))}
@@ -60611,7 +60612,7 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
               style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px 8px", cursor: "pointer", borderBottom: `1px solid ${C.border}` }}>
               <span style={{ fontWeight: 700, fontSize: 14, flex: 1, color: C.text }}>{short(f.name)}</span>
               <span style={{ fontSize: 12.5, color: C.dim }}>{crew.length} crew</span>
-              <span style={{ fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: changed(f) ? 700 : 400, color: changed(f) ? C.accent : C.dim }}>{changed(f) ? "changed" : "foreman"}</span>
+              <span style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: changed(f) ? 700 : 400, color: changed(f) ? C.accent : C.dim }}>{changed(f) ? "changed" : "foreman"}</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 8px 0" }}>
               {crew.map(personCard)}
@@ -61356,7 +61357,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
           {summary.map(j => (
             <button key={j.no} onClick={()=>{ setOpenNo(j.no); setFilter("all"); setMsg(""); setOpenRow(null); }}
               style={{display:"grid",gridTemplateColumns:cols,gap:8,alignItems:"center",width:"100%",textAlign:"left",padding:"11px 14px",border:"none",borderBottom:`1px solid ${C.border}`,background:C.card,color:C.text,fontFamily:"inherit",fontSize:14,cursor:"pointer"}}>
-              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:9,fontWeight:700,color:C.faint,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
+              <span style={{fontWeight:700}}>{j.label}{!ccFor(j.no) && <span style={{marginLeft:8,fontSize:11,fontWeight:700,color:C.faint,letterSpacing:"0.05em"}}>NO CC JOB</span>}</span>
               <span>{j.rows.length}</span>
               <span>{applFmt(j.amps)}</span>
               <span style={{display:"flex",height:10,borderRadius:5,overflow:"hidden",background:C.border}}>
@@ -61639,7 +61640,7 @@ function GenPullBar({ jobs }) {
           <span style={{display:"inline-flex",alignItems:"center",gap:6,padding:"5px 9px",borderRadius:7,border:`1px solid ${C.accent}`,background:C.card,color:C.text,fontSize:13,fontWeight:700}}>
             {labelOf(sel)}
             <button onClick={()=>{ setSel(null); setMsg(""); }} title="Pick a different job"
-              style={{border:"none",background:"transparent",color:C.dim,cursor:"pointer",fontSize:14,lineHeight:1,padding:0,fontFamily:"inherit"}}>×</button>
+              style={{minWidth:"var(--he-tap, 32px)",border:"none",background:"transparent",color:C.dim,cursor:"pointer",fontSize:14,lineHeight:1,padding:0,fontFamily:"inherit"}}>×</button>
           </span>
         ) : (
           <input value={q} onChange={e=>{ setQ(e.target.value); setMsg(""); }} placeholder="Type a job name or number…" inputMode="search"
@@ -61660,7 +61661,7 @@ function GenPullBar({ jobs }) {
           {shown.map(x => (
             <button key={x.j.id} onClick={()=>{ setSel(x); setMsg(""); }}
               style={{padding:"5px 9px",borderRadius:7,border:`1px solid ${x.gen?C.accent:C.border}`,background:C.card,color:C.text,fontSize:13,fontFamily:"inherit",cursor:"pointer",textAlign:"left"}}>
-              {labelOf(x)}{x.gen && <span style={{marginLeft:6,fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:C.accent}}>GENERATOR</span>}
+              {labelOf(x)}{x.gen && <span style={{marginLeft:6,fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:C.accent}}>GENERATOR</span>}
             </button>
           ))}
           {matches.length > shown.length && <span style={{fontSize:12.5,color:C.dim}}>and {matches.length - shown.length} more; keep typing</span>}
@@ -61911,7 +61912,7 @@ function LinkOpensLine({ opens, linkKey, createdAt = null, style }) {
     <div>
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ ...base, cursor: "pointer" }}>
         {dot}{st.label}
-        <span style={{ color: C.faint, fontSize: 9, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+        <span style={{ color: C.faint, fontSize: 11, display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
       </button>
       {open && (
         <div style={{ margin: "6px 0 2px 14px", padding: "8px 10px", background: "#fff", border: `1px solid ${C.border}`,
@@ -62365,7 +62366,7 @@ function urgencyBucket(dateStr) {
 function autoBucket(t) { return urgencyBucket(t.dueDate); }
 function plainText(s) { return String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
 function addDaysYmd(todayYmd, days) { const t = new Date(todayYmd + "T00:00:00"); t.setDate(t.getDate() + days); return localYmd(t); }
-const MYDAY_BUCKETS = { overdue: ["Overdue", "#C62828"], today: ["Today", "#2F5BD9"], week: ["This week", "#5E6670"], later: ["Later", "#8A929D"] };
+const MYDAY_BUCKETS = { overdue: ["Overdue", "#C62828"], today: ["Today", "#2F5BD9"], week: ["This week", "#5E6670"], later: ["Later", C.faint] };
 const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 // ── MY DAY categories (v412) ─────────────────────────────────────────────────
 // Koy, 2026-09-17: "organize these into collapsed categories and sort them by
@@ -63237,7 +63238,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             {/* v446: who it's on, as a visible control when the viewer can change it. */}
             {r.canReassign && r.onTogglePick && !selectMode && (
               <button onClick={e => { e.stopPropagation(); r.onTogglePick(); }} title="Change who this is on" aria-expanded={!!r.pushOpen}
-                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "2px 7px 2px 8px", minHeight: 24, borderRadius: 999, cursor: "pointer",
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "2px 7px 2px 8px", minHeight:"var(--he-tap, 24px)", borderRadius: 999, cursor: "pointer",
                   color: C.accent, border: `1px solid ${C.accent}`, background: r.pushOpen ? `${C.accent}14` : "transparent", whiteSpace: "nowrap" }}>
                 <Icon name="user" size={11} stroke={2.25} />
                 To: {r.assignee ? (sameName(r.assignee, me) ? "me" : first(r.assignee)) : "unassigned"}
@@ -63351,7 +63352,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                       style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", fontSize: 14, padding: "6px 8px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
                     <button onClick={() => setReplyEdit(null)} style={{ fontFamily: "inherit", fontSize: 13, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
                     <button onClick={() => saveReplyEdit(r)} disabled={!String(replyEdit.text || "").trim()}
-                      style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 10px", minHeight: 32, borderRadius: 7, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: String(replyEdit.text || "").trim() ? 1 : .5 }}>Save</button>
+                      style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 10px", minHeight:"var(--he-tap, 32px)", borderRadius: 7, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: String(replyEdit.text || "").trim() ? 1 : .5 }}>Save</button>
                   </div>
                 );
                 return (
@@ -63362,7 +63363,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                     </span>
                     {mine && (
                       <button onClick={() => setReplyEdit({ key: r.key, by: u.by, at: u.at, text: String(u.text || "") })} title="Edit your reply"
-                        style={{ fontFamily: "inherit", fontSize: 14, lineHeight: 1, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "4px 6px", minHeight: 28 }}>✎</button>
+                        style={{ fontFamily: "inherit", fontSize: 14, lineHeight: 1, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "4px 6px", minHeight:"var(--he-tap, 28px)" }}>✎</button>
                     )}
                   </div>
                 );
@@ -63374,7 +63375,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                 {[["note", "Reply"], ["waiting", "Waiting on…"]].map(([k, l]) => (
                   <button key={k} onClick={() => setUpdKind(k)}
-                    style={{ fontFamily: "inherit", fontSize: 13, fontWeight: updKind === k ? 700 : 500, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer",
+                    style={{ fontFamily: "inherit", fontSize: 13, fontWeight: updKind === k ? 700 : 500, padding: "6px 10px", minHeight:"var(--he-tap, 32px)", borderRadius: 999, cursor: "pointer",
                       background: updKind === k ? C.accent : C.card, color: updKind === k ? "#fff" : C.text, border: `1px solid ${updKind === k ? C.accent : C.border}` }}>{l}</button>
                 ))}
               </div>
@@ -63390,7 +63391,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                 )}
                 <button onClick={closeUpd} style={{ fontFamily: "inherit", fontSize: 13, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
                 <button onClick={() => sendUpd(r)} disabled={!updText.trim()}
-                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: updText.trim() ? 1 : .5 }}>
+                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight:"var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: updText.trim() ? 1 : .5 }}>
                   {r.audience ? `Send to ${first(r.audience)}` : "Add note"}
                 </button>
               </div>
@@ -63423,7 +63424,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
               {(r.actions || []).map(a => (
                 <button key={a.label} title={a.title} onClick={e => { e.stopPropagation(); a.onClick(); }}
-                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 10px", minHeight: 32, borderRadius: 8, cursor: "pointer",
+                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 10px", minHeight:"var(--he-tap, 32px)", borderRadius: 8, cursor: "pointer",
                     background: a.tone === "primary" ? C.blue : "transparent", color: a.tone === "primary" ? "#fff" : C.blue, border: `1px solid ${C.blue}` }}>{a.label}</button>
               ))}
               {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
@@ -63442,7 +63443,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                 <span style={{ fontSize: 12.5, color: C.dim }}>{replying ? "Goes in the question's discussion thread — the question stays open." : "Lands on the question in the job and marks it answered."}</span>
                 <button onClick={() => { setAnsFor(null); setAnsText(""); }} style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 13, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
                 <button onClick={() => { if (ansBusy) return; setAnsBusy(true); setTimeout(() => { go(); setAnsBusy(false); }, 420); }} disabled={!ansText.trim() || ansBusy}
-                  style={{ fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>{ansBusy ? <><Spinner size={12} color="#fff"/> Saving…</> : (replying ? "Post reply" : "Save answer")}</button>
+                  style={{ fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight:"var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: ansText.trim() ? 1 : .5 }}>{ansBusy ? <><Spinner size={12} color="#fff"/> Saving…</> : (replying ? "Post reply" : "Save answer")}</button>
               </div>
             </HeUnfold>
             );
@@ -63487,7 +63488,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <button onClick={closePanels} style={{ fontFamily: "inherit", fontSize: 13, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
                   <button onClick={() => saveEdit(n)} disabled={!String(editDraft.text || "").trim()}
-                    style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: String(editDraft.text || "").trim() ? 1 : .5 }}>Save</button>
+                    style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight:"var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: C.accent, color: "#fff", border: "none", opacity: String(editDraft.text || "").trim() ? 1 : .5 }}>Save</button>
                 </div>
               </div>
             );
@@ -63501,7 +63502,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
                 <button onClick={closePanels} style={{ fontFamily: "inherit", fontSize: 13, background: "none", border: "none", color: C.dim, cursor: "pointer", padding: "6px 4px" }}>Cancel</button>
                 <button onClick={() => voidNeed(r.need, voidReason)}
-                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: C.red, color: "#fff", border: "none" }}>Void task</button>
+                  style={{ marginLeft: "auto", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 14px", minHeight:"var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: C.red, color: "#fff", border: "none" }}>Void task</button>
               </div>
             </div>
           )}
@@ -63510,7 +63511,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               <div style={{ width: "100%", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.dim }}>{r.kind === "need" ? "Move it to" : "Push it to"}</div>
               {(r.pickRoster || r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who)))).map(n => (
                 <button key={n} onClick={() => r.onPick(n)}
-                  style={{ fontFamily: "inherit", fontSize: 13, padding: "6px 10px", minHeight: 32, borderRadius: 999, cursor: "pointer", background: C.card, color: C.text, border: `1px solid ${C.border}` }}>{n}</button>
+                  style={{ fontFamily: "inherit", fontSize: 13, padding: "6px 10px", minHeight:"var(--he-tap, 32px)", borderRadius: 999, cursor: "pointer", background: C.card, color: C.text, border: `1px solid ${C.border}` }}>{n}</button>
               ))}
             </div>
           )}
@@ -63653,7 +63654,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
                           {rowsSorted(rows, RowIn, "job")}
                           {isHead && canCreate && openQuickAdd && (
                             <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
-                              style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
+                              style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight:"var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
                               + Add for {headFirst}
                             </button>
                           )}
@@ -63714,8 +63715,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     }
     setBatchQ({ ...batchQ, keys: rest, ok: batchQ.ok + (ok ? 1 : 0), skip: batchQ.skip + (ok ? 0 : 1) });
   }, [batchQ]); // eslint-disable-line
-  const segBtn = (on) => ({ fontFamily: "inherit", fontSize: 13, fontWeight: on ? 700 : 500, padding: "6px 10px", minHeight: 34, border: "none", cursor: "pointer", background: on ? C.accent : "transparent", color: on ? "#fff" : C.text });
-  const barBtn = { fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight: 36, borderRadius: 8, cursor: "pointer", background: "transparent", color: "#66A8FF", border: "1px solid #66A8FF55" };
+  const segBtn = (on) => ({ fontFamily: "inherit", fontSize: 13, fontWeight: on ? 700 : 500, padding: "6px 10px", minHeight: "var(--he-tap, 34px)", border: "none", cursor: "pointer", background: on ? C.accent : "transparent", color: on ? "#fff" : C.text });
+  const barBtn = { fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight: "var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: "transparent", color: "#66A8FF", border: "1px solid #66A8FF55" };
   const topGroups = groups.filter(g => g.key === "foryou");   // v505: full width, above both columns
   const mainGroups = groups.filter(g => g.main);
   const sideGroups = groups.filter(g => !g.main && g.key !== "foryou");
@@ -63816,7 +63817,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             ))}
           </div>
           <button onClick={toggleSelectMode} aria-pressed={selectMode}
-            style={{ marginLeft: narrow ? "auto" : 0, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 12px", minHeight: 34, borderRadius: 8, cursor: "pointer",
+            style={{ marginLeft: narrow ? "auto" : 0, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 12px", minHeight:"var(--he-tap, 34px)", borderRadius: 8, cursor: "pointer",
               background: selectMode ? C.accent : "transparent", color: selectMode ? "#fff" : C.accent, border: `1px solid ${C.accent}` }}>{selectMode ? "Cancel" : "Select"}</button>
         </div>
       </div>
@@ -64323,7 +64324,7 @@ function GCPortalPage({ token, deepJobId }) {
 
   const accent = (link && /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"")) ? link.accentColor : "#2F5BD9";
   const P = { board:"#F2F3F6", card:"#FFFFFF", line:"#E3E5EA", ink:"#232936", dim:"#5E6670",
-    muted:"#8A93A3", accent, urgent:"#C62828", deck1:"#141821", deck2:"#1B2030", live:"#34D17F" };
+    muted:"#666E79", accent, urgent:"#C62828", deck1:"#141821", deck2:"#1B2030", live:"#34D17F" };
   const gcLogo = gcLogoCandidatesFor(link).find(u => !gcLogoBroken.has(u)) || null;
 
   const wrap = (kids) => (
@@ -64429,7 +64430,7 @@ function GCPortalPage({ token, deepJobId }) {
 
   const bar = (label, pct, col) => (
     <div style={{display:"flex",alignItems:"center",gap:9}}>
-      <span style={{font:"700 10px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
+      <span style={{font:"700 11px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
       <span style={{flex:1,height:7,borderRadius:99,background:"#E7E9EE",overflow:"hidden"}}>
         <span style={{display:"block",height:"100%",width:(parseInt(pct)||0)+"%",background:P.muted,borderRadius:99}}/></span>
       <span style={{fontSize:13,color:P.dim,width:38,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{pct||"0%"}</span>
@@ -64511,7 +64512,7 @@ function GCPortalPage({ token, deepJobId }) {
               onError={()=>setGcLogoBroken(prev=>{ const n=new Set(prev); n.add(gcLogo); return n; })}/>
           : <div style={{font:"700 21px Georgia,'Times New Roman',serif",letterSpacing:".04em",color:"#EDEADF",whiteSpace:"nowrap"}}>{link.label}</div>}
         <div style={{marginLeft:"auto",textAlign:"right"}}>
-          <div style={{font:"600 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#9AA3B2"}}>Job portal · our own app</div>
+          <div style={{font:"600 11px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#9AA3B2"}}>Job portal · our own app</div>
           <div style={{fontSize:12.5,color:"#9AA3B2"}}>
             <span style={{display:"inline-flex",alignItems:"center",gap:5,color:stale?"#9AA3B2":"#5FE39C",fontWeight:700}}>
               <span style={{width:7,height:7,borderRadius:"50%",background:stale?"#5E6670":P.live,display:"inline-block"}}/>{stale?"SYNCED":"LIVE"}</span>{freshLabel?" · updated "+freshLabel:""}</div>
@@ -64676,7 +64677,7 @@ function _gcMpNeedsDate(j){
 function _gcBar(P, label, pct, col){
   return (
     <div style={{display:"flex",alignItems:"center",gap:9}}>
-      <span style={{font:"700 10px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
+      <span style={{font:"700 11px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
       <span style={{flex:1,height:7,borderRadius:99,background:"#E7E9EE",overflow:"hidden"}}>
         <span style={{display:"block",height:"100%",width:(parseInt(pct)||0)+"%",background:P.muted,borderRadius:99}}/></span>
       <span style={{fontSize:13,color:P.dim,width:38,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{pct||"0%"}</span>
@@ -66739,7 +66740,8 @@ function App() {
     // opened Forth at 2:14pm" line on Today). That background write still goes
     // through this exact path; it just doesn't flash "Saving…" at someone who
     // changed nothing. Any real edit in the same burst shows the pill as before.
-    const _quietPatch = !!patch && Object.keys(patch).length > 0 && Object.keys(patch).every(k => HE_QUIET_SAVE_KEYS.has(k));
+    const _quietKey = (k) => k === "presence"; // fields whose background writes stay silent
+    const _quietPatch = !!patch && Object.keys(patch).length > 0 && Object.keys(patch).every(_quietKey);
     if (!_quietPatch) setSyncStatus("saving");
 
     // Accumulate patches for this job so we only write changed fields
@@ -66957,7 +66959,7 @@ function App() {
         isDirty.current = false;
 
         // A presence-only write (job card opened) stays silent — see _quietPatch.
-        if (!(accumulatedKeys.length > 0 && accumulatedKeys.every(k => HE_QUIET_SAVE_KEYS.has(k)))) {
+        if (!(accumulatedKeys.length > 0 && accumulatedKeys.every(_quietKey))) {
 
           setSyncStatus("saved");
 
@@ -68318,7 +68320,7 @@ function App() {
                 const p=commPhase(job); const st=commOf(job).stage||"";
                 const lbl = p!==null ? `PHASE ${p} · ${COMM_PHASE_BY_N[p].short} · ${commPhaseDone(job,p)}/${COMM_PHASE_BY_N[p].items.length}` : st==="inprogress"?"IN PROGRESS":st==="hold"?"ON HOLD":st==="closeout"?"CLOSEOUT":st==="complete"?"COMPLETE":"READY TO START";
                 const col = p!==null?C.teal:st==="inprogress"?C.blue:st==="hold"?C.slate:st==="closeout"?C.purple:C.green;
-                return <span title={p!==null?COMM_PHASE_BY_N[p].label:"Commercial stage"} style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{lbl}</span>;
+                return <span title={p!==null?COMM_PHASE_BY_N[p].label:"Commercial stage"} style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{lbl}</span>;
               })()}
 
               <span style={{fontWeight:600,fontSize:14,color:C.text}}>{job.simproNo&&<span style={{color:C.dim,fontWeight:700,marginRight:5}}>#{job.simproNo}</span>}{job.name||"Untitled Job"}</span>
@@ -68412,13 +68414,13 @@ function App() {
 
           {job.prepStage&&(parseStage(job.roughStage)===0)&&(
             <div style={{flex:"0 0 auto",maxWidth:160}}>
-              <div style={{fontSize:9,color:C.teal,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PREP</div>
+              <div style={{fontSize:11,color:C.teal,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PREP</div>
               <div style={{fontSize:12,color:C.teal,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.prepStage}</div>
             </div>
           )}
 
           <div style={{flex:"1 1 150px",minWidth:130}}>
-            <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
+            <div style={{fontSize:11,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
             <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough} animKey={job.id+":r"}/>
             {job.roughProjectedStart&&(
               <div style={{marginTop:4,fontSize:13,fontWeight:700,
@@ -68429,7 +68431,7 @@ function App() {
           </div>
 
           <div style={{flex:"1 1 190px",minWidth:150}}>
-            <div style={{fontSize:9,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
+            <div style={{fontSize:11,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
             <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish} animKey={job.id+":f"}/>
             {job.finishProjectedStart&&(
               <div style={{marginTop:4,fontSize:13,fontWeight:700,
@@ -68755,7 +68757,7 @@ function App() {
               Nightly Firestore backups {backupStatus ? "haven't run in over 48 hours" : "have never run"} — if data gets overwritten there is no snapshot to restore from. Deploy/check the backup function.
             </span>
             <button onClick={()=>setBackupBannerDismissed(true)}
-              style={{background:"none",border:"none",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14,fontFamily:"inherit",flexShrink:0}}>✕</button>
+              style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14,fontFamily:"inherit",flexShrink:0}}>✕</button>
           </div>
         );
       })()}
@@ -68906,7 +68908,7 @@ function App() {
                   display:"inline-flex", alignItems:"center", gap:8,
                 }}>
                 <Icon name="inbox" size={16} stroke={2.25}/>
-                <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",opacity:0.85}}>SIMPRO</span>
+                <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",opacity:0.85}}>SIMPRO</span>
                 <span style={{
                   background:"#fff", color:"#2F5BD9", borderRadius:99,
                   padding:"2px 8px", fontSize:13, fontWeight:800, lineHeight:1,
@@ -68944,7 +68946,7 @@ function App() {
                         {simproSyncing ? "Syncing…" : "Refresh"}
                       </button>
                       <button onClick={()=>setSimproInboxOpen(false)}
-                        style={{background:"none",border:"none",color:C.faint,
+                        style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,
                           fontSize:18,cursor:"pointer",padding:"4px 8px",lineHeight:1}}>×</button>
                     </div>
                   </div>
@@ -68967,8 +68969,8 @@ function App() {
                               <span style={{fontSize:12,fontWeight:600,color:C.faint,marginLeft:6}}>
                                 #{c.simproId}
                               </span>
-                              {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
-                              {c.divisionHint==="resi" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>RESI</span>}
+                              {c.divisionHint==="commercial" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",color:"#fff",background:C.teal,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>COMMERCIAL</span>}
+                              {c.divisionHint==="resi" && <span title={`Simpro Business Group: ${c.businessGroup}`} style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,padding:"1px 6px",marginLeft:6,verticalAlign:"middle"}}>RESI</span>}
                               {!c.divisionHint && <span title="No Business Group on the Simpro job — imports into whichever mode you're in" style={{fontSize:11,fontWeight:700,color:C.slate,marginLeft:6,verticalAlign:"middle"}}>? group unset — imports as {mode==="commercial"?"Commercial":"Residential"}</span>}
                             </div>
                             {c.address && (
@@ -69081,7 +69083,7 @@ function App() {
         }}>
           <div style={{fontWeight:700, fontSize:14}}>{stripEmoji(pushToast.title)}</div>
           {pushToast.body && <div style={{fontSize:14, color:"#CDD3DB"}}>{stripEmoji(pushToast.body)}</div>}
-          {(pushToast.jobId || pushToast.view) && <div style={{fontSize:12.5, color:"#8A929D", marginTop:2}}>Tap to open →</div>}
+          {(pushToast.jobId || pushToast.view) && <div style={{fontSize:12.5, color:D.text, marginTop:2}}>Tap to open →</div>}
         </div>
       )}
 
@@ -69102,7 +69104,7 @@ function App() {
           </div>
           <div onClick={goHome} className="flagtext flag-stripes he-hdr-word" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
-            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#66A8FF";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{syncStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#E3B85F",border:"1px solid #E3B85F66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{syncStatus==="error"&&<span style={{marginLeft:4,font:"700 9px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
+            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#66A8FF";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 11px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{syncStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#66A8FF",border:"1px solid #66A8FF66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{syncStatus==="error"&&<span style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
             <span className="he-hdr-jobs" style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span className="he-hdr-jobs" style={{font:"500 11px system-ui",color:D.text}}>{jobs.length} active jobs</span>
           </div>
@@ -69144,7 +69146,7 @@ function App() {
                 display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
-              {badge ? <span title={badgeTitle||""} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#C62828",color:"#fff",font:"700 10px/16px system-ui",textAlign:"center"}} key={badge} className="he-bump"><HeCount value={badge} ms={500}/></span> : null}
+              {badge ? <span title={badgeTitle||""} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#C62828",color:"#fff",font:"700 11px/16px system-ui",textAlign:"center"}} key={badge} className="he-bump"><HeCount value={badge} ms={500}/></span> : null}
             </button>
           );
         })}
@@ -69219,7 +69221,7 @@ function App() {
             <Icon name="bell" size={14} stroke={2.25}/>
             {inboxUnread>0 && (
               <span style={{position:"absolute",top:-4,right:-4,minWidth:16,height:16,borderRadius:99,
-                background:"#C62828",color:"#fff",fontSize:9,fontWeight:800,display:"inline-flex",
+                background:"#C62828",color:"#fff",fontSize:11,fontWeight:800,display:"inline-flex",
                 alignItems:"center",justifyContent:"center",padding:"0 4px",boxSizing:"border-box"}}>
                 {inboxUnread>9?"9+":inboxUnread}
               </span>
@@ -69962,8 +69964,8 @@ function App() {
                         {[["Rough",rAvg],["Finish",fnAvg]].map(([lbl,pct])=>(
                           <div key={lbl} style={{flex:1}}>
                             <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                              <span style={{fontSize:9,color:C.dim}}>{lbl}</span>
-                              <span style={{fontSize:9,fontWeight:600,color:C.text}}>{pct}%</span>
+                              <span style={{fontSize:11,color:C.dim}}>{lbl}</span>
+                              <span style={{fontSize:11,fontWeight:600,color:C.text}}>{pct}%</span>
                             </div>
                             <div style={{height:4,background:"#EAECEF",borderRadius:4,overflow:"hidden"}}>
                               <div style={{height:"100%",width:`${pct}%`,background:fc,borderRadius:4,transition:"width 0.3s"}}/>
@@ -69974,7 +69976,7 @@ function App() {
                       {/* slim crew access */}
                       <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
                         style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
-                        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.faint}}>Crew Access</span>
+                        <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.faint}}>Crew Access</span>
                         <span style={{fontSize:12,color:C.dim}}>→</span>
                       </div>
                     </div>
@@ -70005,7 +70007,7 @@ function App() {
                       <div style={{display:"flex",gap:6,marginBottom:10}}>
                         <div style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1}}>
                           <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.faint,lineHeight:1}}>{uCOs}</div>
-                          <div style={{fontSize:9,color:C.dim,marginTop:1}}>COs</div>
+                          <div style={{fontSize:11,color:C.dim,marginTop:1}}>COs</div>
                         </div>
                       </div>
                       <div style={{fontSize:12,color:C.dim,fontWeight:600,textAlign:"right"}}>View →</div>
@@ -70031,13 +70033,13 @@ function App() {
                   alignItems:"center",justifyContent:"space-between",gap:12}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
-                      letterSpacing:"0.08em",color:_foremanColors[crewView]||"#6E7682"}}>
+                      letterSpacing:"0.08em",color:_foremanColors[crewView]||C.faint}}>
                       {crewView} — Jobs
                     </div>
                     <div style={{background:`${_foremanColors[crewView]||"#6E7682"}18`,
                       border:`1px solid ${_foremanColors[crewView]||"#6E7682"}33`,
                       borderRadius:99,padding:"2px 10px",fontSize:12.5,
-                      color:_foremanColors[crewView]||"#6E7682",fontWeight:700}}>
+                      color:_foremanColors[crewView]||C.faint,fontWeight:700}}>
                       {jobs.filter(j=>matchesForeman(j,crewView)).length} jobs
                     </div>
                   </div>
@@ -70179,7 +70181,7 @@ function App() {
 
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
 
-                color:_foremanColors[activeForeman]||"#6E7682",lineHeight:1}}>{activeForeman}</div>
+                color:_foremanColors[activeForeman]||C.faint,lineHeight:1}}>{activeForeman}</div>
 
               <div style={{fontSize:12.5,color:C.dim}}>
 
@@ -70469,7 +70471,7 @@ function App() {
                                     style={{color:_lingerIds.has(it.id)?C.faint:"var(--text)",textDecoration:_lingerIds.has(it.id)?"line-through":"none"}}>
                                     <RichText html={it.text}/>
                                   </HeStrikeSpan>
-                                  <div style={{fontSize:9,color:C.dim,marginTop:3,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                                  <div style={{fontSize:11,color:C.dim,marginTop:3,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                                     <span style={{fontWeight:700,letterSpacing:"0.06em",
                                       background: it.phase==="Rough"?C.rough+"22":it.phase==="Finish"?C.accent+"22":"#3E7D7A22",
                                       color: it.phase==="Rough"?C.rough:it.phase==="Finish"?C.accent:"#3E7D7A",

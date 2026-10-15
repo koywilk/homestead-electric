@@ -1,0 +1,4 @@
+{
+  "//": "design-lint ratchet: hex literals in src/App.js that copy a C/D token value. The build fails above this number. Lower it (node scripts/design-lint.js --update-baseline) after swapping copies for tokens.",
+  "tokenHexCopies": 1177
+}
