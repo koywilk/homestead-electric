@@ -40639,7 +40639,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   // their Time block if present or a sane 8-hour default.
   const sumScheduledHoursForJob = (jobId) => {
     const job = jobs.find(j => j.id === jobId);
-    const simproNo = job?.simproNo ? String(job.simproNo) : null;
+    const simproNo = job?.simproNo && isSimproJoinable(job) ? String(job.simproNo) : null; // a shared Simpro # credits only its lead building
     let total = 0;
     for(let di=0; di<crewDays.length; di++) {
       // Names confirmed in Simpro for this cell — used to dedupe the manual
@@ -41078,7 +41078,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
     if(simproPidsThisWeek.size > 0 && !crewForemanFilter) {
       const fromSimproExtra = jobs.filter(j => {
         if(j.tempPed||j.quickJob) return false;
-        if(!j.simproNo) return false;
+        if(!j.simproNo || !isSimproJoinable(j)) return false;
         if(!simproPidsThisWeek.has(String(j.simproNo))) return false;
         return !union.some(u => u.id === j.id);
       }).map(j => ({...j, _simproOnly: true}));
@@ -43452,7 +43452,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           // and the manual pill is suppressed (dedupe). The
                           // manual data on crewData stays put; this is purely
                           // a render-time filter.
-                          const simproNamesRaw = job.simproNo
+                          const simproNamesRaw = job.simproNo && isSimproJoinable(job)
                             ? Array.from(simproPeopleByJobDay.get(`${job.simproNo}_${di}`) || [])
                             : [];
                           const simproLower = new Set(simproNamesRaw.map(n=>n.toLowerCase()));
@@ -43536,7 +43536,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   // "vasa mataafa"). Renders inline on the pill
                                   // so Koy can see WHEN the crew is scheduled,
                                   // not just THAT they're scheduled.
-                                  const simTime = job.simproNo
+                                  const simTime = job.simproNo && isSimproJoinable(job)
                                     ? simproTimeByPersonJobDay.get(`${job.simproNo}_${di}_${(rawName||"").toLowerCase()}`)
                                     : null;
                                   const timeLabel = simTime

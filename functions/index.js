@@ -2916,12 +2916,17 @@ exports.weeklyCommercialDocPull = functions
 
 // Read-only: the attachment folder NAMES on one Simpro job — feeds the Add
 // Building "Simpro folder" picker (Projects spec 2026-10-15 §6.2). No writes,
-// no file contents; same open posture as getSimproJobBasics.
+// no file contents; app-key gated like its Simpro siblings.
 exports.listSimproJobFolders = functions.https.onCall(async (data) => {
+  requireAppKey(data);
   const no = String((data && data.simproNo) || "").replace(/^#/, "").trim();
   if (!/^\d+$/.test(no)) throw new functions.https.HttpsError("invalid-argument", "simproNo must be a Simpro job number");
-  const folders = await DOC_PROVIDERS.simpro.listFolders(no);
-  return { folders: (folders || []).filter(f => f && f.name).map(f => ({ id: f.id, name: f.name })) };
+  // Call Simpro directly (not DOC_PROVIDERS.simpro.listFolders, which swallows failures into []) so a Simpro error reaches the client's fallback.
+  const r = await simproReqWithRetry("GET", `/jobs/${encodeURIComponent(no)}/attachments/folders/`);
+  if (!r || !r.ok || !Array.isArray(r.data)) {
+    throw new functions.https.HttpsError(r && r.status === 404 ? "not-found" : "unavailable", "Couldn't read Simpro folders for job " + no);
+  }
+  return { folders: r.data.map(f => ({ id: f.ID, name: String(f.Name || "") })).filter(f => f.name) };
 });
 
 // ─── Get Simpro Job Financials ────────────────────────────────────────────────
