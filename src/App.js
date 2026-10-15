@@ -47099,7 +47099,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
         @media (max-width:600px){
           .odash .od-top{flex-wrap:nowrap}
-          .odash .od-tabs{flex:1 1 auto;min-width:0;-webkit-mask-image:linear-gradient(90deg,#000 86%,transparent);mask-image:linear-gradient(90deg,#000 86%,transparent)}
+          .odash .od-tabs{flex:1 1 auto;min-width:0;flex-wrap:wrap;border-radius:18px;overflow:visible}
           .odash .od-tabs button{padding:8px 12px}
           .odash .od-top .live{display:none}
           .odash .od-ctrl .od-fbtn,.odash .od-ctrl .live{display:inline-flex}
