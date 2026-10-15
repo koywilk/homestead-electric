@@ -62509,7 +62509,6 @@ function urgencyBucket(dateStr) {
 function autoBucket(t) { return urgencyBucket(t.dueDate); }
 function plainText(s) { return String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
 function addDaysYmd(todayYmd, days) { const t = new Date(todayYmd + "T00:00:00"); t.setDate(t.getDate() + days); return localYmd(t); }
-const MYDAY_BUCKETS = { overdue: ["Overdue", "#C62828"], today: ["Today", "#2F5BD9"], week: ["This week", "#5E6670"], later: ["Later", C.faint] };
 const MYDAY_ORDER = ["overdue", "today", "week", "later"];
 // ── MY DAY categories (v412) ─────────────────────────────────────────────────
 // Koy, 2026-09-17: "organize these into collapsed categories and sort them by
@@ -62543,7 +62542,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
+function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -62575,8 +62574,6 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   const myRec = (users || []).find(u => u && (u.id === identity?.id || sameName(u.name, me))) || identity || {};
   const myTitle = myRec.title || myRec.role || "";
   const crewForeman = myTitle === "foreman" ? me : (myRec.foremanId ? (((users || []).find(u => u && u.id === myRec.foremanId) || {}).name || "") : "");
-  const [openGroups, setOpenGroups] = useState(() => new Set(["mine", "new", "foryou"]));
-  const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
   const [expKey, setExpKey] = useState(null);    // redesign: the one expanded row
   const [moreKey, setMoreKey] = useState(null);  // its More… shelf
@@ -62602,15 +62599,20 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   const [voidReason, setVoidReason] = useState("");
   const [replyEdit, setReplyEdit] = useState(null);  // { key, by, at, text } — reply being edited
   const editJobs = useMemo(() => (jobs || []).filter(j => j && j.name && !j.tempPed && !isInactiveJob(j)).slice().sort((a, b) => String(a.name).localeCompare(String(b.name))), [jobs]);
-  // v429 Ship 2 UI state: search, view (per-device), batch select, stale footer.
+  // v429 Ship 2 UI state: search, batch select. Redesign: tabs, one Group pref
+  // (replaces myday.view + myday.sort, read once), explicit section toggles.
   const [q, setQ] = useState("");
-  const [viewPref, setViewPref] = useState(() => { try { return localStorage.getItem("myday.view") || "cat"; } catch { return "cat"; } });
-  // v539 (Koy 2026-10-09: "sorted by job or person"): order of rows INSIDE each fold, per device.
-  const [sortPref, setSortPref] = useState(() => { try { const v = localStorage.getItem("myday.sort"); return v === "job" || v === "person" ? v : "urgency"; } catch { return "urgency"; } });
-  const pickSort = (v) => { setSortPref(v); try { localStorage.setItem("myday.sort", v); } catch {} };
+  const qOn = !!String(q || "").trim();
+  const [tab, setTab] = useState("todo");
+  const [gmenu, setGmenu] = useState(false);
+  const [groupPref, setGroupPref] = useState(() => { try { return myDayGroupPref(localStorage.getItem("myday.group"), localStorage.getItem("myday.view"), localStorage.getItem("myday.sort")); } catch { return "time"; } });
+  const pickGroup = (v) => { setGroupPref(v); setGmenu(false); try { localStorage.setItem("myday.group", v); } catch {} };
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [secOpen, setSecOpen] = useState(() => new Map());   // explicit toggles; default comes from the section
+  const isSecOpen = (k, def) => (qOn ? true : secOpen.has(k) ? secOpen.get(k) : !!def);
+  const toggleSec = (k, def) => setSecOpen(m => { const n = new Map(m); n.set(k, !(n.has(k) ? n.get(k) : !!def)); return n; });
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
-  const [showStale, setShowStale] = useState(false);
   // Batch runs ONE row per render (see the batch effect below): each step reads
   // that render's fresh jobs/needs, so two rows on the same job can't clobber
   // each other's whole-field writes (clearedTasks / taskDueDates / punch).
@@ -63047,7 +63049,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     const r = mineRows[i];
     if (r && r.kind === "auto" && isAutoSnoozed(r.snoozeYmd, todayYmd)) { snoozedRows.unshift({ ...r, snoozeBack: r.snoozeYmd }); mineRows.splice(i, 1); }
   }
-  snoozedMineNeeds(needs, [identity, ...coverees.map(name => ({ name }))], todayYmd).forEach(n => {
+  snoozedMineNeeds(needs, [identity, ...coverees.map(name => ({ name }))], todayYmd).filter(n => !absorbedDocIds.has(n.id)).forEach(n => {
     snoozedRows.push({ ...needRow(n, false), snoozeBack: n.snoozedUntil, onWake: () => onPatchNeed(n.id, { snoozedUntil: "" }, n) });
   });
   snoozedRows.sort((a, b) => String(a.snoozeBack).localeCompare(String(b.snoozeBack)));
@@ -63059,11 +63061,6 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   // `owners` was carried (single-owner); With-others rows already carry theirs
   // (Ship 2 routing). ageDays mirrors staleReason's own date math off staleDate.
   const qcCounts = useMemo(() => qcTracker ? qcTrackerCounts(jobs) : null, [qcTracker, jobs]);
-  const withQcCat = (cats) => {
-    if (!qcTracker) return cats;
-    if (cats.some(c => c.key === "qc")) return cats;
-    return [...cats, { key: "qc", label: MYDAY_CAT_LABELS.qc, rows: [], top: MYDAY_ORDER.length, overdue: 0, urgent: 0 }];
-  };
   const ageDaysOf = (dateYmd) => {
     const d = dateYmd ? parseAnyDate(dateYmd) : null;
     if (!d) return 0;
@@ -63102,18 +63099,18 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     onSaveFocus({ date: todayYmd, keys: next, prevDate: carrySrc ? carrySrc.date : "", prevKeys: carrySrc ? carrySrc.keys : [] });
   };
   const rePin = () => onSaveFocus({ date: todayYmd, keys: [...pinnedRows.map(r => r.key), ...carryKeys].slice(0, 3), prevDate: "", prevKeys: [] });
-  const qOn = !!String(q || "").trim();
   const fq = (rows) => qOn ? rows.filter(r => rowMatches(r, q)) : rows;
-  const view = (viewPref === "job" || (viewPref === "person" && iRunHead)) ? viewPref : "cat";
+  // Redesign: "person" = the head's Team tab; job / cat only feed what still reads `view`.
+  const view = tab === "team" && iRunHead ? "person" : (groupPref === "job" ? "job" : "cat");
   const sortRows =(rs) => rs.slice().sort(compareMyDayRows);   // v446: urgency → lane → due date → title
+  // To do Group: Job / Type / Who sent it — the label each row bunches under (myDaySections).
+  const groupLabelOf = (r, mode) => mode === "job" ? ((r.jobId && jobById(r.jobId) && jobById(r.jobId).name) || "")
+    : mode === "type" ? (MYDAY_CAT_LABELS[myDayCategoryOf(r)] || "")
+    : (r.sortWho || (r.by ? `From ${first(r.by)}` : ""));
   // v408: "On <head>" is one collapsed line per job ("Koy has N things on this
   // job"), opening to the read-only rows + "+ Add for Koy" (Koy, 2026-09-15).
   // Rows = task docs on the head about my jobs ∪ the head's auto rows on my
   // jobs ∪ duties, with duty twins folded exactly like the head's own board.
-  const [openHeadJobs, setOpenHeadJobs] = useState(() => new Set());
-  const [openCats, setOpenCats] = useState(() => new Set());   // v412: Mine categories start folded
-  const toggleCat = (k) => setOpenCats(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
-  const toggleHeadJob = (id) => setOpenHeadJobs(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   // v421: the requester's views (On <head>, Sent) list NOT-DONE docs, snoozed
   // included — a task the other side put on hold must stay visible with its
   // "waiting on" line instead of silently vanishing.
@@ -63154,7 +63151,6 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   // actually looks.
   // v539: Sent rows also say where each ask stands (Working / Waiting / Not started yet).
   const sentRows = liveNeeds.filter(n => sentByMe(n, identity)).map(n => ({ ...needRow(n, true), showStatus: true }));
-  const sentWaiting = sentRows.filter(r => r.snoozedUntil || (r.latest && r.latest.kind === "waiting")).length;
   // v426: "Done" — task cards I finished or that finished on me in the last 30
   // days (Koy: "a spot where i can see all my completed tasks"). Read-only rows
   // with a one-tap Reopen, newest first by doneAt. Starts folded. v429: the same
@@ -63246,65 +63242,15 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     });
     mineKeysRef.current = mineRows.map(r => r && r.key).filter(Boolean).sort().join("\n");
   }
-  // v490 (Koy 2026-10-01: "the thing that shows anything new added so its
-  // easily visible"): on top of the per-row New / New reply tags, every new
-  // row (and every row with a new reply) is ALSO listed in its own group at the
-  // very top of the page, open by default, titled with when you last looked.
-  // Same row objects, so Done / Answer / Approve work from either place.
-  // v497: unseen rows sent to me by someone else — always on top, until acknowledged on this device.
+  // v497: unseen rows sent to me by someone else stay flagged (blue dot + the
+  // section's "N new" badge) until acknowledged on this device. Redesign: the
+  // separate New-for-you / New-since boxes are gone; the flags ride on the rows.
   mineRows.forEach(r => { if (!r) return; const other = r.fromOther === true || (r.by && !sameName(r.by, me)); r.unseen = !!(other && !ackRef.current[r.key] && r.state !== "with"); });
-  const forYouRows = view === "person" ? [] : sortRows(mineQ.filter(r => r && r.unseen));
-  const _fySet = new Set(forYouRows.map(r => r.key));
-  const newRowsTop = view === "person" ? [] : sortRows(mineQ.filter(r => r && (r.isNew || r.newReply) && !_fySet.has(r.key)));
-  const seenAtLabel = (() => { const at = prevSeenRef.current && prevSeenRef.current.at; if (!at) return "last time"; const d = new Date(at); if (isNaN(d.getTime())) return "last time"; const sameDay = d.toDateString() === new Date().toDateString(); return (sameDay ? "" : d.toLocaleDateString([], { weekday: "short" }) + " ") + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); })();
-  const groups = [
-    ...(forYouRows.length ? [{ key: "foryou", title: "New for you", rows: forYouRows, badge: `${forYouRows.length} unseen`, empty: "" }] : []),
-    ...(newRowsTop.length ? [{ key: "new", title: `New since ${seenAtLabel}`, rows: newRowsTop, badge: `${newRowsTop.length} new`, empty: "" }] : []),
-    ...(view === "person" ? personGroups : [
-      // v459: the QC walks tracker (was its own tab, then a side card — Koy: "why do
-      // i have two qc tabs. keep the one on the bottom left and make it have
-      // everything qc") rides INSIDE Mine's "QC walks" category, under that
-      // category's own rows. If no QC row is on me today the category still
-      // exists (with 0 rows) so the tracker has a home.
-      view === "job"
-        ? { key: "mine", title: "Mine", rows: mineQ, byJob: byJobOf(mineQ), main: true, empty: "All clear — nothing on you right now." }
-        : { key: "mine", title: "Mine", rows: mineQ, byCat: withQcCat(myDayCategories(mineQ)), main: true, empty: "All clear — nothing on you right now." },
-      // v427: rows the head's board used to own that now route to another hat
-      // holder — read-only (no Done/Snooze/actions), folded by default.
-      ...(iRunHead && freshOthers.length ? [{ key: "others", title: "With others", rows: othersQ, byCat: myDayCategories(othersQ), empty: "" }] : []),
-    ]),
-    ...(iRunHead ? [] : [{ key: "head", title: `On ${headFirst}`, rows: headRowsQ, byJob: headByJob, empty: `Nothing waiting on ${headFirst} for your jobs.` }]),
-    // v421: what I asked others for, with their latest update. Starts folded.
-    ...(snoozedRows.length ? [{ key: "snoozed", title: "Snoozed", rows: fq(snoozedRows), empty: "" }] : []),
-    { key: "sent", title: "Sent", rows: sortRows(fq(sentRows)), badge: sentWaiting ? `${sentWaiting} waiting` : "", empty: "Nothing you've sent is still open." },
-    // v429: docs I sent that someone else finished, last 30 days. Folded.
-    { key: "sentDone", title: "Sent · finished", rows: fq(finishedRows), empty: "Nothing you sent was finished in the last 30 days." },
-    // v426: everything I finished (on me, or sent and closed myself), last 30 days, newest first.
-    { key: "done", title: "Done", rows: fq(doneRows), empty: "Nothing finished in the last 30 days." },
-  ];
   // v446: a push / inbox tap carries the task id (`?view=myday&need=<id>`).
-  // Find the row wherever it lives (Focus strip, Mine category / job line,
-  // Sent, Done, a Person group), unfold its way there, scroll to it and flash
-  // it for a few seconds. Waits while `needs` is still empty (cold start);
-  // clears the request once needs are loaded even when the doc isn't found.
   useEffect(() => {
-    if (!jumpNeedId) return;
-    let hit = null;
-    const inFocus = pinnedRows.find(r => r.need && r.need.id === jumpNeedId);
-    if (inFocus) hit = { r: inFocus };
-    else for (const g of groups) { const r = g.rows.find(x => x.need && x.need.id === jumpNeedId); if (r) { hit = { g, r }; break; } }
-    if (!hit) { if ((needs || []).length && onJumped) onJumped(); return; }
-    if (hit.g) {
-      const { g, r } = hit;
-      setOpenGroups(s => { const n = new Set(s); n.add(g.key); return n; });
-      if (g.byCat) { const c = g.byCat.find(c => c.rows.some(x => x.key === r.key)); if (c) setOpenCats(s => { const n = new Set(s); n.add(g.key === "mine" ? c.key : g.key + ":" + c.key); return n; }); }
-      if (g.byJob) { const jid = r.jobId || "_none"; setOpenHeadJobs(s => { const n = new Set(s); n.add(g.key === "head" ? jid : g.key + ":" + jid); return n; }); }
-    }
-    setFlashKey(hit.r.key);
-    const scrollT = setTimeout(() => { const el = document.getElementById("mdrow_" + hit.r.key); if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" }); }, 60);
-    const flashT = setTimeout(() => setFlashKey(null), 4000);
-    if (onJumped) onJumped();
-    return () => { clearTimeout(scrollT); clearTimeout(flashT); };
+    // replaced in Task 6 (deep-link across the new tabs). Until then the request
+    // is still cleared so a push never sticks.
+    if (jumpNeedId && onJumped) onJumped();
   }, [jumpNeedId, needs]); // eslint-disable-line
   // v421 update panel state (Row is a plain render fn, so state lives here).
   const [updFor, setUpdFor] = useState(null);
@@ -63360,7 +63306,6 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   };
   const canMarkUrgent = (r) => !r.readOnly && (r.sel || r.canReassign) && (r.kind === "need" ? !!(r.need && onPatchNeed) : !!onSetPrio);
   const Row = (r, opts) => {
-    const [, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
     // My Day redesign: Row is also handed straight to .map(), so `opts` can be the index.
     const lead = (opts && typeof opts === "object" && opts.readOnlyLead) || "avatar";
     // v429 select mode: a row never opens its job or a panel — tapping a
@@ -63374,7 +63319,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     return (
       <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key} onPointerDownCapture={r.unseen ? () => ack(r.key) : undefined}
         {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#1F7A3F", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: C.slate, fn: () => { if (expKey !== r.key) toggleExp(r.key); setSnoozeFor(r.key); } } : null }))}
-        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: "nowrap", gap: 10, alignItems: "flex-start", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "10px 10px 10px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
+        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: "nowrap", gap: 10, alignItems: "flex-start", background: flashing || (selectMode && isSel) ? C.steelBg : "transparent", padding: "12px 14px", position: "relative", minHeight: 44, boxShadow: flashing ? `inset 3px 0 0 ${C.accent}` : "none", transition: "background .3s, box-shadow .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
@@ -63724,110 +63669,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
       </div>
     );
   };
-  // v539 Sort switch: Urgency keeps the list as sorted; Job / Person bunch the
-  // rows with a small label above each bunch. `skip` = the mode already shown
-  // by the container (a Job-view line is one job, so Sort: Job adds nothing).
-  const sortLabelOf = (r) => sortPref === "job"
-    ? ((r.jobId && jobById(r.jobId) && jobById(r.jobId).name) || "")
-    : (r.sortWho || (r.by ? `From ${first(r.by)}` : ""));
-  const rowsSorted = (rows, RowIn, skip) => {
-    if (sortPref === "urgency" || sortPref === skip || rows.length < 2) return rows.map(RowIn);
-    return bunchRows(rows, sortLabelOf, sortPref === "job" ? "No job" : "Automatic").map(b => (
-      <Fragment key={"sb_" + b.key}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "4px 2px 0" }}>{b.label} · {b.rows.length}</div>
-        {b.rows.map(RowIn)}
-      </Fragment>
-    ));
-  };
-  const Group = (g) => {
-    const RowIn = (!g.main && g.key !== "foryou") ? ((r) => Row({ ...r, side: true })) : Row;
-    const isOpen = g.key === "foryou" || openGroups.has(g.key) || (groups.length === 1) || (qOn && g.rows.length > 0);   // v429: search auto-opens groups with matches
-    const overdue = g.rows.filter(r => r.bucket === "overdue").length;
-    return (
-      <div key={g.key} style={g.key === "foryou"
-        ? { marginBottom: 16, padding: "8px 10px 10px", background: "#2F6FDE10", border: "2px solid #2F6FDE", borderRadius: 12, boxShadow: "0 6px 24px #2F6FDE22" }
-        : { marginBottom: 14 }}>
-        <div onClick={() => toggleGroup(g.key)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
-          <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: isOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
-          <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>{g.title}</span>
-          <span style={{ fontSize: 13, color: C.faint }}>{g.rows.length}</span>
-          {overdue > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: C.red, background: "#C6282818", borderRadius: 5, padding: "1px 6px" }}>{overdue} overdue</span>}
-          {(() => { const nn = g.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 12, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
-          {g.badge && <span style={{ fontSize: 12, fontWeight: 700, color: C.orange, background: "#C2410C1A", borderRadius: 5, padding: "1px 6px" }}>{g.badge}</span>}
-          <span style={{ flex: 1, height: 1, background: C.border }} />
-        </div>
-        {isOpen && g.byCat && (g.byCat.length
-          ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {g.byCat.map(c => {
-                const ck = g.key === "mine" ? c.key : g.key + ":" + c.key;
-                const open = openCats.has(ck) || qOn;
-                const [, laneColor] = MYDAY_BUCKETS[MYDAY_ORDER[c.top]] || MYDAY_BUCKETS.later;
-                return (
-                  <div key={c.key} style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${laneColor}`, borderRadius: 10 }}>
-                    <div onClick={() => toggleCat(ck)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44, userSelect: "none" }}>
-                      <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.label}</span>
-                      <span style={{ fontSize: 13, color: C.faint, fontVariantNumeric: "tabular-nums" }}><HeCount value={c.rows.length} ms={500}/></span>
-                      {/* v490 (Koy: "want it to appear on each drop downs header so i can see it easy") */}
-                      {(() => { const nn = c.rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 12, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
-                      {c.overdue > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: C.red, background: "#C6282818", borderRadius: 5, padding: "1px 6px" }}>{c.overdue} overdue</span>}
-                      {c.overdue === 0 && c.top === 1 && <span style={{ fontSize: 12, fontWeight: 700, color: C.blue }}>today</span>}
-                      {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.needAction > 0 && <span title="QC walks failed, past due or needing a date" style={{ fontSize: 12, fontWeight: 700, color: C.red, background: "#C6282818", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.needAction} need action</span>}
-                      {g.key === "mine" && c.key === "qc" && qcCounts && qcCounts.scheduled > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "#2F5BD9", background: "#2F5BD918", borderRadius: 5, padding: "1px 6px" }}>{qcCounts.scheduled} scheduled</span>}
-                    </div>
-                    {open && <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>{rowsSorted(c.rows, RowIn)}{g.key === "mine" && c.key === "qc" && qcTracker}</HeUnfold>}
-                  </div>
-                );
-              })}
-            </HeUnfold>
-          : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 14, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)}
-        {isOpen && !g.byCat && (g.byJob
-          ? (g.byJob.length
-            ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                {g.byJob.map(({ jobId, job, rows }) => {
-                  const isHead = g.key === "head";
-                  const jk = isHead ? jobId : g.key + ":" + jobId;   // v429: Mine Job view folds independently of the head group
-                  const open = openHeadJobs.has(jk) || qOn;
-                  const n = rows.length;
-                  const od = rows.filter(r => r.bucket === "overdue").length;
-                  return (
-                    <div key={jobId} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10 }}>
-                      <div onClick={() => toggleHeadJob(jk)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", cursor: "pointer", minHeight: 44 }}>
-                        <span style={{ display: "inline-flex", transition: "transform .3s cubic-bezier(.34,1.45,.5,1)", transform: open ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
-                        {isHead
-                          ? <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{headFirst} has {n} thing{n === 1 ? "" : "s"} on {(job && job.name) || "no job"}</span>
-                          : <>
-                              <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{(job && job.name) || "No job"}</span>
-                              <span style={{ fontSize: 13, color: C.faint, fontVariantNumeric: "tabular-nums" }}><HeCount value={n} ms={500}/></span>
-                              {(() => { const nn = rows.filter(r => r && (r.isNew || r.newReply)).length; return nn > 0 ? <span key={nn} className="he-bump" title="New since you last opened My Day on this device" style={{ display: "inline-block", fontSize: 12, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>{nn} new</span> : null; })()}
-                              {od > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: C.red, background: "#C6282818", borderRadius: 5, padding: "1px 6px" }}>{od} overdue</span>}
-                            </>}
-                      </div>
-                      {open && (
-                        <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 10px 10px" }}>
-                          {rowsSorted(rows, RowIn, "job")}
-                          {isHead && canCreate && openQuickAdd && (
-                            <button onClick={() => openQuickAdd({ job, assignedTo: headName })}
-                              style={{ alignSelf: "flex-start", fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight:"var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: "transparent", color: C.accent, border: `1px dashed ${C.accent}` }}>
-                              + Add for {headFirst}
-                            </button>
-                          )}
-                        </HeUnfold>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 14, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>)
-          : (g.rows.length
-            ? <HeUnfold style={{ display: "flex", flexDirection: "column", gap: 7 }}>{(g.key === "foryou" || g.key === "new") ? g.rows.map(RowIn) : rowsSorted(g.rows, RowIn)}</HeUnfold>
-            : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 14, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>{g.empty}</div>))}
-      </div>
-    );
-  };
   const link = (label, fn) => <span onClick={fn} style={{ fontSize: 13, color: C.accent, fontWeight: 600, cursor: "pointer" }}>{label}</span>;
   // ── v429 toolbar / batch ──
-  const pickView = (v) => { setViewPref(v); try { localStorage.setItem("myday.view", v); } catch {} };
   const toggleSel = (key) => setSelected(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const toggleSelectMode = () => {
     if (selectMode) { setExpKey(null); setMoreKey(null); setSelectMode(false); setSelected(new Set()); return; }
@@ -63870,144 +63713,114 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     }
     setBatchQ({ ...batchQ, keys: rest, ok: batchQ.ok + (ok ? 1 : 0), skip: batchQ.skip + (ok ? 0 : 1) });
   }, [batchQ]); // eslint-disable-line
-  const segBtn = (on) => ({ fontFamily: "inherit", fontSize: 13, fontWeight: on ? 700 : 500, padding: "6px 10px", minHeight: "var(--he-tap, 34px)", border: "none", cursor: "pointer", background: on ? C.accent : "transparent", color: on ? "#fff" : C.text });
   const barBtn = { fontFamily: "inherit", fontSize: 14, fontWeight: 700, padding: "8px 12px", minHeight: "var(--he-tap, 36px)", borderRadius: 8, cursor: "pointer", background: "transparent", color: "#66A8FF", border: "1px solid #66A8FF55" };
-  const topGroups = groups.filter(g => g.key === "foryou");   // v505: full width, above both columns
-  const mainGroups = groups.filter(g => g.main);
-  const sideGroups = groups.filter(g => !g.main && g.key !== "foryou");
-  // v431: Team pulse (head only) — folded card, right column, above Sent.
-  // Tapping a person switches to Person view and opens that person's group
-  // (same "p:<name>" fold key the Person view itself uses).
-  const openPersonPulse = (name) => { pickView("person"); setOpenGroups(s => { const n = new Set(s); n.add("p:" + name); return n; }); };
-  const pulseOverdue = pulse.reduce((s, p) => s + p.overdue, 0);
-  const pulseOpen = openGroups.has("pulse");
-  const pulseCard = iRunHead ? (
-    <div key="pulse" style={{ marginBottom: 14 }}>
-      <div onClick={() => toggleGroup("pulse")} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px" }}>
-        <span style={{ display: "inline-flex", transition: "transform .15s", transform: pulseOpen ? "rotate(90deg)" : "none", color: C.dim }}><Icon name="chevronRight" size={16} stroke={2.25} /></span>
-        <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}>Team pulse</span>
-        <span style={{ fontSize: 13, color: C.faint }}>{pulse.length} people</span>
-        {pulseOverdue > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: C.red, background: "#C6282818", borderRadius: 5, padding: "1px 6px" }}>{pulseOverdue} overdue</span>}
-        <span style={{ flex: 1, height: 1, background: C.border }} />
-      </div>
-      {pulseOpen && (pulse.length
-        ? <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-              <thead>
-                <tr style={{ background: C.surface }}>
-                  {["Person", "Open", "Overdue", "Oldest", "Done wk"].map((h, i) => (
-                    <th key={h} style={{ textAlign: i === 0 ? "left" : "right", padding: "7px 10px", color: C.dim, fontWeight: 700, fontSize: 12.5, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pulse.map(p => {
-                  const redOverdue = p.overdue >= 2, redOldest = p.oldestDays >= 7;
-                  // Minor fix: a row here only for doneWeek (no open items) has no
-                  // p:<name> group to open — don't offer a dead tap.
-                  const clickable = p.open > 0;
-                  return (
-                    <tr key={p.name} onClick={clickable ? () => openPersonPulse(p.name) : undefined} style={{ borderTop: `1px solid ${C.border}`, cursor: clickable ? "pointer" : "default" }}>
-                      <td style={{ padding: "7px 10px", color: clickable ? C.text : C.dim, fontWeight: 600 }}>{p.name}</td>
-                      <td style={{ padding: "7px 10px", textAlign: "right", color: C.text }}>{p.open}</td>
-                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOverdue ? C.red : C.text, fontWeight: redOverdue ? 700 : 400 }}>{p.overdue}</td>
-                      <td style={{ padding: "7px 10px", textAlign: "right", color: redOldest ? C.red : C.text, fontWeight: redOldest ? 700 : 400 }}>{p.open > 0 ? `${p.oldestDays}d` : "–"}</td>
-                      <td style={{ padding: "7px 10px", textAlign: "right", color: C.dim }}>{p.doneWeek}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        : <div style={{ padding: 12, textAlign: "center", color: C.dim, fontSize: 14, background: C.surface, border: `1px dashed ${C.border}`, borderRadius: 10 }}>Nobody has open items or finished work this week.</div>)}
-    </div>
-  ) : null;
-  // Splices the pulse card in right before Sent (only when it exists — head only).
-  const sideNodes = sideGroups.flatMap(g => (g.key === "sent" && pulseCard) ? [pulseCard, Group(g)] : [Group(g)]);
-
-  const staleFooter = staleRows.length > 0 && (
-    <div key="stale" style={{ marginBottom: 14 }}>
-      <div onClick={() => setShowStale(s => !s)} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, cursor: "pointer", userSelect: "none", margin: "0 2px 6px", fontSize: 13, color: C.dim }}>
-        <span style={{ display: "inline-flex", transition: "transform .15s", transform: showStale ? "rotate(90deg)" : "none" }}><Icon name="chevronRight" size={14} stroke={2.25} /></span>
-        <span>{staleRows.length} hidden (stale) · <span style={{ color: C.accent, fontWeight: 600 }}>{showStale ? "Hide" : "Show"}</span></span>
-      </div>
-      {showStale && <div style={{ display: "flex", flexDirection: "column", gap: 7, opacity: .75 }}>{sortRows(staleRows).map(Row)}</div>}
+  // ── My Day redesign: one Section renderer for every fold on every tab ──
+  const badgesFor = (rows) => {
+    const u = rows.filter(r => r.prio === "urgent").length, w = rows.filter(r => r.working).length, n = rows.filter(r => r.unseen || r.isNew || r.newReply).length;
+    const b = (t, bg, fg) => <span key={t} style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: bg, color: fg }}>{t}</span>;
+    return [u ? b(`${u} urgent`, C.red, "#fff") : null, w ? b(`${w} working`, `${C.blue}1F`, C.blue) : null, n ? b(`${n} new`, C.blue, "#fff") : null];
+  };
+  const rowsCard = (rows, empty) => (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+      {rows && rows.length ? rows.map((r, i) => <div key={r.key} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>{Row(r)}</div>)
+        : <div style={{ padding: 16, textAlign: "center", color: C.faint, fontSize: 14 }}>{empty || "Nothing here."}</div>}
     </div>
   );
+  const Section = ({ k, label, color, rows, defaultOpen, extra, children, empty }) => {
+    const open = isSecOpen(k, defaultOpen);
+    return (
+      <div key={k} style={{ marginTop: 14 }}>
+        <div role="button" tabIndex={0} aria-expanded={open} onClick={() => toggleSec(k, defaultOpen)}
+          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSec(k, defaultOpen); } }}
+          style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 40, padding: "4px 2px", cursor: "pointer", userSelect: "none" }}>
+          <span style={{ display: "inline-flex", transition: "transform .15s", transform: open ? "rotate(90deg)" : "none", color: C.faint }}><Icon name="chevronRight" size={14} stroke={2.6} /></span>
+          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: color || C.text }}>{label}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.faint }}>{rows ? rows.length : ""}</span>
+          {rows && badgesFor(rows)}{extra}
+          <span style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+        {open && (children || rowsCard(rows, empty))}
+      </div>
+    );
+  };
+  // ── To do: Pinned, then the time lanes (or Job / Type / Who sent it), then the bottom folds ──
+  const todoRows = mineQ;   // already: fresh, not pinned, search-filtered, sorted
+  const todoSections = myDaySections(todoRows, groupPref, groupLabelOf);
+  const LANE_COLOR = { overdue: C.red, today: C.blue, week: C.dim, later: C.faint };
+  // Group: Type puts the QC tracker inside the "QC walks" section, so the bottom fold steps aside.
+  const qcInType = !!qcTracker && todoSections.some(s => s.key === "type:QC walks");
+  const todoBody = (
+    <>
+      {pinnedRows.length > 0 && Section({ k: "pinned", label: "Pinned", color: C.blue, rows: fq(pinnedRows), defaultOpen: true })}
+      {carryKeys.length > 0 && <div style={{ fontSize: 13, color: C.dim, margin: "8px 2px 0" }}>From {mdOf(carrySrc.date)}: {carryKeys.length} pinned still open · {link("Re-pin", rePin)}</div>}
+      {todoSections.map(s => Section({ k: s.key, label: s.label, color: s.lane ? LANE_COLOR[s.lane] : C.text, rows: s.rows, defaultOpen: s.openByDefault,
+        empty: s.lane === "today" ? "Nothing due today." : "Nothing here.",
+        extra: !s.lane && s.rows.some(r => r.bucket === "overdue") ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>overdue</span> : null,
+        children: qcInType && s.key === "type:QC walks" ? <>{rowsCard(s.rows)}<div style={{ marginTop: 6 }}>{qcTracker}</div></> : undefined }))}
+      {snoozedRows.length > 0 && Section({ k: "snoozed", label: "Snoozed", color: C.faint, rows: fq(snoozedRows), defaultOpen: false })}
+      {staleRows.length > 0 && Section({ k: "stale", label: "Older reminders", color: C.faint, rows: fq(sortRows(staleRows)), defaultOpen: false })}
+      {qcTracker && !qcInType && Section({ k: "qct", label: "QC tracker", color: C.faint, rows: null, defaultOpen: false,
+        extra: qcCounts && qcCounts.needAction > 0 ? <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>{qcCounts.needAction} need action</span> : null,
+        children: <div style={{ marginTop: 6 }}>{qcTracker}</div> })}
+      {messagesSlot && Section({ k: "msgs", label: "Office messages", color: C.faint, rows: null, defaultOpen: false, children: <div style={{ marginTop: 6 }}>{messagesSlot}</div> })}
+    </>
+  );
+  // Placeholders until Task 5 (Waiting on others in chase order, Team, Done).
+  const sentBody = Section({ k: "chase:none", label: "Waiting on others", rows: sentChaseOrder(fq(sentRows)), defaultOpen: true });
+  const teamBody = personGroups.length ? <>{personGroups.map(g => Section({ k: "team:" + g.key.slice(2), label: g.title, rows: g.rows, defaultOpen: false, empty: g.empty }))}</> : null;
+  const doneBody = Section({ k: "done", label: "Done", rows: mergeDoneRows(fq(doneRows), fq(finishedRows)), defaultOpen: true });
+  // ── Header + tabs ──
+  const GROUP_LABEL = { time: "Time", job: "Job", type: "Type", from: "Who sent it" };
+  const iconBtn = (on) => ({ width: 44, height: 44, borderRadius: 10, border: `1px solid ${on ? C.blue : C.border}`, background: C.card, color: on ? C.blue : C.text, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 });
+  const menuItem = (on) => ({ display: "flex", width: "100%", justifyContent: "space-between", gap: 10, textAlign: "left", border: "none", background: on ? C.surface : "none", padding: "10px 12px", borderRadius: 8, fontSize: 14, fontWeight: on ? 700 : 500, cursor: "pointer", color: C.text, fontFamily: "inherit" });
+  const overdueN = freshMine.filter(r => r.bucket === "overdue").length;
+  const TABS = [
+    ["todo", "To do", String(freshMine.length), overdueN > 0],   // freshMine already includes pinned rows
+    ["sent", "Waiting on others", String(sentRows.length), false],
+    ...(iRunHead ? [["team", "Team", "", false]] : []),
+    ["done", "Done", "", false],
+  ];
 
   return (
-    <div ref={_mdRoot} style={{ padding: narrow ? "12px 12px 110px" : "16px 18px 60px", maxWidth: 1120, margin: "0 auto" }} onClick={() => { if (snoozeFor) setSnoozeFor(null); }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-        <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 28, letterSpacing: "0.06em", color: C.text, lineHeight: 1 }}>MY DAY</div>
-        <HelpDot section="myday" />
-        {forYouRows.length > 0 && <span key={forYouRows.length} className="he-bump" title="Sent to you by someone else, not seen yet" style={{ display: "inline-block", fontSize: 12.5, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 999, padding: "3px 10px" }}>{forYouRows.length} new for you</span>}
-        <div style={{ display: "flex", gap: 12, alignItems: "center", marginLeft: "auto", flexWrap: "wrap" }}>
-          {onGoHome && link("Job Board", onGoHome)}
-          {crewForeman && onOpenCrew && link("My Crew", () => onOpenCrew(crewForeman))}
-          {canBoard && onOpenBoard && link("Needs", onOpenBoard)}
-          {canCreate && !ON_MOBILE && openQuickAdd && (
-            <button onClick={() => openQuickAdd({})} style={{ background: C.accent, border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Icon name="plus" size={14} stroke={2.5} /> Need
-            </button>
-          )}
+    <div ref={_mdRoot} style={{ padding: narrow ? "12px 12px 110px" : "16px 18px 60px", maxWidth: 720, margin: "0 auto" }} onClick={() => { if (snoozeFor) setSnoozeFor(null); if (gmenu) setGmenu(false); }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 0 10px" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 24, fontWeight: 700, color: C.text, letterSpacing: "0.01em" }}>My Day</span><HelpDot section="myday" />
+          </div>
+          <div style={{ fontSize: 13, color: C.faint, display: "flex", gap: 10, flexWrap: "wrap", marginTop: 2 }}>
+            <span>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}</span>
+            {onGoHome && link("Job Board", onGoHome)}{crewForeman && onOpenCrew && link("My Crew", () => onOpenCrew(crewForeman))}{canBoard && onOpenBoard && link("Needs", onOpenBoard)}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          {<button aria-label="Search" aria-pressed={searchOpen || qOn} onClick={() => { setSearchOpen(s => !s); if (searchOpen) setQ(""); }} style={iconBtn(searchOpen || qOn)}><Icon name="search" size={17} stroke={2.4} /></button>}
+          {tab === "todo" && <div style={{ position: "relative" }}>
+            <button aria-label={`Group by ${GROUP_LABEL[groupPref]}`} aria-expanded={gmenu} onClick={e => { e.stopPropagation(); setGmenu(g => !g); }} style={iconBtn(groupPref !== "time")}><Icon name="sliders" size={18} stroke={2.4} /></button>
+            {gmenu && <div role="menu" onClick={e => e.stopPropagation()} style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 10px 28px rgba(20,30,50,.14)", padding: 6, minWidth: 210 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.faint, padding: "8px 12px 4px" }}>Group by</div>
+              {[["time","Time","overdue first"],["job","Job",""],["type","Type","Punch, QC walks…"],["from","Who sent it",""]].map(([k,l,s]) => (
+                <button key={k} role="menuitemradio" aria-checked={groupPref === k} onClick={() => pickGroup(k)} style={menuItem(groupPref === k)}>{l}<span style={{ color: C.faint, fontWeight: 500 }}>{s}</span></button>))}
+              <div style={{ height: 1, background: C.border, margin: "4px 6px" }} />
+              <button onClick={() => { setGmenu(false); toggleSelectMode(); }} style={menuItem(false)}>{selectMode ? "Stop selecting" : "Select several…"}<span style={{ color: C.faint, fontWeight: 500 }}>done / snooze / push</span></button>
+            </div>}
+          </div>}
+          {canCreate && openQuickAdd && <button onClick={() => openQuickAdd({})} style={{ background: C.blue, border: "none", borderRadius: 10, color: "#fff", fontWeight: 700, padding: "0 16px", minHeight: 44, fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" size={14} stroke={2.5} />Need</button>}
         </div>
       </div>
-      {/* Important office messages waiting on this person's Got it (announcements, v513). */}
-      {topSlot}
-      {/* v429 toolbar: search · Category | Job | Person · Select (stacks when narrow) */}
-      <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", alignItems: narrow ? "stretch" : "center", gap: 8, marginBottom: 10 }}>
-        <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs…"
-          style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "inherit", fontSize: 14, padding: "9px 12px", minHeight: 38, borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text }} />
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
-            {[["cat", "Category"], ["job", "Job"], ...(iRunHead ? [["person", "Person"]] : [])].map(([k, l]) => (
-              <button key={k} onClick={() => pickView(k)} aria-pressed={view === k} style={segBtn(view === k)}>{l}</button>
-            ))}
-          </div>
-          {/* v539: Sort — the order of rows inside each fold. */}
-          <div role="group" aria-label="Sort inside each fold" style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
-            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "0 6px 0 9px" }}>Sort</span>
-            {[["urgency", "Urgency"], ["job", "Job"], ["person", "Person"]].map(([k, l]) => (
-              <button key={k} onClick={() => pickSort(k)} aria-pressed={sortPref === k} style={segBtn(sortPref === k)}>{l}</button>
-            ))}
-          </div>
-          <button onClick={toggleSelectMode} aria-pressed={selectMode}
-            style={{ marginLeft: narrow ? "auto" : 0, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 12px", minHeight:"var(--he-tap, 34px)", borderRadius: 8, cursor: "pointer",
-              background: selectMode ? C.accent : "transparent", color: selectMode ? "#fff" : C.accent, border: `1px solid ${C.accent}` }}>{selectMode ? "Cancel" : "Select"}</button>
-        </div>
+      {(searchOpen || qOn) && <input type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs" aria-label="Search tasks or jobs"
+        style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, marginBottom: 8 }} />}
+      {pinsSlot}
+      <div role="tablist" style={{ position: "sticky", top: "env(safe-area-inset-top, 0px)", zIndex: 4, background: C.bg, display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto", scrollbarWidth: "none" }}>
+        {TABS.map(([k, l, n, hot]) => (
+          <button key={k} role="tab" aria-selected={tab === k} onClick={() => { setTab(k); setExpKey(null); setGmenu(false); if (selectMode && k !== "todo") toggleSelectMode(); }}
+            style={{ flex: "1 0 auto", minHeight: 44, padding: "0 12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
+              border: `1px solid ${tab === k ? C.text : C.border}`, background: tab === k ? C.text : C.card, color: tab === k ? "#fff" : C.dim }}>
+            {l}{n !== "" && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 7px", background: hot ? C.red : tab === k ? "rgba(255,255,255,.18)" : C.bg, color: hot || tab === k ? "#fff" : C.dim }}>{n}</span>}
+          </button>
+        ))}
       </div>
-      {myJobs.length > 0 && (
-        <div style={{ display: "flex", gap: 6, overflowX: "auto", margin: "0 0 12px", paddingBottom: 2, scrollbarWidth: "none" }}>
-          {myJobs.map(j => (
-            <span key={j.id} onClick={() => onOpenJob && onOpenJob(j.id, null)}
-              style={{ flex: "none", fontSize: 13, padding: "6px 10px", borderRadius: 9, background: C.card, border: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer" }}>
-              <b style={{ fontWeight: 600 }}>{j.name}</b>
-              {(j.roughStage || j.finishStage) && <span style={{ fontSize: 12.5, color: C.dim, marginLeft: 6 }}>{parseStage(j.roughStage) < 100 ? `Rough ${parseStage(j.roughStage) || 0}%` : `Finish ${parseStage(j.finishStage) || 0}%`}</span>}
-            </span>
-          ))}
-        </div>
-      )}
-      {/* v429 Focus today: up to 3 pinned Mine rows (always visible, not folded). */}
-      {onSaveFocus && (
-        <div style={{ border: `1px solid #66A8FF`, borderRadius: 12, padding: "10px 10px 12px", marginBottom: 14, background: C.surface }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 8px" }}>
-            <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 19, letterSpacing: "0.07em", color: C.text }}><span style={{ color: "#66A8FF" }}>★</span> Focus today</span>
-            <span style={{ fontSize: 13, color: C.faint }}>{pinnedRows.length}/3</span>
-          </div>
-          {pinnedRows.length
-            ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{pinnedRows.map(Row)}</div>
-            : <div style={{ fontSize: 14, color: C.dim, padding: "2px 4px" }}>Pin up to 3 rows as today's must-dos.</div>}
-          {carryKeys.length > 0 && (
-            <div style={{ fontSize: 13, color: C.dim, marginTop: 8, padding: "0 4px" }}>
-              From {mdOf(carrySrc.date)}: {carryKeys.length} still open · {link("Re-pin", rePin)}
-            </div>
-          )}
-        </div>
-      )}
-      {topGroups.map(Group)}
-      {narrow || groups.length === 1
-        ? <>{mainGroups.map(Group)}{staleFooter}{sideNodes}</>
-        : <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 20, alignItems: "start" }}><div>{mainGroups.map(Group)}{staleFooter}</div><div>{sideNodes}</div></div>}
+      {tab === "todo" ? todoBody : tab === "sent" ? sentBody : tab === "team" ? teamBody : doneBody}
       {/* v429 batch action bar (Command Deck dark, steel blue accent). */}
       {selectMode && (
         <div onClick={e => e.stopPropagation()} style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${(ON_MOBILE ? 92 : 24) + (undo ? 56 : 0)}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8996, background: "#1B2030", color: "#E6EAF1", borderRadius: 12, padding: "10px 12px", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 14, boxShadow: "0 8px 24px rgba(0,0,0,.3)", maxWidth: 640, margin: "0 auto" }}>
@@ -70948,10 +70761,8 @@ function App() {
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
           jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)}
-          topSlot={<>
-            {announcePins.length > 0 && <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/>}
-            <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/>
-          </>}/>
+          pinsSlot={announcePins.length > 0 ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}
+          messagesSlot={(officeMsgs.length || canBroadcast(identity)) ? <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/> : null}/>
       )}
 
       {view==="today"&&can(identity,"today.view")&&(
