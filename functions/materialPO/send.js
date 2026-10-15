@@ -264,7 +264,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
   // Claims the key in a transaction, recovers a PO whose Simpro answer was lost,
   // writes everything down before the POST, then creates. Never emails; the
   // caller decides. Returns { log, again } (again = it already existed).
-  async function ensurePo({ ref, key, cfg, user, base, rule, lines, items, get, dueIso, pickCc, ccMissing }) {
+  async function ensurePo({ ref, key, cfg, user, base, rule, lines, items, get, dueIso, custom, pickCc, ccMissing }) {
     const claimId = "CC-" + crypto.randomBytes(5).toString("hex");
     const fresh = () => ({ status: "creating", claimId, startedAt: nowIso(), by: user.name, ...base, mode: cfg.mode, kind: rule.kind });
     const claim = await db.runTransaction(async (tx) => {
@@ -323,7 +323,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       try { companyBlock = await company(); } catch (e) {}
       const shop = (await storage()).find(s => /^shop$/i.test(T(s.Name)));
       const sender = await senderFor(user.name);
-      const pickup = rule.kind === "email" ? R.pickupLine({ get, date: dueIso }) : "";
+      const pickup = rule.kind === "email" ? R.pickupLine({ get, date: dueIso, custom }) : "";
 
       const log = {
         kind: rule.kind, mode: cfg.mode, claimId, supplierName: rule.simproName, vendorId: vendor.ID, vendorEmail: T(vendor.Email),
@@ -393,10 +393,14 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       if (!rule) throw new HttpsError("invalid-argument", `The app can't send to ${T(data.source) || "that supplier"} yet. Pick CED, Home Depot, ACE or Amazon.`);
       const lines = R.itemsToLines(data.items);
       if (rule.kind === "email" && !lines.length) throw new HttpsError("invalid-argument", "Add the material list first.");
+      // Custom "Get it": their own words replace the pickup line; no date. An
+      // empty box is refused here, before any PO exists.
+      const get = R.getMode(data.get);
+      if (get === "custom" && rule.kind === "email" && !R.cleanCustom(data.custom)) throw new HttpsError("invalid-argument", "Type what CED should do in the Custom box.");
       const ref = LOG().doc(key);
       const { log, again } = await ensurePo({
         ref, key, cfg, user, base: { jobId, phase, orderId }, rule, lines, items: null,
-        get: data.get === "deliver" ? "deliver" : "willcall", dueIso: R.cardDateToIso(data.date),
+        get, dueIso: get === "custom" ? "" : R.cardDateToIso(data.date), custom: data.custom,
         pickCc: (jobNo) => costCenterFor(jobNo, phase, ccId),
         ccMissing: (jobNo) => ccId ? `That cost center isn't on Simpro job ${jobNo} any more. Refresh Bid Items and pick it again.` : `Couldn't find a ${phase === "rough" ? "Rough In" : "Finish"} cost center on Simpro job ${jobNo}.`,
       });
@@ -473,8 +477,10 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       const groups = R.cleanOrderGroups(data.groups);
       const resume = data.resume === true && !groups.length; // Finish sending from a card: email what the order already made
       if (!groups.length && !resume) throw new HttpsError("invalid-argument", "Add something to the order first.");
-      const get = data.get === "deliver" ? "deliver" : "willcall";
-      const dueIso = R.cardDateToIso(data.date);
+      const get = R.getMode(data.get);
+      if (get === "custom" && !resume && !R.cleanCustom(data.custom)) throw new HttpsError("invalid-argument", "Type what CED should do in the Custom box.");
+      const dueIso = get === "custom" ? "" : R.cardDateToIso(data.date);
+      const custom = data.custom;
 
       // Every cost center must be on this job's bid in Simpro right now.
       const { jobNo } = await jobFor(jobId);
@@ -512,7 +518,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
         const items = [...g.items.map(i => ({ part: i.part, name: i.name, qty: i.qty })), ...g.typed.map(t => ({ part: "", name: t, qty: "" }))];
         try {
           const { log } = await ensurePo({
-            ref: LOG().doc(key), key, cfg, user, base: { jobId, phase, orderId, orderKey, ccId: g.ccId }, rule, lines, items, get, dueIso,
+            ref: LOG().doc(key), key, cfg, user, base: { jobId, phase, orderId, orderKey, ccId: g.ccId }, rule, lines, items, get, dueIso, custom,
             pickCc: async () => ({ id: cc.id, name: [cc.sectionName, cc.name].filter(Boolean).join(" · ") }),
             ccMissing: () => "That cost center isn't on the job's bid anymore.",
           });

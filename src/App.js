@@ -13832,6 +13832,11 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
                   draftKey={`po_${jobId||'nojob'}_${phase||'nophase'}_${o.id}`}
                   placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
+                {o.poCustom && (
+                  <div style={{fontSize:13,color:C.text,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",marginTop:6}}>
+                    <b style={{color:C.dim,fontWeight:700}}>Told {o.source || "CED"}:</b> {o.poCustom}
+                  </div>
+                )}
 
                 {/* v523: Send from the app. Shows for CED (email) and store runs
                     (number only) until the card is ordered/picked up; a send
@@ -14113,20 +14118,26 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
           const me = getIdentity();
           if (!me) { setSendSheet(s=>({...s, error:"Sign in again, then send."})); return; }
           if (needCc) { setSendSheet(s=>({...s, error:"Pick which cost center this order is charged to."})); return; }
+          // Custom "Get it" (Koy 2026-10-15): their own words replace will call / deliver.
+          const isCustom = kind === "email" && sendSheet.get === "custom";
+          const customText = String(sendSheet.custom || "").trim();
+          if (isCustom && !customText) { setSendSheet(s=>({...s, error:"Type what CED should do in the Custom box."})); return; }
           setSendSheet(s=>({...s, busy:true, error:""}));
           try {
             const r = await memberCallable("sendMaterialPO", me)({ jobId, phase, orderId:o.id, source:o.source,
-              items:o.items||"", get:sendSheet.get, date:sendSheet.date||"", clientTest:MATERIAL_PO_TEST,
+              items:o.items||"", get:sendSheet.get, date:isCustom ? "" : (sendSheet.date||""), clientTest:MATERIAL_PO_TEST,
+              ...(isCustom ? { custom: customText } : {}),
               ...(isComm ? { ccId: ccPick.id } : {}) });
             const res = (r && r.data) || {};
             if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
             const patch = { po:String(res.poNo), simproPoId:String(res.poNo), poSentVia:"app", poSentMode:res.mode||"",
               poSentBy:me.name||"", poSentAt:poTodayMDY(), poCostCenter:res.costCenter||"",
               poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", "),
+              ...(isCustom ? { poCustom: customText } : {}),
               ...(isComm ? { chargeCcId: ccPick.id, chargeCcName: ccPick.label } : {}) };
             if (res.kind !== "email" || res.emailOk) Object.assign(patch, { ordered:true, orderedBy:me.name||"", orderedAt:poTodayMDY() });
             // Dates fill only if still empty on the LIVE card (someone may have typed one meanwhile).
-            const pickDate = sendSheet.date;
+            const pickDate = isCustom ? "" : sendSheet.date;
             onPatchOrder(o.id, (cur) => ({ ...patch,
               ...(cur.date ? {} : { date: poTodayMDY() }),
               ...(cur.pickupDate || !pickDate ? {} : { pickupDate: pickDate }) }));
@@ -14201,12 +14212,16 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 {kind === "email" && (<>
                   <div style={{display:"grid",gap:6}}>
                     <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</span>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{chip("willcall","Will call")}{chip("deliver","Deliver to job")}</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{chip("willcall","Will call")}{chip("deliver","Deliver to job")}{chip("custom","Custom")}</div>
                   </div>
+                  {sendSheet.get === "custom" ? (
+                    <PoCustomBox value={sendSheet.custom||""} onChange={v=>setSendSheet(s=>({...s, custom:v, error:""}))}/>
+                  ) : (
                   <div style={{display:"grid",gap:6}}>
                     <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>{sendSheet.get==="deliver"?"Deliver on":"Pick up on"}</span>
                     <DateInp value={sendSheet.date} onChange={e=>setSendSheet(s=>({...s, date:e.target.value}))}/>
                   </div>
+                  )}
                   <div style={{display:"grid",gap:6}}>
                     <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Material list · {lines.length} line{lines.length===1?"":"s"}</span>
                     <div style={{fontSize:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",
@@ -14222,10 +14237,12 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 {sendSheet.error && (
                   <div style={{fontSize:14,color:"#C62828",background:"rgba(178,58,58,0.06)",border:"1px solid rgba(178,58,58,0.3)",borderRadius:10,padding:"9px 11px"}}>{sendSheet.error}</div>
                 )}
-                <button onClick={send} disabled={busy || needCc} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
-                  padding:14,background:(busy || needCc)?C.border:C.accent,color:"#fff",cursor:(busy || needCc)?"default":"pointer"}}>
+                {(() => { const customEmpty = kind === "email" && sendSheet.get === "custom" && !String(sendSheet.custom||"").trim(); const off = busy || needCc || customEmpty; return (
+                <button onClick={send} disabled={off} style={{fontFamily:"inherit",fontWeight:700,fontSize:16,border:"none",borderRadius:12,
+                  padding:14,background:off?C.border:C.accent,color:"#fff",cursor:off?"default":"pointer"}}>
                   {busy ? "Sending…" : kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? "Resend email" : `Send to ${o.source}`) : "Get a PO number"}
                 </button>
+                ); })()}
                 <button onClick={close} disabled={busy} style={{fontFamily:"inherit",fontWeight:500,fontSize:14,border:`1px solid ${C.border}`,
                   borderRadius:12,padding:11,background:C.card,color:C.text,cursor:busy?"default":"pointer"}}>Cancel</button>
               </>)}
@@ -14338,8 +14355,25 @@ function PoQtyInput({ value, onCommit, label }) {
   );
 }
 
+// Custom "Get it" box (Koy 2026-10-15: "i just want a custom box option"):
+// the sender's own words go to CED instead of the will call / deliver line —
+// in the email, on the PO form and in Simpro's Supplier Notes. 500 characters,
+// same cap the server enforces (functions/materialPO/rules.js cleanCustom).
+const PO_CUSTOM_MAX = 500;
+function PoCustomBox({ value, onChange }) {
+  return (
+    <label style={{display:"grid",gap:6}}>
+      <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>What should CED do?</span>
+      <textarea value={value} onChange={e=>onChange(e.target.value.slice(0, PO_CUSTOM_MAX))} rows={3} maxLength={PO_CUSTOM_MAX}
+        placeholder="e.g. Not stock: please order in 4 of the 20A dimmers and call Brady with an ETA"
+        style={{fontFamily:"inherit",fontSize:15,lineHeight:1.4,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.card,color:C.text,resize:"vertical",minHeight:84}}/>
+      <span style={{fontSize:12.5,color:C.faint}}>Goes in the email, on the PO form and in Simpro's supplier notes instead of a pickup date.{value.length > PO_CUSTOM_MAX - 60 ? ` ${PO_CUSTOM_MAX - value.length} characters left.` : ""}</span>
+    </label>
+  );
+}
+
 // Cards for every PO in a sendMaterialOrder answer (shared by the order screen and Finish sending on a card).
-function poOrderCards(res, orderId, date, me) {
+function poOrderCards(res, orderId, date, me, custom = "") {
   const today = poTodayMDY(); const sent = !!(res.ok && res.emailOk);
   return (res.pos || []).map(p => ({
     id: uid(), date: today, po: String(p.poNo), pickupDate: date || "", source: "CED",
@@ -14348,6 +14382,7 @@ function poOrderCards(res, orderId, date, me) {
     simproPoId: String(p.poNo), poSentVia: "app", poSentMode: res.mode || "", poSentBy: (me && me.name) || "", poSentAt: today,
     poCostCenter: p.costCenter || "", poEmailOk: sent, poEmailedTo: (res.emailedTo || []).join(", "),
     poOrderId: orderId, poCcId: p.ccId,
+    ...(custom ? { poCustom: custom } : {}),
   }));
 }
 const PO_ORDER_CALL = { timeout: 300000 }; // one Simpro PO per cost center + PDFs + email can take a while
@@ -14401,10 +14436,14 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     if (!me) { setError("Sign in again, then send."); return; }
     setBusy(true); setError("");
     try {
-      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: draft.date,
+      const isCustom = draft.get === "custom";
+      const customText = String(draft.custom || "").trim();
+      if (isCustom && !customText) { setError("Type what CED should do in the Custom box."); setBusy(false); return; }
+      const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: isCustom ? "" : draft.date,
+        ...(isCustom ? { custom: customText } : {}),
         clientTest: MATERIAL_PO_TEST, groups: groups.map(g => ({ ccId: g.ccId, items: g.items, typed: g.typed })) });
       const res = (r && r.data) || {};
-      const cards = poOrderCards(res, draft.orderId, draft.date, me);
+      const cards = poOrderCards(res, draft.orderId, isCustom ? "" : draft.date, me, isCustom ? customText : "");
       if (cards.length && onUpsertCards) onUpsertCards(cards);
       setResult(res);
       if (res.ok && res.emailOk) {
@@ -14555,9 +14594,11 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Supplier</div>
       <div style={{display:"flex",gap:6,marginTop:6}}>{chip(true, "CED", () => {})}</div></div>
     <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Get it</div>
-      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>{chip(draft.get === "willcall", "Will call", () => setDraft(d => ({ ...d, get: "willcall" })))}{chip(draft.get === "deliver", "Deliver to job", () => setDraft(d => ({ ...d, get: "deliver" })))}</div></div>
-    <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",marginBottom:6}}>{draft.get === "deliver" ? "Deliver on" : "Pick up on"}</div>
-      <DateInp value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}/></div>
+      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>{chip(draft.get === "willcall", "Will call", () => setDraft(d => ({ ...d, get: "willcall" })))}{chip(draft.get === "deliver", "Deliver to job", () => setDraft(d => ({ ...d, get: "deliver" })))}{chip(draft.get === "custom", "Custom", () => setDraft(d => ({ ...d, get: "custom" })))}</div></div>
+    {draft.get === "custom"
+      ? <PoCustomBox value={draft.custom || ""} onChange={v => { setError(""); setDraft(d => ({ ...d, custom: v })); }}/>
+      : <div><div style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",marginBottom:6}}>{draft.get === "deliver" ? "Deliver on" : "Pick up on"}</div>
+      <DateInp value={draft.date} onChange={e => setDraft(d => ({ ...d, date: e.target.value }))}/></div>}
     {groups.length > 1 && box(<><b>{groups.length} cost centers = {groups.length} POs.</b> Each PO is charged to its own cost center. CED gets them together in one email.</>)}
     {groups.map((g, i) => (
       <div key={g.ccId} style={{border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",background:C.card,display:"flex",flexDirection:"column",gap:4}}>
@@ -14577,7 +14618,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     {secondary("Add from another cost center", () => setStep("cc"))}
     {box(<>One email to <b>CED's Homestead inbox</b> with {groups.length === 1 ? "the PO form" : `all ${groups.length} PO forms`}. bids@ and you are copied, so CED's reply reaches both.</>)}
     {error && box(<span style={{color:"#C62828"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
-  </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10));
+  </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10 || (draft.get === "custom" && !String(draft.custom || "").trim())));
 }
 
 // ── Material Tally ────────────────────────────────────────────
