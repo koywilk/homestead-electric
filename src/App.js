@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment, Component } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, Component, createContext, useContext } from "react";
 import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
@@ -5083,6 +5083,7 @@ const NOTIF_CATEGORIES = [
     { key:"job_question",      label:"New question on job",                  roles:["admin","manager","foreman","lead"] },
     { key:"daily_update",      label:"Daily update added",                   roles:["admin","manager"] },
     { key:"question_answered", label:"Question answered",                    roles:["admin","manager","foreman","lead"] },
+    { key:"punch_note",        label:"Note left on a punch share link",      roles:["admin","manager","foreman","lead"] },
   ]},
   { label:"Time Off", items:[
     { key:"timeoff_requested", label:"Time off requested (your crew)",        roles:["admin","manager","foreman"] },
@@ -11898,6 +11899,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
 function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
 
   const safeItems = Array.isArray(items) ? items : [];
+  const pn = useContext(PunchNotesCtx); // recipient notes from the punch share link (JobDetail only)
 
   const [addHtml,       setAddHtml]       = useState('');
   const [addOpen,       setAddOpen]       = useState(false);
@@ -12332,6 +12334,33 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               </button>
             </div>
           )}
+          {/* ── Notes left on the share link (e.g. "ready now") ── */}
+          {pn && (() => {
+            const notes = punchNoteList(pn.notes, punchNoteKey(pn.punchKey, item.id));
+            if (!notes.length) return null;
+            const unseen = unseenPunchNotes(notes);
+            const shown = unseen.length ? unseen : notes.slice(-1); // seen: just the latest, quietly
+            const when = (iso) => { try { return new Date(iso).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch { return ''; } };
+            return (
+              <div style={{ marginLeft:22, marginTop:4, display:'flex', flexDirection:'column', gap:4,
+                ...(unseen.length ? { background:C.steelBg, border:`1px solid ${C.steelLine}`, borderRadius:8, padding:'7px 10px' } : {}) }}>
+                {unseen.length > 0 && <div style={{ fontSize:11, fontWeight:700, color:C.accent, letterSpacing:'0.06em' }}>NOTE FROM THE SHARE LINK</div>}
+                {shown.map(n => (
+                  <div key={n.id} style={{ fontSize:13, color: unseen.length ? C.text : C.faint, lineHeight:1.45, wordBreak:'break-word', whiteSpace:'pre-wrap' }}>
+                    <b>{n.by || 'Link'}:</b> {n.text}
+                    <span style={{ fontSize:12, color:C.faint }}> · {when(n.at)}{n.ackAt ? ` · seen by ${n.ackBy || 'office'}` : ''}</span>
+                  </div>
+                ))}
+                {unseen.length > 0 && (
+                  <button onClick={() => pn.onAck(item.id)}
+                    style={{ alignSelf:'flex-start', minHeight:'var(--he-tap, 32px)', padding:'0 14px', borderRadius:8, border:'none',
+                      background:C.accent, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                    Got it
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           {item.materialNeeded && !item.done && (
             <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
               <span style={{fontSize:12,fontWeight:600,background:'#EAEEF6',color:'#34507F',
@@ -12617,6 +12646,9 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   ) : null;
 
 
+  const pnF = useContext(PunchNotesCtx);
+  const noteCount = !pnF ? 0 : unseenNoteCount(pnF.notes, pnF.punchKey,
+    [...data.general, ...(showHotcheck ? data.hotcheck : []), ...data.rooms.flatMap(r => Array.isArray(r.items) ? r.items : [])]);
   const openCount    = data.general.filter(i => !i.done).length +
     (showHotcheck ? data.hotcheck.filter(i => !i.done).length : 0) +
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
@@ -12682,6 +12714,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
         {openCount > 0 && <Pill label={`${openCount} open`} color={C.red}/>}
         {waitingCount > 0 && <Pill label={`${waitingCount} waiting`} color="#56657A"/>}
+        {noteCount > 0 && <Pill label={`${noteCount} note${noteCount !== 1 ? 's' : ''}`} color={C.accent}/>}
         {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}>
           <Pill label={`${mineCount} for you`} color="#34507F"/>
         </span>}
@@ -12736,6 +12769,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             const waitN = items.filter(i => !i.done && i.waiting).length;
             const totalN = items.length;
             const mineN = !myName ? 0 : items.filter(i => !i.done && i.assignedTo === myName).length;
+            const noteN = !pnF ? 0 : unseenNoteCount(pnF.notes, pnF.punchKey, items);
             return (
               <div key={room.id} style={{ marginTop: 12, background: C.surface,
                 border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
@@ -12755,6 +12789,11 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                     <span style={{ fontSize: 12, background: C.slateBg, color: C.slateInk,
                       borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #C9D1DC' }}>
                       {waitN} waiting
+                    </span>}
+                  {noteN > 0 &&
+                    <span style={{ fontSize: 12, background: C.steelBg, color: C.accent,
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: `1px solid ${C.steelLine}` }}>
+                      {noteN} note{noteN !== 1 ? 's' : ''}
                     </span>}
                   {!open && openN===0 && totalN>0 &&
                     <span style={{ fontSize: 12, background: '#DEEFE6', color: '#2C5C40',
@@ -20881,6 +20920,51 @@ const postThreadMessage = async (jobId, jobName, itemId, msg) => {
     return true;
   } catch(e) { return false; }
 };
+
+// ── Punch-item notes from share-link recipients (2026-10-15) ──────────────
+// Koy: "need the recipient to be able to leave a note on a punch item, like if
+// we have something we say we are waiting on they can say its ready now."
+// homeowner_requests/{jobId}.punchNotes = { "<punchKey>_<itemId>": [
+//   { id, text, by, share, at, ackBy?, ackAt? } ] }
+// punchKey = roughPunch | finishPunch | qcPunch. The public punch share page
+// APPENDS; the office's "Got it" stamps ackBy/ackAt (the note is kept). Both
+// go through saveHomeownerRequest (locked prev + version snapshot) — never
+// jobs/{id}, the Kweller rule for outside-party writes. `share` = the link's
+// ?s= id ("" for a legacy link) so one recipient never reads another's notes.
+// A new note pushes the job's lead + foreman (onQuestionAnswered trigger,
+// functions/punchNotes.js, pref "punch_note").
+const PUNCH_NOTE_MAX = 500;
+const punchNoteKey = (punchKey, itemId) => `${punchKey}_${itemId}`;
+const punchNoteList = (map, key) => {
+  const v = map && typeof map === 'object' ? map[key] : null;
+  return Array.isArray(v) ? v.filter(n => n && typeof n === 'object') : [];
+};
+// Returns the next punchNotes map, or null when there's nothing to write (an
+// empty note, or a retry of a send that already landed — same note id).
+function appendPunchNote(prevMap, key, note) {
+  const text = String((note && note.text) || '').trim().slice(0, PUNCH_NOTE_MAX);
+  if (!key || !text || !note.id) return null;
+  const map = prevMap && typeof prevMap === 'object' ? prevMap : {};
+  const cur = punchNoteList(map, key);
+  if (cur.some(n => n.id === note.id)) return null;
+  return { ...map, [key]: [...cur, { id: note.id, text, by: String(note.by || '').slice(0, 80), share: String(note.share || ''), at: note.at }] };
+}
+// "Got it": stamps every unseen note on one item. null = nothing unseen.
+function ackPunchNotes(prevMap, key, by, at) {
+  const map = prevMap && typeof prevMap === 'object' ? prevMap : {};
+  const cur = punchNoteList(map, key);
+  if (!cur.some(n => !n.ackAt)) return null;
+  return { ...map, [key]: cur.map(n => n.ackAt ? n : { ...n, ackBy: by || '', ackAt: at }) };
+}
+const unseenPunchNotes = (list) => (Array.isArray(list) ? list : []).filter(n => n && !n.ackAt);
+const punchNotesForShare = (list, share) => (Array.isArray(list) ? list : []).filter(n => n && String(n.share || '') === String(share || ''));
+// Unseen notes across a list of punch items (floor / room header badges).
+const unseenNoteCount = (map, punchKey, items) => (Array.isArray(items) ? items : [])
+  .reduce((a, i) => a + (i && i.id ? unseenPunchNotes(punchNoteList(map, punchNoteKey(punchKey, i.id))).length : 0), 0);
+// Office side: JobDetail provides { punchKey, notes, onAck } around each
+// PunchSection; PunchItems / PunchFloor read it. Absent (return trips,
+// commercial buildings) → nothing renders.
+const PunchNotesCtx = createContext(null);
 
 function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
   const rooms = job.panelizedLighting?.lutronRooms || [];
@@ -29773,6 +29857,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [planChangeAcks, setPlanChangeAcks] = useState(null); // Tech Lighting "incorporated" acks from ?lutronshare=
   const [planChangeThreads, setPlanChangeThreads] = useState(null); // per-item discussion threads (Tech Lighting ↔ Homestead)
   const [questionThreads, setQuestionThreads] = useState(null); // Q&A discussion replies (side-doc, Kweller hardening Layer 2)
+  const [punchNotes, setPunchNotes] = useState(null); // notes share-link recipients left on punch items (homeowner_requests.punchNotes)
   const questionThreadsRef = useRef(null); questionThreadsRef.current = questionThreads;   // v466: read by the ccquestions listener (stale-closure-safe)
 
   const [refreshing, setRefreshing] = useState(false);
@@ -29937,6 +30022,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   }, [job.simproNo, simproCostCentersTick]);
 
 
+  // "Got it" on a recipient's punch note — stamps who saw it, keeps the note.
+  // Rides the saveHomeownerRequest funnel against the LOCKED server copy.
+  const ackPunchNote = async (punchKey, itemId) => {
+    const key = punchNoteKey(punchKey, itemId);
+    try {
+      await saveHomeownerRequest(job.id, (prev) => {
+        const next = ackPunchNotes((prev||{}).punchNotes, key, identity?.name || '', new Date().toISOString());
+        return next ? { punchNotes: next } : null;
+      }, 'punchNoteAck');
+    } catch(e) { toast.error("Couldn't mark that note as seen. Check your connection and try again."); }
+  };
+  const punchNotesCtx = (punchKey) => ({ punchKey, notes: punchNotes, onAck: (itemId) => ackPunchNote(punchKey, itemId) });
+
   // Live listener for GC question answers + LV lighting collab + plan-change acks
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
@@ -29950,6 +30048,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       else setPlanChangeThreads(null);
       if(snap.exists() && snap.data().questionThreads) setQuestionThreads(snap.data().questionThreads);
       else setQuestionThreads(null);
+      setPunchNotes(snap.exists() && snap.data().punchNotes ? snap.data().punchNotes : null);
       // v466: a new discussion message (office, share page, or an adopted
       // FieldInk reply) republishes the ccquestions mirror so the pin in
       // FieldInk shows it. Hash-gated inside, so an unchanged list never writes.
@@ -31199,6 +31298,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
 
                 {coPunchPhase(job) === "rough" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.rough} phaseLabel="Rough"/>}
+                <PunchNotesCtx.Provider value={punchNotesCtx('roughPunch')}>
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
@@ -31227,6 +31327,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     u({roughQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
                   jobId={job.id}/>
+                </PunchNotesCtx.Provider>
 
               </Section>
 
@@ -31524,6 +31625,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   shares={job.finishPunchShares||[]} onSaveShares={v=>u({finishPunchShares:v})}/>
               }>
                 {coPunchPhase(job) === "finish" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.finish} phaseLabel="Finish"/>}
+                <PunchNotesCtx.Provider value={punchNotesCtx('finishPunch')}>
                 <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapFinish}
@@ -31551,6 +31653,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     u({finishQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
                   jobId={job.id}/>
+                </PunchNotesCtx.Provider>
               </Section>
 
               {(job.finishPunchExternal?.length>0)&&(
@@ -33497,10 +33600,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
               {job.qcPunch&&punchOpen(job.qcPunch)>0&&(
                 <Section label="Legacy QC Items" color={C.teal} defaultOpen={false}>
+                  <PunchNotesCtx.Provider value={punchNotesCtx('qcPunch')}>
                   <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC"
                     onEmail={({subject,body})=>{openEmail("",subject,body);}} showHotcheck={true} jobId={job.id}
                     assigneeOptions={punchAssigneeOptions}
                     myName={identity?.name}/>
+                  </PunchNotesCtx.Provider>
                 </Section>
               )}
 
@@ -54581,6 +54686,14 @@ function PunchSharePage({ jobId, stage }) {
   const [newItemText,  setNewItemText]  = useState('');
   const [addingItem,   setAddingItem]   = useState(false);
   const [addedCount,   setAddedCount]   = useState(0);
+  // Notes on items (2026-10-15) — e.g. "ready now" on something Homestead is
+  // waiting on. Saved to homeowner_requests.punchNotes, never the job doc.
+  const [punchNotes,   setPunchNotes]   = useState({});
+  const [noteOpenId,   setNoteOpenId]   = useState(null);
+  const [noteDraft,    setNoteDraft]    = useState('');
+  const [noteSending,  setNoteSending]  = useState(false);
+  const noteIdRef = useRef(null); // one id per note until it lands, so a retry can't post it twice
+  const preview = new URLSearchParams(window.location.search).get('preview') === '1'; // office preview: never write
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
@@ -54590,6 +54703,13 @@ function PunchSharePage({ jobId, stage }) {
       setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'homeowner_requests',jobId), snap => {
+      setPunchNotes(snap.exists() ? (snap.data().punchNotes || {}) : {});
+    }, () => {});
     return () => unsub();
   }, [jobId]);
 
@@ -54613,6 +54733,27 @@ function PunchSharePage({ jobId, stage }) {
     return new Set(raw);
   })();
   const shareLabel = shareObj?.name || job?.[punchKey+'FilterLabel'] || '';
+
+  const sendNote = async (itemId) => {
+    const text = noteDraft.trim();
+    if (!text || preview) return;
+    if (!noteIdRef.current) noteIdRef.current = uid() + Math.random().toString(36).slice(2, 8); // random tail: ids must be unique across phones
+    const note = { id: noteIdRef.current, text, by: shareLabel || 'GC', share: shareParam, at: new Date().toISOString() };
+    setNoteSending(true);
+    try {
+      await saveHomeownerRequest(jobId, (prev) => {
+        const next = appendPunchNote((prev||{}).punchNotes, punchNoteKey(punchKey, itemId), note);
+        return next ? { punchNotes: next, jobName: (prev && prev.jobName) || job?.name || '' } : null;
+      }, 'punchNote');
+      noteIdRef.current = null;
+      setNoteDraft(''); setNoteOpenId(null);
+      toast.success('Note sent — Homestead will see it right away.');
+    } catch(e) {
+      if (await reportWriteDenied(e, 'homeowner_requests', jobId)) toast.error('This page is out of date — reload it and send again. Your note is still in the box.');
+      else toast.error("Couldn't send the note. Check your connection and try again — your note is still in the box.");
+    }
+    setNoteSending(false);
+  };
 
   const normF = (f) => f && typeof f==='object' ? f : {};
   const FLOOR_KEYS = [
@@ -54654,6 +54795,56 @@ function PunchSharePage({ jobId, stage }) {
           </span>
         </div>
       )}
+      {(() => {
+        const mine = punchNotesForShare(punchNoteList(punchNotes, punchNoteKey(punchKey, item.id)), shareParam);
+        const open = noteOpenId === item.id;
+        const when = (iso) => { try { return new Date(iso).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch { return ''; } };
+        return (
+          <div style={{marginLeft:24,marginTop:4}}>
+            {mine.map(n => (
+              <div key={n.id} style={{fontSize:13,color:'#2E3640',lineHeight:1.45,marginBottom:3,wordBreak:'break-word',whiteSpace:'pre-wrap'}}>
+                <b>Your note:</b> {n.text}
+                <span style={{fontSize:12,color:n.ackAt?C.green:C.faint}}> · {when(n.at)}{n.ackAt ? ' · Seen by Homestead' : ''}</span>
+              </div>
+            ))}
+            {!item.done && !preview && !open && (
+              <button onClick={() => { setNoteOpenId(item.id); setNoteDraft(''); noteIdRef.current = null; }}
+                style={{minHeight:32,padding:'0 2px',background:'none',border:'none',color:stageColor,fontSize:13,fontWeight:600,
+                  cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'}}>
+                {item.waiting ? 'Ready now? Leave a note' : 'Leave a note'}
+              </button>
+            )}
+            {open && (
+              <div style={{marginTop:4,background:'#F7F8FA',border:`1px solid ${C.border}`,borderRadius:8,padding:10}}>
+                {item.waiting && (
+                  <button onClick={() => setNoteDraft('Ready now')}
+                    style={{minHeight:32,padding:'0 12px',marginBottom:8,borderRadius:99,border:`1px solid ${stageColor}`,
+                      background:noteDraft==='Ready now'?stageColor:'#fff',color:noteDraft==='Ready now'?'#fff':stageColor,
+                      fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                    Ready now
+                  </button>
+                )}
+                <textarea value={noteDraft} onChange={e=>setNoteDraft(e.target.value.slice(0, PUNCH_NOTE_MAX))} rows={2} autoFocus
+                  placeholder={item.waiting ? 'e.g. Ready now, cabinets are in' : 'Your note for Homestead…'}
+                  style={{width:'100%',boxSizing:'border-box',border:`1px solid ${C.border}`,borderRadius:8,padding:'8px 10px',
+                    fontSize:14,fontFamily:'system-ui,sans-serif',color:C.text,resize:'vertical',outline:'none',lineHeight:1.45,background:'#fff'}}/>
+                <div style={{display:'flex',gap:8,marginTop:8}}>
+                  <button onClick={() => sendNote(item.id)} disabled={noteSending || !noteDraft.trim()}
+                    style={{flex:1,minHeight:40,borderRadius:8,border:'none',background:noteDraft.trim()?stageColor:C.muted,color:'#fff',
+                      fontSize:14,fontWeight:700,cursor:noteDraft.trim()?'pointer':'not-allowed',fontFamily:'inherit',opacity:noteSending?0.6:1}}>
+                    {noteSending ? 'Sending…' : 'Send note'}
+                  </button>
+                  <button onClick={() => { setNoteOpenId(null); setNoteDraft(''); }} disabled={noteSending}
+                    style={{minHeight:40,padding:'0 16px',borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',color:C.dim,
+                      fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   ));
 
@@ -55640,6 +55831,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 **Last manifest update:** 2026-10-15 · App SW version: v542
 
 ---
+
+- **Punch share link: the GC can leave a note on an item ("ready now"), the office taps Got it** · 'shipped 2026-10-15' · 'SW v542' · 'punchNotes' · 'PunchNotesCtx' · 'functions/punchNotes.js' · needs 'firebase deploy --only functions:onQuestionAnswered' for the phone alert · Koy: *"need the recipient to be able to leave a note on a punch item, like if we have something we say we are waiting on they can say its ready now."* On the punch share page (rough, finish, QC) every open item has **Leave a note**; on an item marked Waiting it reads **Ready now? Leave a note** and offers a one-tap **Ready now**. The recipient sees their own notes under the item, and **Seen by Homestead** once the office has read them. Each link only sees its own notes (keyed by the link's '?s=' id). **In the app** the note shows under the item in a light steel box ("NOTE FROM THE SHARE LINK · Justin - PM: Ready now · Oct 15, 2:14 PM") with a **Got it** button; after Got it it stays as one quiet grey line ("seen by Koy"). Floors and rooms start folded, so their headers show **1 note** next to open / waiting. **Phone alert:** a new note pushes the job's lead and foreman (and the book's coordinator), new toggle *Note left on a punch share link* in Settings → Notifications (on by default), riding the existing 'onQuestionAnswered' trigger on 'homeowner_requests'; at most 5 pushes per save; Got it never pushes. Office preview ('preview=1') can't write. Guide updated: 'public/sops/rough.html'. **Gate:** 'scripts/punchnotes-test.js' (prebuild, 20 checks). **Why it won't lose data:** notes live on 'homeowner_requests/{jobId}.punchNotes', never on 'jobs/{id}' (the Kweller rule for outside writes); every write goes through 'saveHomeownerRequest' (re-reads the doc under a lock, writes only 'punchNotes', keeps a version snapshot); a retried send reuses its note id so it can't post twice; Got it only adds 'ackBy'/'ackAt', it never deletes a note. No punch item, save path or rule changed (the 'homeowner_requests' rule already allows these writes).
 
 - **Share links on a weak signal say "Weak signal — still loading…" instead of "not available"** · 'shipped 2026-10-15' · 'SW v542' · 'shareDocState' · 'ShareWeakSignal' · Justin, a commercial PM, opened a punch share link on a job site and got *"This punch list is not available."* Koy opened the same link fine. The link was correct. The cause: the app keeps a saved copy of what it downloads (Firestore's offline cache), and when a phone can't reach the server it answers from that copy. For a job the phone has never downloaded, that answer is "nothing here", and every share page read "nothing here" as "this job is gone". Now one small check ('shareDocState') decides for all of them: the job showed up → show it; nothing came back from the phone's saved copy → **still loading** (a calm "Weak signal — still loading…" screen with a Retry button; the page fills in by itself when signal comes back); nothing came back *and the server confirmed it* → only then "not available". The pages now also hear the server's answer when nothing about the job changed ('includeMetadataChanges'), so a truly deleted job still says "not available" instead of loading forever. **Pages covered:** punch (rough / finish / QC), questions, job note, home runs, loads, lighting collab, plan changes (Tech Lighting), and the **GC portal** (it said "This portal link is no longer active" or showed an empty board on a weak signal). **Old saved copy:** punch, questions and job-note pages also wait for the server before saying a link is closed or a note is gone, because a copy saved on an earlier visit can predate a newly made link. Retry reloads the page only when the phone reports a connection, so it can never swap the calm screen for the browser's own offline error. **Gate:** 'scripts/sharedoc-test.js' (prebuild) tests the check with real-shaped snapshots and fails the build if any share page goes back to treating a bare "nothing here" as "not available". **Why it won't lose data:** display only — no save path, merge, rules, function or data shape changed; the listeners read the same documents, and "Failed to load" still shows when the listener itself errors.
 

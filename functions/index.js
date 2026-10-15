@@ -132,6 +132,7 @@ async function getUsers() {
 // never; a shared first name is logged instead of silently picking whoever's first.
 const { findUserByName } = require("./nameMatch.js");
 const { countAnswers } = require("./qaCount.js");
+const { newPunchNotes, punchNoteNotification } = require("./punchNotes.js");
 const userByName = (users, name) => findUserByName(users, name,
   (asked, picked) => functions.logger.warn("[names] ambiguous name — picked first match", { asked, picked }));
 
@@ -1729,11 +1730,30 @@ exports.onQuestionAnswered = functions.firestore
     // v432: shape-safe counter (functions/qaCount.js). The old inline one split
     // the answeredBy STRING into characters and threw on every submitted job,
     // so no "Question answered" push had gone out (errors since ≥ 2026-09-02).
-    if (countAnswers(afterAnswers) <= countAnswers(beforeAnswers)) return null;
+    const answered = countAnswers(afterAnswers) > countAnswers(beforeAnswers);
+    // v542: a NEW note on a punch item from the share link (functions/
+    // punchNotes.js). "Got it" acks and re-saves aren't new — no push.
+    const notes = newPunchNotes(before.punchNotes, after.punchNotes);
+    if (!answered && !notes.length) return null;
 
     const jobSnap = await db.doc(`jobs/${jobId}`).get();
     if (!jobSnap.exists) return null;
     const job = jobSnap.data()?.data || {};
+
+    // Punch notes → lead + foreman (+ the book's coordinator), pref punch_note.
+    // One push per new note, capped so a burst can't spam anyone.
+    if (notes.length) {
+      await Promise.all(notes.slice(0, 5).map(found => {
+        const n = punchNoteNotification(job, found);
+        const payload = { title: n.title, body: n.body, jobId, section: n.section };
+        return Promise.all([
+          sendToNameIfWanted(job.lead, "punch_note", payload),
+          job.foreman !== job.lead ? sendToNameIfWanted(job.foreman, "punch_note", payload) : null,
+          sendToJobCoordinatorIfWanted(job.foreman, "punch_note", payload),
+        ]);
+      })).catch(e => functions.logger.error("[onQuestionAnswered] punch note push failed", { jobId, error: e.message }));
+    }
+    if (!answered) return null;
 
     // Honest routing (2026-07-10): lead + foreman + the book's coordinator,
     // all pref-gated on question_answered. Admin blast removed.
