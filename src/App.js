@@ -7076,6 +7076,9 @@ const ICON_PATHS = {
   star:         <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>,
   settings:     <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></>,
   moreHoriz:    <><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></>,
+  search:       <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
+  sliders:      <><path d="M4 6h16"/><path d="M7 12h10"/><path d="M10 18h4"/></>,
+  play:         <path d="M7 4.5v15l12-7.5z"/>,
   zap:          <path d="M13 2 3 14h9l-1 8 10-12h-9z"/>,
   chevronLeft:  <path d="m15 18-6-6 6-6"/>,
   chevronRight: <path d="m9 18 6-6-6-6"/>,
@@ -62575,6 +62578,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   const [openGroups, setOpenGroups] = useState(() => new Set(["mine", "new", "foryou"]));
   const toggleGroup = (k) => setOpenGroups(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [snoozeFor, setSnoozeFor] = useState(null);
+  const [expKey, setExpKey] = useState(null);    // redesign: the one expanded row
+  const [moreKey, setMoreKey] = useState(null);  // its More… shelf
   const [undo, setUndo] = useState(null);
   useHeFlip(_mdRoot);                 // v497 A (G6/M4/M5): rows slide to their new group / pin slot / Done
   const _qLast = useRef({});          // v497 A (M2): last discussion message per row, to flash a fresh reply
@@ -63314,6 +63319,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   const [histFor, setHistFor] = useState(null);
   const [scanDraft, setScanDraft] = useState({});   // v423: per-row Matterport paste-link draft, keyed by row key
   const closeUpd = () => { setUpdFor(null); setUpdKind("note"); setUpdText(""); setUpdUntil(""); };
+  // My Day redesign: one row open at a time; opening/closing a row clears every inline panel.
+  const toggleExp = (key) => { setExpKey(k => k === key ? null : key); setMoreKey(null); closeUpd(); closePanels(); setSnoozeFor(null); setHistFor(null); setAnsFor(null); setPushFor(null); };
   const saveReplyEdit = (r) => { const re = replyEdit; if (!re || !r.need || !onEditNeedUpdate) return; const u = needUpdates(r.need).find(x => x && x.by === re.by && x.at === re.at); setReplyEdit(null); if (u) onEditNeedUpdate(r.need.id, u, re.text); };
   const sendUpd = (r) => {
     const text = updText.trim(); if (!text) return;
@@ -63352,12 +63359,10 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     toast.success(next ? "Marked urgent" : "Urgent cleared");
   };
   const canMarkUrgent = (r) => !r.readOnly && (r.sel || r.canReassign) && (r.kind === "need" ? !!(r.need && onPatchNeed) : !!onSetPrio);
-  const Row = (r) => {
-    const [bLabel, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
-    // v505: a row in the right-hand column (r.side) wraps like a phone row — the column is too
-    // tight to hold the text beside six buttons (Koy's screenshot: one word per line).
-    const tight = narrow || !!r.side;
-    const ib = { width: 44, height: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.dim, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, flexShrink: 0 };
+  const Row = (r, opts) => {
+    const [, bColor] = MYDAY_BUCKETS[r.bucket] || MYDAY_BUCKETS.later;
+    // My Day redesign: Row is also handed straight to .map(), so `opts` can be the index.
+    const lead = (opts && typeof opts === "object" && opts.readOnlyLead) || "avatar";
     // v429 select mode: a row never opens its job or a panel — tapping a
     // selectable row toggles it; per-row buttons / panels are hidden.
     const caps = batchCaps(r);
@@ -63365,62 +63370,57 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
     const isSel = selected.has(r.key);
     const pinned = pinnedSet.has(r.key);
     const flashing = flashKey === r.key;   // v446: row a push / inbox tap deep-linked to
+    const exp = expKey === r.key && !selectMode;   // redesign: actions + panels live behind a tap
     return (
       <div key={r.key} id={"mdrow_" + r.key} data-hekey={r.key} onPointerDownCapture={r.unseen ? () => ack(r.key) : undefined}
-        {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#1F7A3F", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: C.slate, fn: () => setSnoozeFor(r.key) } : null }))}
-        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: tight ? "wrap" : "nowrap", gap: 8, alignItems: "center", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "8px 10px 8px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
+        {...(selectMode ? {} : heSwipeRowProps({ right: r.canDone && r.onDone ? { label: "✓ DONE", color: "#1F7A3F", fn: () => r.onDone() } : null, left: r.canSnooze ? { label: "SNOOZE", color: C.slate, fn: () => { if (expKey !== r.key) toggleExp(r.key); setSnoozeFor(r.key); } } : null }))}
+        ref={el => { if (!el) return; if (r.unseen) observeSeen(el, r.key); if (!r.isNew) return; const _d = heEnter("mdnew:" + r.key, { cls: "he-drop", dur: 520 }); if (_d) { el.style.animationDelay = _d.delay + "ms"; el.classList.add(_d.className); } }} style={{ display: "flex", flexWrap: "nowrap", gap: 10, alignItems: "flex-start", background: C.card, border: `1px solid ${selectMode && isSel ? C.blue : (flashing ? "#66A8FF" : C.border)}`, borderLeft: `4px solid ${r.prio === "urgent" ? C.red : bColor}`, borderRadius: 10, padding: "10px 10px 10px 12px", position: "relative", minHeight: 44, boxShadow: flashing ? "0 0 0 3px #66A8FF55" : "none", transition: "box-shadow .3s, border-color .3s" }}>
         {selectMode && r.sel && (
           <span onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, minHeight: 32, flexShrink: 0 }}>
             <input type="checkbox" checked={isSel} disabled={!canPick} onChange={() => toggleSel(r.key)} title={canPick ? "Select" : "No batch action for this row"}
               style={{ width: 20, height: 20, cursor: canPick ? "pointer" : "not-allowed", accentColor: C.blue }} />
           </span>
         )}
-        {/* v452 (Koy: "My day looks terrible on mobile"): the text column had been
-            squeezed to a few characters by the five action buttons beside it. On
-            narrow screens the row wraps — text first, full width; buttons on their
-            own line, right-aligned. Wide screens are unchanged. */}
-        <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } if (r.jobId && onOpenJob) onOpenJob(r.jobId, r.section); }} style={{ flex: tight ? "1 1 240px" : 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : (r.jobId ? "pointer" : "default") }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: r.state === "with" ? C.dim : C.text, wordBreak: "break-word", lineHeight: 1.35 }}>{r.title}</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 13, color: C.dim, marginTop: 3 }}>
-            {r.unseen && <span title="Sent to you by someone else — stays here until you tap it" style={{ fontSize: 12, fontWeight: 800, color: "#fff", background: "#2F6FDE", borderRadius: 5, padding: "1px 6px" }}>NEW</span>}
-            {(r.isNew || r.newReply) && <span title={r.isNew ? "Wasn't on your list the last time you opened My Day on this device" : "A reply came in since you last opened My Day on this device"} style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: "#2F6FDE" }}>{r.isNew ? "New" : "New reply"}</span>}
-            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: r.tagColor, border: `1px solid ${r.tagColor}66`, background: `${r.tagColor}14` }}>{r.tag}</span>
-            {/* v446 urgency tag: red filled for urgent, grey outline for low; normal shows nothing. */}
-            {r.prio === "urgent" && <span title="Marked urgent" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: "#fff", background: C.red }}><Icon name="flag" size={9} stroke={2.5} />Urgent</span>}
-            {r.prio === "low" && <span title="Low priority" style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", borderRadius: 4, padding: "1px 6px", color: C.faint, border: `1px solid ${C.border}` }}>Low</span>}
-            {r.sub.map((s, i) => <span key={i}>{s}</span>)}
-            {(r.bucket === "overdue") && <span style={{ fontSize: 12, fontWeight: 700, color: bColor }}>{bLabel}</span>}
-            {/* v446: who it's on, as a visible control when the viewer can change it. */}
-            {r.canReassign && r.onTogglePick && !selectMode && (
-              <button onClick={e => { e.stopPropagation(); r.onTogglePick(); }} title="Change who this is on" aria-expanded={!!r.pushOpen}
-                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "2px 7px 2px 8px", minHeight:"var(--he-tap, 24px)", borderRadius: 999, cursor: "pointer",
-                  color: C.accent, border: `1px solid ${C.accent}`, background: r.pushOpen ? `${C.accent}14` : "transparent", whiteSpace: "nowrap" }}>
-                <Icon name="user" size={11} stroke={2.25} />
-                To: {r.assignee ? (sameName(r.assignee, me) ? "me" : first(r.assignee)) : "unassigned"}
-                <Icon name="chevronDown" size={11} stroke={2.5} />
-              </button>
-            )}
-            {/* v539 Working on it: a toggle for whoever has the row; a read-only pill for everyone else. */}
-            {r.canWork && r.onWork && !selectMode && (
-              <button onClick={e => { e.stopPropagation(); r.onWork(); }} aria-pressed={!!r.working}
-                title={r.working ? "Working on it — tap to stop" : "Let everyone see you're on it"}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, cursor: "pointer", whiteSpace: "nowrap",
-                  /* design pass 2026-10-14: a quiet tint, not a solid blue block — it was louder than URGENT */
-                  color: C.accent, border: `1px solid ${r.working ? C.steelLine : C.accent}`, background: r.working ? C.steelBg : "transparent" }}>
-                {r.working ? <><span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {timeAgo(r.working.at)}</> : <>▶ Working on it</>}
-              </button>
-            )}
-            {!(r.canWork && r.onWork && !selectMode) && r.working && (
-              <span title={`${r.working.by} started this`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, padding: "2px 9px", borderRadius: 999, whiteSpace: "nowrap", color: C.accent, background: C.steelBg, border: `1px solid ${C.steelLine}` }}>
-                <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {first(r.working.by)} · {timeAgo(r.working.at)}
-              </span>
-            )}
-            {r.showStatus && !r.working && !r.snoozedUntil && !(r.latest && r.latest.kind === "waiting") && (
-              <span style={{ fontSize: 12.5, color: C.faint }}>Not started yet</span>
-            )}
+        {/* My Day redesign: a quiet row — a circle to finish (or who it's on), the title, one
+            grey line. Tap the row for everything else; tap the job name to open the job. */}
+        {!selectMode && (r.canDone && r.onDone
+          ? <button onClick={e => { e.stopPropagation(); r.onDone(); }} aria-label="Mark done" title="Done"
+              style={{ position: "relative", width: 28, height: 28, borderRadius: 99, border: `2px solid ${C.muted}`, background: C.card, color: C.green, flexShrink: 0, marginTop: 1, padding: 0, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span aria-hidden="true" style={{ position: "absolute", inset: -8 }} />
+            </button>
+          : (r.onWake || lead === "none") ? null
+          : <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: 99, flexShrink: 0, background: C.surface, border: `1px solid ${C.border}`, color: C.dim, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{first(r.assignee || r.by || r.who || "").slice(0, 1)}</span>)}
+        <div onClick={() => { if (heJustSwiped()) return; if (selectMode) { if (canPick) toggleSel(r.key); return; } toggleExp(r.key); }}
+          onKeyDown={e => { if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return; e.preventDefault(); if (selectMode) { if (canPick) toggleSel(r.key); return; } toggleExp(r.key); }}
+          role="button" tabIndex={0} aria-expanded={expKey === r.key}
+          style={{ flex: 1, minWidth: 0, cursor: selectMode ? (canPick ? "pointer" : "default") : "pointer" }}>
+          <div style={{ display: "flex", gap: 7, alignItems: "baseline", fontSize: 15, fontWeight: 600, color: r.state === "with" || r.onWake ? C.dim : C.text, lineHeight: 1.35, wordBreak: "break-word" }}>
+            {(r.unseen || r.isNew || r.newReply) && <span title={r.unseen ? "Sent to you, not opened yet" : r.newReply ? "New reply since you last looked" : "New since you last looked"} style={{ width: 8, height: 8, borderRadius: 99, background: C.blue, flexShrink: 0, transform: "translateY(-1px)" }} />}
+            {r.prio === "urgent" && <Icon name="flag" size={13} color={C.red} stroke={2.4} aria-label="Urgent" />}
+            <span>{r.title}</span>
+          </div>
+          <div style={{ display: "flex", gap: "4px 8px", flexWrap: "wrap", alignItems: "center", fontSize: 13, color: C.dim, marginTop: 3 }}>
+            {(() => { const j = r.jobId ? jobById(r.jobId) : null; const jn = (j && j.name) || ""; const rest = (r.sub || []).filter(s => s && s !== jn);
+              const openJob = (e) => { e.stopPropagation(); if (onOpenJob) onOpenJob(r.jobId, r.section); };
+              return <>
+                {jn ? <span role="link" tabIndex={0} onClick={openJob} onKeyDown={e => { if (e.key === "Enter") openJob(e); }} style={{ textDecoration: "underline", textDecorationColor: C.muted, textUnderlineOffset: 2, cursor: "pointer" }}>{jn}</span> : null}
+                {rest.length > 0 && <span>{(jn ? "· " : "") + rest.join(" · ")}</span>}
+              </>; })()}
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.faint }}>{r.tag === "Auto" ? (MYDAY_CAT_LABELS[myDayCategoryOf(r)] || "Auto") : r.tag}</span>
+            {myDayDueWord(r, todayYmd) && <span style={{ fontSize: 12, fontWeight: 700, color: r.bucket === "overdue" ? C.red : C.dim }}>{myDayDueWord(r, todayYmd)}</span>}
+            {r.prio === "low" && <span style={{ fontSize: 12, fontWeight: 700, color: C.faint }}>Low</span>}
+            {/* v540 quiet Working pill: steel tint, not a solid blue block */}
+            {r.working && <span title={`${r.working.by} started this`} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: C.steelBg, border: `1px solid ${C.steelLine}`, color: C.accent, whiteSpace: "nowrap" }}><span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />Working · {r.canWork ? timeAgo(r.working.at) : `${first(r.working.by)} · ${timeAgo(r.working.at)}`}</span>}
+            {/* v540: waiting states use the slate family, not orange/amber */}
+            {r.showStatus && !r.working && <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "1px 8px", background: sentChaseState(r) === "wait" ? C.slateBg : C.surface, color: sentChaseState(r) === "wait" ? C.slateInk : C.faint }}>{sentChaseState(r) === "wait" ? "Waiting" : "Not started"}</span>}
+            {r.state === "with" && <span style={{ fontSize: 12, fontWeight: 700, color: C.blue }}>with {first(r.who)}{r.age ? ` · ${r.age}` : ""}</span>}
+            {r.state === "verify" && <span style={{ fontSize: 12, fontWeight: 700, color: C.green }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</span>}
+            {r.snoozeBack && <span style={{ fontSize: 12, fontWeight: 700, color: C.faint }}>back {myDayDueWord({ bucket: "later", dueYmd: r.snoozeBack }, todayYmd)}</span>}
+            {r.youAsked && <span style={{ fontSize: 12, fontWeight: 700, color: C.faint }}>you asked</span>}
+            {r.photos && r.photos.length > 0 && expKey !== r.key && <span style={{ fontSize: 12, color: C.faint }}>{r.photos.length} photo{r.photos.length === 1 ? "" : "s"}</span>}
           </div>
           {r.latest && (
-            <div onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
+            <div onClick={e => { if (selectMode) return; e.stopPropagation(); if (expKey !== r.key) { toggleExp(r.key); setHistFor(r.key); return; } setHistFor(h => h === r.key ? null : r.key); }} title="Show all updates"
               style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 13, marginTop: 4, cursor: "pointer" }}>
               <Icon name={r.latest.kind === "waiting" ? "clock" : "note"} size={12} stroke={2} />
               <span style={{ fontWeight: 600, color: r.latest.kind === "waiting" ? C.orange : r.latest.kind === "void" ? C.red : C.text }}>{first(r.latest.by)}: {needUpdateLine(r.latest)}</span>
@@ -63428,25 +63428,25 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               {/* v444 (Koy: "its hard to tell that you can click on the '2 updates'"):
                   a real outlined button, not grey text — tap to open/close the thread. */}
               {!selectMode && (
-                <span role="button" aria-expanded={histFor === r.key}
+                <span role="button" aria-expanded={exp && histFor === r.key}
                   style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, fontWeight: 700, color: C.accent,
-                    border: `1px solid ${C.accent}`, background: histFor === r.key ? `${C.accent}14` : "transparent",
+                    border: `1px solid ${C.accent}`, background: exp && histFor === r.key ? `${C.accent}14` : "transparent",
                     borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap" }}>
                   <Icon name="note" size={11} stroke={2.25} />
-                  {histFor === r.key ? "Hide replies ▴" : `${r.nUpdates} ${r.nUpdates === 1 ? "reply" : "replies"} ▾`}
+                  {exp && histFor === r.key ? "Hide replies ▴" : `${r.nUpdates} ${r.nUpdates === 1 ? "reply" : "replies"} ▾`}
                 </span>
               )}
             </div>
           )}
           {r.qThread && r.qThread.length > 0 && (() => {
-            const t = r.qThread; const last = t[t.length - 1]; const open = histFor === r.key;
+            const t = r.qThread; const last = t[t.length - 1]; const open = exp && histFor === r.key;
             const _lid = String(last.id || last.at || ""); const _rec = _qLast.current[r.key];
             if (!_rec) _qLast.current[r.key] = { id: _lid, t: 0 }; else if (_rec.id !== _lid) { _rec.id = _lid; _rec.t = Date.now(); }
             const _fresh = !!_rec && Date.now() - _rec.t < 1900;
             const who = (m) => m.role === "client" ? `${first(m.by) || "Client"} (client)` : m.role === "field" ? `${first(m.by) || "Field"} (field)` : first(m.by) || "Homestead";
             const line = (m) => <>{String(m.text || "").trim() || `${(m.photos || []).length} photo${(m.photos || []).length === 1 ? "" : "s"}`}</>;
             return (
-              <div className={_fresh ? "he-flash" : undefined} onClick={e => { if (selectMode) return; e.stopPropagation(); setHistFor(h => h === r.key ? null : r.key); }} title="Show the whole discussion"
+              <div className={_fresh ? "he-flash" : undefined} onClick={e => { if (selectMode) return; e.stopPropagation(); if (expKey !== r.key) { toggleExp(r.key); setHistFor(r.key); return; } setHistFor(h => h === r.key ? null : r.key); }} title="Show the whole discussion"
                 style={{ marginTop: 4, fontSize: 13, cursor: "pointer" }}>
                 {!open && (
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -63475,8 +63475,53 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             );
           })()}
           {!r.latest && r.snoozedUntil && <div style={{ fontSize: 13, color: C.orange, fontWeight: 600, marginTop: 4 }}>on hold · back {mdOf(r.snoozedUntil)}</div>}
-          {r.photos && r.photos.length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          {exp && (() => {
+            const btn = (on) => ({ fontFamily: "inherit", fontSize: 14, fontWeight: 600, minHeight: 44, padding: "0 13px", borderRadius: 10, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
+              border: `1px solid ${on ? C.blue : C.border}`, background: on ? C.blue : C.surface, color: on ? "#fff" : C.text });
+            const prim = (r.actions || []).filter(a => a.tone === "primary");
+            const rest = (r.actions || []).filter(a => a.tone !== "primary");
+            const more = moreKey === r.key;
+            const hasMore = !!(canMarkUrgent(r) || (r.sel && onSaveFocus) || r.canPhoto || (r.onTogglePick && (r.canReassign || r.roster)) || rest.length || r.nudge);
+            return (
+              <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10, cursor: "default" }}>
+                {r.onWake && <button style={btn(true)} onClick={() => { r.onWake(); toast.success("Back on your list"); }}>Wake now</button>}
+                {r.canWork && r.onWork && <button style={btn(!!r.working)} aria-pressed={!!r.working} title={r.working ? "Working on it — tap to stop" : "Let everyone see you're on it"} onClick={() => r.onWork()}><Icon name="play" size={12} />{r.working ? "Working · stop" : "Working on it"}</button>}
+                {prim.map(a => <button key={a.label} title={a.title} style={btn(true)} onClick={() => a.onClick()}>{a.label}</button>)}
+                {r.canUpdate && <button style={btn(updFor === r.key)} title={r.audience ? `Reply to ${first(r.audience)}` : "Add a note"} onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); closePanels(); setUpdFor(r.key); } }}>{r.need ? "Reply" : "Note"}</button>}
+                {r.canSnooze && !r.onWake && <button style={btn(snoozeFor === r.key)} onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)}>Snooze</button>}
+                {r.jobId && onOpenJob && <button style={btn(false)} onClick={() => onOpenJob(r.jobId, r.section)}>Open job</button>}
+                {!more && hasMore && <button style={btn(false)} aria-expanded={false} onClick={() => setMoreKey(r.key)}>More…</button>}
+                {more && <>
+                  {canMarkUrgent(r) && <button style={{ ...btn(r.prio === "urgent"), ...(r.prio === "urgent" ? { background: C.red, borderColor: C.red } : {}) }} aria-pressed={r.prio === "urgent"} onClick={() => toggleUrgent(r)}>{r.prio === "urgent" ? "Urgent · clear" : "Mark urgent"}</button>}
+                  {r.sel && onSaveFocus && <button style={btn(pinned)} aria-pressed={pinned} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} onClick={() => toggleFocus(r.key)}><Icon name="star" size={13} />{pinned ? "Pinned" : "Pin"}</button>}
+                  {r.canPhoto && (photoBusyIds && photoBusyIds[r.need.id] ? (
+                    <span title="Uploading photos…" aria-busy="true" style={{ ...btn(false), boxSizing: "border-box", opacity: 0.45, cursor: "default" }}>
+                      <Icon name="camera" size={15} stroke={2} />Photo
+                    </span>
+                  ) : (
+                    <label onClick={e => e.stopPropagation()} title="Add a photo" style={{ ...btn(false), boxSizing: "border-box" }}>
+                      <Icon name="camera" size={15} stroke={2} />Photo
+                      <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                        onChange={e => {
+                          const all = Array.from(e.target.files || []); e.target.value = "";
+                          // Same filter as quick-add: images only (blank type = let it through).
+                          const fs = all.filter(f => f && (!f.type || /^image\//.test(f.type)));
+                          const skipped = all.length - fs.length;
+                          if (skipped) toast.warn(`${skipped} non-image file${skipped === 1 ? "" : "s"} skipped`);
+                          if (fs.length) onAddNeedPhotos(r.need.id, r.need.jobId, fs);
+                        }} />
+                    </label>
+                  ))}
+                  {r.onTogglePick && (r.canReassign || r.roster) && <button style={btn(!!r.pushOpen)} aria-expanded={!!r.pushOpen} title="Change who this is on" onClick={() => r.onTogglePick()}>{r.kind === "need" ? "Move to…" : "Push to…"}</button>}
+                  {rest.map(a => <button key={a.label} title={a.title} style={btn(false)} onClick={() => a.onClick()}>{a.label}</button>)}
+                  {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
+                  {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
+                </>}
+              </div>
+            );
+          })()}
+          {expKey === r.key && r.photos && r.photos.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               {r.photos.map(p => {
                 const img = <img src={p.url} alt={p.name || "photo"} loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}`, display: "block", background: C.bg }} />;
                 return (
@@ -63493,7 +63538,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               })}
             </div>
           )}
-          {histFor === r.key && r.nUpdates > 0 && (
+          {expKey === r.key && histFor === r.key && r.nUpdates > 0 && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, borderLeft: `2px solid ${C.border}`, paddingLeft: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 13, color: C.dim }}>
               {needUpdates(r.need).map((u, i) => {
                 // v434: oldest → newest. My own reply (note / waiting — not the
@@ -63525,7 +63570,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               })}
             </div>
           )}
-          {updFor === r.key && (
+          {expKey === r.key && updFor === r.key && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 8 }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                 {[["note", "Reply"], ["waiting", "Waiting on…"]].map(([k, l]) => (
@@ -63552,8 +63597,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               </div>
             </div>
           )}
-          {r.state === "with" && <div style={{ fontSize: 13, color: C.blue, fontWeight: 600, marginTop: 4 }}>with {first(r.who)}{r.age ? ` · ${r.age}` : ""}</div>}
-          {r.scan && !selectMode && (
+          {expKey === r.key && r.scan && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ display: "flex", gap: 6 }}>
                 <input type="text" value={scanDraft[r.key] || ""} placeholder="Paste Matterport link…"
@@ -63574,19 +63618,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               </div>
             </div>
           )}
-          {r.state === "verify" && <div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginTop: 4 }}>done by {first(r.who)}{r.age ? ` · ${r.age}` : ""} · verify</div>}
-          {!selectMode && ((r.actions && r.actions.length > 0) || r.nudge) && (
-            <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
-              {(r.actions || []).map(a => (
-                <button key={a.label} title={a.title} onClick={e => { e.stopPropagation(); a.onClick(); }}
-                  style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "6px 10px", minHeight:"var(--he-tap, 32px)", borderRadius: 8, cursor: "pointer",
-                    background: a.tone === "primary" ? C.blue : "transparent", color: a.tone === "primary" ? "#fff" : C.blue, border: `1px solid ${C.blue}` }}>{a.label}</button>
-              ))}
-              {/* v446 Nudge: the existing manual-reminder push, deep-linked to this task. */}
-              {r.nudge && <RemindButton to={r.nudge.to} title={r.nudge.title} body={r.nudge.body} view="myday" needId={r.nudge.needId} label="Nudge" people={roster} />}
-            </div>
-          )}
-          {ansFor === r.key && (r.onAnswer || r.onReply) && !selectMode && (() => {
+          {expKey === r.key && ansFor === r.key && (r.onAnswer || r.onReply) && !selectMode && (() => {
             const replying = ansMode === "reply" && !!r.onReply;
             const go = () => (replying ? r.onReply : r.onAnswer)(ansText);
             return (
@@ -63603,7 +63635,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             </HeUnfold>
             );
           })()}
-          {editFor === r.key && editDraft && r.need && !selectMode && (() => {
+          {expKey === r.key && editFor === r.key && editDraft && r.need && !selectMode && (() => {
             // v434 Edit panel: wording, due date, person, job. Same look as the reply panel.
             const n = r.need; const lab = { fontSize: 12.5, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.dim, display: "flex", flexDirection: "column", gap: 4, flex: "1 1 140px", minWidth: 0 };
             const fld = { width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 14, fontWeight: 400, letterSpacing: 0, textTransform: "none", padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.text };
@@ -63648,7 +63680,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               </div>
             );
           })()}
-          {voidFor === r.key && r.need && !selectMode && (
+          {expKey === r.key && voidFor === r.key && r.need && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 8, padding: 8 }}>
               <div style={{ fontSize: 13, color: C.dim, marginBottom: 6 }}>Void this task? It leaves every list{needAssignee(r.need) && !sameName(needAssignee(r.need), me) ? ` and ${first(needAssignee(r.need))} gets a push` : ""}. You'll still see it under Sent · finished.</div>
               <input type="text" value={voidReason} autoFocus onChange={e => setVoidReason(e.target.value)} onKeyDown={e => { if (e.key === "Enter") voidNeed(r.need, voidReason); }}
@@ -63661,7 +63693,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
               </div>
             </div>
           )}
-          {r.pushOpen && !selectMode && (
+          {expKey === r.key && r.pushOpen && !selectMode && (
             <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, padding: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
               <div style={{ width: "100%", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.dim }}>{r.kind === "need" ? "Move it to" : "Push it to"}</div>
               {(r.pickRoster || r.roster.filter(n => !sameName(n, me) && !(r.state === "with" && sameName(n, r.who)))).map(n => (
@@ -63671,45 +63703,7 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
             </div>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, marginLeft: tight ? "auto" : 0 }}>
-        {!selectMode && canMarkUrgent(r) && (
-          <button onClick={() => toggleUrgent(r)} title={r.prio === "urgent" ? "Urgent — tap to clear" : "Mark urgent"} aria-pressed={r.prio === "urgent"}
-            style={{ ...ib, fontSize: 20, fontWeight: 800, lineHeight: 1, color: r.prio === "urgent" ? C.red : C.faint, ...(r.prio === "urgent" ? { borderColor: C.red, background: "#C6282810" } : {}) }}>!</button>
-        )}
-        {!selectMode && r.sel && onSaveFocus && (
-          <button onClick={() => toggleFocus(r.key)} title={pinned ? "Unpin from Focus today" : "Pin to Focus today"} aria-pressed={pinned}
-            style={{ ...ib, fontSize: 20, lineHeight: 1, color: pinned ? "#66A8FF" : C.faint, ...(pinned ? { borderColor: "#66A8FF" } : {}) }}>{pinned ? "★" : "☆"}</button>
-        )}
-        {!selectMode && r.canDone && (
-          <button onClick={r.onDone} title="Done" style={{ ...ib, color: C.green }}><Icon name="check" size={20} stroke={2.25} /></button>
-        )}
-        {!selectMode && r.canSnooze && (
-          <button onClick={() => setSnoozeFor(s => s === r.key ? null : r.key)} title="Snooze" style={ib}><Icon name="clock" size={19} stroke={2} /></button>
-        )}
-        {!selectMode && r.canPhoto && (photoBusyIds && photoBusyIds[r.need.id] ? (
-          <span title="Uploading photos…" aria-busy="true" style={{ ...ib, boxSizing: "border-box", opacity: 0.45, cursor: "default" }}>
-            <Icon name="camera" size={18} stroke={2} />
-          </span>
-        ) : (
-          <label onClick={e => e.stopPropagation()} title="Add a photo" style={{ ...ib, boxSizing: "border-box" }}>
-            <Icon name="camera" size={18} stroke={2} />
-            <input type="file" accept="image/*" multiple style={{ display: "none" }}
-              onChange={e => {
-                const all = Array.from(e.target.files || []); e.target.value = "";
-                // Same filter as quick-add: images only (blank type = let it through).
-                const fs = all.filter(f => f && (!f.type || /^image\//.test(f.type)));
-                const skipped = all.length - fs.length;
-                if (skipped) toast.warn(`${skipped} non-image file${skipped === 1 ? "" : "s"} skipped`);
-                if (fs.length) onAddNeedPhotos(r.need.id, r.need.jobId, fs);
-              }} />
-          </label>
-        ))}
-        {!selectMode && r.canUpdate && (
-          <button onClick={() => { if (updFor === r.key) closeUpd(); else { closeUpd(); closePanels(); setUpdFor(r.key); } }} title={r.audience ? `Reply to ${first(r.audience)}` : "Add a note"}
-            style={{ ...ib, width: "auto", padding: "0 10px", gap: 5, fontFamily: "inherit", fontSize: 14, fontWeight: 700, ...(updFor === r.key ? { borderColor: C.accent, color: C.accent } : {}) }}>{!tight && <Icon name="note" size={16} stroke={2} />}Reply</button>
-        )}
-        </div>
-        {snoozeFor === r.key && (
+        {expKey === r.key && snoozeFor === r.key && (
           // v432: clicks inside the snooze menu must not bubble — the page
           // container closes the menu on ANY click, which unmounted the date
           // input the moment Koy tapped it (so "pick a date" never worked).
@@ -63831,7 +63825,8 @@ function MyDay({ topSlot = null, qcTracker = null, prioMap = {}, onSetPrio, iden
   const pickView = (v) => { setViewPref(v); try { localStorage.setItem("myday.view", v); } catch {} };
   const toggleSel = (key) => setSelected(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const toggleSelectMode = () => {
-    if (selectMode) { setSelectMode(false); setSelected(new Set()); return; }
+    if (selectMode) { setExpKey(null); setMoreKey(null); setSelectMode(false); setSelected(new Set()); return; }
+    setExpKey(null); setMoreKey(null);
     closeUpd(); setSnoozeFor(null); setPushFor(null); setHistFor(null);
     setSelected(new Set()); setSelectMode(true);
   };
