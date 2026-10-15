@@ -52801,6 +52801,52 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
 // for a section turned off in Job Info → Job Sections. Same wording as the
 // Tech Lighting page when a job is pulled off their link. Read-only — the
 // section's data is untouched, and turning it back on revives the same link.
+// Share pages (no login — GCs, PMs, homeowners, often on job-site signal):
+// what a jobs/{id} snapshot actually proves. The app runs Firestore's
+// persistent local cache, so when the phone can't reach the server the SDK
+// hands back a CACHE-ONLY snapshot (metadata.fromCache). For a job this phone
+// never downloaded, that snapshot says exists() === false — which only means
+// "not downloaded yet", NOT "deleted". 2026-10-15: Justin (commercial PM) got
+// "This punch list is not available." in the field on a link Koy opened fine.
+// Only a server-confirmed miss (fromCache === false) is "missing"; listeners
+// subscribe with { includeMetadataChanges: true } so that confirmation arrives
+// even when nothing about the (absent) doc changes. Display only.
+// Also takes a query snapshot (GC portal jobs): there "nothing" is an empty
+// result, and a cache-only empty result is just as unproven.
+function shareDocState(snap) {
+  if (!snap) return 'loading';
+  const has = typeof snap.exists === 'function' ? snap.exists() : !snap.empty;
+  if (has) return 'ok';
+  return snap.metadata && snap.metadata.fromCache === false ? 'missing' : 'loading';
+}
+
+// Calm "weak signal" screen for a share page that has nothing from the server
+// yet. The page's listener stays attached, so it fills in by itself the moment
+// signal comes back. Retry reloads for a fresh connection — but only when the
+// phone says it's online, so a dead connection can't swap this page for the
+// browser's own offline error.
+function ShareWeakSignal() {
+  const [noSignal, setNoSignal] = useState(false);
+  const retry = () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) { setNoSignal(true); return; }
+    window.location.reload();
+  };
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:C.dim,background:C.bg,boxSizing:'border-box'}}>
+      <div style={{fontSize:16,fontWeight:700,color:C.text}}>Weak signal — still loading…</div>
+      <div style={{fontSize:14,maxWidth:340,lineHeight:1.6}}>
+        {noSignal
+          ? "Still no signal on this phone. This page will open by itself when it comes back."
+          : "This page needs a little signal to download. It will open by itself when your connection comes back."}
+      </div>
+      <button onClick={retry}
+        style={{minHeight:40,minWidth:120,padding:'0 22px',borderRadius:10,border:'none',background:C.text,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
 function SectionNotSharedPage() {
   return (
     <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:'#5E6670',background:'#EEF0F3',boxSizing:'border-box'}}>
@@ -53153,17 +53199,20 @@ function HomeRunsSharePage({ jobId }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [weak, setWeak] = useState(false); // cache-only miss: still waiting on signal
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
   }, [jobId]);
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14}}>{error}</div>;
   if(job && isSectionHidden(job,"liveView")) return <SectionNotSharedPage/>; // v440
 
@@ -53242,16 +53291,19 @@ function LoadsSharePage({ jobId }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [weak, setWeak] = useState(false); // cache-only miss: still waiting on signal
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
   }, [jobId]);
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14}}>{error}</div>;
   if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"loadsShare"))) return <SectionNotSharedPage/>; // v440
 
@@ -53340,6 +53392,7 @@ function LightingSharePage({ jobId }) {
   const [job,        setJob]       = useState(null);
   const [loading,    setLoading]   = useState(true);
   const [error,      setError]     = useState(null);
+  const [weak,       setWeak]      = useState(false); // cache-only miss: still waiting on signal
   const [collab,     setCollab]    = useState({sections:{},notes:'',submittedBy:''});
   const [saving,     setSaving]    = useState(false);
   const [savedAt,    setSavedAt]   = useState(null);
@@ -53354,9 +53407,11 @@ function LightingSharePage({ jobId }) {
   const collabBase = useRef(null);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
@@ -53453,7 +53508,7 @@ function LightingSharePage({ jobId }) {
   const inputStyle = {background:SP.bg,border:`1px solid ${SP.border}`,borderRadius:6,padding:'5px 8px',fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',color:SP.text};
   const lvRowStyle = {background:SP.accentBg,border:`1px solid ${SP.accentBorder}55`,borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828'}}>{error}</div>;
   if(job && (isSectionHidden(job,"panelized") || isSectionHidden(job,"lvCollab"))) return <SectionNotSharedPage/>; // v440
 
@@ -53773,6 +53828,7 @@ function LutronAdditionsSharePage({ jobId }) {
   const [job, setJob]         = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
+  const [weak, setWeak]       = useState(false); // cache-only miss: still waiting on signal
   const [acks, setAcks]       = useState({}); // planChangeAcks map from homeowner_requests
   const [drafts, setDrafts]   = useState({}); // {itemId: note text typed before "Mark incorporated"}
   const [threads, setThreads] = useState({}); // planChangeThreads map (itemId or "_general" → messages)
@@ -53780,9 +53836,11 @@ function LutronAdditionsSharePage({ jobId }) {
   useEffect(() => { try { if (tlName.trim()) localStorage.setItem('he_tl_name', tlName.trim()); } catch {} }, [tlName]);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not found" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('Not found.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data);
       setLoading(false);
     }, () => { setError('Failed to load.'); setLoading(false); });
     return () => unsub();
@@ -53824,7 +53882,7 @@ function LutronAdditionsSharePage({ jobId }) {
     if (!ok) throw new Error('send failed');
   };
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828'}}>{error}</div>;
 
   // Honor the office's "On Tech Lighting's link" switch on DIRECT links too —
@@ -54518,14 +54576,18 @@ function PunchSharePage({ jobId, stage }) {
   const [job,          setJob]          = useState(null);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState(null);
+  const [weak,         setWeak]         = useState(false); // cache-only miss: still waiting on signal
+  const [cached,       setCached]       = useState(false); // showing this phone's saved copy, server not reached yet
   const [newItemText,  setNewItemText]  = useState('');
   const [addingItem,   setAddingItem]   = useState(false);
   const [addedCount,   setAddedCount]   = useState(0);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('This punch list is not available.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('This punch list is not available.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
@@ -54595,8 +54657,11 @@ function PunchSharePage({ jobId, stage }) {
     </div>
   ));
 
-  if(loading) return <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
   if(error)   return <div style={{textAlign:'center',padding:60,color:'#C62828',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
+  // A saved copy from an earlier visit may predate this link — wait for the
+  // server before calling it closed.
+  if(linkRevoked && cached) return <ShareWeakSignal/>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
@@ -54771,6 +54836,8 @@ function QuestionsSharePage({ jobId }) {
   const [job,            setJob]           = useState(null);
   const [loading,        setLoading]       = useState(true);
   const [error,          setError]         = useState(null);
+  const [weak,           setWeak]          = useState(false); // cache-only miss: still waiting on signal
+  const [cached,         setCached]        = useState(false); // showing this phone's saved copy, server not reached yet
   const shareParam = new URLSearchParams(window.location.search).get('s') || '';
   // Office-side read-only PREVIEW (?preview=1) — the page renders exactly as the
   // recipient sees it, but wrapped in a disabled <fieldset> so no input/button/
@@ -54885,9 +54952,11 @@ function QuestionsSharePage({ jobId }) {
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if(!snap.exists()){ setError('This questions form is not available.'); setLoading(false); return; }
-      setJob(snap.data()?.data);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
+      if(st==='loading'){ setWeak(true); return; }
+      if(st==='missing'){ setError('This questions form is not available.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
@@ -55204,8 +55273,11 @@ function QuestionsSharePage({ jobId }) {
   const newCount   = [...roughQs, ...finishQs].filter(q=>isNewQ(q)||newReplyQ(q)).length;
   const taStyle = {width:'100%',border:'1px solid #CDD3DB',borderRadius:7,padding:'8px 10px',fontSize:14,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
 
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
+  if(loading) return weak ? <ShareWeakSignal/> : <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:C.faint,fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#C62828',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
+  // A saved copy from an earlier visit may predate this link — wait for the
+  // server before calling it closed.
+  if(linkRevoked && cached) return <ShareWeakSignal/>;
   if(linkRevoked) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:C.slate,display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
@@ -55369,14 +55441,18 @@ function JobNoteSharePage({ param }) {
   const [job,     setJob]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
+  const [weak,    setWeak]    = useState(false); // cache-only miss: still waiting on signal
+  const [cached,  setCached]  = useState(false); // showing this phone's saved copy, server not reached yet
 
   useEffect(() => {
     if (!jobId || !noteId || !token) {
       setError('This link is malformed.'); setLoading(false); return;
     }
-    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
-      if (!snap.exists()) { setError('This note is not available.'); setLoading(false); return; }
-      setJob(snap.data()?.data || null); setLoading(false);
+    const unsub = onSnapshot(doc(db,'jobs',jobId), { includeMetadataChanges:true }, snap => {
+      const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
+      if (st === 'loading') { setWeak(true); return; }
+      if (st === 'missing') { setError('This note is not available.'); setLoading(false); return; }
+      setError(null); setJob(snap.data()?.data || null); setCached(!!snap.metadata.fromCache); setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
   }, [jobId, noteId, token]);
@@ -55384,6 +55460,7 @@ function JobNoteSharePage({ param }) {
   const cardPageBg = '#EEF0F3';
   const headerBg = '#1e3a5f';
 
+  if (loading && weak) return <ShareWeakSignal/>;
   if (loading) return (
     <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>Loading…</div>
   );
@@ -55394,6 +55471,9 @@ function JobNoteSharePage({ param }) {
   const notes = Array.isArray(job?.jobNotes) ? job.jobNotes : [];
   const note = notes.find(n => n && n.id === noteId);
 
+  // A saved copy from an earlier visit may predate this note or its link —
+  // wait for the server before calling it gone or revoked.
+  if (cached && (!note || note.deleted || !note.shareToken || note.shareToken !== token)) return <ShareWeakSignal/>;
   if (!note || note.deleted) {
     return (
       <div style={{textAlign:'center',padding:60,color:C.faint,fontFamily:'system-ui,sans-serif'}}>
@@ -55557,9 +55637,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-14 · App SW version: v540
+**Last manifest update:** 2026-10-15 · App SW version: v542
 
 ---
+
+- **Share links on a weak signal say "Weak signal — still loading…" instead of "not available"** · 'shipped 2026-10-15' · 'SW v542' · 'shareDocState' · 'ShareWeakSignal' · Justin, a commercial PM, opened a punch share link on a job site and got *"This punch list is not available."* Koy opened the same link fine. The link was correct. The cause: the app keeps a saved copy of what it downloads (Firestore's offline cache), and when a phone can't reach the server it answers from that copy. For a job the phone has never downloaded, that answer is "nothing here", and every share page read "nothing here" as "this job is gone". Now one small check ('shareDocState') decides for all of them: the job showed up → show it; nothing came back from the phone's saved copy → **still loading** (a calm "Weak signal — still loading…" screen with a Retry button; the page fills in by itself when signal comes back); nothing came back *and the server confirmed it* → only then "not available". The pages now also hear the server's answer when nothing about the job changed ('includeMetadataChanges'), so a truly deleted job still says "not available" instead of loading forever. **Pages covered:** punch (rough / finish / QC), questions, job note, home runs, loads, lighting collab, plan changes (Tech Lighting), and the **GC portal** (it said "This portal link is no longer active" or showed an empty board on a weak signal). **Old saved copy:** punch, questions and job-note pages also wait for the server before saying a link is closed or a note is gone, because a copy saved on an earlier visit can predate a newly made link. Retry reloads the page only when the phone reports a connection, so it can never swap the calm screen for the browser's own offline error. **Gate:** 'scripts/sharedoc-test.js' (prebuild) tests the check with real-shaped snapshots and fails the build if any share page goes back to treating a bare "nothing here" as "not available". **Why it won't lose data:** display only — no save path, merge, rules, function or data shape changed; the listeners read the same documents, and "Failed to load" still shows when the listener itself errors.
 
 - **Design pass: one look for the app and the dashboard — readable type, no amber, steel-blue dashboard, tidier tabs, and a build gate that stops the drift** · 'shipped 2026-10-14' · 'SW v540' · Koy: *"do all recomended"* after a live design critique of the CC app, the /dashboard and FieldInk (vault: '05-Decisions/One Look Across All Three Apps.md'). **Bugs that made it look unfinished:** the page's base font was **Times**, so anything without its own font (the More menu) rendered serif — DM Sans is now set on body, buttons and inputs; the longhorn **watermark** was a fixed layer painting *on top of* cards and text — it now sits behind everything; **App Map** said "SW v181 · 0 shipped" (its parser never stripped the quotes) and showed raw '**markdown**' and developer tags — it now shows the real version and counts, clean bold text, plain dates, and a "Latest releases" area for the newest entries. **Phones:** the header is one row under 600px (flag mark, live status, Resi/Commercial; wordmark, job count, weather and the guide hint hidden — the ? stays). The **Notifications blocked** banner is never dismissible: full on My Day and on desktop, a one-line "Notifications blocked — fix" (tap to expand) on other tabs on phones. **Tabs:** COs columns with nothing in them fold to a 44px strip with their count (tap to open); Forecast drops the planner's duplicate Book row and shortens crew names to "Keegan W."; Huddle shows folded sections per person with counts and full job names (**Copy text / Send to my phone are byte-for-byte unchanged**; "Show as text" shows the raw view); Contractors, Today, Needs, Huddle, Settings and App Map share one 'PageHeader' (Settings no longer says SETTINGS twice). The **Working · 14h ago** pill is now a light steel tint instead of solid blue, so URGENT is louder. Opening a job no longer flashes "Saving…" for the background presence ping (the write is unchanged; errors still show). **Colour and type:** the amber family (#B7791F etc.) is replaced by a slate family ('C.slate' / 'slateBg' / 'slateLine' / 'slateInk' / 'steelBg' / 'steelLine') — Awaiting Start Date, On Hold (still dashed), CO Pending Approval, waiting chips, owed rings; due-in-3-days uses 'C.orange'; Scoreboard champion row and Adjust scoring are steel blue; 'C.amber' (referenced but undefined) fixed. 144 low-contrast greys used as text now use 'C.faint'; 236 references to never-defined CSS variables ('--text', '--dim', '--card'…) now resolve (borders were vanishing, one modal was see-through); 334 font sizes raised to the 11px floor; emoji replaced by 'Icon'. **Tap targets:** 'Btn' is 40px with primary/secondary/quiet variants; 18 small inline heights become 40 on touch via '--he-tap'; 79 ✕ close buttons get 32px width (40 on touch); the touch rule covers '[role=button]'. **/dashboard:** re-skinned from warm brown + orange to the app's navy and steel blue (#66A8FF, dark text on it), dark raised cards (the highlighted look is kept), no amber (stale / past-date warnings use rose), punch age 0–7 green · 8–14 slate · 15–30 orange · 30+ red, monotone charts that can't dip below zero, 11.5px text floor, the guide is a ? button, job names wrap to two lines, and on phones foreman / 7-14-30 / search sit behind one **Filters** button (tabs still wrap, as in v538). **Guardrail:** 'scripts/design-lint.js' runs in prebuild and fails the build on text under 11px, emoji in UI, or more hand-typed copies of token colours than the baseline in 'scripts/design-lint-baseline.json' (1177 — it may only go down). Guides updated in 'public/sops/'. **Why it won't lose data:** layout, colour and copy only — no save path, listener, merge, rules, function or data shape changed; the build stamp is on every save as before; the Huddle text that gets copied/sent is unchanged; the presence ping still writes, it just doesn't show the pill.
 - **Tasks: "Working on it" status, and sort / group the Needs tab and My Day by job or person** · 'shipped 2026-10-13' · 'SW v539' · Koy: *"I would like to be able to set status and sort needs or tasks, so when im working on something it shows them im working on it, and i can organize them a bit better. would be helpful if in the needs drop they were sorted by job or person as well"* (signed off a clickable mockup first). **Working on it:** every task / need on your list gets a **▶ Working on it** chip (My Day rows, and your own cards on the Needs board); tap it again to stop. It writes 'startedBy' / 'startedAt' on the doc; everyone else sees a blue **Working · Koy · 12m ago** pill on that task (Needs board Mine + All, the sender's My Day **Sent**, the head's Person view). The order is Open → Working on it → Waiting on… → Done: a "Waiting on…" posted after the start shows Waiting instead ('needWorking'). **No push** — 'onNeedWrite' only fires on assign / done / send-back / new updates, so no function deploy. The patch funnel ('patchNeed' → pure 'needWorkReset') clears the start on a hand-off to another person, Done, Void or Reopen, so every writer (board To:, My Day pick, batch push, Edit) obeys; Undo after Done puts it back. My Day **Sent** rows now say where each ask stands: Working, Waiting on…, or **Not started yet**. Time-off decision rows and auto office rows (QC walks, invoicing, start POs) don't take the chip. **Order:** working rows ride on top everywhere ('compareMyDayRows', new 'compareNeedsBoard': working → urgent → Tomorrow lane → oldest → low). **Needs tab Group switch:** **Due** (the Tomorrow / This week lanes, now sorted) · **Job** · **Person** — Job / Person fold everything into one group per job or person ('bunchRows', A–Z, No job / Unassigned last), every group starts folded with its count and **N working · N urgent · N waiting** badges; under All, Person = who it's on; under Mine, Person = who sent it to you. Remembered per device ('needs.group'). **My Day Sort switch:** **Urgency** (today's order) · **Job** · **Person** orders the rows *inside* every fold, with a small label over each bunch ('myday.sort', per device; Person = "From <who>" on your rows, "To <who>" on Sent). The Mine/All buttons read white on blue now (were black). New chips and switches follow the v537 type floor. vm-tested in 'scripts/needs-dryrun.js' (working / reset / board order / bunching, mutation-checked). Guides updated: 'public/sops/needs.html', 'public/sops/myday.html'. **Why it won't lose data:** two additive string fields inside 'data', written only through the existing field-surgical 'patchNeed' (dotted paths, build stamp kept); the sort and group switches are display-only and stored on the phone; no rules, loader or functions change.
@@ -64335,6 +64417,11 @@ function GCPortalPage({ token, deepJobId }) {
   // dropped connection.
   const [linkErr, setLinkErr] = useState(false);
   const [jobsErr, setJobsErr] = useState(false);
+  // Weak signal (2026-10-15): a cache-only miss is "not downloaded yet", never
+  // "revoked" or "no jobs" — see shareDocState. Only a server-confirmed miss
+  // flips link to null / jobs to [].
+  const [linkWeak, setLinkWeak] = useState(false);
+  const [jobsWeak, setJobsWeak] = useState(false);
 
   // Reset the broken-logo Set when the link/token or logoUrl changes so a
   // repaired same-URL or new custom URL isn't stuck skipped for the session
@@ -64346,9 +64433,12 @@ function GCPortalPage({ token, deepJobId }) {
   useEffect(() => {
     if(!token) { setLink(null); return; }
     setLinkErr(false);
-    const unsub = onSnapshot(doc(db,"gc_links",token), snap => {
+    const unsub = onSnapshot(doc(db,"gc_links",token), { includeMetadataChanges:true }, snap => {
       setLinkErr(false);
-      if(!snap.exists() || snap.data()?.revoked === true) { setLink(null); return; }
+      const st = shareDocState(snap);
+      if(st === 'loading') { setLinkWeak(true); return; }
+      setLinkWeak(false);
+      if(st === 'missing' || snap.data()?.revoked === true) { setLink(null); return; }
       setLink(snap.data());
     }, () => setLinkErr(true));
     return unsub;
@@ -64359,8 +64449,10 @@ function GCPortalPage({ token, deepJobId }) {
     if(link === undefined) return;             // link still loading
     if(!portalId) { setJobs([]); return; }     // live link but no mirror → empty state, never stuck loading
     setJobsErr(false);
-    const unsub = onSnapshot(collection(db,"gc_portal",portalId,"jobs"), snap => {
+    const unsub = onSnapshot(collection(db,"gc_portal",portalId,"jobs"), { includeMetadataChanges:true }, snap => {
       setJobsErr(false);
+      if(shareDocState(snap) === 'loading') { setJobsWeak(true); return; } // cache-only empty ≠ "no jobs"
+      setJobsWeak(false);
       setJobs(snap.docs.map(d => d.data()).filter(Boolean));
     }, () => setJobsErr(true));
     return unsub;
@@ -64407,6 +64499,7 @@ function GCPortalPage({ token, deepJobId }) {
       <div style={{fontSize:14,color:P.dim}}>This usually clears up with a refresh. If it keeps happening — {_gcContactLine(P, "")}</div>
     </div>
   );
+  if(link === undefined && linkWeak) return <ShareWeakSignal/>;
   if(link === undefined) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading your portal…</div>);
   if(link === null) return wrap(
     <div style={{padding:"120px 0",textAlign:"center"}}>
@@ -64420,6 +64513,7 @@ function GCPortalPage({ token, deepJobId }) {
       <div style={{fontSize:14,color:P.dim}}>This usually clears up with a refresh. If it keeps happening — {_gcContactLine(P, "")}</div>
     </div>
   );
+  if(jobs === null && jobsWeak) return <ShareWeakSignal/>;
   if(jobs === null) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading jobs…</div>);
   // Data already loaded once, but the live listener has since dropped —
   // keep showing the last-known-good board instead of yanking it away, with
