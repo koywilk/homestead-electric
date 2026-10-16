@@ -4547,24 +4547,19 @@ exports.getSimproScheduleByJob = functions
   });
 
 // ─────────────────────────────────────────────────────────────
-// SCHEDULED — Friday 5:30am Mountain Time
-// Friday Packet — Money & Billing · Blockers & Actions · Week Ahead.
-// One phone-screen Google Doc for Koy + office (admins/managers +
-// coordinators, pref key "friday_packet"), uploaded to Drive and announced
-// via push. Content comes from the PURE builder ./fridayPacket.js so
-// scripts/packet-dryrun.js renders byte-identical output for sign-off.
-// Read-only on jobs; writes one Drive doc per run + the additive
-// settings/fridayPacket state doc (powers "billed since last packet").
-// Rewritten 2026-07-30 from thursdayPacket (Koy: scrap the inventory dump —
-// its forward-looking sections read roughScheduledDate, a field the app no
-// longer writes, so "Next 4 Weeks"/"This Week" rendered empty for months).
+// MEETING PREP — the three weekly doc pulls (Koy, 2026-10-15 night: one Drive
+// folder "Meeting Prep" holding the Monday Scramble, the Wednesday Lead Meeting
+// and the Friday Strategy pulls, and nothing else).
+//   Monday    — claude.ai routine "Monday office meeting prefill" (not this file)
+//   Wednesday — foremanMeetingPrep (Tue 4 PM) writes "Weekly Lead Meeting — <date>"
+//   Friday    — strategyPrep (Fri 6 AM) writes "Friday Strategy Prep — <date>"
+// The Friday Packet (fridayPacket / sendTestFridayPacket, Fri 5:30 AM, 2026-07-30
+// → 2026-10-15) and the Tuesday 6 AM Lead Meeting Prep were RETIRED 2026-10-15
+// in favour of the Friday Strategy Prep. ./fridayPacket.js STAYS a pure module:
+// dailySimproTotals (v542) uses its collectMoneyCandidates for the dashboard's
+// money lines.
 // ─────────────────────────────────────────────────────────────
 
-// Drive folder ID where weekly packets are saved.
-// Koy must share this folder with the service account
-// (<project>@appspot.gserviceaccount.com) as Editor before deploy, and with
-// office staff's Google accounts as Viewer (new docs inherit the folder ACL).
-const PACKET_DRIVE_FOLDER_ID = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
 // "Meeting Prep" Drive folders (Koy, 2026-10-15 night): the Monday routine, the Wednesday
 // Lead Meeting doc and the Friday Strategy doc each land in their own folder. The service
 // account needs Editor on the wednesday + friday ones (the monday one belongs to the routine).
@@ -4814,13 +4809,10 @@ exports.scheduledSimproCandidateRefresh = functions.pubsub
     return null;
   });
 
-// Shared runner for the scheduled Friday packet + the manual test callable.
-// All I/O lives here; content/ranking/rendering live in ./fridayPacket.js
-// (pure) so the dry-run script renders exactly what prod will.
 // Live Simpro Totals for a list of job numbers (concurrency 5) — the job's total
 // incl. tax and its margin. Parsing mirrors getSimproJobFinancials (Actual===100 →
 // no costs tracked yet → use Estimate). A job whose fetch fails is left out.
-// Shared by the Friday Packet and dailySimproTotals (v542).
+// Used by dailySimproTotals (v542); the Friday Packet that shared it was retired 2026-10-15.
 async function fetchSimproTotals(sns) {
   const out = {};
   const CHUNK = 5;
@@ -4867,170 +4859,6 @@ async function stampAutoRun(key, run, { test = false } = {}) {
   }
 }
 
-async function runFridayPacket({ testRun = false } = {}) {
-  const now = new Date();
-  // Calendar math on the Mountain-Time wall-clock date; `now` itself stays
-  // raw UTC so display formatting (inside the builder) shifts exactly once.
-  const mtNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
-  const today = new Date(mtNow.getFullYear(), mtNow.getMonth(), mtNow.getDate());
-  const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
-  const nextMonday = new Date(monday); nextMonday.setDate(monday.getDate() + 7);
-  const nextFriday = new Date(nextMonday); nextFriday.setDate(nextMonday.getDate() + 4);
-  const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const windowStart = ymdOf(monday), windowEnd = ymdOf(nextFriday);
-
-  // 1 · Firestore reads. Job docs are wrapped ({data:{...}}); the unwrap keeps
-  //     the TOP-LEVEL lastActivityAt. Settings docs are not wrapped.
-  const [snap, upSnap, planSnap, ptoSnap, stateSnap, users] = await Promise.all([
-    db.collection("jobs").get(),
-    db.doc("settings/upcoming_jobs").get(),
-    db.doc(`settings/schedule_${ymdOf(nextMonday)}`).get(),
-    db.doc("settings/crewPTO").get(),
-    db.doc("settings/fridayPacket").get(),
-    getUsers(),
-  ]);
-  const jobs = snap.docs.map(d => {
-    const raw = d.data() || {};
-    return { id: d.id, ...(raw.data || {}), lastActivityAt: raw.lastActivityAt || null };
-  });
-  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
-  const plannerDoc = planSnap.exists ? planSnap.data() : null;
-  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
-  const prevState = stateSnap.exists ? stateSnap.data() : null;
-
-  // 2 · Simpro schedules (ground truth of who's booked where) — same paginated
-  //     feed the old packet pulled for compliance, now filtered to just
-  //     this-Monday..next-Friday. Failure degrades to planner-only data.
-  let scheduleEntries = [];
-  try {
-    let page = 1;
-    while (page <= 60) {
-      const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`, {
-        headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
-      });
-      if (!resp.ok) {
-        functions.logger.warn("fridayPacket simpro schedule page failed", { page, status: resp.status });
-        break;
-      }
-      const batch = await resp.json();
-      if (!Array.isArray(batch) || batch.length === 0) break;
-      scheduleEntries.push(...batch);
-      if (batch.length < 250) break;
-      page++;
-    }
-    scheduleEntries = scheduleEntries.filter(s => s && s.Date && s.Date >= windowStart && s.Date <= windowEnd);
-  } catch (e) {
-    functions.logger.warn("fridayPacket simpro schedule fetch error", { error: e.message });
-    scheduleEntries = [];
-  }
-
-  // 3 · Bounded live Totals fetch (headline dollars + fresh margins) for the
-  //     ready-to-invoice + margin-watch jobs only — concurrency 5, cap 50.
-  //     Any failure degrades to the on-job simproMargin cache / count-only.
-  //     Parsing mirrors getSimproJobFinancials (Actual===100 → no costs
-  //     tracked yet → use Estimate).
-  const simproTotalsById = {};
-  try {
-    Object.assign(simproTotalsById, await fetchSimproTotals(fridayPacketLib.collectSimproCandidates(jobs)));
-  } catch (e) {
-    functions.logger.warn("fridayPacket simpro totals fetch error", { error: e.message });
-  }
-  // v542: the office dashboard shows these dollars beside "Ready to invoice" and
-  // the old change orders (settings/simproTotals; dailySimproTotals refreshes it).
-  if (Object.keys(simproTotalsById).length) {
-    await db.doc("settings/simproTotals").set({ at: now.toISOString(), source: "fridayPacket", byNo: simproTotalsById }, { merge: true })
-      .catch(e => functions.logger.warn("simproTotals write failed", { error: e.message }));
-  }
-
-  // 4 · Build + render (pure — no I/O inside).
-  const model = fridayPacketLib.buildModel({
-    jobs, upcoming, plannerDoc, scheduleEntries, pto, users, prevState, simproTotalsById, now,
-  });
-  const html = fridayPacketLib.renderHtml(model);
-  const docTitle = `Friday Packet — ${model.docDate}`;
-
-  // 5 · Upload to Drive as a Google Doc (unchanged mechanism).
-  let docLink = "", docId = "";
-  try {
-    if (!PACKET_DRIVE_FOLDER_ID || PACKET_DRIVE_FOLDER_ID === "REPLACE_WITH_FOLDER_ID") {
-      throw new Error("PACKET_DRIVE_FOLDER_ID not configured in functions/index.js");
-    }
-    const auth = new google.auth.GoogleAuth({
-      scopes: ["https://www.googleapis.com/auth/drive.file"],
-    });
-    const drive = google.drive({ version: "v3", auth });
-    const createRes = await drive.files.create({
-      requestBody: {
-        name: docTitle,
-        parents: [PACKET_DRIVE_FOLDER_ID],
-        mimeType: "application/vnd.google-apps.document",
-      },
-      media: { mimeType: "text/html", body: html },
-      fields: "id, webViewLink",
-      supportsAllDrives: true,
-    });
-    docId = createRes.data.id || "";
-    docLink = createRes.data.webViewLink || "";
-  } catch (e) {
-    functions.logger.error("fridayPacket Drive upload failed", { error: e.message });
-    // Ops alert — intentionally ungated plain sendToName (can't be muted).
-    await sendToName("Koy", {
-      title: "⚠️ Friday Packet failed",
-      body: `Drive upload error: ${e.message.slice(0, 120)}`,
-    });
-    return { ok: false, error: e.message };
-  }
-
-  // 6 · Persist the billed-diff state (merge; additive; never touches jobs).
-  //     Skipped on test runs so a mid-week test can't swallow the real
-  //     Friday "billed since last packet" list.
-  if (!testRun && model.nextState) {
-    try {
-      await db.doc("settings/fridayPacket").set(
-        { ...model.nextState, lastRunAt: now.toISOString() },
-        { merge: true }
-      );
-    } catch (e) {
-      functions.logger.warn("fridayPacket state write failed", { error: e.message });
-    }
-  }
-
-  // 7 · Announce. Real runs: pref-gated ("friday_packet") push + bell-inbox
-  //     to Koy + office (admins/managers ∪ coordinators). Test runs: Koy only.
-  const notif = {
-    title: "📋 Friday Packet ready",
-    body: `${docTitle} is in Drive — open it there`,
-    jobId: "",
-    section: "",
-  };
-  let recipients = [];
-  if (testRun) {
-    recipients = ["Koy (test)"];
-    await sendToName("Koy", notif);
-  } else {
-    const resolved = fridayPacketLib.resolveRecipients(users);
-    recipients = resolved.map(r => `${r.user.name} (${r.reason})`);
-    await Promise.all(resolved.map(r => deliverIfWanted(r.user, "friday_packet", notif)));
-  }
-
-  functions.logger.info("fridayPacket saved to Drive", {
-    docId, docLink, testRun, recipients, ...model.counts,
-  });
-  return { ok: true, docLink, docId, recipients, counts: model.counts };
-}
-
-exports.fridayPacket = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
-  .pubsub.schedule("30 5 * * 5")
-  .timeZone(TZ)
-  .onRun(async () => {
-    await stampAutoRun("packet", () => runFridayPacket());
-    return null;
-  });
-
-// Manual test trigger — a full real run (Drive doc + live fetches) so the
-// whole pipeline can be verified without waiting for a Friday. Push goes to
-// Koy only and the billed-diff state is NOT advanced.
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — weekdays 6:15am Mountain Time (v542)
 // Simpro job totals for the office dashboard's money lines ("Ready to invoice ·
@@ -5053,13 +4881,6 @@ exports.dailySimproTotals = functions
     await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo }, { merge: true });
     functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length });
     return null;
-  });
-
-exports.sendTestFridayPacket = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
-  .https.onCall(async (data) => {
-    requireAppKey(data);
-    return await stampAutoRun("packet", () => runFridayPacket({ testRun: true }), { test: true });
   });
 
 // ─────────────────────────────────────────────────────────────
