@@ -2,7 +2,7 @@
 /* PREVIEW of the Friday Strategy/Scheduling section against real prod data.
  * Mirrors runStrategyPrep (functions/index.js) steps 1–6 exactly: same reads, same Simpro
  * fetches, same pure builder, same Docs requests — writes strategyprep-dryrun.html and, with
- * --doc, creates "PREVIEW — Friday Strategy Prep — <date>" in the packet folder (delete it when
+ * --doc, creates "PREVIEW — Friday Strategy Prep — <date>" in the Meeting Prep / Friday Strategy folder (delete it when
  * done). Reads Josh's notes doc read-only for carry-forward (403 until shared with the service
  * account as Viewer). Never writes to Josh's doc, never pushes, writes nothing to Firestore. Calendar rows need the OAuth JSON in env PLAN_INTAKE_GOOGLE_OAUTH
  * (copy from Secret Manager); without it the calendar section just says so.

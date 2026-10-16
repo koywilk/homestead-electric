@@ -781,7 +781,7 @@ function fixture(over = {}) {
   const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
   const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
   t("F12a: calendar window timeMin …T00:00:00-06:00, timeMax …T23:59:59-07:00", /timeMin: `\$\{windowStart\}T00:00:00-06:00`/.test(run) && /timeMax: `\$\{windowEnd\}T23:59:59-07:00`/.test(run));
-  t("F12c: NO success push — no deliverIfWanted / resolveRecipients / \"Friday prep\" notif in the run; both failure alerts stay; docs go to the Meeting Prep Friday folder", !/deliverIfWanted|resolveRecipients|title: "Friday prep"/.test(run) && /Friday prep: plain-text fallback/.test(run) && /Friday prep failed/.test(run) && !/PACKET_DRIVE_FOLDER_ID/.test(run) && (run.match(/parents: \[MEETING_PREP_FOLDERS\.friday\]/g) || []).length === 2 && !/recipients|pushError/.test(run));
+  t("F12c: NO success push — no deliverIfWanted / resolveRecipients / \"Friday prep\" notif in the run; both failure alerts stay; docs go to the Meeting Prep Friday folder", !/deliverIfWanted|resolveRecipients|title: "Friday prep"/.test(run) && /Friday prep: plain-text fallback/.test(run) && /Friday prep failed/.test(run) && !/PACKET_DRIVE_FOLDER_ID/.test(run) && (run.match(/parents: \[MEETING_PREP_FOLDERS\.friday\]/g) || []).length === 2 && !/recipients|pushError/.test(run) && (run.match(/sendToName\(/g) || []).length === 3);
   t("F12d: fallback HTML declares utf-8", /<meta charset="utf-8">/.test(run));
 
   // F13 — a date cleared last week and set again now prints "no date → M/D".

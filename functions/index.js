@@ -5009,7 +5009,7 @@ exports.sendTestFridayPacket = functions
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Friday 6:00am Mountain Time
 // Weekly Strategy/Scheduling Meeting pre-fill — writes this week's doc
-// "Friday Strategy Prep — <date>" to the packet Drive folder, styled like a Docs
+// "Friday Strategy Prep — <date>" to the Meeting Prep / Friday Strategy Drive folder, styled like a Docs
 // section so Koy pastes its body into Josh's running notes doc (Koy, 2026-10-15:
 // "lets just have it on its own doc, ill copy and paste each week to the meeting
 // doc"). Lands in Drive > Meeting Prep > Friday Strategy; NO push on success (Koy,
@@ -5117,7 +5117,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
   if (inputErrors.length) lines.splice(1, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });
   const docTitle = `${testRun ? "TEST — " : ""}${model.heading}`;
 
-  // 7 · Create the week's doc in the packet folder and fill it with the Docs API (styled, pastes clean).
+  // 7 · Create the week's doc in the Meeting Prep / Friday Strategy folder and fill it with the Docs API (styled, pastes clean).
   //     If styling fails, fall back to an HTML-converted Drive doc so the meeting still has one.
   const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/documents"] });
   const drive = google.drive({ version: "v3", auth }), docs = google.docs({ version: "v1", auth });
@@ -5343,7 +5343,7 @@ async function runForemanMeetingPrep({ testRun = false } = {}) {
 // week" (the Oct 7 doc whose Hours vs bid showed only margins that moved).
 // Pure logic in ./leadMeetingDoc.js; this does the I/O: margin history in the
 // server-only meetingPrepState/leadMargins (closed to the app by the rules'
-// catch-all), a new Google Doc in the packet folder (Shared Drive — the service
+// catch-all), a new Google Doc in the Meeting Prep / Wednesday Lead Meeting folder (Shared Drive — the service
 // account has no My Drive storage), filled with the same Docs requests as the
 // notes doc. Test runs write the doc but never move the history.
 const leadDocLib = require("./leadMeetingDoc.js");
@@ -5369,7 +5369,7 @@ async function writeWeeklyLeadDoc(model, { testRun, docs, mtNow }) {
 // Koy 2026-10-13: "make the folder cards open the latest doc." Read-only: lists
 // the fixed folders in ./autoDocs.js (never a caller-supplied id) with the
 // read-only Drive scope and returns the newest doc of each kind. The service
-// account sees the packet folder through the Shared Drive; a folder it isn't
+// account sees the Meeting Prep folders through the Shared Drive; a folder it isn't
 // shared on lists as empty ({ error: "none" }) or fails ({ error: "no_access" }),
 // and either way the card keeps opening the folder. Cached 10 minutes per instance.
 const autoDocsLib = require("./autoDocs.js");

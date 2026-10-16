@@ -6,8 +6,9 @@
 //   extractShipped(md, today)     → FEATURES.md entries shipped in the last 7 days
 //   parseActionItems(doc, today)  → last meeting's "Action items" bullets (Docs API JSON)
 //
-// Kept pure so scripts/leadprep-dryrun.js renders byte-identical output to the
-// deployed function. The orchestrator (index.js exports.leadMeetingPrep) does
+// Kept pure so scripts/leadprep-test.js exercises exactly what the deployed code
+// runs. The Tuesday orchestrator (exports.leadMeetingPrep) was retired 2026-10-15;
+// runForemanMeetingPrep in index.js still uses buildModel().upcoming + extractShipped and
 // all reads and passes raw data in.
 //
 // Content contract (Koy, 2026-09-08): a Tuesday-morning prep sheet he pulls
