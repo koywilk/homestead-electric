@@ -197,16 +197,25 @@ if (require.main === module) {
   eq(pm.waiting.map(f => f.id), ["unmatched_email_1"], "seen but unfiled still waits; filed or resolved does not");
   assert.ok(pm.byNo["920"], "plan waiting is findable by job number");
 
-  // 9. DOCS
-  const lead = X.OD_DOCS.find(x => x.k === "lead");
-  const missed = X.odDocStatus(lead, { latestDocs: {}, runs: { lead: { lastRunAt: new Date(2026, 9, 6, 6, 2).toISOString(), ok: true } }, now });
+  // 9. DOCS — the Wednesday card reads the "weekly" stamp (foremanMeetingPrep, due Tue 4 PM);
+  //    the Friday card reads the "friday" stamp (strategyPrep, due Fri 6 AM). v544.
+  const wed = X.OD_DOCS.find(x => x.k === "wednesday");
+  const missed = X.odDocStatus(wed, { latestDocs: {}, runs: { weekly: { lastRunAt: new Date(2026, 9, 6, 16, 2).toISOString(), ok: true } }, now });
   assert.ok(missed.missed && /did not run Tue/.test(missed.text), missed.text);
-  const none = X.odDocStatus(lead, { latestDocs: {}, runs: {}, now });
+  const none = X.odDocStatus(wed, { latestDocs: {}, runs: {}, now });
   assert.ok(!none.missed && none.tone === "" && /no run recorded/.test(none.text), "nothing on record is not a missed run");
-  const made = X.odDocStatus(lead, { latestDocs: {}, runs: { lead: { lastRunAt: new Date(2026, 9, 13, 6, 2).toISOString(), ok: true } }, now });
+  const made = X.odDocStatus(wed, { latestDocs: {}, runs: { weekly: { lastRunAt: new Date(2026, 9, 13, 16, 2).toISOString(), ok: true } }, now });
   assert.strictEqual(made.tone, "good");
-  const failed = X.odDocStatus(lead, { latestDocs: {}, runs: { lead: { lastRunAt: new Date(2026, 9, 13, 6, 2).toISOString(), ok: false, error: "Drive 403" } }, now });
+  const failed = X.odDocStatus(wed, { latestDocs: {}, runs: { weekly: { lastRunAt: new Date(2026, 9, 13, 16, 2).toISOString(), ok: false, error: "Drive 403" } }, now });
   assert.ok(failed.tone === "bad" && /Drive 403/.test(failed.text), failed.text);
+  const fri = X.OD_DOCS.find(x => x.k === "friday");
+  eq([fri.latest, fri.by], ["friday", "App (strategyPrep)"], "Friday card reads the autoDocsLatest 'friday' key");
+  const friMade = X.odDocStatus(fri, { latestDocs: { friday: { url: "u", name: "Friday Strategy Prep — Oct 9, 2026", createdTime: new Date(2026, 9, 9, 6, 4).toISOString() } }, runs: { friday: { lastRunAt: new Date(2026, 9, 9, 6, 4).toISOString(), ok: true } }, now });
+  assert.ok(friMade.tone === "good" && /made Fri/.test(friMade.text), friMade.text);
+  const friMissed = X.odDocStatus(fri, { latestDocs: {}, runs: { friday: { lastRunAt: new Date(2026, 9, 2, 6, 4).toISOString(), ok: true } }, now });
+  assert.ok(friMissed.missed && /did not run Fri 6:00 AM/.test(friMissed.text), friMissed.text);
+  assert.ok(!X.OD_DOCS.some(x => ["packet", "lead", "weekly", "strategy"].includes(x.k)), "retired doc keys are gone (packet / lead / weekly / strategy)");
+  eq(X.OD_DOCS.filter(x => x.latest).map(x => x.latest), ["monday", "wednesday", "friday"], "latest keys match functions/autoDocs.js AUTO_DOC_SOURCES");
 
   // 10. MONEY CANDIDATES (functions/fridayPacket.js, what dailySimproTotals fetches)
   const fp = require("../functions/fridayPacket.js");
