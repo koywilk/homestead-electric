@@ -4745,8 +4745,10 @@ const IDENTITY_TTL   = 24 * 60 * 60 * 1000; // 24 hours in ms
 const USERS_KEY    = "he_users";    // Firestore + localStorage user list
 
 // Default users — Koy is admin to start, everyone else added in-app
+// v546: the stand-in is a placeholder while settings/users loads. It is never
+// offered on the sign-in screen and never written back (saveUsers strips it).
 const DEFAULT_USERS = [
-  { id:"koy", name:"Koy Wilkinson", role:"admin", pin:"" },
+  { id:"koy", name:"Koy Wilkinson", role:"admin", pin:"", _standIn:true },
 ];
 
 // ── Title = field role (who they are on site) ────────────────
@@ -4803,6 +4805,7 @@ const PERMISSIONS = {
   // Change Order tracker — office only. Jeromy sends most COs and needs
   // one place to see every CO's status across every job (added 2026-05-24).
   "cos.view":               ["admin","manager"],
+  "cos.setStatus":          ["admin","manager"],   // v546: Approved / Completed / Denied are office calls (they push crew + make invoice tasks)
   // Coordinator Book Worklist — office/coordinators see the panel.
   "worklist.view":          ["admin","manager"],
   // Needs Board — coordinator obligation board for contractor call-in needs.
@@ -4917,13 +4920,14 @@ const saveIdentity = (member) => {
 };
 
 // ── UserPicker — name list + PIN entry ───────────────────────
-function UserPicker({ users, onSelect, onSavePin }) {
+function UserPicker({ users, onSelect, onSavePin, loadState = "ok", onRetry = null }) {
   const [step, setStep]         = useState("pick");   // "pick" | "pin" | "create" | "confirm"
   const [chosen, setChosen]     = useState(null);
   const [pin, setPin]           = useState("");
   const [firstPin, setFirstPin] = useState("");
   const [error, setError]       = useState(false);
   const [saving, setSaving]     = useState(false);
+  const [saveErr, setSaveErr]   = useState("");       // v546: a refused PIN save explains itself
   // v537: the roster is 26 rows on a phone. Remember who signed in on this device last
   // and put them first; everyone else is one search away.
   const [q, setQ]               = useState("");
@@ -4962,10 +4966,18 @@ function UserPicker({ users, onSelect, onSavePin }) {
       setTimeout(()=>{ setError(false); setStep("create"); setFirstPin(""); }, 1200);
       return;
     }
-    // PINs match — save and log in
+    // PINs match — save, and only THEN log in (v546: a refused save used to
+    // sign the person in anyway, and on a stale phone could overwrite the team).
     setSaving(true);
     const updated = {...chosen, pin: entered};
-    await onSavePin(updated);
+    let ok = false;
+    try { ok = (await onSavePin(updated)) !== false; } catch { ok = false; }
+    setSaving(false);
+    if (!ok) {
+      setSaveErr("PIN not saved. The team list on this phone is out of date, so the save was refused to protect everyone else. Reload and try again.");
+      setPin(""); setFirstPin(""); setStep("create");
+      return;
+    }
     select(updated);
   };
 
@@ -4996,6 +5008,19 @@ function UserPicker({ users, onSelect, onSavePin }) {
 
         {step==="pick" && (
           <>
+            {loadState!=="ok" ? (
+              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 18px",textAlign:"left",marginTop:4}}>
+                <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{loadState==="error"?"Couldn't load the team":"Loading the team…"}</div>
+                <div style={{fontSize:13.5,color:C.dim,lineHeight:1.5}}>
+                  {loadState==="error"?"Check your signal and try again. Nothing is saved until the list arrives.":"Weak signal. Your name will show as soon as the list arrives. Nothing is saved until then."}
+                </div>
+                {onRetry && (
+                  <button onClick={onRetry} style={{marginTop:12,background:C.accent,border:"none",color:"#fff",borderRadius:9,minHeight:44,padding:"8px 18px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    {loadState==="error"?"Try again":"Retry"}
+                  </button>
+                )}
+              </div>
+            ) : (<>
             <div style={{fontSize:14,color:C.dim,marginBottom:16}}>Who are you?</div>
             {lastUser && !needle && (
               <button onClick={()=>pickUser(lastUser)}
@@ -5038,6 +5063,7 @@ function UserPicker({ users, onSelect, onSavePin }) {
                 </button>
               ))}
             </div>
+            </>)}
           </>
         )}
 
@@ -5061,6 +5087,13 @@ function UserPicker({ users, onSelect, onSavePin }) {
               {step==="pin"&&error&&<div style={{fontSize:12.5,color:"#C62828",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
               {saving&&<div style={{fontSize:12.5,color:C.accent,fontWeight:600}}>Saving…</div>}
             </div>
+            {saveErr && (
+              <div style={{background:`${C.red}14`,border:`1px solid ${C.red}`,borderRadius:10,padding:"10px 12px",fontSize:13.5,color:C.text,textAlign:"left",marginBottom:14,display:"grid",gap:8}}>
+                <b style={{color:C.red}}>PIN not saved</b>
+                <span style={{lineHeight:1.45}}>{saveErr}</span>
+                <button onClick={()=>window.location.reload()} style={{justifySelf:"start",background:C.accent,border:"none",color:"#fff",borderRadius:8,minHeight:40,padding:"6px 14px",fontSize:13.5,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Reload</button>
+              </div>
+            )}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
               {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
                 <button key={idx} onClick={()=>handleKey(k)} disabled={saving}
@@ -5166,8 +5199,16 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
   const [list,    setList]    = useState(users);
   const [editing, setEditing] = useState(null);
   const [showPin, setShowPin] = useState({});
+  const [refused, setRefused] = useState(false);   // v546: a refused save keeps the editor open
 
-  useEffect(()=>setList(users),[users]);
+  // v546: when the roster refreshes underneath an open editor (a refused save
+  // loads the latest list), keep the row being typed instead of dropping it.
+  useEffect(()=>setList(prev => {
+    if (!editing) return users;
+    const mine = (prev || []).find(u => u.id === editing);
+    if (!mine) return users;
+    return users.some(u => u.id === editing) ? users.map(u => u.id === editing ? mine : u) : [...users, mine];
+  }),[users, editing]);
 
   const newUser = () => {
     const u = { id:"u_"+Date.now(), name:"", title:"foreman", access:"standard", pin:"", notifPrefs: getNotifDefaults("foreman") };
@@ -5176,7 +5217,11 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
   };
 
   const upd  = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
-  const del  = async (id) => { if(!await showConfirm("Remove this person?")) return; const next=list.filter(u=>u.id!==id); setList(next); onSave(next); };
+  const del  = async (id) => {
+    const who = list.find(u=>u.id===id);
+    if(!await showConfirm({ title:`Permanently delete ${who?.name||"this person"}?`, message:"Use Deactivate for layoffs — it keeps their history and the job names they're on. Delete cannot be undone.", confirmLabel:"Delete forever", cancelLabel:"Keep", danger:true })) return;
+    const next=list.filter(u=>u.id!==id); setList(next); onSave(next);
+  };
   // Deactivate = the right move for layoffs. Keeps the record (history,
   // scoreboard names on old jobs, clean reactivation if they come back) but
   // kills access: hidden from the login picker, cached identity booted on
@@ -5184,7 +5229,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
   // hitting their phone immediately. PIN is kept so reactivation is one tap.
   const deactivate = async (id) => {
     const u = list.find(x=>x.id===id); if(!u) return;
-    if(!await showConfirm(`Deactivate ${u.name||"this person"}? They can't log in or get notifications until reactivated. Their history stays.`)) return;
+    if(!await showConfirm({ message:`Deactivate ${u.name||"this person"}? They can't log in or get notifications until reactivated. Their history stays.`, confirmLabel:"Deactivate", danger:false })) return;
     const next = list.map(x=>x.id===id?{...x, active:false,
       deactivatedAt:new Date().toISOString(),
       deactivatedBy:getIdentity()?.name||"",
@@ -5196,7 +5241,12 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
     const next = list.map(x=>x.id===id?{...x, active:true, deactivatedAt:"", deactivatedBy:""}:x);
     setList(next); onSave(next);
   };
-  const save = () => { onSave(list); setEditing(null); };
+  const save = async () => {
+    let ok = false;
+    try { ok = (await onSave(list)) !== false; } catch { ok = false; }
+    if (!ok) { setRefused(true); return; }     // v546: stay open, say why (bar below)
+    setRefused(false); setEditing(null);
+  };
 
   // Access level colors
   const accessColor = { admin:C.red, manager:"#6A3FB5", standard:C.blue, limited:C.dim };
@@ -5460,11 +5510,17 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     );
                   })()}
 
+                  {refused && (
+                    <div style={{marginBottom:10,padding:"10px 12px",borderRadius:10,background:`${C.red}14`,border:`1px solid ${C.red}`,fontSize:13.5,color:C.text,display:"grid",gap:4}}>
+                      <b style={{color:C.red}}>Not saved</b>
+                      <span style={{lineHeight:1.45}}>Someone else changed the team while you were typing. Your edits are still here — tap Save again.</span>
+                    </div>
+                  )}
                   <div style={{display:"flex",gap:8,marginTop:4}}>
                     <button onClick={save}
                       style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
                         fontWeight:700,padding:"8px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-                      Save
+                      {refused ? "Save again" : "Save"}
                     </button>
                     <button onClick={()=>setEditing(null)}
                       style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
@@ -6157,14 +6213,18 @@ const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 // Bottom sheet on a phone; a centered card on a laptop. Extracted from
 // MobileInpSheet (behavior-neutral there) so the My Day quick-add can reuse
 // the exact same shell instead of a second look-alike.
-function SheetShell({ title, onCancel, onDone, doneLabel = "Done", doneDisabled = false, children }) {
+function SheetShell({ title, onCancel, onDone, doneLabel = "Done", doneDisabled = false, dirty = false, children }) {
   const centered = !ON_MOBILE;
-  const { sheetRef, dragEvents } = useHeSheetDrag(onCancel);
+  // v546: with a draft typed (dirty), a tap outside, a drag down, or Cancel asks
+  // "Discard?" instead of throwing the draft away.
+  const [ask, setAsk] = useState(false);
+  const requestCancel = () => { if (dirty) setAsk(true); else onCancel(); };
+  const { sheetRef, dragEvents } = useHeSheetDrag(requestCancel);
   return (
     <div className="he-scrim" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
       display:"flex",flexDirection:"column",justifyContent:centered?"center":"flex-end",
       alignItems:centered?"center":"stretch",WebkitTapHighlightColor:"transparent"}}
-      onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
+      onClick={e=>{if(e.target===e.currentTarget) requestCancel();}}>
       <div ref={sheetRef} className={centered?"he-dialog":"he-sheet"} style={{background:C.surface,borderRadius:centered?16:"18px 18px 0 0",
         width:centered?"min(480px, calc(100vw - 32px))":"100%",maxHeight:"92vh",overflowY:"auto",
         boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
@@ -6172,7 +6232,7 @@ function SheetShell({ title, onCancel, onDone, doneLabel = "Done", doneDisabled 
           padding:"13px 16px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.surface,zIndex:1,
           ...(!centered?{touchAction:"none"}:null)}}>
           {!centered && <span className="he-grab-hint"/>}
-          <button onClick={onCancel}
+          <button onClick={requestCancel}
             style={{background:"none",border:"none",color:C.dim,fontSize:15,
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
             Cancel
@@ -6185,6 +6245,18 @@ function SheetShell({ title, onCancel, onDone, doneLabel = "Done", doneDisabled 
           </button>
         </div>
         {children}
+        {ask && (
+          <div style={{position:"sticky",bottom:0,padding:"12px 16px",borderTop:`1px solid ${C.border}`,background:C.card,display:"grid",gap:8}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text}}>Discard this draft?</div>
+            <div style={{fontSize:13,color:C.dim}}>What you typed here would be lost.</div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setAsk(false)}
+                style={{flex:1,background:C.accent,border:"none",color:"#fff",borderRadius:9,minHeight:44,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Keep editing</button>
+              <button onClick={()=>{ setAsk(false); onCancel(); }}
+                style={{flex:1,background:C.red,border:"none",color:"#fff",borderRadius:9,minHeight:44,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Discard</button>
+            </div>
+          </div>
+        )}
         <div style={{height:"env(safe-area-inset-bottom,16px)"}}/>
       </div>
     </div>
@@ -6300,7 +6372,7 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
   };
 
   return (
-    <SheetShell title="New need" onCancel={onClose} onDone={save} doneLabel="Save" doneDisabled={!text.trim()}>
+    <SheetShell title="New need" dirty={!!text.trim() || pics.length > 0} onCancel={onClose} onDone={save} doneLabel="Save" doneDisabled={!text.trim()}>
       <div style={{ padding: "12px 16px 6px" }}>
         <input autoFocus value={text} onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") save(); }}
@@ -6784,10 +6856,13 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', 
 
   const clearDraft = () => { if (draftKey) { try { localStorage.removeItem(`he_taDraft_${draftKey}`); } catch(e){} } };
 
-  // Save draft on cancel if there's content — nothing is ever discarded
+  // v546 (Koy, Option A): Cancel means cancel. With text typed it asks first;
+  // Discard throws the item away (nothing added, nothing ordered). The autosaved
+  // crash draft above still covers a closed app mid-typing.
+  const [askDiscard, setAskDiscard] = useState(false);
   const handleCancel = () => {
     const hasContent = (html||"").replace(/<[^>]*>/g,"").trim() || material.trim();
-    if (hasContent) { clearDraft(); onDone(html, material, matSource); }
+    if (hasContent) { setAskDiscard(true); }
     else { clearDraft(); onCancel(); }
   };
 
@@ -6836,12 +6911,23 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', 
             </div>
           )}
         </div>
+        {askDiscard && (
+          <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,background:C.card,display:"grid",gap:8,flexShrink:0}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text}}>Discard this item?</div>
+            <div style={{fontSize:13,color:C.dim}}>Nothing will be added or ordered.</div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setAskDiscard(false)}
+                style={{flex:1,background:C.accent,border:"none",color:"#fff",borderRadius:9,minHeight:44,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Keep editing</button>
+              <button onClick={()=>{ clearDraft(); onCancel(); }}
+                style={{flex:1,background:C.red,border:"none",color:"#fff",borderRadius:9,minHeight:44,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Discard</button>
+            </div>
+          </div>
+        )}
         <div style={{height:"env(safe-area-inset-bottom,12px)",flexShrink:0}}/>
       </div>
     </div>
   );
 };
-
 // Time ago helper for "updated X ago" display
 // Strip emoji (and the variation selectors / ZWJ that glue them together) from
 // any string before rendering in-app. Push titles carry emoji for the OS-level
@@ -7541,12 +7627,20 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#2F5BD9", 
     setUploading(false);
     setProg(null);
   };
-  const removePhoto = (id) => onChange((photos||[]).filter(p => p.id !== id));
   const list = Array.isArray(photos) ? photos : [];
   const isImage = (p) => {
     if (p.type && p.type.startsWith && p.type.startsWith("image/")) return true;
     const n = (p.name||"").toLowerCase();
     return /\.(png|jpe?g|gif|webp|heic|heif|bmp|svg)$/.test(n);
+  };
+  // v546: removing is instant on screen with a 10 s Undo (the 18 px corner ×
+  // deleted for good). Photos are removed from the viewer; files from a
+  // Remove button. Storage files stay (ref-only semantics, as before).
+  const removePhoto = (id) => {
+    const before = list;
+    const gone = before.find(p => p.id === id);
+    onChange(before.filter(p => p.id !== id));
+    heUndo(`${gone && !isImage(gone) ? "File" : "Photo"} removed`, () => onChange(before));
   };
   return (
     <div>
@@ -7559,7 +7653,8 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#2F5BD9", 
             <div key={p.id} data-hekey={"ph_"+p.id} style={{position:"relative"}}>
               {isImage(p) ? (
                 <img src={safeImageSrc(p.url)} alt={p.name||"photo"}
-                  onClick={()=>openPhoto(p.url, p.name, list.filter(isImage).map(x=>({url:x.url,name:x.name})))}
+                  onClick={()=>openPhoto(p.url, p.name, list.filter(isImage).map(x=>({url:x.url,name:x.name})),
+                    { onDelete: (url) => { const hit = list.find(x => x.url === url) || p; removePhoto(hit.id); } })}
                   style={{width:62,height:62,objectFit:"cover",borderRadius:6,
                     border:"1px solid #E1E4E9",cursor:"pointer",display:"block"}}/>
               ) : (
@@ -7577,13 +7672,11 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#2F5BD9", 
                   </span>
                 </div>
               )}
-              <button onClick={()=>removePhoto(p.id)}
-                title="Remove"
-                style={{position:"absolute",top:-5,right:-5,
-                  background:"#C62828",color:"#fff",border:"2px solid #fff",
-                  borderRadius:99,width:18,height:18,fontSize:12,fontWeight:700,
-                  cursor:"pointer",lineHeight:1,padding:0,
-                  display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+              {!isImage(p) && (
+                <button onClick={()=>removePhoto(p.id)}
+                  style={{display:"block",width:"100%",marginTop:3,background:"none",border:"none",color:C.red,
+                    fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",minHeight:28,padding:0}}>Remove</button>
+              )}
             </div>
           ))}
         </div>
@@ -7658,6 +7751,43 @@ const showToast = (message, opts = {}) => {
     detail: { message, ...opts }
   }));
 };
+// ── v546 Undo bar (batch 1: stop the bad writes) ────────────────────────────
+// One fixed bottom bar for every one-tap write that used to be final: foreman
+// reassign, promote, photo / link / plan-change delete, CO status. Same look as
+// My Day's (dark, Undo in steel blue, 10 s countdown). heUndo(label, revert,
+// { onExpire }) — revert runs on Undo; onExpire runs when the bar times out or
+// a newer undo replaces it, which is where a deferred Storage delete goes so
+// the file is only really gone once the person had their chance.
+const heUndo = (label, revert, opts = {}) =>
+  window.dispatchEvent(new CustomEvent('he-undo', { detail: { label, revert, onExpire: opts.onExpire || null, ms: opts.ms || 10000 } }));
+function HEUndoHost() {
+  const [u, setU] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => {
+    const commit = (prev) => { if (!prev) return; if (prev.timer) clearTimeout(prev.timer); if (prev.onExpire) { try { prev.onExpire(); } catch (e) { console.error(e); } } };
+    const handler = (e) => {
+      commit(ref.current);
+      const d = e.detail || {};
+      const timer = setTimeout(() => { const cur = ref.current; ref.current = null; setU(null); if (cur && cur.onExpire) { try { cur.onExpire(); } catch (err) { console.error(err); } } }, d.ms || 10000);
+      ref.current = { ...d, timer, key: Date.now() + Math.random() };
+      setU(ref.current);
+    };
+    window.addEventListener('he-undo', handler);
+    return () => window.removeEventListener('he-undo', handler);
+  }, []);
+  if (!u) return null;
+  const undo = () => { const cur = ref.current; ref.current = null; setU(null); if (!cur) return; if (cur.timer) clearTimeout(cur.timer); try { cur.revert && cur.revert(); } catch (e) { console.error(e); } };
+  return (
+    <div role="status" style={{ position: "fixed", left: 16, right: 16, bottom: `calc(${ON_MOBILE ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`, zIndex: 8996, background: D.bg2, color: D.textBright, borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, boxShadow: "0 10px 30px rgba(0,0,0,0.45)", fontSize: 14, overflow: "hidden" }}>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.label}</span>
+      <button onClick={undo} style={{ fontFamily: "inherit", fontWeight: 700, color: "#66A8FF", background: "transparent", border: "none", cursor: "pointer", fontSize: 14, minHeight: "var(--he-tap, 32px)", padding: "0 10px", flexShrink: 0 }}>Undo</button>
+      <HeUndoBar key={u.key} ms={u.ms || 10000}/>
+    </div>
+  );
+}
+// Office number shown on homeowner / share pages. Blank until Koy fills it in;
+// the pages fall back to "reply to the message that sent you this link".
+const HE_OFFICE_PHONE = "";
 const toast = {
   info:    (m, o)=>showToast(m, {type:'info',    ...o}),
   success: (m, o)=>showToast(m, {type:'success', ...o}),
@@ -7978,8 +8108,9 @@ function ZoomableImage({ src, alt, onBackdropTap }) {
 }
 
 // Global opener — call from any component; the host below renders it.
-const openPhoto = (url, name, list) => {
-  window.dispatchEvent(new CustomEvent('he-photo', { detail: { url, name: name || "", list: Array.isArray(list) ? list : null } }));
+const openPhoto = (url, name, list, extra) => {
+  // v546: extra.onDelete(url) adds a Delete button to the viewer (the thumbnail × is gone).
+  window.dispatchEvent(new CustomEvent('he-photo', { detail: { url, name: name || "", list: Array.isArray(list) ? list : null, ...(extra || {}) } }));
 };
 
 function HEPhotoLightboxHost() {
@@ -8017,6 +8148,12 @@ function HEPhotoLightboxHost() {
         <span style={{color:'rgba(255,255,255,0.5)', fontSize:12.5, flexShrink:0}}>
           pinch · scroll · double-tap to zoom
         </span>
+        {photo.onDelete && (
+          <button onClick={()=>{ const fn = photo.onDelete, url = photo.url; setPhoto(null); try { fn(url); } catch (e) { console.error(e); } }}
+            style={{background:C.red, border:'none', color:'#fff', fontSize:12.5,
+              fontWeight:700, cursor:'pointer', borderRadius:6, padding:'6px 12px', minHeight:36,
+              fontFamily:'inherit', flexShrink:0}}>Delete photo</button>
+        )}
         <button onClick={()=>openUrl(photo.url)}
           style={{background:'rgba(255,255,255,0.15)', border:'none', color:'#fff', fontSize:12.5,
             fontWeight:600, cursor:'pointer', borderRadius:6, padding:'6px 10px',
@@ -8042,8 +8179,13 @@ function HEConfirmHost() {
   }, []);
   if (!state) return null;
   const close = (result) => { state.resolve?.(result); setState(null); };
-  const danger = state.danger ?? /delete|remove|clear|discard|reset|wipe|overwrite/i.test((state.message||'')+(state.title||''));
-  const confirmLabel = state.confirmLabel || (danger ? 'Delete' : 'Confirm');
+  // v546: a confirm names its own button. Callers pass confirmLabel; for the
+  // ones that don't, the button takes the verb from the question ("Reset
+  // counts?" → Reset) instead of guessing "Delete" for anything that sounded
+  // destructive, which put a red Delete on Restore jobs and Unlink folder.
+  const verb = ((state.message||'')+' '+(state.title||'')).match(/\b(delete|remove|discard|clear|reset|wipe|overwrite|revoke|restore|unlink|erase)\b/i);
+  const danger = state.danger ?? (!!verb && !/^(restore|unlink)$/i.test(verb[1]));
+  const confirmLabel = state.confirmLabel || (verb ? verb[1][0].toUpperCase()+verb[1].slice(1).toLowerCase() : 'Confirm');
   const cancelLabel  = state.cancelLabel  || 'Cancel';
   return (
     <div onClick={e=>{if(e.target===e.currentTarget) close(false);}}
@@ -8068,7 +8210,7 @@ function HEConfirmHost() {
               fontFamily:'inherit',fontWeight:600}}>{cancelLabel}</button>
           <button onClick={()=>close(true)} autoFocus
             style={{background:danger?C.red:C.accent,border:'none',
-              color:danger?'#fff':'#000',borderRadius:7,padding:'7px 16px',
+              color:'#fff',borderRadius:7,padding:'7px 16px',minHeight:40,
               fontSize:13,cursor:'pointer',fontFamily:'inherit',fontWeight:700}}>
             {confirmLabel}
           </button>
@@ -8826,11 +8968,11 @@ function JobNoteLine({
   };
 
   const removePhoto = async (p) => {
-    // Best-effort delete from Storage, then update the line.
-    if (p && p.storagePath) {
-      try { await deleteObject(ref(storage, p.storagePath)); } catch {}
-    }
-    onChange({ ...line, photos: photos.filter(x => x.id !== p.id) });
+    // v546: update the line at once; the Storage delete waits for the Undo bar.
+    const before = photos;
+    onChange({ ...line, photos: before.filter(x => x.id !== p.id) });
+    heUndo("Photo deleted", () => onChange({ ...line, photos: before }),
+      { onExpire: () => { if (p && p.storagePath) { try { deleteObject(ref(storage, p.storagePath)).catch(()=>{}); } catch {} } } });
   };
 
   // Materials attached to this line. Each entry is a plain string (e.g.
@@ -10455,7 +10597,7 @@ function JobNoteCard({
     });
   };
   const revokeShareLink = async () => {
-    const ok = await showConfirm('Revoke this share link?\n\nThe existing URL will stop working immediately. A new link can be generated later (it will have a different URL).');
+    const ok = await showConfirm({ message:'Revoke this share link?\n\nThe existing URL will stop working immediately. A new link can be generated later (it will have a different URL).', confirmLabel:'Revoke link', danger:true });
     if (!ok) return;
     onChange({
       ...note,
@@ -10535,10 +10677,11 @@ function JobNoteCard({
   };
 
   const removeNotePhoto = async (p) => {
-    if (p && p.storagePath) {
-      try { await deleteObject(ref(storage, p.storagePath)); } catch {}
-    }
-    onChange({ ...note, photos: (note.photos||[]).filter(x => x.id !== p.id), updatedAt: new Date().toISOString() });
+    // v546: on-screen at once, Storage delete deferred until the Undo bar runs out.
+    const before = (note.photos||[]);
+    onChange({ ...note, photos: before.filter(x => x.id !== p.id), updatedAt: new Date().toISOString() });
+    heUndo("Photo deleted", () => onChange({ ...note, photos: before, updatedAt: new Date().toISOString() }),
+      { onExpire: () => { if (p && p.storagePath) { try { deleteObject(ref(storage, p.storagePath)).catch(()=>{}); } catch {} } } });
   };
 
   const toggleSelect = (lineId) => {
@@ -14805,7 +14948,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
               {addedToPO?"Added to PO":"Add to PO"}
             </button>
           )}
-          <button onClick={async ()=>{ if(!await showConfirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
+          <button onClick={async ()=>{ if(!await showConfirm({ message:"Reset all counts to zero?", confirmLabel:"Reset counts", danger:false })) return; onChange(safe.map(i=>({...i,count:0}))); }}
             style={{padding:"10px 14px",borderRadius:8,
               border:`1px solid ${C.border}`,background:C.surface,
               color:C.faint,fontSize:13,fontWeight:700,
@@ -16079,14 +16222,24 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
   const [expandedCOs, setExpandedCOs] = useState({});
   const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
 
-  const add = () => {
+  // v546: "+ New change order" opens a sheet. Nothing is saved (and Jeromy is not
+  // pushed) until Submit — the old Add wrote a blank CO to the top of the list.
+  const [draftCO, setDraftCO] = useState(null);
+  const [statusPickFor, setStatusPickFor] = useState(null);
+  const office = can(getIdentity(), "cos.setStatus");
+  const add = () => setDraftCO({ id:uid(), desc:"", task:"", material:"", materialSource:"", time:"", sendTo:"", photos:[] });
+  const submitDraft = () => {
+    const d = draftCO; if (!d || !stripHtml(d.desc||"").trim()) return;
     const creator = getIdentity();
+    const now = new Date();
     onChange([...orders, {
-      id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
+      id:d.id, date:"", desc:d.desc, task:d.task, material:d.material, materialSource:d.materialSource||"", time:d.time, sendTo:d.sendTo,
+      photos:d.photos||[],
       coStatus:"needs_sending", coStatusDate:"",
       needsHardDate:false, needsByStart:"", needsByEnd:"",
       createdBy: creator?.name || "",
-      createdAt: new Date().toLocaleDateString("en-US"),
+      createdAt: now.toLocaleDateString("en-US"),
+      submittedAt: now.toISOString(), submittedBy: creator?.name || "",
       // Quote # captured AFTER the CO is sent (from Simpro). Starts blank;
       // the user types it in the header field. quoteAddedBy/quoteAddedAt
       // are stamped on first save below.
@@ -16094,6 +16247,20 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
       quoteAddedBy:"",
       quoteAddedAt:"",
     }]);
+    setDraftCO(null);
+    try { toast.success(`Change Order #${orders.length+1} sent to the office to quote`); } catch {}
+  };
+  // One place sets a CO's status (office only). Undo puts the old status back.
+  const setStatus = (o, value) => {
+    const prev = { coStatus:o.coStatus||"needs_sending", coStatusDate:o.coStatusDate||"", needsByStart:o.needsByStart||"", needsByEnd:o.needsByEnd||"", needsHardDate:!!o.needsHardDate };
+    const patch={coStatus:value};
+    if(!getStatusDef(CO_STATUSES_NEW,value).hasDate) patch.coStatusDate="";
+    // Switching away from approved clears the schedule window
+    if(value!=="approved"&&value!=="scheduled") { patch.needsByStart=""; patch.needsByEnd=""; patch.needsHardDate=false; }
+    upd(o.id,patch);
+    const def = getStatusDef(CO_STATUSES_NEW,value) || {};
+    const note = value==="approved" ? " · crew pushed, on the punch list" : value==="completed" ? " · invoice task made" : "";
+    heUndo(`${def.label||value}${note}`, () => upd(o.id, prev));
   };
 
   const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
@@ -16296,8 +16463,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
               </div>
             </div>
 
-            {/* Collapsed completed view — just shows the undo button */}
-            {isCollapsed&&(
+            {/* Collapsed completed view — just shows the undo button (office) */}
+            {isCollapsed&&office&&(
               <div style={{marginTop:6,display:"flex",justifyContent:"flex-end"}}>
                 <button onClick={e=>{e.stopPropagation();upd(o.id,{coStatus:"approved"});}}
                   style={{background:"none",border:"1px solid #1F7A3F44",borderRadius:7,
@@ -16315,30 +16482,27 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
             {!isConverted&&(
               <div style={{marginBottom:10}}>
 
-                {/* Status pill buttons */}
-                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
-                  {CO_STATUSES_NEW.filter(s=>s.value!=="converted").map(s=>{
-                    const active = (o.coStatus||"needs_sending")===s.value;
-                    return (
-                      <button key={s.value} onClick={()=>{
-                        const patch={coStatus:s.value};
-                        if(!getStatusDef(CO_STATUSES_NEW,s.value).hasDate) patch.coStatusDate="";
-                        // Switching away from approved clears the schedule window
-                        if(s.value!=="approved"&&s.value!=="scheduled") { patch.needsByStart=""; patch.needsByEnd=""; patch.needsHardDate=false; }
-                        upd(o.id,patch);
-                      }} style={{
-                        padding:"4px 12px",fontSize:12.5,fontWeight:active?700:500,
-                        borderRadius:99,border:`1px solid ${active?s.color:"var(--border)"}`,
-                        background:active?`${s.color}22`:"none",
-                        color:active?s.color:"var(--dim)",cursor:"pointer",fontFamily:"inherit",
-                        transition:"all 0.15s",
-                      }}>{s.label}</button>
-                    );
-                  })}
-                </div>
+                {/* v546: one status control. Office taps it to pick; crew see
+                    where it stands (seven one-tap pills used to let any crew
+                    tap set Approved, which pushes and changes the punch list). */}
+                {(()=>{
+                  const s = getStatusDef(CO_STATUSES_NEW,o.coStatus||"needs_sending") || CO_STATUSES_NEW[0];
+                  const pill = <span style={{display:"inline-flex",alignItems:"center",padding:"4px 12px",fontSize:12.5,fontWeight:700,borderRadius:99,border:`1px solid ${s.color}`,background:`${s.color}22`,color:s.color}}>{s.label}</span>;
+                  return office ? (
+                    <button type="button" onClick={()=>setStatusPickFor(o.id)}
+                      style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,width:"100%",minHeight:44,padding:"6px 12px",borderRadius:10,border:`1px solid ${C.border}`,background:C.card,cursor:"pointer",fontFamily:"inherit",marginBottom:10}}>
+                      {pill}<span style={{fontSize:12.5,color:C.dim,fontWeight:600}}>Change ▾</span>
+                    </button>
+                  ) : (
+                    <div style={{marginBottom:10}}>
+                      {pill}
+                      <div style={{fontSize:12.5,color:C.dim,marginTop:6}}>Status is set by the office. Need it moved? Reply on My Day.</div>
+                    </div>
+                  );
+                })()}
 
-                {/* Needs to be Sent — due date */}
-                {(o.coStatus||"needs_sending")==="needs_sending"&&(
+                {/* Needs to be Sent — due date (office) */}
+                {office&&(o.coStatus||"needs_sending")==="needs_sending"&&(
                   <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
                     background:"#C6282808",border:"1px solid #C6282833"}}>
                     <div style={{fontSize:11,fontWeight:700,color:"#C62828",letterSpacing:"0.08em",marginBottom:6}}>SEND BY DATE</div>
@@ -16375,11 +16539,15 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                         <div style={{fontSize:12.5,fontWeight:700,color:"#1F7A3F",marginBottom:8}}>
                           ✓ Crew is on site — mark work complete when done
                         </div>
-                        <button onClick={()=>upd(o.id,{coStatus:"completed",needsByStart:"",needsByEnd:"",needsHardDate:false})}
-                          style={{background:"#1F7A3F",border:"none",borderRadius:8,color:"#fff",
-                            fontSize:12.5,fontWeight:700,padding:"7px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                          ✓ Mark Work Completed
-                        </button>
+                        {office ? (
+                          <button onClick={()=>setStatus(o,"completed")}
+                            style={{background:C.green,border:"none",borderRadius:8,color:"#fff",
+                              fontSize:12.5,fontWeight:700,padding:"7px 16px",minHeight:40,cursor:"pointer",fontFamily:"inherit"}}>
+                            ✓ Mark Work Completed
+                          </button>
+                        ) : (
+                          <div style={{fontSize:12.5,color:C.dim}}>Done with it? Tell the office on My Day and they'll mark it complete.</div>
+                        )}
                       </>
                     ):(
                       <>
@@ -16516,7 +16684,76 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
         );
       })}
 
-      <Btn onClick={add} variant="ghost" style={{marginTop:4}}>+ Add Change Order</Btn>
+      <Btn onClick={add} variant="ghost" style={{marginTop:4}}>+ New change order</Btn>
+
+      {/* v546: office status picker — one sheet, large rows, says what each status does */}
+      {statusPickFor && (()=>{
+        const o = orders.find(x=>x.id===statusPickFor); if(!o) return null;
+        const cur = o.coStatus||"needs_sending";
+        const notes = { approved:"pushes crew · goes on the punch list", completed:"makes an invoice task", denied:"", scheduled:"needs a date", pending:"", needs_sending:"" };
+        return (
+          <SheetShell title={`Status · CO #${orders.indexOf(o)+1}`} onCancel={()=>setStatusPickFor(null)} onDone={()=>setStatusPickFor(null)} doneLabel="Close">
+            <div style={{padding:"12px 16px",display:"grid",gap:8}}>
+              {CO_STATUSES_NEW.filter(s=>s.value!=="converted").map(s=>(
+                <button key={s.value} type="button" onClick={()=>{ if(s.value!==cur) setStatus(o,s.value); setStatusPickFor(null); }}
+                  style={{display:"flex",alignItems:"center",gap:10,minHeight:48,padding:"8px 12px",borderRadius:10,textAlign:"left",
+                    border:`1px solid ${s.value===cur?s.color:C.border}`,background:s.value===cur?`${s.color}14`:C.card,cursor:"pointer",fontFamily:"inherit"}}>
+                  <span style={{display:"inline-flex",padding:"4px 12px",fontSize:12.5,fontWeight:700,borderRadius:99,border:`1px solid ${s.color}`,background:`${s.color}22`,color:s.color}}>{s.label}</span>
+                  {s.value===cur && <span style={{fontSize:12,color:C.dim,fontWeight:600}}>current</span>}
+                  {notes[s.value] && <span style={{fontSize:12,color:C.dim,marginLeft:"auto"}}>{notes[s.value]}</span>}
+                </button>
+              ))}
+            </div>
+          </SheetShell>
+        );
+      })()}
+
+      {/* v546: new change order — saved and sent to the office only on Submit */}
+      {draftCO && (()=>{
+        const d = draftCO; const set = (p) => setDraftCO(x => ({...x, ...p}));
+        const ready = !!stripHtml(d.desc||"").trim();
+        const dirty = ready || !!(d.task||"").trim() || !!(d.material||"").trim() || (d.photos||[]).length>0;
+        return (
+          <SheetShell title="New change order" dirty={dirty} onCancel={()=>setDraftCO(null)} onDone={submitDraft} doneLabel="Submit" doneDisabled={!ready}>
+            <div style={{padding:"12px 16px",display:"grid",gap:10}}>
+              <div>
+                <div style={{fontSize:12,color:C.dim,marginBottom:3}}>What changed</div>
+                <Inp value={d.desc||""} onChange={e=>set({desc:e.target.value})} placeholder="Describe the change order…" autoFocus/>
+              </div>
+              <div>
+                <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Send CO To</div>
+                <Inp value={d.sendTo||""} onChange={e=>set({sendTo:e.target.value})} placeholder="e.g. John Smith / GC / Homeowner…"/>
+              </div>
+              <div>
+                <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Estimated Time</div>
+                <Inp value={d.time||""} onChange={e=>set({time:e.target.value})} placeholder="e.g. 3 hrs"/>
+              </div>
+              <div>
+                <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Task (In Field)</div>
+                <TA value={d.task||""} onChange={e=>set({task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
+              </div>
+              <div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <div style={{fontSize:12,color:C.dim}}>Material Needed</div>
+                  <select value={d.materialSource||""} onChange={e=>set({materialSource:e.target.value})}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:d.materialSource?C.accent:C.dim,padding:"3px 7px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                    {MAT_SOURCES.map(s=><option key={s} value={s}>{s||"— source —"}</option>)}
+                  </select>
+                </div>
+                <TA value={d.material||""} onChange={e=>set({material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
+              </div>
+              {jobId && (
+                <div>
+                  <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Photos / files</div>
+                  <PhotoAttacher storagePath={`jobs/${jobId}/co-photos/${d.id}`} photos={d.photos||[]} onChange={(photos)=>set({photos})}
+                    color={C.accent} accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" label="Add photo / file"/>
+                </div>
+              )}
+              <div style={{fontSize:12.5,color:C.dim}}>Saved and sent to the office to quote only when you tap Submit.</div>
+            </div>
+          </SheetShell>
+        );
+      })()}
     </div>
   );
 }
@@ -16851,12 +17088,14 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
     // file, so deleting here only drops the RT's copy; the file stays put
     // for the CO's history (same ref-only semantics as the CO card's own
     // remove button in PhotoAttacher).
+    // v546: the card updates at once, the Storage delete waits for the Undo bar.
     const borrowedFromCO = /\/co-photos\//.test(photo.storagePath||"");
-    if(photo.storagePath && !borrowedFromCO) {
-      try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){}
-    }
     const trip = trips.find(t=>t.id===tripId);
-    upd(tripId, {photos:(trip?.photos||[]).filter(x=>x.id!==photo.id)});
+    const before = (trip?.photos||[]);
+    upd(tripId, {photos:before.filter(x=>x.id!==photo.id)});
+    heUndo("Photo deleted", () => upd(tripId, {photos:before}), { onExpire: () => {
+      if(photo.storagePath && !borrowedFromCO) { try { deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
+    }});
   };
 
 
@@ -17122,13 +17361,10 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                     </div>
                     )}
 
-                    <button onClick={()=>deletePhoto(t.id,p)}
-
-                      style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,0.7)",
-
-                        border:"none",borderRadius:"50%",color:"#fff",width:20,height:20,
-
-                        cursor:"pointer",fontSize:12.5,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                    <button onClick={()=>deletePhoto(t.id,p)} aria-label="Delete photo"
+                      style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,0.7)",
+                        border:"none",borderRadius:"50%",color:"#fff",width:"var(--he-tap, 28px)",height:"var(--he-tap, 28px)",
+                        cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
 
                   </div>
 
@@ -18282,7 +18518,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange, ready=tr
           </span>
         )}
         {loads.length>0&&(
-          <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
+          <button onClick={async ()=>{if(await showConfirm({ message:'Clear all loads?', confirmLabel:'Clear loads', danger:true })) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
               color:C.faint,fontSize:12.5,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
             Clear All
@@ -19294,10 +19530,13 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
   };
 
   const resend = async () => {
-    const msg = hoResponse?.submitted
-      ? 'Homeowner already submitted. Reset and resend?'
-      : 'Resend link with current load list?';
-    if (!await showConfirm(msg)) return;
+    // v546: say what Reset does (it erases the signed picks) and name the button.
+    const signedWho = hoResponse?.signature ? `${hoResponse.signature}'s` : "the homeowner's";
+    const signedWhen = hoResponse?.signedDate ? ` (signed ${hoResponse.signedDate})` : "";
+    const ok = hoResponse?.submitted
+      ? await showConfirm({ title:`Erase ${signedWho} signed selections?`, message:`Their picks and signature${signedWhen} are cleared and a fresh link is sent. They are not notified.`, confirmLabel:"Erase & resend", cancelLabel:"Keep", danger:true })
+      : await showConfirm({ message:'Resend link with current load list?', confirmLabel:'Resend link', danger:false });
+    if (!ok) return;
     setSending(true);
     try {
       // Preserve lighting-collab / Q&A / threads on the shared doc; reset
@@ -21115,10 +21354,14 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
     };
     saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: [...(r.items||[]), item] } : r));
     setAddingItemFor(null);
+    try { toast.success("Change logged"); } catch {}
   };
 
   const deleteItem = (roomId, itemId) => {
+    // v546: instant on screen, 10 s Undo (Tech Lighting sees this list).
+    const before = rooms;
     saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: (r.items||[]).filter(i => i.id !== itemId) } : r));
+    heUndo("Change deleted", () => saveRooms(before));
   };
 
   const startEditItem = (roomId, item) => setEditItem({
@@ -21382,9 +21625,10 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                 style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                   padding:"7px 10px",fontSize:13,fontFamily:"inherit",outline:"none"}}/>
               <div style={{display:"flex",gap:6}}>
-                <button onClick={()=>addItem(room.id)}
-                  style={{background:C.orange,color:"#fff",border:"none",borderRadius:7,padding:"6px 14px",
-                    fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                <button onClick={()=>addItem(room.id)} disabled={!newItem.location.trim()}
+                  title={newItem.location.trim()?"":"Type the location first"}
+                  style={{background:newItem.location.trim()?C.orange:C.border,color:newItem.location.trim()?"#fff":C.dim,border:"none",borderRadius:7,padding:"6px 14px",
+                    fontSize:13,fontWeight:700,cursor:newItem.location.trim()?"pointer":"not-allowed",fontFamily:"inherit"}}>
                   Add item
                 </button>
                 <button onClick={()=>setAddingItemFor(null)}
@@ -26933,7 +27177,7 @@ function DriveFilesSection({ job, onUpdate }) {
   };
 
   const handleRemoveFolder = async () => {
-    if (!await showConfirm("Remove Google Drive folder link?")) return;
+    if (!await showConfirm({ message:"Unlink the Google Drive folder? The folder and its files stay in Drive — only the link on this job is removed.", confirmLabel:"Unlink folder", danger:false })) return;
     onUpdate({ driveFolderId: "" });
     setFolderInput("");
     setEditingFolder(true);
@@ -27632,8 +27876,9 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
                     onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,label:e.target.value}:x))}/>
 
-                  <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
+                  <button onClick={()=>{ const before=links; setLinks(links.filter((_,j)=>j!==i)); heUndo(`Link removed${lnk.label?` · ${lnk.label}`:""}`, ()=>setLinks(before)); }}
 
+                    aria-label="Remove link"
                     style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:C.faint,cursor:"pointer",fontSize:14,flexShrink:0}}>✕</button>
 
                 </div>
@@ -28712,8 +28957,10 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
     setQjUploading(false);
   };
   const deleteJobPhoto = async (photo) => {
-    if(photo.storagePath) { try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
-    u({ photos: (job.photos || []).filter(x => x.id !== photo.id) });
+    // v546: on-screen at once, Storage delete deferred until the Undo bar runs out.
+    const before = (job.photos || []);
+    u({ photos: before.filter(x => x.id !== photo.id) });
+    heUndo("Photo deleted", () => u({ photos: before }), { onExpire: () => { if(photo.storagePath) { try { deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} } } });
   };
 
   return (
@@ -29094,8 +29341,10 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
     setTpUploading(false);
   };
   const deleteTpPhoto = async (photo) => {
-    if(photo.storagePath) { try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
-    u({tempPedPhotos: (job.tempPedPhotos || []).filter(x => x.id !== photo.id)});
+    // v546: on-screen at once, Storage delete deferred until the Undo bar runs out.
+    const before = (job.tempPedPhotos || []);
+    u({tempPedPhotos: before.filter(x => x.id !== photo.id)});
+    heUndo("Photo deleted", () => u({tempPedPhotos: before}), { onExpire: () => { if(photo.storagePath) { try { deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} } } });
   };
 
   const handleSignOff = () => {
@@ -29216,7 +29465,13 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
               <GcSecondContact job={job} u={u}/>
               <div>
                 <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Foreman</div>
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>{
+                  // v546: one place to change the foreman, with Undo (the push to the
+                  // new foreman goes out server-side on the save).
+                  const prev=job.foreman||"Koy", next=e.target.value; if(next===prev) return;
+                  u({foreman:next});
+                  heUndo(`Moved to ${next}${next!=="Unassigned"?" · they'll get a push":""}`, ()=>u({foreman:prev}));
+                }} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
               </div>
               <div>
                 <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Temp Ped #</div>
@@ -33959,7 +34214,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Foreman</div>
 
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>{
+                  // v546: one place to change the foreman, with Undo (the push to the
+                  // new foreman goes out server-side on the save).
+                  const prev=job.foreman||"Koy", next=e.target.value; if(next===prev) return;
+                  u({foreman:next});
+                  heUndo(`Moved to ${next}${next!=="Unassigned"?" · they'll get a push":""}`, ()=>u({foreman:prev}));
+                }} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
 
               </div>
 
@@ -36308,8 +36569,7 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
       </div>
       <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
         <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"6px 16px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
-        <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
-        <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
+        <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:13,minHeight:40,cursor:"pointer",fontFamily:"inherit"}}>Start as job ▾</button>
         <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.faint,fontSize:13,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
       </div>
     </div>
@@ -36317,6 +36577,10 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
 }
 
 function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuote, canManage=false, foremenList, openId=null, onOpened }) {
+  // v546: one "Start as job" button opens a sheet that lists what carries over
+  // (the bare ✓ and Q used to promote on a single, ungated tap).
+  const [promoteFor, setPromoteFor] = useState(null);
+  const askPromote = (u) => { if (!canManage) return; setPromoteFor(u.id); };
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   // Deep-link in from the Forecast → Starts report (Koy 2026-07-29): tapping a
@@ -36387,6 +36651,33 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
               {signedCount>0&&<span style={{marginLeft:8,color:C.green,fontWeight:700}}>· {signedCount} signed</span>}
             </div>
           </div>
+          {promoteFor && (()=>{
+            const u = upcoming.find(x=>x.id===promoteFor); if(!u) return null;
+            const rows = [
+              ["Address", u.address || (u.city ? `${u.city} (city only — fill the street on Job Info)` : "—")],
+              ["Projected rough start", u.projectedStart ? `${u.projectedStart}${u.startConfirmed?" · confirmed":""}` : "—"],
+              ["GC / customer", u.customer || "—"],
+              ["Foreman", u.foreman || "Unassigned"],
+              ["Photos", (u.photos||[]).length ? `${u.photos.length} carried over` : "none"],
+              ["Notes", u.notes ? "stay on the Upcoming card (copy them into the job if needed)" : "—"],
+            ];
+            return (
+              <SheetShell title="Start as job" onCancel={()=>setPromoteFor(null)} onDone={()=>setPromoteFor(null)} doneLabel="Close">
+                <div style={{padding:"12px 16px",display:"grid",gap:10}}>
+                  <div style={{fontSize:16,fontWeight:700,color:C.text}}>{u.name||"Untitled"}</div>
+                  <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",display:"grid",gap:6}}>
+                    <div style={{fontSize:11.5,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.dim}}>Carries over to the Job Board</div>
+                    {rows.map(([k,v])=>(<div key={k} style={{display:"flex",gap:10,fontSize:13.5}}><span style={{color:C.dim,minWidth:150}}>{k}</span><span style={{color:C.text}}>{v}</span></div>))}
+                  </div>
+                  <button onClick={()=>{ setPromoteFor(null); onPromote(u); }}
+                    style={{background:C.green,border:"none",borderRadius:10,color:"#fff",fontSize:15,fontWeight:700,minHeight:46,cursor:"pointer",fontFamily:"inherit"}}>Move to Job Board</button>
+                  <button onClick={()=>{ setPromoteFor(null); onPromoteToQuote(u); }}
+                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,fontSize:15,fontWeight:600,minHeight:46,cursor:"pointer",fontFamily:"inherit"}}>Make a Quote instead</button>
+                  <div style={{fontSize:12.5,color:C.dim}}>Either way the card leaves Upcoming. You get 10 seconds to undo.</div>
+                </div>
+              </SheetShell>
+            );
+          })()}
           {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#fff",fontWeight:700,padding:"9px 20px",fontSize:14,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
         </div>
       </div>
@@ -36408,7 +36699,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
               }}>
                 {isEditing ? (
                   <UpcomingEditForm u={u} upd={upd} del={del} foremenList={foremenList}
-                    onPromote={onPromote} onPromoteToQuote={onPromoteToQuote}
+                    onPromote={askPromote} onPromoteToQuote={askPromote}
                     setEditingId={setEditingId}/>
                 ) : (
                   <>
@@ -36430,8 +36721,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                           padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:isSigned?700:400,
                         }}>{isSigned?"✓ Signed":"Sign"}</button>}
                         {canManage&&<button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:12.5,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>}
-                        <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:12.5,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
-                        <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:12.5,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Move to Board</button>
+                        {canManage&&<button onClick={()=>askPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:12.5,fontWeight:700,padding:"4px 12px",minHeight:36,cursor:"pointer",fontFamily:"inherit"}}>Start as job ▾</button>}
                         {confirmDeleteId===u.id ? (
                           <>
                             <button onClick={()=>del(u.id)} style={{background:"#C62828",border:"none",borderRadius:5,color:"#fff",fontSize:12.5,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
@@ -36499,7 +36789,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                 onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isSigned?`${C.green}08`:"none";}}>
                 {isEditing ? (
                   <UpcomingEditForm u={u} upd={upd} del={del} foremenList={foremenList}
-                    onPromote={onPromote} onPromoteToQuote={onPromoteToQuote}
+                    onPromote={askPromote} onPromoteToQuote={askPromote}
                     setEditingId={setEditingId}/>
                 ) : (
                   <>
@@ -50687,7 +50977,11 @@ function AnnouncementView({ identity, id, onClose, siblings = [], onStep }) {
   const me = String((identity && identity.name) || "").trim().toLowerCase();
   const when = (iso) => { try { return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } };
   return createPortal(
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
+    <div onClick={async () => {
+        // v546: a half-typed reply survives a tap outside.
+        if ((reply.trim() || replyFiles.length) && !(await showConfirm({ title: "Discard your reply?", message: "What you typed would be lost.", confirmLabel: "Discard", cancelLabel: "Keep editing", danger: true }))) return;
+        onClose();
+      }} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
       display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 8px 8px", overflowY: "auto" }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Message from the office"
         style={{ width: "min(600px, 100%)", background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
@@ -51201,7 +51495,12 @@ function BroadcastComposer({ identity, users, onClose }) {
   const s = result && result.summary;
 
   return createPortal(
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
+    <div onClick={async () => {
+        // v546: a typed message, picked people or attachments survive a tap outside.
+        const draft = stage === "edit" && (title.trim() || body.trim() || sel.size > 0 || attachments.length > 0);
+        if (draft && !(await showConfirm({ title: "Discard this message?", message: `Your text${sel.size ? `, the ${sel.size} people you picked` : ""}${attachments.length ? " and the attachments" : ""} would be lost.`, confirmLabel: "Discard", cancelLabel: "Keep editing", danger: true }))) return;
+        onClose();
+      }} style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.45)",
       display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "6vh 8px 8px", overflowY: "auto" }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-label="Send a notification"
         style={{ width: "min(560px, 100%)", background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
@@ -53358,7 +53657,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
               const backupRaw=localStorage.getItem('hejobs_backup');
               if(!backupRaw){toast.warn('No backup found');return;}
               const backupJobs=JSON.parse(backupRaw);
-              if(!await showConfirm(`Restore ${backupJobs.length} jobs from local backup? This will overwrite current Firestore data with your cached version.`)) return;
+              if(!await showConfirm({ message:`Restore ${backupJobs.length} jobs from local backup? This will overwrite current Firestore data with your cached version.`, confirmLabel:`Restore ${backupJobs.length} jobs`, danger:true })) return;
               setRestoring(true);
               const count=await onRestoreFromBackup();
               setRestoring(false);
@@ -53381,7 +53680,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
                   // Support both formats: {jobs:[...]} or raw array [...]
                   const jobsArr=Array.isArray(parsed)?parsed:(parsed.jobs||[]);
                   if(!jobsArr.length){toast.warn('No jobs found in file');return;}
-                  if(!await showConfirm(`Restore ${jobsArr.length} jobs from "${file.name}"? This will overwrite current Firestore data.`)) return;
+                  if(!await showConfirm({ message:`Restore ${jobsArr.length} jobs from "${file.name}"? This will overwrite current Firestore data.`, confirmLabel:`Restore ${jobsArr.length} jobs`, danger:true })) return;
                   setRestoring(true);
                   const count=await onRestoreFromFile(jobsArr);
                   setRestoring(false);
@@ -53746,6 +54045,8 @@ function HomeownerPage({ jobId }) {
   const [sigName,    setSigName]    = useState('');
   const [sigDate,    setSigDate]    = useState(()=>new Date().toISOString().slice(0,10));
   const [sigErr,     setSigErr]     = useState(false);
+  const [stage,      setStage]      = useState('pick');      // v546: pick → review → (submitted)
+  const [sentAt,     setSentAt]     = useState('');
 
   useEffect(()=>{
     (async()=>{
@@ -53756,6 +54057,7 @@ function HomeownerPage({ jobId }) {
         const rsnap = await getDoc(doc(db,'homeowner_requests',jobId));
         if(rsnap.exists()&&rsnap.data().submitted){
           setSubmitted(true);
+          setSigName(rsnap.data().signature||''); setSentAt(rsnap.data().submittedAt||'');
           setItems(rsnap.data().items||[]);
           setGenLoads(rsnap.data().genLoads||[]);
         } else {
@@ -53840,10 +54142,14 @@ function HomeownerPage({ jobId }) {
           genLoads: applyHomeownerSubmitToGenLoads(srv, outItems),
         };
       }, 'HomeownerPage-submit');
+      setSentAt(new Date().toISOString());
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
   };
+  // v546: a confirmation that shows what was picked and offers a way to change it.
+  const sentDateLabel = sentAt ? new Date(sentAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+  const firstName = (sigName||'').trim().split(/\s+/)[0] || '';
 
   const A='#2F5BD9', AB='#EAF0FA', ABorder='#C7D6EE';
   const base={fontFamily:'system-ui,-apple-system,sans-serif',minHeight:'100vh',background:'#EEF0F3',color:'#1B1F24'};
@@ -53852,16 +54158,36 @@ function HomeownerPage({ jobId }) {
   if(loading) return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:14,color:C.faint}}>Loading…</div></div>;
   if(error)   return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center',padding:32,textAlign:'center'}}><div style={{fontSize:14,color:'#C62828'}}>{error}</div></div>;
   if(job && isSectionHidden(job,"generator")) return <SectionNotSharedPage/>; // v440
-  if(submitted) return (
-    <div style={{...base,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:40,textAlign:'center'}}>
-      <div style={{width:56,height:56,borderRadius:'50%',background:'#ECF2EE',border:'0.5px solid #CDE6D7',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,marginBottom:20}}>✓</div>
-      <div style={{fontSize:20,fontWeight:500,marginBottom:8}}>Selections received</div>
-      <div style={{fontSize:14,color:'#5E6670',maxWidth:320,lineHeight:1.6}}>
-        Thank you. Homestead Electric has your generator load selections.
+  if(submitted) {
+    const picks = items.filter(it => it.status==='chosen' || it.included);
+    return (
+    <div style={{...base,maxWidth:560,margin:'0 auto',padding:'32px 16px 60px'}}>
+      <div style={{textAlign:'center',marginBottom:18}}>
+        <div style={{width:56,height:56,borderRadius:'50%',background:'#ECF2EE',border:'0.5px solid #CDE6D7',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:24,marginBottom:14}}>✓</div>
+        <div style={{fontSize:22,fontWeight:700}}>Got it{firstName?`, ${firstName}`:''}.</div>
+        <div style={{fontSize:14,color:C.dim,lineHeight:1.6,marginTop:4}}>
+          {sentDateLabel?`Sent ${sentDateLabel} · `:''}Homestead Electric will confirm the generator size and get back to you.
+        </div>
       </div>
-      <div style={{marginTop:40,fontSize:12.5,color:'#666E79',letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
+      <div style={{...card,padding:'14px 16px'}}>
+        <div style={{fontSize:12,fontWeight:700,color:A,letterSpacing:'0.08em',marginBottom:8}}>YOU PICKED · {picks.length}</div>
+        {picks.length===0 && <div style={{fontSize:14,color:C.dim}}>Nothing on the generator.</div>}
+        {picks.map(it=>(<div key={it.id} style={{fontSize:14,padding:'6px 0',borderTop:'0.5px solid #EEF0F3'}}>{it.name||'Unnamed'}</div>))}
+      </div>
+      <button onClick={()=>{ setSubmitted(false); setStage('pick'); }}
+        style={{width:'100%',marginTop:10,padding:'14px',borderRadius:10,background:'#fff',border:'0.5px solid #E1E4E9',color:C.text,fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+        Change my picks
+      </button>
+      <div style={{...card,marginTop:10,padding:'14px 16px'}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.faint,letterSpacing:'0.08em',marginBottom:6}}>QUESTIONS</div>
+        {HE_OFFICE_PHONE
+          ? <div style={{fontSize:14}}>Homestead Electric · <a href={`tel:${HE_OFFICE_PHONE.replace(/[^0-9+]/g,'')}`} style={{color:A,fontWeight:600,textDecoration:'none'}}>{HE_OFFICE_PHONE}</a><div style={{fontSize:12.5,color:C.dim,marginTop:2}}>Tap to call, or text us.</div></div>
+          : <div style={{fontSize:14,color:C.dim,lineHeight:1.5}}>Reply to the text or email that sent you this link and we'll sort it out.</div>}
+      </div>
+      <div style={{textAlign:'center',marginTop:28,fontSize:12.5,color:C.faint,letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
     </div>
-  );
+    );
+  }
 
   return (
     <div style={{...base,maxWidth:560,margin:'0 auto',padding:'24px 16px 80px'}}>
@@ -54029,8 +54355,26 @@ function HomeownerPage({ jobId }) {
           </>
         )}
 
-        {/* Sign off */}
+        {/* v546: review before sending; nothing can be sent with no picks */}
+        {stage==='pick' && (
+          <div style={{marginTop:28,paddingTop:20,borderTop:'0.5px solid #E1E4E9'}}>
+            <button onClick={()=>{ if(chosenItems.length){ setStage('review'); try { window.scrollTo({top:0,behavior:'smooth'}); } catch {} } }} disabled={!chosenItems.length}
+              style={{width:'100%',padding:'15px',borderRadius:10,border:'none',
+                background:chosenItems.length?C.text:C.border,color:chosenItems.length?'#fff':C.faint,
+                fontSize:14,fontWeight:600,cursor:chosenItems.length?'pointer':'not-allowed',fontFamily:'inherit'}}>
+              Review my picks ({chosenItems.length})
+            </button>
+            {!chosenItems.length && <div style={{textAlign:'center',marginTop:10,fontSize:13,color:C.dim}}>Confirm at least one circuit to continue.</div>}
+            <div style={{textAlign:'center',marginTop:14,fontSize:12,color:C.faint,letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
+          </div>
+        )}
+        {/* Sign off (review stage) */}
+        {stage==='review' && (
         <div style={{marginTop:28,paddingTop:20,borderTop:'0.5px solid #E1E4E9'}}>
+          <div style={{fontSize:12,fontWeight:700,color:A,letterSpacing:'0.08em',marginBottom:8}}>REVIEW BEFORE SENDING · {chosenItems.length}</div>
+          <div style={{...card,padding:'10px 14px',marginBottom:16}}>
+            {chosenItems.map(it=>(<div key={it.id} style={{fontSize:14,padding:'6px 0',borderTop:'0.5px solid #EEF0F3'}}>✓ {it.name||'Unnamed'}</div>))}
+          </div>
           <div style={{fontSize:14,fontWeight:500,marginBottom:4}}>Sign &amp; Submit</div>
           <div style={{fontSize:13,color:'#5E6670',marginBottom:14,lineHeight:1.5}}>
             By submitting you confirm these circuits represent your generator load selection.
@@ -54055,17 +54399,24 @@ function HomeownerPage({ jobId }) {
             </div>
           </div>
           {sigErr&&<div style={{fontSize:12.5,color:'#C62828',marginBottom:10}}>Please enter your name and date.</div>}
-          <button onClick={submit} disabled={submitting}
-            style={{width:'100%',padding:'15px',borderRadius:10,
-              background:submitting?'#E1E4E9':'#1B1F24',border:'none',
-              color:submitting?C.faint:'#fff',fontSize:14,fontWeight:500,
-              cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit'}}>
-            {submitting?'Submitting…':'Submit my selections'}
-          </button>
-          <div style={{textAlign:'center',marginTop:14,fontSize:12,color:'#666E79',letterSpacing:'0.06em'}}>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>setStage('pick')} disabled={submitting}
+              style={{flex:'0 0 auto',padding:'15px 18px',borderRadius:10,background:'#fff',border:'0.5px solid #E1E4E9',color:C.text,fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+              Back
+            </button>
+            <button onClick={submit} disabled={submitting||!chosenItems.length}
+              style={{flex:1,padding:'15px',borderRadius:10,
+                background:submitting?C.border:C.text,border:'none',
+                color:submitting?C.faint:'#fff',fontSize:14,fontWeight:600,
+                cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit'}}>
+              {submitting?'Sending…':'Send to Homestead'}
+            </button>
+          </div>
+          <div style={{textAlign:'center',marginTop:14,fontSize:12,color:C.faint,letterSpacing:'0.06em'}}>
             HOMESTEAD ELECTRIC
           </div>
         </div>
+        )}
       </div>
     </div>
   );
@@ -56602,10 +56953,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-15 · App SW version: v545
+**Last manifest update:** 2026-10-15 · App SW version: v546
 
 ---
 
+- **Stop the bad writes (UX backlog batch 1): sign-in can't overwrite the team, refused team saves keep your work, CO status is office-only and a new CO is saved on Submit, Cancel means cancel, every delete gets a 10-second Undo, confirm boxes name their button, the homeowner generator page reviews before sending, promote carries its fields** · 'shipped 2026-10-15' · 'SW v546' · 'heUndo' · 'HEUndoHost' · 'HE_OFFICE_PHONE' · 'UserPicker' · 'saveUsers' · 'CrewBoard' · 'UserManagement' · 'ChangeOrders' · 'SheetShell' · 'RichMobileSheet' · 'PhotoAttacher' · 'HEPhotoLightboxHost' · 'HEConfirmHost' · 'HomeownerPage' · 'UpcomingJobs' · 'LutronAdditionsView' · 'firestore.rules settings/users' · Batch 1 of the combined 2026-10-14 usability backlog ('docs/ux-backlog-combined-2026-10-14.md'), built to the approved mockup 'docs/mockups/batch1-stop-the-bad-writes.html'; Koy: *"Approved as drawn. Go with Option A for Cancel (it asks Discard?) and add the shrink-refusal rule in Firestore."* **One Undo bar for the app** ('heUndo(label, revert, {onExpire})' + 'HEUndoHost', mounted beside the confirm host): the same dark bar My Day uses, 10 s countdown, steel-blue Undo; 'onExpire' is where a deferred Storage delete goes, so a photo file is only really gone once the bar ran out. **(1) Sign-in:** the roster loads behind a *Loading the team…* card with Retry; the stand-in record ('DEFAULT_USERS', now '_standIn:true') is never offered and never written; 'saveUsers' refuses to write before the real list loaded, strips the stand-in, and refuses any list that would shrink by two or more ('firestore.rules' now enforces the same on 'settings/users': create/update only when 'request.resource.data.list.size() + 1 >= resource.data.list.size()'); the local roster and identity update only after 'setDoc' succeeds; a PIN create signs the person in only when the save returned true, otherwise a red *PIN not saved* card with Reload. **(2) Crew Board:** 'save()' clears dirty only when 'onSave' returns true; on a refusal a red *Not saved* bar keeps the staged moves and *Save again* re-applies them on top of the fresh roster ('baseRef' + 'rebase'). **(3) Team Members:** 'save' awaits 'onSave', stays open on a refusal with the same bar, and the roster effect keeps the row being edited; Remove asks *Permanently delete {name}?* with the button *Delete forever*; Deactivate's button says Deactivate. **(4) Change orders:** new 'cos.setStatus' permission (admin/manager); the seven one-tap status pills are replaced by one 44 px status button (office) that opens a picker sheet listing what each status does, with Undo; crew see a read-only pill and *Status is set by the office*; the Send-by date, Mark Work Completed and Undo Complete are office-only; *+ New change order* opens a sheet and the CO is written (and Jeromy pushed by 'onJobUpdate') only on Submit, stamped 'submittedAt/By' — no more blank CO at the top of the list. **(5) Punch sheet (Koy, Option A):** Cancel with text typed asks *Discard this item?* (Keep editing / Discard); nothing is added or ordered on Discard; the crash draft still autosaves while typing. **(6) Deletes with Undo:** 'PhotoAttacher' lost its 18 px corner ×; photos are deleted from the full-screen viewer (*Delete photo*) and files from a Remove link, both with Undo; return-trip, job, temp-ped, job-note and note-line photo deletes update at once and defer the Storage delete to 'onExpire'; the Plans & Links ✕, the Needs board delete (now the shared bar instead of an inline strip) and plan-change items get the bar too. **(7) Confirm boxes:** 'HEConfirmHost' takes the verb from the question (Reset counts? → Reset) instead of guessing Delete for anything destructive-sounding; non-danger buttons are white-on-blue (was black); explicit labels on Revoke link, Reset counts, Clear loads, Restore N jobs, Unlink folder, Erase & resend / Resend link, Delete forever, Deactivate. **(8) Homeowner generator page:** *Review my picks (N)* (off at zero) → review list + name/date → *Send to Homestead*; the thank-you page lists the picks, the sent date, *Change my picks*, and the office number ('HE_OFFICE_PHONE', blank until filled — falls back to "reply to the message that sent you this link"); Reset & resend is now *Erase & resend* and says whose signed picks it erases. **(9) Upcoming → job:** the bare ✓ / Q buttons are replaced by one manager-only *Start as job ▾* that opens a sheet listing what carries over (address, projected rough start + confirmed, GC, foreman, photos) with *Move to Job Board* / *Make a Quote instead*; promote copies 'address' (City only as a fallback), 'roughProjectedStart', 'roughStartConfirmed' and 'photos', and the Undo bar deletes the new job and restores the card. **(10) Plan changes:** delete with Undo; *Add item* disabled until a location is typed; *Change logged* toast. **(11) Drafts survive an outside tap:** 'SheetShell' takes 'dirty'; a scrim tap, drag-down or Cancel with a draft shows an in-sheet *Discard this draft?*; the quick-add need sheet and the new CO sheet pass it; the announcement composer and the discussion reply backdrops ask through 'showConfirm' first. **(12) Foreman reassign:** the dimmed per-row *→ Name* buttons on the Job Board are gone; the Foreman select on Job Info shows *Moved to X · they'll get a push* with Undo. Guides updated in the same ship: 'changeorders.html', 'photos.html', 'needs.html', 'generatorlink.html', 'jobinfo.html', 'settings.html'. Crew brief 'docs/crew-briefs/v546.md'. **Why it won't lose data:** every change is additive UI or a stricter guard: no job field is renamed or removed, 'promote' only adds fields 'blankJob' already carries, the Undo bar's revert re-issues the exact prior patch through the same save funnels, Storage deletes are deferred (never widened), 'saveUsers' only ever refuses more (stand-in strip, not-loaded guard, shrink guard) and the rules change is the same shrink guard on one doc — a refused team save is kept on screen, never dropped; deploy the rules with 'firebase deploy --only firestore:rules' in the same window as the push (the client guard works without them).
 - **Friday Strategy prep replaces the Friday Packet — one Drive folder "Meeting Prep" for the Monday, Wednesday and Friday pulls, no notification** · 'shipped 2026-10-15' · 'SW v545' · 'strategyPrep' · 'functions/strategyPrep.js' · 'MEETING_PREP_FOLDERS' · 'OD_DOCS' · Koy: *"Friday strategy meeting needs to be completly redone. The pull right now doesnt really help me … Real block and scheduling concerns need to be addressed in this meeting."*, *"it just needs to be 100 percent accurate."*, then *"this does not need to be a notification or anything, and i want it structed in a seperate drive folder and needs to include all meeting doc pulls."* Every Friday at 6:00 AM the function writes a new Google Doc, **Friday Strategy Prep — <date>**, into Drive › Meeting Prep › Friday Strategy (Koy pastes its body into Josh's Weekly Strategy/Scheduling notes doc; Josh's doc is only read, for the "Carried from last week" section, and prints a share hint until it is shared with the two service accounts). Sections: carried items, a 3-line headline, next week's schedule — **booked** comes from Simpro schedules and the planner only, never from a job's foreman or lead; every in-progress job with nobody booked, with its wait reason; starts checked for crew, roles and Job Prep; dates that moved since last Friday; inspections, QC, scans and walks; PTO, pending requests, bodies, new hires, capacity; planner-vs-Simpro conflicts — then blocked jobs grouped by who we wait on with "cleared" marks, coming starts and crews freeing, money (ready to invoice, margin at finish, approved COs), QC to schedule, last week, and a blank action table. **No push on success**; only a failure alert to Koy (the harness fails the build if one is re-added). **Drive:** one folder *Meeting Prep* with *Monday Scramble* (the Claude routine), *Wednesday Lead Meeting* (the Tuesday 4 PM Weekly Lead Meeting doc now lands there) and *Friday Strategy*. **Dashboard › Automations › Automated docs** shows those three cards (each opens the newest real doc; TEST / PREVIEW copies never count) plus a Meeting Prep folder card; Run now on the Wednesday and Friday cards (the Friday one makes a "TEST — Friday Strategy Prep" doc and waits up to 9 min). **Retired:** 'fridayPacket' + 'sendTestFridayPacket' (Fri 5:30 AM packet, 'settings/fridayPacket' no longer read), 'leadMeetingPrep' + 'sendTestLeadMeetingPrep' (the Tuesday 6 AM duplicate of the Wednesday pull), the never-run Claude routine 'friday-strategy-prep', 'scripts/packet-dryrun.js'; 'functions/fridayPacket.js' stays as a pure module because 'dailySimproTotals' uses its money-candidate rule; 'functions/leadMeetingPrep.js' stays because 'foremanMeetingPrep' builds its upcoming board through it. Exports 108 → 106. Tests: 'scripts/strategyprep-test.js' (236 checks on the real Lot 208 / Namjoshi / Hideout cases, also under 'TZ=UTC'), 'scripts/autodocs-test.js' (three prefixes), 'scripts/odash-model-test.js' (Wednesday / Friday card status), all in prebuild; 'scripts/strategyprep-dryrun.js' renders a PREVIEW doc from live data. Guide 'dashboard.html' updated. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:strategyPrep,functions:sendTestStrategyPrep,functions:autoDocsLatest,functions:foremanMeetingPrep,functions:sendTestForemanMeetingPrep' then 'firebase functions:delete fridayPacket sendTestFridayPacket leadMeetingPrep sendTestLeadMeetingPrep'. **Why it won't lose data:** read-only on jobs, needs, users, settings and Simpro; writes are one new Google Doc per run, one additive merge to 'settings/strategyPrep' (test runs never advance it) and the v542 run stamp; no job write, no loader, rules or save-path change; the retired functions only wrote docs and their own settings docs.
 - **Job Board — one-button CSV of the job list (Job ID, name, foreman, lead)** · 'shipped 2026-10-15' · 'SW v544' · 'downloadJobListCsv' · 'jobListRows' · 'jobListCsv' · 'homeBoardFilter' · Josh (2026-10-14): *"Can I get a one-button 'export job list as CSV' in the app (Job ID, name, foreman, lead)?"* A **CSV** button (download icon) sits to the right of the **Pipeline Overview** heading on the Job Board (Koy: *"put it next to pipeline overview"*). It downloads 'Jobs — Residential — YYYY-MM-DD.csv' (or 'Commercial', whichever board is open) with four columns — **Job ID** (the Simpro #), **Job name**, **Foreman**, **Lead** — for every job on that board (the current division; the ALL JOBS search does not narrow it). Rows sort by Simpro # as a number (987 before 1438), jobs with no number last, then by name; names are trimmed; a job with no name is left out. Commas and quotes in names are escaped; the file starts with a BOM so Excel reads it as UTF-8 (same '_downloadTextFile' path as the Panelized Lighting loads CSV). The button is disabled when the board is empty. The home-board search was lifted into a pure 'homeBoardFilter(jobs, search)' (same behaviour) so the harness can cover it. Gate: 'scripts/needs-dryrun.js' (+10 checks on ordering, dropped rows, escaping, header-only, and the shared filter incl. foreman and CO quote # matches). No guide change: the Job Board has no '?' guide. **Why it won't lose data:** read-only — the button only reads the jobs already loaded on the board and writes nothing to Firestore; no new field, loader, rules, function or save path change.
 - **The office dashboard opens for every admin, not only Koy** · 'shipped 2026-10-15' · 'SW v543' · 'canOpenDash' · 'DashPage' · Koy, right after v542: *"lets also make it so any admin can log into this please"*. '/dashboard' used to open only for Koy's own team record (id 'koy'); it now opens for any **active admin** on Settings → Team (today Koy, Josh Cloward, Brady Nelson, Justin Cloward), checked against the live team record, so deactivating someone or moving them off admin locks them out on their next load. Everyone else still sees "This page is private" (now "It only opens for an admin's login"). Each admin sees the same page; the greeting and "Your urgent My Day tasks" follow whoever is signed in; Koy's own doc tiles (his Bonus Tracker and First 90 Days plan) show only for Koy. The plan File it / Not ours buttons were already gated server-side to the Head of Residential or an admin, so nothing changes there. Guide 'dashboard.html' and the home-screen app description updated. **Why it won't lose data:** a read gate only — one access check widened from one id to the admin level; no write, field, loader, rule or function touched.
@@ -61583,8 +61935,14 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
   const [openId, setOpenId]   = useState(null);   // person whose sheet is open
   const [handoff, setHandoff] = useState(null);   // {id, toTitle} — demoting a foreman with crew
   const [saving, setSaving]   = useState(false);
+  const [refused, setRefused] = useState(false);  // v546: a refused save keeps the staged moves on screen
   // Sync from server only when there are no unsaved local edits.
   useEffect(() => { if (!dirty) setList(users); }, [users, dirty]);
+  // v546: the roster this board's edits were made against. On a refused save
+  // (someone else saved first) the staged moves are re-applied on top of the
+  // fresh roster, instead of the old roster + my moves overwriting theirs.
+  const baseRef = useRef(users);
+  useEffect(() => { if (!dirty) baseRef.current = users; }, [users, dirty]);
 
   const T = crewBoardTitle;
   const first = n => String(n || "").trim().split(/\s+/)[0] || "?";
@@ -61629,8 +61987,24 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
   const openSheet  = id => { setOpenId(id); setHandoff(null); };
   const closeSheet = () => { setOpenId(null); setHandoff(null); };
 
-  const save = async () => { setSaving(true); try { await onSave(list); } finally { setSaving(false); setDirty(false); setOpenId(null); setHandoff(null); } };
-  const discard = () => { setList(users); setDirty(false); closeSheet(); };
+  const rebase = (l) => {
+    const base = baseRef.current || [];
+    return users.map(u => {
+      const mine = l.find(x => x.id === u.id), b = base.find(x => x.id === u.id);
+      if (mine && b && (T(mine) !== T(b) || (mine.foremanId || "") !== (b.foremanId || ""))) return { ...u, title: mine.title, foremanId: mine.foremanId || "" };
+      return u;
+    });
+  };
+  const save = async () => {
+    const toSave = refused ? rebase(list) : list;
+    if (refused) setList(toSave);
+    setSaving(true);
+    let ok = false;
+    try { ok = (await onSave(toSave)) !== false; } finally { setSaving(false); }
+    if (ok) { setDirty(false); setRefused(false); setOpenId(null); setHandoff(null); }
+    else { setRefused(true); }   // moves stay; the bar below says why
+  };
+  const discard = () => { setList(users); setDirty(false); setRefused(false); closeSheet(); };
 
   // Pending-changes review — what Save will write, in words.
   const pending = list.filter(u => savedOf(u.id) && changed(u)).map(u => {
@@ -61744,6 +62118,16 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
         {unassigned.map(personCard)}
         {unassigned.length === 0 && <div style={{ fontSize: 12.5, color: C.dim, fontStyle: "italic" }}>Everyone's on a crew.</div>}
       </div>
+      {refused && (
+        <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, background: `${C.red}14`, border: `1px solid ${C.red}`, fontSize: 13.5, color: C.text, display: "grid", gap: 8 }}>
+          <b style={{ color: C.red }}>Not saved</b>
+          <span style={{ lineHeight: 1.45 }}>Someone else changed the team since this screen loaded. Your {pending.length} change{pending.length === 1 ? "" : "s"} {pending.length === 1 ? "is" : "are"} still here — Save again puts {pending.length === 1 ? "it" : "them"} on top of the new list.</span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" onClick={save} disabled={saving} style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, minHeight: 40, padding: "8px 16px", cursor: "pointer", fontFamily: "inherit" }}>{saving ? "Saving…" : "Save again"}</button>
+            <button type="button" onClick={discard} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, color: C.dim, fontSize: 13.5, minHeight: 40, padding: "8px 14px", cursor: "pointer", fontFamily: "inherit" }}>Discard my changes</button>
+          </div>
+        </div>
+      )}
       {pending.length > 0 && (
         <div style={{ marginTop: 12, fontSize: 13, color: C.dim }}>
           <b style={{ color: C.orange }}>{pending.length} unsaved change{pending.length > 1 ? "s" : ""}</b>
@@ -65118,9 +65502,9 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   };
   // Delete is instant with a 10s Undo (no confirm popup). saveNeed re-creates
   // the identical doc id, so Undo is a byte-identical restore.
-  const [undoDel, setUndoDel] = useState(null);
-  const remove    = (n) => { onDeleteNeed && onDeleteNeed(n.id); if (undoDel && undoDel.timer) clearTimeout(undoDel.timer); const timer = setTimeout(() => setUndoDel(null), 10000); setUndoDel({ need: n, timer }); };
-  const undoRemove = () => { if (!undoDel) return; if (undoDel.timer) clearTimeout(undoDel.timer); onSaveNeed && onSaveNeed(undoDel.need); setUndoDel(null); };
+  // v546: the Undo rides the shared fixed bar (it used to be an inline strip at
+  // the top of the page, off-screen after scrolling).
+  const remove    = (n) => { onDeleteNeed && onDeleteNeed(n.id); heUndo(`Deleted “${n.text}”`, () => { onSaveNeed && onSaveNeed(n); }); };
 
   const pill = (text, bg, fg, icon, onClick) => (
     <span onClick={onClick}
@@ -65260,13 +65644,6 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
             </Btn>
           )}
         </>} />
-
-      {undoDel && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, background: "#1B2030", color: "#E6EAF1", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 14 }}>
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Deleted “{undoDel.need.text}”</span>
-          <button onClick={undoRemove} style={{ fontFamily: "inherit", fontWeight: 700, color: "#66A8FF", background: "transparent", border: "none", cursor: "pointer", fontSize: 14, flexShrink: 0 }}>Undo</button>
-        </div>
-      )}
 
       {/* Lanes (Due) or folded groups (Job / Person, v539) */}
       {groupBy === "due" ? (
@@ -66759,6 +67136,10 @@ function App() {
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
+  // v546: sign-in shows "Loading the team…" instead of the stand-in name, and
+  // saveUsers refuses to write until the real list has loaded on this device.
+  const [usersLoad, setUsersLoad] = useState("loading");   // loading | ok | error
+  const loadUsersRef = useRef(null);
   useEffect(() => { _setNudgeRoster(users); }, [users]);  // feed the RemindButton roster cache
   useEffect(() => { _setTaskOwnerFallback(resiHeadName(users)); }, [users]);  // auto-task owner = Head of Residential hat
   // Timestamp of the team doc this device loaded. saveUsers' stale-write guard
@@ -66773,7 +67154,7 @@ function App() {
       "fonoivasa","abraham","asher","austin","bailey","brady","braxton","callen",
       "isaiah","jacob_nuffer","jacob_spackman","jakob","james","noah","payton",
     ]);
-    getDoc(doc(db,"settings","users")).then(snap=>{
+    const loadUsers = () => { setUsersLoad("loading"); getDoc(doc(db,"settings","users")).then(snap=>{
       usersBaseTsRef.current = (snap.exists() && snap.data().updated_at) ? snap.data().updated_at : null;
       const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
       const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
@@ -66795,7 +67176,10 @@ function App() {
       // Delayed off the load like publishCcJobsIndex so anon auth + the org
       // join have settled first, and so it never competes with UI work.
       if (cleaned.length) setTimeout(() => backfillCrewRoster(cleaned), 8000);
-    }).catch(()=>{});
+      setUsersLoad("ok");
+    }).catch(()=>{ setUsersLoad("error"); }); };
+    loadUsersRef.current = loadUsers;
+    loadUsers();
 
     // ── Load color overrides only from settings/main ───────────
     // Name lists are ALWAYS derived from users by role — never stored separately
@@ -66809,7 +67193,14 @@ function App() {
     }).catch(()=>{});
   },[]);
 
-  const saveUsers = async (list) => {
+  const saveUsers = async (listIn) => {
+    // v546: never write the stand-in placeholder, and never write at all before
+    // the real list has loaded on this device (the sign-in overwrite hole).
+    const list = (Array.isArray(listIn) ? listIn : []).filter(u => u && !u._standIn);
+    if (usersLoad !== "ok") {
+      try { toast.error("The team list hasn't loaded on this phone yet — not saved. Reload and try again."); } catch {}
+      return false;
+    }
     // ── Stale-write guard ──────────────────────────────────────
     // Re-read the live team doc first. If it changed since this device loaded
     // it, REFUSE to overwrite — that blind overwrite is how a full setup gets
@@ -66819,6 +67210,13 @@ function App() {
       const cur = await getDoc(doc(db,"settings","users"));
       const remoteTs = cur.exists() ? (cur.data().updated_at || null) : null;
       const baseTs   = usersBaseTsRef.current;
+      // v546 shrink guard (mirrored in firestore.rules): one removal at a time
+      // is a real edit; a list that drops two or more people is a stale phone.
+      const remoteList = cur.exists() && Array.isArray(cur.data().list) ? cur.data().list : [];
+      if (remoteList.length > 1 && list.length + 1 < remoteList.length) {
+        try { toast.error(`That would shrink the team from ${remoteList.length} to ${list.length} people — not saved. Reload and try again.`); } catch {}
+        return false;
+      }
       if (remoteTs && baseTs && remoteTs !== baseTs) {
         const fresh = (cur.data() && cur.data().list) || [];
         setUsers(fresh);
@@ -66832,11 +67230,8 @@ function App() {
       return false;
     }
     // ── Safe to write ──────────────────────────────────────────
-    setUsers(list);
-    if(identity) {
-      const updated = list.find(u=>u.id===identity.id);
-      if(updated) { saveIdentity(updated); setIdentity(updated); }
-    }
+    // v546: the local list and identity update only AFTER the write lands, so a
+    // failed save can't show "Saved" (the Crew Board used to).
     const now = new Date().toISOString();
     try {
       await setDoc(doc(db,"settings","users"), {
@@ -66846,6 +67241,11 @@ function App() {
         device: localStorage.getItem('he_device_id') || "",
       });
       usersBaseTsRef.current = now;
+      setUsers(list);
+      if(identity) {
+        const updated = list.find(u=>u.id===identity.id);
+        if(updated) { saveIdentity(updated); setIdentity(updated); }
+      }
       // P4.2: seed any NEWLY-ADDED employee into FieldInk's crewroster right
       // away (create-only, so existing rows — and Koy's role/active toggles —
       // are never touched). Fire-and-forget; the once-per-session backfill
@@ -69637,28 +70037,9 @@ function App() {
           </div>
 
           <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",flexShrink:0}}>
-
-            {_foremen.filter(f=>f!==foreman).map(f2=>(
-
-              <button key={f2} onClick={e=>{e.stopPropagation();const patch={foreman:f2};updateJob({...job,...patch},patch);}}
-                title={`Reassign to ${f2}`}
-                style={{background:"none",border:`1px solid ${_foremanColors[f2]}44`,borderRadius:6,
-
-                  color:_foremanColors[f2],fontSize:12,padding:"3px 8px",cursor:"pointer",
-
-                  fontFamily:"inherit",whiteSpace:"nowrap",transition:"opacity 0.15s",
-                  /* Dimmed default so a board with N foremen × M jobs
-                     doesn't drown the eye in reassign buttons. Full
-                     opacity on hover preserves discoverability — they're
-                     still there, just quieter when you're not aiming. */
-                  opacity:0.4}}
-
-                onMouseEnter={e=>e.currentTarget.style.opacity="1"}
-
-                onMouseLeave={e=>e.currentTarget.style.opacity="0.4"}>→ {f2}</button>
-
-            ))}
-
+            {/* v546: the per-row "→ Name" reassign buttons are gone (one tap moved a
+                job to another crew with no confirm or undo). Foreman is changed on
+                Job Info, where it now shows an Undo bar. */}
             {can(identity,"job.delete")&&(
               <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
 
@@ -69862,12 +70243,13 @@ function App() {
 
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
-    return <UserPicker users={users.filter(u=>u.active!==false)}
+    return <UserPicker users={users.filter(u=>u.active!==false && !u._standIn)} loadState={usersLoad} onRetry={()=>{ if (loadUsersRef.current) loadUsersRef.current(); }}
       onSelect={m => { saveIdentity(m); setIdentity(m); registerFCMToken(m.id); }}
       onSavePin={async (updated) => {
-        // Save the new PIN into the users list in Firestore
+        // Save the new PIN into the users list in Firestore. v546: the result
+        // matters — UserPicker signs the person in only when this returns true.
         const newList = users.map(u => u.id===updated.id ? updated : u);
-        await saveUsers(newList);
+        return await saveUsers(newList);
       }}
     />;
   }
@@ -69889,6 +70271,7 @@ function App() {
       <div aria-hidden="true" style={{position:"fixed",inset:0,zIndex:-1,pointerEvents:"none",
         background:`linear-gradient(rgba(238,240,243,.85),rgba(238,240,243,.85)), url(/icon-192.png) center center / 320px 320px no-repeat, ${C.bg}`}}/>
       <HEConfirmHost/>
+      <HEUndoHost/>
       <HEPhotoLightboxHost/>
       <HEToastHost/>
       <HeSaveHud status={syncStatus} onRetry={flushSaves}/>
@@ -71897,19 +72280,38 @@ function App() {
             saveAllUpcoming(next);
           }}
           onPromote={(u)=>{
+            // v546: carry the real address, projected start, confirmed flag and
+            // photos (City used to land in Address and the rest was dropped), and
+            // offer Undo, which deletes the new job and puts the card back.
             const j=stampDivision(blankJob());
-            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
+            j.name=u.name||""; j.address=u.address||u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
+            if(u.projectedStart) j.roughProjectedStart=u.projectedStart;
+            if(u.startConfirmed) j.roughStartConfirmed=true;
+            if(Array.isArray(u.photos)&&u.photos.length) j.photos=u.photos;
+            const prevUpcoming=upcoming;
             const next=upcoming.filter(x=>x.id!==u.id);
             setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("home"); saveJob(j); saveAllUpcoming(next);
+            heUndo(`${u.name||"Job"} moved to the Job Board`, ()=>{
+              setAllJobs(js=>js.filter(x=>x.id!==j.id)); setSelected(s=>s&&s.id===j.id?null:s);
+              deleteJobRemote(j.id); setUpcoming(prevUpcoming); saveAllUpcoming(prevUpcoming); setView("upcoming");
+            });
           }}
           onPromoteToQuote={(u)=>{
             const j=stampDivision(blankJob());
-            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
+            j.name=u.name||""; j.address=u.address||u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
+            if(u.projectedStart) j.roughProjectedStart=u.projectedStart;
+            if(u.startConfirmed) j.roughStartConfirmed=true;
+            if(Array.isArray(u.photos)&&u.photos.length) j.photos=u.photos;
             j.type="quote"; j.quoteNumber=nextQuoteNumber(allJobs);
+            const prevUpcoming=upcoming;
             const next=upcoming.filter(x=>x.id!==u.id);
             setAllJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
             setView("quotes"); saveJob(j); saveAllUpcoming(next);
+            heUndo(`${u.name||"Job"} made a Quote`, ()=>{
+              setAllJobs(js=>js.filter(x=>x.id!==j.id)); setSelected(s=>s&&s.id===j.id?null:s);
+              deleteJobRemote(j.id); setUpcoming(prevUpcoming); saveAllUpcoming(prevUpcoming); setView("upcoming");
+            });
           }}
         />
       )}

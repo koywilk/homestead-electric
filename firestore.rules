@@ -119,7 +119,21 @@ service cloud.firestore {
     // rest of the app works today).
     match /settings/{docId} {
       allow read: if true;
-      allow write: if true;
+      // v546 (batch 1, "stop the bad writes"): the team list may never SHRINK by
+      // more than one person in a single write. Removing one person is a real
+      // edit; a list that drops two or more is a stale phone (the sign-in screen
+      // used to be able to write a one-person list over the whole company while
+      // the real list was still loading). Everything else in /settings is open as
+      // before. Per the version-lock rule, the lock lives here, not in a popup.
+      allow create, update: if docId != "users" || teamListNotShrunk();
+      allow delete: if docId != "users";
+    }
+    function teamListNotShrunk() {
+      return request.resource.data.list is list
+          && (resource == null
+              || !("list" in resource.data)
+              || !(resource.data.list is list)
+              || request.resource.data.list.size() + 1 >= resource.data.list.size());
     }
 
     // ── CONFIG ────────────────────────────────────────────────────────────────
