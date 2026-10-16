@@ -69,17 +69,18 @@ const makePreview = process.argv.includes("--doc");
     const r = await google.calendar({ version: "v3", auth }).events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${w.weekYmds[0]}T00:00:00-06:00`, timeMax: `${w.weekYmds[4]}T23:59:59-07:00`, singleEvents: true, maxResults: 250 }, { timeout: 20000 });   // window one hour WIDER on both ends in every DST state
     calendarEvents = r.data.items || []; } catch (e) { inputErrors.push(`calendar: ${e.message}`); console.log("calendar:", e.message); }
 
-  let notesDoc = null;
+  let notesDoc = null, notesError = null;
   try {
     const roAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
     notesDoc = (await google.docs({ version: "v1", auth: roAuth }).documents.get({ documentId: NOTES_DOC })).data || null;
   } catch (e) {
     inputErrors.push(`notes doc read: ${String(e.message).slice(0, 80)}`);
+    notesError = S.NOTES_READ_HINT + " (and with firebase-adminsdk-fbsvc@homestead-electric.iam.gserviceaccount.com for this preview)";
     if (e.code === 403 || /permission/i.test(e.message)) console.log("notes doc: 403 — for the live function share Josh's doc (Viewer) with homestead-electric@appspot.gserviceaccount.com; for this preview also with firebase-adminsdk-fbsvc@homestead-electric.iam.gserviceaccount.com");
     else console.log("notes doc read:", e.message);
   }
 
-  const inputs = { jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now };
+  const inputs = { jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, notesError, simproOk, now };
   const model = S.buildModel(inputs);
   const lines = S.renderLines(model);
   if (inputErrors.length) lines.splice(1, 0, { text: "Some data did not load this run: " + inputErrors.join("; "), kind: "grey" });
@@ -109,11 +110,18 @@ const makePreview = process.argv.includes("--doc");
     else {
       const bucketOf = {}, mark = (rows, label) => rows.forEach(r => { if (!liveIds.has(r.jobId)) return;
         if (bucketOf[r.jobId]) { console.log(`DUPLICATE ${r.name}: ${bucketOf[r.jobId]} + ${label}`); process.exitCode = 2; } bucketOf[r.jobId] = label; });
-      mark(s.booked, "booked"); mark(s.idle, "nobody booked"); mark(s.starts, "start"); mark(s.onHold, "on hold"); mark(s.between, "not started or between phases, no date (not printed)");
+      // between must be exactly the two dateless exemptions; a dated row there means a date went nowhere.
+      const BUG = "DATED IN THE PAST — RULE BUG";
+      mark(s.booked, "booked"); mark(s.idle, "nobody booked"); mark(s.starts.filter(r => !r.overdue), "start"); mark(s.starts.filter(r => r.overdue), "overdue start"); mark(s.onHold, "on hold");
+      mark(s.later, "dated after next week (Coming up)");
+      mark(s.between.filter(r => !r.finishStart && r.kind === "between"), "between phases, no date (exempt)");
+      mark(s.between.filter(r => !r.finishStart && r.kind === "notStarted"), "not started, no date");
+      mark(s.between.filter(r => r.finishStart || (r.kind !== "between" && r.kind !== "notStarted")), BUG);
       live.sort((a, b) => a.name.localeCompare(b.name)).forEach(j => console.log(`  ${(bucketOf[j.id] || "MISSING — RULE BUG").padEnd(42)} ${j.name}`));
+      const bugs = live.filter(j => bucketOf[j.id] === BUG); if (bugs.length) process.exitCode = 2;
       const pipe = s.starts.filter(r => !liveIds.has(r.jobId));
       if (pipe.length) { console.log("\n  upcoming (not in app):"); pipe.forEach(r => console.log(`  ${"upcoming (not in app)".padEnd(42)} ${r.name}`)); }
-      const missing = live.filter(j => !bucketOf[j.id]); console.log(`\nlive ${live.length} · booked ${s.booked.length} (doc shows ${model.schedule.booked.length} + ${model.schedule.bookedMore} more) · nobody booked ${s.idle.length} · starts ${s.starts.length} (${pipe.length} not in app) · on hold ${s.onHold.length} · between ${s.between.length} · MISSING ${missing.length}`);
+      const missing = live.filter(j => !bucketOf[j.id]); console.log(`\nlive ${live.length} · booked ${s.booked.length} (doc shows ${model.schedule.booked.length} + ${model.schedule.bookedMore} more) · nobody booked ${s.idle.length} · starts ${s.starts.length} (${pipe.length} not in app) · on hold ${s.onHold.length} · later ${s.later.length} · between ${s.between.length} · rule bugs ${bugs.length} · MISSING ${missing.length}`);
       if (missing.length) process.exitCode = 2;
     }
   }

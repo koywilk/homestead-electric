@@ -5093,14 +5093,17 @@ async function runStrategyPrep({ testRun = false } = {}) {
   } catch (e) { inputErrors.push(`calendar: ${e.message}`); functions.logger.warn("strategyPrep calendar read failed", { error: e.message }); }
 
   // 5 · Josh's notes doc, READ ONLY, for carry-forward. 403 until shared with the service account as Viewer ⇒ section degrades.
-  let notesDoc = null;
+  let notesDoc = null, notesError = null;
   try {
     const roAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
     notesDoc = (await google.docs({ version: "v1", auth: roAuth }).documents.get({ documentId: STRATEGY_NOTES_DOC_ID })).data || null;
-  } catch (e) { inputErrors.push(`notes doc read: ${e.message.slice(0, 80)}`); functions.logger.warn("strategyPrep notes doc read failed", { error: e.message }); }
+  } catch (e) {
+    inputErrors.push(`notes doc read: ${e.message.slice(0, 80)}`); functions.logger.warn("strategyPrep notes doc read failed", { error: e.message });
+    notesError = strategyLib.NOTES_READ_HINT;   // the Carried section prints this instead of "Nothing carried."
+  }
 
   // 6 · Build (pure).
-  const model = strategyLib.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now });
+  const model = strategyLib.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, notesError, simproOk, now });
   const lines = strategyLib.renderLines(model);
   if (inputErrors.length) lines.splice(1, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });
   const docTitle = `${testRun ? "TEST — " : ""}${model.heading}`;

@@ -159,7 +159,7 @@ function fixture(over = {}) {
   const idx = S.buildScheduleIndex(f.scheduleEntries, f.plannerDoc, live, w.weekYmds);
 
   const keys = S.dateKeys(live);
-  t("dateKeys: Namjoshi rough start + Miller 4-way/QC/scan/RT", keys["NAM:roughProjectedStart"] === "2026-10-19" && keys["MIL:fourWayTargetDate"] === "2026-10-21" && keys["MIL:qcStatusDate"] === "2026-10-21" && keys["MIL:matterportStatusDate"] === "2026-10-23" && keys["MIL:rt:0"] === "2026-10-20", JSON.stringify(keys));
+  t("dateKeys: Namjoshi rough start + Miller 4-way/QC/scan/RT", keys["NAM:roughStart"] === "2026-10-19" && keys["MIL:fourWayTargetDate"] === "2026-10-21" && keys["MIL:qcStatusDate"] === "2026-10-21" && keys["MIL:matterportStatusDate"] === "2026-10-23" && keys["MIL:rt:0"] === "2026-10-20", JSON.stringify(keys));
   const prev = { "NAM:roughProjectedStart": [{ d: "2026-10-02", v: "2026-10-08" }, { d: "2026-10-09", v: "2026-10-12" }], "L208:fourWayTargetDate": [{ d: "2026-10-09", v: "2026-10-01" }] };
   const mv = S.movedDates(live, prev, w.today);
   t("movedDates: Namjoshi 10/12 → 10/19 is the 3rd date", (() => { const r = mv.rows.find(x => x.name.startsWith("Namjoshi")); return r && r.from === "10/12" && r.to === "10/19" && r.nth === 3 && r.label === "rough start"; })(), JSON.stringify(mv.rows));
@@ -217,10 +217,10 @@ function fixture(over = {}) {
     const mv = S.movedDates(live, prev, w.today);
     t("cleared date: Namjoshi rough start 10/19 → no date", mv.rows.length === 1 && mv.rows[0].name.startsWith("Namjoshi") && mv.rows[0].label === "rough start" && mv.rows[0].from === "10/19" && mv.rows[0].to === "no date", JSON.stringify(mv.rows));
     const nx = S.nextDates(live, prev, "2026-10-16");
-    t("cleared date: nextDates ends with an empty value", nx["NAM:roughProjectedStart"].length === 2 && nx["NAM:roughProjectedStart"][1].v === "" && nx["NAM:roughProjectedStart"][1].d === "2026-10-16", JSON.stringify(nx["NAM:roughProjectedStart"]));
-    t("cleared date: second run with that history prints no row", S.movedDates(live, nx, w.today).rows.length === 0 && eq(S.nextDates(live, nx, "2026-10-23")["NAM:roughProjectedStart"], nx["NAM:roughProjectedStart"]));
+    t("cleared date: nextDates ends with an empty value (old key name read, new key name written)", nx["NAM:roughStart"].length === 2 && nx["NAM:roughStart"][1].v === "" && nx["NAM:roughStart"][1].d === "2026-10-16" && !("NAM:roughProjectedStart" in nx), JSON.stringify(nx["NAM:roughStart"]));
+    t("cleared date: second run with that history prints no row", S.movedDates(live, nx, w.today).rows.length === 0 && eq(S.nextDates(live, nx, "2026-10-23")["NAM:roughStart"], nx["NAM:roughStart"]));
     const gone = S.nextDates(live.filter(j => j.id !== "NAM"), prev, "2026-10-16");
-    t("cleared date: a job no longer live drops out of next and prints nothing", !("NAM:roughProjectedStart" in gone) && S.movedDates(live.filter(j => j.id !== "NAM"), prev, w.today).rows.length === 0);
+    t("cleared date: a job no longer live drops out of next and prints nothing", !("NAM:roughProjectedStart" in gone) && !("NAM:roughStart" in gone) && S.movedDates(live.filter(j => j.id !== "NAM"), prev, w.today).rows.length === 0);
     // a completed return trip is not a cleared date
     const f3 = fixture(); f3.jobs.push({ id: "RTJ", name: "RT Job", roughStatus: "inprogress", roughStage: "20%", returnTrips: [{ rtStatus: "complete", rtStatusDate: "10/20/2026" }] });
     const mv3 = S.movedDates(S.liveJobs(f3.jobs), { "RTJ:rt:0": [{ d: "2026-10-09", v: "2026-10-20" }] }, w.today);
@@ -229,13 +229,13 @@ function fixture(over = {}) {
   // 4. nextDates behavior
   {
     const same = S.nextDates(live0, { "NAM:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-19" }] }, "2026-10-16");
-    t("nextDates: unchanged value is not appended", same["NAM:roughProjectedStart"].length === 1 && same["NAM:roughProjectedStart"][0].d === "2026-10-09");
+    t("nextDates: unchanged value is not appended", same["NAM:roughStart"].length === 1 && same["NAM:roughStart"][0].d === "2026-10-09");
     const chg = S.nextDates(live0, { "NAM:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-12" }] }, "2026-10-16");
-    t("nextDates: changed value appends today's entry", eq(chg["NAM:roughProjectedStart"], [{ d: "2026-10-09", v: "2026-10-12" }, { d: "2026-10-16", v: "2026-10-19" }]), JSON.stringify(chg["NAM:roughProjectedStart"]));
+    t("nextDates: changed value appends today's entry", eq(chg["NAM:roughStart"], [{ d: "2026-10-09", v: "2026-10-12" }, { d: "2026-10-16", v: "2026-10-19" }]), JSON.stringify(chg["NAM:roughStart"]));
     const six = [1, 2, 3, 4, 5, 6].map(n => ({ d: `2026-09-0${n}`, v: `2026-09-1${n}` }));
-    const cap = S.nextDates(live0, { "NAM:roughProjectedStart": six }, "2026-10-16")["NAM:roughProjectedStart"];
+    const cap = S.nextDates(live0, { "NAM:roughProjectedStart": six }, "2026-10-16")["NAM:roughStart"];
     t("nextDates: history capped at 6, oldest dropped", cap.length === 6 && cap[0].d === "2026-09-02" && cap[5].v === "2026-10-19", JSON.stringify(cap));
-    t("nextDates: first run (null prev) seeds one entry per key", S.nextDates(live0, null, "2026-10-16")["NAM:roughProjectedStart"].length === 1);
+    t("nextDates: first run (null prev) seeds one entry per key", S.nextDates(live0, null, "2026-10-16")["NAM:roughStart"].length === 1);
   }
   // 4/5. passed branches and guards
   {
@@ -244,7 +244,7 @@ function fixture(over = {}) {
     f.jobs.push({ id: "FIN2", name: "Final Insp Job", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%", finalInspectionTargetDate: "10/10/2026" });
     f.jobs.push({ id: "OLD", name: "Rough Done Old Target", roughStatus: "complete", roughStage: "100%", finishStatus: "waiting_date", fourWayTargetDate: "8/1/2026" });
     const mv = S.movedDates(S.liveJobs(f.jobs), {}, w.today);
-    const p = (n) => mv.passed.filter(x => x.name === n);
+    const p = (n) => mv.passed.filter(x => x.name === n).map(x => ({ name: x.name, label: x.label, date: x.date }));
     t("passed: finish start before today, finish not started", eq(p("Finish Start Job"), [{ name: "Finish Start Job", label: "finish start", date: "10/12" }]), JSON.stringify(mv.passed));
     t("passed: final inspection before today, finish in progress, no result", eq(p("Final Insp Job"), [{ name: "Final Insp Job", label: "final inspection", date: "10/10" }]), JSON.stringify(mv.passed));
     t("passed: rough-complete job with an old 4-way target is NOT in passed", p("Rough Done Old Target").length === 0, JSON.stringify(mv.passed));
@@ -379,7 +379,7 @@ function fixture(over = {}) {
   t("lastWeek: rt 4-week average from state weeks = 2.5", m.lastWeek.rtAvg4 === 2.5, String(m.lastWeek.rtAvg4));
   t("headline: three lines, line 1 counts", m.headline.length === 3 && /jobs crewed/.test(m.headline[0]) && /nobody booked/.test(m.headline[0]) && /starts/.test(m.headline[0]), JSON.stringify(m.headline));
   t("headline: line 3 money", /\$53k ready to bill on 1 job/.test(m.headline[2]), m.headline[2]);
-  t("nextState: blockerKeys, marginByJob, dates, userIds, weeks (cap 8), lastRunAt absent (orchestrator adds)", Array.isArray(m.nextState.blockerKeys) && m.nextState.marginByJob.WADE === -6 && m.nextState.dates["NAM:roughProjectedStart"] && m.nextState.userIds.length === f.users.length && m.nextState.weeks.length === 3 && m.nextState.weeks[0].ymd === "2026-10-16", JSON.stringify(Object.keys(m.nextState)));
+  t("nextState: blockerKeys, marginByJob, dates, userIds, weeks (cap 8), lastRunAt absent (orchestrator adds)", Array.isArray(m.nextState.blockerKeys) && m.nextState.marginByJob.WADE === -6 && m.nextState.dates["NAM:roughStart"] && m.nextState.userIds.length === f.users.length && m.nextState.weeks.length === 3 && m.nextState.weeks[0].ymd === "2026-10-16", JSON.stringify(Object.keys(m.nextState)));
   t("counts: every §4.3 bucket counted + between", typeof m.counts.booked === "number" && typeof m.counts.between === "number");
   const bad = S.buildModel({ ...f, jobs: null, scheduleEntries: "garbage", simproOk: false });
   t("degrade: null jobs → every section error string, model still returned", typeof bad.schedule.error === "string" && typeof bad.blocked.error === "string" && Array.isArray(bad.headline));
@@ -423,7 +423,7 @@ function fixture(over = {}) {
 
   let m6; let threw = false;
   try { m6 = S.buildModel(fixture({ prevState: { blockerKeys: ["K:Material"], marginByJob: { Z: 1 }, dates: { "NAM:roughProjectedStart": [null, 7, { d: "2026-10-09" }, { d: "2026-10-09", v: "2026-10-12" }], "RIV:roughProjectedStart": null }, userIds: ["koy"], weeks: [] } })); } catch (e) { threw = true; }
-  t("fix6: poisoned prevState.dates (null, number, no-v entries) → whole model survives; bad entries dropped, today's value appended", !threw && m6.schedule.error === false && Array.isArray(m6.nextState.blockerKeys) && !m6.stateError && (() => { const h = m6.nextState.dates["NAM:roughProjectedStart"]; return h && h[h.length - 1].v === "2026-10-19" && h[h.length - 1].d === "2026-10-16" && h.every(e => e && typeof e.v === "string"); })(), threw ? "threw" : JSON.stringify(m6 && m6.nextState && m6.nextState.dates) + String(m6 && m6.schedule.error));
+  t("fix6: poisoned prevState.dates (null, number, no-v entries) → whole model survives; bad entries dropped, today's value appended", !threw && m6.schedule.error === false && Array.isArray(m6.nextState.blockerKeys) && !m6.stateError && (() => { const h = m6.nextState.dates["NAM:roughStart"]; return h && h[h.length - 1].v === "2026-10-19" && h[h.length - 1].d === "2026-10-16" && h.every(e => e && typeof e.v === "string"); })(), threw ? "threw" : JSON.stringify(m6 && m6.nextState && m6.nextState.dates) + String(m6 && m6.schedule.error));
   t("fix6: the one valid history entry still drives a moved row (Namjoshi 10/12 → 10/19)", !threw && m6.schedule.moved.some(r => /Namjoshi/.test(r.name) && r.from === "10/12" && r.to === "10/19"), JSON.stringify(m6 && m6.schedule.moved));
   const m6b = S.buildModel(fixture({ jobs: null, notesDoc: null, prevState: { blockerKeys: ["K:Material"], marginByJob: {}, dates: {}, userIds: [], weeks: [] } }));
   t("fix6: missing jobs array → carried section still produced, nextState = prev fallback (not null)", m6b.carried && m6b.carried.error === false && m6b.nextState && eq(m6b.nextState.blockerKeys, ["K:Material"]));
@@ -535,6 +535,63 @@ function fixture(over = {}) {
   let bad = null, threw = false; try { bad = S.renderLines(mBad); } catch (e) { threw = true; }
   const bt = bad ? bad.map(l => l.text) : [];
   t("review3: malformed start row → schedule prints heading + one grey 'could not be rendered'; Money and Action items still render", !threw && bad.some(l => l.kind === "grey" && /could not be rendered/.test(l.text)) && bad.some(l => l.kind === "h3" && /^Schedule next week/.test(l.text)) && bt.includes("Money") && bt.includes("Action items") && bt.filter(x => /could not be rendered/.test(x)).length === 1 && !bt.some(x => /Broken Row/.test(x)), bt.filter(x => /rendered|Schedule/.test(x)).join(" | "));
+}
+
+// ── Final fix wave: CRITICAL (C1–C3) ─────────────────────────────────────────
+{
+  const HINT = "Couldn't read Josh's notes doc. Share it (Viewer) with homestead-electric@appspot.gserviceaccount.com to get carry-forward.";
+  // C1 — a failed notes-doc read must say so, never "Nothing carried."
+  const mErr = S.buildModel(fixture({ notesDoc: null, notesError: HINT }));
+  const tErr = S.renderLines(mErr).map(l => l.text);
+  t("C1: notesError → carried.error is the share hint, no rows", mErr.carried.error === HINT && mErr.carried.rows.length === 0 && mErr.carried.fromLabel === "", JSON.stringify(mErr.carried));
+  t("C1: render prints the hint line and never 'Nothing carried.'", tErr.includes(HINT) && !tErr.includes("Nothing carried."), tErr.slice(0, 8).join(" | "));
+  t("C1: the hint constant is exported for the orchestrator", S.NOTES_READ_HINT === HINT);
+  const mOk = S.buildModel(fixture({ notesDoc: null }));
+  t("C1: no error + no doc → still 'Nothing carried.'", S.renderLines(mOk).some(l => l.text === "Nothing carried.") && mOk.carried.error === false);
+
+  // C2 — start dates follow the app: scheduled/inprogress → StatusDate || ProjectedStart; else ProjectedStart || StatusDate.
+  const prepAll = { redlinePlans: true, cabinetPlans: true, applianceSpecs: true, plansUploaded: true, readyToHandOff: true };
+  const c2Jobs = [
+    { id: "SCH", name: "Status Dated", foreman: "Daegan Smith", lead: "Treycen Rollene", roughStatus: "scheduled", roughStatusDate: "10/21/2026", prepChecklist: prepAll },
+    { id: "SCH2", name: "Scheduled Beats Projected", roughStatus: "scheduled", roughStatusDate: "10/20/2026", roughProjectedStart: "10/12/2026" },
+    { id: "WD", name: "Waiting Date Projected Wins", roughStatus: "waiting_date", roughProjectedStart: "10/22/2026", roughStatusDate: "9/1/2026" },
+    { id: "LATER", name: "Confirmed Three Weeks Out", roughStatus: "complete", finishStatus: "date_confirmed", finishProjectedStart: "11/6/2026", finishStartConfirmed: true },
+    { id: "IDLS", name: "Scheduled No Date", roughStatus: "complete", finishStatus: "scheduled" },
+    { id: "PREPS", name: "Finish Scheduled By Status Date", roughStatus: "complete", finishStatus: "scheduled", finishStatusDate: "10/30/2026", prepChecklist: prepAll },
+  ];
+  const f2 = fixture(); f2.jobs.push(...c2Jobs);
+  const m2 = S.buildModel(f2), s2 = m2.schedule;
+  const st = (id) => s2.starts.find(r => r.jobId === id);
+  t("C2: scheduled, no projected start, status date 10/21 inside the window → Starts, confirmed, Wed", !!st("SCH") && st("SCH").confirmed === true && st("SCH").di === 2 && !st("SCH").overdue, JSON.stringify(st("SCH")));
+  t("C2: scheduled → status date (10/20) beats a stale projected start (10/12)", !!st("SCH2") && st("SCH2").di === 1 && !st("SCH2").overdue, JSON.stringify(st("SCH2")));
+  t("C2: waiting_date → projected start (10/22) beats the status date (9/1)", !!st("WD") && st("WD").di === 3, JSON.stringify(st("WD")));
+  t("C2/F1: confirmed finish start three weeks out → later, not idle", s2.later.some(r => r.jobId === "LATER") && !s2.idle.some(r => r.jobId === "LATER") && m2.counts.later >= 1, JSON.stringify({ later: s2.later, idle: s2.idle.map(r => r.jobId) }));
+  t("C2/F1: the later job still shows under Coming up (week of 11/2)", m2.coming.weeks.some(w => w.label === "Week of 11/2" && w.rows.some(r => r.name === "Confirmed Three Weeks Out")), JSON.stringify(m2.coming.weeks.map(w => [w.label, w.rows.map(r => r.name)])));
+  t("C2: finish scheduled by status date 10/30 → Coming up week of 10/26 and In prep", m2.coming.weeks.some(w => w.label === "Week of 10/26" && w.rows.some(r => r.name === "Finish Scheduled By Status Date")) && m2.coming.prep.some(r => r.name === "Finish Scheduled By Status Date"), JSON.stringify([m2.coming.weeks, m2.coming.prep]));
+  const lines2 = S.renderLines(m2).map(l => l.text);
+  const idl = lines2.find(x => /Scheduled No Date/.test(x));
+  t("C2: idle row for a not-in-progress status prints the status, not N%", s2.idle.some(r => r.jobId === "IDLS") && !!idl && /finish scheduled, no date/.test(idl) && !/finish 0%/.test(idl), idl);
+  const k2 = S.dateKeys(S.liveJobs(f2.jobs));
+  t("C2: dateKeys keys the resolved start as <id>:<phase>Start", k2["SCH:roughStart"] === "2026-10-21" && k2["SCH2:roughStart"] === "2026-10-20" && k2["WD:roughStart"] === "2026-10-22" && !("SCH:roughProjectedStart" in k2) && !("L208:roughStart" in k2), JSON.stringify(k2));
+  const mv2 = S.movedDates(S.liveJobs(f2.jobs), { "SCH:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-14" }] }, S.weekOf(NOW).today);
+  t("C2: history under the OLD key name still drives a moved row (10/14 → 10/21)", mv2.rows.some(r => r.name === "Status Dated" && r.label === "rough start" && r.from === "10/14" && r.to === "10/21"), JSON.stringify(mv2.rows));
+  const live2 = S.liveJobs(f2.jobs), all2 = [...s2.booked, ...s2.idle, ...s2.starts.filter(r => !r.pipeline), ...s2.onHold, ...s2.between, ...s2.later].map(r => r.jobId);
+  t("C2: every live job lands in exactly one bucket (with later)", all2.length === live2.length && new Set(all2).size === live2.length, JSON.stringify(all2));
+
+  // C3 — a past-dated start is an OVERDUE start, not a silent "between".
+  const f3 = fixture();
+  f3.jobs.push({ id: "HIGH", name: "Hightower Remodel", foreman: "Keegan Wilkinson", roughStatus: "complete", finishStatus: "waiting_date", finishProjectedStart: "8/13/2026" },
+    { id: "NS", name: "Nothing Started", roughStatus: "waiting_date" },
+    { id: "INSP", name: "Old Final", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%", finalInspectionTargetDate: "5/20/2026" });
+  const m3 = S.buildModel(f3), s3 = m3.schedule;
+  const hi = s3.starts.find(r => r.jobId === "HIGH");
+  t("C3: Hightower (rough complete, finish waiting_date, start 8/13) → Starts with overdue:true", !!hi && hi.overdue === true && hi.phase === "finish" && S.ymd(hi.date) === "2026-08-13" && hi.atRisk === true, JSON.stringify(hi));
+  t("C3: Hightower is not between and has no DATE PASSED start row", !s3.between.some(r => r.jobId === "HIGH") && !s3.passed.some(r => r.name === "Hightower Remodel"), JSON.stringify([s3.between, s3.passed]));
+  t("C3: between is exactly rough-complete-no-finish-date + nothing-started-no-date", eq(s3.between.map(r => `${r.jobId}:${r.kind}`).sort(), ["MIC:between", "NS:notStarted"]), JSON.stringify(s3.between));
+  t("C3: inspection DATE PASSED rows are kept", s3.passed.some(r => r.name === "Old Final" && r.label === "final inspection"), JSON.stringify(s3.passed));
+  const t3 = S.renderLines(m3);
+  const ov = t3.find(l => /^OVERDUE Hightower/.test(l.text));
+  t("C3: render 'OVERDUE Hightower Remodel — finish start was 8/13 (64d) · nobody booked · no lead · prep 0/5 …' with an amber tag", !!ov && /^OVERDUE Hightower Remodel — finish start was 8\/13 \(64d\) · nobody booked · no lead · prep 0\/5/.test(ov.text) && ov.spans[0].len === 7 && eq(ov.spans[0].rgb, [0.71, 0.33, 0.1]), ov && ov.text);
 }
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }

@@ -10,6 +10,7 @@
 const { docsRequests } = require("./foremanMeetingPrep.js");
 
 const TZ = "America/Denver";
+const NOTES_READ_HINT = "Couldn't read Josh's notes doc. Share it (Viewer) with homestead-electric@appspot.gserviceaccount.com to get carry-forward.";
 const MARGIN_TARGET = 15;
 const CAPS = { carried: 20, booked: 15, calendar: 12, blockedPerGroup: 10, coming: 15, findings: 6, rti: 10, movers: 5, qc: 10, approved: 12 };
 const DAY_LBL = ["Mon", "Tue", "Wed", "Thu", "Fri"];
@@ -66,6 +67,24 @@ const effStatus = (j, phase) => { const st = j[phase + "Status"]; if (st) return
 const pctOf = (j, phase) => parseInt(j[phase + "Stage"]) || 0;
 const ACTIVE_ST = new Set(["inprogress", "scheduled", "date_confirmed"]);
 const STARTED_ST = new Set(["inprogress", "complete", "invoice", "waiting"]);
+// A phase's start date, by the app's own rule (src/App.js forecast, rough + finish): when the phase is scheduled
+// or in progress the status date is the start (`<phase>StatusDate || <phase>ProjectedStart`); otherwise the
+// projected start wins (`<phase>ProjectedStart || <phase>StatusDate`). Reads the raw status, as the app does.
+function startDateOf(j, phase) {
+  const st = j[phase + "Status"];
+  const raw = (st === "scheduled" || st === "inprogress") ? (j[phase + "StatusDate"] || j[phase + "ProjectedStart"]) : (j[phase + "ProjectedStart"] || j[phase + "StatusDate"]);
+  return toDateAny(raw);
+}
+const phasePending = (j, p) => !STARTED_ST.has(effStatus(j, p)) && pctOf(j, p) === 0;
+const roughDone = (j) => ["complete", "invoice"].includes(effStatus(j, "rough"));
+const startConfirmed = (j, p) => !!j[p + "StartConfirmed"] || ["scheduled", "date_confirmed"].includes(effStatus(j, p));
+// The job's NEXT start: rough while rough has not started; finish once rough is done and finish has not started.
+// null while rough is under way (or both phases are past starting). date is null when the phase carries none.
+function nextStartOf(j) {
+  const phase = phasePending(j, "rough") ? "rough" : (roughDone(j) && phasePending(j, "finish")) ? "finish" : null;
+  if (!phase) return null;
+  return { phase, date: startDateOf(j, phase), confirmed: startConfirmed(j, phase) };
+}
 const hasForeman = (j) => !!j.foreman && !/^unassigned$/i.test(String(j.foreman).trim());
 const leadOf = (j) => { const l = String(j.lead || "").trim(); return l && !/unassigned|tbd/i.test(l) ? l : ""; };
 const isDone = (j) => j.finishStatus === "complete" || j.finishStatus === "invoice" || parseInt(j.finishStage) === 100 ||
@@ -149,8 +168,12 @@ function buildScheduleIndex(scheduleEntries, plannerDoc, live, weekYmds) {
 }
 
 // ── classification: every live job → exactly one bucket ─────────────────────
+// booked · starts (inside next week; or OVERDUE = dated before next Monday, not started) · onHold · later (next start
+// dated after next week: counted, printed under Coming up) · idle (in progress / scheduled with nobody booked) ·
+// between (rough complete + no finish date, or nothing started + no date — the deliberate exemption).
+const STATUS_LBL = { scheduled: "scheduled", date_confirmed: "start date set", waiting_date: "awaiting start date", inprogress: "in progress", waiting: "on hold" };
 function classifySchedule(live, idx, weekYmds, today) {
-  const out = { booked: [], idle: [], starts: [], onHold: [], between: [] };
+  const out = { booked: [], idle: [], starts: [], onHold: [], between: [], later: [] };
   const inWindow = (d) => d && weekYmds.includes(ymd(d));
   const elsewhere = (j, di) => {
     const who = [["foreman", hasForeman(j) ? j.foreman : ""], ["lead", leadOf(j)]].filter(x => x[1]);
@@ -164,53 +187,80 @@ function classifySchedule(live, idx, weekYmds, today) {
     const base = { jobId: j.id, name: j.name, phase, pct: pctOf(j, phase), foreman: hasForeman(j) ? j.foreman : "", lead: leadOf(j) };
     const b = idx.byJob.get(j.id);
     const bookedDays = b ? Object.keys(b.days).map(Number).sort() : [];
-    // Dated start for a phase not yet started (only the ProjectedStart fields; the retired scheduled-date field is dead).
-    const startOf = (p) => { const s = effStatus(j, p); if (STARTED_ST.has(s) || pctOf(j, p) > 0) return null; const d = toDateAny(j[p + "ProjectedStart"]); return d ? { phase: p, date: d, confirmed: !!j[p + "StartConfirmed"] || ["scheduled", "date_confirmed"].includes(s) } : null; };
-    const start = startOf("rough") || startOf("finish");
+    // Dated start for a phase not yet started (start date by the app's rule; the retired scheduled-date field is dead).
+    const startOf = (p) => { if (!phasePending(j, p)) return null; const d = startDateOf(j, p); return d ? { phase: p, date: d, confirmed: startConfirmed(j, p) } : null; };
+    const ns = nextStartOf(j);
+    // While rough is under way a finish start inside next week is still a start (rough wraps up, finish begins).
+    const start = ns ? (ns.date ? { phase: ns.phase, date: ns.date, confirmed: ns.confirmed } : null) : (phasePending(j, "rough") ? null : startOf("finish"));
     if (bookedDays.length) {
       const seen = new Set(), people = []; bookedDays.forEach(di => b.days[di].people.forEach(p => { const k = personKey(p); if (!seen.has(k)) { seen.add(k); people.push(p); } }));
       out.booked.push({ ...base, firstDay: bookedDays[0], days: daysLabel(bookedDays), people, source: [...new Set(bookedDays.map(di => b.days[di].source))].join("+"), qcNeeds: j.qcStatus === "needs" || j.finishQcStatus === "needs", start: start && inWindow(start.date) ? { ...start } : null });
       return;
     }
+    const startRow = (s0, extra) => { const missingRoles = [!hasForeman(j) ? "foreman" : "", !leadOf(j) ? "lead" : ""].filter(Boolean);
+      return { ...base, phase: s0.phase, date: s0.date, di: -1, confirmed: s0.confirmed, crewBooked: false, missingRoles, prep: prepOf(j), elsewhere: [], atRisk: true, overdue: false, ...extra }; };
     if (start && inWindow(start.date)) {
-      const di = weekYmds.indexOf(ymd(start.date)); const prep = prepOf(j);
-      const missingRoles = [!hasForeman(j) ? "foreman" : "", !leadOf(j) ? "lead" : ""].filter(Boolean);
+      const di = weekYmds.indexOf(ymd(start.date));
       const soon = daysBetween(start.date, today) <= 7;
-      out.starts.push({ ...base, phase: start.phase, date: start.date, di, confirmed: start.confirmed, crewBooked: false, missingRoles, prep, elsewhere: elsewhere(j, di), atRisk: soon });
+      out.starts.push(startRow(start, { di, elsewhere: elsewhere(j, di), atRisk: soon }));
       return;
     }
+    // Not started and dated before next Monday: an overdue start (MISSING 0 must prove something).
+    if (ns && ns.date && ymd(ns.date) < weekYmds[0]) { out.starts.push(startRow(ns, { overdue: true, daysLate: daysBetween(today, ns.date) })); return; }
     if (st === "waiting") { out.onHold.push({ ...base, since: toDateAny(j[phase + "StatusDate"]) }); return; }
+    if (ns && ns.date && ymd(ns.date) > weekYmds[4]) { out.later.push({ ...base, phase: ns.phase, date: ns.date, confirmed: ns.confirmed }); return; }
     if (ACTIVE_ST.has(st) || (st === "" && pctOf(j, phase) > 0)) {
       const waits = waitingItems(j), qs = openQuestions(j);
       const byB = {}; waits.forEach(w => { const k = waitBucket(w.waitingOn); byB[k] = (byB[k] || 0) + 1; });
       const upd = [...arr(j.roughUpdates), ...arr(j.finishUpdates)].map(u => toDateAny(u && (u.date || u.createdAt))).filter(Boolean).sort((a, c) => c - a)[0] || toDateAny(j.statusUpdateAt);
       const rd = toDateAny(j.readyToInvoiceDate);
-      out.idle.push({ ...base, lastUpdate: upd || null, openPunch: openPunchCount(j), questions: qs.length, waitBuckets: Object.entries(byB).sort((a, c) => c[1] - a[1]).map(([k, n]) => `${k} ${n}`),
+      // A phase that is scheduled / start-date-set but not in progress prints its status, not "0%".
+      const pd = st !== "inprogress" && st !== "" ? startDateOf(j, phase) : null;
+      const statusText = st !== "inprogress" && st !== "" ? `${phase} ${STATUS_LBL[st] || st}${pd ? ` ${fmtMD(pd)}${ymd(pd) < ymd(today) ? " (passed)" : ""}` : ", no date"}` : "";
+      out.idle.push({ ...base, statusText, lastUpdate: upd || null, openPunch: openPunchCount(j), questions: qs.length, waitBuckets: Object.entries(byB).sort((a, c) => c[1] - a[1]).map(([k, n]) => `${k} ${n}`),
         rti: !!(j.readyToInvoice && !j.invoiceDismissed && !j.invoiceSent), rtiDays: j.readyToInvoice && rd ? Math.max(0, daysBetween(today, rd)) : null, qcNeeds: j.qcStatus === "needs" || j.finishQcStatus === "needs", start: start || null });
       return;
     }
-    // Rough done, finish not started, dated later or undated → between (not printed; counted in checks).
-    out.between.push({ ...base, finishStart: start ? start.date : null });
+    // Not printed; counted in the dry-run checks. kind says which exemption it is.
+    out.between.push({ ...base, kind: roughDone(j) ? "between" : "notStarted", finishStart: ns && ns.date ? ns.date : null });
   });
   out.booked.sort((a, b) => a.firstDay - b.firstDay || a.name.localeCompare(b.name));
   out.starts.sort((a, b) => a.di - b.di || a.name.localeCompare(b.name));
   out.idle.sort((a, b) => (b.pct || 0) - (a.pct || 0) || a.name.localeCompare(b.name));
+  out.later.sort((a, b) => a.date - b.date || a.name.localeCompare(b.name));
   return out;
 }
 
 // ── dates that moved since last Friday ───────────────────────────────────────
-const DATE_FIELDS = [["roughProjectedStart", "rough start"], ["finishProjectedStart", "finish start"], ["fourWayTargetDate", "rough inspection"], ["finalInspectionTargetDate", "final inspection"], ["qcStatusDate", "rough QC walk"], ["finishQcStatusDate", "finish QC walk"], ["matterportStatusDate", "Matterport scan"]];
+// Starts are keyed `<jobId>:roughStart` / `:finishStart` with the RESOLVED start (startDateOf), and only while that
+// phase has not started (once it starts the key drops out quietly — a started phase is not a cleared date).
+// Snapshots written before the resolver used `:roughProjectedStart` / `:finishProjectedStart`; normPrevDates reads those.
+const START_KEYS = [["rough", "roughStart", "rough start"], ["finish", "finishStart", "finish start"]];
+const DATE_FIELDS = [["roughStart", "rough start"], ["finishStart", "finish start"], ["fourWayTargetDate", "rough inspection"], ["finalInspectionTargetDate", "final inspection"], ["qcStatusDate", "rough QC walk"], ["finishQcStatusDate", "finish QC walk"], ["matterportStatusDate", "Matterport scan"]];
+const rtKeyOf = (rt, i) => (rt && rt.id != null && String(rt.id) !== "") ? String(rt.id) : String(i);
 function dateKeys(live) {
   const out = {};
   live.forEach(j => {
-    DATE_FIELDS.forEach(([f]) => { const d = toDateAny(j[f]); if (d) out[`${j.id}:${f}`] = ymd(d); });
-    arr(j.returnTrips).forEach((rt, i) => { if (!rt || rt.signedOff || rt.rtStatus === "complete") return; const d = toDateAny(rt.rtStatusDate); if (d) out[`${j.id}:rt:${i}`] = ymd(d); });
+    START_KEYS.forEach(([p, f]) => { if (!phasePending(j, p)) return; const d = startDateOf(j, p); if (d) out[`${j.id}:${f}`] = ymd(d); });
+    DATE_FIELDS.slice(2).forEach(([f]) => { const d = toDateAny(j[f]); if (d) out[`${j.id}:${f}`] = ymd(d); });
+    // Return trips key on their id (index only when a trip has none), so deleting an earlier trip never shifts a key.
+    arr(j.returnTrips).forEach((rt, i) => { if (!rt || rt.signedOff || rt.rtStatus === "complete") return; const d = toDateAny(rt.rtStatusDate); if (d) out[`${j.id}:rt:${rtKeyOf(rt, i)}`] = ymd(d); });
   });
   return out;
 }
+// Old start key names → new ones (a new-name entry, when present, wins).
+function normPrevDates(prevDates) {
+  if (!prevDates || typeof prevDates !== "object") return prevDates;
+  const out = {};
+  Object.keys(prevDates).forEach(k => { const m = k.match(/^(.*):(rough|finish)ProjectedStart$/); if (!m) { out[k] = prevDates[k]; return; } const nk = `${m[1]}:${m[2]}Start`; if (!(nk in prevDates)) out[nk] = prevDates[k]; });
+  return out;
+}
+const rtOfKey = (j, id) => { const rts = arr(j.returnTrips); const byId = rts.find(rt => rt && rt.id != null && String(rt.id) === id); if (byId) return byId;
+  const rt = /^\d+$/.test(id) ? rts[Number(id)] : null; return rt && (rt.id == null || String(rt.id) === "") ? rt : null; };   // an index key only names a trip that has no id
 // Keys that had a date last Friday and have none now, on a job that is still live. A return trip that was
 // completed/signed off (or removed) is not a cleared date, so rt keys only count while that trip is still open.
-// A saved history list can hold junk (null, a number, an entry without a string v); skip those, never throw.
+// A start whose phase has since started is not a cleared date either. A saved history list can hold junk
+// (null, a number, an entry without a string v); skip those, never throw.
 const cleanHist = (h) => arr(h).filter(e => e && typeof e === "object" && typeof e.v === "string");
 function clearedKeys(live, prevDates, cur) {
   if (!prevDates || typeof prevDates !== "object") return [];
@@ -219,45 +269,51 @@ function clearedKeys(live, prevDates, cur) {
     if (k in cur) return;
     const parts = k.split(":"), j = byId.get(parts[0]); if (!j) return;
     const hist = cleanHist(prevDates[k]); if (!hist.length) return;
-    if (parts[1] === "rt") { const rt = arr(j.returnTrips)[Number(parts[2])]; if (!rt || rt.signedOff || rt.rtStatus === "complete") return; }
+    if (parts[1] === "rt") { const rt = rtOfKey(j, parts.slice(2).join(":")); if (!rt || rt.signedOff || rt.rtStatus === "complete") return; }
+    const sk = START_KEYS.find(x => x[1] === parts[1]); if (sk && !phasePending(j, sk[0])) return;
     out.push({ k, j, hist });
   });
   return out;
 }
 const labelOfKey = (k) => { const f = k.split(":")[1]; if (f === "rt") return "return trip"; const e = DATE_FIELDS.find(x => x[0] === f); return e ? e[1] : f; };
 const mdOfYmd = (s) => { const d = toDateAny(s); return d ? fmtMD(d) : s; };
+const nthOf = (hist, v) => new Set([...hist.map(h => h.v), v].filter(Boolean)).size;   // distinct real dates; "" (no date) is not a date
 // prevDates: { key: [{d: runYmd, v: valueYmd}, ...] } (kept newest-last, cap 6). nth = how many distinct values seen incl. this one.
-function movedDates(live, prevDates, today) {
-  const firstRun = !prevDates || typeof prevDates !== "object";
+function movedDates(live, prevDatesRaw, today) {
+  const firstRun = !prevDatesRaw || typeof prevDatesRaw !== "object";
+  const prevDates = normPrevDates(prevDatesRaw);
   const cur = dateKeys(live), nameOf = new Map(live.map(j => [j.id, j]));
   const rows = [], passed = [];
   Object.entries(cur).forEach(([k, v]) => {
     const j = nameOf.get(k.split(":")[0]); if (!j) return;
     const hist = firstRun ? [] : cleanHist(prevDates[k]);
     const last = hist.length ? hist[hist.length - 1].v : null;
-    if (last && last !== v) rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: mdOfYmd(v), nth: new Set([...hist.map(h => h.v), v]).size });
+    if (last === "") rows.push({ name: j.name, label: labelOfKey(k), from: "no date", to: mdOfYmd(v), nth: nthOf(hist, v) });   // cleared last time, dated again now
+    else if (last && last !== v) rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: mdOfYmd(v), nth: nthOf(hist, v) });
   });
   // A date that was there last Friday and is gone now (job still live) is a move to "no date".
   clearedKeys(live, firstRun ? null : prevDates, cur).forEach(({ k, j, hist }) => {
     const last = hist[hist.length - 1].v; if (!last) return;
-    rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: "no date", nth: new Set([...hist.map(h => h.v), ""]).size });
+    rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: "no date", nth: nthOf(hist, "") });
   });
-  // Date passed: a start/inspection/QC/scan date before today whose status never moved.
+  // Date passed: a start/inspection/QC date before today whose status never moved.
   live.forEach(j => {
-    const chk = (f, label, stillPending) => { const d = toDateAny(j[f]); if (d && ymd(d) < ymd(today) && stillPending) passed.push({ name: j.name, label, date: fmtMD(d) }); };
-    chk("roughProjectedStart", "rough start", !STARTED_ST.has(effStatus(j, "rough")) && pctOf(j, "rough") === 0);
-    chk("finishProjectedStart", "finish start", effStatus(j, "rough") === "complete" && !STARTED_ST.has(effStatus(j, "finish")) && pctOf(j, "finish") === 0);
+    const chkD = (d, kind, label, stillPending) => { if (d && ymd(d) < ymd(today) && stillPending) passed.push({ jobId: j.id, name: j.name, kind, label, date: fmtMD(d), days: daysBetween(today, d) }); };
+    const chk = (f, kind, label, stillPending) => chkD(toDateAny(j[f]), kind, label, stillPending);
+    chkD(startDateOf(j, "rough"), "start", "rough start", phasePending(j, "rough"));
+    chkD(startDateOf(j, "finish"), "start", "finish start", roughDone(j) && phasePending(j, "finish"));
     const rs = effStatus(j, "rough"), fs = effStatus(j, "finish");   // same phase guards as calendarRows
-    chk("fourWayTargetDate", "rough inspection", rs !== "complete" && !STARTED_ST.has(fs) && !j.roughInspectionResult && !arr(j.roughInspectionAttempts).length);
-    chk("finalInspectionTargetDate", "final inspection", (STARTED_ST.has(fs) || pctOf(j, "finish") > 0) && fs !== "complete" && !j.finalInspectionResult && !arr(j.finalInspectionAttempts).length);
-    chk("qcStatusDate", "rough QC walk", j.qcStatus === "scheduled");
-    chk("finishQcStatusDate", "finish QC walk", j.finishQcStatus === "scheduled");
+    chk("fourWayTargetDate", "inspection", "rough inspection", rs !== "complete" && !STARTED_ST.has(fs) && !j.roughInspectionResult && !arr(j.roughInspectionAttempts).length);
+    chk("finalInspectionTargetDate", "inspection", "final inspection", (STARTED_ST.has(fs) || pctOf(j, "finish") > 0) && fs !== "complete" && !j.finalInspectionResult && !arr(j.finalInspectionAttempts).length);
+    chk("qcStatusDate", "qc", "rough QC walk", j.qcStatus === "scheduled");
+    chk("finishQcStatusDate", "qc", "finish QC walk", j.finishQcStatus === "scheduled");
   });
   rows.sort((a, b) => a.name.localeCompare(b.name));
   return { rows, passed, firstRun };
 }
 // Next state for the snapshot: append today's value when it differs from the last one.
-function nextDates(live, prevDates, todayYmd) {
+function nextDates(live, prevDatesRaw, todayYmd) {
+  const prevDates = normPrevDates(prevDatesRaw);
   const cur = dateKeys(live), out = {};
   Object.entries(cur).forEach(([k, v]) => { const hist = cleanHist(prevDates && prevDates[k]).slice(-5); if (!hist.length || hist[hist.length - 1].v !== v) hist.push({ d: todayYmd, v }); out[k] = hist.slice(-6); });
   // Cleared dates get a "" entry once, so next week last === current-absent and no row repeats. Done jobs drop out.
@@ -417,8 +473,8 @@ function comingRows({ live, upcoming, agentFindings, weekYmds, today, cls }) {
   arr(upcoming).forEach(u => { if (!u || !(u.name || "").trim() || liveNames.has(normName(u.name))) return;
     const d = toDateAny(u.projectedStart); const fu = toDateAny(u.lastFollowUp);
     rows.push({ upcoming: true, upId: u.id || "", name: String(u.name).trim(), customer: u.customer || "", date: d, confirmed: !!u.startConfirmed, note: clip(stripHtml(u.notes), 60), followUpDays: fu ? daysBetween(today, fu) : null, sales: u.sales || "" }); });
-  live.forEach(j => { const s = ["rough", "finish"].map(p => { const st = effStatus(j, p); if (STARTED_ST.has(st) || pctOf(j, p) > 0) return null; const d = toDateAny(j[p + "ProjectedStart"]); return d && ymd(d) > after ? { p, d, c: !!j[p + "StartConfirmed"] || ["scheduled", "date_confirmed"].includes(st) } : null; }).filter(Boolean)[0];
-    if (s && !(s.p === "finish" && effStatus(j, "rough") !== "complete")) rows.push({ name: j.name, customer: j.customer || "", date: s.d, confirmed: s.c, note: `${s.p} start`, followUpDays: null, sales: "" }); });
+  // Live jobs whose NEXT start (resolved by the app's rule) is after next week — the same set classifySchedule counts as `later`.
+  live.forEach(j => { const s = nextStartOf(j); if (s && s.date && ymd(s.date) > after) rows.push({ name: j.name, customer: j.customer || "", date: s.date, confirmed: s.confirmed, note: `${s.phase} start`, followUpDays: null, sales: "" }); });
   const dated = rows.filter(r => r.date && ymd(r.date) > after).sort((a, b) => a.date - b.date);
   const weeks = []; dated.forEach(r => { const wk = ymd(mondayOf(r.date)); let w = weeks.find(x => x.ymd === wk); if (!w) { w = { ymd: wk, label: `Week of ${fmtMD(toDateAny(wk))}`, rows: [] }; weeks.push(w); } w.rows.push(r); });
   const noDate = rows.filter(r => !r.date);
@@ -427,7 +483,7 @@ function comingRows({ live, upcoming, agentFindings, weekYmds, today, cls }) {
   const startsNextWeek = upRows.filter(r => weekYmds.includes(ymd(r.date)));
   const overdue = upRows.filter(r => ymd(r.date) < weekYmds[0]).map(r => ({ name: r.name, customer: r.customer, date: r.date, confirmed: r.confirmed }));
   // In prep: a start AFTER next week (next week's starts are already in §4.3) but inside 21 days, phase not started.
-  const prep = live.filter(j => { const ph = ["rough", "finish"].find(p => { const st = effStatus(j, p); return !(STARTED_ST.has(st) || pctOf(j, p) > 0); }); const d = ph && toDateAny(j[ph + "ProjectedStart"]); return d && ymd(d) > after && daysBetween(d, today) <= 21; }).map(j => { const p = prepOf(j); return { name: j.name, done: p.done, missing: p.missing }; });
+  const prep = live.filter(j => { const s = nextStartOf(j); return s && s.date && ymd(s.date) > after && daysBetween(s.date, today) <= 21; }).map(j => { const p = prepOf(j); return { name: j.name, done: p.done, missing: p.missing }; });
   const cutoff = addDays(today, -7);
   const findings = arr(agentFindings).filter(f => f && toDateAny(f.createdAt) && toDateAny(f.createdAt) >= cutoff).sort((a, b) => toDateAny(b.createdAt) - toDateAny(a.createdAt)).slice(0, CAPS.findings).map(f => ({ type: f.type, summary: clip(stripHtml(f.summary), 90) }));
   const freeing = live.filter(j => (effStatus(j, "finish") === "inprogress" && pctOf(j, "finish") >= 90) || isRti(j)).map(j => ({ name: j.name, foreman: hasForeman(j) ? j.foreman : "" }));
@@ -527,16 +583,21 @@ function buildModel(inputs) {
   };
   const prev = I.prevState && typeof I.prevState === "object" ? I.prevState : null;
   const prevFallback = () => prev ? { blockerKeys: arr(prev.blockerKeys), marginByJob: prev.marginByJob || {}, dates: prev.dates || {}, userIds: arr(prev.userIds), weeks: arr(prev.weeks) } : null;
-  try { m.carried = parseNotesCarry(I.notesDoc, meeting); } catch (e) { m.carried = { ...ERR(e), fromLabel: "", rows: [] }; }
+  // A failed read of Josh's doc must say so (never "Nothing carried."); the orchestrator passes notesError from its catch.
+  if (I.notesError) m.carried = { error: typeof I.notesError === "string" && I.notesError.trim() ? I.notesError : NOTES_READ_HINT, fromLabel: "", rows: [] };
+  else { try { m.carried = parseNotesCarry(I.notesDoc, meeting); } catch (e) { m.carried = { ...ERR(e), fromLabel: "", rows: [] }; } }
   let live = [];
   try { if (!Array.isArray(I.jobs)) throw new Error("jobs missing"); live = liveJobs(I.jobs); } catch (e) { const err = ERR(e); m.schedule = err; m.blocked = err; m.coming = err; m.money = err; m.qc = err; m.lastWeek = err; m.nextState = prevFallback(); return m; }
-  let cls = { booked: [], idle: [], starts: [], onHold: [], between: [] }, idx = null;
+  let cls = { booked: [], idle: [], starts: [], onHold: [], between: [], later: [] }, idx = null;
   try {
     idx = buildScheduleIndex(Array.isArray(I.scheduleEntries) ? I.scheduleEntries : [], I.plannerDoc, live, weekYmds); idx.simproOk = I.simproOk !== false && Array.isArray(I.scheduleEntries);
     cls = classifySchedule(live, idx, weekYmds, today);
     const mv = movedDates(live, prev && prev.dates, today);
+    // An overdue start already prints under Starts; its DATE PASSED start row would be a duplicate.
+    const overdueIds = new Set(cls.starts.filter(r => r.overdue).map(r => r.jobId));
+    mv.passed = mv.passed.filter(r => !(r.kind === "start" && overdueIds.has(r.jobId)));
     const people = peopleRows({ users: I.users, pto: I.pto, timeOffRequests: I.timeOffRequests, needs: I.needs, prevUserIds: prev ? prev.userIds : null, idx, weekDays, today });
-    m.schedule = { error: false, booked: cls.booked.slice(0, CAPS.booked), bookedMore: Math.max(0, cls.booked.length - CAPS.booked), idle: cls.idle, starts: cls.starts, onHold: cls.onHold, between: cls.between, moved: mv.rows, passed: mv.passed, movedFirstRun: mv.firstRun,
+    m.schedule = { error: false, booked: cls.booked.slice(0, CAPS.booked), bookedMore: Math.max(0, cls.booked.length - CAPS.booked), idle: cls.idle, starts: cls.starts, onHold: cls.onHold, between: cls.between, later: cls.later, moved: mv.rows, passed: mv.passed, movedFirstRun: mv.firstRun,
       calendar: calendarRows(live, I.calendarEvents, weekYmds).slice(0, CAPS.calendar), people, conflicts: conflictRows(idx, I.pto, weekYmds), unknownSimpro: idx.unknownSimpro, simproOk: idx.simproOk, plannerPresent: idx.plannerPresent };
   } catch (e) { m.schedule = ERR(e); }
   try { m.blocked = { error: false, ...blockedRows({ live, needs: I.needs, users: I.users, prevBlockerKeys: prev ? prev.blockerKeys : null, today }) }; } catch (e) { m.blocked = ERR(e); }
@@ -558,7 +619,7 @@ function buildModel(inputs) {
     if (!m.money.error) { const r = m.money.rti, g = m.money.margin; H.push(`${r.count ? `${fmtMoney(r.total)}${r.knownCount < r.count ? "+" : ""} ready to bill on ${plural(r.count, "job")}` : "Nothing ready to bill"}${g.median != null ? ` · margin at finish median ${g.median}% vs ${MARGIN_TARGET}%, ${g.underCount} under` : ""}.`); }
     m.headline = H;
   } catch (e) { m.headline = []; }
-  m.counts = { live: live.length, booked: cls.booked.length, idle: cls.idle.length, starts: m.schedule.error ? cls.starts.length : m.schedule.starts.length, onHold: cls.onHold.length, between: cls.between.length, blocked: m.blocked.error ? null : m.blocked.total, rti: m.money.error ? null : m.money.rti.count, qc: m.qc.error ? null : m.qc.rows.length, carried: m.carried.rows.length };
+  m.counts = { live: live.length, booked: cls.booked.length, idle: cls.idle.length, starts: m.schedule.error ? cls.starts.length : m.schedule.starts.length, onHold: cls.onHold.length, between: cls.between.length, later: cls.later.length, blocked: m.blocked.error ? null : m.blocked.total, rti: m.money.error ? null : m.money.rti.count, qc: m.qc.error ? null : m.qc.rows.length, carried: m.carried.rows.length };
   const weekRow = { ymd: ymd(today), counts: m.lastWeek.error ? {} : m.lastWeek.counts };
   try {
     m.nextState = { blockerKeys: m.blocked.error ? arr(prev && prev.blockerKeys) : m.blocked.keys, marginByJob: m.money.error ? (prev && prev.marginByJob) || {} : m.money.marginByJob,
@@ -658,13 +719,19 @@ function renderLines(m) {
     s.unknownSimpro.forEach(u => B(`Simpro #${u.pid} (not in app) · ${daysLabel(u.days)} · ${u.people.join(", ")}`));
     H4("In progress, nobody booked");
     if (!s.idle.length) G("Every in-progress job has crew next week.");
-    s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.phase} ${r.pct}% · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""} · ${r.openPunch} punch${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
+    s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.statusText || `${r.phase} ${r.pct}%`} · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""} · ${r.openPunch} punch${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
     H4("Starts");
     if (!s.starts.length) G("No starts dated inside next week.");
+    const tail = (r) => ` · nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""} · prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}${r.elsewhere.length ? ` · ${r.elsewhere.join("; ")}` : ""}`;
     s.starts.forEach(r => {
       if (r.pipeline) { tag("UPCOMING", AMBER, `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"} · not in the app yet · nobody booked`); return; }
+      if (r.overdue) {   // dated before next Monday, not started: OVERDUE when the date is gone, DUE when it is today..Sunday
+        if (r.daysLate > 0) tag("OVERDUE", AMBER, `${r.name} — ${r.phase} start was ${fmtMD(r.date)} (${r.daysLate}d)${tail(r)}`);
+        else tag("DUE", AMBER, `${r.name} — ${r.phase} start ${fmtMD(r.date)} (${r.daysLate === 0 ? "today" : "before next week"}), not started${tail(r)}`);
+        return;
+      }
       const chip = r.atRisk ? ["AT RISK", RED] : r.confirmed ? ["CONFIRMED", GREEN] : ["PROJECTED", AMBER];
-      tag(chip[0], chip[1], `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"} · nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""} · prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}${r.elsewhere.length ? ` · ${r.elsewhere.join("; ")}` : ""}`);
+      tag(chip[0], chip[1], `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"}${tail(r)}`);
     });
     H4("Dates that moved since last Friday");
     if (s.movedFirstRun) G("Tracking starts this week."); else if (!s.moved.length && !s.passed.length) G("Nothing moved.");
@@ -765,7 +832,7 @@ function renderLines(m) {
   return L;
 }
 
-module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
+module.exports = { TZ, NOTES_READ_HINT, startDateOf, nextStartOf, normPrevDates, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
   snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests,
   dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays, blockedRows, GROUP_ORDER,
   buildModel, parseNotesCarry, renderLines, docParas, sectionsOf, carryItems, comingRows, moneyRows, qcRows, lastWeekRows, collectSimproCandidates, resolveRecipients, isFinishingOpen, isRti, mondayOf, EXTRA_RECIPIENTS };
