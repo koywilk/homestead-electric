@@ -111,15 +111,20 @@ const makePreview = process.argv.includes("--doc");
     else {
       const bucketOf = {}, mark = (rows, label) => rows.forEach(r => { if (!liveIds.has(r.jobId)) return;
         if (bucketOf[r.jobId]) { console.log(`DUPLICATE ${r.name}: ${bucketOf[r.jobId]} + ${label}`); process.exitCode = 2; } bucketOf[r.jobId] = label; });
-      // between must be exactly the two dateless exemptions; a dated row there means a date went nowhere.
-      const BUG = "DATED IN THE PAST — RULE BUG";
+      // between must be exactly the two dateless exemptions. A between job with ANY start date on a phase that has not
+      // started means a date went nowhere in the doc: a rule bug (exit 2).
+      const BUG = "DATED IN THE PAST — RULE BUG", BUG_AHEAD = "DATED, NOT SHOWN — RULE BUG";
+      const liveById = new Map(live.map(j => [j.id, j])), todayYmd = S.ymd(w.today);
+      const pendingDate = (r) => { const j = liveById.get(r.jobId); if (!j) return null; const ds = ["rough", "finish"].filter(p => S.phasePending(j, p)).map(p => S.startDateOf(j, p)).filter(Boolean).sort((a, b) => a - b); return ds[0] || null; };
+      const exempt = (r) => !r.finishStart && !pendingDate(r) && (r.kind === "between" || r.kind === "notStarted");
       mark(s.booked, "booked"); mark(s.idle, "nobody booked"); mark(s.starts.filter(r => !r.overdue), "start"); mark(s.starts.filter(r => r.overdue), "overdue start"); mark(s.onHold, "on hold");
       mark(s.later, "dated after next week (Coming up)");
-      mark(s.between.filter(r => !r.finishStart && r.kind === "between"), "between phases, no date (exempt)");
-      mark(s.between.filter(r => !r.finishStart && r.kind === "notStarted"), "not started, no date");
-      mark(s.between.filter(r => r.finishStart || (r.kind !== "between" && r.kind !== "notStarted")), BUG);
+      mark(s.between.filter(r => exempt(r) && r.kind === "between"), "between phases, no date (exempt)");
+      mark(s.between.filter(r => exempt(r) && r.kind === "notStarted"), "not started, no date");
+      mark(s.between.filter(r => !exempt(r) && (!pendingDate(r) || S.ymd(pendingDate(r)) < todayYmd)), BUG);
+      mark(s.between.filter(r => !exempt(r) && pendingDate(r) && S.ymd(pendingDate(r)) >= todayYmd), BUG_AHEAD);
       live.sort((a, b) => a.name.localeCompare(b.name)).forEach(j => console.log(`  ${(bucketOf[j.id] || "MISSING — RULE BUG").padEnd(42)} ${j.name}`));
-      const bugs = live.filter(j => bucketOf[j.id] === BUG); if (bugs.length) process.exitCode = 2;
+      const bugs = live.filter(j => bucketOf[j.id] === BUG || bucketOf[j.id] === BUG_AHEAD); if (bugs.length) process.exitCode = 2;
       const pipe = s.starts.filter(r => !liveIds.has(r.jobId));
       if (pipe.length) { console.log("\n  upcoming (not in app):"); pipe.forEach(r => console.log(`  ${"upcoming (not in app)".padEnd(42)} ${r.name}`)); }
       const missing = live.filter(j => !bucketOf[j.id]); console.log(`\nlive ${live.length} · booked ${s.booked.length} (doc shows ${model.schedule.booked.length} + ${model.schedule.bookedMore} more) · nobody booked ${s.idle.length} · starts ${s.starts.length} (${pipe.length} not in app) · on hold ${s.onHold.length} · later ${s.later.length} · between ${s.between.length} · rule bugs ${bugs.length} · MISSING ${missing.length}`);

@@ -828,5 +828,22 @@ function fixture(over = {}) {
   t("M8: 10 full Simpro schedule pages → logged and pushed to inputErrors", /simpro schedule: 10 full pages/.test(run) && /strategyPrep simpro schedule page cap hit/.test(run));
 }
 
+// ── Final fix wave: self-review fixes ────────────────────────────────────────
+{
+  // A finish-only job (rough never started, no rough date) with a finish date is still a dated start — never "between".
+  const f = fixture();
+  f.jobs.push({ id: "FO1", name: "Finish Only In Window", roughStatus: "", finishStatus: "waiting_date", finishProjectedStart: "10/21/2026" },
+    { id: "FO2", name: "Finish Only Later", roughStatus: "", finishStatus: "date_confirmed", finishProjectedStart: "11/20/2026", finishStartConfirmed: true });
+  const m = S.buildModel(f), sch = m.schedule;
+  t("review: rough undated + finish dated 10/21 → finish start Wed (old fallback kept)", sch.starts.some(r => r.jobId === "FO1" && r.phase === "finish" && r.di === 2) && !sch.between.some(r => r.jobId === "FO1"), JSON.stringify([sch.starts.map(r => r.jobId), sch.between]));
+  t("review: rough undated + finish dated 11/20 → later + Coming up, not between", sch.later.some(r => r.jobId === "FO2") && m.coming.weeks.some(w => w.rows.some(r => r.name === "Finish Only Later")), JSON.stringify(sch.later));
+  // "starts in the next two weeks" counts dated starts ahead, not overdue or undated hard-date rows.
+  const f2 = fixture(); f2.jobs.push({ id: "OV", name: "Overdue One", roughStatus: "complete", finishStatus: "waiting_date", finishProjectedStart: "8/13/2026" },
+    { id: "HDX", name: "Hard Undated", roughStatus: "waiting_date", roughNeedsHardDate: true });
+  const m2 = S.buildModel(f2);
+  t("review: startsSoon ignores overdue and undated hard-date starts (still 2: Namjoshi + Riverton)", m2.coming.startsSoon === 2 && m2.schedule.starts.length === 4, JSON.stringify([m2.coming.startsSoon, m2.schedule.starts.map(r => r.jobId)]));
+  t("review: phasePending exported for the dry-run's rule-bug check", typeof S.phasePending === "function" && S.phasePending({ roughStatus: "" }, "rough") === true && S.phasePending({ roughStatus: "complete" }, "rough") === false);
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");

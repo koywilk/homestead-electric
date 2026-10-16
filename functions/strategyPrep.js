@@ -85,10 +85,12 @@ const phasePending = (j, p) => !STARTED_ST.has(effStatus(j, p)) && pctOf(j, p) =
 const roughDone = (j) => ["complete", "invoice"].includes(effStatus(j, "rough"));
 const startConfirmed = (j, p) => !!j[p + "StartConfirmed"] || ["scheduled", "date_confirmed"].includes(effStatus(j, p));
 // The job's NEXT start: rough while rough has not started; finish once rough is done and finish has not started.
-// null while rough is under way (or both phases are past starting). date is null when the phase carries none.
+// A job whose rough never started and carries no rough date but does carry a finish date (a finish-only job) starts
+// at that finish date. null while rough is under way (or both phases are past starting); date null = no date on file.
 function nextStartOf(j) {
-  const phase = phasePending(j, "rough") ? "rough" : (roughDone(j) && phasePending(j, "finish")) ? "finish" : null;
+  let phase = phasePending(j, "rough") ? "rough" : (roughDone(j) && phasePending(j, "finish")) ? "finish" : null;
   if (!phase) return null;
+  if (phase === "rough" && !startDateOf(j, "rough") && phasePending(j, "finish") && startDateOf(j, "finish")) phase = "finish";
   return { phase, date: startDateOf(j, phase), confirmed: startConfirmed(j, phase) };
 }
 const hasForeman = (j) => !!j.foreman && !/^unassigned$/i.test(String(j.foreman).trim());
@@ -538,7 +540,7 @@ function comingRows({ live, upcoming, agentFindings, weekYmds, today, cls }) {
   const findings = arr(agentFindings).filter(f => f && toDateAny(f.createdAt) && toDateAny(f.createdAt) >= cutoff).sort((a, b) => toDateAny(b.createdAt) - toDateAny(a.createdAt)).slice(0, CAPS.findings).map(f => ({ type: f.type, summary: clip(stripHtml(f.summary), 90) }));
   const freeing = live.filter(j => (effStatus(j, "finish") === "inprogress" && pctOf(j, "finish") >= 90) || isRti(j)).map(j => ({ name: j.name, foreman: hasForeman(j) ? j.foreman : "" }));
   const twoWeeks = ymd(addDays(today, 14));
-  const startsSoon = cls.starts.length + startsNextWeek.length + dated.filter(r => ymd(r.date) <= twoWeeks).length;
+  const startsSoon = cls.starts.filter(r => !r.overdue && r.di >= 0).length + startsNextWeek.length + dated.filter(r => ymd(r.date) <= twoWeeks).length;
   const laterCount = weeks.slice(6).reduce((n, wk) => n + wk.rows.length, 0);   // starts in the weeks past the six printed
   return { error: false, weeks: weeks.slice(0, 6), laterCount, noDate, prep, findings, freeing, startsSoon, startsNextWeek, overdue, quotes: null };
 }
@@ -898,7 +900,7 @@ function renderLines(m) {
   return L;
 }
 
-module.exports = { TZ, NOTES_READ_HINT, startDateOf, nextStartOf, normPrevDates, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
+module.exports = { TZ, NOTES_READ_HINT, startDateOf, nextStartOf, phasePending, normPrevDates, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
   snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests,
   dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays, blockedRows, GROUP_ORDER,
   buildModel, parseNotesCarry, renderLines, docParas, sectionsOf, carryItems, comingRows, moneyRows, qcRows, lastWeekRows, collectSimproCandidates, resolveRecipients, isFinishingOpen, isRti, mondayOf, EXTRA_RECIPIENTS };
