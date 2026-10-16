@@ -5025,27 +5025,37 @@ async function runStrategyPrep({ testRun = false } = {}) {
   const windowStart = w.weekYmds[0], windowEnd = w.weekYmds[4];
   const inputErrors = [];
 
-  // 1 · Firestore reads (jobs/needs wrapped {data}; settings docs not wrapped).
-  const [snap, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, findSnap, users] = await Promise.all([
-    db.collection("jobs").get(), db.collection("needs").get(), db.doc("settings/upcoming_jobs").get(),
-    db.doc(`settings/schedule_${w.weekYmds[0]}`).get(), db.doc("settings/crewPTO").get(), db.doc("settings/timeOffRequests").get(),
-    db.doc("settings/strategyPrep").get(), db.collection("agentFindings").where("day", ">=", strategyLib.ymd(strategyLib.addDays(w.today, -7))).get().catch(e => { inputErrors.push(`agentFindings: ${e.message}`); return { docs: [] }; }),
-    getUsers(),
-  ]);
+  // 1 · Firestore reads (jobs/needs wrapped {data}; settings docs not wrapped). jobs + users are FATAL (alert Koy);
+  //     every other read degrades to "missing" and is named in the doc's grey "did not load" line.
+  const soft = (name, p) => p.catch(e => { inputErrors.push(`${name}: ${String(e.message).slice(0, 80)}`); return null; });
+  let snap, users, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, findSnap;
+  try {
+    [snap, users, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, findSnap] = await Promise.all([
+      db.collection("jobs").get(), getUsers(),
+      soft("needs", db.collection("needs").get()), soft("upcoming_jobs", db.doc("settings/upcoming_jobs").get()),
+      soft("schedule", db.doc(`settings/schedule_${w.weekYmds[0]}`).get()), soft("crewPTO", db.doc("settings/crewPTO").get()),
+      soft("timeOffRequests", db.doc("settings/timeOffRequests").get()), soft("strategyPrep state", db.doc("settings/strategyPrep").get()),
+      soft("agentFindings", db.collection("agentFindings").where("day", ">=", strategyLib.ymd(strategyLib.addDays(w.today, -7))).get()),
+    ]);
+  } catch (e) {
+    functions.logger.error("strategyPrep fatal read failed (jobs/users)", { error: e.message });
+    try { await sendToName("Koy", { title: "Friday prep failed", body: e.message.slice(0, 120) }); } catch (e2) { /* nothing more to do */ }
+    return { ok: false, error: e.message };
+  }
   const unwrap = (d) => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; };
-  const jobs = snap.docs.map(unwrap), needs = needSnap.docs.map(unwrap);
-  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
-  const plannerDoc = planSnap.exists ? planSnap.data() : null;
-  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
-  const timeOffRequests = toSnap.exists ? (toSnap.data().list || []) : [];
-  const prevState = stateSnap.exists ? stateSnap.data() : null;
-  const agentFindings = findSnap.docs.map(d => d.data());
+  const jobs = snap.docs.map(unwrap), needs = needSnap ? needSnap.docs.map(unwrap) : [];
+  const upcoming = upSnap && upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
+  const plannerDoc = planSnap && planSnap.exists ? planSnap.data() : null;
+  const pto = ptoSnap && ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+  const timeOffRequests = toSnap && toSnap.exists ? (toSnap.data().list || []) : [];
+  const prevState = stateSnap && stateSnap.exists ? stateSnap.data() : null;
+  const agentFindings = findSnap ? findSnap.docs.map(d => d.data()) : [];
 
   // 2 · Simpro schedules for next week — between() filter (verified 2026-10-15), paged just in case.
   let scheduleEntries = [], simproOk = true;
   try {
     for (let page = 1; page <= 10; page++) {
-      const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${windowStart},${windowEnd})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+      const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${windowStart},${windowEnd})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) });
       if (!resp.ok) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule page failed", { page, status: resp.status }); break; }
       const batch = await resp.json();
       if (!Array.isArray(batch)) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule non-array"); break; }
@@ -5062,7 +5072,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
     for (let i = 0; i < wanted.length; i += 5) {
       await Promise.all(wanted.slice(i, i + 5).map(async (sn) => {
         try {
-          const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+          const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) });
           if (!resp.ok) return;
           const results = await resp.json(); const sj = Array.isArray(results) ? results[0] : null; if (!sj) return;
           const t = sj.Totals || {}, actual = t.NettMargin?.Actual ?? null, estimate = t.NettMargin?.Estimate ?? null, hasReal = actual !== null && actual !== 100, top = sj.Total || {};
@@ -5078,7 +5088,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
     const raw = process.env.PLAN_INTAKE_GOOGLE_OAUTH; if (!raw) throw new Error("PLAN_INTAKE_GOOGLE_OAUTH not set");
     const o = JSON.parse(raw); const auth = new google.auth.OAuth2(o.client_id, o.client_secret); auth.setCredentials({ refresh_token: o.refresh_token });
     const cal = google.calendar({ version: "v3", auth });
-    const r = await cal.events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${windowStart}T00:00:00-06:00`, timeMax: `${windowEnd}T23:59:59-06:00`, singleEvents: true, maxResults: 250 });
+    const r = await cal.events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${windowStart}T00:00:00-07:00`, timeMax: `${windowEnd}T23:59:59-06:00`, singleEvents: true, maxResults: 250 }, { timeout: 20000 });   // window one hour wide of Mountain (-06 DST / -07 standard), never narrower
     calendarEvents = (r.data && r.data.items) || [];
   } catch (e) { inputErrors.push(`calendar: ${e.message}`); functions.logger.warn("strategyPrep calendar read failed", { error: e.message }); }
 
@@ -5106,12 +5116,21 @@ async function runStrategyPrep({ testRun = false } = {}) {
     await docs.documents.batchUpdate({ documentId: docId, requestBody: { requests: strategyLib.docsRequests(lines, 1) } });
   } catch (e) {
     functions.logger.error("strategyPrep doc create/fill failed", { error: e.message, docId });
+    if (docId) { await drive.files.delete({ fileId: docId, supportsAllDrives: true }).catch(() => {}); docId = ""; docLink = ""; }   // no blank doc beside the fallback
     try {
       const esc = strategyLib.esc;
-      const html = `<div style="font-family:Arial,sans-serif;font-size:13px">${lines.map(l => l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : (l.kind === "bullet" || l.kind === "check") ? `<li>${esc(l.text) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`).join("")}</div>`;
+      let body = "", inList = false;
+      for (const l of lines) {
+        const isLi = l.kind === "bullet" || l.kind === "check";
+        if (inList && !isLi) { body += "</ul>"; inList = false; }
+        if (isLi && !inList) { body += "<ul>"; inList = true; }
+        body += l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : isLi ? `<li>${l.kind === "check" ? "☐ " : ""}${esc(l.text) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`;
+      }
+      if (inList) body += "</ul>";
+      const html = `<div style="font-family:Arial,sans-serif;font-size:13px">${body}</div>`;
       const created = await drive.files.create({ requestBody: { name: `${docTitle} (fallback)`, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, media: { mimeType: "text/html", body: html }, fields: "id, webViewLink", supportsAllDrives: true });
       docId = created.data.id; docLink = created.data.webViewLink || `https://docs.google.com/document/d/${docId}/edit`; fallback = true;
-      await sendToName("Koy", { title: "Friday prep: plain-text fallback", body: `${e.message.slice(0, 100)} — unstyled doc in Drive`, url: docLink });
+      await sendToName("Koy", { title: "Friday prep: plain-text fallback", body: `${e.message.slice(0, 80)} — unstyled doc "${docTitle}" is in the Friday Packets Drive folder`, url: docLink });
     } catch (e2) {
       functions.logger.error("strategyPrep fallback failed", { error: e2.message });
       await sendToName("Koy", { title: "Friday prep failed", body: e.message.slice(0, 120) });
@@ -5121,18 +5140,21 @@ async function runStrategyPrep({ testRun = false } = {}) {
 
   // 8 · State (real runs only; additive merge).
   if (!testRun && model.nextState) {
-    try { await db.doc("settings/strategyPrep").set({ ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docId, docLink }, ...((prevState && prevState.history) || [])].slice(0, 26) }, { merge: true }); }
+    try { await db.doc("settings/strategyPrep").set({ ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docId, docLink }, ...(Array.isArray(prevState && prevState.history) ? prevState.history : []).filter(h => !(h && h.date === model.meetingYmd))].slice(0, 26) }, { merge: true }); }
     catch (e) { functions.logger.warn("strategyPrep state write failed", { error: e.message }); }
   }
 
-  // 9 · Push: headline line 1, tap opens the doc. Test runs → Koy only.
-  const notif = { title: "Friday prep", body: (model.headline[0] || `${docTitle} is ready`).slice(0, 180), url: docLink };
-  let recipients = [];
-  if (testRun) { recipients = ["Koy (test)"]; await sendToName("Koy", notif); }
-  else { const resolved = strategyLib.resolveRecipients(users); recipients = resolved.map(r => `${r.user.name} (${r.reason})`); await Promise.all(resolved.map(r => deliverIfWanted(r.user, "friday_packet", notif))); }
+  // 9 · Push. The pipeline (normalizeNotif) drops `url`, so the BODY must stand alone: headline first, then where the doc is.
+  //     Test runs → Koy only. A push failure never fails the run — the doc and state are already written.
+  const notif = { title: "Friday prep", body: `${model.headline[0] || "This week's prep is ready"} — doc "${docTitle}" is in the Friday Packets Drive folder`.slice(0, 180), url: docLink };
+  let recipients = [], pushError = null;
+  try {
+    if (testRun) { recipients = ["Koy (test)"]; await sendToName("Koy", notif); }
+    else { const resolved = strategyLib.resolveRecipients(users); recipients = resolved.map(r => `${r.user.name} (${r.reason})`); await Promise.all(resolved.map(r => deliverIfWanted(r.user, "friday_packet", notif))); }
+  } catch (e) { pushError = e.message; functions.logger.error("strategyPrep push failed", { error: e.message }); }
 
   functions.logger.info("strategyPrep done", { docId, docLink, testRun, fallback, recipients, inputErrors, ...model.counts });
-  return { ok: true, docId, docLink, fallback, recipients, counts: model.counts, inputErrors };
+  return { ok: true, docId, docLink, fallback, recipients, counts: model.counts, inputErrors, ...(pushError ? { pushError } : {}) };
 }
 
 exports.strategyPrep = functions

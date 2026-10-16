@@ -262,6 +262,8 @@ function fixture(over = {}) {
     const one = S.calendarRows(S.liveJobs(fixture().jobs.concat([{ id: "MIL", name: "Miller Residence - Alpine", roughStatus: "inprogress", roughStage: "75%" }])), [walk], w.weekYmds);
     t("calendar: single match is ambiguous false", one.length === 1 && one[0].ambiguous === false);
     const allDay = S.calendarRows(live, [{ summary: "Miller meeting", start: { date: "2026-10-21" } }], w.weekYmds);
+    const lateEv = S.calendarRows(live, [{ summary: "Miller walk", start: { dateTime: "2026-10-22T22:30:00-06:00" } }], w.weekYmds);
+    t("calendar: 22:30-06:00 event stays on Thu (day from the written date, not the UTC instant)", lateEv.length === 2 && lateEv.every(r => r.di === 3), JSON.stringify(lateEv));
     t("calendar: all-day event lands on Wed (Meeting)", allDay.length === 2 && allDay.every(r => w.DAY_LBL[r.di] === "Wed" && r.label === "Meeting"), JSON.stringify(allDay));
   }
   // 4. people edge cases

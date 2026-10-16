@@ -289,7 +289,7 @@ function calendarRows(live, calendarEvents, weekYmds) {
     if (n[0] && n[0].length >= 5 && !/^\d+$/.test(n[0])) keys.push(n[0]); if (n.length >= 2) keys.push(n.slice(0, 2).join(" ")); return { j, keys }; }).filter(x => x.keys.length);
   arr(calendarEvents).forEach(ev => {
     if (!ev || !ev.start || ev.status === "cancelled") return;
-    const raw = ev.start.dateTime || ev.start.date; const d = toDateAny(raw); if (!d) return;
+    const rawDT = ev.start.dateTime; const raw = typeof rawDT === "string" && rawDT ? rawDT.slice(0, 10) : (rawDT || ev.start.date); const d = toDateAny(raw);   // day = the date part as written (local to the event), never the UTC-shifted instant if (!d) return;
     const title = normName(ev.summary);
     const hits = names.filter(x => x.keys.some(k => new RegExp(`(^| )${k}( |$)`).test(title))); if (!hits.length) return;
     const who = arr(ev.attendees).map(a => String((a && a.email) || "").split("@")[0]).filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(", ");
