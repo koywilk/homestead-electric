@@ -231,6 +231,97 @@ function logKey(jobId, phase, orderId) {
   return /^[A-Za-z0-9-]+_(rough|finish)_[A-Za-z0-9_-]+$/.test(k) ? k : "";
 }
 
+// ── Store-run receipts (SW v548) ─────────────────────────────────────────────
+// A crew member snaps the Home Depot / ACE / Amazon receipt on a store-run card
+// and it lands on that PO's Attachments in Simpro (receipt.js). These rules
+// decide whether the number on the card really is a store PO on this job.
+const STORE_VENDORS = ["home depot", "ace hardware", "amazon"];
+const RECEIPT_MAX_BYTES = 6 * 1024 * 1024;   // decoded; the app shrinks to ~1 MB, the callable limit is 10 MB
+
+// "7024", "PO 7024", "PO-7024", "#7024" → "7024". Anything else → "".
+function cleanPoNo(v) {
+  const m = String(v == null ? "" : v).trim().match(/^(?:P\.?\s*O\.?)?[\s#:-]*(\d{3,7})$/i);
+  return m ? String(Number(m[1])) : "";
+}
+
+// Which Simpro job a PO is on. AssignedTo.Job on the PO record (checked on POs
+// 7024 / 7285, 2026-10-16), else the "1417-18663 Residential (Finish)" name.
+function poJobNo(po) {
+  const a = po && po.AssignedTo;
+  if (a && a.Job != null && String(a.Job).trim() !== "") return String(a.Job).trim();
+  const m = String((a && a.Name) || "").match(/^(\d+)-\d+/);
+  return m ? m[1] : "";
+}
+
+// Is Simpro's PO record a store run on this job? po = GET /vendorOrders/{id}
+// (null when Simpro has no such PO). Returns {ok:true, vendor} or
+// {ok:false, error, badPo} — badPo = the number on the card is wrong (the card
+// remembers it so the office sees "Not a PO #").
+function checkStorePo({ po, typed, poNo, jobNo, source }) {
+  const shown = T(typed) || poNo;
+  const store = T(source) || "store";
+  const fix = "Fix the PO number on the card, then add the photo.";
+  if (!poNo) return { ok: false, badPo: true, error: `"${shown}" isn't a PO number. ${fix}` };
+  const looksLikeJob = String(poNo) === String(jobNo);
+  const jobHint = looksLikeJob ? " It looks like the job number." : "";
+  if (!po) return { ok: false, badPo: true, error: `Simpro has no PO ${poNo}.${jobHint} ${fix}` };
+  const vendor = T(po.Vendor && (po.Vendor.Name || po.Vendor.CompanyName));
+  if (!STORE_VENDORS.includes(vendor.toLowerCase())) {
+    return { ok: false, badPo: true, error: looksLikeJob
+      ? `${poNo} isn't a ${store} PO on this job. It looks like the job number. ${fix}`
+      : `PO ${poNo} is ${vendor ? `a ${vendor}` : "not a store"} PO, not a Home Depot, ACE or Amazon run. ${fix}` };
+  }
+  const onJob = poJobNo(po);
+  if (onJob !== String(jobNo)) {
+    return { ok: false, badPo: true, error: looksLikeJob
+      ? `${poNo} isn't a ${store} PO on this job. It looks like the job number. ${fix}`
+      : `PO ${poNo} is on ${onJob ? `job ${onJob}` : "another job"}, not this job (${jobNo}). ${fix}` };
+  }
+  if (/void/i.test(T(po.Stage))) return { ok: false, badPo: true, error: `PO ${poNo} is voided in Simpro. ${fix}` };
+  return { ok: true, vendor };
+}
+function T(v) { return String(v == null ? "" : v).trim(); }
+
+// "PO 7024 receipt – Braden Davis – 2026-09-02.jpg". Simpro shows an empty
+// AddedBy for API uploads, so the name and date ride in the filename. The 2nd
+// photo on the same PO is "PO 7024 receipt 2 – …".
+function receiptFileName(poNo, name, ymd, n = 1) {
+  const who = T(name).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "crew";
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(T(ymd)) ? T(ymd) : "";
+  return `PO ${poNo} receipt${n > 1 ? ` ${n}` : ""} – ${who}${day ? ` – ${day}` : ""}.jpg`;
+}
+// How many receipt photos are already on the PO (from its attachments list).
+function receiptCount(files, poNo) {
+  const re = new RegExp(`^PO ${poNo} receipt\\b`, "i");
+  return (Array.isArray(files) ? files : []).filter(f => re.test(T(f && (f.Filename || f.Name)))).length;
+}
+
+// One photo, one claim: material_receipt_log/{job_phase_card_receipt}. The app
+// mints the receipt id when a photo is picked, so a double tap or a retry finds
+// the same claim and never attaches twice.
+function receiptKey(jobId, phase, orderId, receiptId) {
+  const clean = (v) => String(v || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
+  const job = String(jobId || "").replace(/[^A-Za-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  const rid = String(receiptId || "");
+  if (!/^[A-Za-z0-9_-]{6,40}$/.test(rid)) return "";
+  const k = `${job}_${clean(phase)}_${clean(orderId)}__r_${rid}`;
+  return /^[A-Za-z0-9-]+_(rough|finish|comm)_[A-Za-z0-9_-]+__r_[A-Za-z0-9_-]+$/.test(k) ? k : "";
+}
+
+// The photo the app sends: base64 JPEG (with or without the data: prefix).
+// Returns {buf} or {error}.
+function decodeReceiptPhoto(b64) {
+  const raw = String(b64 || "").replace(/^data:image\/[a-z+]+;base64,/i, "").replace(/\s+/g, "");
+  if (!raw) return { error: "Take or choose the receipt photo first." };
+  if (raw.length > Math.ceil(RECEIPT_MAX_BYTES * 4 / 3) + 8) return { error: "That photo is too big to send. Take it again, a little farther back." };
+  if (!/^[A-Za-z0-9+/]+=*$/.test(raw)) return { error: "That photo didn't come through. Pick it again." };
+  const buf = Buffer.from(raw, "base64");
+  if (buf.length > RECEIPT_MAX_BYTES) return { error: "That photo is too big to send. Take it again, a little farther back." };
+  if (buf.length < 200 || buf[0] !== 0xFF || buf[1] !== 0xD8 || buf[2] !== 0xFF) return { error: "That photo didn't come through as a picture. Pick it again." };
+  return { buf };
+}
+
 module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
   pickupLine, cleanCustom, getMode, CUSTOM_MAX, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
-  poList, cleanOrderGroups, orderLine, groupKey };
+  poList, cleanOrderGroups, orderLine, groupKey,
+  STORE_VENDORS, RECEIPT_MAX_BYTES, cleanPoNo, poJobNo, checkStorePo, receiptFileName, receiptCount, receiptKey, decodeReceiptPhoto };

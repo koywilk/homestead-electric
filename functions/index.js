@@ -8033,3 +8033,10 @@ exports.poMailerTest = _poGmail.test;
 exports.sendMaterialPO = _materialPO.sendMaterialPO;
 // v524: one order from the bid → one PO per cost center, one email (deploy with sendMaterialPO).
 exports.sendMaterialOrder = _materialPO.sendMaterialOrder;
+// v548: receipt photo on a Home Depot / ACE / Amazon card → that PO's Attachments in
+// Simpro (functions/materialPO/receipt.js). Deploy ONLY this:
+//   firebase deploy --only functions:attachStoreReceipt
+const _receipt = require("./materialPO/receipt.js")({
+  functions, db, TZ, simproReqWithRetry, requireMember, accessOf: gcAdminAccessOf,
+});
+exports.attachStoreReceipt = _receipt.attachStoreReceipt;

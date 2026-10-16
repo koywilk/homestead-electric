@@ -13902,6 +13902,68 @@ const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").r
 const poTodayMDY = () => new Date().toLocaleDateString("en-US");
 const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
 
+// v548 Store-run receipts (vault: Crew POs from the App › Receipt photo on store runs).
+// A Home Depot / ACE / Amazon card with a PO # gets "Add receipt photo": the photo is
+// shrunk here to about 1 MB and attachStoreReceipt puts it on that PO in Simpro. The
+// card keeps receipts:[{id,name,by,at,simproFileId,po,thumb}] INSIDE the order object.
+// STORE_RECEIPT_HELPERS_START (scripts/receipt-sim.js extracts this block)
+const RECEIPT_MAX_SIDE = 2000;                    // px, long side
+const RECEIPT_TARGET_BYTES = 1200 * 1024;         // stop shrinking at about 1 MB
+const RECEIPT_SEND_MAX = 5.5 * 1024 * 1024;       // the server refuses over 6 MB; the callable limit is 10 MB
+const receiptList = (o) => (o && Array.isArray(o.receipts) ? o.receipts.filter(r => r && r.id) : []);
+// "none" = not a store card with a PO # · "have" · "badpo" (the server said the # is wrong) · "missing"
+function receiptState(o) {
+  if (!o || poSendKind(o.source) !== "number" || !String(o.po || "").trim()) return "none";
+  if (receiptList(o).length) return "have";
+  if (o.receiptBadPo && String(o.receiptBadPo).trim() === String(o.po).trim()) return "badpo";
+  return "missing";
+}
+// Picked up on a store card with a PO # and no receipt asks once: "Got the receipt?"
+const receiptNudgeFor = (o, asked) => receiptState(o) === "missing" && !(asked && asked.has(o.id));
+// One shrink try at a time: step 0 caps the long side at 2000 px; each later step,
+// while the last JPEG was still over ~1 MB, goes 20% smaller and a bit lower quality.
+// null = done (small enough, or out of tries — the caller then checks RECEIPT_SEND_MAX).
+function receiptShrinkPlan(w0, h0, lastBytes, step) {
+  if (!(w0 > 0 && h0 > 0)) return null;
+  if (step > 0 && lastBytes <= RECEIPT_TARGET_BYTES) return null;
+  if (step > 5) return null;
+  const side = RECEIPT_MAX_SIDE * Math.pow(0.8, step);
+  const k = Math.min(1, side / Math.max(w0, h0));
+  return { w: Math.max(1, Math.round(w0 * k)), h: Math.max(1, Math.round(h0 * k)), q: Math.max(0.5, 0.82 - 0.06 * step), step };
+}
+const newReceiptId = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+// STORE_RECEIPT_HELPERS_END
+const RECEIPT_CALL = { timeout: 150000 }; // Simpro check + upload (the server allows 60 s for the upload itself)
+
+// Browser half of the shrink: decode, redraw on a canvas, JPEG until it fits.
+async function shrinkReceiptPhoto(file) {
+  if (!file) throw new Error("Pick a photo first.");
+  const src = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("Couldn't read that photo. Try Take photo instead.")); i.src = src; });
+    const w0 = img.naturalWidth, h0 = img.naturalHeight;
+    const draw = (w, h, q) => new Promise((res, rej) => {
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const ctx = c.getContext("2d"); ctx.fillStyle = C.card; ctx.fillRect(0, 0, w, h); ctx.drawImage(img, 0, 0, w, h);
+      c.toBlob(b => b ? res(b) : rej(new Error("Couldn't shrink that photo. Try again.")), "image/jpeg", q);
+    });
+    let plan = receiptShrinkPlan(w0, h0, 0, 0), blob = null;
+    if (!plan) throw new Error("Couldn't read that photo. Try Take photo instead.");
+    while (plan) { blob = await draw(plan.w, plan.h, plan.q); plan = receiptShrinkPlan(w0, h0, blob.size, plan.step + 1); }
+    if (blob.size > RECEIPT_SEND_MAX) throw new Error("That photo is too big to send. Take it again, a little farther back.");
+    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).replace(/^data:[^,]*,/, "")); r.onerror = () => rej(new Error("Couldn't read that photo.")); r.readAsDataURL(blob); });
+    // A tiny thumbnail for the card (about 2 KB) — the full photo lives on the PO in Simpro.
+    let thumb = "";
+    try {
+      const tk = Math.min(1, 64 / Math.max(w0, h0)), tc = document.createElement("canvas");
+      tc.width = Math.max(1, Math.round(w0 * tk)); tc.height = Math.max(1, Math.round(h0 * tk));
+      tc.getContext("2d").drawImage(img, 0, 0, tc.width, tc.height);
+      thumb = tc.toDataURL("image/jpeg", 0.5); if (thumb.length > 4000) thumb = "";
+    } catch {}
+    return { b64, bytes: blob.size, thumb, preview: URL.createObjectURL(blob) };
+  } finally { URL.revokeObjectURL(src); }
+}
+
 // v539: Material Tracking runs in three places — residential Rough / Finish and the
 // commercial Materials tab (job.commMaterials, phase "comm"; each card picks the
 // Simpro cost center it is charged to, sent to sendMaterialPO as ccId).
@@ -13935,6 +13997,66 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
       if (typeof toast !== "undefined" && toast.error) toast.error(m); else window.alert(m);
     } finally { setResuming(null); }
   };
+
+  // v548: store-run receipts — the Add receipt sheet and the once-only Picked up reminder.
+  // rcpt = {id, rid, photo:{b64,bytes,thumb,preview}|null, reading, check:{state,msg,poNo,vendor}, busy, error, done}
+  const [rcpt, setRcpt] = useState(null);
+  const [rcptNudge, setRcptNudge] = useState(null); // card id
+  const rcptAsked = useRef(new Set());
+  const canReceipt = !!(onPatchOrder && can(getIdentity(), "materials.sendPO"));
+  const rcptFor = (id, fn) => setRcpt(s => (s && s.id === id ? fn(s) : s));
+  const receiptRefused = (o, e) => {
+    const d = (e && e.details) || {};
+    const msg = String((e && e.message) || e || "Something went wrong.");
+    if (d.badPo) {
+      rcptFor(o.id, s => ({ ...s, check: { state: "bad", msg } }));
+      // Remember the bad number so Bid Items → Orders shows "Not a PO #" until it's fixed.
+      if (String(o.receiptBadPo || "") !== String(o.po || "")) onPatchOrder(o.id, { receiptBadPo: String(o.po || "") });
+      return true;
+    }
+    return false;
+  };
+  const openReceipt = async (o) => {
+    setRcptNudge(null);
+    setRcpt({ id: o.id, rid: "", photo: null, reading: false, check: { state: "checking" }, busy: false, error: "", done: null });
+    const me = getIdentity();
+    if (!me) { rcptFor(o.id, s => ({ ...s, check: { state: "error", msg: "Sign in again, then add the photo." } })); return; }
+    try {
+      const r = await memberCallable("attachStoreReceipt", me)({ checkOnly: true, jobId, phase, orderId: o.id, source: o.source, po: o.po });
+      const res = (r && r.data) || {};
+      rcptFor(o.id, s => ({ ...s, check: { state: "ok", poNo: res.poNo, vendor: res.vendor } }));
+      if (o.receiptBadPo) onPatchOrder(o.id, { receiptBadPo: "" });
+    } catch (e) {
+      // Can't check right now (signal, Simpro slow): the photo can still go; the send checks again.
+      if (!receiptRefused(o, e)) rcptFor(o.id, s => ({ ...s, check: { state: "error", msg: String((e && e.message) || e || "") } }));
+    }
+  };
+  const pickReceipt = async (o, file) => {
+    if (!file) return;
+    rcptFor(o.id, s => ({ ...s, reading: true, error: "" }));
+    try {
+      const photo = await shrinkReceiptPhoto(file);
+      rcptFor(o.id, s => { if (s.photo && s.photo.preview) URL.revokeObjectURL(s.photo.preview); return { ...s, photo, rid: newReceiptId(), reading: false }; });
+    } catch (e) { rcptFor(o.id, s => ({ ...s, reading: false, error: String((e && e.message) || e) })); }
+  };
+  const attachReceipt = async (o) => {
+    const s0 = rcpt; const me = getIdentity();
+    if (!s0 || !s0.photo || s0.busy) return;
+    if (!me) { rcptFor(o.id, s => ({ ...s, error: "Sign in again, then add the photo." })); return; }
+    rcptFor(o.id, s => ({ ...s, busy: true, error: "" }));
+    try {
+      const r = await memberCallable("attachStoreReceipt", me, RECEIPT_CALL)({ jobId, phase, orderId: o.id, source: o.source, po: o.po, receiptId: s0.rid, photo: s0.photo.b64 });
+      const res = (r && r.data) || {};
+      const entry = { id: s0.rid, name: String(res.fileName || ""), by: me.name || "", at: poTodayMDY(), simproFileId: String(res.simproFileId || ""), po: String(res.poNo || ""), thumb: s0.photo.thumb || "" };
+      // Through the live job copy (onPatchOrder → jobRef.current), never this render's list.
+      onPatchOrder(o.id, (cur) => ({ receipts: [...receiptList(cur).filter(x => x.id !== entry.id), entry], ...(cur.receiptBadPo ? { receiptBadPo: "" } : {}) }));
+      rcptFor(o.id, s => ({ ...s, busy: false, done: res }));
+    } catch (e) {
+      if (receiptRefused(o, e)) rcptFor(o.id, s => ({ ...s, busy: false }));
+      else rcptFor(o.id, s => ({ ...s, busy: false, error: String((e && e.message) || e || "Something went wrong.") }));
+    }
+  };
+  const closeReceipt = () => setRcpt(s => { if (s && s.busy) return s; if (s && s.photo && s.photo.preview) URL.revokeObjectURL(s.photo.preview); return null; });
 
   const [collapsed, setCollapsed] = useState(() => {
     const m = {};
@@ -14020,6 +14142,11 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
               {o.source && (
                 <StatusPill variant="accent">{o.source}</StatusPill>
               )}
+              {/* v548: receipt badge on store-run cards (No receipt only once it's picked up) */}
+              {(() => { const rs = receiptState(o);
+                return rs === "have" ? <StatusPill variant="done">Receipt</StatusPill>
+                  : rs === "badpo" ? <StatusPill variant="inprogress">Not a PO #</StatusPill>
+                  : rs === "missing" && o.pickedUp ? <StatusPill variant="needs">No receipt</StatusPill> : null; })()}
               {isCollapsed && o.items && (
                 <span style={{fontSize:12.5,color:C.faint,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
                   {poItemsPreview(o.items)}
@@ -14303,6 +14430,8 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                         <input type="checkbox" checked={!!o.pickedUp} onChange={e=>{
                           const val=e.target.checked; const who=getIdentity();
                           upd(o.id,{pickedUp:val,pickedUpBy:val?(who?.name||""):"",pickedUpAt:val?new Date().toLocaleDateString("en-US"):""});
+                          // v548: a reminder, never a block — Picked up is already saved.
+                          if (val && canReceipt && receiptNudgeFor(o, rcptAsked.current)) { rcptAsked.current.add(o.id); setRcptNudge(o.id); }
                         }} style={{accentColor:"#1F7A3F",width:14,height:14,cursor:"pointer"}}/>
                         Picked up
                       </label>
@@ -14312,6 +14441,41 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                     </div>
                   </>)}
                 </div>
+
+                {/* v548: receipt photo on store runs → the PO's Attachments in Simpro */}
+                {receiptState(o) !== "none" && onPatchOrder && (() => {
+                  const list = receiptList(o);
+                  if (!list.length) return (
+                    <div style={{marginTop:12,border:`1.5px dashed ${C.orange}`,background:"rgba(194,65,12,0.06)",borderRadius:12,padding:10,display:"flex",flexDirection:"column",gap:8}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.orange}}>
+                        {receiptState(o) === "badpo" ? `"${o.po}" isn't a ${o.source} PO on this job. Fix the PO # above, then add the photo.` : "No receipt yet"}</div>
+                      {canReceipt && (
+                        <button onClick={()=>openReceipt(o)} style={{width:"100%",background:C.accent,border:"none",color:"#fff",borderRadius:10,
+                          padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"inline-flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                          <Icon name="camera" size={15} stroke={2.25}/>Add receipt photo</button>
+                      )}
+                    </div>
+                  );
+                  return (
+                    <div style={{marginTop:12,border:"1px solid rgba(31,122,63,0.35)",background:"rgba(31,122,63,0.07)",borderRadius:12,padding:10,display:"flex",flexDirection:"column",gap:8}}>
+                      {list.map(r => (
+                        <div key={r.id} style={{display:"flex",gap:10,alignItems:"center"}}>
+                          <div style={{width:44,height:56,borderRadius:6,border:`1px solid ${C.border}`,background:C.card,flexShrink:0,overflow:"hidden",display:"grid",placeItems:"center",color:C.green}}>
+                            {r.thumb ? <img src={safeImageSrc(r.thumb)} alt="Receipt photo" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/> : <Icon name="fileText" size={18}/>}
+                          </div>
+                          <div style={{minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:700,color:C.green}}>Receipt on PO {r.po || o.po}</div>
+                            <div style={{fontSize:12.5,color:C.dim}}>{[r.by, r.at, "in Simpro"].filter(Boolean).join(" · ")}</div>
+                          </div>
+                        </div>
+                      ))}
+                      {canReceipt && (
+                        <button onClick={()=>openReceipt(o)} style={{background:C.card,border:`1px solid ${C.border}`,color:C.accent,borderRadius:10,
+                          padding:"8px 12px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add another photo</button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -14325,6 +14489,88 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
         <OrderBuilder open={builderOpen} onClose={()=>{ setBuilderOpen(false); if (onBuilderClosed) onBuilderClosed(); }}
           jobId={jobId} phase={phase} bid={bid} onRefreshBid={onRefreshBid} onUpsertCards={onUpsertCards}/>
       )}
+
+      {/* v548: Picked up on a store card with no receipt asks once. Picked up is already saved. */}
+      {rcptNudge && !rcpt && (() => {
+        const o = safeOrders.find(x => x.id === rcptNudge);
+        if (!o) return null;
+        return (
+          <div onClick={()=>setRcptNudge(null)} style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(10,14,22,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()} role="dialog" aria-label="Got the receipt?"
+              style={{background:C.card,width:"100%",maxWidth:520,borderRadius:"16px 16px 0 0",padding:"18px 16px calc(20px + env(safe-area-inset-bottom, 0px))",
+                boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:12}}>
+              <div style={{fontSize:20,fontWeight:800,color:C.text}}>Got the receipt? Snap it now.</div>
+              <div style={{fontSize:14,color:C.dim}}>It goes on PO {o.po} in Simpro, so the office can post the cost. Picked up is already saved.</div>
+              <button onClick={()=>openReceipt(o)} style={{background:C.accent,border:"none",color:"#fff",borderRadius:10,padding:"12px 14px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                display:"inline-flex",alignItems:"center",justifyContent:"center",gap:8}}><Icon name="camera" size={16} stroke={2.25}/>Add receipt photo</button>
+              <button onClick={()=>setRcptNudge(null)} style={{background:C.card,border:`1px solid ${C.border}`,color:C.dim,borderRadius:10,padding:"10px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Not now</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* v548: Add receipt — check the PO, take or choose the photo, put it on the PO in Simpro. */}
+      {rcpt && (() => {
+        const o = safeOrders.find(x => x.id === rcpt.id);
+        if (!o) return null;
+        const ck = rcpt.check || {}, busy = !!rcpt.busy, done = rcpt.done;
+        const poNo = ck.poNo || String(o.po || "").trim();
+        const fileBtn = (label, capture) => (
+          <label style={{position:"relative",overflow:"hidden",flex:1,textAlign:"center",background:C.card,border:`1px solid ${C.border}`,color:C.accent,borderRadius:10,
+            padding:"10px 8px",fontSize:14,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            <Icon name={capture ? "camera" : "image"} size={15} stroke={2.25}/>{label}
+            <input type="file" accept="image/*" {...(capture ? { capture: "environment" } : {})} disabled={busy || rcpt.reading}
+              onChange={e=>{ const f = e.target.files && e.target.files[0]; e.target.value = ""; pickReceipt(o, f); }}
+              style={{position:"absolute",inset:0,opacity:0,cursor:"pointer"}}/>
+          </label>
+        );
+        return (
+          <div onClick={closeReceipt} style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(10,14,22,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()} role="dialog" aria-label="Add receipt"
+              style={{background:C.card,width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto",borderRadius:"16px 16px 0 0",
+                padding:"16px 16px calc(20px + env(safe-area-inset-bottom, 0px))",boxShadow:"0 -8px 30px rgba(0,0,0,0.25)",display:"flex",flexDirection:"column",gap:12}}>
+              {busy ? (
+                <PoSendMotion phase="sending" title="Adding the receipt" steps={[`Checking PO ${poNo}`, `Putting the photo on PO ${poNo}`]}/>
+              ) : done ? (<>
+                <PoSendMotion phase="sent" title={`Receipt on PO ${done.poNo || poNo}`}
+                  sub={`It's on the PO in Simpro${done.again ? " (already added from this photo)" : ""}. The office can post the cost from it.`}/>
+                {done.fileName && <div style={{fontSize:12.5,color:C.dim,textAlign:"center",wordBreak:"break-word"}}>{done.fileName}</div>}
+                <button onClick={closeReceipt} style={{background:C.accent,border:"none",color:"#fff",borderRadius:10,padding:"12px 14px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+              </>) : (<>
+                <div>
+                  <div style={{fontSize:20,fontWeight:800,color:C.text}}>Add receipt</div>
+                  <div style={{fontSize:13,color:C.dim,marginTop:2}}>{o.source} · PO {o.po}</div>
+                </div>
+                {ck.state === "bad" ? (<>
+                  <div style={{fontSize:14,color:C.red,background:"rgba(198,40,40,0.06)",border:"1px solid rgba(198,40,40,0.3)",borderRadius:10,padding:"9px 11px"}}>{ck.msg}</div>
+                  <button onClick={closeReceipt} style={{background:C.card,border:`1px solid ${C.border}`,color:C.accent,borderRadius:10,padding:"12px 14px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Back to the card</button>
+                </>) : (<>
+                  <div style={{borderRadius:12,border:`1px solid ${C.border}`,background:C.surface,height:240,display:"grid",placeItems:"center",overflow:"hidden"}}>
+                    {rcpt.photo
+                      ? <img src={safeImageSrc(rcpt.photo.preview)} alt="Your receipt photo" style={{width:"100%",height:"100%",objectFit:"contain",background:C.text}}/>
+                      : <div style={{color:C.faint,fontSize:13,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+                          {rcpt.reading ? <><Spinner size={18}/>Getting the photo ready…</> : <><Icon name="fileText" size={28}/>Your photo shows here</>}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:8}}>{fileBtn("Take photo", true)}{fileBtn("Choose photo", false)}</div>
+                  <div style={{fontSize:13,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",display:"flex",flexDirection:"column",gap:2}}>
+                    <span style={{color:C.dim}}>Goes on</span>
+                    <b style={{fontSize:14,color:C.text}}>PO {poNo} in Simpro</b>
+                    <span style={{color:C.dim}}>{[simproNo ? `Job ${simproNo}` : "", matPhaseLabel(phase), ck.vendor || o.source].filter(Boolean).join(" · ")}</span>
+                    {ck.state === "checking" && <span style={{color:C.faint,display:"inline-flex",alignItems:"center",gap:6}}><Spinner size={11}/>Checking the PO in Simpro…</span>}
+                    {ck.state === "ok" && <span style={{color:C.green,fontWeight:700}}>✓ Checked: {ck.vendor} PO on this job</span>}
+                    {ck.state === "error" && <span style={{color:C.faint}}>Couldn't check the PO yet. It's checked again when you attach.</span>}
+                  </div>
+                  {rcpt.error && <div style={{fontSize:14,color:C.red,background:"rgba(198,40,40,0.06)",border:"1px solid rgba(198,40,40,0.3)",borderRadius:10,padding:"9px 11px"}}>{rcpt.error}</div>}
+                  <button onClick={()=>attachReceipt(o)} disabled={!rcpt.photo || rcpt.reading}
+                    style={{background:rcpt.photo ? C.accent : C.surface,border:rcpt.photo ? "none" : `1px solid ${C.border}`,color:rcpt.photo ? "#fff" : C.faint,borderRadius:10,padding:"12px 14px",fontSize:15,fontWeight:700,
+                      cursor:rcpt.photo ? "pointer" : "not-allowed",fontFamily:"inherit"}}>{`Attach to PO ${poNo}`}</button>
+                  <button onClick={closeReceipt} style={{background:"none",border:"none",color:C.dim,padding:"6px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                </>)}
+              </>)}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* v523: Send sheet — check the order, then send it from the app. */}
       {sendSheet && (() => {
@@ -15616,6 +15862,7 @@ function JobOrdersSummary({job, onOrder, phases = ["rough","finish"]}) {
       {!rows.length && <div style={{fontSize:13,color:C.faint,fontStyle:"italic"}}>No PO cards on this job yet.</div>}
       {rows.map(o => {
         const [label, variant] = state(o);
+        const rs = receiptState(o);
         const lines = poPlainLines(o.items);
         const who = o.poSentBy || o.orderedBy || o.pickedUpBy || "";
         const when = o.poSentAt || o.orderedAt || o.date || "";
@@ -15625,7 +15872,13 @@ function JobOrdersSummary({job, onOrder, phases = ["rough","finish"]}) {
             <span style={{fontSize:14,fontWeight:700,color:C.text}}>
               {o.po ? `PO ${o.po}` : "No PO # yet"}{o.source ? ` · ${o.source}` : ""}
             </span>
-            <StatusPill variant={variant}>{label}</StatusPill>
+            <span style={{display:"inline-flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center"}}>
+              {/* v548: Receipt column for store runs (Home Depot / ACE / Amazon with a PO #) */}
+              {rs === "have" && <StatusPill variant="done">{receiptList(o).length > 1 ? `${receiptList(o).length} receipts` : "Receipt"}</StatusPill>}
+              {rs === "missing" && <StatusPill variant="needs">No receipt</StatusPill>}
+              {rs === "badpo" && <StatusPill variant="inprogress">Not a PO #</StatusPill>}
+              <StatusPill variant={variant}>{label}</StatusPill>
+            </span>
             <span style={{gridColumn:"1/-1",fontSize:12.5,color:C.dim}}>
               {o._ph}{who ? ` · ${who}` : ""}{when ? ` · ${when}` : ""}{o.poSentVia==="app" ? (o.poSentMode==="test" ? " · test send from the app" : " · sent from the app") : ""}
             </span>
@@ -56953,10 +57206,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-15 · App SW version: v546
+**Last manifest update:** 2026-10-16 · App SW version: v548
 
 ---
 
+- **Store-run receipts: snap the Home Depot / ACE / Amazon receipt on the card and it lands on that PO in Simpro** · 'shipped 2026-10-16' · 'SW v548' · 'attachStoreReceipt' · 'functions/materialPO/receipt.js' · 'shrinkReceiptPhoto' · 'receiptState' · Koy asked whether a crew's Home Depot receipt could go from the app onto its Simpro PO. Live data (2026-10-15): only 2 of the last 25 store POs had a receipt (added by hand by the office, 8 and 18 days later), 15 of 25 still showed $0 cost, and crews still make store POs in Simpro Mobile and type the number on the card, so this works on **any** store-run card with a PO #. Koy's calls (2026-10-16): a reminder on Picked up, never a block; no typed receipt total; anyone who can send POs can attach; no missing-receipts list yet, just a receipt column on Bid Items → Orders. Mockup: claude.ai/artifact/XQtGUzyKbYTEmL7WkzAr3M. **The card:** a Home Depot / ACE / Amazon card with a PO # (Material Tracking on Rough, Finish and the commercial Materials tab) shows an orange **No receipt yet** box with **Add receipt photo** (people with 'materials.sendPO'). The sheet checks the number with Simpro as it opens ('checkOnly'), offers **Take photo** / **Choose photo**, shrinks the photo in the browser (long side 2000 px, JPEG, down to about 1 MB in up to six tries; over 5.5 MB it refuses), shows **Goes on PO #### in Simpro · Job · phase · store**, and **Attach to PO ####** sends it with the same send motion as Get a PO number. Then the box turns green: a tiny thumbnail (about 2 KB, kept on the card; the photo itself lives only on the PO), **Receipt on PO ####**, who · when · in Simpro, and **Add another photo**. The card header shows **Receipt**, **Not a PO #**, or (once picked up) **No receipt**. **Picked up** on a store card with a PO # and no receipt asks once per card per session, *Got the receipt? Snap it now.* (Add receipt photo / Not now); Picked up is already saved. **Server:** new callable **'attachStoreReceipt'** (requireMember + live PIN like 'sendMaterialPO'; same 'gc_config/material_po' switch: 'off' stops it, test = admins only, live = 'liveAccess'; plus 'receipts:"off"' to stop only receipts). It reads 'GET /vendorOrders/{po}' and refuses, in plain words, anything that isn't a Home Depot / ACE Hardware / Amazon PO on this job's Simpro job ('AssignedTo.Job'), or is voided — e.g. Battle Creek's card holding 1412 gets *"1412 isn't a Home Depot PO on this job. It looks like the job number. Fix the PO number on the card, then add the photo."*; the card then remembers 'receiptBadPo' so Orders shows **Not a PO #** until the number changes. Then 'POST /vendorOrders/{id}/attachments/files/' with '{Filename, Base64Data}' (proven on test PO 7285 on 2026-10-16: byte-identical round trip). API uploads show an empty AddedBy in Simpro, so the name and day ride in the filename: 'PO 7024 receipt – Braden Davis – 2026-09-02.jpg' (the 2nd photo on a PO is 'receipt 2'). **Retry safety:** the app mints one id per photo; the server claims 'material_receipt_log/{job_phase_card__r_<id>}' in a transaction (function-only, the rules' catch-all denies clients), writes the PO and filename down before the upload, and a lost Simpro answer is marked unknown and looked up on the PO's attachments by filename before any re-upload; a second tap waits for the first and gets the same answer. The photo never touches Firestore (the claim keeps its md5 and size). **Card data:** inside the order object only — 'receipts: [{id, name, by, at, simproFileId, po, thumb}]' and 'receiptBadPo' — written through 'onPatchOrder' (the job's live copy, 'jobRef.current'). **Bid Items → Orders:** each store-run row gets a receipt chip (Receipt / 2 receipts / No receipt / Not a PO #). Gate: new 'scripts/receipt-sim.js' in prebuild (12 scenarios on the real handler + the app's helpers pulled from App.js: good attach and filename, 2nd photo, PO box formats, the 1412 job-number refusal with nothing uploaded, another job / CED / no such PO / voided / not a number, check-only, three simultaneous taps → one file, lost answer recovered without a 2nd upload, Simpro refusal then retry, a 12 MP photo shrunk to ≤ ~1 MB and an 11 MB payload refused by the server, who may attach, badge + once-only reminder; mutation-checked). Guides: rough, finish, biditems, materials. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:attachStoreReceipt' before the app push** (until then the sheet says it couldn't check, and Attach fails with a plain error; nothing is saved on the card). **Why it won't lose data:** no new top-level job field; two new keys inside existing order objects, written through the normal save against the live job copy; nothing is deleted or overwritten; the only server writes are the function-only 'material_receipt_log' docs and the new file on the Simpro PO; no rules change.
 - **Stop the bad writes (UX backlog batch 1): sign-in can't overwrite the team, refused team saves keep your work, CO status is office-only and a new CO is saved on Submit, Cancel means cancel, every delete gets a 10-second Undo, confirm boxes name their button, the homeowner generator page reviews before sending, promote carries its fields** · 'shipped 2026-10-15' · 'SW v546' · 'heUndo' · 'HEUndoHost' · 'HE_OFFICE_PHONE' · 'UserPicker' · 'saveUsers' · 'CrewBoard' · 'UserManagement' · 'ChangeOrders' · 'SheetShell' · 'RichMobileSheet' · 'PhotoAttacher' · 'HEPhotoLightboxHost' · 'HEConfirmHost' · 'HomeownerPage' · 'UpcomingJobs' · 'LutronAdditionsView' · 'firestore.rules settings/users' · Batch 1 of the combined 2026-10-14 usability backlog ('docs/ux-backlog-combined-2026-10-14.md'), built to the approved mockup 'docs/mockups/batch1-stop-the-bad-writes.html'; Koy: *"Approved as drawn. Go with Option A for Cancel (it asks Discard?) and add the shrink-refusal rule in Firestore."* **One Undo bar for the app** ('heUndo(label, revert, {onExpire})' + 'HEUndoHost', mounted beside the confirm host): the same dark bar My Day uses, 10 s countdown, steel-blue Undo; 'onExpire' is where a deferred Storage delete goes, so a photo file is only really gone once the bar ran out. **(1) Sign-in:** the roster loads behind a *Loading the team…* card with Retry; the stand-in record ('DEFAULT_USERS', now '_standIn:true') is never offered and never written; 'saveUsers' refuses to write before the real list loaded, strips the stand-in, and refuses any list that would shrink by two or more ('firestore.rules' now enforces the same on 'settings/users': create/update only when 'request.resource.data.list.size() + 1 >= resource.data.list.size()'); the local roster and identity update only after 'setDoc' succeeds; a PIN create signs the person in only when the save returned true, otherwise a red *PIN not saved* card with Reload. **(2) Crew Board:** 'save()' clears dirty only when 'onSave' returns true; on a refusal a red *Not saved* bar keeps the staged moves and *Save again* re-applies them on top of the fresh roster ('baseRef' + 'rebase'). **(3) Team Members:** 'save' awaits 'onSave', stays open on a refusal with the same bar, and the roster effect keeps the row being edited; Remove asks *Permanently delete {name}?* with the button *Delete forever*; Deactivate's button says Deactivate. **(4) Change orders:** new 'cos.setStatus' permission (admin/manager); the seven one-tap status pills are replaced by one 44 px status button (office) that opens a picker sheet listing what each status does, with Undo; crew see a read-only pill and *Status is set by the office*; the Send-by date, Mark Work Completed and Undo Complete are office-only; *+ New change order* opens a sheet and the CO is written (and Jeromy pushed by 'onJobUpdate') only on Submit, stamped 'submittedAt/By' — no more blank CO at the top of the list. **(5) Punch sheet (Koy, Option A):** Cancel with text typed asks *Discard this item?* (Keep editing / Discard); nothing is added or ordered on Discard; the crash draft still autosaves while typing. **(6) Deletes with Undo:** 'PhotoAttacher' lost its 18 px corner ×; photos are deleted from the full-screen viewer (*Delete photo*) and files from a Remove link, both with Undo; return-trip, job, temp-ped, job-note and note-line photo deletes update at once and defer the Storage delete to 'onExpire'; the Plans & Links ✕, the Needs board delete (now the shared bar instead of an inline strip) and plan-change items get the bar too. **(7) Confirm boxes:** 'HEConfirmHost' takes the verb from the question (Reset counts? → Reset) instead of guessing Delete for anything destructive-sounding; non-danger buttons are white-on-blue (was black); explicit labels on Revoke link, Reset counts, Clear loads, Restore N jobs, Unlink folder, Erase & resend / Resend link, Delete forever, Deactivate. **(8) Homeowner generator page:** *Review my picks (N)* (off at zero) → review list + name/date → *Send to Homestead*; the thank-you page lists the picks, the sent date, *Change my picks*, and the office number ('HE_OFFICE_PHONE', blank until filled — falls back to "reply to the message that sent you this link"); Reset & resend is now *Erase & resend* and says whose signed picks it erases. **(9) Upcoming → job:** the bare ✓ / Q buttons are replaced by one manager-only *Start as job ▾* that opens a sheet listing what carries over (address, projected rough start + confirmed, GC, foreman, photos) with *Move to Job Board* / *Make a Quote instead*; promote copies 'address' (City only as a fallback), 'roughProjectedStart', 'roughStartConfirmed' and 'photos', and the Undo bar deletes the new job and restores the card. **(10) Plan changes:** delete with Undo; *Add item* disabled until a location is typed; *Change logged* toast. **(11) Drafts survive an outside tap:** 'SheetShell' takes 'dirty'; a scrim tap, drag-down or Cancel with a draft shows an in-sheet *Discard this draft?*; the quick-add need sheet and the new CO sheet pass it; the announcement composer and the discussion reply backdrops ask through 'showConfirm' first. **(12) Foreman reassign:** the dimmed per-row *→ Name* buttons on the Job Board are gone; the Foreman select on Job Info shows *Moved to X · they'll get a push* with Undo. Guides updated in the same ship: 'changeorders.html', 'photos.html', 'needs.html', 'generatorlink.html', 'jobinfo.html', 'settings.html'. Crew brief 'docs/crew-briefs/v546.md'. **Why it won't lose data:** every change is additive UI or a stricter guard: no job field is renamed or removed, 'promote' only adds fields 'blankJob' already carries, the Undo bar's revert re-issues the exact prior patch through the same save funnels, Storage deletes are deferred (never widened), 'saveUsers' only ever refuses more (stand-in strip, not-loaded guard, shrink guard) and the rules change is the same shrink guard on one doc — a refused team save is kept on screen, never dropped; deploy the rules with 'firebase deploy --only firestore:rules' in the same window as the push (the client guard works without them).
 - **Friday Strategy prep replaces the Friday Packet — one Drive folder "Meeting Prep" for the Monday, Wednesday and Friday pulls, no notification** · 'shipped 2026-10-15' · 'SW v545' · 'strategyPrep' · 'functions/strategyPrep.js' · 'MEETING_PREP_FOLDERS' · 'OD_DOCS' · Koy: *"Friday strategy meeting needs to be completly redone. The pull right now doesnt really help me … Real block and scheduling concerns need to be addressed in this meeting."*, *"it just needs to be 100 percent accurate."*, then *"this does not need to be a notification or anything, and i want it structed in a seperate drive folder and needs to include all meeting doc pulls."* Every Friday at 6:00 AM the function writes a new Google Doc, **Friday Strategy Prep — <date>**, into Drive › Meeting Prep › Friday Strategy (Koy pastes its body into Josh's Weekly Strategy/Scheduling notes doc; Josh's doc is only read, for the "Carried from last week" section, and prints a share hint until it is shared with the two service accounts). Sections: carried items, a 3-line headline, next week's schedule — **booked** comes from Simpro schedules and the planner only, never from a job's foreman or lead; every in-progress job with nobody booked, with its wait reason; starts checked for crew, roles and Job Prep; dates that moved since last Friday; inspections, QC, scans and walks; PTO, pending requests, bodies, new hires, capacity; planner-vs-Simpro conflicts — then blocked jobs grouped by who we wait on with "cleared" marks, coming starts and crews freeing, money (ready to invoice, margin at finish, approved COs), QC to schedule, last week, and a blank action table. **No push on success**; only a failure alert to Koy (the harness fails the build if one is re-added). **Drive:** one folder *Meeting Prep* with *Monday Scramble* (the Claude routine), *Wednesday Lead Meeting* (the Tuesday 4 PM Weekly Lead Meeting doc now lands there) and *Friday Strategy*. **Dashboard › Automations › Automated docs** shows those three cards (each opens the newest real doc; TEST / PREVIEW copies never count) plus a Meeting Prep folder card; Run now on the Wednesday and Friday cards (the Friday one makes a "TEST — Friday Strategy Prep" doc and waits up to 9 min). **Retired:** 'fridayPacket' + 'sendTestFridayPacket' (Fri 5:30 AM packet, 'settings/fridayPacket' no longer read), 'leadMeetingPrep' + 'sendTestLeadMeetingPrep' (the Tuesday 6 AM duplicate of the Wednesday pull), the never-run Claude routine 'friday-strategy-prep', 'scripts/packet-dryrun.js'; 'functions/fridayPacket.js' stays as a pure module because 'dailySimproTotals' uses its money-candidate rule; 'functions/leadMeetingPrep.js' stays because 'foremanMeetingPrep' builds its upcoming board through it. Exports 108 → 106. Tests: 'scripts/strategyprep-test.js' (236 checks on the real Lot 208 / Namjoshi / Hideout cases, also under 'TZ=UTC'), 'scripts/autodocs-test.js' (three prefixes), 'scripts/odash-model-test.js' (Wednesday / Friday card status), all in prebuild; 'scripts/strategyprep-dryrun.js' renders a PREVIEW doc from live data. Guide 'dashboard.html' updated. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:strategyPrep,functions:sendTestStrategyPrep,functions:autoDocsLatest,functions:foremanMeetingPrep,functions:sendTestForemanMeetingPrep' then 'firebase functions:delete fridayPacket sendTestFridayPacket leadMeetingPrep sendTestLeadMeetingPrep'. **Why it won't lose data:** read-only on jobs, needs, users, settings and Simpro; writes are one new Google Doc per run, one additive merge to 'settings/strategyPrep' (test runs never advance it) and the v542 run stamp; no job write, no loader, rules or save-path change; the retired functions only wrote docs and their own settings docs.
 - **Job Board — one-button CSV of the job list (Job ID, name, foreman, lead)** · 'shipped 2026-10-15' · 'SW v544' · 'downloadJobListCsv' · 'jobListRows' · 'jobListCsv' · 'homeBoardFilter' · Josh (2026-10-14): *"Can I get a one-button 'export job list as CSV' in the app (Job ID, name, foreman, lead)?"* A **CSV** button (download icon) sits to the right of the **Pipeline Overview** heading on the Job Board (Koy: *"put it next to pipeline overview"*). It downloads 'Jobs — Residential — YYYY-MM-DD.csv' (or 'Commercial', whichever board is open) with four columns — **Job ID** (the Simpro #), **Job name**, **Foreman**, **Lead** — for every job on that board (the current division; the ALL JOBS search does not narrow it). Rows sort by Simpro # as a number (987 before 1438), jobs with no number last, then by name; names are trimmed; a job with no name is left out. Commas and quotes in names are escaped; the file starts with a BOM so Excel reads it as UTF-8 (same '_downloadTextFile' path as the Panelized Lighting loads CSV). The button is disabled when the board is empty. The home-board search was lifted into a pure 'homeBoardFilter(jobs, search)' (same behaviour) so the harness can cover it. Gate: 'scripts/needs-dryrun.js' (+10 checks on ordering, dropped rows, escaping, header-only, and the shared filter incl. foreman and CO quote # matches). No guide change: the Job Board has no '?' guide. **Why it won't lose data:** read-only — the button only reads the jobs already loaded on the board and writes nothing to Firestore; no new field, loader, rules, function or save path change.
