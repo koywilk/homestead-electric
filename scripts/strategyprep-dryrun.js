@@ -84,8 +84,8 @@ const makePreview = process.argv.includes("--doc");
   const inputs = { jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, notesError, simproOk, now };
   const model = S.buildModel(inputs);
   const lines = S.renderLines(model);
-  if (inputErrors.length) lines.splice(1, 0, { text: "Some data did not load this run: " + inputErrors.join("; "), kind: "grey" });
-  const html = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:13px;max-width:760px;margin:20px auto">${lines.map(l => l.kind === "h2" ? `<h1>${S.esc(l.text)}</h1>` : l.kind === "h3" ? `<h2>${S.esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${S.esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${S.esc(l.text)}</p>` : l.kind === "check" ? `<div>\u2610 ${S.esc(l.text) || "&nbsp;"}</div>` : l.kind === "bullet" ? `<div>\u2022 ${S.esc(l.text) || "&nbsp;"}</div>` : `<p>${S.esc(l.text)}</p>`).join("\n")}</body></html>`;
+  if (inputErrors.length) lines.splice(0, 0, { text: "Some data did not load this run: " + inputErrors.join("; "), kind: "grey" });
+  const html = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:13px;max-width:760px;margin:20px auto">${lines.map(l => l.kind === "h2" ? `<h1>${S.esc(l.text)}</h1>` : l.kind === "h3" ? `<h2>${S.esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${S.esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${S.esc(l.text)}</p>` : l.kind === "check" ? `<div>\u2610 ${S.esc(l.text) || "&nbsp;"}</div>` : l.kind === "bullet" ? `<div style="margin-left:${(l.text.match(/^\t*/) || [""])[0].length * 18}px">\u2022 ${S.esc(l.text.replace(/^\t+/, "")) || "&nbsp;"}</div>` : `<p>${S.esc(l.text)}</p>`).join("\n")}</body></html>`;
   fs.writeFileSync(path.join(__dirname, "../strategyprep-dryrun.html"), html);
   console.log("wrote strategyprep-dryrun.html");
   if (makePreview) {

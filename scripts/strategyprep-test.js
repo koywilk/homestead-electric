@@ -471,10 +471,12 @@ function fixture(over = {}) {
   const m = S.buildModel(fixture({ notesDoc: doc }));
   const lines = S.renderLines(m);
   const txt = lines.map(l => l.text);
-  t("render: body starts with the grey pre-line, then the headline; no H2 heading, no attendee line", lines[0].kind === "grey" && /pre-filled/.test(lines[0].text) && lines[1].kind === "p" && !lines.some(l => l.kind === "h2") && !txt.some(s => /^Attendees/.test(s)));
-  t("render: section headings in meeting order", (() => { const h = lines.filter(l => l.kind === "h3").map(l => l.text.replace(/ [·—].*$/, "")); return eq(h, ["Carried from Oct 9", "Schedule next week", "Blocked", "Coming up", "Money", "QC to schedule", "Last week", "Action items"]); })(), JSON.stringify(lines.filter(l => l.kind === "h3").map(l => l.text)));
-  t("render: Namjoshi start row says nobody booked and where the lead is", txt.some(s => /Namjoshi.*rough starts Mon 10\/19.*confirmed.*nobody booked.*lead Treycen Rollene is at The Hideout Mon/.test(s)), txt.filter(s => /Namjoshi/.test(s)).join(" | "));
-  t("render: Lot 208 under nobody booked with reasons", txt.some(s => /Skyridge Lot 208.*rough 80%.*ready to invoice 15d.*QC needs.*3 punch.*GC \/ builder/.test(s)), txt.filter(s => /Skyridge/.test(s)).join(" | "));
+  t("render (v547 layout): no pre-line, no headline — the body opens at the first heading; no H2, no attendee line", lines[0].kind === "h3" && !txt.some(s => /pre-filled|booked = Simpro/.test(s)) && !lines.some(l => l.kind === "p" && l.text) && !lines.some(l => l.kind === "h2") && !txt.some(s => /^Attendees/.test(s)), JSON.stringify(lines.slice(0, 3)));
+  t("render: section headings in meeting order", (() => { const h = lines.filter(l => l.kind === "h3").map(l => l.text.replace(/ [·—].*$/, "")); return eq(h, ["Carried from Oct 9", "Schedule next week", "Blocked", "Coming up", "Last week", "Action items"]); })(), JSON.stringify(lines.filter(l => l.kind === "h3").map(l => l.text)));
+  const iNam = txt.findIndex(s => /^AT RISK Namjoshi/.test(s));
+  t("render: Namjoshi is a tree — AT RISK parent, then start / nobody booked / prep / where the lead is / Plan as children", iNam >= 0 && txt[iNam + 1] === "\trough confirmed start Mon 10/19" && /^\tnobody booked · Daegan Smith · Treycen Rollene$/.test(txt[iNam + 2]) && txt[iNam + 3] === "\tprep 5/5" && txt[iNam + 4] === "\tlead Treycen Rollene is at The Hideout Mon" && txt[iNam + 5] === "\tPlan", txt.slice(iNam, iNam + 6).join(" | "));
+  const i208 = txt.findIndex(s => s === "NO CREW Skyridge Lot 208 - Mayflower");
+  t("render: Lot 208 is a tree — NO CREW parent, then the status line with reasons, then Plan", i208 >= 0 && /^\trough 80%.*ready to invoice 15d.*QC needs.*3 punch.*GC \/ builder/.test(txt[i208 + 1]) && txt[i208 + 2] === "\tPlan", txt.slice(i208, i208 + 3).join(" | "));
   t("render: Simpro job unknown to the app printed, not dropped", txt.some(s => /Simpro #9999 \(not in app\).*Zane Watkins/.test(s)));
   t("render: no emoji / non-BMP", lines.every(l => !/[\u{10000}-\u{10FFFF}]/u.test(l.text)));
   t("render: every bullet line is 'bullet' or 'check'; blank check line closes each list", lines.filter(l => l.kind === "check").length >= 6);
@@ -482,7 +484,7 @@ function fixture(over = {}) {
   const reqs = S.docsRequests(lines, 1);
   t("docsRequests: first is insertText at 1, rest styles/bullets", reqs[0].insertText && reqs[0].insertText.location.index === 1 && reqs.length > 10);
   const err = S.renderLines({ ...m, schedule: { error: "Section unavailable this week: boom" } });
-  t("render: a failed section prints its one grey line and the rest still renders", err.some(l => l.kind === "grey" && /boom/.test(l.text)) && err.some(l => l.text === "Money"));
+  t("render: a failed section prints its one grey line and the rest still renders", err.some(l => l.kind === "grey" && /boom/.test(l.text)) && err.some(l => l.text === "Last week"));
 
   // Round-review model fields (items 1-4, 7): each has its rendered form.
   const mk5 = (over) => S.buildModel(fixture({ upcoming: [
@@ -493,7 +495,8 @@ function fixture(over = {}) {
   const m5 = mk5({});
   const t5 = S.renderLines(m5).map(l => l.text);
   const up = S.renderLines(m5).find(l => /Pipeline In-Window/.test(l.text) && /^UPCOMING/.test(l.text));
-  t("render: pipeline start → 'UPCOMING <name> — rough starts Wed 10/21 confirmed · not in the app yet · nobody booked', no roles/prep tail, amber tag span", !!up && up.text === "UPCOMING Pipeline In-Window — rough starts Wed 10/21 confirmed · not in the app yet · nobody booked" && up.spans.length === 1 && up.spans[0].start === 0 && up.spans[0].len === 8, up && up.text);
+  const iUp = t5.indexOf("UPCOMING Pipeline In-Window");
+  t("render: pipeline start → 'UPCOMING <name>' parent (amber tag + bold name), children 'rough confirmed start Wed 10/21 · not in the app yet' / 'nobody booked' / 'Plan', no roles/prep", !!up && iUp >= 0 && up.spans.length === 2 && up.spans[0].start === 0 && up.spans[0].len === 8 && eq(up.spans[0].rgb, [0.71, 0.33, 0.1]) && t5[iUp + 1] === "\trough confirmed start Wed 10/21 · not in the app yet" && t5[iUp + 2] === "\tnobody booked" && t5[iUp + 3] === "\tPlan", t5.slice(iUp, iUp + 4).join(" | "));
   t("render: overdue pipeline rows → one 'Projected start passed, still in Upcoming' bullet", t5.filter(s => /^Projected start passed, still in Upcoming: /.test(s)).length === 1 && t5.some(s => s === "Projected start passed, still in Upcoming: Pipeline Overdue 9/30, Pipeline Older 10/5") && !t5.some(s => /Pipeline In-Window/.test(s) && /Projected start passed/.test(s)), t5.filter(s => /Projected start/.test(s)).join(" | "));
   t("render: no overdue bullet when none overdue", !txt.some(s => /Projected start passed/.test(s)));
 
@@ -537,7 +540,7 @@ function fixture(over = {}) {
   mBad.schedule.starts = [{ jobId: "X", name: "Broken Row", phase: "rough", pct: 0, foreman: "", lead: "", date: new Date(2026, 9, 19), di: 0, confirmed: true, crewBooked: false, missingRoles: [], atRisk: true, prep: undefined, elsewhere: undefined }];
   let bad = null, threw = false; try { bad = S.renderLines(mBad); } catch (e) { threw = true; }
   const bt = bad ? bad.map(l => l.text) : [];
-  t("review3: malformed start row → schedule prints heading + one grey 'could not be rendered'; Money and Action items still render", !threw && bad.some(l => l.kind === "grey" && /could not be rendered/.test(l.text)) && bad.some(l => l.kind === "h3" && /^Schedule next week/.test(l.text)) && bt.includes("Money") && bt.includes("Action items") && bt.filter(x => /could not be rendered/.test(x)).length === 1 && !bt.some(x => /Broken Row/.test(x)), bt.filter(x => /rendered|Schedule/.test(x)).join(" | "));
+  t("review3: malformed start row → schedule prints heading + one grey 'could not be rendered'; Money and Action items still render", !threw && bad.some(l => l.kind === "grey" && /could not be rendered/.test(l.text)) && bad.some(l => l.kind === "h3" && /^Schedule next week/.test(l.text)) && bt.includes("Last week") && bt.includes("Action items") && bt.filter(x => /could not be rendered/.test(x)).length === 1 && !bt.some(x => /Broken Row/.test(x)), bt.filter(x => /rendered|Schedule/.test(x)).join(" | "));
 }
 
 // ── Final fix wave: CRITICAL (C1–C3) ─────────────────────────────────────────
@@ -547,10 +550,10 @@ function fixture(over = {}) {
   const mErr = S.buildModel(fixture({ notesDoc: null, notesError: HINT }));
   const tErr = S.renderLines(mErr).map(l => l.text);
   t("C1: notesError → carried.error is the share hint, no rows", mErr.carried.error === HINT && mErr.carried.rows.length === 0 && mErr.carried.fromLabel === "", JSON.stringify(mErr.carried));
-  t("C1: render prints the hint line and never 'Nothing carried.'", tErr.includes(HINT) && !tErr.includes("Nothing carried."), tErr.slice(0, 8).join(" | "));
+  t("C1 (v547): a failed notes read is NOT printed in the doc — no hint line, no 'Nothing carried.', no Carried heading (the orchestrator logs it)", !tErr.includes(HINT) && !tErr.includes("Nothing carried.") && !tErr.some(x => /^Carried from/.test(x)) && /^Schedule next week/.test(tErr[0]), tErr.slice(0, 3).join(" | "));
   t("C1: the hint constant is exported for the orchestrator", S.NOTES_READ_HINT === HINT);
   const mOk = S.buildModel(fixture({ notesDoc: null }));
-  t("C1: no error + no doc → still 'Nothing carried.'", S.renderLines(mOk).some(l => l.text === "Nothing carried.") && mOk.carried.error === false);
+  t("C1 (v547): no error + nothing to carry → the Carried section is omitted entirely", !S.renderLines(mOk).some(l => /^Carried from|Nothing carried/.test(l.text)) && mOk.carried.error === false);
 
   // C2 — start dates follow the app: scheduled/inprogress → StatusDate || ProjectedStart; else ProjectedStart || StatusDate.
   const prepAll = { redlinePlans: true, cabinetPlans: true, applianceSpecs: true, plansUploaded: true, readyToHandOff: true };
@@ -572,8 +575,8 @@ function fixture(over = {}) {
   t("C2/F1: the later job still shows under Coming up (week of 11/2)", m2.coming.weeks.some(w => w.label === "Week of 11/2" && w.rows.some(r => r.name === "Confirmed Three Weeks Out")), JSON.stringify(m2.coming.weeks.map(w => [w.label, w.rows.map(r => r.name)])));
   t("C2: finish scheduled by status date 10/30 → Coming up week of 10/26 and In prep", m2.coming.weeks.some(w => w.label === "Week of 10/26" && w.rows.some(r => r.name === "Finish Scheduled By Status Date")) && m2.coming.prep.some(r => r.name === "Finish Scheduled By Status Date"), JSON.stringify([m2.coming.weeks, m2.coming.prep]));
   const lines2 = S.renderLines(m2).map(l => l.text);
-  const idl = lines2.find(x => /Scheduled No Date/.test(x));
-  t("C2: idle row for a not-in-progress status prints the status, not N%", s2.idle.some(r => r.jobId === "IDLS") && !!idl && /finish scheduled, no date/.test(idl) && !/finish 0%/.test(idl), idl);
+  const iIdl = lines2.indexOf("NO CREW Scheduled No Date"), idl = iIdl >= 0 ? lines2[iIdl + 1] : "";
+  t("C2: idle row for a not-in-progress status prints the status, not N% (on the child line)", s2.idle.some(r => r.jobId === "IDLS") && iIdl >= 0 && /^\tfinish scheduled, no date/.test(idl) && !/finish 0%/.test(idl), idl);
   const k2 = S.dateKeys(S.liveJobs(f2.jobs));
   t("C2: dateKeys keys the resolved start as <id>:<phase>Start", k2["SCH:roughStart"] === "2026-10-21" && k2["SCH2:roughStart"] === "2026-10-20" && k2["WD:roughStart"] === "2026-10-22" && !("SCH:roughProjectedStart" in k2) && !("L208:roughStart" in k2), JSON.stringify(k2));
   const mv2 = S.movedDates(S.liveJobs(f2.jobs), { "SCH:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-14" }] }, S.weekOf(NOW).today);
@@ -593,8 +596,7 @@ function fixture(over = {}) {
   t("C3: between is exactly rough-complete-no-finish-date + nothing-started-no-date", eq(s3.between.map(r => `${r.jobId}:${r.kind}`).sort(), ["MIC:between", "NS:notStarted"]), JSON.stringify(s3.between));
   t("C3: inspection DATE PASSED rows are kept", s3.passed.some(r => r.name === "Old Final" && r.label === "final inspection"), JSON.stringify(s3.passed));
   const t3 = S.renderLines(m3);
-  const ov = t3.find(l => /^OVERDUE Hightower/.test(l.text));
-  t("C3: render 'OVERDUE Hightower Remodel — finish start was 8/13 (64d) · nobody booked · no lead · prep 0/5 …' with an amber tag", !!ov && /^OVERDUE Hightower Remodel — finish start was 8\/13 \(64d\) · nobody booked · no lead · prep 0\/5/.test(ov.text) && ov.spans[0].len === 7 && eq(ov.spans[0].rgb, [0.71, 0.33, 0.1]), ov && ov.text);
+  t("C3 (v547): an OVERDUE start stays in the model (overdue:true, counted) but prints nowhere — Koy dropped OVERDUE / DUE rows", !t3.some(l => /Hightower/.test(l.text)) && t3.some(l => l.kind === "h4" && l.text === "Starts · 2") && m3.counts.starts === 3, t3.filter(l => /Starts|Hightower/.test(l.text)).map(l => l.text).join(" | "));
 }
 
 // ── Final fix wave: IMPORTANT (I1–I11) ───────────────────────────────────────
@@ -671,11 +673,11 @@ function fixture(over = {}) {
   const fj = (id, m) => ({ id, name: id, simproNo: id === "F1" ? "501" : "", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", ...(m != null ? { simproMargin: m } : {}) });
   const m6 = S.buildModel(fixture({ jobs: [fj("F1", 12), fj("F2", null), fj("F3", null)] }));
   t("I6: moneyRows reports finishingCount before the margin filter", m6.money.margin.finishingCount === 3 && m6.money.margin.count === 1, JSON.stringify(m6.money.margin));
-  t("I6: render 'Median 12% across 1 of 3 finishing jobs (2 have no Simpro margin)'", S.renderLines(m6).some(l => /^Median 12% across 1 of 3 finishing jobs \(2 have no Simpro margin\) · target 15% · 1 under$/.test(l.text)), S.renderLines(m6).filter(l => /^Median/.test(l.text)).map(l => l.text).join());
+  t("I6 (v547): Money is computed (state) but never printed — no 'Money' heading, no Median line, no Ready to invoice", !S.renderLines(m6).some(l => /^Median|^Money$|^Ready to invoice|^Approved this week/.test(l.text)) && m6.money.marginByJob && m6.nextState.marginByJob, S.renderLines(m6).filter(l => /^Median|Money/.test(l.text)).map(l => l.text).join());
 
   // I7 — "Crews freeing up" relabelled.
   const t7 = S.renderLines(S.buildModel(fixture())).map(l => l.text);
-  t("I7: 'Near done (finish ≥ 90% or ready to invoice): …' replaces 'Crews freeing up'", t7.some(x => /^Near done \(finish ≥ 90% or ready to invoice\): /.test(x)) && !t7.some(x => /Crews freeing up/.test(x)));
+  t("I7 (v547): the Near done / In prep / Plan intake summary rows are gone from Coming up", !t7.some(x => /^Near done|^In prep, start inside|^Plan intake:|Crews freeing up/.test(x)));
 
   // I8 — return-trip keys on rt.id.
   const rtJob = (rts) => ({ id: "RTJ", name: "RT Job", roughStatus: "inprogress", roughStage: "20%", returnTrips: rts });
@@ -700,9 +702,9 @@ function fixture(over = {}) {
   t("I10: headline line 1 counts at-risk starts, not every start ('2 starts, 1 at risk')", /2 starts, 1 at risk\./.test(m10.headline[0]), m10.headline[0]);
   const m10b = S.buildModel(fixture({ scheduleEntries: [], simproOk: false, plannerDoc: null }));
   const t10b = S.renderLines(m10b).map(l => l.text);
-  const bh = t10b.find(x => /^Booked/.test(x));
+  const bh = t10b.find(x => /^Scheduled/.test(x));
   t("I10: both sources missing → 'crew unknown: Simpro unavailable', no 'in progress with nobody booked'", /crew unknown: Simpro unavailable/.test(m10b.headline[0]) && !/nobody booked/.test(m10b.headline[0]), m10b.headline[0]);
-  t("I10: Booked heading does not contradict itself when both sources are missing", !!bh && !(/planner only/.test(bh) && /Simpro only/.test(bh)) && /crew unknown/.test(bh), bh);
+  t("I10: Scheduled heading does not contradict itself when both sources are missing", !!bh && !(/planner only/.test(bh) && /Simpro only/.test(bh)) && /crew unknown/.test(bh), bh);
 
   // I11 — NeedsHardDate with nothing confirmed → an AT RISK start row.
   const f11 = fixture();
@@ -711,8 +713,8 @@ function fixture(over = {}) {
   const m11 = S.buildModel(f11), hd = m11.schedule.starts.find(r => r.jobId === "HD");
   t("I11: hard date needed, nothing confirmed → Starts row, hardDate, atRisk", !!hd && hd.hardDate === true && hd.atRisk === true && S.ymd(hd.hardBy) === "2026-11-02", JSON.stringify(hd));
   t("I11: a confirmed phase gets no hard-date row", !m11.schedule.starts.some(r => r.jobId === "HDC"));
-  const hdl = S.renderLines(m11).find(l => /^HARD DATE NEEDED Hard Date Job/.test(l.text));
-  t("I11: render 'HARD DATE NEEDED Hard Date Job — rough needs a hard date by 11/2 · nobody booked · no lead · prep 0/5 …' red tag", !!hdl && /^HARD DATE NEEDED Hard Date Job — rough needs a hard date by 11\/2 · nobody booked · no lead · prep 0\/5/.test(hdl.text) && hdl.spans[0].len === 16 && eq(hdl.spans[0].rgb, [0.72, 0.14, 0.14]), hdl && hdl.text);
+  const l11 = S.renderLines(m11), i11 = l11.findIndex(l => l.text === "HARD DATE NEEDED Hard Date Job"), hdl = l11[i11];
+  t("I11: 'HARD DATE NEEDED Hard Date Job' parent (red tag), children 'rough needs a hard date by 11/2' / 'nobody booked · no lead' / 'prep 0/5 …' / Plan", i11 >= 0 && hdl.spans[0].len === 16 && eq(hdl.spans[0].rgb, [0.72, 0.14, 0.14]) && l11[i11 + 1].text === "\trough needs a hard date by 11/2" && l11[i11 + 2].text === "\tnobody booked · no lead" && /^\tprep 0\/5/.test(l11[i11 + 3].text) && l11[i11 + 4].text === "\tPlan", l11.slice(i11, i11 + 5).map(l => l.text).join(" | "));
 }
 
 // ── Final fix wave: LEDGER F-items ───────────────────────────────────────────
@@ -755,7 +757,7 @@ function fixture(over = {}) {
   const m8 = S.buildModel(fixture({ jobs: [tj], calendarEvents: [{ summary: "Trim Job walk", start: { date: "2026-10-22" } }] }));
   const names8 = [m8.schedule.idle[0].name, m8.blocked.groups[0].rows[0].name, m8.money.rti.rows[0].name, m8.qc.rows[0].name, ...m8.schedule.calendar.map(r => r.name), m8.coming.freeing[0].name];
   t("F8: name trimmed in idle, blocked, money, qc, calendar, near done", names8.length === 7 && names8.every(n => n === "Trim Job"), JSON.stringify(names8));
-  t("F8: no rendered line carries the untrimmed name", S.renderLines(m8).filter(l => /Trim Job/.test(l.text)).length >= 6 && !S.renderLines(m8).some(l => /\s{2}Trim Job|Trim Job\s{2}/.test(l.text)), S.renderLines(m8).filter(l => /Trim Job/.test(l.text)).map(l => JSON.stringify(l.text)).join(" | "));
+  t("F8: no rendered line carries the untrimmed name", S.renderLines(m8).filter(l => /Trim Job/.test(l.text)).length >= 4 && !S.renderLines(m8).some(l => /\s{2}Trim Job|Trim Job\s{2}/.test(l.text)), S.renderLines(m8).filter(l => /Trim Job/.test(l.text)).map(l => JSON.stringify(l.text)).join(" | "));
 
   // F9 — clip collapses whitespace; PTO notes clipped to 40.
   t("F9: clip collapses whitespace", S.clip("a   b\n\n c", 50) === "a b c", JSON.stringify(S.clip("a   b\n\n c", 50)));
@@ -764,15 +766,15 @@ function fixture(over = {}) {
 
   // F10 — counts on the schedule h4s.
   const h4 = S.renderLines(S.buildModel(fixture())).filter(l => l.kind === "h4").map(l => l.text);
-  t("F10: 'Booked · 2', 'In progress, nobody booked · 2', 'Starts · 2'", h4.includes("Booked · 2 (no planner for next week; Simpro only)") && h4.includes("In progress, nobody booked · 2") && h4.includes("Starts · 2"), JSON.stringify(h4));
+  t("F10 (v547): 'Notes', 'Scheduled · 2', 'Need to be scheduled next week · 2', 'Starts · 2'", h4[0] === "Notes" && h4.includes("Scheduled · 2 (no planner for next week; Simpro only)") && h4.includes("Need to be scheduled next week · 2") && h4.includes("Starts · 2"), JSON.stringify(h4));
 
   // F11 — DATE PASSED wording per kind.
   const f11 = fixture();
   f11.jobs.push({ id: "INSP", name: "Old Final", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%", finalInspectionTargetDate: "5/20/2026" },
     { id: "QCW", name: "Old Walk", roughStatus: "inprogress", roughStage: "50%", qcStatus: "scheduled", qcStatusDate: "10/5/2026" });
-  const t11 = S.renderLines(S.buildModel(f11)).map(l => l.text);
-  t("F11: 'DATE PASSED Old Final — final inspection 5/20 (149d), no result logged'", t11.includes("DATE PASSED Old Final — final inspection 5/20 (149d), no result logged"), t11.filter(x => /DATE PASSED/.test(x)).join(" | "));
-  t("F11: 'DATE PASSED Old Walk — rough QC walk 10/5 (11d), walk not logged'", t11.includes("DATE PASSED Old Walk — rough QC walk 10/5 (11d), walk not logged"), t11.filter(x => /DATE PASSED/.test(x)).join(" | "));
+  const m11f = S.buildModel(f11), t11 = S.renderLines(m11f).map(l => l.text);
+  t("F11 (v547): the model still finds both passed dates (Old Final final inspection, Old Walk rough QC walk) …", m11f.schedule.passed.some(r => r.name === "Old Final" && r.label === "final inspection" && r.days === 149) && m11f.schedule.passed.some(r => r.name === "Old Walk" && r.label === "rough QC walk"), JSON.stringify(m11f.schedule.passed));
+  t("F11 (v547): … but DATE PASSED rows never print — Koy dropped them", !t11.some(x => /DATE PASSED/.test(x)), t11.filter(x => /DATE PASSED/.test(x)).join(" | "));
 
   // F12 — calendar guard; orchestrator window, push body, fallback charset.
   const src = require("fs").readFileSync(require.resolve("../functions/strategyPrep.js"), "utf8");
@@ -796,7 +798,8 @@ function fixture(over = {}) {
   const ups = ["10/26/2026", "10/27/2026", "11/2/2026", "11/9/2026", "11/16/2026", "11/23/2026", "11/30/2026", "12/7/2026", "12/8/2026"].map((d, i) => ({ id: "w" + i, name: "Up " + i, projectedStart: d }));
   const m1 = S.buildModel(fixture({ upcoming: ups }));
   const t1 = S.renderLines(m1).map(l => l.text);
-  t("M1: jobs within a week row are separated by '; '", t1.includes("Week of 10/26 — Up 0 10/26 projected; Up 1 10/27 projected"), t1.filter(x => /^Week of/.test(x)).join(" | "));
+  const iW = t1.indexOf("Week of 10/26 — Up 0 10/26 projected");
+  t("M1 (v547): one job per line — the week label rides on its first job, the next job is its own bullet", iW >= 0 && t1[iW + 1] === "Up 1 10/27 projected" && !t1.some(x => /; Up /.test(x)), t1.filter(x => /^Week of|^Up /.test(x)).join(" | "));
   t("M1: after six weeks → '…and 2 later' (12/7 + 12/8 are the 7th week)", t1.filter(x => /^Week of/.test(x)).length === 6 && t1.includes("…and 2 later"), t1.filter(x => /later/.test(x)).join(" | "));
 
   // M2 / M3 — notes parser: "Notes:" heading; short-text substring matches don't count as carried weeks.
@@ -843,6 +846,58 @@ function fixture(over = {}) {
   const m2 = S.buildModel(f2);
   t("review: startsSoon ignores overdue and undated hard-date starts (still 2: Namjoshi + Riverton)", m2.coming.startsSoon === 2 && m2.schedule.starts.length === 4, JSON.stringify([m2.coming.startsSoon, m2.schedule.starts.map(r => r.jobId)]));
   t("review: phasePending exported for the dry-run's rule-bug check", typeof S.phasePending === "function" && S.phasePending({ roughStatus: "" }, "rough") === true && S.phasePending({ roughStatus: "complete" }, "rough") === false);
+}
+
+// ── v547 layout (Koy's hand-edited TEST doc, 2026-10-16) ──────────────────────
+{
+  const w = S.weekOf(NOW);
+  const m = S.buildModel(fixture());
+  const L = S.renderLines(m), T = L.map(l => l.text);
+  const hs = L.filter(l => l.kind === "h3" || l.kind === "h4").map(l => l.text.replace(/ [·—].*$/, ""));
+  t("v547: Notes is the first list under Schedule and starts with one empty bullet to type in", (() => { const i = L.findIndex(l => l.kind === "h4" && l.text === "Notes"); return i > 0 && L[i - 1].kind === "h3" && L[i + 1].kind === "bullet" && L[i + 1].text === ""; })(), JSON.stringify(L.slice(0, 4)));
+  const iH = T.indexOf("The Hideout");
+  t("v547: a Scheduled job is a tree — bold name, status child, Plan child, crew · days grandchild in green", iH >= 0 && L[iH].spans.length === 1 && L[iH].spans[0].bold === true && L[iH].spans[0].len === "The Hideout".length && T[iH + 1] === "\tfinish 95%" && T[iH + 2] === "\tPlan" && T[iH + 3] === "\t\tTreycen Rollene, Bailey Smith · Mon" && L[iH + 3].spans[0].start === 2 && L[iH + 3].spans[0].len === "Treycen Rollene, Bailey Smith · Mon".length && eq(L[iH + 3].spans[0].rgb, [0.22, 0.46, 0.11]) && L[iH + 3].spans[0].bold === false, T.slice(iH, iH + 4).join(" | ") + " " + JSON.stringify(L[iH + 3] && L[iH + 3].spans));
+  const idleIdx = L.map((l, i) => /^NO CREW /.test(l.text) ? i : -1).filter(i => i >= 0);
+  t("v547: NO CREW parent = red bold tag + bold black name; two spans", idleIdx.length === 2 && idleIdx.every(i => L[i].spans.length === 2 && L[i].spans[0].len === 7 && eq(L[i].spans[0].rgb, [0.72, 0.14, 0.14]) && L[i].spans[0].bold && L[i].spans[1].start === 8 && L[i].spans[1].len === L[i].text.length - 8 && eq(L[i].spans[1].rgb, [0, 0, 0]) && L[i].spans[1].bold), JSON.stringify(idleIdx.map(i => L[i])));
+  t("v547: a blank paragraph separates two trees in the same list (none before the first)", idleIdx.length === 2 && L[idleIdx[1] - 1].kind === "p" && L[idleIdx[1] - 1].text === "" && L[idleIdx[0] - 1].kind === "h4", JSON.stringify([L[idleIdx[0] - 1], L[idleIdx[1] - 1]]));
+  const mP = S.buildModel(fixture()); mP.schedule.people = { ...mP.schedule.people, out: [{ name: "Braden Davis", range: "all week", note: "Hunting" }, { name: "Bailey Smith", range: "Mon", note: "" }] };
+  const TP = S.renderLines(mP).map(l => l.text), iO = TP.indexOf("Out:");
+  t("v547: People → 'Out:' parent with one person per child; nobody out → one plain line", iO >= 0 && TP[iO + 1] === "\tBraden Davis all week (Hunting)" && TP[iO + 2] === "\tBailey Smith Mon" && !/^\t/.test(TP[iO + 3]) && T.includes("Nobody out next week."), TP.slice(iO, iO + 4).join(" | "));
+  t("v547: QC to schedule is an h4 inside Coming up (after the Coming up h3, before Last week), each walk a tree with a Plan child", (() => { const c = hs.indexOf("Coming up"), q = hs.indexOf("QC to schedule"), lw = hs.indexOf("Last week"); const iq = T.indexOf("Skyridge Lot 208 - Mayflower · Keegan Wilkinson"); return c >= 0 && q > c && lw > q && L.find(l => l.text === "QC to schedule").kind === "h4" && iq > 0 && /^\tQC needs/.test(T[iq + 1]) && /3 punch open/.test(T[iq + 1]) && T[iq + 2] === "\tPlan"; })(), hs.join(" > "));
+  t("v547: no Money, no headline, no pre-line, no DATE PASSED, no OVERDUE / DUE, no on-hold footnote", !T.some(x => /^Money$|^Median |^Ready to invoice|^Approved this week|pre-filled|^Next week: |jobs blocked|^DATE PASSED|^OVERDUE |^DUE |on hold listed under Blocked/.test(x)), T.filter(x => /Money|Median|DATE PASSED|OVERDUE|on hold/.test(x)).join(" | "));
+  // Blocked: only GC / builder and Us print, whatever the model holds; the cleared list follows the same filter.
+  const mB = S.buildModel(fixture());
+  mB.blocked = { ...mB.blocked, groups: [
+    { name: "GC / builder", rows: [{ name: "GC Job", what: "1 waiting-on item — Cabinets", who: "", ageDays: 5 }], more: 0 },
+    { name: "Homeowner / designer", rows: [{ name: "HO Job", what: "2 questions", who: "", ageDays: 9 }], more: 0 },
+    { name: "Material", rows: [{ name: "Mat Job", what: "Delivery", who: "", ageDays: 3 }], more: 0 },
+    { name: "On hold", rows: [{ name: "Hold Job", what: "Finish on hold", who: "", ageDays: null }], more: 0 },
+    { name: "Us (office owes the field)", rows: [{ name: "Us Job", what: "redlines", who: "Koy", ageDays: 2 }], more: 0 },
+    { name: "Sold work not on the calendar", rows: [{ name: "Sold Job", what: "1 approved CO, not done", who: "", ageDays: 40 }], more: 0 },
+    { name: "Other", rows: [{ name: "Other Job", what: "Soffit", who: "", ageDays: 1 }], more: 0 }],
+    cleared: [{ name: "Cleared GC", group: "GC / builder" }, { name: "Cleared Mat", group: "Material" }] };
+  const TB = S.renderLines(mB).map(l => l.text);
+  t("v547: Blocked prints GC / builder and Us only; Homeowner / Material / On hold / Sold work / Other never print", TB.includes("GC / builder · 1") && TB.includes("Us (office owes the field) · 1") && TB.some(x => /^GC Job — /.test(x)) && TB.some(x => /^Us Job — redlines · Koy · 2d$/.test(x)) && !TB.some(x => /HO Job|Mat Job|Hold Job|Sold Job|Other Job|^Homeowner|^Material|^On hold|^Sold work|^Other ·/.test(x)), TB.filter(x => /Job|·  ?\d$/.test(x)).join(" | "));
+  t("v547: Cleared since last Friday follows the same two-group filter", TB.includes("CLEARED Cleared GC — GC / builder") && !TB.some(x => /Cleared Mat/.test(x)), TB.filter(x => /CLEARED/.test(x)).join(" | "));
+  t("v547: nothing blocked on GC or us → one grey line", (() => { const m0 = S.buildModel(fixture()); m0.blocked = { ...m0.blocked, groups: [{ name: "Material", rows: [{ name: "M", what: "x", ageDays: 1 }], more: 0 }], cleared: [] }; return S.renderLines(m0).some(l => l.kind === "grey" && l.text === "Nothing blocked on the GC or on us."); })());
+  // Carried prints only when there are rows.
+  const para = (text, o = {}) => ({ paragraph: { elements: [{ textRun: { content: text + "\n", textStyle: {} } }], paragraphStyle: { namedStyleType: o.style || "NORMAL_TEXT" }, ...(o.bullet ? { bullet: { nestingLevel: 0 } } : {}) } });
+  const docC = { body: { content: [para("Oct 9, 2026 | Weekly Strategy/Scheduling Meeting", { style: "HEADING_2" }), para("Notes"), para("Call Edge about Pierce", { bullet: true })] } };
+  const TC = S.renderLines(S.buildModel(fixture({ notesDoc: docC }))).map(l => l.text);
+  t("v547: with a readable notes doc that has items, Carried is the first heading and its items are checkboxes", TC[0] === "Carried from Oct 9" && TC[1] === "Call Edge about Pierce" && /^Schedule next week/.test(TC[3]), TC.slice(0, 4).join(" | "));
+  // docsRequests: tab-nested lines keep their span ranges — a span on a depth-2 line starts 2 characters in.
+  const reqs = S.docsRequests(L, 1);
+  const starts = []; let idx = 1; L.forEach(l => { starts.push(idx); idx += l.text.length + 1; });
+  const kCrew = T.indexOf("\t\tTreycen Rollene, Bailey Smith · Mon"), kNo = idleIdx[0];
+  const spanAt = (k, off, len) => reqs.some(q => q.updateTextStyle && q.updateTextStyle.range.startIndex === starts[k] + off && q.updateTextStyle.range.endIndex === starts[k] + off + len && q.updateTextStyle.textStyle.foregroundColor);
+  t("v547: docsRequests — the green crew span sits past the two tabs; the NO CREW tag span sits at the line start", spanAt(kCrew, 2, "Treycen Rollene, Bailey Smith · Mon".length) && spanAt(kNo, 0, 7) && spanAt(kNo, 8, L[kNo].text.length - 8), JSON.stringify({ kCrew, kNo, start: starts[kCrew] }));
+  t("v547: docsRequests — one bullet request spans a whole tree (parents, tabbed children and grandchildren are one list)", reqs.filter(q => q.createParagraphBullets).some(q => q.createParagraphBullets.range.startIndex <= starts[iH] && q.createParagraphBullets.range.endIndex >= starts[iH + 3] + L[iH + 3].text.length && q.createParagraphBullets.bulletPreset === "BULLET_DISC_CIRCLE_SQUARE"), JSON.stringify(reqs.filter(q => q.createParagraphBullets).map(q => q.createParagraphBullets.range)));
+  t("v547: the inserted text carries the tabs the Docs API nests on", reqs[0].insertText.text.includes("\n\tfinish 95%\n\tPlan\n\t\tTreycen Rollene, Bailey Smith · Mon\n"));
+  // Orchestrator: the data-did-not-load line is inserted at the TOP (there is no pre-line any more).
+  const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
+  const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
+  t("v547: orchestrator splices the 'Some data did not load' line at index 0", /lines\.splice\(0, 0, \{ text: `Some data did not load this run/.test(run) && !/lines\.splice\(1, 0/.test(run));
+  t("v547: fallback HTML indents tab-nested rows and strips the tabs from the text", /margin-left:\$\{depth \* 18\}px/.test(run) && /esc\(plain\)/.test(run));
 }
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }

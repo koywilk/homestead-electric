@@ -4991,7 +4991,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
   // 6 · Build (pure).
   const model = strategyLib.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, notesError, simproOk, now });
   const lines = strategyLib.renderLines(model);
-  if (inputErrors.length) lines.splice(1, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });
+  if (inputErrors.length) lines.splice(0, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });   // top of the doc: there is no pre-line any more (v547 layout)
   const docTitle = `${testRun ? "TEST — " : ""}${model.heading}`;
 
   // 7 · Create the week's doc in the Meeting Prep / Friday Strategy folder and fill it with the Docs API (styled, pastes clean).
@@ -5013,7 +5013,8 @@ async function runStrategyPrep({ testRun = false } = {}) {
         const isLi = l.kind === "bullet" || l.kind === "check";
         if (inList && !isLi) { body += "</ul>"; inList = false; }
         if (isLi && !inList) { body += "<ul>"; inList = true; }
-        body += l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : isLi ? `<li>${l.kind === "check" ? "☐ " : ""}${esc(l.text) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`;
+        const depth = (l.text.match(/^\t*/) || [""])[0].length, plain = l.text.slice(depth);   // tab-nested rows (v547 trees) indent in the fallback too
+        body += l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : isLi ? `<li style="margin-left:${depth * 18}px">${l.kind === "check" ? "☐ " : ""}${esc(plain) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`;
       }
       if (inList) body += "</ul>";
       const html = `<html><head><meta charset="utf-8"></head><body><div style="font-family:Arial,sans-serif;font-size:13px">${body}</div></body></html>`;
