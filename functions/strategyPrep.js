@@ -213,13 +213,15 @@ function dateKeys(live) {
 }
 // Keys that had a date last Friday and have none now, on a job that is still live. A return trip that was
 // completed/signed off (or removed) is not a cleared date, so rt keys only count while that trip is still open.
+// A saved history list can hold junk (null, a number, an entry without a string v); skip those, never throw.
+const cleanHist = (h) => arr(h).filter(e => e && typeof e === "object" && typeof e.v === "string");
 function clearedKeys(live, prevDates, cur) {
   if (!prevDates || typeof prevDates !== "object") return [];
   const byId = new Map(live.map(j => [j.id, j])), out = [];
   Object.keys(prevDates).forEach(k => {
     if (k in cur) return;
     const parts = k.split(":"), j = byId.get(parts[0]); if (!j) return;
-    const hist = arr(prevDates[k]); if (!hist.length) return;
+    const hist = cleanHist(prevDates[k]); if (!hist.length) return;
     if (parts[1] === "rt") { const rt = arr(j.returnTrips)[Number(parts[2])]; if (!rt || rt.signedOff || rt.rtStatus === "complete") return; }
     out.push({ k, j, hist });
   });
@@ -234,7 +236,7 @@ function movedDates(live, prevDates, today) {
   const rows = [], passed = [];
   Object.entries(cur).forEach(([k, v]) => {
     const j = nameOf.get(k.split(":")[0]); if (!j) return;
-    const hist = firstRun ? [] : arr(prevDates[k]);
+    const hist = firstRun ? [] : cleanHist(prevDates[k]);
     const last = hist.length ? hist[hist.length - 1].v : null;
     if (last && last !== v) rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: mdOfYmd(v), nth: new Set([...hist.map(h => h.v), v]).size });
   });
@@ -260,7 +262,7 @@ function movedDates(live, prevDates, today) {
 // Next state for the snapshot: append today's value when it differs from the last one.
 function nextDates(live, prevDates, todayYmd) {
   const cur = dateKeys(live), out = {};
-  Object.entries(cur).forEach(([k, v]) => { const hist = arr(prevDates && prevDates[k]).slice(-5); if (!hist.length || hist[hist.length - 1].v !== v) hist.push({ d: todayYmd, v }); out[k] = hist.slice(-6); });
+  Object.entries(cur).forEach(([k, v]) => { const hist = cleanHist(prevDates && prevDates[k]).slice(-5); if (!hist.length || hist[hist.length - 1].v !== v) hist.push({ d: todayYmd, v }); out[k] = hist.slice(-6); });
   // Cleared dates get a "" entry once, so next week last === current-absent and no row repeats. Done jobs drop out.
   clearedKeys(live, prevDates, cur).forEach(({ k, hist }) => { const h = hist.slice(); if (h[h.length - 1].v !== "") h.push({ d: todayYmd, v: "" }); out[k] = h.slice(-6); });
   return out;
