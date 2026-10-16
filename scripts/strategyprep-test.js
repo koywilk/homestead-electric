@@ -300,7 +300,7 @@ function fixture(over = {}) {
   const g = (n) => (b.groups.find(x => x.name === n) || { rows: [] }).rows;
   t("blocked: Lot 208 under GC / builder (pocket door framing), one line, age 59d from the oldest open question (8/18)", (() => { const r = g("GC / builder").find(x => x.jobId === "L208"); return r && r.ageDays === 59 && /ufer clamp|Pocket door/.test(r.what); })(), JSON.stringify(g("GC / builder")));
   t("blocked: Lot 208 appears in ONE group only", b.groups.filter(x => x.rows.some(r => r.jobId === "L208")).length === 1, JSON.stringify(b.groups.map(x => [x.name, x.rows.map(r => r.jobId)])));
-  t("blocked: Hideout under Material (cabinetry → GC) — highest-count bucket wins: 1 Material vs 1 GC → first by bucket order = GC / builder", g("GC / builder").some(r => r.jobId === "HIDE") || g("Material").some(r => r.jobId === "HIDE"));
+  t("blocked: Hideout 1 GC (cabinetry) vs 1 Material (fixture) → tie → GROUP_ORDER → GC / builder", g("GC / builder").some(r => r.jobId === "HIDE") && !g("Material").some(r => r.jobId === "HIDE"), JSON.stringify(b.groups.map(x => [x.name, x.rows.map(r => r.jobId)])));
   t("blocked: Ashcraft under Homeowner / designer with 10 questions since 10/2", (() => { const r = g("Homeowner / designer").find(x => x.jobId === "ASH"); return r && /10 questions/.test(r.what) && r.ageDays === 14; })(), JSON.stringify(g("Homeowner / designer")));
   t("blocked: Rose under On hold", g("On hold").some(r => r.jobId === "ROSE"));
   t("blocked: Us = Oak Hill need open 11d (fresh one and field-assigned task excluded); flagged Ashcraft counted under Us too", (() => { const us = g("Us (office owes the field)"); return us.some(r => r.jobId === "OAK" && /pantry redlines/.test(r.what) && r.ageDays === 11) && !us.some(r => /Fresh one|spider/.test(r.what)) && us.some(r => r.jobId === "ASH" && /flagged/.test(r.what)); })(), JSON.stringify(g("Us (office owes the field)")));
@@ -309,7 +309,29 @@ function fixture(over = {}) {
   t("blocked: keys cover every printed row; total + byGroup consistent", b.keys.length === b.total && Object.values(b.byGroup).reduce((a, n) => a + n, 0) === b.total);
   t("blocked: firstRun false with prev keys; true with null", b.firstRun === false && S.blockedRows({ live, needs: [], users: f.users, prevBlockerKeys: null, today: w.today }).firstRun === true);
   const big = S.blockedRows({ live: Array.from({ length: 14 }, (_, i) => ({ id: "H" + i, name: "Hold " + i, roughStatus: "waiting" })), needs: [], users: f.users, prevBlockerKeys: [], today: w.today });
-  t("blocked: cap 10 per group + more", big.groups[0].rows.length === 10 && big.groups[0].more === 4);
+  const bigHold = big.groups.find(x => x.name === "On hold") || { rows: [], more: -1 };
+  t("blocked: cap 10 per group + more (On hold)", bigHold.rows.length === 10 && bigHold.more === 4, JSON.stringify(big.groups.map(x => [x.name, x.rows.length, x.more])));
+  // review fixes
+  const item = (o) => ({ text: "item", done: false, voided: false, ...o });
+  const keyPrev = (prev) => S.blockedRows({ live, needs: f.needs, users: f.users, prevBlockerKeys: prev, today: w.today });
+  const multi = keyPrev(["MIC:Material", "MIC:On hold", "MIC:GC / builder"]);
+  t("blocked: several cleared keys on one job → ONE entry, first previous group in GROUP_ORDER", eq(multi.cleared, [{ name: "Micek Residence", group: "GC / builder" }]), JSON.stringify(multi.cleared));
+  const gone = keyPrev(["GONE:Material", "need_old:Us (office owes the field)"]);
+  t("blocked: job no longer live / synthetic need_ key → not cleared, no raw id printed", gone.cleared.length === 0 && !/GONE|need_/.test(JSON.stringify(gone.cleared)), JSON.stringify(gone.cleared));
+  const unNeeds = [{ id: "u1", kind: "need", text: "Call the inspector", createdBy: "Louis Hoffman", createdAt: "2026-10-07T15:00:00Z", status: "open", assignedTo: "Koy Wilkinson" }];
+  const un1 = S.blockedRows({ live, needs: unNeeds, users: f.users, prevBlockerKeys: null, today: w.today });
+  const unRow = (un1.groups.find(x => x.name === "Us (office owes the field)") || { rows: [] }).rows.find(r => r.name === "(no job)");
+  t("blocked: unattached need (no jobId, no jobName, 9d) → one Us row named (no job), key need_…", unRow && /Call the inspector/.test(unRow.what) && unRow.ageDays === 9 && un1.keys.some(k => k === "need_u1:Us (office owes the field)"), JSON.stringify(unRow) + JSON.stringify(un1.keys));
+  const un2 = S.blockedRows({ live, needs: [{ ...unNeeds[0], status: "done" }, { id: "u2", kind: "need", text: "Another loose one", createdAt: "2026-10-07T15:00:00Z", status: "open", assignedTo: "Koy Wilkinson" }], users: f.users, prevBlockerKeys: un1.keys, today: w.today });
+  t("blocked: resolved unattached need is NOT cleared; the other unattached one still prints; no crash", !un2.cleared.some(c => /no job|u1/.test(c.name)) && un2.keys.includes("need_u2:Us (office owes the field)") && !un2.keys.includes("need_u1:Us (office owes the field)"), JSON.stringify(un2.cleared));
+  const cnt = S.blockedRows({ live: [{ id: "CNT", name: "Count Test", roughStatus: "complete", finishStatus: "inprogress", finishPunch: { main: { general: [
+    item({ waiting: true, waitingOn: "Waiting for fixture A" }), item({ waiting: true, waitingOn: "Waiting for fixture B" }), item({ waiting: true, waitingOn: "Waiting for fixture C" }), item({ waiting: true, waitingOn: "Waiting for cabinetry" })] } } }], needs: [], users: f.users, prevBlockerKeys: [], today: w.today });
+  t("blocked: 3 Material items vs 1 GC item → lands under Material (summed item count, not entry count)", eq(cnt.keys, ["CNT:Material"]), JSON.stringify(cnt.keys));
+  const undated = S.blockedRows({ live: [{ id: "UND", name: "Undated", roughStatus: "complete", finishStatus: "inprogress", changeOrders: [{ coStatus: "approved" }], returnTrips: [{ rtStatus: "needs" }] }], needs: [], users: f.users, prevBlockerKeys: [], today: w.today });
+  const undRow = (undated.groups.find(x => x.name === "Sold work not on the calendar") || { rows: [] }).rows[0];
+  t("blocked: CO with no createdAt + RT with no dates → row present, ageDays null", undRow && undRow.ageDays === null && /approved CO/.test(undRow.what) && /return trip/.test(undRow.what), JSON.stringify(undRow));
+  const empty = S.blockedRows({ live: [], needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  t("blocked: empty live + empty needs → empty result, no throw", eq(empty.groups, []) && eq(empty.cleared, []) && eq(empty.keys, []) && empty.total === 0, JSON.stringify(empty));
 }
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
