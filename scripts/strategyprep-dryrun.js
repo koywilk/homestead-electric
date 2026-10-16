@@ -28,50 +28,67 @@ const makePreview = process.argv.includes("--doc");
 
 (async () => {
   const now = new Date(); const w = S.weekOf(now);
+  const inputErrors = [];
+  const soft = (name, p) => p.catch(e => { inputErrors.push(`${name}: ${String(e.message).slice(0, 80)}`); return null; });
+  let snap, usersSnap, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, findSnap;
+  try {
+    [snap, usersSnap, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, findSnap] = await Promise.all([
+      db.collection("jobs").get(), db.doc("settings/users").get(),
+      soft("needs", db.collection("needs").get()), soft("upcoming_jobs", db.doc("settings/upcoming_jobs").get()),
+      soft("schedule", db.doc(`settings/schedule_${w.weekYmds[0]}`).get()), soft("crewPTO", db.doc("settings/crewPTO").get()),
+      soft("timeOffRequests", db.doc("settings/timeOffRequests").get()), soft("strategyPrep state", db.doc("settings/strategyPrep").get()),
+      soft("agentFindings", db.collection("agentFindings").where("day", ">=", S.ymd(S.addDays(w.today, -7))).get()),
+    ]);
+  } catch (e) { console.error("FATAL read (jobs/users) failed:", e.message); process.exit(1); }
   const unwrap = (d) => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; };
-  const [snap, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, usersSnap, findSnap] = await Promise.all([
-    db.collection("jobs").get(), db.collection("needs").get(), db.doc("settings/upcoming_jobs").get(), db.doc(`settings/schedule_${w.weekYmds[0]}`).get(),
-    db.doc("settings/crewPTO").get(), db.doc("settings/timeOffRequests").get(), db.doc("settings/strategyPrep").get(), db.doc("settings/users").get(),
-    db.collection("agentFindings").where("day", ">=", S.ymd(S.addDays(w.today, -7))).get().catch(() => ({ docs: [] })),
-  ]);
-  const jobs = snap.docs.map(unwrap), needs = needSnap.docs.map(unwrap), users = usersSnap.exists ? (usersSnap.data().list || []) : [];
-  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
-  const plannerDoc = planSnap.exists ? planSnap.data() : null, pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
-  const timeOffRequests = toSnap.exists ? (toSnap.data().list || []) : [], prevState = stateSnap.exists ? stateSnap.data() : null;
-  const agentFindings = findSnap.docs.map(d => d.data());
+  const jobs = snap.docs.map(unwrap), needs = needSnap ? needSnap.docs.map(unwrap) : [], users = usersSnap.exists ? (usersSnap.data().list || []) : [];
+  const upcoming = upSnap && upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
+  const plannerDoc = planSnap && planSnap.exists ? planSnap.data() : null, pto = ptoSnap && ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+  const timeOffRequests = toSnap && toSnap.exists ? (toSnap.data().list || []) : [], prevState = stateSnap && stateSnap.exists ? stateSnap.data() : null;
+  const agentFindings = findSnap ? findSnap.docs.map(d => d.data()) : [];
   console.log(`jobs ${jobs.length} · needs ${needs.length} · users ${users.length} · planner ${plannerDoc ? "present" : "MISSING"} · state ${prevState ? "present" : "first run"}`);
 
   let scheduleEntries = [], simproOk = true;
   try { for (let page = 1; page <= 10; page++) {
-    const r = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${w.weekYmds[0]},${w.weekYmds[4]})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+    const r = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${w.weekYmds[0]},${w.weekYmds[4]})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) });
     if (!r.ok) { simproOk = false; break; } const b = await r.json(); if (!Array.isArray(b)) { simproOk = false; break; } scheduleEntries.push(...b); if (b.length < 250) break; } } catch (e) { simproOk = false; }
   if (!simproOk) scheduleEntries = [];
   console.log(`simpro schedule entries next week: ${scheduleEntries.length} (ok=${simproOk})`);
   const simproTotalsById = {};
-  const wanted = S.collectSimproCandidates(jobs);
+  let wanted = [];
+  try { wanted = S.collectSimproCandidates(jobs);
   for (let i = 0; i < wanted.length; i += 5) await Promise.all(wanted.slice(i, i + 5).map(async sn => { try {
-    const r = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }); if (!r.ok) return;
+    const r = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) }); if (!r.ok) return;
     const sj = (await r.json())[0]; if (!sj) return; const t = sj.Totals || {}, a = t.NettMargin?.Actual ?? null, e = t.NettMargin?.Estimate ?? null, real = a !== null && a !== 100, top = sj.Total || {};
-    simproTotalsById[sn] = { total: typeof top.IncTax === "number" ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null), margin: real ? a : e, isEstimate: !real }; } catch (e) {} }));
+    simproTotalsById[sn] = { total: typeof top.IncTax === "number" ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null), margin: real ? a : e, isEstimate: !real }; } catch (e) {} })); } catch (e) { console.log("simpro totals error:", e.message); }
   console.log(`simpro totals fetched: ${Object.keys(simproTotalsById).length} of ${wanted.length}`);
 
   let calendarEvents = [];
   try { const raw = process.env.PLAN_INTAKE_GOOGLE_OAUTH; if (!raw) throw new Error("no PLAN_INTAKE_GOOGLE_OAUTH in env");
     const o = JSON.parse(raw); const auth = new google.auth.OAuth2(o.client_id, o.client_secret); auth.setCredentials({ refresh_token: o.refresh_token });
-    const r = await google.calendar({ version: "v3", auth }).events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${w.weekYmds[0]}T00:00:00-06:00`, timeMax: `${w.weekYmds[4]}T23:59:59-06:00`, singleEvents: true, maxResults: 250 });
-    calendarEvents = r.data.items || []; } catch (e) { console.log("calendar:", e.message); }
+    const r = await google.calendar({ version: "v3", auth }).events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${w.weekYmds[0]}T00:00:00-06:00`, timeMax: `${w.weekYmds[4]}T23:59:59-07:00`, singleEvents: true, maxResults: 250 }, { timeout: 20000 });   // window one hour WIDER on both ends in every DST state
+    calendarEvents = r.data.items || []; } catch (e) { inputErrors.push(`calendar: ${e.message}`); console.log("calendar:", e.message); }
 
-  const docsAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"] });
-  const docs = google.docs({ version: "v1", auth: docsAuth }), drive = google.drive({ version: "v3", auth: docsAuth });
   let notesDoc = null;
-  try { notesDoc = (await docs.documents.get({ documentId: NOTES_DOC })).data; } catch (e) { console.log("notes doc read:", e.message, "(share Josh's doc with the service account as Viewer to get carry-forward)"); }
+  try {
+    const roAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
+    notesDoc = (await google.docs({ version: "v1", auth: roAuth }).documents.get({ documentId: NOTES_DOC })).data || null;
+  } catch (e) {
+    inputErrors.push(`notes doc read: ${String(e.message).slice(0, 80)}`);
+    if (e.code === 403 || /permission/i.test(e.message)) console.log("notes doc: 403 — for the live function share Josh's doc (Viewer) with homestead-electric@appspot.gserviceaccount.com; for this preview also with firebase-adminsdk-fbsvc@homestead-electric.iam.gserviceaccount.com");
+    else console.log("notes doc read:", e.message);
+  }
 
-  const model = S.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now });
+  const inputs = { jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now };
+  const model = S.buildModel(inputs);
   const lines = S.renderLines(model);
-  const html = `<html><body style="font-family:Arial,sans-serif;font-size:13px;max-width:760px;margin:20px auto">${lines.map(l => l.kind === "h2" ? `<h1>${S.esc(l.text)}</h1>` : l.kind === "h3" ? `<h2>${S.esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${S.esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${S.esc(l.text)}</p>` : (l.kind === "bullet" || l.kind === "check") ? `<div>&bull; ${S.esc(l.text) || "&nbsp;"}</div>` : `<p>${S.esc(l.text)}</p>`).join("\n")}</body></html>`;
+  if (inputErrors.length) lines.splice(1, 0, { text: "Some data did not load this run: " + inputErrors.join("; "), kind: "grey" });
+  const html = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;font-size:13px;max-width:760px;margin:20px auto">${lines.map(l => l.kind === "h2" ? `<h1>${S.esc(l.text)}</h1>` : l.kind === "h3" ? `<h2>${S.esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${S.esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${S.esc(l.text)}</p>` : l.kind === "check" ? `<div>\u2610 ${S.esc(l.text) || "&nbsp;"}</div>` : l.kind === "bullet" ? `<div>\u2022 ${S.esc(l.text) || "&nbsp;"}</div>` : `<p>${S.esc(l.text)}</p>`).join("\n")}</body></html>`;
   fs.writeFileSync(path.join(__dirname, "../strategyprep-dryrun.html"), html);
   console.log("wrote strategyprep-dryrun.html");
   if (makePreview) {
+    const docsAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"] });
+    const docs = google.docs({ version: "v1", auth: docsAuth }), drive = google.drive({ version: "v3", auth: docsAuth });
     const created = await drive.files.create({ requestBody: { name: `PREVIEW — ${model.heading}`, parents: [PACKET_FOLDER], mimeType: "application/vnd.google-apps.document" }, fields: "id, webViewLink", supportsAllDrives: true });
     await docs.documents.batchUpdate({ documentId: created.data.id, requestBody: { requests: S.docsRequests(lines, 1) } });
     console.log(`preview doc: ${created.data.webViewLink || `https://docs.google.com/document/d/${created.data.id}/edit`}`);
@@ -79,19 +96,27 @@ const makePreview = process.argv.includes("--doc");
 
   // CHECKS — every live job and where it landed. Pipeline starts (jobId up_…) are not live jobs:
   // they are listed separately and never counted against the live-job bucket map.
-  const live = S.liveJobs(jobs), s = model.schedule, liveIds = new Set(live.map(j => j.id));
+  const live = S.liveJobs(jobs), liveIds = new Set(live.map(j => j.id));
   console.log("\nCHECKS");
   console.log("headline:", model.headline);
   console.log("counts:", JSON.stringify(model.counts));
-  if (!s.error) {
-    const bucketOf = {}, mark = (rows, label) => rows.forEach(r => { if (liveIds.has(r.jobId)) bucketOf[r.jobId] = label; });
-    mark(s.booked, "booked"); mark(s.idle, "nobody booked"); mark(s.starts, "start"); mark(s.onHold, "on hold"); mark(s.between, "not started or between phases, no date (not printed)");
-    live.sort((a, b) => a.name.localeCompare(b.name)).forEach(j => console.log(`  ${(bucketOf[j.id] || "MISSING — RULE BUG").padEnd(42)} ${j.name}`));
-    const pipe = s.starts.filter(r => !liveIds.has(r.jobId));
-    if (pipe.length) { console.log("\n  upcoming (not in app):"); pipe.forEach(r => console.log(`  ${"upcoming (not in app)".padEnd(42)} ${r.name}`)); }
-    const missing = live.filter(j => !bucketOf[j.id]); console.log(`\nlive ${live.length} · booked ${s.booked.length + s.bookedMore} · nobody booked ${s.idle.length} · starts ${s.starts.length} (${pipe.length} not in app) · on hold ${s.onHold.length} · between ${s.between.length} · MISSING ${missing.length}`);
-    if (missing.length) process.exitCode = 2;
-  } else console.log("schedule section failed:", s.error);
+  if (model.schedule.error) { console.log("schedule section failed:", model.schedule.error); process.exitCode = 2; }
+  else {
+    // The rendered model caps the booked list (CAPS.booked); the bucket map must see every job, so rebuild uncapped.
+    const capBooked = S.CAPS.booked; S.CAPS.booked = 1e9; const full = S.buildModel(inputs); S.CAPS.booked = capBooked;
+    const s = full.schedule;
+    if (s.error) { console.log("uncapped schedule section failed:", s.error); process.exitCode = 2; }
+    else {
+      const bucketOf = {}, mark = (rows, label) => rows.forEach(r => { if (!liveIds.has(r.jobId)) return;
+        if (bucketOf[r.jobId]) { console.log(`DUPLICATE ${r.name}: ${bucketOf[r.jobId]} + ${label}`); process.exitCode = 2; } bucketOf[r.jobId] = label; });
+      mark(s.booked, "booked"); mark(s.idle, "nobody booked"); mark(s.starts, "start"); mark(s.onHold, "on hold"); mark(s.between, "not started or between phases, no date (not printed)");
+      live.sort((a, b) => a.name.localeCompare(b.name)).forEach(j => console.log(`  ${(bucketOf[j.id] || "MISSING — RULE BUG").padEnd(42)} ${j.name}`));
+      const pipe = s.starts.filter(r => !liveIds.has(r.jobId));
+      if (pipe.length) { console.log("\n  upcoming (not in app):"); pipe.forEach(r => console.log(`  ${"upcoming (not in app)".padEnd(42)} ${r.name}`)); }
+      const missing = live.filter(j => !bucketOf[j.id]); console.log(`\nlive ${live.length} · booked ${s.booked.length} (doc shows ${model.schedule.booked.length} + ${model.schedule.bookedMore} more) · nobody booked ${s.idle.length} · starts ${s.starts.length} (${pipe.length} not in app) · on hold ${s.onHold.length} · between ${s.between.length} · MISSING ${missing.length}`);
+      if (missing.length) process.exitCode = 2;
+    }
+  }
   console.log("blocked by group:", JSON.stringify(model.blocked.byGroup || model.blocked.error));
   console.log("simpro people booked next week:", [...(scheduleEntries.reduce((m, e) => { if (e.Type === "job" && e.Staff) m.add(e.Staff.Name); return m; }, new Set()))].join(", "));
 })().catch(e => { console.error("dryrun failed:", e); process.exit(1); });
