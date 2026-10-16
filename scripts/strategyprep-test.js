@@ -713,5 +713,80 @@ function fixture(over = {}) {
   t("I11: render 'HARD DATE NEEDED Hard Date Job — rough needs a hard date by 11/2 · nobody booked · no lead · prep 0/5 …' red tag", !!hdl && /^HARD DATE NEEDED Hard Date Job — rough needs a hard date by 11\/2 · nobody booked · no lead · prep 0\/5/.test(hdl.text) && hdl.spans[0].len === 16 && eq(hdl.spans[0].rgb, [0.72, 0.14, 0.14]), hdl && hdl.text);
 }
 
+// ── Final fix wave: LEDGER F-items ───────────────────────────────────────────
+{
+  const w = S.weekOf(NOW);
+  const item = (o) => ({ text: "item", done: false, voided: false, ...o });
+  const HG = { id: "HG", name: "Hold With GC Waits", roughStatus: "complete", finishStatus: "waiting", finishStage: "40%", finishPunch: { main: { general: [item({ waiting: true, waitingOn: "Framing" })] } } };
+  const SOLDJ = { id: "SJ", name: "Sold Job", roughStatus: "complete", finishStatus: "inprogress", finishStage: "60%", changeOrders: [{ id: "c1", coStatus: "approved", createdAt: "2026-06-01T10:00:00Z" }] };
+  // F2 — distinct jobs; plain lower-case group labels.
+  const m2 = S.buildModel(fixture({ jobs: [HG, SOLDJ], needs: [{ id: "n1", kind: "need", text: "Redlines", jobId: "HG", createdBy: "Louis Hoffman", assignedTo: "Koy Wilkinson", createdAt: "2026-10-05T15:00:00Z", status: "open" }] }));
+  t("F2: headline line 2 counts distinct jobs and lists groups as '1 GC / builder · 1 on hold · 1 on us · 1 sold work not dated'", m2.headline[1] === "2 jobs blocked: 1 GC / builder · 1 on hold · 1 on us · 1 sold work not dated.", m2.headline[1]);
+  t("F2: counts.blocked = distinct jobs (2), rows stay 4", m2.counts.blocked === 2 && m2.blocked.total === 4, JSON.stringify([m2.counts.blocked, m2.blocked.total]));
+
+  // F3 — ready-to-bill line when dollars are missing or partial.
+  const rtiJ = (id, sn) => ({ id, name: id, simproNo: sn, roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%", readyToInvoice: true, readyToInvoiceDate: "10/1/2026" });
+  const m3a = S.buildModel(fixture({ jobs: [rtiJ("R1", "11"), rtiJ("R2", "12")], simproTotalsById: {} }));
+  const m3b = S.buildModel(fixture({ jobs: [rtiJ("R1", "11"), rtiJ("R2", "12")], simproTotalsById: { "11": { total: 53000, margin: 20 } } }));
+  t("F3: no dollars fetched → '2 jobs ready to bill ($ not fetched)'", /^2 jobs ready to bill \(\$ not fetched\)/.test(m3a.headline[2]), m3a.headline[2]);
+  t("F3: partial → '$53k on 1 of 2 jobs ready to bill'", /^\$53k on 1 of 2 jobs ready to bill/.test(m3b.headline[2]), m3b.headline[2]);
+
+  // F4 — the generated time, never a hard-coded 6:00 AM.
+  const m4 = S.buildModel(fixture({ now: new Date("2026-10-16T15:41:00Z") }));
+  const t4 = S.renderLines(m4).map(l => l.text);
+  t("F4: preLine carries the real generated time in MT", /^pre-filled Fri, Oct 16, 9:41 AM MT from the crew app/.test(m4.preLine) && /as of Fri, Oct 16, 9:41 AM MT/.test(m4.preLine), m4.preLine);
+  t("F4: no '6:00 AM' anywhere when the run was at 9:41", !t4.some(x => /6:00 AM/.test(x)), t4.filter(x => /6:00/.test(x)).join(" | "));
+
+  // F5 — deduped item texts, em dash, questions joined.
+  const dj = { id: "DJ", name: "Dup Job", roughStatus: "inprogress", roughStage: "40%", roughPunch: { main: { general: [item({ waiting: true, waitingOn: "Knob and tube??" }), item({ waiting: true, waitingOn: "knob and TUBE??" }), item({ waiting: true, waitingOn: "Knob and tube??" })] } },
+    roughQuestions: { main: [{ question: "Which knob?", answer: "", addedAt: "2026-10-02T12:00:00Z" }] } };
+  const b5 = S.blockedRows({ live: [dj], needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  t("F5: 'N waiting-on items — t1 · N questions unanswered since M/D', texts deduped case-insensitively", b5.groups[0] && b5.groups[0].rows[0].what === "3 waiting-on items — Knob and tube?? · 1 question unanswered since 10/2", JSON.stringify(b5.groups));
+
+  // F6 — "Unspecified" is now "no reason given".
+  const b6 = S.blockedRows({ live: [{ id: "NR", name: "No Reason", roughStatus: "inprogress", roughStage: "40%", roughPunch: { main: { general: [item({ waiting: true, waitingOn: "", text: "" })] } } }], needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  t("F6: a waiting item with no reason and no text → group 'no reason given'", eq(b6.keys, ["NR:no reason given"]) && S.GROUP_ORDER.includes("no reason given") && !S.GROUP_ORDER.includes("Unspecified"), JSON.stringify(b6.keys));
+
+  // F8 — job names trimmed at every display boundary.
+  const tj = { id: "TJ", name: "  Trim Job  ", simproNo: "77", foreman: "Keegan Wilkinson", roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%", readyToInvoice: true, readyToInvoiceDate: "10/1/2026", finishQcStatus: "needs",
+    finalInspectionTargetDate: "10/21/2026", finishPunch: { main: { general: [item({ waiting: true, waitingOn: "Fixture" })] } } };
+  const m8 = S.buildModel(fixture({ jobs: [tj], calendarEvents: [{ summary: "Trim Job walk", start: { date: "2026-10-22" } }] }));
+  const names8 = [m8.schedule.idle[0].name, m8.blocked.groups[0].rows[0].name, m8.money.rti.rows[0].name, m8.qc.rows[0].name, ...m8.schedule.calendar.map(r => r.name), m8.coming.freeing[0].name];
+  t("F8: name trimmed in idle, blocked, money, qc, calendar, near done", names8.length === 7 && names8.every(n => n === "Trim Job"), JSON.stringify(names8));
+  t("F8: no rendered line carries the untrimmed name", S.renderLines(m8).filter(l => /Trim Job/.test(l.text)).length >= 6 && !S.renderLines(m8).some(l => /\s{2}Trim Job|Trim Job\s{2}/.test(l.text)), S.renderLines(m8).filter(l => /Trim Job/.test(l.text)).map(l => JSON.stringify(l.text)).join(" | "));
+
+  // F9 — clip collapses whitespace; PTO notes clipped to 40.
+  t("F9: clip collapses whitespace", S.clip("a   b\n\n c", 50) === "a b c", JSON.stringify(S.clip("a   b\n\n c", 50)));
+  const pp9 = S.peopleRows({ users: [], pto: [{ name: "Colby Fogh", start: "10/19/2026", note: "We had to schedule Lizzie's pediatrician appointment for that day. We are able to get her other appointments" }], timeOffRequests: [], needs: [], prevUserIds: null, idx: S.buildScheduleIndex([], null, [], w.weekYmds), weekDays: w.weekDays, today: w.today });
+  t("F9: PTO note clipped to 40 chars", pp9.out[0].note.length <= 40 && /…$/.test(pp9.out[0].note), JSON.stringify(pp9.out[0].note));
+
+  // F10 — counts on the schedule h4s.
+  const h4 = S.renderLines(S.buildModel(fixture())).filter(l => l.kind === "h4").map(l => l.text);
+  t("F10: 'Booked · 2', 'In progress, nobody booked · 2', 'Starts · 2'", h4.includes("Booked · 2 (no planner for next week; Simpro only)") && h4.includes("In progress, nobody booked · 2") && h4.includes("Starts · 2"), JSON.stringify(h4));
+
+  // F11 — DATE PASSED wording per kind.
+  const f11 = fixture();
+  f11.jobs.push({ id: "INSP", name: "Old Final", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%", finalInspectionTargetDate: "5/20/2026" },
+    { id: "QCW", name: "Old Walk", roughStatus: "inprogress", roughStage: "50%", qcStatus: "scheduled", qcStatusDate: "10/5/2026" });
+  const t11 = S.renderLines(S.buildModel(f11)).map(l => l.text);
+  t("F11: 'DATE PASSED Old Final — final inspection 5/20 (149d), no result logged'", t11.includes("DATE PASSED Old Final — final inspection 5/20 (149d), no result logged"), t11.filter(x => /DATE PASSED/.test(x)).join(" | "));
+  t("F11: 'DATE PASSED Old Walk — rough QC walk 10/5 (11d), walk not logged'", t11.includes("DATE PASSED Old Walk — rough QC walk 10/5 (11d), walk not logged"), t11.filter(x => /DATE PASSED/.test(x)).join(" | "));
+
+  // F12 — calendar guard; orchestrator window, push body, fallback charset.
+  const src = require("fs").readFileSync(require.resolve("../functions/strategyPrep.js"), "utf8");
+  const calSrc = src.slice(src.indexOf("function calendarRows"), src.indexOf("// ── people"));
+  t("F12b: calendarRows guard 'if (!d) return;' is live code on its own line, not inside a comment", /\n\s*if \(!d\) return;/.test(calSrc), "");
+  const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
+  const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
+  t("F12a: calendar window timeMin …T00:00:00-06:00, timeMax …T23:59:59-07:00", /timeMin: `\$\{windowStart\}T00:00:00-06:00`/.test(run) && /timeMax: `\$\{windowEnd\}T23:59:59-07:00`/.test(run));
+  t("F12c: push body slices the HEADLINE to 110, then appends the doc pointer (not cut)", /\(model\.headline\[0\] \|\| "This week's prep is ready"\)\.slice\(0, 110\)\} — doc "\$\{docTitle\}" is in the Friday Packets Drive folder`/.test(run) && !/Drive folder`\.slice\(0, 180\)/.test(run));
+  t("F12d: fallback HTML declares utf-8", /<meta charset="utf-8">/.test(run));
+
+  // F13 — a date cleared last week and set again now prints "no date → M/D".
+  const f13 = S.liveJobs(fixture().jobs);
+  const mv13 = S.movedDates(f13, { "NAM:roughStart": [{ d: "2026-10-02", v: "2026-10-08" }, { d: "2026-10-09", v: "" }] }, w.today);
+  t("F13: last value '' and a date now → 'rough start no date → 10/19', nth counts real dates only (2)", mv13.rows.length === 1 && mv13.rows[0].from === "no date" && mv13.rows[0].to === "10/19" && mv13.rows[0].nth === 2, JSON.stringify(mv13.rows));
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");

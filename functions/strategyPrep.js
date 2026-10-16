@@ -61,7 +61,7 @@ const firstKey = (name) => String(name || "").trim().toLowerCase().split(/\s+/)[
 const personKey = (name) => { const t = String(name || "").trim().toLowerCase().split(/\s+/).filter(Boolean); return t.length > 1 ? `${t[0]} ${t[t.length - 1][0]}` : (t[0] || ""); };
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const arr = (v) => (Array.isArray(v) ? v : []);
-const clip = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : s; };
+const clip = (s, n) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : s; };
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c])); }
 function stripHtml(s) { return String(s || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/\s+/g, " ").trim(); }
 const fmtMoney = (v) => v >= 950 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`;
@@ -95,8 +95,10 @@ const hasForeman = (j) => !!j.foreman && !/^unassigned$/i.test(String(j.foreman)
 const leadOf = (j) => { const l = String(j.lead || "").trim(); return l && !/unassigned|tbd/i.test(l) ? l : ""; };
 const isDone = (j) => j.finishStatus === "complete" || j.finishStatus === "invoice" || parseInt(j.finishStage) === 100 ||
   (j.tempPed && j.tempPedStatus === "completed") || (j.quickJob && ["complete", "invoice"].includes(j.quickJobStatus));
+// Names are trimmed here, once, so every row built from a live job shows "Cowdrey", never "Cowdrey ".
 function liveJobs(jobs) {
-  return arr(jobs).filter(j => j && j.name && String(j.name).trim() !== "Example Job" && j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt && !isDone(j));
+  return arr(jobs).filter(j => j && j.name && String(j.name).trim() && String(j.name).trim() !== "Example Job" && j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt && !isDone(j))
+    .map(j => String(j.name) === String(j.name).trim() ? j : { ...j, name: String(j.name).trim() });
 }
 function walkPunch(punch, cb) {
   if (!punch || typeof punch !== "object") return;
@@ -113,7 +115,7 @@ function openQuestions(j) {
       out.push({ text: stripHtml(q.question || q.text || ""), since: toDateAny(q.addedAt) || toDateAny(q.date) || toDateAny(q.id) }); })); });
   return out.filter(q => q.text);
 }
-function waitBucket(text) { const r = String(text || "").trim(); if (!r) return "Unspecified"; for (const [label, re] of WAIT_BUCKETS) if (re.test(r)) return label; return "Other"; }
+function waitBucket(text) { const r = String(text || "").trim(); if (!r) return "no reason given"; for (const [label, re] of WAIT_BUCKETS) if (re.test(r)) return label; return "Other"; }
 const waitReason = (w) => w.waitingOn || w.text;   // a waiting item with no "waiting on" text is bucketed by its own text
 // A question is for the homeowner / designer unless its text NAMES another party (an object word like "cabinet"
 // or "ceiling" is not a party). Several parties named → the one named first.
@@ -366,7 +368,9 @@ function calendarRows(live, calendarEvents, weekYmds) {
     if (n[0] && n[0].length >= 5 && !/^\d+$/.test(n[0])) keys.push(n[0]); if (n.length >= 2) keys.push(n.slice(0, 2).join(" ")); return { j, keys }; }).filter(x => x.keys.length);
   arr(calendarEvents).forEach(ev => {
     if (!ev || !ev.start || ev.status === "cancelled") return;
-    const rawDT = ev.start.dateTime; const raw = typeof rawDT === "string" && rawDT ? rawDT.slice(0, 10) : (rawDT || ev.start.date); const d = toDateAny(raw);   // day = the date part as written (local to the event), never the UTC-shifted instant if (!d) return;
+    // day = the date part as written (local to the event), never the UTC-shifted instant
+    const rawDT = ev.start.dateTime; const raw = typeof rawDT === "string" && rawDT ? rawDT.slice(0, 10) : (rawDT || ev.start.date); const d = toDateAny(raw);
+    if (!d) return;
     const title = normName(ev.summary);
     const hits = names.filter(x => x.keys.some(k => new RegExp(`(^| )${k}( |$)`).test(title))); if (!hits.length) return;
     const who = arr(ev.attendees).map(a => String((a && a.email) || "").split("@")[0]).filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(", ");
@@ -382,7 +386,7 @@ function overlapDays(startRaw, endRaw, weekDays) {
   return weekDays.map((d, i) => (ymd(d) >= ymd(s) && ymd(d) <= ymd(e)) ? i : -1).filter(i => i >= 0);
 }
 function peopleRows({ users, pto, timeOffRequests, needs, prevUserIds, idx, weekDays, today }) {
-  const out = arr(pto).map(p => ({ name: p.name, dis: overlapDays(p.start, p.end, weekDays), note: p.note || "" })).filter(p => p.dis.length).map(p => ({ name: p.name, range: daysLabel(p.dis), dis: p.dis, note: p.note }));
+  const out = arr(pto).map(p => ({ name: p.name, dis: overlapDays(p.start, p.end, weekDays), note: clip(p.note, 40) })).filter(p => p.dis.length).map(p => ({ name: p.name, range: daysLabel(p.dis), dis: p.dis, note: p.note }));
   const pending = arr(timeOffRequests).filter(r => r && r.status === "pending").map(r => { const s = toDateAny(r.start), e = toDateAny(r.end || r.start), q = toDateAny(r.requestedAt);
     return { name: r.name, range: s ? `${fmtShort(s)}${e && ymd(e) !== ymd(s) ? `–${fmtShort(e)}` : ""}` : "", requestedDays: q ? daysBetween(today, q) : null }; });
   const bodies = arr(needs).filter(n => n && n.kind === "bodies" && n.status !== "done" && !n.voided).map(n => ({ text: clip(stripHtml(n.text || `${n.count || "some"} bodies`), 120), job: n.jobName || "", by: String(n.createdBy || "").trim(), ageDays: toDateAny(n.createdAt) ? daysBetween(today, toDateAny(n.createdAt)) : null }));
@@ -415,8 +419,10 @@ function conflictRows(idx, pto, weekYmds) {
 }
 
 // ── blocked: one line per job, grouped by who we wait on ────────────────────
-const GROUP_ORDER = ["GC / builder", "Homeowner / designer", "Material", "Inspection", "Other trades", "On hold", "Us (office owes the field)", "Sold work not on the calendar", "Other", "Unspecified"];
+const GROUP_ORDER = ["GC / builder", "Homeowner / designer", "Material", "Inspection", "Other trades", "On hold", "Us (office owes the field)", "Sold work not on the calendar", "Other", "no reason given"];
 const OFFICE_NAMES = /^(koy|josh|jeromy|justin|brady)\b/i;
+const HEAD_GROUP = { "GC / builder": "GC / builder", "Homeowner / designer": "homeowner / designer", Material: "material", Inspection: "inspection", "Other trades": "other trades",
+  "On hold": "on hold", "Us (office owes the field)": "on us", "Sold work not on the calendar": "sold work not dated", Other: "other", "no reason given": "no reason given" };   // headline line 2 labels
 // The app's coIsConverted (src/App.js): converted when its status says so, or a return trip was made from it
 // (rt.fromCOId === co.id) and the convert was not undone. COs carry no scheduled date: a CO is "dated" when it
 // has a needsByStart, or a linked return trip has an rtStatusDate.
@@ -435,7 +441,9 @@ function blockedRows({ live, needs, users, prevBlockerKeys, today, now }) {
     const waits = waitingItems(j), qs = openQuestions(j);
     const byBucket = {};
     waits.forEach(w => { const b = waitBucket(waitReason(w)); (byBucket[b] = byBucket[b] || []).push(w); });
-    Object.entries(byBucket).forEach(([b, list]) => push(j, b, `${plural(list.length, "waiting-on item")}: ${list.slice(0, 2).map(w => clip(waitReason(w), 40)).join(", ")}`, oldest(list.map(w => w.since)), "", list.length));
+    Object.entries(byBucket).forEach(([b, list]) => { const seen = new Set(), texts = [];
+      list.forEach(w => { const t = clip(waitReason(w), 40), k = t.toLowerCase(); if (t && !seen.has(k)) { seen.add(k); texts.push(t); } });   // same text twice reads once
+      push(j, b, `${plural(list.length, "waiting-on item")}${texts.length ? ` — ${texts.slice(0, 2).join(", ")}` : ""}`, oldest(list.map(w => w.since)), "", list.length); });
     // Each question buckets by its own text; one entry per bucket with its own count.
     const qByB = {}; qs.forEach(q => { const b = questionBucket(q.text); (qByB[b] = qByB[b] || []).push(q); });
     Object.entries(qByB).forEach(([b, list]) => { const since = oldest(list.map(q => q.since)); push(j, b, `${plural(list.length, "question")} unanswered${since ? ` since ${fmtMD(since)}` : ""}`, since, "", list.length); });
@@ -503,7 +511,7 @@ function blockedRows({ live, needs, users, prevBlockerKeys, today, now }) {
     if (!prevGroups.has(jobId)) prevGroups.set(jobId, []); prevGroups.get(jobId).push(group); });
   const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i < 0 ? GROUP_ORDER.length : i; };
   const cleared = [...prevGroups].map(([jobId, gs]) => ({ name: liveById.get(jobId).name, group: gs.sort((x, y) => rank(x) - rank(y))[0] }));
-  return { groups: outGroups, cleared, keys, total: keys.length, byGroup, firstRun };
+  return { groups: outGroups, cleared, keys, total: keys.length, jobs: new Set(keys.map(k => k.split(":")[0])).size, byGroup, firstRun };
 }
 
 // ── coming up ────────────────────────────────────────────────────────────────
@@ -587,7 +595,7 @@ function qcRows({ live, today }) {
 function lastWeekRows({ jobs, live, users, prevState, blocked, today }) {
   const mon = mondayOf(today), inWin = (raw) => { const d = toDateAny(raw); return d && ymd(d) >= ymd(mon) && ymd(d) <= ymd(today); };
   const all = arr(jobs).filter(j => j && j.name && j.type !== "quote" && !j.archived && !j.deleted);
-  const finished = all.filter(j => (j.finishStatus === "complete" || parseInt(j.finishStage) === 100) && inWin(j.finishStatusDate)).map(j => j.name);
+  const finished = all.filter(j => (j.finishStatus === "complete" || parseInt(j.finishStage) === 100) && inWin(j.finishStatusDate)).map(j => String(j.name).trim());
   let inspPassed = 0, inspFailed = 0, cosCreated = 0, cosApproved = 0, cosConverted = 0, rtCreated = 0, punchClosed = 0, qAsked = 0, qAnswered = 0;
   all.forEach(j => {
     ["roughInspectionAttempts", "finalInspectionAttempts"].forEach(k => arr(j[k]).forEach(a => { if (a && inWin(a.date)) { if (a.result === "fail") inspFailed++; else if (a.result) inspPassed++; } }));
@@ -618,9 +626,11 @@ function buildModel(inputs) {
   const I = inputs || {}; const now = I.now instanceof Date ? I.now : new Date();
   const w = weekOf(now), { today, meeting, weekYmds, weekDays } = w;
   const ERR = (e) => ({ error: `Section unavailable this week: ${(e && e.message) || e}` });
+  // When the doc was actually generated, in MT (a test run at 9:41 must not claim 6:00 AM).
+  const builtAt = now.toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).replace(/[\u00a0\u202f]/g, " ");
   const m = {
     heading: `Friday Strategy Prep — ${meeting.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,   // the doc title; the body carries no heading (it is pasted under Google's own)
-    preLine: `pre-filled Fri 6:00 AM MT from the crew app · next week Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])} · booked = Simpro + planner as of 6:00 AM · details live in the app`,
+    preLine: `pre-filled ${builtAt} MT from the crew app · next week Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])} · booked = Simpro + planner as of ${builtAt} MT · details live in the app`, builtAt,
     weekLabel: `Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])}`, meetingYmd: ymd(meeting), todayYmd: ymd(today),
     carried: { error: false, fromLabel: "", rows: [] }, headline: [], schedule: { error: true }, blocked: { error: true }, coming: { error: true }, money: { error: true }, qc: { error: true }, lastWeek: { error: true }, counts: {}, nextState: null,
   };
@@ -660,11 +670,14 @@ function buildModel(inputs) {
     if (!m.schedule.error) { const s = m.schedule, risk = s.starts.filter(x => x.atRisk).length;
       const crew = !s.simproOk && !s.plannerPresent ? "crew unknown: Simpro unavailable, no planner for next week" : `${plural(cls.booked.length, "job")} crewed · ${s.idle.length} in progress with nobody booked`;
       H.push(`Next week: ${crew} · ${plural(s.starts.length, "start")}${risk ? `, ${risk} at risk` : ""}.`); }
-    if (!m.blocked.error) { const parts = GROUP_ORDER.filter(g => m.blocked.byGroup[g]).map(g => `${m.blocked.byGroup[g]} on ${g.replace(" (office owes the field)", "").toLowerCase()}`); H.push(`${plural(m.blocked.total, "job")} blocked${parts.length ? `: ${parts.join(", ")}` : ""}.`); }
-    if (!m.money.error) { const r = m.money.rti, g = m.money.margin; H.push(`${r.count ? `${fmtMoney(r.total)}${r.knownCount < r.count ? "+" : ""} ready to bill on ${plural(r.count, "job")}` : "Nothing ready to bill"}${g.median != null ? ` · margin at finish median ${g.median}% vs ${MARGIN_TARGET}%, ${g.underCount} under` : ""}.`); }
+    if (!m.blocked.error) { const parts = GROUP_ORDER.filter(g => m.blocked.byGroup[g]).map(g => `${m.blocked.byGroup[g]} ${HEAD_GROUP[g] || g.toLowerCase()}`); H.push(`${plural(m.blocked.jobs, "job")} blocked${parts.length ? `: ${parts.join(" · ")}` : ""}.`); }
+    if (!m.money.error) { const r = m.money.rti, g = m.money.margin;
+      const bill = !r.count ? "Nothing ready to bill" : r.knownCount === 0 ? `${plural(r.count, "job")} ready to bill ($ not fetched)`
+        : r.knownCount < r.count ? `${fmtMoney(r.total)} on ${r.knownCount} of ${plural(r.count, "job")} ready to bill` : `${fmtMoney(r.total)} ready to bill on ${plural(r.count, "job")}`;
+      H.push(`${bill}${g.median != null ? ` · margin at finish median ${g.median}% vs ${MARGIN_TARGET}%, ${g.underCount} under` : ""}.`); }
     m.headline = H;
   } catch (e) { m.headline = []; }
-  m.counts = { live: live.length, booked: cls.booked.length, idle: cls.idle.length, starts: m.schedule.error ? cls.starts.length : m.schedule.starts.length, onHold: cls.onHold.length, between: cls.between.length, later: cls.later.length, blocked: m.blocked.error ? null : m.blocked.total, rti: m.money.error ? null : m.money.rti.count, qc: m.qc.error ? null : m.qc.rows.length, carried: m.carried.rows.length };
+  m.counts = { live: live.length, booked: cls.booked.length, idle: cls.idle.length, starts: m.schedule.error ? cls.starts.length : m.schedule.starts.length, onHold: cls.onHold.length, between: cls.between.length, later: cls.later.length, blocked: m.blocked.error ? null : m.blocked.jobs, rti: m.money.error ? null : m.money.rti.count, qc: m.qc.error ? null : m.qc.rows.length, carried: m.carried.rows.length };
   const weekRow = { ymd: ymd(today), counts: m.lastWeek.error ? {} : m.lastWeek.counts };
   try {
     m.nextState = { blockerKeys: m.blocked.error ? arr(prev && prev.blockerKeys) : m.blocked.keys, marginByJob: m.money.error ? (prev && prev.marginByJob) || {} : m.money.marginByJob,
@@ -758,15 +771,15 @@ function renderLines(m) {
   if (m.schedule.error) fail(m.schedule); else {
     const s = m.schedule;
     const crewUnknown = !s.simproOk && !s.plannerPresent;
-    H4(crewUnknown ? "Booked — crew unknown: Simpro unavailable and no planner for next week" : `Booked${s.simproOk ? (s.plannerPresent ? "" : " (no planner for next week; Simpro only)") : " — Simpro unavailable; planner only"}`);
-    if (!s.booked.length && !crewUnknown) G("Nothing booked for next week yet (as of 6:00 AM).");
+    H4(crewUnknown ? "Booked — crew unknown: Simpro unavailable and no planner for next week" : `Booked · ${s.booked.length + (s.bookedMore || 0)}${s.simproOk ? (s.plannerPresent ? "" : " (no planner for next week; Simpro only)") : " — Simpro unavailable; planner only"}`);
+    if (!s.booked.length && !crewUnknown) G(`Nothing booked for next week yet${m.builtAt ? ` (as of ${m.builtAt} MT)` : ""}.`);
     s.booked.forEach(r => B(`${r.name} — ${r.phase}${r.pct ? ` ${r.pct}%` : ""} · ${r.days} · ${r.people.join(", ")}${r.qcNeeds ? " · QC after" : ""}${r.start ? ` · ${r.start.phase} start ${fmtMD(r.start.date)} ${r.start.confirmed ? "confirmed" : "projected"}` : ""}`));
     more(s.bookedMore);
     s.unknownSimpro.forEach(u => B(`Simpro #${u.pid} ${u.appName ? `${u.appName} (${u.appState})` : "(not in app)"} · ${daysLabel(u.days)} · ${u.people.join(", ")}`));
-    H4("In progress, nobody booked");
+    H4(`In progress, nobody booked · ${s.idle.length}`);
     if (!s.idle.length) G("Every in-progress job has crew next week.");
     s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.statusText || `${r.phase} ${r.pct}%`} · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""} · ${r.openPunch} punch${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
-    H4("Starts");
+    H4(`Starts · ${s.starts.length}`);
     if (!s.starts.length) G("No starts dated inside next week.");
     const tail = (r) => ` · nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""} · prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}${r.elsewhere.length ? ` · ${r.elsewhere.join("; ")}` : ""}`;
     s.starts.forEach(r => {
@@ -784,7 +797,7 @@ function renderLines(m) {
     H4("Dates that moved since last Friday");
     if (s.movedFirstRun) G("Tracking starts this week."); else if (!s.moved.length && !s.passed.length) G("Nothing moved.");
     s.moved.forEach(r => B(r.to === "no date" ? `${r.name} — ${r.label} ${r.from} → no date (cleared)` : `${r.name} — ${r.label} ${r.from} → ${r.to}${r.nth > 2 ? ` (${r.nth}${r.nth === 3 ? "rd" : "th"} date)` : ""}`));
-    s.passed.forEach(r => tag("DATE PASSED", AMBER, `${r.name} — ${r.label} ${r.date}, status never moved`));
+    s.passed.forEach(r => tag("DATE PASSED", AMBER, `${r.name} — ${r.label} ${r.date}${r.days != null ? ` (${r.days}d)` : ""}, ${r.kind === "inspection" ? "no result logged" : r.kind === "qc" ? "walk not logged" : "status never moved"}`));
     H4("On the calendar");
     if (!s.calendar.length) G("No inspections, walks or scans dated next week.");
     s.calendar.forEach(r => B(`${DAY_LBL[r.di]} — ${r.label} · ${r.name}${r.who ? ` · ${r.who}` : ""}${r.ambiguous ? " (name match — check which job)" : ""}`));

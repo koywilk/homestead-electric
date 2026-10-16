@@ -5088,7 +5088,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
     const raw = process.env.PLAN_INTAKE_GOOGLE_OAUTH; if (!raw) throw new Error("PLAN_INTAKE_GOOGLE_OAUTH not set");
     const o = JSON.parse(raw); const auth = new google.auth.OAuth2(o.client_id, o.client_secret); auth.setCredentials({ refresh_token: o.refresh_token });
     const cal = google.calendar({ version: "v3", auth });
-    const r = await cal.events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${windowStart}T00:00:00-07:00`, timeMax: `${windowEnd}T23:59:59-06:00`, singleEvents: true, maxResults: 250 }, { timeout: 20000 });   // window one hour wide of Mountain (-06 DST / -07 standard), never narrower
+    const r = await cal.events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${windowStart}T00:00:00-06:00`, timeMax: `${windowEnd}T23:59:59-07:00`, singleEvents: true, maxResults: 250 }, { timeout: 20000 });   // window one hour WIDER on both ends in every DST state (-06 starts earlier, -07 ends later)
     calendarEvents = (r.data && r.data.items) || [];
   } catch (e) { inputErrors.push(`calendar: ${e.message}`); functions.logger.warn("strategyPrep calendar read failed", { error: e.message }); }
 
@@ -5130,7 +5130,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
         body += l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : isLi ? `<li>${l.kind === "check" ? "☐ " : ""}${esc(l.text) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`;
       }
       if (inList) body += "</ul>";
-      const html = `<div style="font-family:Arial,sans-serif;font-size:13px">${body}</div>`;
+      const html = `<html><head><meta charset="utf-8"></head><body><div style="font-family:Arial,sans-serif;font-size:13px">${body}</div></body></html>`;
       const created = await drive.files.create({ requestBody: { name: `${docTitle} (fallback)`, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, media: { mimeType: "text/html", body: html }, fields: "id, webViewLink", supportsAllDrives: true });
       docId = created.data.id; docLink = created.data.webViewLink || `https://docs.google.com/document/d/${docId}/edit`; fallback = true;
       await sendToName("Koy", { title: "Friday prep: plain-text fallback", body: `${e.message.slice(0, 80)} — unstyled doc "${docTitle}" is in the Friday Packets Drive folder`, url: docLink });
@@ -5149,7 +5149,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
 
   // 9 · Push. The pipeline (normalizeNotif) drops `url`, so the BODY must stand alone: headline first, then where the doc is.
   //     Test runs → Koy only. A push failure never fails the run — the doc and state are already written.
-  const notif = { title: "Friday prep", body: `${model.headline[0] || "This week's prep is ready"} — doc "${docTitle}" is in the Friday Packets Drive folder`.slice(0, 180), url: docLink };
+  const notif = { title: "Friday prep", body: `${(model.headline[0] || "This week's prep is ready").slice(0, 110)} — doc "${docTitle}" is in the Friday Packets Drive folder`, url: docLink };   // the doc pointer is never cut
   let recipients = [], pushError = null;
   try {
     if (testRun) { recipients = ["Koy (test)"]; await sendToName("Koy", notif); }
