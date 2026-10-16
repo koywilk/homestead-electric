@@ -387,5 +387,49 @@ function fixture(over = {}) {
   t("collectSimproCandidates: RTI + finishing, trimmed, cap", (() => { const c = S.collectSimproCandidates(f.jobs); return c.includes("1419") && c.includes("694") && !c.includes("1444") && c.every(s => s === s.trim()); })(), JSON.stringify(S.collectSimproCandidates(f.jobs)));
 }
 
+// ── Task 4 review fixes ──────────────────────────────────────────────────────
+{
+  const mk = (jobs, over = {}) => S.buildModel(fixture({ jobs, ...over }));
+  const rtWeeks = [1, 2, 3, 4, 50, 60].map((n, i) => ({ ymd: `2026-10-${String(9 - i).padStart(2, "0")}`, counts: { rtCreated: n } }));
+  const m1 = mk([{ id: "A", name: "A", roughStatus: "inprogress", roughStage: "10%" }], { prevState: { blockerKeys: [], marginByJob: {}, dates: {}, userIds: [], weeks: rtWeeks } });
+  t("fix1: rtAvg4 uses the NEWEST four prior weeks (1,2,3,4 → 2.5), not the oldest", m1.lastWeek.rtAvg4 === 2.5, String(m1.lastWeek.rtAvg4));
+  const m1b = mk([{ id: "A", name: "A", roughStatus: "inprogress", roughStage: "10%" }], { prevState: { blockerKeys: [], marginByJob: {}, dates: {}, userIds: [], weeks: [{ ymd: "2026-10-16", counts: { rtCreated: 99 } }, ...rtWeeks] } });
+  t("fix1: a stored row for today is ignored in the average", m1b.lastWeek.rtAvg4 === 2.5, String(m1b.lastWeek.rtAvg4));
+
+  const pass = [{ date: "2026-10-14", result: "pass" }];
+  const qj = (id, o) => ({ id, name: id, roughStatus: "complete", finishStatus: "inprogress", finishStage: "70%", finalInspectionAttempts: pass, ...o });
+  const q2 = mk([qj("SCHED", { finishQcStatus: "scheduled" }), qj("FAILED", { qcStatus: "fail" }), qj("PLAIN", {}), qj("DONEQ", { qcStatus: "completed" })]).qc.rows;
+  t("fix2: final passed + QC scheduled / completed → not listed", !q2.some(r => r.name === "SCHED" || r.name === "DONEQ"), JSON.stringify(q2));
+  t("fix2: qcStatus fail → own row 'QC failed, re-walk after fixes'; plain passed final still 'final passed, no QC yet'", (q2.find(r => r.name === "FAILED") || {}).why === "QC failed, re-walk after fixes" && (q2.find(r => r.name === "PLAIN") || {}).why === "final passed, no QC yet", JSON.stringify(q2));
+
+  const prepAll = { redlinePlans: true, cabinetPlans: true, applianceSpecs: true, plansUploaded: true, readyToHandOff: true };
+  const m3 = mk([{ id: "STALE", name: "Stale Rough Date", roughStatus: "complete", roughProjectedStart: "6/1/2026", finishStatus: "date_confirmed", finishProjectedStart: "11/2/2026", finishStartConfirmed: true, prepChecklist: prepAll }]);
+  t("fix3: rough complete with stale rough date, finish 11/2 prep 5/5 → listed under prep", m3.coming.prep.length === 1 && m3.coming.prep[0].name === "Stale Rough Date" && m3.coming.prep[0].done === 5, JSON.stringify(m3.coming.prep));
+
+  const m4 = mk([{ id: "DISM", name: "Dismissed RTI", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", readyToInvoice: true, invoiceDismissed: true }, { id: "RTI2", name: "Live RTI", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", readyToInvoice: true }]);
+  t("fix4: ready-to-invoice + dismissed at finish 50% is NOT in freeing; undismissed RTI is", !m4.coming.freeing.some(x => x.name === "Dismissed RTI") && m4.coming.freeing.some(x => x.name === "Live RTI"), JSON.stringify(m4.coming.freeing));
+
+  const m5 = mk([{ id: "A", name: "A", roughStatus: "inprogress", roughStage: "10%" }], { upcoming: [
+    { id: "in1", name: "Pipeline In-Window", customer: "GC", projectedStart: "10/21/2026", startConfirmed: true },
+    { id: "od1", name: "Pipeline Overdue", customer: "GC2", projectedStart: "9/30/2026" },
+    { id: "a1", name: "A", projectedStart: "10/22/2026" },
+  ] });
+  const st5 = m5.schedule.starts.find(x => x.name === "Pipeline In-Window");
+  t("fix5: upcoming row dated 10/21 → m.schedule.starts, pipeline true, di 2, jobId up_in1, no crew", st5 && st5.pipeline === true && st5.di === 2 && st5.jobId === "up_in1" && st5.crewBooked === false && st5.confirmed === true && eq(st5.missingRoles, ["foreman", "lead"]) && st5.prep.legacy === true, JSON.stringify(st5));
+  t("fix5: upcoming row dated 9/30 → coming.overdue; a name matching a live job is neither", m5.coming.overdue.length === 1 && m5.coming.overdue[0].name === "Pipeline Overdue" && m5.coming.overdue[0].customer === "GC2" && !JSON.stringify(m5.coming.startsNextWeek).includes('"A"'), JSON.stringify(m5.coming.overdue));
+  t("fix5: neither appears in coming.weeks / noDate; counted in counts.starts", !JSON.stringify(m5.coming.weeks).includes("Pipeline") && !JSON.stringify(m5.coming.noDate).includes("Pipeline") && m5.counts.starts === m5.schedule.starts.length && m5.counts.starts >= 1);
+
+  let m6; let threw = false;
+  try { m6 = S.buildModel(fixture({ prevState: { blockerKeys: ["K:Material"], marginByJob: { Z: 1 }, dates: { "NAM:roughProjectedStart": [null] }, userIds: ["koy"], weeks: [] } })); } catch (e) { threw = true; }
+  t("fix6: poisoned prevState.dates does not throw; nextState falls back to prev; stateError set", !threw && Array.isArray(m6.nextState.blockerKeys) && eq(m6.nextState.blockerKeys, ["K:Material"]) && typeof m6.stateError === "string", threw ? "threw" : JSON.stringify(m6 && m6.nextState) + String(m6 && m6.stateError));
+  const m6b = S.buildModel(fixture({ jobs: null, notesDoc: null, prevState: { blockerKeys: ["K:Material"], marginByJob: {}, dates: {}, userIds: [], weeks: [] } }));
+  t("fix6: missing jobs array → carried section still produced, nextState = prev fallback (not null)", m6b.carried && m6b.carried.error === false && m6b.nextState && eq(m6b.nextState.blockerKeys, ["K:Material"]));
+  t("fix6: missing jobs and no prev → nextState null", S.buildModel(fixture({ jobs: null })).nextState === null);
+
+  const many = Array.from({ length: 12 }, (_, i) => ({ id: "Q" + i, name: i < 3 ? `Zeta ${i}` : `Alpha ${i}`, roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%", ...(i < 3 ? { qcStatus: "needs" } : {}) }));
+  const q7 = mk(many).qc;
+  t("fix7: 12 candidates, cap 10 → every 'QC needs' row kept, first in order", q7.rows.length === 10 && q7.more === 2 && q7.rows.slice(0, 3).every(r => r.why === "QC needs") && q7.rows.filter(r => r.why === "QC needs").length === 3, JSON.stringify(q7.rows.map(r => r.name + ":" + r.why)));
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");
