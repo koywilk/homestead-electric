@@ -539,7 +539,8 @@ function comingRows({ live, upcoming, agentFindings, weekYmds, today, cls }) {
   const freeing = live.filter(j => (effStatus(j, "finish") === "inprogress" && pctOf(j, "finish") >= 90) || isRti(j)).map(j => ({ name: j.name, foreman: hasForeman(j) ? j.foreman : "" }));
   const twoWeeks = ymd(addDays(today, 14));
   const startsSoon = cls.starts.length + startsNextWeek.length + dated.filter(r => ymd(r.date) <= twoWeeks).length;
-  return { error: false, weeks: weeks.slice(0, 6), noDate, prep, findings, freeing, startsSoon, startsNextWeek, overdue, quotes: null };
+  const laterCount = weeks.slice(6).reduce((n, wk) => n + wk.rows.length, 0);   // starts in the weeks past the six printed
+  return { error: false, weeks: weeks.slice(0, 6), laterCount, noDate, prep, findings, freeing, startsSoon, startsNextWeek, overdue, quotes: null };
 }
 
 // ── money (the Friday Packet's engine, moved) ────────────────────────────────
@@ -561,8 +562,8 @@ function moneyRows({ live, simproTotalsById, prevMargin, today }) {
   const rows = finishing.map(j => ({ jobId: j.id, name: j.name, margin: marginOf(j), stage: `finish ${pctOf(j, "finish")}%` })).filter(r => r.margin != null).sort((a, b) => a.margin - b.margin);
   const firstRun = !prevMargin || typeof prevMargin !== "object";
   const movers = firstRun ? [] : rows.filter(r => typeof prevMargin[r.jobId] === "number" && Math.abs(r.margin - prevMargin[r.jobId]) >= 3).map(r => ({ name: r.name, from: prevMargin[r.jobId], to: r.margin, delta: Math.round((r.margin - prevMargin[r.jobId]) * 10) / 10 })).sort((a, b) => a.delta - b.delta).slice(0, CAPS.movers);
-  const weekAgo = addDays(today, -7);
-  const approved = []; live.forEach(j => arr(j.changeOrders).forEach(co => { if (!co || String(co.coStatus).toLowerCase() !== "approved") return; const d = toDateAny(co.coStatusSyncedAt) || toDateAny(co.coStatusDate); if (!d || d < weekAgo) return; approved.push({ name: j.name, quote: String(co.quoteNumber || "").trim(), desc: clip(stripHtml(co.desc || co.task), 50), dated: coDated(co, j.returnTrips) }); }));
+  const mon = ymd(mondayOf(today)), tdy = ymd(today);   // Monday..today: the same window Last week counts approvals in
+  const approved = []; live.forEach(j => arr(j.changeOrders).forEach(co => { if (!co || String(co.coStatus).toLowerCase() !== "approved") return; const d = toDateAny(co.coStatusSyncedAt) || toDateAny(co.coStatusDate); if (!d || ymd(d) < mon || ymd(d) > tdy) return; approved.push({ name: j.name, quote: String(co.quoteNumber || "").trim(), desc: clip(stripHtml(co.desc || co.task), 50), dated: coDated(co, j.returnTrips) }); }));
   const marginByJob = {}; rows.forEach(r => { marginByJob[r.jobId] = r.margin; });
   return { error: false, rti: { rows: rti.slice(0, CAPS.rti), more: Math.max(0, rti.length - CAPS.rti), count: rti.length, total: known.reduce((s, r) => s + r.dollars, 0), knownCount: known.length },
     margin: { median: median(rows.map(r => r.margin)), count: rows.length, finishingCount: finishing.length, underCount: rows.filter(r => r.margin < MARGIN_TARGET).length, rows: rows.slice(0, 15), movers, firstRun },
@@ -712,7 +713,8 @@ function sectionsOf(paras) {
 function carryItems(sec) {
   const rows = []; let list = null, struckNest = null, parent = null;
   for (let p of sec.paras) {
-    if (!p.bullet) { const t = p.text.replace(/^[*_]+|[*_]+$/g, "").trim(); if (!t) continue; if (CARRY_SECTION.test(t)) { list = "carry"; struckNest = null; parent = null; continue; } if (SKIP_SECTION.test(t) || /^attendees/i.test(t)) { list = "skip"; continue; } if (list === "carry") list = null; continue; }
+    // A list heading may end with a colon ("Notes:", "Ready to invoice:"); it is stripped before matching.
+    if (!p.bullet) { const t = p.text.replace(/^[*_]+|[*_]+$/g, "").trim().replace(/\s*:\s*$/, ""); if (!t) continue; if (CARRY_SECTION.test(t)) { list = "carry"; struckNest = null; parent = null; continue; } if (SKIP_SECTION.test(t) || /^attendees/i.test(t)) { list = "skip"; continue; } if (list === "carry") list = null; continue; }
     if (list !== "carry" || !p.text) continue;
     p = { ...p, text: p.text.replace(CARRIED_SUFFIX, "") };   // our own "(carried N wks)" tag, read back from the Carried section we wrote
     if (!p.text) continue;
@@ -735,7 +737,8 @@ function parseNotesCarry(doc, meetingDate) {
   if (!secs.length) return empty;
   const items = carryItems(secs[0]);
   const earlier = secs.slice(1).map(s => new Set(carryItems(s).map(normText)));
-  const rows = items.map(text => { const k = normText(text); let weeks = 1; for (const set of earlier) { if (set.has(k) || [...set].some(x => x && (k.includes(x) || x.includes(k)))) weeks++; else break; } return { text, weeks }; });
+  // A substring match counts only between real sentences (12+ chars each): "Rose" is not "Rose Residence panel swap".
+  const rows = items.map(text => { const k = normText(text); let weeks = 1; for (const set of earlier) { if (set.has(k) || [...set].some(x => x && k.length >= 12 && x.length >= 12 && (k.includes(x) || x.includes(k)))) weeks++; else break; } return { text, weeks }; });
   return { error: false, fromLabel: secs[0].label, rows: rows.slice(0, CAPS.carried) };
 }
 
@@ -778,7 +781,7 @@ function renderLines(m) {
     s.unknownSimpro.forEach(u => B(`Simpro #${u.pid} ${u.appName ? `${u.appName} (${u.appState})` : "(not in app)"} · ${daysLabel(u.days)} · ${u.people.join(", ")}`));
     H4(`In progress, nobody booked · ${s.idle.length}`);
     if (!s.idle.length) G("Every in-progress job has crew next week.");
-    s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.statusText || `${r.phase} ${r.pct}%`} · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""} · ${r.openPunch} punch${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
+    s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.statusText || `${r.phase} ${r.pct}%`} · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""}${r.openPunch ? ` · ${r.openPunch} punch` : ""}${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
     H4(`Starts · ${s.starts.length}`);
     if (!s.starts.length) G("No starts dated inside next week.");
     const tail = (r) => ` · nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""} · prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}${r.elsewhere.length ? ` · ${r.elsewhere.join("; ")}` : ""}`;
@@ -831,7 +834,8 @@ function renderLines(m) {
   if (m.coming.error) fail(m.coming); else {
     const c = m.coming;
     if (!c.weeks.length) G("No dated starts after next week.");
-    c.weeks.forEach(w => B(`${w.label} — ${w.rows.map(r => `${r.name}${r.customer ? ` (${r.customer})` : ""} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"}${r.note ? ` · ${r.note}` : ""}`).join(" · ")}`));
+    c.weeks.forEach(w => B(`${w.label} — ${w.rows.map(r => `${r.name}${r.customer ? ` (${r.customer})` : ""} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"}${r.note ? ` · ${r.note}` : ""}`).join("; ")}`));
+    if (c.laterCount > 0) G(`…and ${c.laterCount} later`);
     if (arr(c.overdue).length) B(`Projected start passed, still in Upcoming: ${c.overdue.map(r => `${r.name} ${fmtMD(r.date)}`).join(", ")}`);
     if (c.noDate.length) B(`No date yet: ${c.noDate.map(r => `${r.name}${r.note ? ` (${r.note})` : ""}`).join(" · ")}`);
     if (c.prep.length) B(`In prep, start inside 3 weeks: ${c.prep.map(r => `${r.name} ${r.done}/5${r.missing.length ? ` (${prepShort(r.missing)})` : ""}`).join(" · ")}`);

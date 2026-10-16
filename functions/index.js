@@ -5052,17 +5052,21 @@ async function runStrategyPrep({ testRun = false } = {}) {
   const agentFindings = findSnap ? findSnap.docs.map(d => d.data()) : [];
 
   // 2 · Simpro schedules for next week — between() filter (verified 2026-10-15), paged just in case.
-  let scheduleEntries = [], simproOk = true;
+  let scheduleEntries = [], simproOk = true, pagesRead = 0, lastPageLen = 0;
   try {
     for (let page = 1; page <= 10; page++) {
       const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${windowStart},${windowEnd})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) });
       if (!resp.ok) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule page failed", { page, status: resp.status }); break; }
       const batch = await resp.json();
       if (!Array.isArray(batch)) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule non-array"); break; }
-      scheduleEntries.push(...batch);
+      scheduleEntries.push(...batch); pagesRead = page; lastPageLen = batch.length;
       if (batch.length < 250) break;
     }
   } catch (e) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule fetch error", { error: e.message }); }
+  if (simproOk && pagesRead === 10 && lastPageLen === 250) {   // the loop stopped on its cap, not at the end of the data
+    functions.logger.warn("strategyPrep simpro schedule page cap hit", { pages: pagesRead, entries: scheduleEntries.length });
+    inputErrors.push("simpro schedule: 10 full pages read, later entries not loaded");
+  }
   if (!simproOk) scheduleEntries = [];
 
   // 3 · Simpro totals for ready-to-invoice + finishing jobs (cap 50, concurrency 5). Parsing mirrors getSimproJobFinancials.
@@ -5143,7 +5147,9 @@ async function runStrategyPrep({ testRun = false } = {}) {
 
   // 8 · State (real runs only; additive merge).
   if (!testRun && model.nextState) {
-    try { await db.doc("settings/strategyPrep").set({ ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docId, docLink }, ...(Array.isArray(prevState && prevState.history) ? prevState.history : []).filter(h => !(h && h.date === model.meetingYmd))].slice(0, 26) }, { merge: true }); }
+    // mergeFields: each listed field is replaced whole (dates / marginByJob / history are whole maps; merge:true would keep stale keys).
+    const statePayload = { ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docId, docLink }, ...(Array.isArray(prevState && prevState.history) ? prevState.history : []).filter(h => !(h && h.date === model.meetingYmd))].slice(0, 26) };
+    try { await db.doc("settings/strategyPrep").set(statePayload, { mergeFields: Object.keys(statePayload) }); }
     catch (e) { functions.logger.warn("strategyPrep state write failed", { error: e.message }); }
   }
 

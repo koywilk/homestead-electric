@@ -462,7 +462,9 @@ function fixture(over = {}) {
   t("carry: source section is Oct 9 (not our own Oct 16 one)", c.fromLabel === "Oct 9, 2026", c.fromLabel);
   const texts = c.rows.map(r => r.text);
   t("carry: struck item and its child dropped; parent + child of open items kept as one line", eq(texts, ["Rose — Still havent heard from austin", "Ashcraft — Any update?", "Call Edge about Pierce"]), JSON.stringify(texts));
-  t("carry: weeks counted across earlier sections (Rose 2, Ashcraft 1, Pierce action 2)", eq(c.rows.map(r => r.weeks), [2, 1, 2]), JSON.stringify(c.rows.map(r => r.weeks)));
+  // M3 (final wave): a substring match needs both texts 12+ chars, so last week's bare "Rose" no longer counts toward
+  // "Rose — Still havent heard from austin" (it used to: weeks 2). The exact-text Pierce action item still counts.
+  t("carry: weeks counted across earlier sections (Rose 1 under M3, Ashcraft 1, Pierce action 2)", eq(c.rows.map(r => r.weeks), [1, 1, 2]), JSON.stringify(c.rows.map(r => r.weeks)));
   t("carry: null doc → empty, no throw", S.parseNotesCarry(null, meeting).rows.length === 0);
   t("carry: cap", S.parseNotesCarry({ body: { content: [para("Oct 9, 2026 | X", { style: "HEADING_2" }), para("Notes"), ...Array.from({ length: 30 }, (_, i) => para("row " + i, { bullet: true }))] } }, meeting).rows.length === 20);
 
@@ -786,6 +788,44 @@ function fixture(over = {}) {
   const f13 = S.liveJobs(fixture().jobs);
   const mv13 = S.movedDates(f13, { "NAM:roughStart": [{ d: "2026-10-02", v: "2026-10-08" }, { d: "2026-10-09", v: "" }] }, w.today);
   t("F13: last value '' and a date now → 'rough start no date → 10/19', nth counts real dates only (2)", mv13.rows.length === 1 && mv13.rows[0].from === "no date" && mv13.rows[0].to === "10/19" && mv13.rows[0].nth === 2, JSON.stringify(mv13.rows));
+}
+
+// ── Final fix wave: MINOR (M1–M5, M7, M8; M6 is with I5) ────────────────────
+{
+  // M1 — week rows separate jobs with "; " and say how many weeks' worth were cut.
+  const ups = ["10/26/2026", "10/27/2026", "11/2/2026", "11/9/2026", "11/16/2026", "11/23/2026", "11/30/2026", "12/7/2026", "12/8/2026"].map((d, i) => ({ id: "w" + i, name: "Up " + i, projectedStart: d }));
+  const m1 = S.buildModel(fixture({ upcoming: ups }));
+  const t1 = S.renderLines(m1).map(l => l.text);
+  t("M1: jobs within a week row are separated by '; '", t1.includes("Week of 10/26 — Up 0 10/26 projected; Up 1 10/27 projected"), t1.filter(x => /^Week of/.test(x)).join(" | "));
+  t("M1: after six weeks → '…and 2 later' (12/7 + 12/8 are the 7th week)", t1.filter(x => /^Week of/.test(x)).length === 6 && t1.includes("…and 2 later"), t1.filter(x => /later/.test(x)).join(" | "));
+
+  // M2 / M3 — notes parser: "Notes:" heading; short-text substring matches don't count as carried weeks.
+  const para = (text, o = {}) => ({ paragraph: { elements: [{ textRun: { content: text + "\n", textStyle: {} } }], paragraphStyle: { namedStyleType: "NORMAL_TEXT" }, ...(o.bullet ? { bullet: { nestingLevel: 0 } } : {}) } });
+  const H = (d) => para(`${d} | Weekly Strategy/Scheduling Meeting`);
+  const doc = { body: { content: [
+    H("Oct 9, 2026"), para("Notes:"), para("Rose", { bullet: true }), para("Call Edge about Pierce panel", { bullet: true }), para("Ready to invoice:"), para("Koplin", { bullet: true }),
+    H("Oct 2, 2026"), para("Notes"), para("Rose Residence panel swap", { bullet: true }), para("Call Edge about Pierce panel today", { bullet: true }),
+  ] } };
+  const c = S.parseNotesCarry(doc, new Date(2026, 9, 16, 12, 0, 0));
+  t("M2: 'Notes:' carries and 'Ready to invoice:' skips (trailing colon stripped)", eq(c.rows.map(r => r.text), ["Rose", "Call Edge about Pierce panel"]), JSON.stringify(c.rows));
+  t("M3: 'Rose' inside 'Rose Residence panel swap' is not a carried week (short text); long substring still counts", eq(c.rows.map(r => r.weeks), [1, 2]), JSON.stringify(c.rows));
+
+  // M5 — Approved this week = Monday..today, same window as Last week.
+  const coJ = { id: "AJ", name: "Approved Job", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", changeOrders: [
+    { id: "x1", coStatus: "approved", coStatusDate: "10/10/2026", desc: "Saturday before" }, { id: "x2", coStatus: "approved", coStatusDate: "10/12/2026", desc: "Monday" }] };
+  const m5 = S.buildModel(fixture({ jobs: [coJ] }));
+  t("M5: a CO approved Sat 10/10 is outside Mon–today; Mon 10/12 is in; matches Last week's count", m5.money.approved.count === 1 && m5.money.approved.rows[0].desc === "Monday" && m5.lastWeek.cosApproved === 1, JSON.stringify([m5.money.approved, m5.lastWeek.cosApproved]));
+
+  // M7 — no "· 0 punch".
+  const m7 = S.buildModel(fixture({ jobs: [{ id: "Z", name: "Zero Punch", roughStatus: "inprogress", roughStage: "30%" }] }));
+  const z = S.renderLines(m7).find(l => /^NO CREW Zero Punch/.test(l.text));
+  t("M7: idle row omits '· 0 punch'", !!z && !/0 punch/.test(z.text), z && z.text);
+
+  // M4 / M8 — orchestrator: whole-field state write; Simpro page cap is reported.
+  const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
+  const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
+  t("M4: state write uses mergeFields of the payload's keys (stale map keys replaced), not merge:true", /\{ mergeFields: Object\.keys\(statePayload\) \}/.test(run) && !/settings\/strategyPrep"\)\.set\([^;]*\{ merge: true \}/.test(run));
+  t("M8: 10 full Simpro schedule pages → logged and pushed to inputErrors", /simpro schedule: 10 full pages/.test(run) && /strategyPrep simpro schedule page cap hit/.test(run));
 }
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }

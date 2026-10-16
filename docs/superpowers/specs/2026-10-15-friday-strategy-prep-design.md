@@ -1,5 +1,7 @@
 # Friday Strategy/Scheduling Meeting pre-fill — design
 
+**Errata (2026-10-15, final review wave):** COs carry no `scheduledDate`; "dated" = `needsByStart` or a linked return trip (`rt.fromCOId === co.id`) with an `rtStatusDate`, and "approved, not done" excludes converted COs (the app's `coIsConverted`) (I4). "Crews freeing up" is relabelled "Near done". `*NeedsHardDate` is implemented as an AT RISK start ("HARD DATE NEEDED"). Starts use the app's start-date rule (scheduled/in progress: `StatusDate || ProjectedStart`; otherwise `ProjectedStart || StatusDate`), a not-started start dated before next Monday prints as OVERDUE under Starts, and one dated after next week is counted as "later" (it prints under Coming up). The header shows the actual build time, not a fixed 6:00 AM.
+
 **Status:** DRAFT for Koy's review, 2026-10-15. Design approved in chat ("yes looks a lot more useful … way better structure") with one standing requirement: **"it just needs to be 100 percent accurate."** Nothing is built.
 **Mockup:** artifact `Wk6dTFtqMeDQaPdPYNofWC` (illustrative rows; the two errors Koy caught are fixed in §3 below).
 **Delivery (Koy, 2026-10-15, after approving the spec):** *"lets just have it on its own doc, ill copy and paste each week to the meeting doc."* The function writes its own Google Doc each week; nothing writes into Josh's doc. Sections below are amended accordingly.

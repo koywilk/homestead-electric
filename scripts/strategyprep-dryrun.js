@@ -48,10 +48,11 @@ const makePreview = process.argv.includes("--doc");
   const agentFindings = findSnap ? findSnap.docs.map(d => d.data()) : [];
   console.log(`jobs ${jobs.length} · needs ${needs.length} · users ${users.length} · planner ${plannerDoc ? "present" : "MISSING"} · state ${prevState ? "present" : "first run"}`);
 
-  let scheduleEntries = [], simproOk = true;
+  let scheduleEntries = [], simproOk = true, pagesRead = 0, lastPageLen = 0;
   try { for (let page = 1; page <= 10; page++) {
     const r = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${w.weekYmds[0]},${w.weekYmds[4]})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) });
-    if (!r.ok) { simproOk = false; break; } const b = await r.json(); if (!Array.isArray(b)) { simproOk = false; break; } scheduleEntries.push(...b); if (b.length < 250) break; } } catch (e) { simproOk = false; }
+    if (!r.ok) { simproOk = false; break; } const b = await r.json(); if (!Array.isArray(b)) { simproOk = false; break; } scheduleEntries.push(...b); pagesRead = page; lastPageLen = b.length; if (b.length < 250) break; } } catch (e) { simproOk = false; }
+  if (simproOk && pagesRead === 10 && lastPageLen === 250) { inputErrors.push("simpro schedule: 10 full pages read, later entries not loaded"); console.log("simpro schedule: page cap hit"); }
   if (!simproOk) scheduleEntries = [];
   console.log(`simpro schedule entries next week: ${scheduleEntries.length} (ok=${simproOk})`);
   const simproTotalsById = {};
