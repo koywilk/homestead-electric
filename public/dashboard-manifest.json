@@ -2,7 +2,7 @@
   "id": "/dashboard",
   "name": "Homestead Dashboard",
   "short_name": "Dashboard",
-  "description": "Koy's live dashboard for Homestead Electric",
+  "description": "The live office dashboard for Homestead Electric",
   "start_url": "/dashboard",
   "scope": "/",
   "display": "standalone",

@@ -66,6 +66,7 @@ const parts = [
   cst("commOf"), cst("commPhase"), cst("coIsConverted"), fn("matterportScanNeeded"), fn("qcWalkRows"), fn("qcBucketOf"),
   fn("isSnoozed"), fn("needIsOpen"), fn("needAssignee"), fn("needPriority"),
   src.slice(a, b),
+  cst("canOpenDash"),
 ];
 const code = babel.transformSync(parts.join("\n\n"), { babelrc: false, configFile: false, sourceType: "script", presets: [[require.resolve("@babel/preset-react"), { runtime: "classic" }]] }).code;
 
@@ -79,7 +80,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_DOCS };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_DOCS, canOpenDash };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -220,6 +221,14 @@ if (require.main === module) {
     { simproNo: "", readyToInvoice: true },
   ], now);
   eq(mc, ["1", "3", "5"], "ready to invoice, CO waiting 60+ d, finished with open COs");
+
+  // 11. WHO OPENS THE PAGE (v543): any active admin, by access or legacy role; nobody else.
+  assert.strictEqual(X.canOpenDash({ id: "koy", name: "Koy Wilkinson", access: "admin" }), true);
+  assert.strictEqual(X.canOpenDash({ id: "u1", name: "Josh Cloward", role: "admin" }), true, "legacy admin role counts");
+  assert.strictEqual(X.canOpenDash({ id: "u2", name: "Keegan Wilkinson", access: "manager" }), false, "managers do not");
+  assert.strictEqual(X.canOpenDash({ id: "u3", name: "Old Admin", access: "admin", active: false }), false, "a deactivated admin does not");
+  assert.strictEqual(X.canOpenDash(null), false);
+  assert.ok(X.OD_DOCS.filter(x => x.koyOnly).map(x => x.k).join() === "bonus,ninety", "Koy's own doc tiles are marked");
 
   console.log("odash-model-test: all checks passed");
 }
