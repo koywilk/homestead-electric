@@ -1550,7 +1550,7 @@ git commit -m "Friday prep: read-only dry-run with CHECKS block into a preview c
 - Modify: `functions/index.js` (delete `runFridayPacket`, `exports.fridayPacket`, `exports.sendTestFridayPacket`, the `fridayPacketLib` require and the packet comment block; keep `_stripHtml` — it has other callers)
 - Delete: `functions/fridayPacket.js`, `scripts/packet-dryrun.js`
 - Modify: `functions/autoDocs.js`, `scripts/autodocs-test.js`
-- Modify (other repo, one note only): `~/Desktop/homestead-command-center/scripts/strategy-prep.mjs` header comment: `// RETIRED 2026-10-xx — replaced by functions/strategyPrep.js in the crew app.`
+- Modify (other repo, one note only; `config/tools.json` there already points at the Meeting Prep folders): `~/Desktop/homestead-command-center/scripts/strategy-prep.mjs` header comment: `// RETIRED 2026-10-xx — replaced by functions/strategyPrep.js in the crew app.`
 
 **Interfaces:**
 - `AUTO_DOC_SOURCES`: remove `packet`; change `strategy` to `{ key: "strategy", folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Friday Strategy Prep — " }`; `pickLatest` and `autoDocsLatest` unchanged.
@@ -1656,6 +1656,26 @@ git commit -m "Dashboard + Settings: Friday meeting prep card and toggle; Friday
 ```
 
 Koy pushes from the worktree branch (pre-push gate runs the CI build again). After the push: vault log, feature note, update `Thursday Packet.md` to superseded, memory `project_friday_strategy_prep.md` → SHIPPED, crew brief (office-facing: "Josh's Friday doc fills itself at 6 AM; here is what each section means and what to do when a row is wrong").
+
+
+### Task 10: No push, Meeting Prep folders, retire the duplicate Wednesday pull (Koy, 2026-10-15 night)
+
+**Files:**
+- Modify: `functions/index.js` (`runStrategyPrep` + exports; the Weekly Lead Meeting doc writer ~line 5264; delete `runLeadMeetingPrep`, `exports.leadMeetingPrep`, `exports.sendTestLeadMeetingPrep`, the `leadPrepLib` require if nothing else uses it)
+- Modify: `functions/autoDocs.js`, `scripts/autodocs-test.js`, `scripts/strategyprep-dryrun.js`, `package.json` (prebuild: drop `node scripts/leadprep-test.js` ONLY if the module is deleted)
+- Delete (only if unreferenced after the index.js change — run the orphan sweep: `grep -rn "leadMeetingPrep" functions scripts src --include=*.js`): `functions/leadMeetingPrep.js`, `scripts/leadprep-test.js`, `scripts/leadprep-dryrun.js`. If `functions/foremanMeetingPrep.js` or anything else requires `./leadMeetingPrep.js`, KEEP the module and delete only the Tuesday 6 AM function + its callable.
+
+**Interfaces:**
+- Produces: `const MEETING_PREP_FOLDERS = { monday: "17WmRG9qdErbJcvl4vDShRjSduJOZARZ0", wednesday: "1tAFxgYFL7su4xDviMDvPo0Xe355tGaRR", friday: "1q107o80DtOadifPymLZzzImSMQBf74_3" };` next to `PACKET_DRIVE_FOLDER_ID` in `functions/index.js`. `runStrategyPrep` returns `{ ok, docId, docLink, fallback, counts, inputErrors }` (no `recipients`, no `pushError`). `AUTO_DOC_SOURCES` = exactly three entries: `monday` (folder monday, prefix `Monday Office Meeting — `), `wednesday` (folder wednesday, prefix `Weekly Lead Meeting — `), `friday` (folder friday, prefix `Friday Strategy Prep — `).
+- Export count: 108 → 106 (two Lead Meeting Prep exports removed). `fridayPacket` + `sendTestFridayPacket` stay until Task 8.
+
+- [ ] **Step 1: No success push.** In `runStrategyPrep` delete step 9 entirely (the `notif`, `resolveRecipients`, `deliverIfWanted`, `sendToName("Koy", notif)` for test runs, and the try/catch around them); keep the two FAILURE alerts (doc create/fill fallback, fatal step-1 read). Update the header comment ("writes ONE new doc + ONE additive merge … no push"). Remove `recipients`/`pushError` from the log line and return value. The `strategyLib.resolveRecipients` export may stay in the pure module (unused) — or delete it with its test; either is fine, say which.
+- [ ] **Step 2: Folders.** Add `MEETING_PREP_FOLDERS`. `runStrategyPrep`: both `drive.files.create` calls use `parents: [MEETING_PREP_FOLDERS.friday]`; the fallback alert body says "in the Meeting Prep / Friday Strategy folder". Weekly Lead Meeting writer (~5264): `parents: [MEETING_PREP_FOLDERS.wednesday]`. `scripts/strategyprep-dryrun.js`: `PACKET_FOLDER` → `MEETING_PREP_FRIDAY = "1q107o80DtOadifPymLZzzImSMQBf74_3"`, preview title unchanged.
+- [ ] **Step 3: Retire Lead Meeting Prep (Tuesday 6 AM).** Delete `runLeadMeetingPrep`, `exports.leadMeetingPrep`, `exports.sendTestLeadMeetingPrep`, the `LEAD_NOTES_DOC_ID` constant if only they used it, and the `leadPrepLib` require if unreferenced; run the orphan sweep above before deleting any file; remove `node scripts/leadprep-test.js` from `prebuild` only if the test file is deleted. `node --check`, export count 106.
+- [ ] **Step 4: autoDocs.** Replace `AUTO_DOC_SOURCES` with the three entries above; rewrite `scripts/autodocs-test.js` fixtures to the three prefixes (keep the "SUPERSEDED/TEST/PREVIEW does not win" assertions: `pickLatest` requires the name to START with the prefix). Run it.
+- [ ] **Step 5: Tests + commit.** `node scripts/strategyprep-test.js` (and `TZ=UTC`), `node scripts/autodocs-test.js`, `cd functions && node --check index.js && node -e "console.log(Object.keys(require('./index.js')).length)"` → 106. Commit: "Friday prep: no push; Meeting Prep folders (Mon/Wed/Fri); retire Lead Meeting Prep" + Co-Authored-By.
+
+**Also amended by this task (text only, for Tasks 8–9):** Task 8 no longer touches `autoDocs.js` (done here); its retirement list gains `firebase functions:delete leadMeetingPrep sendTestLeadMeetingPrep`. Task 9's `OD_DOCS` becomes three cards — `Monday Scramble prep` (routine, Mon 3 PM, folder monday, latest `monday`), `Wednesday Lead Meeting prep` (App foremanMeetingPrep, Tue 4 PM, folder wednesday, latest `wednesday`), `Friday Strategy prep` (App strategyPrep, Fri 6 AM, folder friday, latest `friday`) — plus one `Meeting Prep` folder link; the `NOTIF_CATEGORIES` toggle is DROPPED (no push); FEATURES.md entry says "no notification; docs land in Drive › Meeting Prep". Koy's cloud routine "Monday office meeting prefill" must be re-pointed at folder `17WmRG9qdErbJcvl4vDShRjSduJOZARZ0` (its prompt lives on claude.ai; `homestead-command-center/config/tools.json` already updated).
 
 ---
 
