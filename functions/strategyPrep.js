@@ -574,6 +574,7 @@ function buildModel(inputs) {
 const HEAD_RE = /^([A-Z][a-z]{2} \d{1,2}, \d{4})\s*\|/;
 const CARRY_SECTION = /^(notes|general|next week'?s? top priorities|action items?|carried from .+)$/i;
 const SKIP_SECTION = /^(ready to invoice|qcs? needed.*|invoicing|invoice ready|app additions.*|schedule.*|money|coming up|blocked|last week|qc to schedule)$/i;
+const CARRIED_SUFFIX = /\s*\(carried \d+ wks?\)\s*$/;
 const normText = (s) => String(s || "").toLowerCase().replace(/\(carried \d+ wks?\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 function docParas(doc) {
   const content = doc && doc.body && Array.isArray(doc.body.content) ? doc.body.content : [];
@@ -591,9 +592,11 @@ function sectionsOf(paras) {
 }
 function carryItems(sec) {
   const rows = []; let list = null, struckNest = null, parent = null;
-  for (const p of sec.paras) {
+  for (let p of sec.paras) {
     if (!p.bullet) { const t = p.text.replace(/^[*_]+|[*_]+$/g, "").trim(); if (!t) continue; if (CARRY_SECTION.test(t)) { list = "carry"; struckNest = null; parent = null; continue; } if (SKIP_SECTION.test(t) || /^attendees/i.test(t)) { list = "skip"; continue; } if (list === "carry") list = null; continue; }
     if (list !== "carry" || !p.text) continue;
+    p = { ...p, text: p.text.replace(CARRIED_SUFFIX, "") };   // our own "(carried N wks)" tag, read back from the Carried section we wrote
+    if (!p.text) continue;
     if (/^owner\s+[—-]\s+what/i.test(p.text)) continue;
     if (struckNest != null && p.nest > struckNest) continue;       // child of a struck item
     struckNest = null;
@@ -607,7 +610,8 @@ function carryItems(sec) {
 function parseNotesCarry(doc, meetingDate) {
   const empty = { error: false, fromLabel: "", rows: [] };
   if (!doc) return empty;
-  const meet = meetingDate instanceof Date ? startOfDay(meetingDate) : new Date();
+  if (!(meetingDate instanceof Date)) return empty;   // pure module: no clock read
+  const meet = startOfDay(meetingDate);
   const secs = sectionsOf(docParas(doc)).filter(s => s.date < meet).sort((a, b) => b.date - a.date);
   if (!secs.length) return empty;
   const items = carryItems(secs[0]);
@@ -628,18 +632,22 @@ function renderLines(m) {
   const more = (n) => { if (n > 0) G(`…and ${n} more in the app`); };
   const who = (r) => [r.foreman, r.lead && r.lead !== r.foreman ? r.lead : ""].filter(Boolean).join(" · ");
   const age = (n) => n == null ? "no date" : `${n}d`;
+  const sec = (fallback, fn) => { const start = L.length; try { fn(); } catch (e) { L.length = start; H3(fallback); G(`Section could not be rendered: ${(e && e.message) || e}`); } };
   const prepShort = (xs) => xs.map(x => x.replace(/ Received| Up to Date| to App & SimPro| to Foreman/g, "")).join(", ");
 
   G(m.preLine);
   if (m.headline.length) m.headline.forEach(P);
 
   // Carried
+  sec("Carried from last meeting", () => {
   H3(m.carried.fromLabel ? `Carried from ${m.carried.fromLabel.replace(/,\s*\d{4}$/, "")}` : "Carried from last meeting");   // "Carried from Oct 9" — the same heading Josh's notes use
   if (m.carried.error) fail(m.carried); else if (!m.carried.rows.length) G("Nothing carried.");
   else m.carried.rows.forEach(r => C(`${r.text}${r.weeks > 1 ? ` (carried ${r.weeks} wks)` : ""}`));
+  });
   C("");
 
   // Schedule
+  sec("Schedule next week", () => {
   H3(`Schedule next week · ${m.weekLabel}`);
   if (m.schedule.error) fail(m.schedule); else {
     const s = m.schedule;
@@ -675,18 +683,22 @@ function renderLines(m) {
     if (s.conflicts.length) { H4("Conflicts"); s.conflicts.forEach(c => tag("CONFLICT", RED, c)); }
     if (s.onHold.length) G(`${plural(s.onHold.length, "job")} on hold listed under Blocked.`);
   }
+  });
   C("");
 
   // Blocked
+  sec("Blocked", () => {
   H3("Blocked — what we are waiting on, from whom, how long");
   if (m.blocked.error) fail(m.blocked); else {
     if (!m.blocked.groups.length) G("Nothing blocked.");
     m.blocked.groups.forEach(g => { H4(`${g.name} · ${g.rows.length + g.more}`); g.rows.forEach(r => B(`${r.name} — ${r.what}${r.who ? ` · ${r.who}` : ""} · ${age(r.ageDays)}`)); more(g.more); });
     if (m.blocked.cleared.length) { H4("Cleared since last Friday"); m.blocked.cleared.forEach(c => tag("CLEARED", GREEN, `${c.name} — ${c.group}`)); }
   }
+  });
   C("");
 
   // Coming up
+  sec("Coming up", () => {
   H3("Coming up · next 2–8 weeks");
   if (m.coming.error) fail(m.coming); else {
     const c = m.coming;
@@ -698,9 +710,11 @@ function renderLines(m) {
     c.findings.forEach(f => B(`Plan intake: ${f.summary}`));
     B(`Crews freeing up (finish ≥ 90% or ready to invoice): ${c.freeing.length ? c.freeing.map(r => r.name).join(", ") : "none"} · starts in the next two weeks: ${c.startsSoon}`);
   }
+  });
   C("");
 
   // Money
+  sec("Money", () => {
   H3("Money");
   if (m.money.error) fail(m.money); else {
     const r = m.money.rti, g = m.money.margin, a = m.money.approved;
@@ -719,14 +733,18 @@ function renderLines(m) {
     a.rows.forEach(x => B(`${x.name}${x.quote ? ` #${x.quote}` : ""}${x.desc ? ` — ${x.desc}` : ""}`));
     if (a.count) B(`${a.undated} of ${a.count} not dated yet`);
   }
+  });
   C("");
 
   // QC
+  sec("QC to schedule", () => {
   H3("QC to schedule");
   if (m.qc.error) fail(m.qc); else { if (!m.qc.rows.length) G("Nothing waiting on a QC walk."); m.qc.rows.forEach(r => B(`${r.name}${r.foreman ? ` · ${r.foreman}` : ""} — ${r.why}${r.since ? ` since ${r.since}` : ""} · ${r.openPunch} punch open${r.small ? " · small — pics may do" : ""}`)); more(m.qc.more); }
+  });
   C("");
 
   // Last week
+  sec("Last week", () => {
   H3("Last week");
   if (m.lastWeek.error) fail(m.lastWeek); else {
     const l = m.lastWeek;
@@ -737,6 +755,7 @@ function renderLines(m) {
     B(`Punch closed: ${l.punchClosed} · questions answered ${l.qAnswered} of ${l.qAsked} asked`);
     B(`Blocks cleared: ${l.cleared.length}`);
   }
+  });
 
   // Action items
   if (typeof m.stateError === "string" && m.stateError) G(`State snapshot not updated this run: ${m.stateError}`);

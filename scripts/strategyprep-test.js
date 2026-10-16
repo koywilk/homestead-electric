@@ -507,5 +507,33 @@ function fixture(over = {}) {
   t("render: stateError → one grey line directly before the Action items heading; absent otherwise", iSe >= 0 && lSe[iSe].kind === "grey" && iAct === iSe + 1 && !txt.some(s => /State snapshot not updated/.test(s)), String(iSe) + "/" + String(iAct));
 }
 
+// ── Task 5 review fixes ──────────────────────────────────────────────────────
+{
+  const para = (text, o = {}) => ({ paragraph: { elements: [{ textRun: { content: text + "\n", textStyle: {} } }], paragraphStyle: { namedStyleType: o.style || "NORMAL_TEXT" }, ...(o.bullet ? { bullet: { nestingLevel: o.nest || 0 } } : {}) } });
+  const H = (d) => para(`${d} | Weekly Strategy/Scheduling Meeting`, { style: "HEADING_2" });
+  const meeting = new Date(2026, 9, 16, 12, 0, 0);
+  // Last Friday's section holds the Carried list OUR renderer wrote (with its "(carried N wks)" tag); older sections hold the plain item.
+  const doc = { body: { content: [
+    H("Oct 9, 2026"), para("Carried from Oct 2", { style: "HEADING_3" }), para("Rose — still waiting (carried 2 wks)", { bullet: true }), para("Child note (carried 1 wk)", { bullet: true, nest: 1 }),
+    H("Oct 2, 2026"), para("Notes"), para("Rose — still waiting", { bullet: true }),
+    H("Sep 25, 2026"), para("Notes"), para("Rose — still waiting", { bullet: true }),
+  ] } };
+  const c = S.parseNotesCarry(doc, meeting);
+  t("review1: own '(carried N wks)' suffix stripped from parent and child; weeks keep counting", eq(c.rows, [{ text: "Rose — still waiting — Child note", weeks: 3 }]), JSON.stringify(c.rows));
+  const doc2 = { body: { content: [H("Oct 9, 2026"), para("Carried from Oct 2", { style: "HEADING_3" }), para("Rose — still waiting (carried 2 wks)", { bullet: true }), H("Oct 2, 2026"), para("Notes"), para("Rose — still waiting", { bullet: true }), H("Sep 25, 2026"), para("Notes"), para("Rose — still waiting", { bullet: true })] } };
+  const c2 = S.parseNotesCarry(doc2, meeting);
+  t("review1: row text exactly 'Rose — still waiting', weeks 3", c2.rows.length === 1 && c2.rows[0].text === "Rose — still waiting" && c2.rows[0].weeks === 3, JSON.stringify(c2.rows));
+  const l2 = S.renderLines(S.buildModel(fixture({ notesDoc: doc2 }))).map(l => l.text).filter(x => /^Rose — still waiting/.test(x));
+  t("review1: rendered line carries the tag exactly once, ends '(carried 3 wks)'", l2.length === 1 && l2[0] === "Rose — still waiting (carried 3 wks)", JSON.stringify(l2));
+
+  t("review2: meetingDate not a Date → empty result, no throw, no clock read", (() => { try { const r = S.parseNotesCarry(doc2, undefined); return r.error === false && r.fromLabel === "" && r.rows.length === 0; } catch (e) { return false; } })());
+
+  const mBad = S.buildModel(fixture());
+  mBad.schedule.starts = [{ jobId: "X", name: "Broken Row", phase: "rough", pct: 0, foreman: "", lead: "", date: new Date(2026, 9, 19), di: 0, confirmed: true, crewBooked: false, missingRoles: [], atRisk: true, prep: undefined, elsewhere: undefined }];
+  let bad = null, threw = false; try { bad = S.renderLines(mBad); } catch (e) { threw = true; }
+  const bt = bad ? bad.map(l => l.text) : [];
+  t("review3: malformed start row → schedule prints heading + one grey 'could not be rendered'; Money and Action items still render", !threw && bad.some(l => l.kind === "grey" && /could not be rendered/.test(l.text)) && bad.some(l => l.kind === "h3" && /^Schedule next week/.test(l.text)) && bt.includes("Money") && bt.includes("Action items") && bt.filter(x => /could not be rendered/.test(x)).length === 1 && !bt.some(x => /Broken Row/.test(x)), bt.filter(x => /rendered|Schedule/.test(x)).join(" | "));
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");
