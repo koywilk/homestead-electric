@@ -432,5 +432,80 @@ function fixture(over = {}) {
   t("fix7: 12 candidates, cap 10 → every 'QC needs' row kept, first in order", q7.rows.length === 10 && q7.more === 2 && q7.rows.slice(0, 3).every(r => r.why === "QC needs") && q7.rows.filter(r => r.why === "QC needs").length === 3, JSON.stringify(q7.rows.map(r => r.name + ":" + r.why)));
 }
 
+// ── Task 5: notes-doc parser + renderer ─────────────────────────────────────
+{
+  // Minimal Docs JSON in the shape Google's meeting-notes template produces (checked 2026-10-15: H2 date headings, bullets with nestingLevel, strikethrough on done items).
+  const para = (text, o = {}) => ({ paragraph: { elements: [{ textRun: { content: text + "\n", textStyle: o.struck ? { strikethrough: true } : {} } }], paragraphStyle: { namedStyleType: o.style || "NORMAL_TEXT" }, ...(o.bullet ? { bullet: { nestingLevel: o.nest || 0 } } : {}) } });
+  const doc = { body: { content: [
+    para("Meeting Notes", { style: "HEADING_1" }),
+    // OUR OWN section for today must be skipped as a source (Review Focus 4).
+    para("Oct 16, 2026 | Weekly Strategy/Scheduling Meeting", { style: "HEADING_2" }), para("Attendees: Koy"), para("Carried from Oct 9", { style: "HEADING_3" }), para("Rose — still haven't heard from Austin", { bullet: true }),
+    para("Oct 9, 2026 | Weekly Strategy/Scheduling Meeting", { style: "HEADING_2" }),
+    para("Attendees: Justin Cloward Brady Nelson Joshua Cloward Koy Wilkinson"),
+    para("Notes"),
+    para("Cox overhead temp - Before thursday.", { bullet: true, struck: true }), para("Tuesday Treycen", { bullet: true, nest: 1 }),   // child of a struck item → dropped
+    para("Rose", { bullet: true }), para("Still havent heard from austin", { bullet: true, nest: 1 }),
+    para("Ashcraft", { bullet: true }), para("Any update?", { bullet: true, nest: 1 }),
+    para("Ready to invoice"),
+    para("Koplin", { bullet: true }),                                              // not Notes/General/Action → ignored
+    para("QCs needed"), para("", { bullet: true }),
+    para("Action items"), para("Call Edge about Pierce", { bullet: true }), para("Order spider box", { bullet: true, struck: true }),
+    para("Oct 2, 2026 | Weekly Strategy/Scheduling Meeting", { style: "HEADING_2" }),
+    para("Notes"), para("Rose", { bullet: true }), para("Pierce - Need Update from Colby", { bullet: true }),
+    para("Action items"), para("Call Edge about Pierce", { bullet: true }),
+  ] } };
+  const meeting = new Date(2026, 9, 16, 12, 0, 0);
+  const c = S.parseNotesCarry(doc, meeting);
+  t("carry: source section is Oct 9 (not our own Oct 16 one)", c.fromLabel === "Oct 9, 2026", c.fromLabel);
+  const texts = c.rows.map(r => r.text);
+  t("carry: struck item and its child dropped; parent + child of open items kept as one line", eq(texts, ["Rose — Still havent heard from austin", "Ashcraft — Any update?", "Call Edge about Pierce"]), JSON.stringify(texts));
+  t("carry: weeks counted across earlier sections (Rose 2, Ashcraft 1, Pierce action 2)", eq(c.rows.map(r => r.weeks), [2, 1, 2]), JSON.stringify(c.rows.map(r => r.weeks)));
+  t("carry: null doc → empty, no throw", S.parseNotesCarry(null, meeting).rows.length === 0);
+  t("carry: cap", S.parseNotesCarry({ body: { content: [para("Oct 9, 2026 | X", { style: "HEADING_2" }), para("Notes"), ...Array.from({ length: 30 }, (_, i) => para("row " + i, { bullet: true }))] } }, meeting).rows.length === 20);
+
+  const m = S.buildModel(fixture({ notesDoc: doc }));
+  const lines = S.renderLines(m);
+  const txt = lines.map(l => l.text);
+  t("render: body starts with the grey pre-line, then the headline; no H2 heading, no attendee line", lines[0].kind === "grey" && /pre-filled/.test(lines[0].text) && lines[1].kind === "p" && !lines.some(l => l.kind === "h2") && !txt.some(s => /^Attendees/.test(s)));
+  t("render: section headings in meeting order", (() => { const h = lines.filter(l => l.kind === "h3").map(l => l.text.replace(/ [·—].*$/, "")); return eq(h, ["Carried from Oct 9", "Schedule next week", "Blocked", "Coming up", "Money", "QC to schedule", "Last week", "Action items"]); })(), JSON.stringify(lines.filter(l => l.kind === "h3").map(l => l.text)));
+  t("render: Namjoshi start row says nobody booked and where the lead is", txt.some(s => /Namjoshi.*rough starts Mon 10\/19.*confirmed.*nobody booked.*lead Treycen Rollene is at The Hideout Mon/.test(s)), txt.filter(s => /Namjoshi/.test(s)).join(" | "));
+  t("render: Lot 208 under nobody booked with reasons", txt.some(s => /Skyridge Lot 208.*rough 80%.*ready to invoice 15d.*QC needs.*3 punch.*GC \/ builder/.test(s)), txt.filter(s => /Skyridge/.test(s)).join(" | "));
+  t("render: Simpro job unknown to the app printed, not dropped", txt.some(s => /Simpro #9999 \(not in app\).*Zane Watkins/.test(s)));
+  t("render: no emoji / non-BMP", lines.every(l => !/[\u{10000}-\u{10FFFF}]/u.test(l.text)));
+  t("render: every bullet line is 'bullet' or 'check'; blank check line closes each list", lines.filter(l => l.kind === "check").length >= 6);
+  t("render: Micek (between, no date) is NOT printed", !txt.some(s => /Micek/.test(s)));
+  const reqs = S.docsRequests(lines, 1);
+  t("docsRequests: first is insertText at 1, rest styles/bullets", reqs[0].insertText && reqs[0].insertText.location.index === 1 && reqs.length > 10);
+  const err = S.renderLines({ ...m, schedule: { error: "Section unavailable this week: boom" } });
+  t("render: a failed section prints its one grey line and the rest still renders", err.some(l => l.kind === "grey" && /boom/.test(l.text)) && err.some(l => l.text === "Money"));
+
+  // Round-review model fields (items 1-4, 7): each has its rendered form.
+  const mk5 = (over) => S.buildModel(fixture({ upcoming: [
+    { id: "in1", name: "Pipeline In-Window", customer: "GC", projectedStart: "10/21/2026", startConfirmed: true },
+    { id: "od1", name: "Pipeline Overdue", customer: "GC2", projectedStart: "9/30/2026" },
+    { id: "od2", name: "Pipeline Older", customer: "GC3", projectedStart: "10/5/2026" },
+  ], ...over }));
+  const m5 = mk5({});
+  const t5 = S.renderLines(m5).map(l => l.text);
+  const up = S.renderLines(m5).find(l => /Pipeline In-Window/.test(l.text) && /^UPCOMING/.test(l.text));
+  t("render: pipeline start → 'UPCOMING <name> — rough starts Wed 10/21 confirmed · not in the app yet · nobody booked', no roles/prep tail, amber tag span", !!up && up.text === "UPCOMING Pipeline In-Window — rough starts Wed 10/21 confirmed · not in the app yet · nobody booked" && up.spans.length === 1 && up.spans[0].start === 0 && up.spans[0].len === 8, up && up.text);
+  t("render: overdue pipeline rows → one 'Projected start passed, still in Upcoming' bullet", t5.filter(s => /^Projected start passed, still in Upcoming: /.test(s)).length === 1 && t5.some(s => s === "Projected start passed, still in Upcoming: Pipeline Overdue 9/30, Pipeline Older 10/5") && !t5.some(s => /Pipeline In-Window/.test(s) && /Projected start passed/.test(s)), t5.filter(s => /Projected start/.test(s)).join(" | "));
+  t("render: no overdue bullet when none overdue", !txt.some(s => /Projected start passed/.test(s)));
+
+  const mAmb = S.buildModel(fixture({ notesDoc: doc }));
+  mAmb.schedule.calendar = [{ di: 1, label: "Site walk", name: "Dup Job", who: "Koy", ambiguous: true }, { di: 2, label: "Meeting", name: "Solo Job", who: "", ambiguous: false }];
+  const tAmb = S.renderLines(mAmb).map(l => l.text);
+  t("render: ambiguous calendar row gets the '(name match — check which job)' suffix; unambiguous row does not", tAmb.includes("Tue — Site walk · Dup Job · Koy (name match — check which job)") && tAmb.includes("Wed — Meeting · Solo Job"), tAmb.filter(s => /Dup Job|Solo Job/.test(s)).join(" | "));
+
+  const mMv = S.buildModel(fixture({ notesDoc: doc }));
+  mMv.schedule.moved = [{ name: "Cleared Job", label: "rough start", from: "10/12", to: "no date", nth: 2 }, { name: "Slid Job", label: "rough start", from: "10/12", to: "10/19", nth: 3 }];
+  const tMv = S.renderLines(mMv).map(l => l.text);
+  t("render: moved-to-no-date prints '→ no date (cleared)'; a normal move keeps its date and ordinal", tMv.includes("Cleared Job — rough start 10/12 → no date (cleared)") && tMv.includes("Slid Job — rough start 10/12 → 10/19 (3rd date)"), tMv.filter(s => /Cleared Job|Slid Job/.test(s)).join(" | "));
+
+  const mSe = S.buildModel(fixture({ notesDoc: doc })); mSe.stateError = "boom state";
+  const lSe = S.renderLines(mSe), iSe = lSe.findIndex(l => l.text === "State snapshot not updated this run: boom state"), iAct = lSe.findIndex(l => l.kind === "h3" && l.text === "Action items");
+  t("render: stateError → one grey line directly before the Action items heading; absent otherwise", iSe >= 0 && lSe[iSe].kind === "grey" && iAct === iSe + 1 && !txt.some(s => /State snapshot not updated/.test(s)), String(iSe) + "/" + String(iAct));
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");

@@ -9,9 +9,6 @@
 "use strict";
 const { docsRequests } = require("./foremanMeetingPrep.js");
 
-// Task 5 replaces this stub with the real notes parser (declared with `function`, stub deleted).
-let parseNotesCarry = () => ({ error: false, fromLabel: "", rows: [] });
-
 const TZ = "America/Denver";
 const MARGIN_TARGET = 15;
 const CAPS = { carried: 20, booked: 15, calendar: 12, blockedPerGroup: 10, coming: 15, findings: 6, rti: 10, movers: 5, qc: 10, approved: 12 };
@@ -570,7 +567,186 @@ function buildModel(inputs) {
   return m;
 }
 
+// ── Josh's notes doc → last meeting's carry-forward (Docs API JSON) ─────────
+// Sections start at a paragraph whose text begins "Mon D, YYYY |" (Google's meeting-notes heading; any style).
+// Inside a section, a non-bullet paragraph names the list: Notes / General / Next week's top priorities / Action items carry;
+// Ready to invoice / QCs / Invoicing do not. Struck-through text (what Docs does to a ticked checkbox) = done; its children go with it.
+const HEAD_RE = /^([A-Z][a-z]{2} \d{1,2}, \d{4})\s*\|/;
+const CARRY_SECTION = /^(notes|general|next week'?s? top priorities|action items?|carried from .+)$/i;
+const SKIP_SECTION = /^(ready to invoice|qcs? needed.*|invoicing|invoice ready|app additions.*|schedule.*|money|coming up|blocked|last week|qc to schedule)$/i;
+const normText = (s) => String(s || "").toLowerCase().replace(/\(carried \d+ wks?\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+function docParas(doc) {
+  const content = doc && doc.body && Array.isArray(doc.body.content) ? doc.body.content : [];
+  return content.filter(c => c && c.paragraph).map(c => {
+    const els = arr(c.paragraph.elements).filter(e => e && e.textRun && typeof e.textRun.content === "string");
+    const text = els.map(e => e.textRun.content).join("").replace(/\s+/g, " ").trim();
+    const struck = els.length > 0 && els.every(e => !e.textRun.content.trim() || (e.textRun.textStyle && e.textRun.textStyle.strikethrough));
+    return { text, bullet: !!c.paragraph.bullet, nest: (c.paragraph.bullet && c.paragraph.bullet.nestingLevel) || 0, struck };
+  });
+}
+function sectionsOf(paras) {
+  const secs = [];
+  paras.forEach(p => { const m = !p.bullet && p.text.match(HEAD_RE); if (m) { const d = toDateAny(m[1]); if (d) secs.push({ label: m[1], date: d, paras: [] }); return; } if (secs.length) secs[secs.length - 1].paras.push(p); });
+  return secs;
+}
+function carryItems(sec) {
+  const rows = []; let list = null, struckNest = null, parent = null;
+  for (const p of sec.paras) {
+    if (!p.bullet) { const t = p.text.replace(/^[*_]+|[*_]+$/g, "").trim(); if (!t) continue; if (CARRY_SECTION.test(t)) { list = "carry"; struckNest = null; parent = null; continue; } if (SKIP_SECTION.test(t) || /^attendees/i.test(t)) { list = "skip"; continue; } if (list === "carry") list = null; continue; }
+    if (list !== "carry" || !p.text) continue;
+    if (/^owner\s+[—-]\s+what/i.test(p.text)) continue;
+    if (struckNest != null && p.nest > struckNest) continue;       // child of a struck item
+    struckNest = null;
+    if (p.struck) { struckNest = p.nest; if (p.nest === 0) parent = null; continue; }
+    if (p.nest === 0) { parent = { text: p.text, children: [] }; rows.push(parent); }
+    else if (parent) parent.children.push(p.text);
+    else rows.push({ text: p.text, children: [] });
+  }
+  return rows.map(r => r.children.length ? `${r.text} — ${r.children.join("; ")}` : r.text);
+}
+function parseNotesCarry(doc, meetingDate) {
+  const empty = { error: false, fromLabel: "", rows: [] };
+  if (!doc) return empty;
+  const meet = meetingDate instanceof Date ? startOfDay(meetingDate) : new Date();
+  const secs = sectionsOf(docParas(doc)).filter(s => s.date < meet).sort((a, b) => b.date - a.date);
+  if (!secs.length) return empty;
+  const items = carryItems(secs[0]);
+  const earlier = secs.slice(1).map(s => new Set(carryItems(s).map(normText)));
+  const rows = items.map(text => { const k = normText(text); let weeks = 1; for (const set of earlier) { if (set.has(k) || [...set].some(x => x && (k.includes(x) || x.includes(k)))) weeks++; else break; } return { text, weeks }; });
+  return { error: false, fromLabel: secs[0].label, rows: rows.slice(0, CAPS.carried) };
+}
+
+// ── lines for the Docs API (consumed by foremanMeetingPrep.docsRequests) ─────
+const RED = [0.72, 0.14, 0.14], GREEN = [0.12, 0.48, 0.3], AMBER = [0.71, 0.33, 0.1], BLUE = [0.18, 0.4, 0.77];
+function renderLines(m) {
+  const L = [];
+  const H3 = (t) => L.push({ text: t, kind: "h3" }), H4 = (t) => L.push({ text: t, kind: "h4" });
+  const P = (t) => L.push({ text: t, kind: "p" }), G = (t) => L.push({ text: t, kind: "grey" }), C = (t) => L.push({ text: t, kind: "check" });
+  const B = (t, spans) => L.push({ text: t, kind: "bullet", spans: spans || [] });
+  const tag = (word, rgb, rest) => { B(`${word} ${rest}`, [{ start: 0, len: word.length, rgb, bold: true }]); };
+  const fail = (sec) => G(typeof sec.error === "string" ? sec.error : "Section unavailable this week.");
+  const more = (n) => { if (n > 0) G(`…and ${n} more in the app`); };
+  const who = (r) => [r.foreman, r.lead && r.lead !== r.foreman ? r.lead : ""].filter(Boolean).join(" · ");
+  const age = (n) => n == null ? "no date" : `${n}d`;
+  const prepShort = (xs) => xs.map(x => x.replace(/ Received| Up to Date| to App & SimPro| to Foreman/g, "")).join(", ");
+
+  G(m.preLine);
+  if (m.headline.length) m.headline.forEach(P);
+
+  // Carried
+  H3(m.carried.fromLabel ? `Carried from ${m.carried.fromLabel.replace(/,\s*\d{4}$/, "")}` : "Carried from last meeting");   // "Carried from Oct 9" — the same heading Josh's notes use
+  if (m.carried.error) fail(m.carried); else if (!m.carried.rows.length) G("Nothing carried.");
+  else m.carried.rows.forEach(r => C(`${r.text}${r.weeks > 1 ? ` (carried ${r.weeks} wks)` : ""}`));
+  C("");
+
+  // Schedule
+  H3(`Schedule next week · ${m.weekLabel}`);
+  if (m.schedule.error) fail(m.schedule); else {
+    const s = m.schedule;
+    H4(`Booked${s.simproOk ? "" : " — Simpro unavailable; planner only"}${s.plannerPresent ? "" : " (no planner for next week; Simpro only)"}`);
+    if (!s.booked.length) G("Nothing booked for next week yet (as of 6:00 AM).");
+    s.booked.forEach(r => B(`${r.name} — ${r.phase}${r.pct ? ` ${r.pct}%` : ""} · ${r.days} · ${r.people.join(", ")}${r.qcNeeds ? " · QC after" : ""}${r.start ? ` · ${r.start.phase} start ${fmtMD(r.start.date)} ${r.start.confirmed ? "confirmed" : "projected"}` : ""}`));
+    more(s.bookedMore);
+    s.unknownSimpro.forEach(u => B(`Simpro #${u.pid} (not in app) · ${daysLabel(u.days)} · ${u.people.join(", ")}`));
+    H4("In progress, nobody booked");
+    if (!s.idle.length) G("Every in-progress job has crew next week.");
+    s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.phase} ${r.pct}% · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""} · ${r.openPunch} punch${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
+    H4("Starts");
+    if (!s.starts.length) G("No starts dated inside next week.");
+    s.starts.forEach(r => {
+      if (r.pipeline) { tag("UPCOMING", AMBER, `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"} · not in the app yet · nobody booked`); return; }
+      const chip = r.atRisk ? ["AT RISK", RED] : r.confirmed ? ["CONFIRMED", GREEN] : ["PROJECTED", AMBER];
+      tag(chip[0], chip[1], `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"} · nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""} · prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}${r.elsewhere.length ? ` · ${r.elsewhere.join("; ")}` : ""}`);
+    });
+    H4("Dates that moved since last Friday");
+    if (s.movedFirstRun) G("Tracking starts this week."); else if (!s.moved.length && !s.passed.length) G("Nothing moved.");
+    s.moved.forEach(r => B(r.to === "no date" ? `${r.name} — ${r.label} ${r.from} → no date (cleared)` : `${r.name} — ${r.label} ${r.from} → ${r.to}${r.nth > 2 ? ` (${r.nth}${r.nth === 3 ? "rd" : "th"} date)` : ""}`));
+    s.passed.forEach(r => tag("DATE PASSED", AMBER, `${r.name} — ${r.label} ${r.date}, status never moved`));
+    H4("On the calendar");
+    if (!s.calendar.length) G("No inspections, walks or scans dated next week.");
+    s.calendar.forEach(r => B(`${DAY_LBL[r.di]} — ${r.label} · ${r.name}${r.who ? ` · ${r.who}` : ""}${r.ambiguous ? " (name match — check which job)" : ""}`));
+    H4("People");
+    const p = s.people;
+    if (p.out.length) B(`Out: ${p.out.map(o => `${o.name} ${o.range}${o.note ? ` (${o.note})` : ""}`).join(" · ")}`); else B("Nobody out next week.");
+    p.pending.forEach(r => B(`Pending request: ${r.name} · ${r.range}${r.requestedDays != null ? ` · asked ${r.requestedDays}d ago` : ""}`));
+    p.bodies.forEach(r => B(`Bodies asked for: ${r.text}${r.job ? ` [${r.job}]` : ""} (${r.by}${r.ageDays != null ? `, ${r.ageDays}d ago` : ""})`));
+    p.newUsers.forEach(u => B(`New on the team: ${u.name}${u.title ? ` · ${u.title}` : ""}`));
+    B(`Capacity (booked / available): ${p.capacity.map(c => `${DAY_LBL[c.di]} ${c.booked}/${c.available}`).join(" · ")}`);
+    if (s.conflicts.length) { H4("Conflicts"); s.conflicts.forEach(c => tag("CONFLICT", RED, c)); }
+    if (s.onHold.length) G(`${plural(s.onHold.length, "job")} on hold listed under Blocked.`);
+  }
+  C("");
+
+  // Blocked
+  H3("Blocked — what we are waiting on, from whom, how long");
+  if (m.blocked.error) fail(m.blocked); else {
+    if (!m.blocked.groups.length) G("Nothing blocked.");
+    m.blocked.groups.forEach(g => { H4(`${g.name} · ${g.rows.length + g.more}`); g.rows.forEach(r => B(`${r.name} — ${r.what}${r.who ? ` · ${r.who}` : ""} · ${age(r.ageDays)}`)); more(g.more); });
+    if (m.blocked.cleared.length) { H4("Cleared since last Friday"); m.blocked.cleared.forEach(c => tag("CLEARED", GREEN, `${c.name} — ${c.group}`)); }
+  }
+  C("");
+
+  // Coming up
+  H3("Coming up · next 2–8 weeks");
+  if (m.coming.error) fail(m.coming); else {
+    const c = m.coming;
+    if (!c.weeks.length) G("No dated starts after next week.");
+    c.weeks.forEach(w => B(`${w.label} — ${w.rows.map(r => `${r.name}${r.customer ? ` (${r.customer})` : ""} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"}${r.note ? ` · ${r.note}` : ""}`).join(" · ")}`));
+    if (arr(c.overdue).length) B(`Projected start passed, still in Upcoming: ${c.overdue.map(r => `${r.name} ${fmtMD(r.date)}`).join(", ")}`);
+    if (c.noDate.length) B(`No date yet: ${c.noDate.map(r => `${r.name}${r.note ? ` (${r.note})` : ""}`).join(" · ")}`);
+    if (c.prep.length) B(`In prep, start inside 3 weeks: ${c.prep.map(r => `${r.name} ${r.done}/5${r.missing.length ? ` (${prepShort(r.missing)})` : ""}`).join(" · ")}`);
+    c.findings.forEach(f => B(`Plan intake: ${f.summary}`));
+    B(`Crews freeing up (finish ≥ 90% or ready to invoice): ${c.freeing.length ? c.freeing.map(r => r.name).join(", ") : "none"} · starts in the next two weeks: ${c.startsSoon}`);
+  }
+  C("");
+
+  // Money
+  H3("Money");
+  if (m.money.error) fail(m.money); else {
+    const r = m.money.rti, g = m.money.margin, a = m.money.approved;
+    H4(`Ready to invoice · ${r.count}`);
+    if (!r.rows.length) G("Nothing ready to invoice.");
+    r.rows.forEach(x => B(`${x.name}${x.foreman ? ` · ${x.foreman}` : ""}${x.dollars != null ? ` · ${fmtMoney(x.dollars)}` : ""}${x.idleDays != null ? ` · idle ${x.idleDays}d` : ""}${x.margin != null ? ` · ${x.margin}% margin` : ""}${x.flag ? ` · ${x.flag}` : ""}`, x.flag ? [{ start: 0, len: x.name.length, rgb: RED, bold: false }] : []));
+    more(r.more);
+    H4("Margin at finish");
+    if (g.median == null) G("No margin data on finishing jobs."); else {
+      B(`Median ${g.median}% across ${plural(g.count, "finishing job")} · target ${MARGIN_TARGET}% · ${g.underCount} under`);
+      if (g.firstRun) G("Movers: tracking starts this week."); else if (!g.movers.length) G("No margin moved 3 points or more since last Friday.");
+      g.movers.forEach(x => B(`${x.name} ${x.from}% → ${x.to}% (${x.delta > 0 ? "+" : ""}${x.delta})`));
+    }
+    H4(`Approved this week · ${a.count}`);
+    if (!a.rows.length) G("No change orders approved this week.");
+    a.rows.forEach(x => B(`${x.name}${x.quote ? ` #${x.quote}` : ""}${x.desc ? ` — ${x.desc}` : ""}`));
+    if (a.count) B(`${a.undated} of ${a.count} not dated yet`);
+  }
+  C("");
+
+  // QC
+  H3("QC to schedule");
+  if (m.qc.error) fail(m.qc); else { if (!m.qc.rows.length) G("Nothing waiting on a QC walk."); m.qc.rows.forEach(r => B(`${r.name}${r.foreman ? ` · ${r.foreman}` : ""} — ${r.why}${r.since ? ` since ${r.since}` : ""} · ${r.openPunch} punch open${r.small ? " · small — pics may do" : ""}`)); more(m.qc.more); }
+  C("");
+
+  // Last week
+  H3("Last week");
+  if (m.lastWeek.error) fail(m.lastWeek); else {
+    const l = m.lastWeek;
+    B(`Finished: ${l.finished.length ? l.finished.join(", ") : "none"}`);
+    B(`Inspections: ${l.inspPassed} passed · ${l.inspFailed} failed`);
+    B(`Change orders: ${l.cosCreated} created · ${l.cosApproved} approved · ${l.cosConverted} converted to return trip`);
+    B(`Return trips created: ${l.rtCreated}${l.rtAvg4 != null ? ` (4-week average ${l.rtAvg4})` : ""}`);
+    B(`Punch closed: ${l.punchClosed} · questions answered ${l.qAnswered} of ${l.qAsked} asked`);
+    B(`Blocks cleared: ${l.cleared.length}`);
+  }
+
+  // Action items
+  if (typeof m.stateError === "string" && m.stateError) G(`State snapshot not updated this run: ${m.stateError}`);
+  H3("Action items");
+  G("Owner — what — by when");
+  C(""); C(""); C(""); C("");
+  return L;
+}
+
 module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
   snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests,
   dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays, blockedRows, GROUP_ORDER,
-  buildModel, comingRows, moneyRows, qcRows, lastWeekRows, collectSimproCandidates, resolveRecipients, isFinishingOpen, isRti, mondayOf, EXTRA_RECIPIENTS };
+  buildModel, parseNotesCarry, renderLines, docParas, sectionsOf, carryItems, comingRows, moneyRows, qcRows, lastWeekRows, collectSimproCandidates, resolveRecipients, isFinishingOpen, isRti, mondayOf, EXTRA_RECIPIENTS };
