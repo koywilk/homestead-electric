@@ -196,5 +196,119 @@ function classifySchedule(live, idx, weekYmds, today) {
   return out;
 }
 
+// ── dates that moved since last Friday ───────────────────────────────────────
+const DATE_FIELDS = [["roughProjectedStart", "rough start"], ["finishProjectedStart", "finish start"], ["fourWayTargetDate", "rough inspection"], ["finalInspectionTargetDate", "final inspection"], ["qcStatusDate", "rough QC walk"], ["finishQcStatusDate", "finish QC walk"], ["matterportStatusDate", "Matterport scan"]];
+function dateKeys(live) {
+  const out = {};
+  live.forEach(j => {
+    DATE_FIELDS.forEach(([f]) => { const d = toDateAny(j[f]); if (d) out[`${j.id}:${f}`] = ymd(d); });
+    arr(j.returnTrips).forEach((rt, i) => { if (!rt || rt.signedOff || rt.rtStatus === "complete") return; const d = toDateAny(rt.rtStatusDate); if (d) out[`${j.id}:rt:${i}`] = ymd(d); });
+  });
+  return out;
+}
+const labelOfKey = (k) => { const f = k.split(":")[1]; if (f === "rt") return "return trip"; const e = DATE_FIELDS.find(x => x[0] === f); return e ? e[1] : f; };
+const mdOfYmd = (s) => { const d = toDateAny(s); return d ? fmtMD(d) : s; };
+// prevDates: { key: [{d: runYmd, v: valueYmd}, ...] } (kept newest-last, cap 6). nth = how many distinct values seen incl. this one.
+function movedDates(live, prevDates, today) {
+  const firstRun = !prevDates || typeof prevDates !== "object";
+  const cur = dateKeys(live), nameOf = new Map(live.map(j => [j.id, j]));
+  const rows = [], passed = [];
+  Object.entries(cur).forEach(([k, v]) => {
+    const j = nameOf.get(k.split(":")[0]); if (!j) return;
+    const hist = firstRun ? [] : arr(prevDates[k]);
+    const last = hist.length ? hist[hist.length - 1].v : null;
+    if (last && last !== v) rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: mdOfYmd(v), nth: new Set([...hist.map(h => h.v), v]).size });
+  });
+  // Date passed: a start/inspection/QC/scan date before today whose status never moved.
+  live.forEach(j => {
+    const chk = (f, label, stillPending) => { const d = toDateAny(j[f]); if (d && ymd(d) < ymd(today) && stillPending) passed.push({ name: j.name, label, date: fmtMD(d) }); };
+    chk("roughProjectedStart", "rough start", !STARTED_ST.has(effStatus(j, "rough")) && pctOf(j, "rough") === 0);
+    chk("finishProjectedStart", "finish start", effStatus(j, "rough") === "complete" && !STARTED_ST.has(effStatus(j, "finish")) && pctOf(j, "finish") === 0);
+    chk("fourWayTargetDate", "rough inspection", !j.roughInspectionResult && !arr(j.roughInspectionAttempts).length);
+    chk("finalInspectionTargetDate", "final inspection", !j.finalInspectionResult && !arr(j.finalInspectionAttempts).length);
+    chk("qcStatusDate", "rough QC walk", j.qcStatus === "scheduled");
+    chk("finishQcStatusDate", "finish QC walk", j.finishQcStatus === "scheduled");
+  });
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  return { rows, passed, firstRun };
+}
+// Next state for the snapshot: append today's value when it differs from the last one.
+function nextDates(live, prevDates, todayYmd) {
+  const cur = dateKeys(live), out = {};
+  Object.entries(cur).forEach(([k, v]) => { const hist = arr(prevDates && prevDates[k]).slice(-5); if (!hist.length || hist[hist.length - 1].v !== v) hist.push({ d: todayYmd, v }); out[k] = hist.slice(-6); });
+  return out;
+}
+
+// ── on the calendar next week ────────────────────────────────────────────────
+const normName = (n) => String(n || "").toLowerCase().replace(/^#?\d{3,5}\s*-?\s*/, "").replace(/[^a-z0-9]+/g, " ").trim();
+function calendarRows(live, calendarEvents, weekYmds) {
+  const rows = [];
+  const add = (j, raw, label, who) => { const d = toDateAny(raw); if (!d) return; const di = weekYmds.indexOf(ymd(d)); if (di >= 0) rows.push({ di, label, name: j.name, who: who || "" }); };
+  live.forEach(j => {
+    const rs = effStatus(j, "rough"), fs = effStatus(j, "finish");
+    const lastAttempt = (l) => arr(l).map(a => toDateAny(a && a.date)).filter(Boolean).sort((a, b) => b - a)[0] || null;
+    const insp = (target, result, attempts, label) => { const at = toDateAny(target); if (!at || result) return; const la = lastAttempt(attempts); if (la && ymd(la) >= ymd(at)) return; add(j, target, label); };
+    if (rs !== "complete" && !STARTED_ST.has(fs)) insp(j.fourWayTargetDate, j.roughInspectionResult, j.roughInspectionAttempts, "Rough inspection");
+    if (STARTED_ST.has(fs) || pctOf(j, "finish") > 0) insp(j.finalInspectionTargetDate, j.finalInspectionResult, j.finalInspectionAttempts, "Final inspection");
+    if (j.qcStatus === "scheduled") add(j, j.qcStatusDate, "Rough QC walk");
+    if (j.finishQcStatus === "scheduled") add(j, j.finishQcStatusDate, "Finish QC walk");
+    const scanned = arr(j.matterportLinks).length || j.matterportLink;
+    if (j.matterportStatus === "scheduled" && !scanned) add(j, j.matterportStatusDate, "Matterport scan");
+    arr(j.returnTrips).forEach(rt => { if (rt && !rt.signedOff && rt.rtStatus === "scheduled") add(j, rt.rtStatusDate, "Return trip", String(rt.assignedTo || "").trim()); });
+  });
+  // Koy's calendar: an event whose title carries a live job's name is a site walk/meeting for it.
+  // Keys per job: the first word when it is a real name (5+ letters, not a number — "miller"), plus the
+  // first two words ("lot 23"), matched as whole words so "Miller site walk" hits Miller Residence - Alpine.
+  const names = live.map(j => { const n = normName(j.name).split(" ").filter(Boolean); const keys = [];
+    if (n[0] && n[0].length >= 5 && !/^\d+$/.test(n[0])) keys.push(n[0]); if (n.length >= 2) keys.push(n.slice(0, 2).join(" ")); return { j, keys }; }).filter(x => x.keys.length);
+  arr(calendarEvents).forEach(ev => {
+    if (!ev || !ev.start) return;
+    const raw = ev.start.dateTime || ev.start.date; const d = toDateAny(raw); if (!d) return;
+    const title = normName(ev.summary);
+    const hit = names.find(x => x.keys.some(k => new RegExp(`(^| )${k}( |$)`).test(title))); if (!hit) return;
+    const who = arr(ev.attendees).map(a => String((a && a.email) || "").split("@")[0]).filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(", ");
+    add(hit.j, raw, /walk/i.test(ev.summary) ? "Site walk" : "Meeting", who);
+  });
+  return rows.sort((a, b) => a.di - b.di || a.label.localeCompare(b.label));
+}
+
+// ── people: out, pending, bodies, new, capacity ──────────────────────────────
+const isRoster = (u) => !!u && u.active !== false && ["foreman", "lead", "crew"].includes(u.title || u.role || "");
+function overlapDays(startRaw, endRaw, weekDays) {
+  const s = toDateAny(startRaw), e = toDateAny(endRaw || startRaw); if (!s || !e) return [];
+  return weekDays.map((d, i) => (ymd(d) >= ymd(s) && ymd(d) <= ymd(e)) ? i : -1).filter(i => i >= 0);
+}
+function peopleRows({ users, pto, timeOffRequests, needs, prevUserIds, idx, weekDays, today }) {
+  const out = arr(pto).map(p => ({ name: p.name, dis: overlapDays(p.start, p.end, weekDays), note: p.note || "" })).filter(p => p.dis.length).map(p => ({ name: p.name, range: daysLabel(p.dis), dis: p.dis, note: p.note }));
+  const pending = arr(timeOffRequests).filter(r => r && r.status === "pending").map(r => { const s = toDateAny(r.start), e = toDateAny(r.end || r.start), q = toDateAny(r.requestedAt);
+    return { name: r.name, range: s ? `${fmtShort(s)}${e && ymd(e) !== ymd(s) ? `–${fmtShort(e)}` : ""}` : "", requestedDays: q ? daysBetween(today, q) : null }; });
+  const bodies = arr(needs).filter(n => n && n.kind === "bodies" && n.status !== "done" && !n.voided).map(n => ({ text: clip(stripHtml(n.text || `${n.count || "some"} bodies`), 120), job: n.jobName || "", by: String(n.createdBy || "").trim(), ageDays: toDateAny(n.createdAt) ? daysBetween(today, toDateAny(n.createdAt)) : null }));
+  const prev = new Set(arr(prevUserIds));
+  const newUsers = prevUserIds == null ? [] : arr(users).filter(u => u && u.active !== false && !prev.has(u.id || u.name)).map(u => ({ name: u.name, title: u.title || u.role || "" }));
+  const roster = arr(users).filter(isRoster);
+  const capacity = weekDays.map((d, di) => {
+    const outToday = new Set(out.filter(o => o.dis.includes(di)).map(o => personKey(o.name)));
+    const available = roster.filter(u => !outToday.has(personKey(u.name))).length;
+    let booked = 0; idx.byPerson.forEach(p => { if (p.days[di]) booked++; });
+    return { di, booked, available, thin: available > 0 ? booked / available < 0.7 : false };
+  });
+  return { out, pending, bodies, newUsers, capacity };
+}
+
+// ── conflicts ────────────────────────────────────────────────────────────────
+function conflictRows(idx, pto, weekYmds) {
+  const rows = [];
+  idx.byPerson.forEach(p => Object.entries(p.days).forEach(([di, jobsSet]) => { if (jobsSet.size > 1) rows.push(`${p.name} is on two jobs ${DAY_LBL[di]}: ${[...jobsSet].join(" and ")}`); }));
+  const weekDays = weekYmds.map(s => toDateAny(s));
+  arr(pto).forEach(o => { const dis = overlapDays(o.start, o.end, weekDays); const p = idx.byPerson.get(personKey(o.name)); if (!p) return;
+    dis.forEach(di => { if (p.days[di]) rows.push(`${o.name} is booked ${DAY_LBL[di]} (${[...p.days[di]].join(", ")}) but out that day${o.note ? ` — ${o.note}` : ""}`); }); });
+  idx.byJob.forEach((b, jobId) => Object.entries(b.days).forEach(([di, day]) => { if (day.source !== "planner") return;
+    const name = [...idx.byPerson.values()].find(p => p.days[di] && day.people.some(x => personKey(x) === personKey(p.name)));
+    const jobName = name ? [...name.days[di]][0] : jobId;
+    rows.push(`planner has ${day.people.join(", ")} on ${jobName} ${DAY_LBL[di]} but Simpro has nothing there that day`); }));
+  return rows;
+}
+
 module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
-  snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests };
+  snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests,
+  dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays };
