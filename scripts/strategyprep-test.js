@@ -198,5 +198,84 @@ function fixture(over = {}) {
   t("conflicts: planner says Abraham on Hideout Tue, Simpro doesn't → disagreement line", S.conflictRows(idx3, [], w.weekYmds).some(s => /planner.*Abraham Tristan.*Hideout.*Tue.*Simpro/.test(s)), JSON.stringify(S.conflictRows(idx3, [], w.weekYmds)));
 }
 
+// ── Task 2 review fixes: jrforeman, cleared dates, ambiguous calendar, passed guards, nextDates ──
+{
+  const w = S.weekOf(NOW);
+  const live0 = S.liveJobs(fixture().jobs);
+  // 1. jrforeman is roster
+  {
+    const base = fixture(), withJr = fixture(); withJr.users.push({ id: "jr", name: "Payton Hale", title: "jrforeman" });
+    const cap = (f) => { const l = S.liveJobs(f.jobs); return S.peopleRows({ users: f.users, pto: [], timeOffRequests: [], needs: [], prevUserIds: null, idx: S.buildScheduleIndex(f.scheduleEntries, null, l, w.weekYmds), weekDays: w.weekDays, today: w.today }).capacity; };
+    const c0 = cap(base), c1 = cap(withJr);
+    t("roster: jrforeman adds one available person every day", c0.every((c, i) => c1[i].available === c.available + 1), JSON.stringify([c0, c1]));
+  }
+  // 2. cleared dates
+  {
+    const prev = { "NAM:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-19" }] };
+    const f = fixture(); delete f.jobs.find(j => j.id === "NAM").roughProjectedStart;
+    const live = S.liveJobs(f.jobs);
+    const mv = S.movedDates(live, prev, w.today);
+    t("cleared date: Namjoshi rough start 10/19 → no date", mv.rows.length === 1 && mv.rows[0].name.startsWith("Namjoshi") && mv.rows[0].label === "rough start" && mv.rows[0].from === "10/19" && mv.rows[0].to === "no date", JSON.stringify(mv.rows));
+    const nx = S.nextDates(live, prev, "2026-10-16");
+    t("cleared date: nextDates ends with an empty value", nx["NAM:roughProjectedStart"].length === 2 && nx["NAM:roughProjectedStart"][1].v === "" && nx["NAM:roughProjectedStart"][1].d === "2026-10-16", JSON.stringify(nx["NAM:roughProjectedStart"]));
+    t("cleared date: second run with that history prints no row", S.movedDates(live, nx, w.today).rows.length === 0 && eq(S.nextDates(live, nx, "2026-10-23")["NAM:roughProjectedStart"], nx["NAM:roughProjectedStart"]));
+    const gone = S.nextDates(live.filter(j => j.id !== "NAM"), prev, "2026-10-16");
+    t("cleared date: a job no longer live drops out of next and prints nothing", !("NAM:roughProjectedStart" in gone) && S.movedDates(live.filter(j => j.id !== "NAM"), prev, w.today).rows.length === 0);
+    // a completed return trip is not a cleared date
+    const f3 = fixture(); f3.jobs.push({ id: "RTJ", name: "RT Job", roughStatus: "inprogress", roughStage: "20%", returnTrips: [{ rtStatus: "complete", rtStatusDate: "10/20/2026" }] });
+    const mv3 = S.movedDates(S.liveJobs(f3.jobs), { "RTJ:rt:0": [{ d: "2026-10-09", v: "2026-10-20" }] }, w.today);
+    t("cleared date: a completed return trip is not reported as cleared", mv3.rows.length === 0, JSON.stringify(mv3.rows));
+  }
+  // 4. nextDates behavior
+  {
+    const same = S.nextDates(live0, { "NAM:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-19" }] }, "2026-10-16");
+    t("nextDates: unchanged value is not appended", same["NAM:roughProjectedStart"].length === 1 && same["NAM:roughProjectedStart"][0].d === "2026-10-09");
+    const chg = S.nextDates(live0, { "NAM:roughProjectedStart": [{ d: "2026-10-09", v: "2026-10-12" }] }, "2026-10-16");
+    t("nextDates: changed value appends today's entry", eq(chg["NAM:roughProjectedStart"], [{ d: "2026-10-09", v: "2026-10-12" }, { d: "2026-10-16", v: "2026-10-19" }]), JSON.stringify(chg["NAM:roughProjectedStart"]));
+    const six = [1, 2, 3, 4, 5, 6].map(n => ({ d: `2026-09-0${n}`, v: `2026-09-1${n}` }));
+    const cap = S.nextDates(live0, { "NAM:roughProjectedStart": six }, "2026-10-16")["NAM:roughProjectedStart"];
+    t("nextDates: history capped at 6, oldest dropped", cap.length === 6 && cap[0].d === "2026-09-02" && cap[5].v === "2026-10-19", JSON.stringify(cap));
+    t("nextDates: first run (null prev) seeds one entry per key", S.nextDates(live0, null, "2026-10-16")["NAM:roughProjectedStart"].length === 1);
+  }
+  // 4/5. passed branches and guards
+  {
+    const f = fixture();
+    f.jobs.push({ id: "FIN", name: "Finish Start Job", roughStatus: "complete", finishStatus: "waiting_date", finishProjectedStart: "10/12/2026" });
+    f.jobs.push({ id: "FIN2", name: "Final Insp Job", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%", finalInspectionTargetDate: "10/10/2026" });
+    f.jobs.push({ id: "OLD", name: "Rough Done Old Target", roughStatus: "complete", roughStage: "100%", finishStatus: "waiting_date", fourWayTargetDate: "8/1/2026" });
+    const mv = S.movedDates(S.liveJobs(f.jobs), {}, w.today);
+    const p = (n) => mv.passed.filter(x => x.name === n);
+    t("passed: finish start before today, finish not started", eq(p("Finish Start Job"), [{ name: "Finish Start Job", label: "finish start", date: "10/12" }]), JSON.stringify(mv.passed));
+    t("passed: final inspection before today, finish in progress, no result", eq(p("Final Insp Job"), [{ name: "Final Insp Job", label: "final inspection", date: "10/10" }]), JSON.stringify(mv.passed));
+    t("passed: rough-complete job with an old 4-way target is NOT in passed", p("Rough Done Old Target").length === 0, JSON.stringify(mv.passed));
+  }
+  // 3. calendar: ambiguity, cancelled, all-day
+  {
+    const f = fixture();
+    f.jobs.push({ id: "MIL", name: "Miller Residence - Alpine", simproNo: "1438", roughStatus: "inprogress", roughStage: "75%" });
+    f.jobs.push({ id: "MIL2", name: "Miller Residence - Floor Boxes", roughStatus: "inprogress" });
+    const live = S.liveJobs(f.jobs);
+    const walk = { summary: "Miller site walk with homeowners", start: { dateTime: "2026-10-22T10:00:00-06:00" } };
+    const cal = S.calendarRows(live, [walk], w.weekYmds);
+    t("calendar: event matching two jobs → two Site walk rows, both ambiguous", cal.length === 2 && cal.every(r => r.label === "Site walk" && r.ambiguous === true) && eq(cal.map(r => r.name).sort(), ["Miller Residence - Alpine", "Miller Residence - Floor Boxes"]), JSON.stringify(cal));
+    t("calendar: cancelled event yields nothing", S.calendarRows(live, [{ ...walk, status: "cancelled" }], w.weekYmds).length === 0);
+    const one = S.calendarRows(S.liveJobs(fixture().jobs.concat([{ id: "MIL", name: "Miller Residence - Alpine", roughStatus: "inprogress", roughStage: "75%" }])), [walk], w.weekYmds);
+    t("calendar: single match is ambiguous false", one.length === 1 && one[0].ambiguous === false);
+    const allDay = S.calendarRows(live, [{ summary: "Miller meeting", start: { date: "2026-10-21" } }], w.weekYmds);
+    t("calendar: all-day event lands on Wed (Meeting)", allDay.length === 2 && allDay.every(r => w.DAY_LBL[r.di] === "Wed" && r.label === "Meeting"), JSON.stringify(allDay));
+  }
+  // 4. people edge cases
+  {
+    const f = fixture({ pto: [{ name: "Bailey Smith", start: "10/20/2026" }] });
+    const live = S.liveJobs(f.jobs), idx = S.buildScheduleIndex(f.scheduleEntries, null, live, w.weekYmds);
+    const args = { users: f.users, pto: f.pto, timeOffRequests: [], needs: [], idx, weekDays: w.weekDays, today: w.today };
+    const pp = S.peopleRows({ ...args, prevUserIds: ["koy"] });
+    t("people: PTO with no end counts one day", pp.out.length === 1 && eq(pp.out[0].dis, [1]) && pp.out[0].range === "Tue", JSON.stringify(pp.out));
+    t("people: prevUserIds null → newUsers empty", S.peopleRows({ ...args, prevUserIds: null }).newUsers.length === 0);
+    t("people: prevUserIds [] → newUsers empty (empty snapshot must not flag the team)", S.peopleRows({ ...args, prevUserIds: [] }).newUsers.length === 0);
+    t("people: non-empty prevUserIds still flags the new ones", S.peopleRows({ ...args, prevUserIds: ["koy"] }).newUsers.length === 9);
+  }
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");

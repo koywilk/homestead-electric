@@ -208,6 +208,20 @@ function dateKeys(live) {
   });
   return out;
 }
+// Keys that had a date last Friday and have none now, on a job that is still live. A return trip that was
+// completed/signed off (or removed) is not a cleared date, so rt keys only count while that trip is still open.
+function clearedKeys(live, prevDates, cur) {
+  if (!prevDates || typeof prevDates !== "object") return [];
+  const byId = new Map(live.map(j => [j.id, j])), out = [];
+  Object.keys(prevDates).forEach(k => {
+    if (k in cur) return;
+    const parts = k.split(":"), j = byId.get(parts[0]); if (!j) return;
+    const hist = arr(prevDates[k]); if (!hist.length) return;
+    if (parts[1] === "rt") { const rt = arr(j.returnTrips)[Number(parts[2])]; if (!rt || rt.signedOff || rt.rtStatus === "complete") return; }
+    out.push({ k, j, hist });
+  });
+  return out;
+}
 const labelOfKey = (k) => { const f = k.split(":")[1]; if (f === "rt") return "return trip"; const e = DATE_FIELDS.find(x => x[0] === f); return e ? e[1] : f; };
 const mdOfYmd = (s) => { const d = toDateAny(s); return d ? fmtMD(d) : s; };
 // prevDates: { key: [{d: runYmd, v: valueYmd}, ...] } (kept newest-last, cap 6). nth = how many distinct values seen incl. this one.
@@ -221,13 +235,19 @@ function movedDates(live, prevDates, today) {
     const last = hist.length ? hist[hist.length - 1].v : null;
     if (last && last !== v) rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: mdOfYmd(v), nth: new Set([...hist.map(h => h.v), v]).size });
   });
+  // A date that was there last Friday and is gone now (job still live) is a move to "no date".
+  clearedKeys(live, firstRun ? null : prevDates, cur).forEach(({ k, j, hist }) => {
+    const last = hist[hist.length - 1].v; if (!last) return;
+    rows.push({ name: j.name, label: labelOfKey(k), from: mdOfYmd(last), to: "no date", nth: new Set([...hist.map(h => h.v), ""]).size });
+  });
   // Date passed: a start/inspection/QC/scan date before today whose status never moved.
   live.forEach(j => {
     const chk = (f, label, stillPending) => { const d = toDateAny(j[f]); if (d && ymd(d) < ymd(today) && stillPending) passed.push({ name: j.name, label, date: fmtMD(d) }); };
     chk("roughProjectedStart", "rough start", !STARTED_ST.has(effStatus(j, "rough")) && pctOf(j, "rough") === 0);
     chk("finishProjectedStart", "finish start", effStatus(j, "rough") === "complete" && !STARTED_ST.has(effStatus(j, "finish")) && pctOf(j, "finish") === 0);
-    chk("fourWayTargetDate", "rough inspection", !j.roughInspectionResult && !arr(j.roughInspectionAttempts).length);
-    chk("finalInspectionTargetDate", "final inspection", !j.finalInspectionResult && !arr(j.finalInspectionAttempts).length);
+    const rs = effStatus(j, "rough"), fs = effStatus(j, "finish");   // same phase guards as calendarRows
+    chk("fourWayTargetDate", "rough inspection", rs !== "complete" && !STARTED_ST.has(fs) && !j.roughInspectionResult && !arr(j.roughInspectionAttempts).length);
+    chk("finalInspectionTargetDate", "final inspection", (STARTED_ST.has(fs) || pctOf(j, "finish") > 0) && fs !== "complete" && !j.finalInspectionResult && !arr(j.finalInspectionAttempts).length);
     chk("qcStatusDate", "rough QC walk", j.qcStatus === "scheduled");
     chk("finishQcStatusDate", "finish QC walk", j.finishQcStatus === "scheduled");
   });
@@ -238,6 +258,8 @@ function movedDates(live, prevDates, today) {
 function nextDates(live, prevDates, todayYmd) {
   const cur = dateKeys(live), out = {};
   Object.entries(cur).forEach(([k, v]) => { const hist = arr(prevDates && prevDates[k]).slice(-5); if (!hist.length || hist[hist.length - 1].v !== v) hist.push({ d: todayYmd, v }); out[k] = hist.slice(-6); });
+  // Cleared dates get a "" entry once, so next week last === current-absent and no row repeats. Done jobs drop out.
+  clearedKeys(live, prevDates, cur).forEach(({ k, hist }) => { const h = hist.slice(); if (h[h.length - 1].v !== "") h.push({ d: todayYmd, v: "" }); out[k] = h.slice(-6); });
   return out;
 }
 
@@ -245,7 +267,7 @@ function nextDates(live, prevDates, todayYmd) {
 const normName = (n) => String(n || "").toLowerCase().replace(/^#?\d{3,5}\s*-?\s*/, "").replace(/[^a-z0-9]+/g, " ").trim();
 function calendarRows(live, calendarEvents, weekYmds) {
   const rows = [];
-  const add = (j, raw, label, who) => { const d = toDateAny(raw); if (!d) return; const di = weekYmds.indexOf(ymd(d)); if (di >= 0) rows.push({ di, label, name: j.name, who: who || "" }); };
+  const add = (j, raw, label, who, ambiguous) => { const d = toDateAny(raw); if (!d) return; const di = weekYmds.indexOf(ymd(d)); if (di >= 0) rows.push({ di, label, name: j.name, who: who || "", ambiguous: !!ambiguous }); };
   live.forEach(j => {
     const rs = effStatus(j, "rough"), fs = effStatus(j, "finish");
     const lastAttempt = (l) => arr(l).map(a => toDateAny(a && a.date)).filter(Boolean).sort((a, b) => b - a)[0] || null;
@@ -264,18 +286,18 @@ function calendarRows(live, calendarEvents, weekYmds) {
   const names = live.map(j => { const n = normName(j.name).split(" ").filter(Boolean); const keys = [];
     if (n[0] && n[0].length >= 5 && !/^\d+$/.test(n[0])) keys.push(n[0]); if (n.length >= 2) keys.push(n.slice(0, 2).join(" ")); return { j, keys }; }).filter(x => x.keys.length);
   arr(calendarEvents).forEach(ev => {
-    if (!ev || !ev.start) return;
+    if (!ev || !ev.start || ev.status === "cancelled") return;
     const raw = ev.start.dateTime || ev.start.date; const d = toDateAny(raw); if (!d) return;
     const title = normName(ev.summary);
-    const hit = names.find(x => x.keys.some(k => new RegExp(`(^| )${k}( |$)`).test(title))); if (!hit) return;
+    const hits = names.filter(x => x.keys.some(k => new RegExp(`(^| )${k}( |$)`).test(title))); if (!hits.length) return;
     const who = arr(ev.attendees).map(a => String((a && a.email) || "").split("@")[0]).filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(", ");
-    add(hit.j, raw, /walk/i.test(ev.summary) ? "Site walk" : "Meeting", who);
+    hits.forEach(hit => add(hit.j, raw, /walk/i.test(ev.summary) ? "Site walk" : "Meeting", who, hits.length > 1));   // several jobs match → one row each, marked ambiguous
   });
   return rows.sort((a, b) => a.di - b.di || a.label.localeCompare(b.label));
 }
 
 // ── people: out, pending, bodies, new, capacity ──────────────────────────────
-const isRoster = (u) => !!u && u.active !== false && ["foreman", "lead", "crew"].includes(u.title || u.role || "");
+const isRoster = (u) => !!u && u.active !== false && ["foreman", "jrforeman", "lead", "crew"].includes(u.title || u.role || "");
 function overlapDays(startRaw, endRaw, weekDays) {
   const s = toDateAny(startRaw), e = toDateAny(endRaw || startRaw); if (!s || !e) return [];
   return weekDays.map((d, i) => (ymd(d) >= ymd(s) && ymd(d) <= ymd(e)) ? i : -1).filter(i => i >= 0);
@@ -286,7 +308,7 @@ function peopleRows({ users, pto, timeOffRequests, needs, prevUserIds, idx, week
     return { name: r.name, range: s ? `${fmtShort(s)}${e && ymd(e) !== ymd(s) ? `–${fmtShort(e)}` : ""}` : "", requestedDays: q ? daysBetween(today, q) : null }; });
   const bodies = arr(needs).filter(n => n && n.kind === "bodies" && n.status !== "done" && !n.voided).map(n => ({ text: clip(stripHtml(n.text || `${n.count || "some"} bodies`), 120), job: n.jobName || "", by: String(n.createdBy || "").trim(), ageDays: toDateAny(n.createdAt) ? daysBetween(today, toDateAny(n.createdAt)) : null }));
   const prev = new Set(arr(prevUserIds));
-  const newUsers = prevUserIds == null ? [] : arr(users).filter(u => u && u.active !== false && !prev.has(u.id || u.name)).map(u => ({ name: u.name, title: u.title || u.role || "" }));
+  const newUsers = !arr(prevUserIds).length ? [] : arr(users).filter(u => u && u.active !== false && !prev.has(u.id || u.name)).map(u => ({ name: u.name, title: u.title || u.role || "" }));
   const roster = arr(users).filter(isRoster);
   const capacity = weekDays.map((d, di) => {
     const outToday = new Set(out.filter(o => o.dis.includes(di)).map(o => personKey(o.name)));
