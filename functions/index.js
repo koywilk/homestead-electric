@@ -5003,6 +5003,153 @@ exports.sendTestFridayPacket = functions
   });
 
 // ─────────────────────────────────────────────────────────────
+// SCHEDULED — Friday 6:00am Mountain Time
+// Weekly Strategy/Scheduling Meeting pre-fill — writes this week's doc
+// "Friday Strategy Prep — <date>" to the packet Drive folder, styled like a Docs
+// section so Koy pastes its body into Josh's running notes doc (Koy, 2026-10-15:
+// "lets just have it on its own doc, ill copy and paste each week to the meeting
+// doc"). Content is the PURE builder ./strategyPrep.js so scripts/strategyprep-dryrun.js
+// renders the identical doc as a PREVIEW for sign-off. Replaces fridayPacket
+// (spec docs/superpowers/specs/2026-10-15-friday-strategy-prep-design.md).
+// Reads jobs/needs/settings/agentFindings, Simpro schedules + totals, Koy's
+// calendar (PLAN_INTAKE_GOOGLE_OAUTH, same as the plan-intake watcher), Josh's
+// doc read-only (carry-forward); writes ONE new doc + ONE additive merge to
+// settings/strategyPrep.
+// ─────────────────────────────────────────────────────────────
+const STRATEGY_NOTES_DOC_ID = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";   // Josh's notes doc — READ ONLY here
+const strategyLib = require("./strategyPrep.js");
+
+async function runStrategyPrep({ testRun = false } = {}) {
+  const now = new Date();
+  const w = strategyLib.weekOf(now);
+  const windowStart = w.weekYmds[0], windowEnd = w.weekYmds[4];
+  const inputErrors = [];
+
+  // 1 · Firestore reads (jobs/needs wrapped {data}; settings docs not wrapped).
+  const [snap, needSnap, upSnap, planSnap, ptoSnap, toSnap, stateSnap, findSnap, users] = await Promise.all([
+    db.collection("jobs").get(), db.collection("needs").get(), db.doc("settings/upcoming_jobs").get(),
+    db.doc(`settings/schedule_${w.weekYmds[0]}`).get(), db.doc("settings/crewPTO").get(), db.doc("settings/timeOffRequests").get(),
+    db.doc("settings/strategyPrep").get(), db.collection("agentFindings").where("day", ">=", strategyLib.ymd(strategyLib.addDays(w.today, -7))).get().catch(e => { inputErrors.push(`agentFindings: ${e.message}`); return { docs: [] }; }),
+    getUsers(),
+  ]);
+  const unwrap = (d) => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; };
+  const jobs = snap.docs.map(unwrap), needs = needSnap.docs.map(unwrap);
+  const upcoming = upSnap.exists ? (upSnap.data().items || upSnap.data().list || []) : [];
+  const plannerDoc = planSnap.exists ? planSnap.data() : null;
+  const pto = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+  const timeOffRequests = toSnap.exists ? (toSnap.data().list || []) : [];
+  const prevState = stateSnap.exists ? stateSnap.data() : null;
+  const agentFindings = findSnap.docs.map(d => d.data());
+
+  // 2 · Simpro schedules for next week — between() filter (verified 2026-10-15), paged just in case.
+  let scheduleEntries = [], simproOk = true;
+  try {
+    for (let page = 1; page <= 10; page++) {
+      const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}&Date=between(${windowStart},${windowEnd})&columns=ID,Type,Date,Staff,Project`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+      if (!resp.ok) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule page failed", { page, status: resp.status }); break; }
+      const batch = await resp.json();
+      if (!Array.isArray(batch)) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule non-array"); break; }
+      scheduleEntries.push(...batch);
+      if (batch.length < 250) break;
+    }
+  } catch (e) { simproOk = false; functions.logger.warn("strategyPrep simpro schedule fetch error", { error: e.message }); }
+  if (!simproOk) scheduleEntries = [];
+
+  // 3 · Simpro totals for ready-to-invoice + finishing jobs (cap 50, concurrency 5). Parsing mirrors getSimproJobFinancials.
+  const simproTotalsById = {};
+  try {
+    const wanted = strategyLib.collectSimproCandidates(jobs);
+    for (let i = 0; i < wanted.length; i += 5) {
+      await Promise.all(wanted.slice(i, i + 5).map(async (sn) => {
+        try {
+          const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+          if (!resp.ok) return;
+          const results = await resp.json(); const sj = Array.isArray(results) ? results[0] : null; if (!sj) return;
+          const t = sj.Totals || {}, actual = t.NettMargin?.Actual ?? null, estimate = t.NettMargin?.Estimate ?? null, hasReal = actual !== null && actual !== 100, top = sj.Total || {};
+          simproTotalsById[sn] = { total: typeof top.IncTax === "number" ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null), margin: hasReal ? actual : estimate, isEstimate: !hasReal };
+        } catch (e) { /* cache fallback */ }
+      }));
+    }
+  } catch (e) { functions.logger.warn("strategyPrep simpro totals error", { error: e.message }); }
+
+  // 4 · Koy's calendar next week (read as Koy via the plan-intake OAuth secret). Missing secret ⇒ no calendar rows.
+  let calendarEvents = [];
+  try {
+    const raw = process.env.PLAN_INTAKE_GOOGLE_OAUTH; if (!raw) throw new Error("PLAN_INTAKE_GOOGLE_OAUTH not set");
+    const o = JSON.parse(raw); const auth = new google.auth.OAuth2(o.client_id, o.client_secret); auth.setCredentials({ refresh_token: o.refresh_token });
+    const cal = google.calendar({ version: "v3", auth });
+    const r = await cal.events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${windowStart}T00:00:00-06:00`, timeMax: `${windowEnd}T23:59:59-06:00`, singleEvents: true, maxResults: 250 });
+    calendarEvents = (r.data && r.data.items) || [];
+  } catch (e) { inputErrors.push(`calendar: ${e.message}`); functions.logger.warn("strategyPrep calendar read failed", { error: e.message }); }
+
+  // 5 · Josh's notes doc, READ ONLY, for carry-forward. 403 until shared with the service account as Viewer ⇒ section degrades.
+  let notesDoc = null;
+  try {
+    const roAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
+    notesDoc = (await google.docs({ version: "v1", auth: roAuth }).documents.get({ documentId: STRATEGY_NOTES_DOC_ID })).data || null;
+  } catch (e) { inputErrors.push(`notes doc read: ${e.message.slice(0, 80)}`); functions.logger.warn("strategyPrep notes doc read failed", { error: e.message }); }
+
+  // 6 · Build (pure).
+  const model = strategyLib.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now });
+  const lines = strategyLib.renderLines(model);
+  if (inputErrors.length) lines.splice(1, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });
+  const docTitle = `${testRun ? "TEST — " : ""}${model.heading}`;
+
+  // 7 · Create the week's doc in the packet folder and fill it with the Docs API (styled, pastes clean).
+  //     If styling fails, fall back to an HTML-converted Drive doc so the meeting still has one.
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/documents"] });
+  const drive = google.drive({ version: "v3", auth }), docs = google.docs({ version: "v1", auth });
+  let docId = "", docLink = "", fallback = false;
+  try {
+    const created = await drive.files.create({ requestBody: { name: docTitle, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, fields: "id, webViewLink", supportsAllDrives: true });
+    docId = created.data.id; docLink = created.data.webViewLink || `https://docs.google.com/document/d/${docId}/edit`;
+    await docs.documents.batchUpdate({ documentId: docId, requestBody: { requests: strategyLib.docsRequests(lines, 1) } });
+  } catch (e) {
+    functions.logger.error("strategyPrep doc create/fill failed", { error: e.message, docId });
+    try {
+      const esc = strategyLib.esc;
+      const html = `<div style="font-family:Arial,sans-serif;font-size:13px">${lines.map(l => l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : (l.kind === "bullet" || l.kind === "check") ? `<li>${esc(l.text) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`).join("")}</div>`;
+      const created = await drive.files.create({ requestBody: { name: `${docTitle} (fallback)`, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, media: { mimeType: "text/html", body: html }, fields: "id, webViewLink", supportsAllDrives: true });
+      docId = created.data.id; docLink = created.data.webViewLink || `https://docs.google.com/document/d/${docId}/edit`; fallback = true;
+      await sendToName("Koy", { title: "Friday prep: plain-text fallback", body: `${e.message.slice(0, 100)} — unstyled doc in Drive`, url: docLink });
+    } catch (e2) {
+      functions.logger.error("strategyPrep fallback failed", { error: e2.message });
+      await sendToName("Koy", { title: "Friday prep failed", body: e.message.slice(0, 120) });
+      return { ok: false, error: e.message };
+    }
+  }
+
+  // 8 · State (real runs only; additive merge).
+  if (!testRun && model.nextState) {
+    try { await db.doc("settings/strategyPrep").set({ ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docId, docLink }, ...((prevState && prevState.history) || [])].slice(0, 26) }, { merge: true }); }
+    catch (e) { functions.logger.warn("strategyPrep state write failed", { error: e.message }); }
+  }
+
+  // 9 · Push: headline line 1, tap opens the doc. Test runs → Koy only.
+  const notif = { title: "Friday prep", body: (model.headline[0] || `${docTitle} is ready`).slice(0, 180), url: docLink };
+  let recipients = [];
+  if (testRun) { recipients = ["Koy (test)"]; await sendToName("Koy", notif); }
+  else { const resolved = strategyLib.resolveRecipients(users); recipients = resolved.map(r => `${r.user.name} (${r.reason})`); await Promise.all(resolved.map(r => deliverIfWanted(r.user, "friday_packet", notif))); }
+
+  functions.logger.info("strategyPrep done", { docId, docLink, testRun, fallback, recipients, inputErrors, ...model.counts });
+  return { ok: true, docId, docLink, fallback, recipients, counts: model.counts, inputErrors };
+}
+
+exports.strategyPrep = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
+  .pubsub.schedule("0 6 * * 5")
+  .timeZone(TZ)
+  .onRun(async () => { await runStrategyPrep(); return null; });
+
+// Manual test: a full real run that writes a "TEST — …" doc, pushes Koy only, and does NOT advance state.
+exports.sendTestStrategyPrep = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    return await runStrategyPrep({ testRun: true });
+  });
+
+// ─────────────────────────────────────────────────────────────
 // SCHEDULED — Tuesday 6:00am Mountain Time
 // Lead Meeting Prep — a pre-filled sheet (Rough / Finish / Upcoming / crew out /
 // inspection highlights / what shipped / last week's action items) for the
