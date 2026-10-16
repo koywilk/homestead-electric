@@ -277,5 +277,40 @@ function fixture(over = {}) {
   }
 }
 
+// ── Task 3: blocked ──────────────────────────────────────────────────────────
+{
+  const f = fixture({
+    needs: [
+      { id: "n1", kind: "need", text: "Updated pantry redlines", jobName: "Oak Hill 5 - Alpine", jobId: "OAK", createdBy: "Louis Hoffman", createdAt: "2026-10-05T15:00:00Z", status: "open", assignedTo: "Koy Wilkinson" },
+      { id: "n2", kind: "need", text: "Fresh one", jobName: "Oak Hill 5 - Alpine", jobId: "OAK", createdBy: "Louis Hoffman", createdAt: "2026-10-14T15:00:00Z", status: "open", assignedTo: "Koy Wilkinson" },   // < 5 days → not a block yet
+      { id: "n3", kind: "task", text: "Pick up spider box", createdBy: "Koy Wilkinson", createdAt: "2026-09-20T15:00:00Z", status: "open", assignedTo: "Keegan Wilkinson" },           // field-assigned → not "us"
+      { id: "n4", kind: "need", text: "Old done", jobId: "OAK", createdAt: "2026-09-01T15:00:00Z", status: "done", assignedTo: "Koy Wilkinson" },
+    ],
+  });
+  f.jobs.push(
+    { id: "BUL", name: "Bulowski", simproNo: "866", foreman: "Colby Fogh", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%",
+      changeOrders: [{ coStatus: "approved", createdAt: "2026-05-11T10:00:00Z", desc: "More Dimmers" }, { coStatus: "approved", createdAt: "2026-05-11T10:00:00Z", desc: "Tape light" }, { coStatus: "completed", createdAt: "2026-04-01T10:00:00Z" }] },
+    { id: "COW", name: "Cowdrey", simproNo: "929", foreman: "Keegan Wilkinson", roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%",
+      returnTrips: [{ rtStatus: "needs", createdAt: "2026-06-17T10:00:00Z", scope: "Floor outlets" }, { rtStatus: "complete", signedOff: true }] },
+    { id: "ASH", name: "Ashcraft", simproNo: "1291", foreman: "Vasa Mataafa", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%",
+      finishQuestions: { main: Array.from({ length: 10 }, (_, i) => ({ question: `Q${i}`, answer: "", done: false, addedAt: "2026-10-02T10:00:00Z" })) }, flagged: true, flagNote: "Need an update from Louis" },
+  );
+  const live = S.liveJobs(f.jobs), w = S.weekOf(NOW);
+  const b = S.blockedRows({ live, needs: f.needs, users: f.users, prevBlockerKeys: ["L208:GC / builder", "ROSE:On hold", "HIDE:Material", "MIC:Material"], today: w.today });
+  const g = (n) => (b.groups.find(x => x.name === n) || { rows: [] }).rows;
+  t("blocked: Lot 208 under GC / builder (pocket door framing), one line, age 59d from the oldest open question (8/18)", (() => { const r = g("GC / builder").find(x => x.jobId === "L208"); return r && r.ageDays === 59 && /ufer clamp|Pocket door/.test(r.what); })(), JSON.stringify(g("GC / builder")));
+  t("blocked: Lot 208 appears in ONE group only", b.groups.filter(x => x.rows.some(r => r.jobId === "L208")).length === 1, JSON.stringify(b.groups.map(x => [x.name, x.rows.map(r => r.jobId)])));
+  t("blocked: Hideout under Material (cabinetry → GC) — highest-count bucket wins: 1 Material vs 1 GC → first by bucket order = GC / builder", g("GC / builder").some(r => r.jobId === "HIDE") || g("Material").some(r => r.jobId === "HIDE"));
+  t("blocked: Ashcraft under Homeowner / designer with 10 questions since 10/2", (() => { const r = g("Homeowner / designer").find(x => x.jobId === "ASH"); return r && /10 questions/.test(r.what) && r.ageDays === 14; })(), JSON.stringify(g("Homeowner / designer")));
+  t("blocked: Rose under On hold", g("On hold").some(r => r.jobId === "ROSE"));
+  t("blocked: Us = Oak Hill need open 11d (fresh one and field-assigned task excluded); flagged Ashcraft counted under Us too", (() => { const us = g("Us (office owes the field)"); return us.some(r => r.jobId === "OAK" && /pantry redlines/.test(r.what) && r.ageDays === 11) && !us.some(r => /Fresh one|spider/.test(r.what)) && us.some(r => r.jobId === "ASH" && /flagged/.test(r.what)); })(), JSON.stringify(g("Us (office owes the field)")));
+  t("blocked: sold work — Bulowski 2 approved COs 158d, Cowdrey RT 121d", (() => { const s = g("Sold work not on the calendar"); const bu = s.find(r => r.jobId === "BUL"), co = s.find(r => r.jobId === "COW"); return bu && /2 approved COs/.test(bu.what) && bu.ageDays === 158 && co && /return trip/.test(co.what) && co.ageDays === 121; })(), JSON.stringify(g("Sold work not on the calendar")));
+  t("blocked: cleared = Micek Material (key gone), not Lot 208 (still blocked, group may differ → still counted as moved not cleared)", eq(b.cleared.map(c => c.name), ["Micek Residence"]), JSON.stringify(b.cleared));
+  t("blocked: keys cover every printed row; total + byGroup consistent", b.keys.length === b.total && Object.values(b.byGroup).reduce((a, n) => a + n, 0) === b.total);
+  t("blocked: firstRun false with prev keys; true with null", b.firstRun === false && S.blockedRows({ live, needs: [], users: f.users, prevBlockerKeys: null, today: w.today }).firstRun === true);
+  const big = S.blockedRows({ live: Array.from({ length: 14 }, (_, i) => ({ id: "H" + i, name: "Hold " + i, roughStatus: "waiting" })), needs: [], users: f.users, prevBlockerKeys: [], today: w.today });
+  t("blocked: cap 10 per group + more", big.groups[0].rows.length === 10 && big.groups[0].more === 4);
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");

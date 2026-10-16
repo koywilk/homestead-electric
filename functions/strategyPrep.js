@@ -335,6 +335,70 @@ function conflictRows(idx, pto, weekYmds) {
   return rows;
 }
 
+// ── blocked: one line per job, grouped by who we wait on ────────────────────
+const GROUP_ORDER = ["GC / builder", "Homeowner / designer", "Material", "Inspection", "Other trades", "On hold", "Us (office owes the field)", "Sold work not on the calendar", "Other", "Unspecified"];
+const OFFICE_NAMES = /^(koy|josh|jeromy|justin|brady)\b/i;
+const CO_OPEN_APPROVED = (co) => co && String(co.coStatus || "").toLowerCase() === "approved" && !co.scheduledDate;
+function blockedRows({ live, needs, users, prevBlockerKeys, today }) {
+  const firstRun = !Array.isArray(prevBlockerKeys);
+  const prev = new Set(firstRun ? [] : prevBlockerKeys);
+  const age = (d) => d ? Math.max(0, daysBetween(today, d)) : null;
+  const oldest = (dates) => { const ds = dates.filter(Boolean).sort((a, b) => a - b); return ds.length ? ds[0] : null; };
+  const perJob = new Map(); // jobId → [{group, what, who, since}]
+  const push = (j, group, what, since, who) => { if (!perJob.has(j.id)) perJob.set(j.id, []); perJob.get(j.id).push({ group, what, since: since || null, who: who || "" }); };
+  live.forEach(j => {
+    const waits = waitingItems(j), qs = openQuestions(j);
+    const byBucket = {};
+    waits.forEach(w => { const b = waitBucket(w.waitingOn); (byBucket[b] = byBucket[b] || []).push(w); });
+    Object.entries(byBucket).forEach(([b, list]) => push(j, b, `${plural(list.length, "waiting-on item")}: ${list.slice(0, 2).map(w => clip(w.waitingOn || w.text, 40)).join(", ")}`, oldest(list.map(w => w.since))));
+    if (qs.length) { const b = qs.map(q => waitBucket(q.text)).find(x => x !== "Other" && x !== "Unspecified" && x !== "Homeowner / designer") || "Homeowner / designer"; push(j, b, `${plural(qs.length, "question")} unanswered since ${fmtMD(oldest(qs.map(q => q.since)) || today)}`, oldest(qs.map(q => q.since))); }
+    [["rough", "Rough"], ["finish", "Finish"]].forEach(([p, L]) => { if (effStatus(j, p) === "waiting") push(j, "On hold", `${L} on hold`, toDateAny(j[p + "StatusDate"])); });
+    if (j.flagged) push(j, "Us (office owes the field)", `flagged${j.flagNote ? ` — ${clip(stripHtml(j.flagNote), 60)}` : ""}`, toDateAny(j.flaggedAt));
+    const cos = arr(j.changeOrders).filter(CO_OPEN_APPROVED);
+    if (cos.length) push(j, "Sold work not on the calendar", `${plural(cos.length, "approved CO")}, no date`, oldest(cos.map(c => toDateAny(c.createdAt) || toDateAny(c.id))));
+    const rts = arr(j.returnTrips).filter(rt => rt && !rt.signedOff && rt.rtStatus === "needs" && !toDateAny(rt.rtStatusDate) && !toDateAny(rt.scheduledDate));
+    if (rts.length) push(j, "Sold work not on the calendar", `${plural(rts.length, "return trip")} with no date${rts[0].scope ? ` — ${clip(stripHtml(rts[0].scope), 40)}` : ""}`, oldest(rts.map(r => toDateAny(r.createdAt) || toDateAny(r.date))));
+  });
+  const liveById = new Map(live.map(j => [j.id, j]));
+  arr(needs).forEach(n => {
+    if (!n || n.status === "done" || n.voided || n.kind === "bodies") return;
+    if (!OFFICE_NAMES.test(String(n.assignedTo || ""))) return;
+    const c = toDateAny(n.createdAt); if (!c || daysBetween(today, c) < 5) return;
+    const j = liveById.get(n.jobId) || live.find(x => x.name === n.jobName);
+    const target = j || { id: `need:${n.id}`, name: n.jobName || "(no job)" };
+    push(target, "Us (office owes the field)", `${clip(stripHtml(n.text), 70)} (${String(n.createdBy || "").split(" ")[0] || "crew"})`, c, String(n.assignedTo || "").split(" ")[0]);
+  });
+  // One line per job per audience: among the "waiting on someone else" groups the highest item count wins
+  // (ties → GROUP_ORDER). "Us" and "Sold work" are their own audiences and additive — a job can sit in one
+  // waiting group AND under Us AND under Sold work, never twice within the waiting groups.
+  const US = "Us (office owes the field)", SOLD = "Sold work not on the calendar";
+  const groups = new Map(GROUP_ORDER.map(g => [g, []])), keys = [], byGroup = {};
+  perJob.forEach((items, jobId) => {
+    const jobName = (liveById.get(jobId) || {}).name || (arr(needs).find(n => `need:${n.id}` === jobId) || {}).jobName || jobId;
+    const sold = items.filter(i => i.group === SOLD), us = items.filter(i => i.group === US), rest = items.filter(i => i.group !== SOLD && i.group !== US);
+    const emit = (list, groupName) => {
+      if (!list.length) return;
+      const sinceAll = oldest(list.map(i => i.since));
+      const what = list.map(i => i.what).join(" · ");
+      groups.get(groupName).push({ jobId, name: jobName, what: clip(what, 140), who: list.map(i => i.who).filter(Boolean)[0] || "", ageDays: age(sinceAll), more: Math.max(0, list.length - 2), _since: sinceAll ? sinceAll.getTime() : Infinity });
+      keys.push(`${jobId}:${groupName}`); byGroup[groupName] = (byGroup[groupName] || 0) + 1;
+    };
+    if (rest.length) {
+      const count = {}; rest.forEach(i => { count[i.group] = (count[i.group] || 0) + 1; });
+      const winner = Object.keys(count).sort((a, b) => count[b] - count[a] || GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b))[0];
+      emit(rest, winner);
+    }
+    emit(us, US);
+    emit(sold, SOLD);
+  });
+  const outGroups = [];
+  groups.forEach((rows, name) => { if (!rows.length) return; rows.sort((a, b) => a._since - b._since || a.name.localeCompare(b.name)); rows.forEach(r => delete r._since);
+    outGroups.push({ name, rows: rows.slice(0, CAPS.blockedPerGroup), more: Math.max(0, rows.length - CAPS.blockedPerGroup) }); });
+  const nowKeys = new Set(keys), nowJobs = new Set(keys.map(k => k.split(":")[0]));
+  const cleared = firstRun ? [] : [...prev].filter(k => !nowKeys.has(k) && !nowJobs.has(k.split(":")[0])).map(k => { const [jobId, group] = [k.split(":")[0], k.split(":").slice(1).join(":")]; const j = liveById.get(jobId); return { name: j ? j.name : jobId, group }; }).filter(c => c.name && c.name !== c.group);
+  return { groups: outGroups, cleared, keys, total: keys.length, byGroup, firstRun };
+}
+
 module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
   snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests,
-  dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays };
+  dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays, blockedRows, GROUP_ORDER };
