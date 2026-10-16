@@ -334,5 +334,58 @@ function fixture(over = {}) {
   t("blocked: empty live + empty needs → empty result, no throw", eq(empty.groups, []) && eq(empty.cleared, []) && eq(empty.keys, []) && empty.total === 0, JSON.stringify(empty));
 }
 
+// ── Task 4: buildModel — coming, money, qc, last week, headline, state ───────
+{
+  const f = fixture({
+    upcoming: [
+      { id: "u1", name: "#3019 - Chapman Residence", customer: "E Builders", projectedStart: "10/27/2026", startConfirmed: false, sales: "Josh Cloward", lastFollowUp: "10/1/2026", notes: "framing" },
+      { id: "u2", name: "Forth", customer: "", projectedStart: "11/17/2026", startConfirmed: true },
+      { id: "u3", name: "Peterson", customer: "", projectedStart: "", notes: "waiting on Heber P&L drawings" },
+      { id: "u4", name: "Oak Hill 5 - Alpine", projectedStart: "10/26/2026" },   // already a live job → not listed
+    ],
+    agentFindings: [
+      { type: "folder_created", summary: "Hemsley plans filed", createdAt: "2026-10-13T10:00:00Z", day: "2026-10-13" },
+      { type: "unmatched_plan", summary: "Plan not matched: Robert Brown", createdAt: "2026-10-14T10:00:00Z", day: "2026-10-14" },
+      { type: "folder_created", summary: "Old", createdAt: "2026-10-01T10:00:00Z", day: "2026-10-01" },
+    ],
+    simproTotalsById: { "1419": { total: 53000, margin: 37.4, isEstimate: false }, "1302": { total: 0, margin: -5.0, isEstimate: false } },
+    prevState: { blockerKeys: [], marginByJob: { HIDE: 1.8 }, dates: {}, userIds: [], weeks: [{ ymd: "2026-10-09", counts: { rtCreated: 2 } }, { ymd: "2026-10-02", counts: { rtCreated: 3 } }] },
+  });
+  f.jobs.push(
+    { id: "WADE", name: "Wade Residence", simproNo: "694", foreman: "Colby Fogh", roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%", simproMargin: -6.0,
+      changeOrders: [{ coStatus: "approved", createdAt: "2026-10-01T10:00:00Z", coStatusDate: "10/13/2026", quoteNumber: "3329", desc: "Car lift" }] },
+    { id: "WEBB", name: "Webb", simproNo: "1304", foreman: "Gage Lund", roughStatus: "complete", finishStatus: "inprogress", finishStage: "98%",
+      finalInspectionAttempts: [{ date: "2026-10-14", result: "pass" }], finishPunch: { main: { general: [{ text: "a", done: false }, { text: "b", done: true, checkedAtTs: "2026-10-13T12:00:00Z" }] } } },
+    { id: "WOOD2", name: "Kweller", simproNo: "1107", finishStatus: "complete", finishStage: "100%", finishStatusDate: "10/13/2026" },
+    { id: "PREP", name: "Cougar Moon Lot 84 - Kamas", simproNo: "1402", foreman: "Daegan Smith", roughStatus: "complete", finishStatus: "date_confirmed", finishProjectedStart: "11/2/2026", finishStartConfirmed: true, prepChecklist: { redlinePlans: true, cabinetPlans: true, applianceSpecs: true, plansUploaded: true, readyToHandOff: true },
+      returnTrips: [{ rtStatus: "needs", createdAt: "2026-10-12T10:00:00Z", scope: "new" }] },
+  );
+  const m = S.buildModel(f);
+  t("model: heading = the doc title", m.heading === "Friday Strategy Prep — Oct 16, 2026", m.heading);
+  t("model: preLine names the window", /Mon 10\/19 – Fri 10\/23/.test(m.preLine) && /6:00 AM/.test(m.preLine), m.preLine);
+  t("coming: Chapman week of 10/26, Cougar Moon (live, finish 11/2) week of 11/2, Forth week of 11/16; Peterson under no date; Oak Hill (live) excluded", (() => { const c = m.coming; const labels = c.weeks.map(w => `${w.label}:${w.rows.map(r => r.name).join(",")}`); return eq(labels, ["Week of 10/26:#3019 - Chapman Residence", "Week of 11/2:Cougar Moon Lot 84 - Kamas", "Week of 11/16:Forth"]) && c.noDate.length === 1 && c.noDate[0].name === "Peterson" && !JSON.stringify(c).includes("Oak Hill"); })(), JSON.stringify(m.coming.weeks));
+  t("coming: Cougar Moon in prep inside 21 days? (11/2 is 17 days) → yes, 5/5", m.coming.prep.length === 1 && m.coming.prep[0].name.startsWith("Cougar Moon") && m.coming.prep[0].done === 5, JSON.stringify(m.coming.prep));
+  t("coming: findings last 7 days = 2, oldest dropped", m.coming.findings.length === 2);
+  t("coming: freeing = Hideout 95, Wade 95, Webb 98, Lot 208 RTI; starts in 2 weeks = Namjoshi, Riverton + Chapman 10/27", m.coming.freeing.length === 4 && m.coming.startsSoon === 3, JSON.stringify([m.coming.freeing.map(x => x.name), m.coming.startsSoon]));
+  t("money: RTI = Lot 208 $53k idle 15d margin 37.4 (live wins)", (() => { const r = m.money.rti.rows[0]; return r && r.name.startsWith("Skyridge") && r.dollars === 53000 && r.idleDays === 15 && r.margin === 37.4 && r.flag === ""; })(), JSON.stringify(m.money.rti));
+  t("money: margin watch = finishing not finished, not RTI, not invoiced, not entangled → Wade -6 (cached), Webb none, Hideout excluded (invoiced), Temp power excluded", (() => { const names = m.money.margin.rows.map(r => r.name); return eq(names, ["Wade Residence"]) && m.money.margin.rows[0].margin === -6; })(), JSON.stringify(m.money.margin.rows));
+  t("money: movers need prev value; Hideout invoiced so not in watch → no movers", m.money.margin.movers.length === 0 && m.money.margin.firstRun === false);
+  t("money: approved this week = Wade #3329 (10/9), none dated", m.money.approved.rows.length === 1 && m.money.approved.rows[0].quote === "3329" && m.money.approved.undated === 1, JSON.stringify(m.money.approved));
+  t("qc: Lot 208 (needs, 3 punch → not small), Webb (final passed, no QC), Wade/Bulowski/Cowdrey at ≥90 without QC", (() => { const names = m.qc.rows.map(r => r.name); return names.includes("Skyridge Lot 208 - Mayflower") && names.includes("Webb") && names.includes("Wade Residence"); })(), JSON.stringify(m.qc.rows));
+  t("qc: small tag when open punch ≤ 3", (() => { const w = m.qc.rows.find(r => r.name === "Webb"); return w && w.small === true; })());
+  t("lastWeek: finished Kweller; inspections 1 passed; punch closed 1; approved COs 1", m.lastWeek.finished.includes("Kweller") && m.lastWeek.inspPassed === 1 && m.lastWeek.punchClosed === 1 && m.lastWeek.cosApproved === 1, JSON.stringify(m.lastWeek));
+  t("lastWeek: rt 4-week average from state weeks = 2.5", m.lastWeek.rtAvg4 === 2.5, String(m.lastWeek.rtAvg4));
+  t("headline: three lines, line 1 counts", m.headline.length === 3 && /jobs crewed/.test(m.headline[0]) && /nobody booked/.test(m.headline[0]) && /starts/.test(m.headline[0]), JSON.stringify(m.headline));
+  t("headline: line 3 money", /\$53k ready to bill on 1 job/.test(m.headline[2]), m.headline[2]);
+  t("nextState: blockerKeys, marginByJob, dates, userIds, weeks (cap 8), lastRunAt absent (orchestrator adds)", Array.isArray(m.nextState.blockerKeys) && m.nextState.marginByJob.WADE === -6 && m.nextState.dates["NAM:roughProjectedStart"] && m.nextState.userIds.length === f.users.length && m.nextState.weeks.length === 3 && m.nextState.weeks[0].ymd === "2026-10-16", JSON.stringify(Object.keys(m.nextState)));
+  t("counts: every §4.3 bucket counted + between", typeof m.counts.booked === "number" && typeof m.counts.between === "number");
+  const bad = S.buildModel({ ...f, jobs: null, scheduleEntries: "garbage", simproOk: false });
+  t("degrade: null jobs → every section error string, model still returned", typeof bad.schedule.error === "string" && typeof bad.blocked.error === "string" && Array.isArray(bad.headline));
+  const noSimpro = S.buildModel({ ...f, scheduleEntries: [], simproOk: false });
+  t("degrade: simproOk false flags schedule.simproOk false", noSimpro.schedule.simproOk === false);
+  t("recipients: admins + josh/brady/justin, never manager, deduped", (() => { const r = S.resolveRecipients([...f.users, { id: "jer", name: "Jeromy Cloward", access: "manager" }]); const n = r.map(x => x.user.name); return n.includes("Koy Wilkinson") && n.includes("Brady Nelson") && !n.includes("Jeromy Cloward") && new Set(n).size === n.length; })());
+  t("collectSimproCandidates: RTI + finishing, trimmed, cap", (() => { const c = S.collectSimproCandidates(f.jobs); return c.includes("1419") && c.includes("694") && !c.includes("1444") && c.every(s => s === s.trim()); })(), JSON.stringify(S.collectSimproCandidates(f.jobs)));
+}
+
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
 console.log("\nall strategy prep tests passed");

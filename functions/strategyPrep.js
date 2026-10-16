@@ -9,6 +9,9 @@
 "use strict";
 const { docsRequests } = require("./foremanMeetingPrep.js");
 
+// Task 5 replaces this stub with the real notes parser (declared with `function`, stub deleted).
+let parseNotesCarry = () => ({ error: false, fromLabel: "", rows: [] });
+
 const TZ = "America/Denver";
 const MARGIN_TARGET = 15;
 const CAPS = { carried: 20, booked: 15, calendar: 12, blockedPerGroup: 10, coming: 15, findings: 6, rti: 10, movers: 5, qc: 10, approved: 12 };
@@ -406,6 +409,148 @@ function blockedRows({ live, needs, users, prevBlockerKeys, today }) {
   return { groups: outGroups, cleared, keys, total: keys.length, byGroup, firstRun };
 }
 
+// ── coming up ────────────────────────────────────────────────────────────────
+const mondayOf = (d) => { const m = new Date(d); m.setDate(m.getDate() - ((m.getDay() + 6) % 7)); return startOfDay(m); };
+function comingRows({ live, upcoming, agentFindings, weekYmds, today, cls }) {
+  const liveNames = new Set(live.map(j => normName(j.name)));
+  const after = weekYmds[4];
+  const rows = [];
+  arr(upcoming).forEach(u => { if (!u || !(u.name || "").trim() || liveNames.has(normName(u.name))) return;
+    const d = toDateAny(u.projectedStart); const fu = toDateAny(u.lastFollowUp);
+    rows.push({ name: String(u.name).trim(), customer: u.customer || "", date: d, confirmed: !!u.startConfirmed, note: clip(stripHtml(u.notes), 60), followUpDays: fu ? daysBetween(today, fu) : null, sales: u.sales || "" }); });
+  live.forEach(j => { const s = ["rough", "finish"].map(p => { const st = effStatus(j, p); if (STARTED_ST.has(st) || pctOf(j, p) > 0) return null; const d = toDateAny(j[p + "ProjectedStart"]); return d && ymd(d) > after ? { p, d, c: !!j[p + "StartConfirmed"] || ["scheduled", "date_confirmed"].includes(st) } : null; }).filter(Boolean)[0];
+    if (s && !(s.p === "finish" && effStatus(j, "rough") !== "complete")) rows.push({ name: j.name, customer: j.customer || "", date: s.d, confirmed: s.c, note: `${s.p} start`, followUpDays: null, sales: "" }); });
+  const dated = rows.filter(r => r.date && ymd(r.date) > after).sort((a, b) => a.date - b.date);
+  const weeks = []; dated.forEach(r => { const wk = ymd(mondayOf(r.date)); let w = weeks.find(x => x.ymd === wk); if (!w) { w = { ymd: wk, label: `Week of ${fmtMD(toDateAny(wk))}`, rows: [] }; weeks.push(w); } w.rows.push(r); });
+  const noDate = rows.filter(r => !r.date);
+  // In prep: a start AFTER next week (next week's starts are already in §4.3) but inside 21 days, phase not started.
+  const prep = live.filter(j => { const d = toDateAny(j.roughProjectedStart) || toDateAny(j.finishProjectedStart); return d && ymd(d) > after && daysBetween(d, today) <= 21 && effStatus(j, "rough") !== "inprogress"; }).map(j => { const p = prepOf(j); return { name: j.name, done: p.done, missing: p.missing }; });
+  const cutoff = addDays(today, -7);
+  const findings = arr(agentFindings).filter(f => f && toDateAny(f.createdAt) && toDateAny(f.createdAt) >= cutoff).sort((a, b) => toDateAny(b.createdAt) - toDateAny(a.createdAt)).slice(0, CAPS.findings).map(f => ({ type: f.type, summary: clip(stripHtml(f.summary), 90) }));
+  const freeing = live.filter(j => (effStatus(j, "finish") === "inprogress" && pctOf(j, "finish") >= 90) || (j.readyToInvoice && !j.invoiceSent)).map(j => ({ name: j.name, foreman: hasForeman(j) ? j.foreman : "" }));
+  const twoWeeks = ymd(addDays(today, 14));
+  const startsSoon = cls.starts.length + dated.filter(r => ymd(r.date) <= twoWeeks).length;
+  return { error: false, weeks: weeks.slice(0, 6), noDate, prep, findings, freeing, startsSoon, quotes: null };
+}
+
+// ── money (the Friday Packet's engine, moved) ────────────────────────────────
+const isFinishingOpen = (j) => { const fs = effStatus(j, "finish"); return ((pctOf(j, "finish") > 0) || fs === "inprogress") && fs !== "complete" && fs !== "invoice" && !j.readyToInvoice && !j.invoiceSent && !SPECIAL_JOB.test(String(j.name || "")); };
+const isRti = (j) => !!j.readyToInvoice && !j.invoiceDismissed && !j.invoiceSent;
+function collectSimproCandidates(jobs, cap = 50) {
+  const live = liveJobs(jobs); const out = [], seen = new Set();
+  [...live.filter(isRti), ...live.filter(isFinishingOpen)].forEach(j => { const sn = snOf(j); if (!sn || seen.has(sn) || out.length >= cap) return; seen.add(sn); out.push(sn); });
+  return out;
+}
+function moneyRows({ live, simproTotalsById, prevMargin, today }) {
+  const totalsOf = (j) => (simproTotalsById || {})[snOf(j)] || null;
+  const marginOf = (j) => { const t = totalsOf(j); if (t && typeof t.margin === "number") return Math.round(t.margin * 10) / 10; return (typeof j.simproMargin === "number" && isFinite(j.simproMargin)) ? Math.round(j.simproMargin * 10) / 10 : null; };
+  const rti = live.filter(isRti).map(j => { const t = totalsOf(j), rd = toDateAny(j.readyToInvoiceDate), m = marginOf(j);
+    return { name: j.name, foreman: hasForeman(j) ? j.foreman : "", dollars: t && typeof t.total === "number" ? t.total : null, idleDays: rd ? Math.max(0, daysBetween(today, rd)) : null, margin: m, flag: m == null ? "" : m < 0 ? "negative margin, check Simpro costs" : m < MARGIN_TARGET ? `${Math.round((MARGIN_TARGET - m) * 10) / 10} pts under` : "" }; })
+    .sort((a, b) => (b.dollars || 0) - (a.dollars || 0) || (b.idleDays || 0) - (a.idleDays || 0));
+  const known = rti.filter(r => r.dollars != null);
+  const rows = live.filter(isFinishingOpen).map(j => ({ jobId: j.id, name: j.name, margin: marginOf(j), stage: `finish ${pctOf(j, "finish")}%` })).filter(r => r.margin != null).sort((a, b) => a.margin - b.margin);
+  const firstRun = !prevMargin || typeof prevMargin !== "object";
+  const movers = firstRun ? [] : rows.filter(r => typeof prevMargin[r.jobId] === "number" && Math.abs(r.margin - prevMargin[r.jobId]) >= 3).map(r => ({ name: r.name, from: prevMargin[r.jobId], to: r.margin, delta: Math.round((r.margin - prevMargin[r.jobId]) * 10) / 10 })).sort((a, b) => a.delta - b.delta).slice(0, CAPS.movers);
+  const weekAgo = addDays(today, -7);
+  const approved = []; live.forEach(j => arr(j.changeOrders).forEach(co => { if (!co || String(co.coStatus).toLowerCase() !== "approved") return; const d = toDateAny(co.coStatusSyncedAt) || toDateAny(co.coStatusDate); if (!d || d < weekAgo) return; approved.push({ name: j.name, quote: String(co.quoteNumber || "").trim(), desc: clip(stripHtml(co.desc || co.task), 50), dated: !!co.scheduledDate }); }));
+  const marginByJob = {}; rows.forEach(r => { marginByJob[r.jobId] = r.margin; });
+  return { error: false, rti: { rows: rti.slice(0, CAPS.rti), more: Math.max(0, rti.length - CAPS.rti), count: rti.length, total: known.reduce((s, r) => s + r.dollars, 0), knownCount: known.length },
+    margin: { median: median(rows.map(r => r.margin)), count: rows.length, underCount: rows.filter(r => r.margin < MARGIN_TARGET).length, rows: rows.slice(0, 15), movers, firstRun },
+    approved: { rows: approved.slice(0, CAPS.approved), count: approved.length, undated: approved.filter(a => !a.dated).length }, marginByJob };
+}
+
+// ── QC to schedule ───────────────────────────────────────────────────────────
+function qcRows({ live, today }) {
+  const weekAgo = addDays(today, -7);
+  const rows = live.map(j => {
+    const needs = j.qcStatus === "needs" || j.finishQcStatus === "needs";
+    const noQc = !j.qcStatus && !j.finishQcStatus;
+    const high = effStatus(j, "finish") === "inprogress" && pctOf(j, "finish") >= 90;
+    const passedFinal = arr(j.finalInspectionAttempts).some(a => a && a.result === "pass" && toDateAny(a.date) && toDateAny(a.date) >= weekAgo) && !["completed", "pass", "passed_items", "fixed"].includes(j.finishQcStatus || j.qcStatus);
+    if (!needs && !(noQc && high) && !passedFinal) return null;
+    const open = openPunchCount(j);
+    const since = toDateAny(j.finishQcStatus === "needs" ? j.finishQcStatusDate : j.qcStatusDate);
+    const why = needs ? "QC needs" : passedFinal ? "final passed, no QC yet" : `finish ${pctOf(j, "finish")}%, no QC status`;
+    return { name: j.name, foreman: hasForeman(j) ? j.foreman : "", why, since: since ? fmtMD(since) : "", openPunch: open, small: open <= 3 };
+  }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  return { error: false, rows: rows.slice(0, CAPS.qc), more: Math.max(0, rows.length - CAPS.qc) };
+}
+
+// ── last week ────────────────────────────────────────────────────────────────
+function lastWeekRows({ jobs, live, users, prevState, blocked, today }) {
+  const mon = mondayOf(today), inWin = (raw) => { const d = toDateAny(raw); return d && ymd(d) >= ymd(mon) && ymd(d) <= ymd(today); };
+  const all = arr(jobs).filter(j => j && j.name && j.type !== "quote" && !j.archived && !j.deleted);
+  const finished = all.filter(j => (j.finishStatus === "complete" || parseInt(j.finishStage) === 100) && inWin(j.finishStatusDate)).map(j => j.name);
+  let inspPassed = 0, inspFailed = 0, cosCreated = 0, cosApproved = 0, cosConverted = 0, rtCreated = 0, punchClosed = 0, qAsked = 0, qAnswered = 0;
+  all.forEach(j => {
+    ["roughInspectionAttempts", "finalInspectionAttempts"].forEach(k => arr(j[k]).forEach(a => { if (a && inWin(a.date)) { if (a.result === "fail") inspFailed++; else if (a.result) inspPassed++; } }));
+    arr(j.changeOrders).forEach(co => { if (!co) return; if (inWin(co.createdAt)) cosCreated++; const sd = co.coStatusSyncedAt || co.coStatusDate; if (inWin(sd) && String(co.coStatus).toLowerCase() === "approved") cosApproved++; if (inWin(sd) && String(co.coStatus).toLowerCase() === "converted") cosConverted++; });
+    arr(j.returnTrips).forEach(rt => { if (rt && inWin(rt.createdAt || rt.date)) rtCreated++; });
+    ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(j[k], i => { if (i.done && !i.voided && inWin(i.checkedAtTs || i.checkedAt)) punchClosed++; }));
+    ["roughQuestions", "finishQuestions"].forEach(k => { const qs = j[k]; if (!qs || typeof qs !== "object") return; Object.values(qs).forEach(l => arr(l).forEach(q => { if (!q) return; if (inWin(q.addedAt)) qAsked++; if (inWin(q.answeredAt)) qAnswered++; })); });
+  });
+  const weeks = arr(prevState && prevState.weeks);
+  const rts = weeks.slice(-4).map(w => w && w.counts && w.counts.rtCreated).filter(n => typeof n === "number");
+  const rtAvg4 = rts.length ? Math.round(rts.reduce((a, n) => a + n, 0) / rts.length * 10) / 10 : null;
+  const counts = { finished: finished.length, inspPassed, inspFailed, cosCreated, cosApproved, cosConverted, rtCreated, punchClosed, qAsked, qAnswered, blocksCleared: blocked.cleared.length };
+  return { error: false, finished, inspPassed, inspFailed, cosCreated, cosApproved, cosConverted, rtCreated, rtAvg4, punchClosed, qAsked, qAnswered, cleared: blocked.cleared, counts };
+}
+
+// ── recipients ───────────────────────────────────────────────────────────────
+const EXTRA_RECIPIENTS = ["josh", "brady", "justin"];
+function resolveRecipients(users) {
+  const accessOf = (u) => u.access || ({ admin: "admin", justin: "admin", jeromy: "manager", foreman: "standard" }[u.role] || "limited");
+  const out = [], seen = new Set();
+  arr(users).forEach(u => { if (!u || u.active === false) return; const n = String(u.name || "").toLowerCase().trim(); const isAdmin = accessOf(u) === "admin", isExtra = EXTRA_RECIPIENTS.some(x => n === x || n.startsWith(x + " "));
+    if (!isAdmin && !isExtra) return; const id = u.id || u.name; if (!id || seen.has(id)) return; seen.add(id); out.push({ user: u, reason: isAdmin ? "admin" : "added" }); });
+  return out;
+}
+
+// ── model ────────────────────────────────────────────────────────────────────
+function buildModel(inputs) {
+  const I = inputs || {}; const now = I.now instanceof Date ? I.now : new Date();
+  const w = weekOf(now), { today, meeting, weekYmds, weekDays } = w;
+  const ERR = (e) => ({ error: `Section unavailable this week: ${(e && e.message) || e}` });
+  const m = {
+    heading: `Friday Strategy Prep — ${meeting.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,   // the doc title; the body carries no heading (it is pasted under Google's own)
+    preLine: `pre-filled Fri 6:00 AM MT from the crew app · next week Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])} · booked = Simpro + planner as of 6:00 AM · details live in the app`,
+    weekLabel: `Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])}`, meetingYmd: ymd(meeting), todayYmd: ymd(today),
+    carried: { error: false, fromLabel: "", rows: [] }, headline: [], schedule: { error: true }, blocked: { error: true }, coming: { error: true }, money: { error: true }, qc: { error: true }, lastWeek: { error: true }, counts: {}, nextState: null,
+  };
+  let live = [];
+  try { if (!Array.isArray(I.jobs)) throw new Error("jobs missing"); live = liveJobs(I.jobs); } catch (e) { const err = ERR(e); m.schedule = err; m.blocked = err; m.coming = err; m.money = err; m.qc = err; m.lastWeek = err; return m; }
+  const prev = I.prevState && typeof I.prevState === "object" ? I.prevState : null;
+  try { m.carried = parseNotesCarry(I.notesDoc, meeting); } catch (e) { m.carried = { ...ERR(e), fromLabel: "", rows: [] }; }
+  let cls = { booked: [], idle: [], starts: [], onHold: [], between: [] }, idx = null;
+  try {
+    idx = buildScheduleIndex(Array.isArray(I.scheduleEntries) ? I.scheduleEntries : [], I.plannerDoc, live, weekYmds); idx.simproOk = I.simproOk !== false && Array.isArray(I.scheduleEntries);
+    cls = classifySchedule(live, idx, weekYmds, today);
+    const mv = movedDates(live, prev && prev.dates, today);
+    const people = peopleRows({ users: I.users, pto: I.pto, timeOffRequests: I.timeOffRequests, needs: I.needs, prevUserIds: prev ? prev.userIds : null, idx, weekDays, today });
+    m.schedule = { error: false, booked: cls.booked.slice(0, CAPS.booked), bookedMore: Math.max(0, cls.booked.length - CAPS.booked), idle: cls.idle, starts: cls.starts, onHold: cls.onHold, between: cls.between, moved: mv.rows, passed: mv.passed, movedFirstRun: mv.firstRun,
+      calendar: calendarRows(live, I.calendarEvents, weekYmds).slice(0, CAPS.calendar), people, conflicts: conflictRows(idx, I.pto, weekYmds), unknownSimpro: idx.unknownSimpro, simproOk: idx.simproOk, plannerPresent: idx.plannerPresent };
+  } catch (e) { m.schedule = ERR(e); }
+  try { m.blocked = { error: false, ...blockedRows({ live, needs: I.needs, users: I.users, prevBlockerKeys: prev ? prev.blockerKeys : null, today }) }; } catch (e) { m.blocked = ERR(e); }
+  try { m.coming = comingRows({ live, upcoming: I.upcoming, agentFindings: I.agentFindings, weekYmds, today, cls }); } catch (e) { m.coming = ERR(e); }
+  try { m.money = moneyRows({ live, simproTotalsById: I.simproTotalsById, prevMargin: prev ? prev.marginByJob : null, today }); } catch (e) { m.money = ERR(e); }
+  try { m.qc = qcRows({ live, today }); } catch (e) { m.qc = ERR(e); }
+  try { m.lastWeek = lastWeekRows({ jobs: I.jobs, live, users: I.users, prevState: prev, blocked: m.blocked.error ? { cleared: [] } : m.blocked, today }); } catch (e) { m.lastWeek = ERR(e); }
+  // headline — each line drops if its section failed
+  try {
+    const H = [];
+    if (!m.schedule.error) { const s = m.schedule, risk = s.starts.filter(x => !x.crewBooked).length; H.push(`Next week: ${plural(cls.booked.length, "job")} crewed · ${s.idle.length} in progress with nobody booked · ${plural(s.starts.length, "start")}${risk ? `, ${risk} with no crew` : ""}.`); }
+    if (!m.blocked.error) { const parts = GROUP_ORDER.filter(g => m.blocked.byGroup[g]).map(g => `${m.blocked.byGroup[g]} on ${g.replace(" (office owes the field)", "").toLowerCase()}`); H.push(`${plural(m.blocked.total, "job")} blocked${parts.length ? `: ${parts.join(", ")}` : ""}.`); }
+    if (!m.money.error) { const r = m.money.rti, g = m.money.margin; H.push(`${r.count ? `${fmtMoney(r.total)}${r.knownCount < r.count ? "+" : ""} ready to bill on ${plural(r.count, "job")}` : "Nothing ready to bill"}${g.median != null ? ` · margin at finish median ${g.median}% vs ${MARGIN_TARGET}%, ${g.underCount} under` : ""}.`); }
+    m.headline = H;
+  } catch (e) { m.headline = []; }
+  m.counts = { live: live.length, booked: cls.booked.length, idle: cls.idle.length, starts: cls.starts.length, onHold: cls.onHold.length, between: cls.between.length, blocked: m.blocked.error ? null : m.blocked.total, rti: m.money.error ? null : m.money.rti.count, qc: m.qc.error ? null : m.qc.rows.length, carried: m.carried.rows.length };
+  const weekRow = { ymd: ymd(today), counts: m.lastWeek.error ? {} : m.lastWeek.counts };
+  m.nextState = { blockerKeys: m.blocked.error ? arr(prev && prev.blockerKeys) : m.blocked.keys, marginByJob: m.money.error ? (prev && prev.marginByJob) || {} : m.money.marginByJob,
+    dates: nextDates(live, prev && prev.dates, ymd(today)), userIds: arr(I.users).map(u => u && (u.id || u.name)).filter(Boolean), weeks: [weekRow, ...arr(prev && prev.weeks).filter(x => x && x.ymd !== weekRow.ymd)].slice(0, 8) };
+  return m;
+}
+
 module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
   snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests,
-  dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays, blockedRows, GROUP_ORDER };
+  dateKeys, movedDates, nextDates, calendarRows, peopleRows, conflictRows, isRoster, normName, overlapDays, blockedRows, GROUP_ORDER,
+  buildModel, comingRows, moneyRows, qcRows, lastWeekRows, collectSimproCandidates, resolveRecipients, isFinishingOpen, isRti, mondayOf, EXTRA_RECIPIENTS };
