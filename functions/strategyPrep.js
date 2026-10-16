@@ -5,6 +5,7 @@
 // Accuracy rules (Koy, 2026-10-15: "it just needs to be 100 percent accurate"):
 //   booked = Simpro schedules ∪ planner, NEVER job.foreman/lead · no live job silently dropped ·
 //   conflicts shown, never merged · the retired *ScheduledDate and last-activity fields are never read.
+// Layout (Koy, 2026-10-16, from his hand-edited TEST doc): see the comment above renderLines.
 // ─────────────────────────────────────────────────────────────
 "use strict";
 const { docsRequests } = require("./foremanMeetingPrep.js");
@@ -745,138 +746,152 @@ function parseNotesCarry(doc, meetingDate) {
 }
 
 // ── lines for the Docs API (consumed by foremanMeetingPrep.docsRequests) ─────
-const RED = [0.72, 0.14, 0.14], GREEN = [0.12, 0.48, 0.3], AMBER = [0.71, 0.33, 0.1], BLUE = [0.18, 0.4, 0.77];
+// Layout = Koy's hand-edited TEST doc of 2026-10-15 ("exactly how I want it structured and templated in the
+// future pulls"): no header or headline, Carried only when there is something to carry, a free Notes list,
+// every job as a small tree (name › status › Plan), Blocked = GC / builder + Us only, one job per Coming-up
+// line with QC to schedule folded in, no Money, no DATE PASSED, no OVERDUE / DUE starts, no Plan-intake /
+// In-prep / Near-done rows. The model still computes everything (state, counts, dry-run checks); only the
+// rendering changed. Nesting = leading tabs (what createParagraphBullets reads as the level); every span
+// offset is shifted past them.
+const RED = [0.72, 0.14, 0.14], GREEN = [0.12, 0.48, 0.3], AMBER = [0.71, 0.33, 0.1], BLUE = [0.18, 0.4, 0.77], BLACK = [0, 0, 0], CREW_GREEN = [0.22, 0.46, 0.11];
+const BLOCKED_GROUPS_SHOWN = new Set(["GC / builder", "Us (office owes the field)"]);   // Koy 2026-10-16: the other groups never print
 function renderLines(m) {
   const L = [];
   const H3 = (t) => L.push({ text: t, kind: "h3" }), H4 = (t) => L.push({ text: t, kind: "h4" });
   const P = (t) => L.push({ text: t, kind: "p" }), G = (t) => L.push({ text: t, kind: "grey" }), C = (t) => L.push({ text: t, kind: "check" });
-  const B = (t, spans) => L.push({ text: t, kind: "bullet", spans: spans || [] });
-  const tag = (word, rgb, rest) => { B(`${word} ${rest}`, [{ start: 0, len: word.length, rgb, bold: true }]); };
+  const B = (t, spans, depth = 0) => L.push({ text: "\t".repeat(depth) + t, kind: "bullet", spans: (spans || []).map(sp => ({ ...sp, start: sp.start + depth })) });
+  const B1 = (t, spans) => B(t, spans, 1), B2 = (t, spans) => B(t, spans, 2);
+  const BLANK = () => P("");
+  const bold = (t) => [{ start: 0, len: t.length, rgb: BLACK, bold: true }];
+  // "NO CREW Name" — coloured bold tag, then the name in bold black (the whole parent line is bold, like Koy's).
+  const tag = (word, rgb, rest) => B(`${word} ${rest}`, [{ start: 0, len: word.length, rgb, bold: true }, { start: word.length + 1, len: rest.length, rgb: BLACK, bold: true }]);
   const fail = (sec) => G(typeof sec.error === "string" ? sec.error : "Section unavailable this week.");
   const more = (n) => { if (n > 0) G(`…and ${n} more in the app`); };
   const who = (r) => [r.foreman, r.lead && r.lead !== r.foreman ? r.lead : ""].filter(Boolean).join(" · ");
   const age = (n) => n == null ? "no date" : `${n}d`;
   const sec = (fallback, fn) => { const start = L.length; try { fn(); } catch (e) { L.length = start; H3(fallback); G(`Section could not be rendered: ${(e && e.message) || e}`); } };
   const prepShort = (xs) => xs.map(x => x.replace(/ Received| Up to Date| to App & SimPro| to Foreman/g, "")).join(", ");
+  const conf = (c) => c ? "confirmed" : "projected";
 
-  G(m.preLine);
-  if (m.headline.length) m.headline.forEach(P);
-
-  // Carried
-  sec("Carried from last meeting", () => {
-  H3(m.carried.fromLabel ? `Carried from ${m.carried.fromLabel.replace(/,\s*\d{4}$/, "")}` : "Carried from last meeting");   // "Carried from Oct 9" — the same heading Josh's notes use
-  if (m.carried.error) fail(m.carried); else if (!m.carried.rows.length) G("Nothing carried.");
-  else m.carried.rows.forEach(r => C(`${r.text}${r.weeks > 1 ? ` (carried ${r.weeks} wks)` : ""}`));
-  });
-  C("");
+  // Carried — only when Josh's doc was read AND something carries. A failed read is logged by the
+  // orchestrator (and shown in the dashboard card), not printed in the meeting doc (Koy 2026-10-16).
+  if (!m.carried.error && m.carried.rows.length) {
+    sec("Carried from last meeting", () => {
+      H3(m.carried.fromLabel ? `Carried from ${m.carried.fromLabel.replace(/,\s*\d{4}$/, "")}` : "Carried from last meeting");   // "Carried from Oct 9" — the same heading Josh's notes use
+      m.carried.rows.forEach(r => C(`${r.text}${r.weeks > 1 ? ` (carried ${r.weeks} wks)` : ""}`));
+    });
+    C("");
+  }
 
   // Schedule
   sec("Schedule next week", () => {
   H3(`Schedule next week · ${m.weekLabel}`);
   if (m.schedule.error) fail(m.schedule); else {
     const s = m.schedule;
+    H4("Notes"); B("");
     const crewUnknown = !s.simproOk && !s.plannerPresent;
-    H4(crewUnknown ? "Booked — crew unknown: Simpro unavailable and no planner for next week" : `Booked · ${s.booked.length + (s.bookedMore || 0)}${s.simproOk ? (s.plannerPresent ? "" : " (no planner for next week; Simpro only)") : " — Simpro unavailable; planner only"}`);
+    H4(crewUnknown ? "Scheduled — crew unknown: Simpro unavailable and no planner for next week" : `Scheduled · ${s.booked.length + (s.bookedMore || 0)}${s.simproOk ? (s.plannerPresent ? "" : " (no planner for next week; Simpro only)") : " — Simpro unavailable; planner only"}`);
     if (!s.booked.length && !crewUnknown) G(`Nothing booked for next week yet${m.builtAt ? ` (as of ${m.builtAt} MT)` : ""}.`);
-    s.booked.forEach(r => B(`${r.name} — ${r.phase}${r.pct ? ` ${r.pct}%` : ""} · ${r.days} · ${r.people.join(", ")}${r.qcNeeds ? " · QC after" : ""}${r.start ? ` · ${r.start.phase} start ${fmtMD(r.start.date)} ${r.start.confirmed ? "confirmed" : "projected"}` : ""}`));
+    s.booked.forEach((r, i) => {
+      if (i) BLANK();
+      B(r.name, bold(r.name));
+      B1(`${r.phase}${r.pct ? ` ${r.pct}%` : ""}${r.qcNeeds ? " · QC after" : ""}${r.start ? ` · ${r.start.phase} start ${fmtMD(r.start.date)} ${conf(r.start.confirmed)}` : ""}`);
+      B1("Plan");
+      const crew = `${r.people.join(", ")} · ${r.days}`;
+      B2(crew, [{ start: 0, len: crew.length, rgb: CREW_GREEN, bold: false }]);
+    });
     more(s.bookedMore);
     s.unknownSimpro.forEach(u => B(`Simpro #${u.pid} ${u.appName ? `${u.appName} (${u.appState})` : "(not in app)"} · ${daysLabel(u.days)} · ${u.people.join(", ")}`));
-    H4(`In progress, nobody booked · ${s.idle.length}`);
+    H4(`Need to be scheduled next week · ${s.idle.length}`);
     if (!s.idle.length) G("Every in-progress job has crew next week.");
-    s.idle.forEach(r => tag("NO CREW", RED, `${r.name} — ${r.statusText || `${r.phase} ${r.pct}%`} · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""}${r.openPunch ? ` · ${r.openPunch} punch` : ""}${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`));
-    H4(`Starts · ${s.starts.length}`);
-    if (!s.starts.length) G("No starts dated inside next week.");
-    const tail = (r) => ` · nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""} · prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}${r.elsewhere.length ? ` · ${r.elsewhere.join("; ")}` : ""}`;
-    s.starts.forEach(r => {
-      if (r.pipeline) { tag("UPCOMING", AMBER, `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"} · not in the app yet · nobody booked`); return; }
-      const hardTail = r.hardDate ? ` · needs a hard date${r.hardBy ? ` by ${fmtMD(r.hardBy)}` : ""}` : "";
-      if (r.overdue) {   // dated before next Monday, not started: OVERDUE when the date is gone, DUE when it is today..Sunday
-        if (r.daysLate > 0) tag("OVERDUE", AMBER, `${r.name} — ${r.phase} start was ${fmtMD(r.date)} (${r.daysLate}d)${tail(r)}${hardTail}`);
-        else tag("DUE", AMBER, `${r.name} — ${r.phase} start ${fmtMD(r.date)} (${r.daysLate === 0 ? "today" : "before next week"}), not started${tail(r)}${hardTail}`);
-        return;
+    s.idle.forEach((r, i) => {
+      if (i) BLANK();
+      tag("NO CREW", RED, r.name);
+      B1(`${r.statusText || `${r.phase} ${r.pct}%`} · last update ${r.lastUpdate ? fmtMD(r.lastUpdate) : "none on file"}${r.rti ? ` · ready to invoice ${age(r.rtiDays)}` : ""}${r.qcNeeds ? " · QC needs" : ""}${r.openPunch ? ` · ${r.openPunch} punch` : ""}${r.questions ? ` · ${plural(r.questions, "question")}` : ""}${r.waitBuckets.length ? ` · waiting: ${r.waitBuckets.slice(0, 2).join(", ")}` : ""}${!s.simproOk ? " (Simpro not checked)" : ""}`);
+      B1("Plan");
+    });
+    // OVERDUE / DUE rows (dated before next Monday, not started) are gone for good (Koy 2026-10-16);
+    // the model keeps them so the dry-run's every-job-in-one-bucket check still sees them.
+    const starts = s.starts.filter(r => !r.overdue);
+    H4(`Starts · ${starts.length}`);
+    if (!starts.length) G("No starts dated inside next week.");
+    starts.forEach((r, i) => {
+      if (i) BLANK();
+      if (r.pipeline) {
+        tag("UPCOMING", AMBER, r.name);
+        B1(`${r.phase} ${conf(r.confirmed)} start ${DAY_LBL[r.di]} ${fmtMD(r.date)} · not in the app yet`);
+        B1("nobody booked"); B1("Plan"); return;
       }
-      if (r.hardDate && r.di < 0) { tag("HARD DATE NEEDED", RED, `${r.name} — ${r.phase} needs a hard date${r.hardBy ? ` by ${fmtMD(r.hardBy)}` : ""}${tail(r)}`); return; }
-      const chip = r.atRisk ? ["AT RISK", RED] : r.confirmed ? ["CONFIRMED", GREEN] : ["PROJECTED", AMBER];
-      tag(chip[0], chip[1], `${r.name} — ${r.phase} starts ${DAY_LBL[r.di]} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"}${tail(r)}${hardTail}`);
+      const hardTail = r.hardDate ? ` · needs a hard date${r.hardBy ? ` by ${fmtMD(r.hardBy)}` : ""}` : "";
+      if (r.hardDate && r.di < 0) { tag("HARD DATE NEEDED", RED, r.name); B1(`${r.phase} needs a hard date${r.hardBy ? ` by ${fmtMD(r.hardBy)}` : ""}`); }
+      else {
+        const chip = r.atRisk ? ["AT RISK", RED] : r.confirmed ? ["CONFIRMED", GREEN] : ["PROJECTED", AMBER];
+        tag(chip[0], chip[1], r.name);
+        B1(`${r.phase} ${conf(r.confirmed)} start ${DAY_LBL[r.di]} ${fmtMD(r.date)}${hardTail}`);
+      }
+      B1(`nobody booked${r.missingRoles.length ? ` · no ${r.missingRoles.join(", no ")}` : who(r) ? ` · ${who(r)}` : ""}`);
+      B1(`prep ${r.prep.done}/${r.prep.total}${r.prep.missing.length && r.prep.done < 5 ? ` (${prepShort(r.prep.missing)})` : ""}`);
+      r.elsewhere.forEach(e => B1(e));
+      B1("Plan");
     });
     H4("Dates that moved since last Friday");
-    if (s.movedFirstRun) G("Tracking starts this week."); else if (!s.moved.length && !s.passed.length) G("Nothing moved.");
+    if (s.movedFirstRun) G("Tracking starts this week."); else if (!s.moved.length) G("Nothing moved.");
     s.moved.forEach(r => B(r.to === "no date" ? `${r.name} — ${r.label} ${r.from} → no date (cleared)` : `${r.name} — ${r.label} ${r.from} → ${r.to}${r.nth > 2 ? ` (${r.nth}${r.nth === 3 ? "rd" : "th"} date)` : ""}`));
-    s.passed.forEach(r => tag("DATE PASSED", AMBER, `${r.name} — ${r.label} ${r.date}${r.days != null ? ` (${r.days}d)` : ""}, ${r.kind === "inspection" ? "no result logged" : r.kind === "qc" ? "walk not logged" : "status never moved"}`));
+    // DATE PASSED rows (old inspections / walks with no result) are gone for good (Koy 2026-10-16).
     H4("On the calendar");
     if (!s.calendar.length) G("No inspections, walks or scans dated next week.");
     s.calendar.forEach(r => B(`${DAY_LBL[r.di]} — ${r.label} · ${r.name}${r.who ? ` · ${r.who}` : ""}${r.ambiguous ? " (name match — check which job)" : ""}`));
     H4("People");
     const p = s.people;
-    if (p.out.length) B(`Out: ${p.out.map(o => `${o.name} ${o.range}${o.note ? ` (${o.note})` : ""}`).join(" · ")}`); else B("Nobody out next week.");
+    if (p.out.length) { B("Out:"); p.out.forEach(o => B1(`${o.name} ${o.range}${o.note ? ` (${o.note})` : ""}`)); } else B("Nobody out next week.");
     p.pending.forEach(r => B(`Pending request: ${r.name} · ${r.range}${r.requestedDays != null ? ` · asked ${r.requestedDays}d ago` : ""}`));
     p.bodies.forEach(r => B(`Bodies asked for: ${r.text}${r.job ? ` [${r.job}]` : ""} (${r.by}${r.ageDays != null ? `, ${r.ageDays}d ago` : ""})`));
     p.newUsers.forEach(u => B(`New on the team: ${u.name}${u.title ? ` · ${u.title}` : ""}`));
     B(`Capacity (booked / available): ${p.capacity.map(c => `${DAY_LBL[c.di]} ${c.booked}/${c.available}`).join(" · ")}`);
     if (s.conflicts.length) { H4("Conflicts"); s.conflicts.forEach(c => tag("CONFLICT", RED, c)); }
-    if (s.onHold.length) G(`${plural(s.onHold.length, "job")} on hold listed under Blocked.`);
   }
   });
   C("");
 
-  // Blocked
+  // Blocked — GC / builder and Us only (Koy 2026-10-16). Every group is still computed for state + the dashboard.
   sec("Blocked", () => {
   H3("Blocked — what we are waiting on, from whom, how long");
   if (m.blocked.error) fail(m.blocked); else {
-    if (!m.blocked.groups.length) G("Nothing blocked.");
-    m.blocked.groups.forEach(g => { H4(`${g.name} · ${g.rows.length + g.more}`); g.rows.forEach(r => B(`${r.name} — ${r.what}${r.who ? ` · ${r.who}` : ""} · ${age(r.ageDays)}`)); more(g.more); });
-    if (m.blocked.cleared.length) { H4("Cleared since last Friday"); m.blocked.cleared.forEach(c => tag("CLEARED", GREEN, `${c.name} — ${c.group}`)); }
+    const groups = m.blocked.groups.filter(g => BLOCKED_GROUPS_SHOWN.has(g.name));
+    if (!groups.length) G("Nothing blocked on the GC or on us.");
+    groups.forEach(g => { H4(`${g.name} · ${g.rows.length + g.more}`); g.rows.forEach(r => B(`${r.name} — ${r.what}${r.who ? ` · ${r.who}` : ""} · ${age(r.ageDays)}`)); more(g.more); });
+    const cleared = m.blocked.cleared.filter(c => BLOCKED_GROUPS_SHOWN.has(c.group));
+    if (cleared.length) { H4("Cleared since last Friday"); cleared.forEach(c => tag("CLEARED", GREEN, `${c.name} — ${c.group}`)); }
   }
   });
   C("");
 
-  // Coming up
+  // Coming up — one job per line; the first line of a week carries the week label.
   sec("Coming up", () => {
   H3("Coming up · next 2–8 weeks");
   if (m.coming.error) fail(m.coming); else {
     const c = m.coming;
     if (!c.weeks.length) G("No dated starts after next week.");
-    c.weeks.forEach(w => B(`${w.label} — ${w.rows.map(r => `${r.name}${r.customer ? ` (${r.customer})` : ""} ${fmtMD(r.date)} ${r.confirmed ? "confirmed" : "projected"}${r.note ? ` · ${r.note}` : ""}`).join("; ")}`));
+    c.weeks.forEach(w => w.rows.forEach((r, i) => B(`${i === 0 ? `${w.label} — ` : ""}${r.name}${r.customer ? ` (${r.customer})` : ""} ${fmtMD(r.date)} ${conf(r.confirmed)}${r.note ? ` · ${r.note}` : ""}`)));
     if (c.laterCount > 0) G(`…and ${c.laterCount} later`);
     if (arr(c.overdue).length) B(`Projected start passed, still in Upcoming: ${c.overdue.map(r => `${r.name} ${fmtMD(r.date)}`).join(", ")}`);
-    if (c.noDate.length) B(`No date yet: ${c.noDate.map(r => `${r.name}${r.note ? ` (${r.note})` : ""}`).join(" · ")}`);
-    if (c.prep.length) B(`In prep, start inside 3 weeks: ${c.prep.map(r => `${r.name} ${r.done}/5${r.missing.length ? ` (${prepShort(r.missing)})` : ""}`).join(" · ")}`);
-    c.findings.forEach(f => B(`Plan intake: ${f.summary}`));
-    B(`Near done (finish ≥ 90% or ready to invoice): ${c.freeing.length ? c.freeing.map(r => r.name).join(", ") : "none"} · starts in the next two weeks: ${c.startsSoon}`);
+    c.noDate.forEach((r, i) => B(`${i === 0 ? "No date yet: " : ""}${r.name}${r.note ? ` (${r.note})` : ""}`));
+    // In prep / Plan intake / Near done rows are gone for good (Koy 2026-10-16).
   }
   });
-  C("");
-
-  // Money
-  sec("Money", () => {
-  H3("Money");
-  if (m.money.error) fail(m.money); else {
-    const r = m.money.rti, g = m.money.margin, a = m.money.approved;
-    H4(`Ready to invoice · ${r.count}`);
-    if (!r.rows.length) G("Nothing ready to invoice.");
-    r.rows.forEach(x => B(`${x.name}${x.foreman ? ` · ${x.foreman}` : ""}${x.dollars != null ? ` · ${fmtMoney(x.dollars)}` : ""}${x.idleDays != null ? ` · idle ${x.idleDays}d` : ""}${x.margin != null ? ` · ${x.margin}% margin` : ""}${x.flag ? ` · ${x.flag}` : ""}`, x.flag ? [{ start: 0, len: x.name.length, rgb: RED, bold: false }] : []));
-    more(r.more);
-    H4("Margin at finish");
-    if (g.median == null) G("No margin data on finishing jobs."); else {
-      const fc = typeof g.finishingCount === "number" ? g.finishingCount : g.count, noM = fc - g.count;
-      B(`Median ${g.median}% across ${g.count} of ${plural(fc, "finishing job")}${noM > 0 ? ` (${noM} ${noM === 1 ? "has" : "have"} no Simpro margin)` : ""} · target ${MARGIN_TARGET}% · ${g.underCount} under`);
-      if (g.firstRun) G("Movers: tracking starts this week."); else if (!g.movers.length) G("No margin moved 3 points or more since last Friday.");
-      g.movers.forEach(x => B(`${x.name} ${x.from}% → ${x.to}% (${x.delta > 0 ? "+" : ""}${x.delta})`));
-    }
-    H4(`Approved this week · ${a.count}`);
-    if (!a.rows.length) G("No change orders approved this week.");
-    a.rows.forEach(x => B(`${x.name}${x.quote ? ` #${x.quote}` : ""}${x.desc ? ` — ${x.desc}` : ""}`));
-    if (a.count) B(`${a.undated} of ${a.count} not dated yet`);
-  }
-  });
-  C("");
-
-  // QC
+  // QC to schedule — folded into Coming up as a sub-list (Koy 2026-10-16), each walk a small tree.
   sec("QC to schedule", () => {
-  H3("QC to schedule");
-  if (m.qc.error) fail(m.qc); else { if (!m.qc.rows.length) G("Nothing waiting on a QC walk."); m.qc.rows.forEach(r => B(`${r.name}${r.foreman ? ` · ${r.foreman}` : ""} — ${r.why}${r.since ? ` since ${r.since}` : ""} · ${r.openPunch} punch open${r.small ? " · small — pics may do" : ""}`)); more(m.qc.more); }
+  BLANK();
+  H4("QC to schedule");
+  if (m.qc.error) fail(m.qc); else {
+    if (!m.qc.rows.length) G("Nothing waiting on a QC walk.");
+    m.qc.rows.forEach(r => { B(`${r.name}${r.foreman ? ` · ${r.foreman}` : ""}`); B1(`${r.why}${r.since ? ` since ${r.since}` : ""} · ${r.openPunch} punch open${r.small ? " · small — pics may do" : ""}`); B1("Plan"); });
+    more(m.qc.more);
+  }
   });
   C("");
+
+  // Money — not printed (Koy 2026-10-16). moneyRows still runs: marginByJob state + the dry-run counts need it.
 
   // Last week
   sec("Last week", () => {
