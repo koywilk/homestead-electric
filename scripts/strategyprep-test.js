@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+process.env.TZ = "UTC";   // Cloud Functions run in UTC: the harness proves production behavior, not this Mac's Mountain clock.
 // Friday Strategy/Scheduling prep — pure-module tests. Run: node scripts/strategyprep-test.js
 // Fixtures are the REAL cases Koy caught on 2026-10-15 (Lot 208, Namjoshi/Treycen/Hideout), simplified.
 "use strict";
@@ -324,7 +325,7 @@ function fixture(over = {}) {
   const un1 = S.blockedRows({ live, needs: unNeeds, users: f.users, prevBlockerKeys: null, today: w.today });
   const unRow = (un1.groups.find(x => x.name === "Us (office owes the field)") || { rows: [] }).rows.find(r => r.name === "(no job)");
   t("blocked: unattached need (no jobId, no jobName, 9d) → one Us row named (no job), key need_…", unRow && /Call the inspector/.test(unRow.what) && unRow.ageDays === 9 && un1.keys.some(k => k === "need_u1:Us (office owes the field)"), JSON.stringify(unRow) + JSON.stringify(un1.keys));
-  const un2 = S.blockedRows({ live, needs: [{ ...unNeeds[0], status: "done" }, { id: "u2", kind: "need", text: "Another loose one", createdAt: "2026-10-07T15:00:00Z", status: "open", assignedTo: "Koy Wilkinson" }], users: f.users, prevBlockerKeys: un1.keys, today: w.today });
+  const un2 = S.blockedRows({ live, needs: [{ ...unNeeds[0], status: "done" }, { id: "u2", kind: "need", text: "Another loose one", createdBy: "Louis Hoffman", createdAt: "2026-10-07T15:00:00Z", status: "open", assignedTo: "Koy Wilkinson" }], users: f.users, prevBlockerKeys: un1.keys, today: w.today });
   t("blocked: resolved unattached need is NOT cleared; the other unattached one still prints; no crash", !un2.cleared.some(c => /no job|u1/.test(c.name)) && un2.keys.includes("need_u2:Us (office owes the field)") && !un2.keys.includes("need_u1:Us (office owes the field)"), JSON.stringify(un2.cleared));
   const cnt = S.blockedRows({ live: [{ id: "CNT", name: "Count Test", roughStatus: "complete", finishStatus: "inprogress", finishPunch: { main: { general: [
     item({ waiting: true, waitingOn: "Waiting for fixture A" }), item({ waiting: true, waitingOn: "Waiting for fixture B" }), item({ waiting: true, waitingOn: "Waiting for fixture C" }), item({ waiting: true, waitingOn: "Waiting for cabinetry" })] } } }], needs: [], users: f.users, prevBlockerKeys: [], today: w.today });
@@ -592,6 +593,124 @@ function fixture(over = {}) {
   const t3 = S.renderLines(m3);
   const ov = t3.find(l => /^OVERDUE Hightower/.test(l.text));
   t("C3: render 'OVERDUE Hightower Remodel — finish start was 8/13 (64d) · nobody booked · no lead · prep 0/5 …' with an amber tag", !!ov && /^OVERDUE Hightower Remodel — finish start was 8\/13 \(64d\) · nobody booked · no lead · prep 0\/5/.test(ov.text) && ov.spans[0].len === 7 && eq(ov.spans[0].rgb, [0.71, 0.33, 0.1]), ov && ov.text);
+}
+
+// ── Final fix wave: IMPORTANT (I1–I11) ───────────────────────────────────────
+{
+  const w = S.weekOf(NOW);
+  const item = (o) => ({ text: "item", done: false, voided: false, ...o });
+  // I1 — absolute instants read as Mountain wall-clock; date-only strings stay as written.
+  t("I1: process runs in UTC (harness proves production)", new Date(0).getTimezoneOffset() === 0);
+  t("I1: an evening MT stamp stays on its MT day", S.ymd(S.toDateAny("2026-10-12T23:30:00-06:00")) === "2026-10-12", S.ymd(S.toDateAny("2026-10-12T23:30:00-06:00")));
+  t("I1: a Firestore Timestamp at 23:30 MT stays on its MT day", S.ymd(S.toDateAny({ seconds: Date.parse("2026-10-13T05:30:00Z") / 1000 })) === "2026-10-12" && S.ymd(S.toDateAny({ toDate: () => new Date("2026-10-13T05:30:00Z") })) === "2026-10-12");
+  t("I1: an epoch-ms id at 23:30 MT stays on its MT day", S.ymd(S.toDateAny(String(Date.parse("2026-10-13T05:30:00Z")))) === "2026-10-12");
+  t("I1: date-only strings are not shifted", S.ymd(S.toDateAny("2026-10-12")) === "2026-10-12" && S.ymd(S.toDateAny("10/12/2026")) === "2026-10-12");
+
+  // I2 — On hold is additive: an on-hold job keeps its On hold row AND its waiting row.
+  const holdJobs = [
+    { id: "HG", name: "Hold With GC Waits", roughStatus: "complete", finishStatus: "waiting", finishStage: "40%", finishPunch: { main: { general: [item({ waiting: true, waitingOn: "Framing" }), item({ waiting: true, waitingOn: "Drywall" })] } } },
+    { id: "HR", name: "Rough Hold Finish Scheduled", roughStatus: "waiting", finishStatus: "scheduled" },
+    { id: "HP", name: "Plain Hold", roughStatus: "waiting" },
+  ];
+  const b2 = S.blockedRows({ live: holdJobs, needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  const inG = (b, g, id) => ((b.groups.find(x => x.name === g) || { rows: [] }).rows).some(r => r.jobId === id);
+  t("I2: on-hold job with GC waits → a row under On hold AND under GC / builder", inG(b2, "On hold", "HG") && inG(b2, "GC / builder", "HG"), JSON.stringify(b2.groups.map(g => [g.name, g.rows.map(r => r.jobId)])));
+  t("I2: byGroup['On hold'] equals the number of on-hold live jobs (3)", b2.byGroup["On hold"] === 3, JSON.stringify(b2.byGroup));
+
+  // I3 — each question buckets by its own text; a question leaves Homeowner / designer only when it names a party.
+  const qj = { id: "QJ", name: "Question Job", roughStatus: "inprogress", roughStage: "40%", roughQuestions: { main: [
+    ...["Cabinet plans?", "Ceiling height in the den?", "Which chandelier?", "Pendant location?", "Island outlet?"].map((q, i) => ({ question: q, answer: "", addedAt: `2026-10-0${i + 1}T12:00:00Z` })),
+    { question: "ask the GC about framing", answer: "", addedAt: "2026-10-08T12:00:00Z" }] } };
+  const b3 = S.blockedRows({ live: [qj], needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  t("I3: 5 homeowner-ish questions + 1 'ask the GC about framing' → Homeowner / designer wins (5 vs 1)", eq(b3.keys, ["QJ:Homeowner / designer"]) && /5 questions/.test(b3.groups[0].rows[0].what) && /1 question unanswered/.test(b3.groups[0].rows[0].what), JSON.stringify(b3.groups));
+  const wj = { id: "WJ", name: "Blank Reason Job", roughStatus: "inprogress", roughStage: "40%", roughPunch: { main: { general: [item({ waiting: true, waitingOn: "", text: "Waiting on cabinets" })] } } };
+  const b3b = S.blockedRows({ live: [wj], needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  t("I3: a waiting item with blank waitingOn buckets by its text ('Waiting on cabinets' → GC / builder)", eq(b3b.keys, ["WJ:GC / builder"]), JSON.stringify(b3b.keys));
+
+  // I4 — approved-open COs: approved and not converted; dated = needsByStart or a linked RT with a date.
+  const coJob = { id: "COJ", name: "CO Job", roughStatus: "complete", finishStatus: "inprogress", finishStage: "60%",
+    changeOrders: [
+      { id: "c1", coStatus: "approved", createdAt: "2026-05-11T10:00:00Z", desc: "Dimmers", needsByStart: "2026-11-02", coStatusDate: "10/13/2026" },
+      { id: "c2", coStatus: "approved", createdAt: "2026-05-12T10:00:00Z", desc: "Tape light" },
+      { id: "c3", coStatus: "approved", createdAt: "2026-04-01T10:00:00Z", desc: "Converted one", coStatusDate: "10/14/2026" },
+      { id: "c4", coStatus: "converted", createdAt: "2026-04-01T10:00:00Z", desc: "Status converted" }],
+    returnTrips: [{ id: "r1", fromCOId: "c3", rtStatus: "scheduled", rtStatusDate: "10/28/2026" }] };
+  const b4 = S.blockedRows({ live: [coJob], needs: [], users: [], prevBlockerKeys: [], today: w.today });
+  const sold = ((b4.groups.find(x => x.name === "Sold work not on the calendar") || { rows: [] }).rows)[0];
+  t("I4: converted COs (via RT, or status converted) are excluded; row '2 approved COs, not done · needed by 11/2'", !!sold && /^2 approved COs, not done · needed by 11\/2$/.test(sold.what) && sold.ageDays === 158, JSON.stringify(sold));
+  const m4 = S.buildModel(fixture({ jobs: [coJob] }));
+  const ap = m4.money.approved;
+  t("I4: Approved this week — needsByStart CO counts as dated; RT-linked CO with an rtStatusDate counts as dated", ap.count === 2 && ap.undated === 0 && ap.rows.every(r => r.dated === true), JSON.stringify(ap));
+  t("I4: no CO reads the nonexistent scheduledDate field", !/co\.scheduledDate|CO_OPEN_APPROVED/.test(require("fs").readFileSync(require.resolve("../functions/strategyPrep.js"), "utf8")));
+
+  // I5 — the Us rule.
+  const NEED = (o) => ({ kind: "need", status: "open", createdAt: "2026-10-05T15:00:00Z", jobId: "OAK", jobName: "Oak Hill 5 - Alpine", ...o });
+  const usOf = (needs) => S.blockedRows({ live: S.liveJobs(fixture().jobs), needs, users: fixture().users, prevBlockerKeys: [], today: w.today, now: new Date(2026, 9, 16, 6, 0, 0) });
+  const usRows = (b) => ((b.groups.find(x => x.name === "Us (office owes the field)") || { rows: [] }).rows);
+  const b5 = usOf([
+    NEED({ id: "k1", text: "Koy self to-do", createdBy: "Koy Wilkinson", assignedTo: "Koy Wilkinson" }),
+    NEED({ id: "k2", text: "Time off doc", createdBy: "Louis Hoffman", assignedTo: "Koy Wilkinson", timeoffId: "to1" }),
+    NEED({ id: "k3", text: "Louis needs redlines", createdBy: "Louis Hoffman", assignedTo: "Koy Wilkinson" }),
+    NEED({ id: "k4", text: "Snoozed ask", createdBy: "Louis Hoffman", assignedTo: "Koy Wilkinson", snoozedUntil: "2026-10-20" }),
+    NEED({ id: "k5", text: "Coordinator fallback", createdBy: "Keegan Wilkinson", assignedTo: "", coordinator: "Josh Cloward" }),
+    NEED({ id: "k6", text: "Assigned by field", assignedBy: "Treycen Rollene", createdBy: "Koy Wilkinson", assignedTo: "Brady Nelson" }),
+  ]);
+  const u5 = usRows(b5).map(r => r.what).join(" | ");
+  t("I5: Koy-created Koy-assigned need → excluded", !/Koy self/.test(u5), u5);
+  t("I5: timeoffId doc → excluded; snoozed need → excluded", !/Time off doc|Snoozed ask/.test(u5), u5);
+  t("I5: Louis→Koy need open 11d → included, credited to Louis", usRows(b5).some(r => /Louis needs redlines \(Louis\)/.test(r.what) && r.ageDays === 11 && r.who === "Koy"), u5);
+  t("I5: assignee falls back to coordinator; requester = assignedBy || createdBy", /Coordinator fallback \(Keegan\)/.test(u5) && /Assigned by field \(Treycen\)/.test(u5), u5);
+  // M6 rides with I5: the resi.head hat holder counts as office.
+  const b6 = S.blockedRows({ live: [], needs: [NEED({ id: "h1", jobId: "", jobName: "", text: "Head owes this", createdBy: "Louis Hoffman", assignedTo: "Casey Hatholder" })],
+    users: [{ id: "casey", name: "Casey Hatholder", caps: { "resi.head": true } }], prevBlockerKeys: [], today: w.today, now: new Date(2026, 9, 16, 6, 0, 0) });
+  t("M6: a need assigned to the resi.head hat holder counts as office-owed", usRows(b6).some(r => /Head owes this/.test(r.what)), JSON.stringify(b6.groups));
+
+  // I6 — margin denominator.
+  const fj = (id, m) => ({ id, name: id, simproNo: id === "F1" ? "501" : "", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", ...(m != null ? { simproMargin: m } : {}) });
+  const m6 = S.buildModel(fixture({ jobs: [fj("F1", 12), fj("F2", null), fj("F3", null)] }));
+  t("I6: moneyRows reports finishingCount before the margin filter", m6.money.margin.finishingCount === 3 && m6.money.margin.count === 1, JSON.stringify(m6.money.margin));
+  t("I6: render 'Median 12% across 1 of 3 finishing jobs (2 have no Simpro margin)'", S.renderLines(m6).some(l => /^Median 12% across 1 of 3 finishing jobs \(2 have no Simpro margin\) · target 15% · 1 under$/.test(l.text)), S.renderLines(m6).filter(l => /^Median/.test(l.text)).map(l => l.text).join());
+
+  // I7 — "Crews freeing up" relabelled.
+  const t7 = S.renderLines(S.buildModel(fixture())).map(l => l.text);
+  t("I7: 'Near done (finish ≥ 90% or ready to invoice): …' replaces 'Crews freeing up'", t7.some(x => /^Near done \(finish ≥ 90% or ready to invoice\): /.test(x)) && !t7.some(x => /Crews freeing up/.test(x)));
+
+  // I8 — return-trip keys on rt.id.
+  const rtJob = (rts) => ({ id: "RTJ", name: "RT Job", roughStatus: "inprogress", roughStage: "20%", returnTrips: rts });
+  const A = { id: "a", rtStatus: "scheduled", rtStatusDate: "10/20/2026" }, B = { id: "b", rtStatus: "scheduled", rtStatusDate: "10/27/2026" };
+  t("I8: return trips key as <jobId>:rt:<rt.id>", eq(Object.keys(S.dateKeys([rtJob([A, B])])).sort(), ["RTJ:rt:a", "RTJ:rt:b"]), JSON.stringify(S.dateKeys([rtJob([A, B])])));
+  const prev8 = S.nextDates([rtJob([A, B])], null, "2026-10-09");
+  const mv8 = S.movedDates([rtJob([B])], prev8, w.today);
+  t("I8: deleting the earlier return trip produces no false moved / cleared row", mv8.rows.length === 0, JSON.stringify(mv8.rows));
+  const mv8b = S.movedDates([rtJob([B])], { "RTJ:rt:0": [{ d: "2026-10-09", v: "2026-10-20" }] }, w.today);
+  t("I8: a legacy index key whose trip now has an id is not reported as cleared", mv8b.rows.length === 0, JSON.stringify(mv8b.rows));
+
+  // I9 — a Simpro booking on a job the app has finished.
+  const f9 = fixture(); f9.jobs.find(j => j.id === "DONE").simproNo = "1111";
+  f9.scheduleEntries.push({ Type: "job", Date: "2026-10-20", Project: { ProjectID: 1111 }, Staff: { Name: "Zane Watkins" } });
+  const t9 = S.renderLines(S.buildModel(f9)).map(l => l.text);
+  t("I9: 'Simpro #1111 Wood (finished in app) · Tue · Zane Watkins'; unknown 9999 still '(not in app)'", t9.includes("Simpro #1111 Wood (finished in app) · Tue · Zane Watkins") && t9.some(x => /^Simpro #9999 \(not in app\)/.test(x)), t9.filter(x => /^Simpro #/.test(x)).join(" | "));
+
+  // I10 — headline risk counts at-risk starts only; crew unknown when Simpro and the planner are both missing.
+  const WED = new Date("2026-10-14T12:00:00Z");   // Wed 6 AM MT: Fri 10/23 is 9 days out → not at risk
+  const f10 = fixture({ now: WED }); f10.jobs.find(j => j.id === "RIV").roughProjectedStart = "10/23/2026";
+  const m10 = S.buildModel(f10);
+  t("I10: headline line 1 counts at-risk starts, not every start ('2 starts, 1 at risk')", /2 starts, 1 at risk\./.test(m10.headline[0]), m10.headline[0]);
+  const m10b = S.buildModel(fixture({ scheduleEntries: [], simproOk: false, plannerDoc: null }));
+  const t10b = S.renderLines(m10b).map(l => l.text);
+  const bh = t10b.find(x => /^Booked/.test(x));
+  t("I10: both sources missing → 'crew unknown: Simpro unavailable', no 'in progress with nobody booked'", /crew unknown: Simpro unavailable/.test(m10b.headline[0]) && !/nobody booked/.test(m10b.headline[0]), m10b.headline[0]);
+  t("I10: Booked heading does not contradict itself when both sources are missing", !!bh && !(/planner only/.test(bh) && /Simpro only/.test(bh)) && /crew unknown/.test(bh), bh);
+
+  // I11 — NeedsHardDate with nothing confirmed → an AT RISK start row.
+  const f11 = fixture();
+  f11.jobs.push({ id: "HD", name: "Hard Date Job", foreman: "Daegan Smith", roughStatus: "waiting_date", roughNeedsHardDate: true, roughNeedsByStart: "11/2/2026" },
+    { id: "HDC", name: "Hard Date Confirmed", roughStatus: "waiting_date", roughNeedsHardDate: true, roughNeedsByStart: "11/2/2026", roughStartConfirmed: true });
+  const m11 = S.buildModel(f11), hd = m11.schedule.starts.find(r => r.jobId === "HD");
+  t("I11: hard date needed, nothing confirmed → Starts row, hardDate, atRisk", !!hd && hd.hardDate === true && hd.atRisk === true && S.ymd(hd.hardBy) === "2026-11-02", JSON.stringify(hd));
+  t("I11: a confirmed phase gets no hard-date row", !m11.schedule.starts.some(r => r.jobId === "HDC"));
+  const hdl = S.renderLines(m11).find(l => /^HARD DATE NEEDED Hard Date Job/.test(l.text));
+  t("I11: render 'HARD DATE NEEDED Hard Date Job — rough needs a hard date by 11/2 · nobody booked · no lead · prep 0/5 …' red tag", !!hdl && /^HARD DATE NEEDED Hard Date Job — rough needs a hard date by 11\/2 · nobody booked · no lead · prep 0\/5/.test(hdl.text) && hdl.spans[0].len === 16 && eq(hdl.spans[0].rgb, [0.72, 0.14, 0.14]), hdl && hdl.text);
 }
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }
