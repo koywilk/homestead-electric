@@ -131,6 +131,7 @@ function fixture(over = {}) {
     const planner = { assignments: { OAK_0: { lead: "Louis Hoffman", crew: [] } } };
     const i3 = S.buildScheduleIndex(f3.scheduleEntries, planner, live3, w.weekYmds);
     t("same person from Simpro + planner is ONE person, source both", i3.byJob.get("OAK").days[0].people.length === 1 && i3.byJob.get("OAK").days[0].source === "both" && i3.plannerPresent === true, JSON.stringify(i3.byJob.get("OAK").days[0]));
+    t("same person from Simpro + planner: per-person source is both", i3.byJob.get("OAK").days[0].by["louis h"] === "both", JSON.stringify(i3.byJob.get("OAK").days[0]));
   }
   {
     const f4 = fixture();
@@ -188,6 +189,11 @@ function fixture(over = {}) {
   const idx2 = S.buildScheduleIndex([...f.scheduleEntries, { Type: "job", Date: "2026-10-19", Project: { ProjectID: 1454 }, Staff: { Name: "Treycen Rollene" } }], f.plannerDoc, live, w.weekYmds);
   t("conflicts: same person two jobs same day", S.conflictRows(idx2, [], w.weekYmds).some(s => /Treycen Rollene .*Mon.*The Hideout.*Oak Hill 5/.test(s) || /Treycen Rollene .*Mon.*Oak Hill 5.*The Hideout/.test(s)), JSON.stringify(S.conflictRows(idx2, [], w.weekYmds)));
   // Simpro has Treycen + Bailey at the Hideout Mon (source "both" once the planner adds Abraham), nobody Tue → the Tue cell is the planner-only disagreement.
+  // Case (a): planner adds Abraham on Hideout Mon alongside Simpro's Treycen + Bailey → per-person line.
+  const idxA = S.buildScheduleIndex(f.scheduleEntries, { assignments: { "HIDE_0": { lead: "Abraham Tristan", crew: [] } } }, live, w.weekYmds);
+  const hd0 = idxA.byJob.get("HIDE").days[0], cfA = S.conflictRows(idxA, [], w.weekYmds);
+  t("conflicts: planner-only person on a Simpro-staffed day → 'Simpro does not list them'", cfA.some(s => /planner has Abraham Tristan on The Hideout Mon but Simpro does not list them/.test(s)) && !cfA.some(s => /Treycen|Bailey/.test(s) && /planner has/.test(s)), JSON.stringify(cfA));
+  t("index: per-person source on a mixed day", hd0.by["abraham t"] === "planner" && hd0.by["treycen r"] === "simpro" && hd0.source === "both" && eq(hd0.people, ["Treycen Rollene", "Bailey Smith", "Abraham Tristan"]), JSON.stringify(hd0));
   const idx3 = S.buildScheduleIndex(f.scheduleEntries, { assignments: { "HIDE_1": { lead: "Abraham Tristan", crew: [] } } }, live, w.weekYmds);
   t("conflicts: planner says Abraham on Hideout Tue, Simpro doesn't → disagreement line", S.conflictRows(idx3, [], w.weekYmds).some(s => /planner.*Abraham Tristan.*Hideout.*Tue.*Simpro/.test(s)), JSON.stringify(S.conflictRows(idx3, [], w.weekYmds)));
 }

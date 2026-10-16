@@ -118,10 +118,12 @@ function buildScheduleIndex(scheduleEntries, plannerDoc, live, weekYmds) {
   const byJob = new Map(), byPerson = new Map(), unknown = new Map();
   const jobBySn = new Map(); live.forEach(j => { const sn = snOf(j); if (sn) jobBySn.set(sn, j); });
   const note = (job, di, person, source) => {
-    if (!byJob.has(job.id)) byJob.set(job.id, { days: {} });
-    const d = byJob.get(job.id).days; if (!d[di]) d[di] = { people: [], source };
-    if (!d[di].people.some(p => personKey(p) === personKey(person))) d[di].people.push(person);
+    if (!byJob.has(job.id)) byJob.set(job.id, { name: job.name, days: {} });
+    const d = byJob.get(job.id).days; if (!d[di]) d[di] = { people: [], source, by: {} };
+    const pk = personKey(person);
+    if (!d[di].people.some(p => personKey(p) === pk)) d[di].people.push(person);
     if (d[di].source !== source) d[di].source = "both";
+    d[di].by[pk] = (d[di].by[pk] && d[di].by[pk] !== source) ? "both" : source;
     const k = personKey(person); if (!byPerson.has(k)) byPerson.set(k, { name: person, days: {} });
     const pd = byPerson.get(k).days; if (!pd[di]) pd[di] = new Set(); pd[di].add(job.name);
   };
@@ -302,10 +304,12 @@ function conflictRows(idx, pto, weekYmds) {
   const weekDays = weekYmds.map(s => toDateAny(s));
   arr(pto).forEach(o => { const dis = overlapDays(o.start, o.end, weekDays); const p = idx.byPerson.get(personKey(o.name)); if (!p) return;
     dis.forEach(di => { if (p.days[di]) rows.push(`${o.name} is booked ${DAY_LBL[di]} (${[...p.days[di]].join(", ")}) but out that day${o.note ? ` — ${o.note}` : ""}`); }); });
-  idx.byJob.forEach((b, jobId) => Object.entries(b.days).forEach(([di, day]) => { if (day.source !== "planner") return;
-    const name = [...idx.byPerson.values()].find(p => p.days[di] && day.people.some(x => personKey(x) === personKey(p.name)));
-    const jobName = name ? [...name.days[di]][0] : jobId;
-    rows.push(`planner has ${day.people.join(", ")} on ${jobName} ${DAY_LBL[di]} but Simpro has nothing there that day`); }));
+  // Planner vs Simpro, per person: a planner-only person on a day Simpro staffs, or a whole day only the planner has.
+  idx.byJob.forEach((b, jobId) => Object.entries(b.days).forEach(([di, day]) => {
+    const jobName = b.name || jobId;
+    if (day.source === "planner") { rows.push(`planner has ${day.people.join(", ")} on ${jobName} ${DAY_LBL[di]} but Simpro has nothing there that day`); return; }
+    day.people.forEach(name => { if (day.by && day.by[personKey(name)] === "planner") rows.push(`planner has ${name} on ${jobName} ${DAY_LBL[di]} but Simpro does not list them`); });
+  }));
   return rows;
 }
 
