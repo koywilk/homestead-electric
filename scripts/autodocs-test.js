@@ -1,32 +1,42 @@
-// Dashboard automated docs (v535): pickLatest() against the real listings of
-// the packet and Monday folders on 2026-10-13. Run: node scripts/autodocs-test.js
+// Dashboard automated docs (v535, folders re-pointed 2026-10-15): pickLatest() against
+// listings shaped like the real Meeting Prep folders. Run: node scripts/autodocs-test.js
 // Exit 0 = all pass. Wired into `prebuild`.
 "use strict";
 const assert = require("assert");
 const { AUTO_DOC_SOURCES, pickLatest } = require("../functions/autoDocs.js");
-const packet = [
-  { id: "1vu6", name: "Lead Meeting Prep — Wed, Oct 7", createdTime: "2026-10-06T12:00:12.605Z" },
-  { id: "1f94", name: "Weekly Strategy Meeting — 2026-10-08", createdTime: "2026-10-09T01:54:59.115Z" },
-  { id: "1kp3", name: "SUPERSEDED 7:04p — Weekly Strategy Meeting — 2026-10-08", createdTime: "2026-10-09T00:04:02.676Z" },
-  { id: "1yXJ", name: "Oct 9, 2026 | Weekly Strategy/Scheduling Meeting — Prep", createdTime: "2026-10-09T00:28:29.813Z" },
-  { id: "1dB_", name: "Lead Meeting Prep — Wed, Sep 9", createdTime: "2026-09-08T20:45:44.403Z" },
-  { id: "fp1", name: "Friday Packet — Oct 2, 2026", createdTime: "2026-10-02T11:30:04.000Z" },
-  { id: "fp2", name: "Friday Packet — Oct 9, 2026", createdTime: "2026-10-09T11:30:04.000Z", webViewLink: "https://docs.google.com/document/d/fp2/edit?usp=drivesdk" },
-];
 const monday = [
   { id: "1g2P", name: "Monday Office Meeting — 2026-10-12 (v2)", createdTime: "2026-10-12T21:16:18.725Z" },
   { id: "1aZj", name: "Monday Office Meeting — 2026-10-12", createdTime: "2026-10-12T19:36:22.554Z" },
   { id: "1bEc", name: "Monday Office Meeting — 2026-10-05 (v2)", createdTime: "2026-10-05T21:59:26.154Z" },
 ];
-const pre = (k) => AUTO_DOC_SOURCES.find(s => s.key === k).prefix;
+const wednesday = [
+  { id: "wl2", name: "Weekly Lead Meeting — 2026-10-21", createdTime: "2026-10-20T22:05:00Z", webViewLink: "https://docs.google.com/document/d/wl2/edit?usp=drivesdk" },
+  { id: "wl1", name: "Weekly Lead Meeting — 2026-10-14", createdTime: "2026-10-13T22:05:00Z" },
+  { id: "wlt", name: "Weekly Lead Meeting — 2026-10-21 (test)", createdTime: "2026-10-20T23:30:00Z" },   // test copy is newer but still the same prefix: documents the (test) hazard
+  { id: "wls", name: "SUPERSEDED 7:04p — Weekly Lead Meeting — 2026-10-21", createdTime: "2026-10-21T01:00:00Z" },
+];
+const friday = [
+  { id: "fs2", name: "Friday Strategy Prep — 2026-10-23", createdTime: "2026-10-23T12:00:04.000Z", webViewLink: "https://docs.google.com/document/d/fs2/edit?usp=drivesdk" },
+  { id: "fs1", name: "Friday Strategy Prep — 2026-10-16", createdTime: "2026-10-16T12:00:04.000Z" },
+  { id: "fst", name: "TEST — Friday Strategy Prep — 2026-10-23", createdTime: "2026-10-23T13:00:00.000Z" },
+  { id: "fsp", name: "PREVIEW — Friday Strategy Prep — 2026-10-23", createdTime: "2026-10-23T14:00:00.000Z" },
+  { id: "fsx", name: "SUPERSEDED — Friday Strategy Prep — 2026-10-16", createdTime: "2026-10-24T00:00:00.000Z" },
+  { id: "fsf", name: "Friday Strategy Prep — 2026-10-09 (fallback)", createdTime: "2026-10-09T12:00:04.000Z" },
+];
+const src = (k) => AUTO_DOC_SOURCES.find(s => s.key === k);
+const pre = (k) => src(k).prefix;
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
-ok(pickLatest(packet, pre("lead")).id === "1vu6", "lead prep: newest Lead Meeting Prep");
-ok(pickLatest(packet, pre("strategy")).id === "1f94", "strategy: the real one, not SUPERSEDED or the hand-made Prep doc");
-ok(pickLatest(packet, pre("packet")).id === "fp2", "packet: newest Friday Packet");
-ok(pickLatest(packet, pre("packet")).url.includes("/fp2/"), "packet: keeps Drive's link");
+ok(AUTO_DOC_SOURCES.length === 3 && AUTO_DOC_SOURCES.map(s => s.key).join() === "monday,wednesday,friday", "exactly three sources: monday, wednesday, friday");
+ok(src("monday").folder === "17WmRG9qdErbJcvl4vDShRjSduJOZARZ0" && src("wednesday").folder === "1tAFxgYFL7su4xDviMDvPo0Xe355tGaRR" && src("friday").folder === "1q107o80DtOadifPymLZzzImSMQBf74_3", "each source points at its own Meeting Prep folder");
+ok(pre("monday") === "Monday Office Meeting — " && pre("wednesday") === "Weekly Lead Meeting — " && pre("friday") === "Friday Strategy Prep — ", "prefixes");
 ok(pickLatest(monday, pre("monday")).id === "1g2P", "monday: the (v2) made later the same day wins");
 ok(pickLatest(monday, pre("monday")).url === "https://docs.google.com/document/d/1g2P/edit", "monday: builds a link when Drive gives none");
+ok(pickLatest(wednesday, pre("wednesday")).id === "wlt", "wednesday: newest by createdTime among names that START with the prefix; SUPERSEDED does not win");
+ok(pickLatest(wednesday.filter(f => f.id !== "wlt"), pre("wednesday")).id === "wl2", "wednesday: real doc wins once the test copy is gone");
+ok(pickLatest(wednesday.filter(f => f.id !== "wlt"), pre("wednesday")).url.includes("/wl2/"), "wednesday: keeps Drive's link");
+ok(pickLatest(friday, pre("friday")).id === "fs2", "friday: real doc wins; TEST / PREVIEW / SUPERSEDED prefixes do not match");
+ok(pickLatest(friday, pre("friday")).url.includes("/fs2/"), "friday: keeps Drive's link");
+ok(pickLatest([friday[2], friday[3], friday[4]], pre("friday")) === null, "friday: only TEST / PREVIEW / SUPERSEDED copies gives null");
 ok(pickLatest([], pre("monday")) === null && pickLatest(undefined, "x") === null, "empty or missing listing gives null");
-ok(pickLatest([...packet, { id: "wl", name: "Weekly Lead Meeting — 2026-10-14", createdTime: "2026-10-13T22:05:00Z" }, { id: "wlt", name: "Weekly Lead Meeting — 2026-10-14 (test)", createdTime: "2026-10-13T21:00:00Z" }], pre("weekly")).id === "wl", "weekly: newest Weekly Lead Meeting");
 ok(new Set(AUTO_DOC_SOURCES.map(s => s.key)).size === AUTO_DOC_SOURCES.length, "keys are unique");
 console.log(`autodocs-test: ${n} checks passed`);

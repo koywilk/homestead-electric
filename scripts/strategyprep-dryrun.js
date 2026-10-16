@@ -23,7 +23,7 @@ const SIMPRO_TOKEN = (fnSrc.match(/const SIMPRO_TOKEN = "([^"]+)"/) || [])[1];
 const SIMPRO_BASE  = (fnSrc.match(/const SIMPRO_BASE  = "([^"]+)"/) || [])[1];
 if (!SIMPRO_TOKEN || !SIMPRO_BASE) { console.error("could not read SIMPRO_TOKEN / SIMPRO_BASE from functions/index.js"); process.exit(1); }
 const NOTES_DOC = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";   // Josh's doc — read only
-const PACKET_FOLDER = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
+const MEETING_PREP_FRIDAY = "1q107o80DtOadifPymLZzzImSMQBf74_3";
 const makePreview = process.argv.includes("--doc");
 
 (async () => {
@@ -91,7 +91,7 @@ const makePreview = process.argv.includes("--doc");
   if (makePreview) {
     const docsAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"] });
     const docs = google.docs({ version: "v1", auth: docsAuth }), drive = google.drive({ version: "v3", auth: docsAuth });
-    const created = await drive.files.create({ requestBody: { name: `PREVIEW — ${model.heading}`, parents: [PACKET_FOLDER], mimeType: "application/vnd.google-apps.document" }, fields: "id, webViewLink", supportsAllDrives: true });
+    const created = await drive.files.create({ requestBody: { name: `PREVIEW — ${model.heading}`, parents: [MEETING_PREP_FRIDAY], mimeType: "application/vnd.google-apps.document" }, fields: "id, webViewLink", supportsAllDrives: true });
     await docs.documents.batchUpdate({ documentId: created.data.id, requestBody: { requests: S.docsRequests(lines, 1) } });
     console.log(`preview doc: ${created.data.webViewLink || `https://docs.google.com/document/d/${created.data.id}/edit`}`);
   }

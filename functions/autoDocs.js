@@ -5,11 +5,9 @@
 "use strict";
 
 const AUTO_DOC_SOURCES = [
-  { key: "packet",   folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Friday Packet — " },
-  { key: "lead",     folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Lead Meeting Prep — " },
-  { key: "weekly",   folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Weekly Lead Meeting — " },
-  { key: "strategy", folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Weekly Strategy Meeting — " },
-  { key: "monday",   folder: "1-_A2XYgbz85O83K1Hwspka4KCnYeZQYP", prefix: "Monday Office Meeting — " },
+  { key: "monday",    folder: "17WmRG9qdErbJcvl4vDShRjSduJOZARZ0", prefix: "Monday Office Meeting — " },
+  { key: "wednesday", folder: "1tAFxgYFL7su4xDviMDvPo0Xe355tGaRR", prefix: "Weekly Lead Meeting — " },
+  { key: "friday",    folder: "1q107o80DtOadifPymLZzzImSMQBf74_3", prefix: "Friday Strategy Prep — " },
 ];
 
 // files: Drive files of one folder ({id, name, createdTime, modifiedTime, webViewLink}).
