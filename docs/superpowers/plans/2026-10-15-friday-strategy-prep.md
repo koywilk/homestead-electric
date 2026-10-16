@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Every Friday 6:00 AM MT a Cloud Function inserts this week's pre-filled section at the top of Josh's "Notes - Weekly Strategy/Scheduling Meeting" Google Doc — schedule gaps, blocked jobs by who we wait on, pipeline, money, QC, last week — built so that no live job is silently dropped and crew is never inferred from a job's roles.
+**Goal:** Every Friday 6:00 AM MT a Cloud Function writes this week's pre-filled meeting doc ("Friday Strategy Prep — <date>", packet Drive folder, styled to paste straight into Josh's "Notes - Weekly Strategy/Scheduling Meeting") — schedule gaps, blocked jobs by who we wait on, pipeline, money, QC, last week — built so that no live job is silently dropped and crew is never inferred from a job's roles.
 
-**Architecture:** All content logic is a PURE module `functions/strategyPrep.js` (`buildModel(inputs)` → plain object, `renderLines(model)` → `[{kind,text,spans}]`, `parseNotesCarry(doc, now)`), reusing `foremanMeetingPrep.docsRequests` for the Docs API requests. `functions/index.js` gains `runStrategyPrep` (reads, Simpro, Calendar, Docs insert, Drive fallback, additive state merge, push) with cron + test callable. A plain-node harness with fixtures from the real Lot 208 / Namjoshi cases runs in `prebuild`; a read-only dry-run renders the exact section into a preview copy for Koy's sign-off.
+**Architecture:** All content logic is a PURE module `functions/strategyPrep.js` (`buildModel(inputs)` → plain object, `renderLines(model)` → `[{kind,text,spans}]`, `parseNotesCarry(doc, now)`), reusing `foremanMeetingPrep.docsRequests` for the Docs API requests. `functions/index.js` gains `runStrategyPrep` (reads, Simpro, Calendar, read of Josh's doc for carry-forward, doc create + fill, HTML fallback, additive state merge, push) with cron + test callable. A plain-node harness with fixtures from the real Lot 208 / Namjoshi cases runs in `prebuild`; a read-only dry-run renders the exact doc as a PREVIEW doc for Koy's sign-off.
 
 **Tech Stack:** Node 22 Cloud Functions (`firebase-functions/v1`, googleapis Docs v3/Calendar v3/Drive v3, `fetch`), plain-node test scripts (no framework), Firestore, FCM via the existing `deliver` layer.
 
@@ -18,9 +18,9 @@
 - **Docs text is ASCII/BMP only — no emoji** (JS `length` must equal UTF-16 index math in `docsRequests`). Push titles: `Friday prep`, no glyph.
 - **Dates:** `TZ = "America/Denver"`; `MARGIN_TARGET = 15`; `toDateAny` accepts ISO, `M/D/YY`, `M/D/YYYY`, Firestore Timestamp, ms-epoch strings (app ids).
 - **`functions/index.js` export count:** 106 before this plan → 108 after Task 6 → 106 after Task 8 retires the packet. Check with `cd functions && node -e "console.log(Object.keys(require('./index.js')).length)"` before and after every edit to that file. Edit in place, never rewrite from a snapshot.
-- **Reads only.** The only Firestore write is one `set(..., {merge:true})` on `settings/strategyPrep`; test runs skip it. The only Docs write is one `batchUpdate` of `insertText` + styles range-limited to the inserted text.
+- **Reads only.** The only Firestore write is one `set(..., {merge:true})` on `settings/strategyPrep`; test runs skip it. The only Docs write is one `batchUpdate` into the doc this run just created. Josh's notes doc is only ever read.
 - **FCM:** deep-link fields ride `data.*`; never add fields to `webpush.notification`. The notif object is `{ title, body, url }` (`notifyDelivery.js` reads `url`).
-- **Service account access:** the functions SA (`homestead-electric@appspot.gserviceaccount.com`) got **403** on Josh's doc on 2026-10-15. Josh (owner) or Koy (if editor) must share the doc with the SA as Editor before the real run; the dry-run and test callable target a **copy** Koy makes and shares the same way.
+- **Service account access:** the functions SA (`homestead-electric@appspot.gserviceaccount.com`) got **403** on Josh's doc on 2026-10-15. That only affects the Carried section (a read): sharing the doc with the SA as **Viewer** enables it; until then the section prints the share hint. Everything else writes to its own new doc in the packet folder (Koy, 2026-10-15: *"lets just have it on its own doc, ill copy and paste each week to the meeting doc."*).
 - **Client ship (Task 9) rules:** SW bump to current+1 (re-read `public/service-worker.js` line 1 at execution time; live was v541 on 2026-10-15), FEATURES.md entry naming the same `SW v<N>`, `CI=true npm run build` with NO pipe, no emoji in UI copy, no yellow.
 
 ## Review Focus
@@ -798,7 +798,7 @@ git commit -m "Friday prep: blocked jobs grouped by who we wait on, cleared sinc
       returnTrips: [{ rtStatus: "needs", createdAt: "2026-10-12T10:00:00Z", scope: "new" }] },
   );
   const m = S.buildModel(f);
-  t("model: heading is Google's shape", m.heading === "Oct 16, 2026 | Weekly Strategy/Scheduling Meeting", m.heading);
+  t("model: heading = the doc title", m.heading === "Friday Strategy Prep — Oct 16, 2026", m.heading);
   t("model: preLine names the window", /Mon 10\/19 – Fri 10\/23/.test(m.preLine) && /6:00 AM/.test(m.preLine), m.preLine);
   t("coming: Chapman week of 10/26, Cougar Moon (live, finish 11/2) week of 11/2, Forth week of 11/16; Peterson under no date; Oak Hill (live) excluded", (() => { const c = m.coming; const labels = c.weeks.map(w => `${w.label}:${w.rows.map(r => r.name).join(",")}`); return eq(labels, ["Week of 10/26:#3019 - Chapman Residence", "Week of 11/2:Cougar Moon Lot 84 - Kamas", "Week of 11/16:Forth"]) && c.noDate.length === 1 && c.noDate[0].name === "Peterson" && !JSON.stringify(c).includes("Oak Hill"); })(), JSON.stringify(m.coming.weeks));
   t("coming: Cougar Moon in prep inside 21 days? (11/2 is 17 days) → yes, 5/5", m.coming.prep.length === 1 && m.coming.prep[0].name.startsWith("Cougar Moon") && m.coming.prep[0].done === 5, JSON.stringify(m.coming.prep));
@@ -933,8 +933,7 @@ function buildModel(inputs) {
   const w = weekOf(now), { today, meeting, weekYmds, weekDays } = w;
   const ERR = (e) => ({ error: `Section unavailable this week: ${(e && e.message) || e}` });
   const m = {
-    heading: `${meeting.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} | Weekly Strategy/Scheduling Meeting`,
-    attendeesLine: "Attendees: Justin Cloward · Brady Nelson · Joshua Cloward · Koy Wilkinson",
+    heading: `Friday Strategy Prep — ${meeting.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,   // the doc title; the body carries no heading (it is pasted under Google's own)
     preLine: `pre-filled Fri 6:00 AM MT from the crew app · next week Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])} · booked = Simpro + planner as of 6:00 AM · details live in the app`,
     weekLabel: `Mon ${fmtMD(weekDays[0])} – Fri ${fmtMD(weekDays[4])}`, meetingYmd: ymd(meeting), todayYmd: ymd(today),
     carried: { error: false, fromLabel: "", rows: [] }, headline: [], schedule: { error: true }, blocked: { error: true }, coming: { error: true }, money: { error: true }, qc: { error: true }, lastWeek: { error: true }, counts: {}, nextState: null,
@@ -1037,7 +1036,7 @@ git commit -m "Friday prep: coming up, money (packet engine), QC, last week, hea
   const m = S.buildModel(fixture({ notesDoc: doc }));
   const lines = S.renderLines(m);
   const txt = lines.map(l => l.text);
-  t("render: heading first, then attendees, pre-line", lines[0].kind === "h2" && lines[0].text === m.heading && /^Attendees/.test(txt[1]) && lines[2].kind === "grey");
+  t("render: body starts with the grey pre-line, then the headline; no H2 heading, no attendee line", lines[0].kind === "grey" && /pre-filled/.test(lines[0].text) && lines[1].kind === "p" && !lines.some(l => l.kind === "h2") && !txt.some(s => /^Attendees/.test(s)));
   t("render: section headings in meeting order", (() => { const h = lines.filter(l => l.kind === "h3").map(l => l.text.replace(/ [·—].*$/, "")); return eq(h, ["Carried from Oct 9", "Schedule next week", "Blocked", "Coming up", "Money", "QC to schedule", "Last week", "Action items"]); })(), JSON.stringify(lines.filter(l => l.kind === "h3").map(l => l.text)));
   t("render: Namjoshi start row says nobody booked and where the lead is", txt.some(s => /Namjoshi.*rough starts Mon 10\/19.*confirmed.*nobody booked.*lead Treycen Rollene is at The Hideout Mon/.test(s)), txt.filter(s => /Namjoshi/.test(s)).join(" | "));
   t("render: Lot 208 under nobody booked with reasons", txt.some(s => /Skyridge Lot 208.*rough 80%.*ready to invoice 15d.*QC needs.*3 punch.*GC \/ builder/.test(s)), txt.filter(s => /Skyridge/.test(s)).join(" | "));
@@ -1110,7 +1109,7 @@ function parseNotesCarry(doc, meetingDate) {
 const RED = [0.72, 0.14, 0.14], GREEN = [0.12, 0.48, 0.3], AMBER = [0.71, 0.33, 0.1], BLUE = [0.18, 0.4, 0.77];
 function renderLines(m) {
   const L = [];
-  const H2 = (t) => L.push({ text: t, kind: "h2" }), H3 = (t) => L.push({ text: t, kind: "h3" }), H4 = (t) => L.push({ text: t, kind: "h4" });
+  const H3 = (t) => L.push({ text: t, kind: "h3" }), H4 = (t) => L.push({ text: t, kind: "h4" });
   const P = (t) => L.push({ text: t, kind: "p" }), G = (t) => L.push({ text: t, kind: "grey" }), C = (t) => L.push({ text: t, kind: "check" });
   const B = (t, spans) => L.push({ text: t, kind: "bullet", spans: spans || [] });
   const tag = (word, rgb, rest) => { B(`${word} ${rest}`, [{ start: 0, len: word.length, rgb, bold: true }]); };
@@ -1119,7 +1118,7 @@ function renderLines(m) {
   const who = (r) => [r.foreman, r.lead && r.lead !== r.foreman ? r.lead : ""].filter(Boolean).join(" · ");
   const age = (n) => n == null ? "no date" : `${n}d`;
 
-  H2(m.heading); P(m.attendeesLine); G(m.preLine);
+  G(m.preLine);
   if (m.headline.length) m.headline.forEach(P);
 
   // Carried
@@ -1251,7 +1250,7 @@ git commit -m "Friday prep: notes-doc carry parser (Docs JSON) + Docs line rende
 
 **Interfaces:**
 - Consumes: `strategyPrep.js` exports from Tasks 1–5; existing `db`, `functions`, `google`, `getUsers`, `deliverIfWanted`, `sendToName`, `requireAppKey`, `SIMPRO_BASE`, `SIMPRO_TOKEN`, `TZ`, `PACKET_DRIVE_FOLDER_ID`, `foremanPrepLib.docsRequests` (already required as `foremanPrepLib`).
-- Produces: `runStrategyPrep({ testRun, docId })` → `{ ok, docLink, counts, recipients, fallback? }`; `exports.strategyPrep` (cron `0 6 * * 5`, secrets `["PLAN_INTAKE_GOOGLE_OAUTH"]`); `exports.sendTestStrategyPrep` (callable, app key; body `{ _appKey, docId }`).
+- Produces: `runStrategyPrep({ testRun })` → `{ ok, docLink, docId, counts, recipients, fallback? }`; `exports.strategyPrep` (cron `0 6 * * 5`, secrets `["PLAN_INTAKE_GOOGLE_OAUTH"]`); `exports.sendTestStrategyPrep` (callable, app key; body `{ _appKey }`; writes a `TEST — ` doc).
 
 - [ ] **Step 1: Record the export count**
 
@@ -1262,22 +1261,23 @@ Run: `cd functions && node -e "console.log(Object.keys(require('./index.js')).le
 ```js
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Friday 6:00am Mountain Time
-// Weekly Strategy/Scheduling Meeting pre-fill — inserts this week's section at
-// the TOP of Josh's running notes doc (the calendar attachment). Content is the
-// PURE builder ./strategyPrep.js so scripts/strategyprep-dryrun.js renders the
-// identical section into a preview copy for Koy's sign-off. Replaces fridayPacket
-// (2026-10-15; spec docs/superpowers/specs/2026-10-15-friday-strategy-prep-design.md).
+// Weekly Strategy/Scheduling Meeting pre-fill — writes this week's doc
+// "Friday Strategy Prep — <date>" to the packet Drive folder, styled like a Docs
+// section so Koy pastes its body into Josh's running notes doc (Koy, 2026-10-15:
+// "lets just have it on its own doc, ill copy and paste each week to the meeting
+// doc"). Content is the PURE builder ./strategyPrep.js so scripts/strategyprep-dryrun.js
+// renders the identical doc as a PREVIEW for sign-off. Replaces fridayPacket
+// (spec docs/superpowers/specs/2026-10-15-friday-strategy-prep-design.md).
 // Reads jobs/needs/settings/agentFindings, Simpro schedules + totals, Koy's
-// calendar (PLAN_INTAKE_GOOGLE_OAUTH, same as the plan-intake watcher), the doc
-// itself; writes ONE Docs insert + ONE additive merge to settings/strategyPrep.
+// calendar (PLAN_INTAKE_GOOGLE_OAUTH, same as the plan-intake watcher), Josh's
+// doc read-only (carry-forward); writes ONE new doc + ONE additive merge to
+// settings/strategyPrep.
 // ─────────────────────────────────────────────────────────────
-const STRATEGY_NOTES_DOC_ID = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";
+const STRATEGY_NOTES_DOC_ID = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";   // Josh's notes doc — READ ONLY here
 const strategyLib = require("./strategyPrep.js");
 
-async function runStrategyPrep({ testRun = false, docId = "" } = {}) {
+async function runStrategyPrep({ testRun = false } = {}) {
   const now = new Date();
-  const targetDoc = docId || STRATEGY_NOTES_DOC_ID;
-  if (!testRun && docId && docId !== STRATEGY_NOTES_DOC_ID) throw new Error("real runs only write the real notes doc");
   const w = strategyLib.weekOf(now);
   const windowStart = w.weekYmds[0], windowEnd = w.weekYmds[4];
   const inputErrors = [];
@@ -1339,31 +1339,36 @@ async function runStrategyPrep({ testRun = false, docId = "" } = {}) {
     calendarEvents = (r.data && r.data.items) || [];
   } catch (e) { inputErrors.push(`calendar: ${e.message}`); functions.logger.warn("strategyPrep calendar read failed", { error: e.message }); }
 
-  // 5 · The notes doc (read + later write with the same scope).
-  const docsAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"] });
-  const docs = google.docs({ version: "v1", auth: docsAuth });
+  // 5 · Josh's notes doc, READ ONLY, for carry-forward. 403 until shared with the service account as Viewer ⇒ section degrades.
   let notesDoc = null;
-  try { notesDoc = (await docs.documents.get({ documentId: targetDoc })).data || null; }
-  catch (e) { inputErrors.push(`notes doc read: ${e.message}`); functions.logger.warn("strategyPrep notes doc read failed", { error: e.message, targetDoc }); }
+  try {
+    const roAuth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/documents.readonly"] });
+    notesDoc = (await google.docs({ version: "v1", auth: roAuth }).documents.get({ documentId: STRATEGY_NOTES_DOC_ID })).data || null;
+  } catch (e) { inputErrors.push(`notes doc read: ${e.message.slice(0, 80)}`); functions.logger.warn("strategyPrep notes doc read failed", { error: e.message }); }
 
   // 6 · Build (pure).
   const model = strategyLib.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now });
   const lines = strategyLib.renderLines(model);
-  if (inputErrors.length) lines.splice(3, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });
-  const requests = strategyLib.docsRequests(lines, 1);
-  let docLink = `https://docs.google.com/document/d/${targetDoc}/edit`, fallback = false;
+  if (inputErrors.length) lines.splice(1, 0, { text: `Some data did not load this run: ${inputErrors.join("; ")}`, kind: "grey" });
+  const docTitle = `${testRun ? "TEST — " : ""}${model.heading}`;
 
-  // 7 · Insert at the top; on failure fall back to a Drive doc so the meeting still has one.
+  // 7 · Create the week's doc in the packet folder and fill it with the Docs API (styled, pastes clean).
+  //     If styling fails, fall back to an HTML-converted Drive doc so the meeting still has one.
+  const auth = new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/documents"] });
+  const drive = google.drive({ version: "v3", auth }), docs = google.docs({ version: "v1", auth });
+  let docId = "", docLink = "", fallback = false;
   try {
-    await docs.documents.batchUpdate({ documentId: targetDoc, requestBody: { requests } });
+    const created = await drive.files.create({ requestBody: { name: docTitle, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, fields: "id, webViewLink", supportsAllDrives: true });
+    docId = created.data.id; docLink = created.data.webViewLink || `https://docs.google.com/document/d/${docId}/edit`;
+    await docs.documents.batchUpdate({ documentId: docId, requestBody: { requests: strategyLib.docsRequests(lines, 1) } });
   } catch (e) {
-    functions.logger.error("strategyPrep docs insert failed", { error: e.message, targetDoc });
+    functions.logger.error("strategyPrep doc create/fill failed", { error: e.message, docId });
     try {
-      const drive = google.drive({ version: "v3", auth: docsAuth });
-      const html = `<div style="font-family:Arial,sans-serif;font-size:13px">${lines.map(l => l.kind === "h2" ? `<h1>${strategyLib.esc(l.text)}</h1>` : l.kind === "h3" ? `<h2>${strategyLib.esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${strategyLib.esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${strategyLib.esc(l.text)}</p>` : l.kind === "bullet" || l.kind === "check" ? `<li>${strategyLib.esc(l.text) || "&nbsp;"}</li>` : `<p>${strategyLib.esc(l.text)}</p>`).join("")}</div>`;
-      const created = await drive.files.create({ requestBody: { name: `Friday prep (fallback) — ${model.meetingYmd}`, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, media: { mimeType: "text/html", body: html }, fields: "id, webViewLink", supportsAllDrives: true });
-      docLink = created.data.webViewLink || docLink; fallback = true;
-      await sendToName("Koy", { title: "Friday prep could not write Josh's doc", body: `${e.message.slice(0, 100)} — fallback doc in Drive`, url: docLink });
+      const esc = strategyLib.esc;
+      const html = `<div style="font-family:Arial,sans-serif;font-size:13px">${lines.map(l => l.kind === "h3" ? `<h2>${esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${esc(l.text)}</p>` : (l.kind === "bullet" || l.kind === "check") ? `<li>${esc(l.text) || "&nbsp;"}</li>` : `<p>${esc(l.text)}</p>`).join("")}</div>`;
+      const created = await drive.files.create({ requestBody: { name: `${docTitle} (fallback)`, parents: [PACKET_DRIVE_FOLDER_ID], mimeType: "application/vnd.google-apps.document" }, media: { mimeType: "text/html", body: html }, fields: "id, webViewLink", supportsAllDrives: true });
+      docId = created.data.id; docLink = created.data.webViewLink || `https://docs.google.com/document/d/${docId}/edit`; fallback = true;
+      await sendToName("Koy", { title: "Friday prep: plain-text fallback", body: `${e.message.slice(0, 100)} — unstyled doc in Drive`, url: docLink });
     } catch (e2) {
       functions.logger.error("strategyPrep fallback failed", { error: e2.message });
       await sendToName("Koy", { title: "Friday prep failed", body: e.message.slice(0, 120) });
@@ -1373,18 +1378,18 @@ async function runStrategyPrep({ testRun = false, docId = "" } = {}) {
 
   // 8 · State (real runs only; additive merge).
   if (!testRun && model.nextState) {
-    try { await db.doc("settings/strategyPrep").set({ ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docLink }, ...((prevState && prevState.history) || [])].slice(0, 26) }, { merge: true }); }
+    try { await db.doc("settings/strategyPrep").set({ ...model.nextState, lastRunAt: now.toISOString(), history: [{ date: model.meetingYmd, docId, docLink }, ...((prevState && prevState.history) || [])].slice(0, 26) }, { merge: true }); }
     catch (e) { functions.logger.warn("strategyPrep state write failed", { error: e.message }); }
   }
 
   // 9 · Push: headline line 1, tap opens the doc. Test runs → Koy only.
-  const notif = { title: "Friday prep", body: (model.headline[0] || `${model.heading} is ready`).slice(0, 180), url: docLink };
+  const notif = { title: "Friday prep", body: (model.headline[0] || `${docTitle} is ready`).slice(0, 180), url: docLink };
   let recipients = [];
   if (testRun) { recipients = ["Koy (test)"]; await sendToName("Koy", notif); }
   else { const resolved = strategyLib.resolveRecipients(users); recipients = resolved.map(r => `${r.user.name} (${r.reason})`); await Promise.all(resolved.map(r => deliverIfWanted(r.user, "friday_packet", notif))); }
 
-  functions.logger.info("strategyPrep done", { targetDoc, testRun, fallback, recipients, inputErrors, ...model.counts });
-  return { ok: true, docLink, fallback, recipients, counts: model.counts, inputErrors };
+  functions.logger.info("strategyPrep done", { docId, docLink, testRun, fallback, recipients, inputErrors, ...model.counts });
+  return { ok: true, docId, docLink, fallback, recipients, counts: model.counts, inputErrors };
 }
 
 exports.strategyPrep = functions
@@ -1393,15 +1398,12 @@ exports.strategyPrep = functions
   .timeZone(TZ)
   .onRun(async () => { await runStrategyPrep(); return null; });
 
-// Manual test: full run into the doc id passed (a COPY of Josh's doc shared with the
-// service account), push to Koy only, state NOT advanced. Refuses to run without a docId.
+// Manual test: a full real run that writes a "TEST — …" doc, pushes Koy only, and does NOT advance state.
 exports.sendTestStrategyPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
   .https.onCall(async (data) => {
     requireAppKey(data);
-    const docId = String((data && data.docId) || "").trim();
-    if (!docId) throw new functions.https.HttpsError("invalid-argument", "docId (a copy of the notes doc) is required for a test run");
-    return await runStrategyPrep({ testRun: true, docId });
+    return await runStrategyPrep({ testRun: true });
   });
 ```
 
@@ -1429,7 +1431,7 @@ git commit -m "Friday prep: strategyPrep orchestrator — reads, Simpro, calenda
 
 **Interfaces:**
 - Consumes: `functions/strategyPrep.js` (every export used by Task 6), the SA key at `/Users/koyhomestead/Desktop/homestead-electric-firebase-adminsdk-fbsvc-e3fa8a404f.json`, `functions/node_modules` (`firebase-admin`, `googleapis`).
-- Produces: `strategyprep-dryrun.html` (gitignored like the other dryrun outputs — add the name to `.gitignore` if not matched by an existing pattern) and a PREVIEW Google Doc; prints the `checks` block.
+- Produces: `strategyprep-dryrun.html` (gitignored like the other dryrun outputs — add the name to `.gitignore` if not matched by an existing pattern) and, with `--doc`, a PREVIEW Google Doc in the packet folder; prints the `checks` block.
 
 - [ ] **Step 1: Write the script**
 
@@ -1437,10 +1439,10 @@ git commit -m "Friday prep: strategyPrep orchestrator — reads, Simpro, calenda
 #!/usr/bin/env node
 /* PREVIEW of the Friday Strategy/Scheduling section against real prod data.
  * Mirrors runStrategyPrep (functions/index.js) steps 1–6 exactly: same reads, same Simpro
- * fetches, same pure builder, same Docs requests — then inserts into a PREVIEW copy of the
- * notes doc (pass its id: node scripts/strategyprep-dryrun.js <previewDocId>) and writes
- * strategyprep-dryrun.html. Never touches the real notes doc, never pushes, writes nothing
- * to Firestore. Calendar rows need the OAuth JSON in env PLAN_INTAKE_GOOGLE_OAUTH
+ * fetches, same pure builder, same Docs requests — writes strategyprep-dryrun.html and, with
+ * --doc, creates "PREVIEW — Friday Strategy Prep — <date>" in the packet folder (delete it when
+ * done). Reads Josh's notes doc read-only for carry-forward (403 until shared with the service
+ * account as Viewer). Never writes to Josh's doc, never pushes, writes nothing to Firestore. Calendar rows need the OAuth JSON in env PLAN_INTAKE_GOOGLE_OAUTH
  * (copy from Secret Manager); without it the calendar section just says so.
  * The CHECKS block at the end lists every live job and the bucket it landed in — read it
  * before signing off: a job you expected and do not see is a rule bug, not a data gap. */
@@ -1454,9 +1456,9 @@ const db = admin.firestore();
 const S = require(path.join(__dirname, "../functions/strategyPrep.js"));
 const SIMPRO_TOKEN = "402222413e886be0bda7bd5173aa8e215d34bcdb";   // same as functions/index.js — keep in sync
 const SIMPRO_BASE  = "https://homesteadelectric.simprosuite.com/api/v1.0/companies/0";
-const REAL_DOC = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";
-const previewDoc = process.argv[2] || "";
-if (previewDoc === REAL_DOC) { console.error("refusing: that is the REAL notes doc"); process.exit(1); }
+const NOTES_DOC = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";   // Josh's doc — read only
+const PACKET_FOLDER = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
+const makePreview = process.argv.includes("--doc");
 
 (async () => {
   const now = new Date(); const w = S.weekOf(now);
@@ -1493,17 +1495,21 @@ if (previewDoc === REAL_DOC) { console.error("refusing: that is the REAL notes d
     const r = await google.calendar({ version: "v3", auth }).events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${w.weekYmds[0]}T00:00:00-06:00`, timeMax: `${w.weekYmds[4]}T23:59:59-06:00`, singleEvents: true, maxResults: 250 });
     calendarEvents = r.data.items || []; } catch (e) { console.log("calendar:", e.message); }
 
-  const docsAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents"] });
-  const docs = google.docs({ version: "v1", auth: docsAuth });
+  const docsAuth = new google.auth.GoogleAuth({ keyFile: SA_PATH, scopes: ["https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"] });
+  const docs = google.docs({ version: "v1", auth: docsAuth }), drive = google.drive({ version: "v3", auth: docsAuth });
   let notesDoc = null;
-  try { notesDoc = (await docs.documents.get({ documentId: previewDoc || REAL_DOC })).data; } catch (e) { console.log("notes doc read:", e.message, "(share the doc with the service account as Editor)"); }
+  try { notesDoc = (await docs.documents.get({ documentId: NOTES_DOC })).data; } catch (e) { console.log("notes doc read:", e.message, "(share Josh's doc with the service account as Viewer to get carry-forward)"); }
 
   const model = S.buildModel({ jobs, users, scheduleEntries, plannerDoc, pto, timeOffRequests, needs, upcoming, agentFindings, calendarEvents, prevState, simproTotalsById, notesDoc, simproOk, now });
   const lines = S.renderLines(model);
   const html = `<html><body style="font-family:Arial,sans-serif;font-size:13px;max-width:760px;margin:20px auto">${lines.map(l => l.kind === "h2" ? `<h1>${S.esc(l.text)}</h1>` : l.kind === "h3" ? `<h2>${S.esc(l.text)}</h2>` : l.kind === "h4" ? `<h3>${S.esc(l.text)}</h3>` : l.kind === "grey" ? `<p style="color:#777">${S.esc(l.text)}</p>` : (l.kind === "bullet" || l.kind === "check") ? `<div>&bull; ${S.esc(l.text) || "&nbsp;"}</div>` : `<p>${S.esc(l.text)}</p>`).join("\n")}</body></html>`;
   fs.writeFileSync(path.join(__dirname, "../strategyprep-dryrun.html"), html);
   console.log("wrote strategyprep-dryrun.html");
-  if (previewDoc) { await docs.documents.batchUpdate({ documentId: previewDoc, requestBody: { requests: S.docsRequests(lines, 1) } }); console.log(`inserted into preview doc https://docs.google.com/document/d/${previewDoc}/edit`); }
+  if (makePreview) {
+    const created = await drive.files.create({ requestBody: { name: `PREVIEW — ${model.heading}`, parents: [PACKET_FOLDER], mimeType: "application/vnd.google-apps.document" }, fields: "id, webViewLink", supportsAllDrives: true });
+    await docs.documents.batchUpdate({ documentId: created.data.id, requestBody: { requests: S.docsRequests(lines, 1) } });
+    console.log(`preview doc: ${created.data.webViewLink || `https://docs.google.com/document/d/${created.data.id}/edit`}`);
+  }
 
   // CHECKS — every live job and where it landed.
   const live = S.liveJobs(jobs), s = model.schedule;
@@ -1521,13 +1527,13 @@ if (previewDoc === REAL_DOC) { console.error("refusing: that is the REAL notes d
 })().catch(e => { console.error("dryrun failed:", e); process.exit(1); });
 ```
 
-- [ ] **Step 2: Run it against prod (read-only), first without a preview doc**
+- [ ] **Step 2: Run it against prod (read-only), HTML only**
 
 Run: `node scripts/strategyprep-dryrun.js` → prints counts and the CHECKS list; `MISSING 0`. Open `strategyprep-dryrun.html`. Check the CHECKS list against what Koy knows (Lot 208 under "nobody booked", Namjoshi under "start" with the Treycen line).
 
-- [ ] **Step 3: Preview copy**
+- [ ] **Step 3: Preview doc**
 
-Koy: File → Make a copy of Josh's doc, name it `PREVIEW — Weekly Strategy notes`, share with `homestead-electric@appspot.gserviceaccount.com` as Editor, paste its id. Run `node scripts/strategyprep-dryrun.js <id>` → section appears at the top of the copy. **Koy signs off here (spec §8 step 2).**
+Run `node scripts/strategyprep-dryrun.js --doc` → a `PREVIEW — Friday Strategy Prep — <date>` doc in the packet folder, styled exactly as the function will write it. Koy opens it, and pastes its body into a scratch doc to confirm checkboxes and colors survive a copy-paste. **Koy signs off here (spec §8 step 2).** Delete the preview doc afterwards.
 
 - [ ] **Step 4: Commit**
 
@@ -1547,27 +1553,27 @@ git commit -m "Friday prep: read-only dry-run with CHECKS block into a preview c
 - Modify (other repo, one note only): `~/Desktop/homestead-command-center/scripts/strategy-prep.mjs` header comment: `// RETIRED 2026-10-xx — replaced by functions/strategyPrep.js in the crew app.`
 
 **Interfaces:**
-- `AUTO_DOC_SOURCES`: remove `packet`; change `strategy` to `{ key: "strategy", docId: "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM", prefix: "" }`; `pickLatest` unchanged; `autoDocsLatest` returns `{ id: docId, url: https://docs.google.com/document/d/<id>/edit }` for a source with `docId` (no Drive listing).
+- `AUTO_DOC_SOURCES`: remove `packet`; change `strategy` to `{ key: "strategy", folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Friday Strategy Prep — " }`; `pickLatest` and `autoDocsLatest` unchanged.
 
 - [ ] **Step 1: Prerequisite and deploy (Koy's terminal)**
 
-Josh shares the real notes doc with `homestead-electric@appspot.gserviceaccount.com` as Editor. Then:
+Optional but recommended: Josh (or Koy, if he has edit rights) shares the notes doc with `homestead-electric@appspot.gserviceaccount.com` as **Viewer** so the Carried section fills. Then:
 
 ```bash
 cd functions && FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:strategyPrep,functions:sendTestStrategyPrep
 ```
 
-Test into the preview copy (app key from `APP_CALL_KEY` in functions/index.js):
+Test run (app key from `APP_CALL_KEY` in functions/index.js):
 
 ```bash
-curl -s -X POST https://us-central1-homestead-electric.cloudfunctions.net/sendTestStrategyPrep -H "Content-Type: application/json" -d '{"data":{"_appKey":"<APP_CALL_KEY>","docId":"<previewDocId>"}}'
+curl -s -X POST https://us-central1-homestead-electric.cloudfunctions.net/sendTestStrategyPrep -H "Content-Type: application/json" -d '{"data":{"_appKey":"<APP_CALL_KEY>"}}'
 ```
 
-Expected: `{"result":{"ok":true,"docLink":"…","counts":{…}}}`; Koy's phone gets "Friday prep" with headline line 1; tapping opens the copy.
+Expected: `{"result":{"ok":true,"docLink":"…","counts":{…}}}`; a `TEST — Friday Strategy Prep — <date>` doc in the packet folder; Koy's phone gets "Friday prep" with headline line 1; tapping opens the doc.
 
 - [ ] **Step 2: First real Friday**
 
-Leave `fridayPacket` running this one Friday too (belt and braces). At 8:00 check: section at the top of Josh's doc; when Josh clicks Google's "take meeting notes", does it duplicate the heading? If yes → open a follow-up to insert BELOW Google's heading when one for today exists; if no → done.
+Leave `fridayPacket` running this one Friday too (belt and braces). At 6:05 check: `Friday Strategy Prep — <date>` in the packet folder, push received. Koy pastes the body under Google's dated heading in Josh's doc; confirm checkboxes and colors survive the paste.
 
 - [ ] **Step 3: Retire the packet (code)**
 
@@ -1579,12 +1585,12 @@ In `functions/index.js`: delete from the `// SCHEDULED — Friday 5:30am Mountai
 const AUTO_DOC_SOURCES = [
   { key: "lead",     folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Lead Meeting Prep — " },
   { key: "weekly",   folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Weekly Lead Meeting — " },
-  { key: "strategy", docId: "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM" },     // Josh's notes doc; the Friday section is inserted at its top
+  { key: "strategy", folder: "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb", prefix: "Friday Strategy Prep — " },
   { key: "monday",   folder: "1-_A2XYgbz85O83K1Hwspka4KCnYeZQYP", prefix: "Monday Office Meeting — " },
 ];
 ```
 
-In `exports.autoDocsLatest` loop: `if (src.docId) { out[src.key] = { id: src.docId, name: "Notes - Weekly Strategy/Scheduling Meeting", url: \`https://docs.google.com/document/d/${src.docId}/edit\` }; continue; }` before the Drive listing. Add to `scripts/autodocs-test.js`: `t("docId source needs no listing", AUTO_DOC_SOURCES.find(s => s.key === "strategy").docId && !AUTO_DOC_SOURCES.some(s => s.key === "packet"));`. Run it.
+`pickLatest` and the `autoDocsLatest` loop are unchanged (same folder, new prefix). In `scripts/autodocs-test.js` replace the packet-prefix fixture names with `Friday Strategy Prep — 2026-10-16` / `TEST — Friday Strategy Prep — 2026-10-16` and assert the TEST doc never wins (`pickLatest` requires the name to START with the prefix). Run it.
 
 - [ ] **Step 5: Deploy the retirement + disable the routine**
 
@@ -1619,7 +1625,7 @@ git commit -m "Friday prep live: retire fridayPacket + packet dry-run; autoDocs 
 Replace the `packet` and `strategy` entries with one:
 
 ```js
-  { k: "strategy", title: "Friday meeting prep", when: "Fridays 6:00 AM", by: "App (strategyPrep)", what: "Next week's schedule gaps, blocked jobs, money and QC, added to the top of Josh's notes doc", url: OD_GDOC("1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM"), latest: "strategy" },
+  { k: "strategy", title: "Friday meeting prep", when: "Fridays 6:00 AM", by: "App (strategyPrep)", what: "Next week's schedule gaps, blocked jobs, money and QC — paste it into Josh's meeting notes", url: OD_GFOLDER("1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb"), folder: true, latest: "strategy" },
 ```
 
 Remove the `settings/fridayPacket.lastRunAt` read if the card used it (grep `fridayPacket` in App.js; swap to `settings/strategyPrep` `lastRunAt`).
@@ -1633,10 +1639,10 @@ In `NOTIF_CATEGORIES`, in the Reminders group, add: `{ key:"friday_packet", labe
 `public/service-worker.js` line 1 → `homestead-v<current+1>` (re-read at execution). FEATURES.md, top of the newest section:
 
 ```
-- **Friday meeting prep replaces the Friday Packet — this week's section lands at the top of Josh's Weekly Strategy/Scheduling notes doc** · `shipped <date>` · `SW v<N>` · `strategyPrep` · `functions/strategyPrep.js` · Koy: *"Friday strategy meeting needs to be completly redone. The pull right now doesnt really help me … Real block and scheduling concerns need to be addressed in this meeting."* and *"it just needs to be 100 percent accurate."* Fridays 6:00 AM the function inserts: carried items, a 3-line headline, next week's schedule (booked from Simpro + planner only — never a job's foreman/lead; every in-progress job with nobody booked, with its wait reason; starts checked for crew, roles and Job Prep; dates that moved since last Friday; inspections/QC/scans/walks; PTO, pending requests, bodies, new hires, capacity; conflicts), blocked jobs grouped by who we wait on with "cleared" marks, coming starts and crews freeing, money (ready to invoice, margin at finish, approved COs), QC to schedule, last week, blank action table. Dashboard card opens the doc; Settings → Notifications gains the toggle. `fridayPacket` deleted. Harness `scripts/strategyprep-test.js` (prebuild) with the real Lot 208 / Namjoshi cases; `scripts/strategyprep-dryrun.js` renders into a preview copy. **Why it won't lose data:** read-only on jobs, needs, users and settings; one additive merge to `settings/strategyPrep`; one range-limited Docs insert; no loader, rules or job write change.
+- **Friday meeting prep replaces the Friday Packet — this week's section lands at the top of Josh's Weekly Strategy/Scheduling notes doc** · `shipped <date>` · `SW v<N>` · `strategyPrep` · `functions/strategyPrep.js` · Koy: *"Friday strategy meeting needs to be completly redone. The pull right now doesnt really help me … Real block and scheduling concerns need to be addressed in this meeting."* and *"it just needs to be 100 percent accurate."* Fridays 6:00 AM the function writes a new doc (packet folder; Koy pastes it into Josh's notes): carried items, a 3-line headline, next week's schedule (booked from Simpro + planner only — never a job's foreman/lead; every in-progress job with nobody booked, with its wait reason; starts checked for crew, roles and Job Prep; dates that moved since last Friday; inspections/QC/scans/walks; PTO, pending requests, bodies, new hires, capacity; conflicts), blocked jobs grouped by who we wait on with "cleared" marks, coming starts and crews freeing, money (ready to invoice, margin at finish, approved COs), QC to schedule, last week, blank action table. Dashboard card opens the doc; Settings → Notifications gains the toggle. `fridayPacket` deleted. Harness `scripts/strategyprep-test.js` (prebuild) with the real Lot 208 / Namjoshi cases; `scripts/strategyprep-dryrun.js` renders into a preview copy. **Why it won't lose data:** read-only on jobs, needs, users and settings; one additive merge to `settings/strategyPrep`; one range-limited Docs insert; no loader, rules or job write change.
 ```
 
-`public/sops/dashboard.html`: in the Automated docs paragraph replace the Friday Packet sentence with "Friday meeting prep opens Josh's notes doc, where this week's section is added at the top every Friday at 6:00 AM."
+`public/sops/dashboard.html`: in the Automated docs paragraph replace the Friday Packet sentence with "Friday meeting prep makes a new doc every Friday at 6:00 AM; the card opens the newest one, and Koy pastes it into Josh's meeting notes."
 
 - [ ] **Step 4: Build gate**
 
@@ -1655,7 +1661,7 @@ Koy pushes from the worktree branch (pre-push gate runs the CI build again). Aft
 
 ## Self-review
 
-**Spec coverage.** §3.1 booked rule → Task 1 (`buildScheduleIndex` never reads roles; Namjoshi test). §3.2 no job dropped → Task 1 (`classifySchedule` + "every live job lands in exactly one bucket" test) and Task 7 CHECKS. §3.3 conflicts → Task 2. §3.4 ages from stored dates → Tasks 2–4 (`daysBetween` on stored fields; "no date" fallback in renderer). §3.5 "as of 6:00 AM" → Task 4 `preLine`. §3.6 dead fields → Task 1 grep test. §3.7 pure + dry-run + harness → Tasks 1, 7. §3.8 copy first → Tasks 7, 8. §4.1 → Task 5. §4.2 → Task 4. §4.3 → Tasks 1, 2, 5 (people/capacity/conflicts/calendar/moved). §4.4 → Task 3. §4.5 → Task 4 (`comingRows`; `quotes` count is `null` — quotes carry no reliable date; the spec's "Quotes: count + oldest age" is dropped here deliberately and the renderer omits the line). §4.6 → Task 4. §4.7 → Task 4. §4.8 → Task 4. §4.9 → Task 5. §5 reads/writes → Task 6. §6 architecture/retire → Tasks 6, 8, 9. §7 errors → Tasks 4 (per-section `ERR`), 6 (fallback doc). §8 testing/sign-off → Tasks 7, 8. §10 decisions → Task 4 recipients, Task 6 cron/doc.
+**Spec coverage.** §3.1 booked rule → Task 1 (`buildScheduleIndex` never reads roles; Namjoshi test). §3.2 no job dropped → Task 1 (`classifySchedule` + "every live job lands in exactly one bucket" test) and Task 7 CHECKS. §3.3 conflicts → Task 2. §3.4 ages from stored dates → Tasks 2–4 (`daysBetween` on stored fields; "no date" fallback in renderer). §3.5 "as of 6:00 AM" → Task 4 `preLine`. §3.6 dead fields → Task 1 grep test. §3.7 pure + dry-run + harness → Tasks 1, 7. §3.8 TEST doc first → Tasks 7, 8. §4.1 → Task 5. §4.2 → Task 4. §4.3 → Tasks 1, 2, 5 (people/capacity/conflicts/calendar/moved). §4.4 → Task 3. §4.5 → Task 4 (`comingRows`; `quotes` count is `null` — quotes carry no reliable date; the spec's "Quotes: count + oldest age" is dropped here deliberately and the renderer omits the line). §4.6 → Task 4. §4.7 → Task 4. §4.8 → Task 4. §4.9 → Task 5. §5 reads/writes → Task 6. §6 architecture/retire → Tasks 6, 8, 9. §7 errors → Tasks 4 (per-section `ERR`), 6 (fallback doc). §8 testing/sign-off → Tasks 7, 8. §10 decisions → Task 4 recipients, Task 6 cron/doc.
 
 **Placeholder scan.** No TBD/TODO. `<N>`, `<date>`, `<previewDocId>`, `<APP_CALL_KEY>` are values the executor reads at execution time, each with where to read it.
 

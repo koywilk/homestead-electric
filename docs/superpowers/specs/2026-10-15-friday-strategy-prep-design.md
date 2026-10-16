@@ -2,11 +2,12 @@
 
 **Status:** DRAFT for Koy's review, 2026-10-15. Design approved in chat ("yes looks a lot more useful … way better structure") with one standing requirement: **"it just needs to be 100 percent accurate."** Nothing is built.
 **Mockup:** artifact `Wk6dTFtqMeDQaPdPYNofWC` (illustrative rows; the two errors Koy caught are fixed in §3 below).
+**Delivery (Koy, 2026-10-15, after approving the spec):** *"lets just have it on its own doc, ill copy and paste each week to the meeting doc."* The function writes its own Google Doc each week; nothing writes into Josh's doc. Sections below are amended accordingly.
 **Replaces:** the Friday Packet doc (`exports.fridayPacket`), the `friday-strategy-prep` Claude routine + `homestead-command-center/scripts/strategy-prep.mjs`, and the hand-built "Weekly Strategy Meeting —" docs.
 
 ## 1. Goal
 
-Every Friday at 6:00 AM MT, the top of Josh's running Google Doc **"Notes - Weekly Strategy/Scheduling Meeting"** (the calendar attachment, id `1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM`) already holds this week's section, filled from the crew app and Simpro, in the order the meeting runs: what rolled over, next week's schedule and its holes, what is blocked and by whom, what is coming, money, QC, last week, action items. The group (Koy, Josh, Brady, Justin) reads it instead of reconstructing the week from memory.
+Every Friday at 6:00 AM MT a new Google Doc **"Friday Strategy Prep — <date>"** lands in the packet Drive folder, filled from the crew app and Simpro and styled like a Docs section so Koy pastes its body into Josh's running notes doc **"Notes - Weekly Strategy/Scheduling Meeting"** (the calendar attachment, id `1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM`) in one copy-paste. Its order is the order the meeting runs: what rolled over, next week's schedule and its holes, what is blocked and by whom, what is coming, money, QC, last week, action items. The group (Koy, Josh, Brady, Justin) reads it instead of reconstructing the week from memory.
 
 Koy, 2026-10-15: *"Real block and scheduling concerns need to be addressed in this meeting. Anything else strategy related."*
 
@@ -31,16 +32,16 @@ These come from the two errors Koy caught in the mockup, checked against live da
 5. **The doc says when it was built.** Header: "pre-filled Fri 6:00 AM MT". Simpro's next-week schedule is sparse at 6 AM (the meeting itself fills it); the Booked list is explicitly "as of 6:00 AM".
 6. **Dead fields are never read.** `roughScheduledDate` / `finishScheduledDate` (the app stopped writing them; this is what emptied the old Thursday packet), `lastActivityAt` (a presence ping). Return-trip dates come from `rtStatusDate` (`scheduledDate` is empty in live data).
 7. **Pure builder + dry-run gate + regression harness.** `functions/strategyPrep.js` has no I/O. `scripts/strategyprep-dryrun.js` renders the exact section from live data to an HTML file; Koy signs off on the render before the first insert. `scripts/strategyprep-test.js` carries fixtures built from the real cases above (Lot 208, Namjoshi/Treycen/Hideout) and runs in `prebuild`.
-8. **First live run goes to a copy, not Josh's doc.** The test callable inserts into a scratch copy of the notes doc; Koy compares it with what he knows; only then does the cron point at the real doc.
+8. **First live run is a TEST doc.** The test callable writes `TEST — Friday Strategy Prep — <date>` to the packet folder (state not advanced); Koy compares it with what he knows; only then does the cron go live.
 
 ## 4. The section, top to bottom
 
-Same rendering contract as the Tuesday insert: Docs API `insertText` at index 1, then range-limited paragraph/text styles and bullet presets, ASCII/BMP only, no emoji. One line per job, hard caps with "…and N more in the app", every section degrades alone to one grey line ("Section unavailable this week: <reason>").
+Same rendering contract as the Tuesday weekly doc (v536): create an empty Google Doc in the packet folder, then one Docs API `batchUpdate` (`insertText` at index 1, then range-limited paragraph/text styles and bullet presets), ASCII/BMP only, no emoji. One line per job, hard caps with "…and N more in the app", every section degrades alone to one grey line ("Section unavailable this week: <reason>").
 
-Heading matches Google's meeting-notes heading so it reads as the week's entry: `Oct 16, 2026 | Weekly Strategy/Scheduling Meeting` (HEADING_2), then the attendee line, then a grey line `pre-filled Fri 6:00 AM MT from the crew app · next week Mon 10/19 – Fri 10/23 · details live in the app`.
+The doc title carries the date (`Friday Strategy Prep — Oct 16, 2026`). The body has no heading and no attendee line of its own: it starts with a grey line `pre-filled Fri 6:00 AM MT from the crew app · next week Mon 10/19 – Fri 10/23 · booked = Simpro + planner as of 6:00 AM · details live in the app`, so Koy pastes it under Google's own dated heading in Josh's doc without a duplicate.
 
 ### 4.1 Carried from <last meeting date>
-Last section of this same doc (Docs API `documents.get`, newest dated heading before today). Rules from `strategy-prep.mjs` `parseNotesCarry`, ported: struck-through = done (its children go with it); un-struck Notes/General bullets and unchecked Action items carry; each gets `(carried N wks)` counted from the first section it appeared in (match by normalized text). Cap 20. One blank checkbox line at the end. Unreadable doc ⇒ "Couldn't read last week's notes" line.
+Last dated section of Josh's notes doc (Docs API `documents.get`, read-only, newest dated heading before today). Needs the doc shared with the functions service account as **Viewer** (it got 403 on 2026-10-15); until then this section prints "Couldn't read Josh's notes doc — share it with the service account to get carry-forward." Rules from `strategy-prep.mjs` `parseNotesCarry`, ported: struck-through = done (its children go with it); un-struck Notes/General bullets and unchecked Action items carry; each gets `(carried N wks)` counted from the first section it appeared in (match by normalized text). Cap 20. One blank checkbox line at the end. Unreadable doc ⇒ "Couldn't read last week's notes" line.
 
 ### 4.2 Headline (three lines; each drops if its data failed)
 - `Next week: {booked} jobs crewed · {idle} in progress with nobody booked · {starts} starts, {startsAtRisk} with no crew.`
@@ -101,35 +102,35 @@ Blank 3-column table (Owner · What · By when, 4 rows). Next Friday, unchecked 
 
 **Reads (all read-only):** `jobs` (wrapped `{data}` envelope, unwrap as the packet does), `needs`, `settings/users`, `settings/upcoming_jobs`, `settings/schedule_<nextMonday>`, `settings/crewPTO`, `settings/timeOffRequests`, `settings/strategyPrep` (state), `agentFindings` (last 7 days), Simpro `/schedules/?Date=between(<mon>,<fri>)` (the `between()` filter works; verified 2026-10-15, so no 60-page crawl), Simpro `/jobs/?ID=…&columns=ID,Total,Totals` for ready-to-invoice + margin-watch candidates (cap 50, concurrency 5), Koy's Google Calendar (plan-intake credentials), Josh's notes doc (Docs API).
 
-**Writes:** one `insertText` + styles into Josh's doc (range-limited to the inserted text); one merge into `settings/strategyPrep` = `{ lastRunAt, dates: {key: [{d, v}…]}, blockerKeys: [], marginByJob: {}, userIds: [], weeks: [{ymd, counts}] (cap 8), history: [{date, docLink}] (cap 26) }`. Test runs never write state. **No job write path, no loader change, no rules change** (`settings/*` already readable; the doc is the only thing holding margins, same as today).
+**Writes:** one new Google Doc per run in the packet folder (`PACKET_DRIVE_FOLDER_ID`), filled by one Docs `batchUpdate`; one merge into `settings/strategyPrep` = `{ lastRunAt, dates: {key: [{d, v}…]}, blockerKeys: [], marginByJob: {}, userIds: [], weeks: [{ymd, counts}] (cap 8), history: [{date, docLink}] (cap 26) }`. Test runs never write state. **No job write path, no loader change, no rules change** (`settings/*` already readable; the doc is the only thing holding margins, same as today).
 
 ## 6. Architecture
 
 - `functions/strategyPrep.js` — PURE: `buildModel(inputs)`, `renderLines(model)` (the Tuesday builder's line shape: `{kind, text, spans}`), reuse `foremanMeetingPrep.docsRequests(lines, 1)` for the Docs API requests, `parseNotesCarry(doc)` (ported from `strategy-prep.mjs` to the Docs JSON shape, since the function reads the doc through the API, not Drive markdown), `collectSimproCandidates`, `resolveRecipients`. Moves in from `fridayPacket.js`: date helpers, `WAIT_BUCKETS`/`waitBucket`, `flatPunchWaiting`, `countUnansweredQuestions`, the blockers scoring (as the per-job "highest item" rule), the Week Ahead merge/dedupe, `SPECIAL_JOB`, `MARGIN_TARGET`.
-- `functions/index.js` — `runStrategyPrep({testRun, docId})`: reads above, Simpro fetches (schedule window + totals), Docs read + insert, state merge, push. `exports.strategyPrep` cron `0 6 * * 5` America/Denver, 540 s, 512 MB. `exports.sendTestStrategyPrep` callable (app key): full run, inserts into the doc id passed (the scratch copy), push to Koy only, no state write. Push: title `Friday prep`, body = headline line 1, `data.url` = doc link, recipients Koy, Josh, Brady, Justin (admins ∪ explicit list; never plain "manager"), pref key `friday_packet` reused so the existing Settings toggle still governs it (its label changes to "Friday meeting prep (Fri 6:00 AM)" in the next client push).
-- Fallback: if the insert fails, upload the same content as a Drive doc in the packet folder (the packet's upload code) and push Koy the ops alert, so the meeting still has a doc.
-- Retire: `exports.fridayPacket` + `exports.sendTestFridayPacket` (delete after the first clean live Friday); `fridayPacket.js` deleted once its helpers have moved; `autoDocs.js` "packet" and "strategy" sources replaced by one `strategy` entry that links Josh's notes doc directly; the Dashboard card copy updated; the `friday-strategy-prep` Claude routine disabled and `strategy-prep.mjs` marked retired in the command-center repo (that repo is Koy's; one note, no deletion).
+- `functions/index.js` — `runStrategyPrep({testRun})`: reads above, Simpro fetches (schedule window + totals), read of Josh's doc (carry), create + fill the week's doc, state merge, push. `exports.strategyPrep` cron `0 6 * * 5` America/Denver, 540 s, 512 MB. `exports.sendTestStrategyPrep` callable (app key): full run writing a `TEST — ` doc, push to Koy only, no state write. Push: title `Friday prep`, body = headline line 1, `data.url` = doc link, recipients Koy, Josh, Brady, Justin (admins ∪ explicit list; never plain "manager"), pref key `friday_packet` reused so the existing Settings toggle still governs it (its label changes to "Friday meeting prep (Fri 6:00 AM)" in the next client push).
+- Fallback: if the Docs styling fails, upload the same content as an HTML-converted Drive doc (the packet's upload code) and push Koy the ops alert, so the meeting still has a doc.
+- Retire: `exports.fridayPacket` + `exports.sendTestFridayPacket` (delete after the first clean live Friday); `fridayPacket.js` deleted once its helpers have moved; `autoDocs.js` "packet" and "strategy" sources replaced by one `strategy` entry with prefix `Friday Strategy Prep — ` in the packet folder (the Dashboard card opens the newest); the `friday-strategy-prep` Claude routine disabled and `strategy-prep.mjs` marked retired in the command-center repo (that repo is Koy's; one note, no deletion).
 - Export count: +2 then −2 (106 → 106 after retirement; verify with the usual one-liner before and after each edit).
 
 ## 7. Errors
 
-Each section is wrapped; a throw renders one grey line with the reason and never kills the insert. Simpro schedule failure ⇒ Booked prints "Simpro unavailable; planner only" and §4.3 idle rows carry "(Simpro not checked)". Totals failure ⇒ cached margins, no dollars. Notes doc unreadable ⇒ §4.1 degrades, insert still happens (Docs write scope covers the read). Insert failure ⇒ Drive fallback + ungated ops push to Koy. All failures logged with `strategyPrep <step>` prefixes.
+Each section is wrapped; a throw renders one grey line with the reason and never kills the insert. Simpro schedule failure ⇒ Booked prints "Simpro unavailable; planner only" and §4.3 idle rows carry "(Simpro not checked)". Totals failure ⇒ cached margins, no dollars. Notes doc unreadable ⇒ §4.1 degrades, insert still happens (Docs write scope covers the read). Docs styling failure ⇒ HTML upload fallback + ungated ops push to Koy. All failures logged with `strategyPrep <step>` prefixes.
 
 ## 8. Testing and sign-off
 
 1. `scripts/strategyprep-test.js` (plain node, prebuild): fixtures reproduce Lot 208 (in progress, RTI, QC needs, waiting items ⇒ appears under nobody booked with reasons), Namjoshi (confirmed start, lead booked elsewhere ⇒ at risk with the "is at" line), Hideout (finish 95%, invoiced, waiting items ⇒ Booked when Simpro says so, Blocked/material otherwise), a planner-vs-Simpro conflict, a cleared block, a moved date with history, first-run behaviour of every snapshot-dependent section, every section's degrade path, and that no live job is missing from §4.3's union.
 2. `scripts/strategyprep-dryrun.js`: read-only prod render → `strategyprep-dryrun.html` + a `checks` block listing every live job and which §4.3 bucket it landed in. **Koy approves the render.**
-3. Deploy `strategyPrep` + `sendTestStrategyPrep`; Koy makes a copy of Josh's doc; test callable inserts into the copy; Koy compares against his own knowledge of next week.
-4. Point the cron at the real doc. First real Friday: watch whether Google's "take meeting notes" button duplicates the heading when Josh clicks it; if it does, switch to inserting under Google's own heading when one exists (run at 6:00 either way).
+3. Deploy `strategyPrep` + `sendTestStrategyPrep`; Koy fires the test callable; a `TEST — Friday Strategy Prep — <date>` doc appears in the packet folder; Koy compares it against his own knowledge of next week.
+4. Cron live. First real Friday: Koy pastes the body under Google's dated heading in Josh's doc; check the paste keeps checkboxes and colors.
 5. After one clean Friday: delete `fridayPacket`, disable the routine, update FEATURES.md, the Dashboard card, the vault, and the crew brief (office-facing).
 
 ## 9. Data safety
 
-Read-only on jobs, needs, users, settings except one additive merge to `settings/strategyPrep`. One range-limited insert into Josh's doc (the same mechanism that has inserted into the Foreman + Lead doc weekly since 2026-09-21). No loader, rules, SW or client change in the first ship; the Dashboard card and FEATURES.md ride a later client push. Rollback = `firebase functions:delete strategyPrep`; the packet function can be redeployed from git until it is deleted.
+Read-only on jobs, needs, users, settings except one additive merge to `settings/strategyPrep`. One new Drive doc per run (the mechanism the Friday Packet and Lead Meeting Prep have used since July); Josh's doc is only ever read. No loader, rules, SW or client change in the first ship; the Dashboard card and FEATURES.md ride a later client push. Rollback = `firebase functions:delete strategyPrep`; the packet function can be redeployed from git until it is deleted.
 
 ## 10. Decisions assumed (object if wrong)
 
-1. Insert into Josh's calendar doc, not a separate doc.
+1. ~~Insert into Josh's calendar doc, not a separate doc.~~ **Changed by Koy 2026-10-15:** its own doc each week in the packet folder; Koy copies the body into the meeting doc.
 2. Fold the Friday Packet into this and stop the packet doc.
 3. Disable the Claude routine and retire `strategy-prep.mjs` once this is live.
 4. Recipients: Koy, Josh, Brady, Justin. Jeromy does not get the push (he was approved for the packet in August; say so if he should).
