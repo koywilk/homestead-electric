@@ -69,7 +69,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
-  "loadsListRows","loadsListCsv",
+  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
   extractConst("PERMISSIONS"),
@@ -621,6 +621,30 @@ eq(H.loadsListRows([{ name:"X" }], []), [{ id:"", name:"X", floor:"No floor", ro
 const csv = H.loadsListCsv([{ n:1, floor:"Main Level", room:"Kitchen", name:'Pendants, "island"', type:"Dimming", watts:"180" }]);
 eq(csv, '#,Floor,Room,Load,Type,Watts\r\n1,Main Level,Kitchen,"Pendants, ""island""",Dimming,180\r\n', "CSV header + quoted/escaped cell");
 eq(H.loadsListCsv([]), "#,Floor,Room,Load,Type,Watts\r\n", "header only when empty");
+
+// ── v544 — Job Board CSV export (Josh: Job ID, name, foreman, lead) ──
+const jlJobs = [
+  { id:"a", simproNo:"1449", name:" Wise Flooring ", foreman:"Keegan", lead:"Colby" },
+  { id:"b", simproNo:"1438", name:'Miller Residence, "Alpine"', foreman:"Daegan", lead:"" },
+  { id:"c", simproNo:"", name:"No Number Yet", foreman:"", lead:"Gage" },
+  { id:"d", simproNo:"987", name:"Short Number", foreman:"Colby" },
+  { id:"e", simproNo:"1438", name:"", foreman:"X" },                       // unnamed → dropped
+  null,
+];
+const jlRows = H.jobListRows(jlJobs);
+eq(jlRows.map(r => `${r.id || "-"}:${r.name}`), ["987:Short Number", "1438:Miller Residence, \"Alpine\"", "1449:Wise Flooring", "-:No Number Yet"],
+  "Simpro # ascending as numbers (987 before 1438), unnamed dropped, no-number jobs last, names trimmed");
+eq(jlRows[2], { id:"1449", name:"Wise Flooring", foreman:"Keegan", lead:"Colby" }, "row = id, name, foreman, lead only");
+eq(jlRows[3].lead, "Gage", "lead carried when foreman blank");
+eq(H.jobListRows([]), [], "empty → []");
+eq(H.jobListCsv(jlRows.slice(0, 2)), 'Job ID,Job name,Foreman,Lead\r\n987,Short Number,Colby,\r\n1438,"Miller Residence, ""Alpine""",Daegan,\r\n',
+  "CSV header + comma/quote cell escaped");
+eq(H.jobListCsv([]), "Job ID,Job name,Foreman,Lead\r\n", "header only when empty");
+const hbJobs = [{ name:"Wise Flooring", simproNo:"1449", foreman:"Keegan", gc:"", address:"Alpine" }, { name:"Miller", simproNo:"1438", changeOrders:[{ quoteNumber: 55012 }] }];
+eq(H.homeBoardFilter(hbJobs, "").length, 2, "no search → every job on the board");
+eq(H.homeBoardFilter(hbJobs, "keeg").map(j => j.name), ["Wise Flooring"], "search matches foreman");
+eq(H.homeBoardFilter(hbJobs, "55012").map(j => j.name), ["Miller"], "search matches a CO quote #");
+eq(H.homeBoardFilter(hbJobs, "zzz"), [], "no match → []");
 
 // ── v449 — Lutron Panel Builder: catalog, migration, assignment, suggest ──
 eq(H.lutronNormalizeType(" lqse-s8 "), "LQSE-4S8-120-D", "old S8 alias → real SKU");
