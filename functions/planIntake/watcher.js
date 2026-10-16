@@ -80,6 +80,33 @@ module.exports = function makePlanIntake(deps) {
     try { await db.collection(FINDINGS).doc(`${prefixOf(mode)}${id}`).create(doc); }
     catch (e) { if (e.code !== 6) log.warn("planIntake: finding write failed", { id, error: e.message }); }
   }
+  // v542: a "needs you" finding is resolved when the thing it asked about is done
+  // (filed, dismissed, walk matched) — the dashboard counts what is still waiting,
+  // not what nobody has looked at. Update only: never creates a stub finding.
+  async function resolveFinding(mode, id, how, by) {
+    try { await db.collection(FINDINGS).doc(`${prefixOf(mode)}${id}`).update({ resolved: true, resolvedAt: nowIso(), resolvedHow: how, resolvedBy: by || "plan intake" }); }
+    catch (e) { /* no such finding (or a dry run): nothing to resolve */ }
+  }
+  // v542: a plan the Routine could not place because its job or quote didn't exist
+  // yet gets another look once a new job / quote / quote folder appears. Only
+  // emailed PDFs marked unmatched in the last 14 days, at most 3 times each.
+  async function reopenUnmatched(mode, why) {
+    let n = 0;
+    try {
+      const p = prefixOf(mode);
+      const snap = await db.collection(QUEUE).where("status", "==", "unmatched").get();
+      const cutoff = Date.now() - 14 * 86400e3;
+      for (const d of snap.docs) {
+        if (p ? !d.id.startsWith(p) : /^(dry|test)_/.test(d.id)) continue;
+        const it = d.data() || {};
+        if (it.type !== "email_pdf" || !it.inboxFileId) continue;
+        if (Date.parse(it.decidedAt || it.createdAt || "") < cutoff || (it.reopenCount || 0) >= 3) continue;
+        await d.ref.update({ status: "open", reopenedAt: nowIso(), reopenWhy: String(why || "").slice(0, 120), reopenCount: (it.reopenCount || 0) + 1 });
+        n++;
+      }
+    } catch (e) { log.warn("planIntake: reopen unmatched failed", { error: e.message }); }
+    return n;
+  }
   async function enqueue(mode, id, item) {
     try { await db.collection(QUEUE).doc(`${prefixOf(mode)}${id}`).create({ ...item, status: "open", mode, createdAt: nowIso() }); }
     catch (e) { if (e.code !== 6) log.warn("planIntake: queue write failed", { id, error: e.message }); }
@@ -346,6 +373,7 @@ module.exports = function makePlanIntake(deps) {
       walkEventIds: why.eventId ? [why.eventId] : [], tracking: true, jobNo: "", ledger: {}, createdAt: nowIso(), updatedAt: nowIso(),
     };
     await ref.set(st, { merge: true });
+    if (folderId && cfg.mode !== "dry") await reopenUnmatched(cfg.mode, `new folder for Quote #${quoteNo}`);
     const verb = cfg.mode === "dry" ? "Would create" : adoptedFrom ? "Using the app's folder for" : made ? "Created" : "Found";
     await finding(cfg.mode, `folder_${quoteNo}`, {
       number: `Q${quoteNo}`, type: adoptedFrom ? "folder_adopted" : "folder_created",
@@ -702,6 +730,12 @@ module.exports = function makePlanIntake(deps) {
     }
     await ref.set({ at: nowIso(), resiOnly: true, jobs, appQuotes, quotes, siteAddr, groups });
     counts.candidates = { jobs: jobs.length, quotes: quotes.length };
+    // v542: anything new since yesterday's list → unmatched plans get another look.
+    if (prev.at) {
+      const had = new Set([...(prev.jobs || []).map(x => "#" + x.number), ...(prev.quotes || []).map(x => "Q" + x.number), ...(prev.appQuotes || []).map(x => "Q" + x.number)]);
+      const fresh = [...jobs.map(x => "#" + x.number), ...quotes.map(x => "Q" + x.number), ...appQuotes.map(x => "Q" + x.number)].filter(k => !had.has(k));
+      if (fresh.length && ctx.cfg.mode !== "dry") counts.reopened = await reopenUnmatched(ctx.cfg.mode, `new in the candidate list: ${fresh.slice(0, 5).join(", ")}`);
+    }
   }
 
   // ══ Routine API (Phase 2) ═══════════════════════════════════════════════
@@ -757,11 +791,21 @@ module.exports = function makePlanIntake(deps) {
           }
         } catch (e) { log.warn("planIntake: dismiss move failed", { item: item.id, error: e.message }); }
       }
+      await resolveFinding(cfg.mode, `unmatched_${item.id}`, "dismissed", d.by);
       return { status: "dismissed", note: String(d.reason || "").slice(0, 200) };
     }
     if (d.action === "unmatched") {
+      // v542: the job or quote this sender's files went to most often, when it isn't
+      // already the best guess — the dashboard offers it as "or #1454".
+      let altGuess = "", altWhy = "";
+      try {
+        const hist = item.from ? await senderHistory(cfg.mode, item.from) : {};
+        const best = String(d.bestGuess || "").replace(/[^0-9Q]/gi, "").toUpperCase();
+        const top = Object.entries(hist).map(([k, n]) => [String(k).replace(/^#/, "").toUpperCase(), Number(n) || 0]).filter(([k, n]) => k && n > 0 && k !== best).sort((a, b) => b[1] - a[1])[0];
+        if (top) { altGuess = top[0]; altWhy = `${top[1]} earlier file${top[1] === 1 ? "" : "s"} from this sender`; }
+      } catch (e) { /* history is a hint; never block the finding */ }
       await finding(cfg.mode, `unmatched_${item.id}`, { number: String(d.bestGuess || ""), type: "unmatched_plan",
-        extra: { item: item.id, bestGuess: String(d.bestGuess || ""), canFile: !!item.inboxFileId, filename: item.filename || "", from: item.from || "" },
+        extra: { item: item.id, bestGuess: String(d.bestGuess || ""), altGuess, altWhy, canFile: !!item.inboxFileId, filename: item.filename || "", from: item.from || "" },
         summary: `Plan not matched: ${item.filename || item.link || "link"} from ${item.from}${d.bestGuess ? ` — best guess ${d.bestGuess}` : ""}${d.reason ? ` (${String(d.reason).slice(0, 120)})` : ""}`,
         links: [...(item.inboxFileId ? [{ label: "File", url: `https://drive.google.com/file/d/${item.inboxFileId}/view` }] : []), { label: "Email", url: item.gmailLink }] });
       return { status: "unmatched", note: String(d.reason || "").slice(0, 200) };
@@ -772,12 +816,14 @@ module.exports = function makePlanIntake(deps) {
       if (await isCommercial(d.kind === "job" ? "job" : "quote", number)) throw notResi(`${d.kind === "job" ? "job" : "quote"} #${number}`);
       if (d.kind === "job") {
         await finding(cfg.mode, `walk_job_${item.eventId}`, { number, type: "walk_existing_job", summary: `Walk on existing job #${number}: ${item.title} (${item.walkDate}) — matched by the Routine` });
+        await resolveFinding(cfg.mode, `walk_unmatched_${item.eventId}`, "matched", "the Routine");
         return { status: "done", note: `existing job #${number}` };
       }
       const q = await sget(`/quotes/${number}?columns=ID,Name,Site`).catch(() => null);
       if (!q || !q.ID) throw Object.assign(new Error(`no Simpro quote ${number}`), { code: 422 });
       await ensureQuoteFolder(ctx, number, { eventId: item.eventId, quoteName: q.Name || "", siteName: (q.Site && q.Site.Name) || "", walkTitle: item.title, walkDate: item.walkDate, source: "walk (Routine)" });
       await db.collection(STATE).doc(`${prefixOf(cfg.mode)}walk_${item.eventId}`).set({ status: "matched", quoteNo: number, matchedBy: "routine" }, { merge: true });
+      await resolveFinding(cfg.mode, `walk_unmatched_${item.eventId}`, "matched", "the Routine");
       return { status: "done", note: `quote #${number}` };
     }
     if (d.action !== "file") throw Object.assign(new Error(`unknown action ${d.action}`), { code: 422 });
@@ -804,6 +850,7 @@ module.exports = function makePlanIntake(deps) {
     await finding(cfg.mode, `filed_${item.id}`, { number: kind === "quote" ? `Q${number}` : number, type: "plans_filed",
       summary: `Filed "${item.filename}" from ${item.from} into ${kind === "quote" ? "Q" : "#"}${number} / MOST UPDATED${cf.name ? ` / ${cf.name}` : ""} as "${name}"${d.reason ? ` — ${String(d.reason).slice(0, 120)}` : ""}`,
       links: [{ label: "Folder", url: folderUrl(targetId) }, { label: "Email", url: item.gmailLink }] });
+    await resolveFinding(cfg.mode, `unmatched_${item.id}`, "filed", d.by || "the Routine");
     return { status: "done", note: name };
   }
 
@@ -912,13 +959,39 @@ module.exports = function makePlanIntake(deps) {
       const ctx = { cfg, drive, auth, deadline: () => 100 * 1000 - (Date.now() - started) };
       let out;
       try {
-        out = await decide(ctx, item, { action: "file", kind: data.kind === "quote" ? "quote" : "job", number: data.number, category: data.category, rev: data.rev, date: data.date, reason: `filed by ${user.name} from the Plans card` });
+        out = await decide(ctx, item, { action: "file", kind: data.kind === "quote" ? "quote" : "job", number: data.number, category: data.category, rev: data.rev, date: data.date, reason: `filed by ${user.name} by hand`, by: user.name });
       } catch (e) {
         throw new functions.https.HttpsError(e.code === 409 ? "failed-precondition" : e.code === 422 ? "invalid-argument" : "internal", String(e.message || e));
       }
       await iref.update({ status: out.status, decision: { action: "file", number: String(data.number || ""), category: String(data.category || ""), by: user.name, note: out.note, at: nowIso() }, decidedAt: nowIso() });
       await db.collection(FINDINGS).doc(`unmatched_${itemId}`).set({ seen: true, seenAt: nowIso(), seenBy: user.name }, { merge: true }).catch(() => {});
       return { ok: true, name: out.note };
+    });
+
+  // v542: "Not ours" from the dashboard — the same gate as planFileByHand (app key +
+  // name + PIN, Head of Residential or admin). Moves the PDF to _Plan Inbox/Dismissed
+  // (never deletes) and resolves the finding.
+  const planDismissByHand = functions
+    .runWith({ timeoutSeconds: 120 })
+    .https.onCall(async (data) => {
+      const user = await requireAdmin(data);
+      const isHead = Array.isArray(user.caps) && user.caps.includes("resi.head");
+      if (!isHead && gcAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "Only the Head of Residential can dismiss plans.");
+      const cfg = await loadConfig();
+      if (cfg.mode !== "live") throw new functions.https.HttpsError("failed-precondition", `plan intake is in ${cfg.mode} mode`);
+      const itemId = String((data && data.item) || "");
+      if (!itemId || /^(dry|test)_/.test(itemId)) throw new functions.https.HttpsError("not-found", "No such plan.");
+      const iref = db.collection(QUEUE).doc(itemId);
+      const item = { id: itemId, ...((await iref.get()).data() || {}) };
+      if (item.type !== "email_pdf") throw new functions.https.HttpsError("not-found", "No such plan.");
+      if (!["open", "unmatched"].includes(item.status)) throw new functions.https.HttpsError("failed-precondition", `This plan is already ${item.status}.`);
+      const { drive, auth } = driveFullClient();
+      const started = Date.now();
+      const ctx = { cfg, drive, auth, deadline: () => 100 * 1000 - (Date.now() - started) };
+      const reason = String((data && data.reason) || `dismissed by ${user.name}`).slice(0, 200);
+      const out = await decide(ctx, item, { action: "dismiss", reason, by: user.name });
+      await iref.update({ status: out.status, decision: { action: "dismiss", by: user.name, note: out.note, at: nowIso() }, decidedAt: nowIso() });
+      return { ok: true };
     });
 
   // ── The run ─────────────────────────────────────────────────────────────
@@ -1031,5 +1104,5 @@ module.exports = function makePlanIntake(deps) {
       return { linked: true, folderId: st.folderId, folderName };
     });
 
-  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide };
+  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, planDismissByHand, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide, _reopenUnmatched: reopenUnmatched };
 };

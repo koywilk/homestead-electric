@@ -189,6 +189,23 @@ function collectSimproCandidates(jobs, cap = 50) {
   return out;
 }
 
+// v542 — jobs worth a Simpro Totals fetch for the office dashboard's money lines:
+// ready to invoice (not dismissed), a change order sent 60+ days ago, or finished
+// with change orders still open. Simpro # required; quotes, archived and deleted
+// jobs out; ready-to-invoice first; capped.
+function collectMoneyCandidates(jobs, now = new Date(), cap = 80) {
+  const live = (jobs || []).filter(j => j && j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt && String(j.simproNo || "").trim());
+  const openCo = (co) => !!co && !["completed", "converted", "denied"].includes(co.coStatus || "");
+  const pendingOld = (co) => { if (!co || co.coStatus !== "pending") return false; const t = Date.parse(co.submittedAt || co.createdAt || co.date || ""); return !!t && now - t > 60 * 86400e3; };
+  const done = (j) => j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
+  const rti = live.filter(j => j.readyToInvoice && !j.invoiceDismissed);
+  const old = live.filter(j => (j.changeOrders || []).some(pendingOld));
+  const doneCo = live.filter(j => done(j) && (j.changeOrders || []).some(openCo));
+  const out = [], seen = new Set();
+  [...rti, ...old, ...doneCo].forEach(j => { const sn = String(j.simproNo).trim(); if (seen.has(sn) || out.length >= cap) return; seen.add(sn); out.push(sn); });
+  return out;
+}
+
 // ── model builder ────────────────────────────────────────────────────────────
 
 function buildModel(inputs) {
@@ -719,4 +736,4 @@ ${weekHtml}
 </div>`;
 }
 
-module.exports = { buildModel, renderHtml, resolveRecipients, collectSimproCandidates, TZ, MARGIN_TARGET };
+module.exports = { buildModel, renderHtml, resolveRecipients, collectSimproCandidates, collectMoneyCandidates, TZ, MARGIN_TARGET };

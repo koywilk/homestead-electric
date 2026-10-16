@@ -4817,6 +4817,56 @@ exports.scheduledSimproCandidateRefresh = functions.pubsub
 // Shared runner for the scheduled Friday packet + the manual test callable.
 // All I/O lives here; content/ranking/rendering live in ./fridayPacket.js
 // (pure) so the dry-run script renders exactly what prod will.
+// Live Simpro Totals for a list of job numbers (concurrency 5) — the job's total
+// incl. tax and its margin. Parsing mirrors getSimproJobFinancials (Actual===100 →
+// no costs tracked yet → use Estimate). A job whose fetch fails is left out.
+// Shared by the Friday Packet and dailySimproTotals (v542).
+async function fetchSimproTotals(sns) {
+  const out = {};
+  const CHUNK = 5;
+  for (let i = 0; i < sns.length; i += CHUNK) {
+    await Promise.all(sns.slice(i, i + CHUNK).map(async (sn) => {
+      try {
+        const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, {
+          headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
+        });
+        if (!resp.ok) return;
+        const results = await resp.json();
+        const sj = Array.isArray(results) ? results[0] : null;
+        if (!sj) return;
+        const t = sj.Totals || {};
+        const actual = t.NettMargin?.Actual ?? null;
+        const estimate = t.NettMargin?.Estimate ?? null;
+        const hasRealActual = actual !== null && actual !== 100;
+        const top = sj.Total || {};
+        out[sn] = {
+          total: (typeof top.IncTax === "number") ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null),
+          margin: hasRealActual ? actual : estimate,
+          isEstimate: !hasRealActual,
+        };
+      } catch (e) { /* one job's fetch failing just means no number for it */ }
+    }));
+  }
+  return out;
+}
+
+// v542: every automated-doc run stamps settings/autoDocRuns.<key> — when it ran,
+// whether it worked, and the error if not — so the office dashboard can say
+// "made Tue 6:02 AM" or "did not run" without depending on a Drive listing.
+async function stampAutoRun(key, run, { test = false } = {}) {
+  const at = new Date().toISOString();
+  const write = (v) => db.doc("settings/autoDocRuns").set({ [key]: { lastRunAt: at, test, ...v } }, { merge: true })
+    .catch(e => functions.logger.warn("autoDocRuns stamp failed", { key, error: e.message }));
+  try {
+    const r = await run();
+    await write(r && r.ok === false ? { ok: false, error: String(r.error || "failed").slice(0, 200) } : { ok: true, error: "" });
+    return r;
+  } catch (e) {
+    await write({ ok: false, error: String((e && e.message) || e).slice(0, 200) });
+    throw e;
+  }
+}
+
 async function runFridayPacket({ testRun = false } = {}) {
   const now = new Date();
   // Calendar math on the Mountain-Time wall-clock date; `now` itself stays
@@ -4881,33 +4931,15 @@ async function runFridayPacket({ testRun = false } = {}) {
   //     tracked yet → use Estimate).
   const simproTotalsById = {};
   try {
-    const wanted = fridayPacketLib.collectSimproCandidates(jobs);
-    const CHUNK = 5;
-    for (let i = 0; i < wanted.length; i += CHUNK) {
-      await Promise.all(wanted.slice(i, i + CHUNK).map(async (sn) => {
-        try {
-          const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, {
-            headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
-          });
-          if (!resp.ok) return;
-          const results = await resp.json();
-          const sj = Array.isArray(results) ? results[0] : null;
-          if (!sj) return;
-          const t = sj.Totals || {};
-          const actual = t.NettMargin?.Actual ?? null;
-          const estimate = t.NettMargin?.Estimate ?? null;
-          const hasRealActual = actual !== null && actual !== 100;
-          const top = sj.Total || {};
-          simproTotalsById[sn] = {
-            total: (typeof top.IncTax === "number") ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null),
-            margin: hasRealActual ? actual : estimate,
-            isEstimate: !hasRealActual,
-          };
-        } catch (e) { /* one job's fetch failing just means cache fallback */ }
-      }));
-    }
+    Object.assign(simproTotalsById, await fetchSimproTotals(fridayPacketLib.collectSimproCandidates(jobs)));
   } catch (e) {
     functions.logger.warn("fridayPacket simpro totals fetch error", { error: e.message });
+  }
+  // v542: the office dashboard shows these dollars beside "Ready to invoice" and
+  // the old change orders (settings/simproTotals; dailySimproTotals refreshes it).
+  if (Object.keys(simproTotalsById).length) {
+    await db.doc("settings/simproTotals").set({ at: now.toISOString(), source: "fridayPacket", byNo: simproTotalsById }, { merge: true })
+      .catch(e => functions.logger.warn("simproTotals write failed", { error: e.message }));
   }
 
   // 4 · Build + render (pure — no I/O inside).
@@ -4992,18 +5024,42 @@ exports.fridayPacket = functions
   .pubsub.schedule("30 5 * * 5")
   .timeZone(TZ)
   .onRun(async () => {
-    await runFridayPacket();
+    await stampAutoRun("packet", () => runFridayPacket());
     return null;
   });
 
 // Manual test trigger — a full real run (Drive doc + live fetches) so the
 // whole pipeline can be verified without waiting for a Friday. Push goes to
 // Koy only and the billed-diff state is NOT advanced.
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — weekdays 6:15am Mountain Time (v542)
+// Simpro job totals for the office dashboard's money lines ("Ready to invoice ·
+// $41k", "change orders waiting 60+ days … job value $X"): ready-to-invoice jobs,
+// jobs with a change order sent 60+ days ago, and finished jobs still carrying open
+// change orders (fridayPacket.collectMoneyCandidates, cap 80). Reads the jobs with a
+// field mask (not whole docs: the 256 MiB cliff), reads Simpro, and writes ONE doc:
+// settings/simproTotals (merge). No job write.
+// ─────────────────────────────────────────────────────────────
+exports.dailySimproTotals = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .pubsub.schedule("15 6 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const snap = await db.collection("jobs").select("data.name", "data.type", "data.archived", "data.archivedAt", "data.deleted", "data.simproNo",
+      "data.readyToInvoice", "data.invoiceDismissed", "data.finishStatus", "data.finishStage", "data.changeOrders").get();
+    const jobs = snap.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) }));
+    const wanted = fridayPacketLib.collectMoneyCandidates(jobs, new Date());
+    const byNo = await fetchSimproTotals(wanted);
+    await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo }, { merge: true });
+    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length });
+    return null;
+  });
+
 exports.sendTestFridayPacket = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB" })
   .https.onCall(async (data) => {
     requireAppKey(data);
-    return await runFridayPacket({ testRun: true });
+    return await stampAutoRun("packet", () => runFridayPacket({ testRun: true }), { test: true });
   });
 
 // ─────────────────────────────────────────────────────────────
@@ -5166,14 +5222,14 @@ exports.strategyPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
   .pubsub.schedule("0 6 * * 5")
   .timeZone(TZ)
-  .onRun(async () => { await runStrategyPrep(); return null; });
+  .onRun(async () => { await stampAutoRun("friday", () => runStrategyPrep()); return null; });
 
 // Manual test: a full real run that writes a "TEST — …" doc and does NOT advance state (no push either way).
 exports.sendTestStrategyPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
   .https.onCall(async (data) => {
     requireAppKey(data);
-    return await runStrategyPrep({ testRun: true });
+    return await stampAutoRun("friday", () => runStrategyPrep({ testRun: true }), { test: true });
   });
 
 // Lead Meeting Prep (Tuesday 6 AM, runLeadMeetingPrep + leadMeetingPrep/sendTestLeadMeetingPrep)
@@ -5193,8 +5249,8 @@ const FEATURES_MD_RAW_URL = "https://raw.githubusercontent.com/koywilk/homestead
 // + next week's Simpro schedule, hours vs bid, inspections since last meeting,
 // crew out, blank action items. Content comes from the PURE builder
 // ./foremanMeetingPrep.js so a dry run renders byte-identical output.
-// Data safety: read-only on Firestore (jobs, needs, crewPTO, upcoming_jobs); ZERO Firestore
-// writes. The only write is a Docs API insert at index 1 of the notes doc —
+// Data safety: read-only on Firestore (jobs, needs, crewPTO, upcoming_jobs) apart from the
+// v542 run stamp (settings/autoDocRuns.weekly). The only write is a Docs API insert at index 1 of the notes doc —
 // it never deletes or restyles existing text (updates are range-limited to the
 // freshly inserted characters). Koy shares the doc Editor with
 // <project>@appspot.gserviceaccount.com; unreadable ⇒ the carried section
@@ -5407,7 +5463,7 @@ exports.foremanMeetingPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .pubsub.schedule("0 16 * * 2")
   .timeZone(TZ)
-  .onRun(async () => { await runForemanMeetingPrep(); return null; });
+  .onRun(async () => { await stampAutoRun("weekly", () => runForemanMeetingPrep()); return null; });
 
 // Manual trigger — a full real run any day so the pipeline can be verified
 // without waiting for a Tuesday. Inserts a section like the scheduled run does.
@@ -5415,7 +5471,7 @@ exports.sendTestForemanMeetingPrep = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .https.onCall(async (data) => {
     requireAppKey(data);
-    return await runForemanMeetingPrep({ testRun: true });
+    return await stampAutoRun("weekly", () => runForemanMeetingPrep({ testRun: true }), { test: true });
   });
 
 // ─────────────────────────────────────────────────────────────
@@ -8132,6 +8188,8 @@ exports.planRoutineApi    = _planIntake.planRoutineApi;
 exports.planIntakeDigest   = _planIntake.planIntakeDigest;
 exports.planIntakeWalkPush = _planIntake.planIntakeWalkPush;
 exports.planFileByHand     = _planIntake.planFileByHand;
+// v542: "Not ours" from the office dashboard (same gate as planFileByHand).
+exports.planDismissByHand  = _planIntake.planDismissByHand;
 
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it
