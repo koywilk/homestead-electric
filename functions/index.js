@@ -8073,3 +8073,102 @@ const _receipt = require("./materialPO/receipt.js")({
   functions, db, TZ, simproReqWithRetry, requireMember, accessOf: gcAdminAccessOf,
 });
 exports.attachStoreReceipt = _receipt.attachStoreReceipt;
+
+// ─────────────────────────────────────────────────────────────
+// SCOREBOARD — nightly Simpro pull for the in-app Scoreboard tab (2026-10-16)
+// Writes ONE slim cache doc, settings/scoreboardCompleted:
+//   { generated_at, since, done:[…], prog:[…], counts }
+// done = every Simpro job in a DONE stage (Complete / Invoiced / Archived) completed in the
+// last 12 months; prog = every job in Progress stage. Percent / ratio inputs only — the tab never
+// renders a dollar figure. The rules (who gets credit, what is scored) live in the page's own
+// shape.js so the standalone doc and the tab can never disagree. Read-only against Simpro.
+// ─────────────────────────────────────────────────────────────
+const SCOREBOARD_DOC = "scoreboardCompleted";
+function scoreboardNum(v) { return (typeof v === "number" && Number.isFinite(v)) ? v : (v == null || v === "" ? null : Number(v)); }
+function scoreboardSlim(j, stage) {
+  const t = j.Totals || {}, rc = t.ResourcesCost || {};
+  const r0 = (v) => { const n = scoreboardNum(v); return n == null ? null : Math.round(n); };
+  const r1 = (v) => { const n = scoreboardNum(v); return n == null ? null : Math.round(n * 10) / 10; };
+  const techs = Array.isArray(j.Technicians) ? j.Technicians.map(x => x && x.Name).filter(Boolean) : [];
+  const bg = (j.CustomFields || []).find(c => c && c.CustomField && /business group/i.test(c.CustomField.Name || ""));
+  let division = bg && bg.Value ? String(bg.Value).toLowerCase().replace(/\s+/g, "") : "";
+  if (division === "multi-family") division = "multifamily";
+  return {
+    id: j.ID, name: j.Name || "", stage, status: String((j.Status && j.Status.Name) || "").replace(/^Job\s*-\s*/i, "").trim(),
+    completed: j.CompletedDate || null, issued: j.DateIssued || null, division, type: j.Type || null,
+    tech: techs.length ? techs.join(" / ") : "UNASSIGNED",
+    contract: r0(j.Total && j.Total.ExTax), inv_pct: r1(t.InvoicePercentage),
+    nm_act: r1(t.NettMargin && t.NettMargin.Actual), nm_est: r1(t.NettMargin && t.NettMargin.Estimate),
+    gm_act: r1(t.GrossMargin && t.GrossMargin.Actual), npl_act: r0(t.NettProfitLoss && t.NettProfitLoss.Actual),
+    hrs_act: r1(rc.LaborHours && rc.LaborHours.Actual), hrs_est: r1(rc.LaborHours && rc.LaborHours.Estimate),
+    mat_act: r0(t.MaterialsCost && t.MaterialsCost.Actual), mat_est: r0(t.MaterialsCost && t.MaterialsCost.Estimate),
+    lab_act: r0(rc.Labor && rc.Labor.Actual), lab_est: r0(rc.Labor && rc.Labor.Estimate),
+  };
+}
+async function scoreboardList(stage) {
+  const out = [];
+  for (let page = 1; page <= 60; page++) {
+    const r = await simproReqWithRetry("GET", `/jobs/?Stage=${stage}&columns=ID,Name,Stage,Status,DateIssued,CompletedDate&pageSize=250&page=${page}`);
+    if (!r.ok || !Array.isArray(r.data)) { functions.logger.warn("[scoreboard] list failed", { stage, page, status: r.status }); break; }
+    out.push(...r.data);
+    if (r.data.length < 250) break;
+  }
+  return out;
+}
+async function scoreboardFetchAll(ids, stageOf, concurrency) {
+  const rows = []; let i = 0, failed = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (i < ids.length) {
+      const id = ids[i++];
+      const r = await simproReqWithRetry("GET", `/jobs/${id}`);
+      if (r.ok && r.data && r.data.ID != null) rows.push(scoreboardSlim(r.data, stageOf(id)));
+      else { failed++; functions.logger.warn("[scoreboard] job failed", { id, status: r.status }); }
+    }
+  }));
+  return { rows, failed };
+}
+async function runScoreboardPull({ reason = "nightly" } = {}) {
+  const startedAt = Date.now();
+  const sinceD = new Date(); sinceD.setFullYear(sinceD.getFullYear() - 1);
+  const since = sinceD.toISOString().slice(0, 10);
+  const stageOfId = {};
+  const doneIds = [];
+  for (const st of ["Complete", "Invoiced", "Archived"]) {
+    const list = await scoreboardList(st);
+    list.forEach(j => { if (j && j.ID != null && (j.CompletedDate || "") >= since) { doneIds.push(j.ID); stageOfId[j.ID] = st; } });
+  }
+  const progList = await scoreboardList("Progress");
+  const progIds = progList.map(j => j && j.ID).filter(id => id != null);
+  progIds.forEach(id => { stageOfId[id] = "Progress"; });
+  const done = await scoreboardFetchAll(doneIds, id => stageOfId[id], 6);
+  const prog = await scoreboardFetchAll(progIds, id => stageOfId[id], 6);
+  // Refuse to overwrite a good cache with a half-empty one (Simpro hiccup, rate limiting).
+  if (doneIds.length && done.rows.length < doneIds.length * 0.9) {
+    throw new Error(`[scoreboard] only ${done.rows.length} of ${doneIds.length} done jobs came back — keeping the previous cache`);
+  }
+  done.rows.sort((a, b) => String(b.completed || "").localeCompare(String(a.completed || "")));
+  const payload = {
+    generated_at: new Date().toISOString(), since, reason,
+    done: done.rows, prog: prog.rows,
+    counts: { done: done.rows.length, prog: prog.rows.length, doneFailed: done.failed, progFailed: prog.failed, listedDone: doneIds.length, listedProg: progIds.length },
+    seconds: Math.round((Date.now() - startedAt) / 1000),
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(payload));
+  if (bytes > 950000) throw new Error(`[scoreboard] cache would be ${bytes} bytes — over the document limit, not written`);
+  await db.collection("settings").doc(SCOREBOARD_DOC).set(payload);
+  functions.logger.info("[scoreboard] cache written", { ...payload.counts, bytes, seconds: payload.seconds, reason });
+  return { ok: true, ...payload.counts, bytes, seconds: payload.seconds, generated_at: payload.generated_at };
+}
+// 5:20 AM Mountain, every day — after Simpro's own overnight posting, before anyone opens the tab.
+exports.scoreboardNightly = functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .pubsub.schedule("20 5 * * *").timeZone(TZ)
+  .onRun(async () => { try { return await runScoreboardPull({ reason: "nightly" }); } catch (e) { functions.logger.error("[scoreboard] nightly failed", { error: e.message }); return null; } });
+// Admin "Pull from Simpro now" button on the Scoreboard tab (same app-key guard as every other callable).
+exports.sendTestScoreboardPull = functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    try { return await runScoreboardPull({ reason: "manual" }); }
+    catch (e) { functions.logger.error("[scoreboard] manual pull failed", { error: e.message }); return { ok: false, error: e.message }; }
+  });

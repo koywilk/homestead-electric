@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Homestead Scoreboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600&family=Alfa+Slab+One&display=swap" rel="stylesheet">
+<style>
+/* Homestead Electric scoreboard: light highlighted board with the dark deck band the GC portal uses for the brand. */
+:root{
+  --bg:#f3f5f7; --bg-2:#e9edf1; --card:#ffffff; --card-2:#f6f8fa; --line:#dde3e9; --line-2:#c9d2db;
+  --ink:#131a21; --ink-2:#465463; --ink-3:#6c7a88;
+  --accent:#3b5ba5; --accent-ink:#ffffff; --accent-soft:rgba(59,91,165,.11); --accent-glow:rgba(59,91,165,.28);
+  --good:#1b7f4a; --good-soft:rgba(27,127,74,.12); --good-glow:rgba(27,127,74,.25);
+  --warn:#a66a00; --warn-soft:rgba(166,106,0,.12);
+  --bad:#b23a3a; --bad-soft:rgba(178,58,58,.12);
+  --early:#6c7a88; --early-soft:rgba(108,122,136,.14);
+  --track:#e6ebf0;
+  --deck1:#141821; --deck2:#1b2030; --deck-ink:#e6eaf1; --deck-dim:#9aa3b2; --deck-hair:#2a2f3a; --live:#34d17f;
+  --shadow:0 1px 2px rgba(15,25,35,.06), 0 8px 24px -18px rgba(15,25,35,.25);
+  --r:14px;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --slab:"Alfa Slab One","Rockwell",Georgia,serif;
+  --body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+:root[data-theme="dark"]{
+  --bg:#0f1318; --bg-2:#141a21; --card:#1a222b; --card-2:#1f2932; --line:#2a3541; --line-2:#354350;
+  --ink:#eef2f6; --ink-2:#aab6c3; --ink-3:#7a8794;
+  --accent:#66a8ff; --accent-ink:#0b1420; --accent-soft:rgba(102,168,255,.14); --accent-glow:rgba(102,168,255,.35);
+  --good:#3dbe7a; --good-soft:rgba(61,190,122,.16); --good-glow:rgba(61,190,122,.3);
+  --warn:#e0a526; --warn-soft:rgba(224,165,38,.16);
+  --bad:#ef6a55; --bad-soft:rgba(239,106,85,.16);
+  --early:#8a93a0; --early-soft:rgba(138,147,160,.16);
+  --track:#232d37;
+  --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -16px rgba(0,0,0,.8);
+  color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1318; --bg-2:#141a21; --card:#1a222b; --card-2:#1f2932; --line:#2a3541; --line-2:#354350;
+  --ink:#eef2f6; --ink-2:#aab6c3; --ink-3:#7a8794;
+  --accent:#66a8ff; --accent-ink:#0b1420; --accent-soft:rgba(102,168,255,.14); --accent-glow:rgba(102,168,255,.35);
+  --good:#3dbe7a; --good-soft:rgba(61,190,122,.16); --good-glow:rgba(61,190,122,.3); --warn:#e0a526; --warn-soft:rgba(224,165,38,.16);
+  --bad:#ef6a55; --bad-soft:rgba(239,106,85,.16); --early:#8a93a0; --early-soft:rgba(138,147,160,.16);
+  --track:#232d37; --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -16px rgba(0,0,0,.8);
+  color-scheme:dark}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{height:100%}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.35;
+  background-image:radial-gradient(1100px 520px at 50% -160px,var(--accent-soft),transparent 70%);}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num{font-variant-numeric:tabular-nums}
+.g{color:var(--good)}.y{color:var(--warn)}.r{color:var(--bad)}.gr{color:var(--early)}
+
+/* shell — the deck band */
+.deck{background:linear-gradient(180deg,var(--deck1) 0%,var(--deck2) 100%);color:var(--deck-ink);position:relative;overflow:hidden;border-bottom:1px solid var(--deck-hair)}
+.deck::before{content:"";position:absolute;inset:0;background:radial-gradient(900px 300px at 20% 120%,rgba(59,91,165,.35),transparent 70%);pointer-events:none}
+.deck .wm{position:absolute;right:-40px;top:-30px;width:min(52vw,520px);opacity:.06;pointer-events:none;filter:blur(.2px)}
+.deck-in{max-width:1100px;margin:0 auto;padding:18px 16px 14px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;position:relative}
+.deck .logo{height:64px;width:auto;flex:none;filter:drop-shadow(0 6px 18px rgba(0,0,0,.45))}
+.deck .x{color:var(--deck-dim);font-size:22px;font-weight:300}
+.deck .title{display:flex;flex-direction:column;gap:2px;min-width:0}
+.deck .title h1{margin:0;font:400 clamp(26px,5vw,40px)/1 var(--slab);letter-spacing:.06em;text-transform:uppercase;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.35)}
+.deck .title .season{font:600 12px var(--display);letter-spacing:.18em;text-transform:uppercase;color:var(--deck-dim);display:flex;gap:10px;align-items:center}
+.deck .title .season i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--live);box-shadow:0 0 10px var(--live)}
+.deck .title .season .stale{color:#ff8a7a;font-weight:700}
+.deck .right{margin-left:auto;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.seg{display:inline-flex;background:rgba(255,255,255,.06);border:1px solid var(--deck-hair);border-radius:999px;padding:3px}
+.seg button{padding:7px 14px;border-radius:999px;font:700 14px var(--display);letter-spacing:.06em;text-transform:uppercase;color:var(--deck-dim)}
+.seg button[aria-selected="true"]{background:#fff;color:var(--deck1)}
+.icon-btn{width:38px;height:38px;border-radius:10px;border:1px solid var(--deck-hair);background:rgba(255,255,255,.06);display:grid;place-items:center;color:var(--deck-ink);flex:none}
+.icon-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.rule-line{height:1px;background:linear-gradient(90deg,transparent,var(--deck-hair) 20%,var(--deck-hair) 80%,transparent)}
+@media (max-width:640px){.deck .logo{height:48px}.deck .x{display:none}.deck .right{margin-left:0;width:100%}}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.filters{max-width:1100px;margin:0 auto;padding:10px 16px;display:flex;gap:8px;align-items:center;overflow-x:auto;scrollbar-width:none}
+.filters::-webkit-scrollbar{display:none}
+.filters .lbl{flex:none;font:600 12px var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.filters .sep{flex:none;width:1px;height:22px;background:var(--line-2);margin:0 2px}
+.filters .fresh{margin-left:auto;flex:none;font-size:12px;color:var(--ink-3)}
+.chip{flex:none;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 12px;font-size:13px;color:var(--ink-2);font-weight:500;display:inline-flex;align-items:center;gap:6px;line-height:1}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.chip .n{opacity:.75;font-weight:600}
+.chip.tg[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px calc(24px + env(safe-area-inset-bottom))}
+
+/* type */
+.eyebrow{font:600 12px var(--display);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+h2.sect{font:400 20px var(--slab);letter-spacing:.08em;text-transform:uppercase;color:var(--ink);margin:30px 0 12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+h2.sect::before,h2.sect.rules-h::after{content:"";height:2px;width:34px;background:var(--ink);opacity:.8;border-top:1px solid var(--bg);box-shadow:0 3px 0 var(--ink)}
+h2.sect .cnt{color:var(--ink-3);font-weight:600;font-size:15px}
+h2.sect .why{margin-left:auto;font:500 12px var(--body);letter-spacing:0;text-transform:none;color:var(--ink-3)}
+.note{font-size:12px;color:var(--ink-3);margin:8px 2px 0;line-height:1.45}
+
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:6px;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pill.g{background:var(--good-soft);color:var(--good)}.pill.y{background:var(--warn-soft);color:var(--warn)}.pill.r{background:var(--bad-soft);color:var(--bad)}.pill.gr{background:var(--early-soft);color:var(--early)}
+.pill i{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+.pill.y i{border-radius:1px;transform:rotate(45deg);width:6px;height:6px}
+.pill.r i{border-radius:1px}
+.pill.gr i{background:none;border:1.5px solid currentColor;width:6px;height:6px}
+.pill.lg{font-size:15px;padding:5px 11px;border-radius:8px}
+.tag{display:inline-block;padding:1px 6px;border-radius:4px;font:600 10px var(--display);letter-spacing:.06em;text-transform:uppercase;background:var(--bg-2);color:var(--ink-3);vertical-align:1px}
+.spill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:5px;font:700 11px var(--display);letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.spill.ok{background:var(--good-soft);color:var(--good)}.spill.risk{background:var(--bad-soft);color:var(--bad)}
+
+/* podium */
+.arena{margin-top:18px;position:relative}
+.arena .head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.arena .head .eyebrow{color:var(--accent);font-size:13px}
+.arena .head .sub{font-size:13px;color:var(--ink-3)}
+.podium{display:grid;gap:12px;align-items:end;grid-template-columns:repeat(var(--cols,3),1fr)}
+.pod{position:relative;border-radius:var(--r);border:1px solid var(--line);background:linear-gradient(180deg,var(--card) 0%,var(--card-2) 100%);box-shadow:var(--shadow);padding:16px 14px 14px;display:flex;flex-direction:column;gap:8px;min-width:0;min-height:var(--h,200px);justify-content:flex-end;overflow:hidden;animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
+.pod::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(135deg,transparent 0 12px,rgba(255,255,255,.012) 12px 13px);pointer-events:none}
+.pod.first{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 0 1px var(--accent-soft),0 0 40px -10px var(--accent-glow),var(--shadow)}
+.pod.first .mark{position:absolute;left:50%;bottom:-8%;width:78%;transform:translateX(-50%);opacity:.05;pointer-events:none}
+:root[data-theme="dark"] .pod.first .mark,:root:not([data-theme="light"]) .pod.first .mark{opacity:.05}
+.pod.first::after{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,transparent,var(--accent),transparent)}
+.pod .place{font:800 54px/1 var(--display);letter-spacing:-.02em;color:var(--ink-3);opacity:.35;position:absolute;top:8px;right:12px}
+.pod.first .place{color:var(--accent);opacity:.9;text-shadow:0 0 24px var(--accent-glow)}
+.pod .team{font:800 22px/1.05 var(--display);letter-spacing:.02em;text-transform:uppercase;padding-right:44px}
+.pod .roster{font-size:12px;color:var(--ink-3);line-height:1.35}
+.pod .score{font:800 72px/1 var(--display);letter-spacing:-.03em;margin-top:4px}
+.pod.first .score{font-size:88px;text-shadow:0 0 26px var(--accent-glow)}
+.pod .score small{display:block;font:600 11px var(--display);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);margin-top:4px}
+.pod .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.pod .line b{color:var(--ink);font-weight:600}
+.pod.empty{opacity:.55;justify-content:center;text-align:center}
+.pod.empty .score{color:var(--early);text-shadow:none}
+@media (max-width:640px){.podium{grid-template-columns:1fr !important}.pod{min-height:0 !important}.pod .score,.pod.first .score{font-size:64px}}
+
+/* race to 15 */
+.race{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 16px 12px}
+.race .head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.race .head .eyebrow{color:var(--ink-2);font-size:13px}
+.lane{display:grid;grid-template-columns:minmax(110px,1.1fr) 5fr auto;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.lane:first-of-type{border-top:0}
+.lane .who{font:700 15px var(--display);letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane .who small{display:block;font:500 11px var(--body);letter-spacing:0;text-transform:none;color:var(--ink-3)}
+.lane .track{position:relative;height:16px;background:var(--track);border-radius:8px;overflow:visible}
+.lane .track>i{position:absolute;left:0;top:0;bottom:0;border-radius:8px;transform-origin:left;animation:grow 1.1s cubic-bezier(.2,.7,.2,1) both}
+.lane .track>i.g{background:linear-gradient(90deg,color-mix(in srgb,var(--good) 60%,transparent),var(--good));box-shadow:0 0 18px -4px var(--good-glow)}
+.lane .track>i.y{background:var(--warn)}.lane .track>i.r{background:var(--bad)}.lane .track>i.gr{background:var(--early)}
+.lane .track>i.neg{left:auto;right:calc(100% - var(--zero));width:0}
+.lane .goal{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--ink);opacity:.7}
+.lane .goal::after{content:"15%";position:absolute;top:-16px;left:-10px;font:700 10px var(--display);letter-spacing:.08em;color:var(--ink-2)}
+.lane .v{font:800 20px/1 var(--display);white-space:nowrap;text-align:right;min-width:60px}
+.lane.all .who{color:var(--accent)}
+@keyframes grow{from{transform:scaleX(0)}}
+@media (max-width:520px){.lane{grid-template-columns:minmax(84px,1fr) 4fr auto;gap:8px}.lane .v{font-size:17px;min-width:48px}}
+
+/* this month */
+.spot{margin-top:14px;background:linear-gradient(160deg,var(--card) 0%,var(--card-2) 100%);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;position:relative;overflow:hidden}
+.spot::before{content:"";position:absolute;inset:-40% -20% auto auto;width:60%;height:120%;background:radial-gradient(closest-side,var(--accent-soft),transparent);pointer-events:none}
+.spot .head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;position:relative}
+.spot .head .eyebrow{color:var(--accent);font-size:13px}
+.mchips{display:flex;gap:6px;flex-wrap:wrap}
+.mchips .chip{padding:5px 10px;font-size:12px}
+.spot .leader{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:center;margin-top:10px;position:relative}
+.spot .leader .name{font:400 clamp(36px,8vw,64px)/1 var(--slab);letter-spacing:.02em;text-transform:uppercase;color:var(--accent)}
+.spot .leader .name small{display:block;font:600 12px var(--display);letter-spacing:.14em;color:var(--ink-3);text-shadow:none;margin-bottom:6px}
+.spot .leader .facts{display:grid;gap:4px;font-size:14px;color:var(--ink-2)}
+.spot .leader .facts b{color:var(--ink)}
+.spotstats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 6px;position:relative}
+.stat{display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:var(--bg-2);border-radius:12px;border:1px solid var(--line)}
+.stat .v{font:800 28px/1 var(--display)}
+.stat .eyebrow{font-size:10px}
+.stat .hint{font-size:11px;color:var(--ink-3)}
+.srow{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:14px;position:relative}
+.srow .who{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.srow .who small{display:block;font-size:11px;color:var(--ink-3);font-weight:400}
+.srow .n{font-size:12px;color:var(--ink-3);white-space:nowrap}
+.srow .tagset{display:inline-flex;gap:6px;align-items:center}
+.spot .empty{padding:18px 8px 6px;color:var(--ink-3)}
+@media (max-width:640px){.spot .leader{grid-template-columns:1fr}.spotstats{grid-template-columns:1fr 1fr 1fr}.srow{grid-template-columns:1fr auto}.srow .n{display:none}}
+
+/* people */
+.teamblock{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.teamblock .th{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.teamblock .th .rank{font:800 26px/1 var(--display);color:var(--ink-3);min-width:34px}
+.teamblock.first .th .rank{color:var(--accent)}
+.teamblock .th .nm{font:800 20px/1 var(--display);letter-spacing:.03em;text-transform:uppercase}
+.teamblock .th .meta{margin-left:auto;display:inline-flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-3);flex-wrap:wrap}
+.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;padding:12px}
+.person{background:var(--card-2);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;min-width:0;text-align:left;position:relative;transition:border-color .15s,transform .15s}
+.person:hover{border-color:var(--line-2)}
+.person:active{transform:scale(.985)}
+.person.lead{border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.person .row1{display:flex;align-items:center;gap:10px}
+.avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font:800 15px var(--display);letter-spacing:.02em;color:#fff;flex:none}
+.person .nm{font:700 17px/1.05 var(--display);letter-spacing:.02em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person .nm small{display:block;font:500 11px var(--body);letter-spacing:0;color:var(--ink-3);margin-top:2px}
+.person .sc{margin-left:auto;font:800 30px/1 var(--display);text-align:right}
+.person .sc small{display:block;font:600 9px var(--display);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.form{display:flex;gap:3px;flex-wrap:wrap}
+.form i{width:14px;height:14px;border-radius:3px;background:var(--track);display:inline-block}
+.form i.w{background:var(--good);box-shadow:0 0 8px -2px var(--good-glow)}.form i.l{background:var(--bad)}.form i.p{background:none;border:1.5px solid var(--early);opacity:.7}
+.form .lbl{font:600 10px var(--display);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);width:100%;margin-top:-2px}
+.mini{display:grid;gap:5px}
+.mini .m{display:grid;grid-template-columns:64px 1fr auto;gap:8px;align-items:center;font-size:12px;color:var(--ink-3)}
+.mini .m .b{height:6px;border-radius:3px;background:var(--track);overflow:hidden}
+.mini .m .b>i{display:block;height:100%;border-radius:3px;background:var(--accent);transform-origin:left;animation:grow .9s cubic-bezier(.2,.7,.2,1) both}
+.mini .m .b>i.g{background:var(--good)}.mini .m .b>i.y{background:var(--warn)}.mini .m .b>i.r{background:var(--bad)}
+.mini .m b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;min-width:44px;text-align:right}
+.person.empty{opacity:.6}
+.person .open{position:absolute;right:10px;top:10px;color:var(--ink-3);opacity:.6}
+.person .open svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* detail sheet */
+.detail{margin:0 12px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:12px;animation:rise .3s cubic-bezier(.2,.7,.2,1) both}
+.detail .dh{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.detail .dh .nm{font:800 20px var(--display);letter-spacing:.03em;text-transform:uppercase}
+.detail .dh .x{margin-left:auto;color:var(--ink-3);font:600 12px var(--display);letter-spacing:.08em;text-transform:uppercase}
+.pstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:0 0 8px}
+
+/* tables */
+.tbl-wrap{border:1px solid var(--line);border-radius:10px;overflow:auto;-webkit-overflow-scrolling:touch;margin-top:8px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:13px}
+th{position:sticky;top:0;background:var(--card-2);color:var(--ink-3);font:600 11px var(--display);letter-spacing:.08em;text-transform:uppercase;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+th.n,td.n{text-align:right}
+td .sm{display:block;font-size:11px;color:var(--ink-3);font-weight:400;white-space:normal}
+td.nm{white-space:normal;min-width:180px}
+tr.dim td{color:var(--ink-3)}
+.tbl-wrap.compact table{min-width:0}
+
+/* edit mode: who gets credit */
+.pend{margin-top:14px;background:var(--card);border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:var(--r);box-shadow:var(--shadow);padding:14px}
+.pend .head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.pend .head .eyebrow{color:var(--accent);font-size:13px}
+.pend .hint{font-size:13px;color:var(--ink-2);margin:8px 0 0;line-height:1.45}
+.pendlist{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
+.pendlist li{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;background:var(--card-2);border-radius:10px;font-size:13px}
+.pendlist li button{color:var(--accent);font-weight:600;font-size:12px}
+.pendbar{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.pend textarea{width:100%;min-height:72px;margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card-2);color:var(--ink);font:12px/1.4 ui-monospace,Menlo,monospace;resize:vertical}
+td.assign{white-space:normal;min-width:220px}
+.assign-in{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.achip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font:600 12px var(--body);border:1px solid transparent}
+.achip:hover{border-color:var(--accent)}
+.achip b{font-weight:700;opacity:.8}
+.aadd{font:500 12px var(--body);color:var(--ink-2);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px 8px;max-width:150px}
+.areset{font:600 12px var(--body);color:var(--ink-3);text-decoration:underline}
+.editlink{color:var(--deck-dim);text-decoration:underline;font-size:12px;margin-top:4px}
+/* in progress panels */
+.stagegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+@media (max-width:900px){.stagegrid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;box-shadow:var(--shadow)}
+.panel h3{margin:0 0 4px;font:700 15px var(--display);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.panel h3 span{color:var(--ink-3);font-weight:500;letter-spacing:.02em;text-transform:none;font-family:var(--body);font-size:12px}
+.dd{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:10px 0 0;overflow:hidden}
+.dd summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 12px;font:700 13px var(--display);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);user-select:none}
+.dd summary::-webkit-details-marker{display:none}
+.dd summary::before{content:"";width:8px;height:8px;border-right:2px solid var(--ink-3);border-bottom:2px solid var(--ink-3);transform:rotate(-45deg);transition:transform .15s;flex:none;margin-left:2px}
+.dd[open] summary::before{transform:rotate(45deg)}
+.dd summary .cnt{font:700 12px var(--display);padding:2px 8px;border-radius:999px;background:var(--bg-2);color:var(--ink-3)}
+.dd .body{padding:0 12px 12px;border-top:1px solid var(--line)}
+
+/* rules */
+.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+@media (max-width:700px){.rules{grid-template-columns:1fr}}
+.rule{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;box-shadow:var(--shadow)}
+.rule .pts{font:800 40px/1 var(--display);color:var(--accent)}
+.rule .pts small{font:600 12px var(--display);letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);margin-left:4px}
+.rule h4{margin:6px 0 4px;font:800 18px var(--display);letter-spacing:.04em;text-transform:uppercase}
+.rule p{margin:0;font-size:13px;color:var(--ink-2);line-height:1.45}
+.src{margin-top:10px}
+.src table{min-width:0;font-size:13px}
+.src td{white-space:normal;vertical-align:top}
+.src td:first-child{font-weight:600;color:var(--ink);width:34%}
+.legend{margin-top:14px;padding:12px 14px;border:1px dashed var(--line-2);border-radius:var(--r);font-size:13px;color:var(--ink-3);display:grid;gap:8px}
+.legend .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.legend .row b{color:var(--ink-2);margin-right:2px;font:600 12px var(--display);letter-spacing:.08em;text-transform:uppercase}
+.footband{margin-top:26px;background:linear-gradient(180deg,var(--deck2),var(--deck1));color:var(--deck-dim);border-top:1px solid var(--deck-hair)}
+.footband .in{max-width:1100px;margin:0 auto;padding:22px 16px calc(22px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:12px}
+.footband img{height:44px;width:auto}
+.footband b{color:var(--deck-ink);font:600 13px var(--display);letter-spacing:.14em;text-transform:uppercase}
+.footband .r{margin-left:auto;text-align:right}
+.view{animation:rise .35s cubic-bezier(.2,.7,.2,1) both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.stagger>*:nth-child(2){animation-delay:.08s}.stagger>*:nth-child(3){animation-delay:.16s}.stagger>*:nth-child(4){animation-delay:.24s}
+@media (prefers-reduced-motion:reduce){.view,.pod,.lane .track>i,.mini .m .b>i,.detail{animation:none}}
+</style>
+
+<header class="deck">
+  <img class="wm" src="/hs-logo-white.png" alt="" aria-hidden="true">
+  <div class="deck-in">
+    <img class="logo" src="/hs-logo-white.png" alt="Homestead Electric">
+    <span class="x">×</span>
+    <div class="title"><h1>Scoreboard</h1><div class="season"><i></i><span id="seasonlbl"></span></div></div>
+    <div class="right"><div class="seg" id="tabs" role="tablist"></div>
+      <button class="icon-btn" id="theme" aria-label="Toggle light or dark" title="Light / dark"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c-4.5 0-9-4.5-9-9z"/></svg></button></div>
+  </div>
+</header>
+<div class="top"><div class="filters" id="filters"></div></div>
+<main class="wrap"><div id="app" class="view"></div></main>
+<footer class="footband" id="foot"></footer>
+
+<script>
+/* shape.js — the ONE place the scoreboard's rules live. Runs in node (compute.js, for the
+ * standalone doc) and in the browser (the in-app page, fed by the app over postMessage).
+ *
+ *   shapeScoreboard({ done, prog, appJobs, qc, corrections, doneGeneratedAt, progGeneratedAt })
+ *     done        Simpro jobs in a DONE stage (pull.js / the nightly function's slim rows)
+ *     prog        Simpro jobs in Progress stage (tech-margin-dashboard rows or the function's slim rows)
+ *     appJobs     [{ simproNo, foreman, lead }]  — the app's job docs (first names or full names)
+ *     qc          { [simproNo]: { qcWalk, misses, minors, walkScore } }
+ *     corrections [{ job, name, set:[people], note }]  — Koy's reassignments; set:[] = nobody
+ *
+ * Rules (Koy, Sep 28 → Oct 16 2026): credit = app foreman OR lead (matched by Simpro number), else
+ * Simpro technician, else nobody; corrections win. Scored = costs posted and not temp/extras work
+ * (the page adds: 100% invoiced, completed in the window, contract ≥ $2,500 unless toggled). */
+(function (root, factory) {
+  if (typeof module === "object" && module.exports) module.exports = factory();
+  else root.SB_SHAPE = factory();
+})(typeof self !== "undefined" ? self : this, function () {
+  "use strict";
+  const TEAMS = [
+    { key: "colby",  name: "Colby's Team",  division: "residential", lead: "Colby Fogh",       members: ["Colby Fogh", "Jacob Spackman", "Payton Bolda", "James Coleman Christen"] },
+    { key: "keegan", name: "Keegan's Team", division: "residential", lead: "Keegan Wilkinson", members: ["Keegan Wilkinson", "Gage Lund", "Austin Schut", "Noah Davis"] },
+    { key: "daegan", name: "Daegan's Team", division: "residential", lead: "Daegan Smith",     members: ["Daegan Smith", "Louis Hoffman", "Trever Worley", "Bailey Smith", "Treycen Rollene", "Callen Jakeman"] },
+    { key: "comm",   name: "Commercial",    division: "commercial",  lead: "Zane Watkins",     members: ["Zane Watkins", "Abraham Tristan", "Braden Davis"] },
+  ];
+  const SOLO = ["Joel Fey"];
+  const FORMER = ["Fonoivasa Mataafa", "Jonathan Harding"];
+  const OFFICE = ["Koy Wilkinson", "Jeromy Cloward", "Paul"];
+  const NICK = { "Trever Worley": ["trevor", "trever"], "James Coleman Christen": ["coleman", "james"], "Abraham Tristan": ["abe", "abraham"], "Fonoivasa Mataafa": ["vasa", "fonoivasa"] };
+  const ALL_PEOPLE = [].concat(...TEAMS.map(t => t.members), SOLO, FORMER);
+  const SPECIAL = /phase|temp power|temp p\b|temp ped|t&m|ev charger|light change|whip|\bstc\b/i;   // ScoreboardV4 _sb4Special + temp peds
+
+  const firstOf = (n) => String(n || "").trim().toLowerCase().split(/\s+/)[0] || "";
+  const fullByFirst = (name) => {
+    const f = firstOf(name); if (!f) return null;
+    for (const full of Object.keys(NICK)) if (NICK[full].indexOf(f) >= 0) return full;
+    const exact = ALL_PEOPLE.find(p => p.toLowerCase() === String(name || "").trim().toLowerCase()); if (exact) return exact;
+    return ALL_PEOPLE.find(p => firstOf(p) === f) || null;
+  };
+  const teamOf = (p) => TEAMS.find(t => t.members.indexOf(p) >= 0) || null;
+  const teamsOf = (people) => { const out = []; people.forEach(p => { const t = teamOf(p); if (t && out.indexOf(t.key) < 0) out.push(t.key); }); return out; };
+  const uniq = (a) => a.filter((v, i) => v && a.indexOf(v) === i);
+  const num = (v) => (typeof v === "number" && isFinite(v)) ? v : (v == null || v === "" ? null : Number(v));
+  const AE = (o, k) => o && o[k] && typeof o[k] === "object" ? o[k] : null;
+
+  function shapeScoreboard(input) {
+    const done = input.done || [], prog = input.prog || [], appJobs = input.appJobs || [], qc = input.qc || {};
+    // Corrections are normalized on the way in: a finite numeric job id, short strings, a small list of names.
+    const corr = (Array.isArray(input.corrections) ? input.corrections : []).filter(c => c && isFinite(Number(c.job)))
+      .map(c => ({ job: Number(c.job), name: String(c.name || "").slice(0, 120), set: (Array.isArray(c.set) ? c.set : []).map(x => String(x || "").slice(0, 80)).filter(Boolean).slice(0, 6), note: String(c.note || "").slice(0, 200) }));
+    const OVERRIDE = {}; corr.forEach(c => { if (c && c.job != null) OVERRIDE[Number(c.job)] = { people: Array.isArray(c.set) ? c.set : [], note: c.note || "" }; });
+    const appBySn = {}; appJobs.forEach(a => { const sn = Number(a && a.simproNo); if (sn) appBySn[sn] = a; });
+
+    const jobs = done.map(j => {
+      // Accept both the pull.js shape ({nm:{act,est}, hrs:{…}}) and the function's flat shape (nm_act, nm_est, …).
+      const nm = AE(j, "nm"), gm = AE(j, "gm"), npl = AE(j, "npl"), hrs = AE(j, "hrs"), mat = AE(j, "mat"), lab = AE(j, "lab");
+      const nmAct = nm ? nm.act : num(j.nm_act), nmBid = nm ? nm.est : num(j.nm_est), gmAct = gm ? gm.act : num(j.gm_act), nplAct = npl ? npl.act : num(j.npl_act);
+      const hrsAct = hrs ? hrs.act : num(j.hrs_act), hrsEst = hrs ? hrs.est : num(j.hrs_est), matAct = mat ? mat.act : num(j.mat_act), matEst = mat ? mat.est : num(j.mat_est), labAct = lab ? lab.act : num(j.lab_act), labEst = lab ? lab.est : num(j.lab_est);
+      const a = appBySn[Number(j.id)] || null;
+      let people = [], source = "none";
+      if (a) { people = uniq([fullByFirst(a.foreman), fullByFirst(a.lead)]); if (people.length) source = "app foreman/lead"; }
+      if (!people.length && j.tech && j.tech !== "UNASSIGNED") { people = String(j.tech).split(" / "); source = "simpro technician"; }
+      if (OVERRIDE[j.id]) { people = OVERRIDE[j.id].people.slice(); source = "correction"; }
+      people = uniq(people);
+      const teams = teamsOf(people);
+      const division = j.division || (teams.indexOf("comm") >= 0 ? "commercial" : "residential");
+      const special = SPECIAL.test(j.name || ""), costs = nmAct !== 100 && ((matAct || 0) > 0 || (labAct || 0) > 0 || (hrsAct || 0) > 0);
+      const invPct = num(j.inv_pct), invoiced100 = invPct != null && invPct >= 99.5;
+      const q = qc[j.id];
+      return {
+        id: j.id, name: j.name || "", completed: j.completed || null, stage: j.stage || "", status: j.status || "", type: j.type || null,
+        division, people, teams, source, scored: costs && !special, special, costs, invoiced100,
+        why: special ? "extras / temp work — listed, never scored" : !costs ? "no costs posted in Simpro yet" : "",
+        qc: q ? { walk: !!q.qcWalk, misses: q.misses || 0, minors: q.minors || 0, walkScore: q.walkScore == null ? null : q.walkScore } : null,
+        nm: nmAct, nm_bid: nmBid, gm: gmAct, npl: nplAct, contract: num(j.contract) || 0, inv_pct: invPct,
+        hrs_act: hrsAct || 0, hrs_est: hrsEst || 0, mat_act: matAct || 0, mat_est: matEst || 0, lab_act: labAct || 0, lab_est: labEst || 0,
+      };
+    });
+
+    const progRows = prog.map(j => {
+      const base = !j.tech || j.tech === "UNASSIGNED" ? [] : String(j.tech).split(" / ");
+      const people = OVERRIDE[j.id] ? OVERRIDE[j.id].people.slice() : base;
+      return { id: j.id, name: j.name || "", status: j.status || "", division: j.division || "residential", people, teams: teamsOf(people),
+        nm: num(j.nm_act), nm_bid: num(j.nm_est), hrs_act: num(j.hrs_act) || 0, hrs_est: num(j.hrs_est) || 0, mat_act: num(j.mat_act) || 0, mat_est: num(j.mat_est) || 0, contract: num(j.contract) || 0 };
+    });
+
+    const roster = uniq([].concat(ALL_PEOPLE, ...jobs.map(j => j.people), ...progRows.map(j => j.people))).filter(p => OFFICE.indexOf(p) < 0).sort();
+    return {
+      generated_at: new Date().toISOString(), done_generated_at: input.doneGeneratedAt || null, prog_generated_at: input.progGeneratedAt || null,
+      teams: TEAMS, solo: SOLO, former: FORMER, office: OFFICE, roster, corrections: corr, jobs, prog: progRows,
+    };
+  }
+  return { shapeScoreboard, TEAMS, SOLO, FORMER, OFFICE, SPECIAL, fullByFirst, teamsOf };
+});
+
+</script>
+<script>
+(function(){
+"use strict";
+// Standalone doc: data is baked in as window.SB_DATA. In the app: the Scoreboard tab posts the raw inputs
+// (Simpro cache + the app's foreman/lead + QC + corrections) and this page shapes them with SB_SHAPE.
+const APP_MODE = !window.SB_DATA;
+let D = window.SB_DATA || { loading: true, teams: (window.SB_SHAPE && window.SB_SHAPE.TEAMS) || [], solo: [], former: [], office: [], roster: [], corrections: [], jobs: [], prog: [] };
+let CAN_SAVE = false;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const $ = (s, r = document) => r.querySelector(s);
+function mount(el, html) { const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html"); el.replaceChildren(...doc.body.childNodes); }
+const DASH = "—";
+const pct1 = (v) => (Math.round(v * 10) / 10).toFixed(1) + "%";
+const pct0 = (v) => Math.round(v) + "%";
+const signed0 = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(Math.round(v)) + "%";
+const dateS = (d) => { if (!d) return DASH; const x = new Date(d + "T12:00:00"); return isNaN(x) ? d : x.toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
+const NICK = { "Trever Worley": "Trevor", "James Coleman Christen": "Coleman", "Abraham Tristan": "Abe", "Fonoivasa Mataafa": "Vasa" };
+const shortName = (n) => NICK[n] || String(n).split(" ")[0];
+const initials = (n) => { const p = String(n || "").trim().split(/\s+/); return p.length > 1 ? (p[0][0] + p[p.length - 1][0]) : (p[0] || "?").slice(0, 2); };
+const PAL = ["#3B5BA5", "#46916A", "#B06A2C", "#6A5E97", "#3E7D7A", "#C58A4C", "#3E9E74", "#5B7FC0", "#A5525B"];
+const colorFor = (nm) => PAL[Math.abs(String(nm).split("").reduce((a, c) => a + c.charCodeAt(0), 0)) % PAL.length];
+const ordinal = (n) => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
+
+/* grading — same scales as the Tech Margins doc */
+const G_DONE = { green: 15, yellow: 10 }, G_ROUGH = { green: 45, yellow: 39 };
+const mClass = (m, G) => m == null ? "gr" : m >= (G || G_DONE).green ? "g" : m >= (G || G_DONE).yellow ? "y" : "r";
+const mPill = (m, G, lg) => `<span class="pill ${mClass(m, G)}${lg ? " lg" : ""}"><i></i>${m == null ? DASH : pct1(m)}</span>`;
+const hrsClass = (p) => p == null ? "gr" : p <= 100 ? "g" : p <= 110 ? "y" : "r";
+const matClass = (p) => p == null ? "gr" : p <= 0 ? "g" : p <= 10 ? "y" : "r";
+
+/* state */
+const ls = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
+const st = { division: ls("sb2.div", "residential"), win: ls("sb2.win", "ytd"), extras: ls("sb2.extras", false), small: ls("sb2.smallIn", false), score: ls("sb2.score", true), month: "", open: "", edit: location.hash === "#edit" };
+let PEND = ls("sb2.corr", {}); if (!PEND || typeof PEND !== "object" || Array.isArray(PEND)) PEND = {};
+const savePend = () => { try { localStorage.setItem("sb2.corr", JSON.stringify(PEND)); } catch {} };
+const save = () => { try { Object.entries({ "sb2.div": st.division, "sb2.win": st.win, "sb2.extras": st.extras, "sb2.smallIn": st.small, "sb2.score": st.score }).forEach(([k, v]) => localStorage.setItem(k, JSON.stringify(v))); } catch {} };
+const WINS = [{ k: "ytd", l: "This year" }, { k: "90", l: "Last 90 days" }, { k: "365", l: "Last 12 months" }];
+function winFrom() { const t = new Date(); t.setHours(0, 0, 0, 0); if (st.win === "ytd") return `${t.getFullYear()}-01-01`; const d = new Date(t); d.setDate(d.getDate() - (st.win === "90" ? 90 : 365)); return d.toISOString().slice(0, 10); }
+
+/* selection */
+const TEAMS = D.teams;
+const teamOf = (p) => TEAMS.find(t => t.members.includes(p)) || null;
+const teamsOf = (people) => [...new Set(people.map(teamOf).filter(Boolean).map(t => t.key))];
+// A pending correction made on this device replaces who gets credit for a job until it is baked into the page.
+const eff = (j) => { const p = PEND[j.id]; return p ? { ...j, people: p.set, teams: teamsOf(p.set), pending: true } : j; };
+const JOBS_ALL = () => D.jobs.map(eff), PROG_ALL = () => D.prog.map(eff);
+const ROSTER = () => Array.isArray(D.roster) && D.roster.length ? D.roster : [...new Set([...TEAMS.flatMap(t => t.members), ...(D.solo || []), ...(D.former || []), ...D.jobs.flatMap(j => j.people)])].filter(p => !(D.office || []).includes(p)).sort();
+const SMALL_MAX = 2500, isSmall = (j) => j.contract < SMALL_MAX;
+const BASE = (j) => j.division === st.division && j.invoiced100 && (st.extras || !j.special) && (st.small || !isSmall(j));
+function JOBS() { const from = winFrom(); return JOBS_ALL().filter(j => BASE(j) && j.completed >= from); }
+function NOT_INVOICED() { const from = winFrom(); return JOBS_ALL().filter(j => j.division === st.division && !j.invoiced100 && j.completed >= from && (st.extras || !j.special) && (st.small || !isSmall(j))); }
+const MONTHS = (() => { const out = [], t = new Date(); for (let i = 0; i < 4; i++) { const d = new Date(t.getFullYear(), t.getMonth() - i, 1); out.push({ k: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, l: d.toLocaleDateString("en-US", { month: "long" }) + (d.getFullYear() !== t.getFullYear() ? " " + d.getFullYear() : "") }); } return out; })();
+function MONTH(k) { const keys = new Set(TEAMS.filter(t => t.division === st.division).map(t => t.key)); return JOBS_ALL().filter(j => BASE(j) && j.completed.slice(0, 7) === k && isScored(j) && j.teams.some(x => keys.has(x))); }
+function PROG() { return PROG_ALL().filter(j => j.division === st.division); }
+const isRough = (j) => j.status === "Rough-In Complete", isFin = (j) => j.status === "Finish" || j.status === "Punch List", isEarly = (j) => !isRough(j) && !isFin(j);
+const stageScale = (j) => isFin(j) ? G_DONE : G_ROUGH;
+const stageLabel = (j) => isFin(j) ? "finishing" : isRough(j) ? "post-rough" : "in rough";
+const progForPerson = (p) => PROG().filter(j => j.people.includes(p));
+const progForTeam = (key) => PROG().filter(j => j.teams.includes(key));
+const isScored = (j) => j.costs && (st.extras || !j.special);
+
+function stats(jobs) {
+  const sc = jobs.filter(isScored);
+  const sum = (f) => sc.reduce((s, j) => s + (f(j) || 0), 0);
+  return {
+    n: jobs.length, scored: sc.length, jobs, sc,
+    avg: sc.length ? sc.reduce((s, j) => s + j.nm, 0) / sc.length : null,
+    gm: sc.length ? sc.reduce((s, j) => s + j.gm, 0) / sc.length : null,
+    hrsAct: sum(j => j.hrs_act), hrsEst: sum(j => j.hrs_est), matAct: sum(j => j.mat_act), matEst: sum(j => j.mat_est),
+    green: sc.filter(j => mClass(j.nm) === "g").length, amber: sc.filter(j => mClass(j.nm) === "y").length, red: sc.filter(j => mClass(j.nm) === "r").length,
+  };
+}
+const hrsPct = (s) => s.hrsEst ? s.hrsAct / s.hrsEst * 100 : null;
+const matPct = (s) => s.matEst ? (s.matAct - s.matEst) / s.matEst * 100 : null;
+const forTeam = (jobs, key) => jobs.filter(j => j.teams.includes(key));
+const forPerson = (jobs, p) => jobs.filter(j => j.people.includes(p));
+
+/* score — Margin 50 · Beat the bid 30 · Labor 20 (percentages only, all Simpro) */
+const W = { margin: 50, bid: 30, labor: 20 };
+const clamp = (v) => Math.max(0, Math.min(1, v));
+function scoreOf(s) {
+  const sc = s.sc; if (!sc.length) return null;
+  const parts = {};
+  parts.margin = s.avg == null ? null : clamp(s.avg / 30);
+  const bidJobs = sc.filter(j => j.nm_bid != null); parts.bid = bidJobs.length ? bidJobs.filter(j => j.nm >= j.nm_bid).length / bidJobs.length : null;
+  const labJobs = sc.filter(j => j.hrs_est > 0); parts.labor = labJobs.length ? labJobs.reduce((a, j) => a + clamp(1 - Math.max(0, j.hrs_act / j.hrs_est * 100 - 100) / 50), 0) / labJobs.length : null;
+  const qcJobs = sc.filter(j => j.qc && j.qc.walk && j.qc.walkScore != null);
+  let sum = 0, wsum = 0; Object.keys(W).forEach(k => { if (parts[k] != null) { sum += parts[k] * W[k]; wsum += W[k]; } });
+  return { score: wsum ? Math.round(sum / wsum * 100) : null, parts, counts: { bid: bidJobs.length, beat: bidJobs.filter(j => j.nm >= j.nm_bid).length, labor: labJobs.length, qc: qcJobs.length }, qcItems: qcJobs.length ? qcJobs.reduce((a, j) => a + j.qc.misses + j.qc.minors, 0) / qcJobs.length : null };
+}
+const scoreCls = (v) => v == null ? "gr" : v >= 67 ? "g" : v >= 50 ? "y" : "r";
+const rankSort = (a, b) => (b.s.scored > 0) - (a.s.scored > 0) || (st.score ? ((b.r && b.r.score) ?? -1e9) - ((a.r && a.r.score) ?? -1e9) : 0) || (b.s.avg ?? -1e9) - (a.s.avg ?? -1e9) || b.s.scored - a.s.scored;
+
+/* shell */
+function renderTabs() {
+  const counts = {}; D.jobs.forEach(j => counts[j.division] = (counts[j.division] || 0) + 1);
+  mount($("#tabs"), ["residential", "commercial"].map(k => `<button role="tab" data-div="${k}" aria-selected="${st.division === k}">${k}</button>`).join(""));
+}
+function renderFilters() {
+  const n = JOBS().length;
+  mount($("#filters"), `<span class="lbl">Season</span>` +
+    WINS.map(w => `<button class="chip" data-win="${w.k}" aria-pressed="${st.win === w.k}">${w.l}${st.win === w.k ? ` <span class="n">${n}</span>` : ""}</button>`).join("") +
+    `<span class="sep"></span>` +
+    `<button class="chip tg" data-tg="score" aria-pressed="${st.score}">Overall score ${st.score ? "on" : "off"}</button>` +
+    `<button class="chip tg" data-tg="small" aria-pressed="${st.small}">Jobs under $2,500 ${st.small ? "in" : "out"}</button>` +
+    `<button class="chip tg" data-tg="extras" aria-pressed="${st.extras}">Temp peds &amp; extras ${st.extras ? "in" : "out"}</button>` +
+    `<span class="fresh">finished &amp; 100% invoiced jobs only</span>`);
+  const g = D.done_generated_at ? new Date(D.done_generated_at) : null, ageDays = g ? Math.round((Date.now() - g.getTime()) / 864e5) : null;
+  mount($("#seasonlbl"), `${new Date().getFullYear()} season · ${esc(st.division)} · ${g ? (ageDays > 7 ? `<b class="stale">Simpro pull is ${ageDays} days old</b>` : `live from Simpro ${esc(g.toLocaleDateString("en-US", { month: "short", day: "numeric" }))}`) : "no Simpro pull yet"}`);
+}
+
+/* pieces */
+function podium(teams) {
+  const max = Math.max(1, ...teams.map(x => (x.r && x.r.score) || (x.s.avg != null ? Math.min(100, Math.max(0, x.s.avg * 2)) : 0)));
+  const val = (x) => st.score ? (x.r ? x.r.score : null) : x.s.avg;
+  const cols = Math.min(4, Math.max(1, teams.length));
+  return `<div class="podium" style="--cols:${cols}">${teams.map((x, i) => {
+    const empty = !x.s.scored, v = val(x), h = empty ? 150 : 170 + Math.round((st.score ? (v || 0) : Math.min(100, Math.max(0, (v || 0) * 2))) / max * 120);
+    return `<div class="pod ${i === 0 && !empty ? "first" : ""} ${empty ? "empty" : ""}" style="--h:${h}px;animation-delay:${i * .1}s">
+      ${empty ? "" : `<div class="place">${ordinal(i + 1)}</div>`}
+      ${i === 0 && !empty ? `<img class="mark" src="/icon-512.png" alt="" aria-hidden="true">` : ""}
+      <div class="team">${esc(x.t.name)}</div>
+      <div class="roster">${x.t.members.map(shortName).map(esc).join(" · ")}</div>
+      ${empty ? `<div class="score gr">${DASH}<small>no finished jobs yet</small></div>` :
+        st.score ? `<div class="score ${scoreCls(v)} count" data-to="${v}">${v}<small>score · out of 100</small></div>
+          <div class="line">${mPill(x.s.avg)}<span>avg margin</span><b>${x.r.counts.beat} of ${x.r.counts.bid}</b><span>beat the bid</span></div>` :
+        `<div class="score ${mClass(v)}">${pct1(v)}<small>avg net margin · goal 15%</small></div>
+          <div class="line"><b>${x.s.scored}</b><span>finished jobs</span></div>`}
+    </div>`; }).join("")}</div>`;
+}
+function race(teams, all) {
+  const vals = [...teams.map(x => x.s.avg), all.avg].filter(v => v != null);
+  const lo = Math.min(0, ...vals), hi = Math.max(20, ...vals) * 1.08, span = hi - lo, zero = (0 - lo) / span * 100, goal = (15 - lo) / span * 100;
+  const lane = (name, sub, s, cls) => { const v = s.avg; const w = v == null ? 0 : Math.abs(v) / span * 100;
+    return `<div class="lane ${cls || ""}"><span class="who">${esc(name)}<small>${esc(sub)}</small></span><span class="track"><span class="goal" style="left:${goal}%"></span>${v == null ? "" : `<i class="${mClass(v)}" style="left:${v >= 0 ? zero : zero - w}%;width:${w}%"></i>`}</span><span class="v ${mClass(v)}">${v == null ? DASH : pct1(v)}</span></div>`; };
+  return `<section class="race"><div class="head"><span class="eyebrow">Race to 15% · avg net margin on finished jobs</span><span class="note" style="margin:0">green past the line · amber 10 to 15 · red under 10</span></div>
+    ${teams.map(x => lane(x.t.name, x.s.scored ? `${x.s.scored} finished` : "nothing finished yet", x.s)).join("")}
+    ${lane("Everybody", `${all.scored} finished jobs`, all, "all")}</section>`;
+}
+function spotlight() {
+  const cur = st.month || MONTHS[0].k, m = MONTHS.find(x => x.k === cur) || MONTHS[0];
+  const jobs = MONTH(cur).sort((a, b) => b.nm - a.nm);
+  const beats = jobs.filter(j => j.nm_bid != null && j.nm >= j.nm_bid);
+  const people = {}; jobs.forEach(j => (j.people.length ? j.people : ["No foreman on record"]).forEach(p => { const r = people[p] = people[p] || { p, n: 0, beat: 0, nms: [] }; r.n++; r.nms.push(j.nm); if (j.nm_bid != null && j.nm >= j.nm_bid) r.beat++; }));
+  const lead = Object.values(people).filter(r => r.p !== "No foreman on record").sort((a, b) => b.beat - a.beat || (b.beat / b.n) - (a.beat / a.n) || Math.max(...b.nms) - Math.max(...a.nms))[0];
+  const best = jobs[0];
+  const chips = MONTHS.map(x => `<button class="chip" data-month="${x.k}" aria-pressed="${x.k === cur}">${x.l}</button>`).join("");
+  const rows = jobs.map(j => { const hp = j.hrs_est ? j.hrs_act / j.hrs_est * 100 : null, beat = j.nm_bid != null ? j.nm >= j.nm_bid : null;
+    return `<div class="srow"><span class="who">${esc(j.name)}<small>${j.people.length ? esc(j.people.map(shortName).join(" + ")) : "no foreman on record"} · closed ${dateS(j.completed)}${j.nm_bid != null ? ` · bid ${pct1(j.nm_bid)}` : ""}</small></span><span class="n ${hp == null ? "gr" : hrsClass(hp)}">${hp == null ? DASH : "labor " + pct0(hp)}</span><span class="tagset">${beat == null ? "" : `<span class="spill ${beat ? "ok" : "risk"}">${beat ? "beat the bid" : "missed the bid"}</span>`}${mPill(j.nm)}</span></div>`; }).join("");
+  return `<section class="spot">
+    <div class="head"><span class="eyebrow">This month · ${esc(m.l)}</span><div class="mchips">${chips}</div></div>
+    ${jobs.length ? `
+    <div class="leader">
+      <div class="name"><small>Month leader</small>${lead ? esc(shortName(lead.p)) : DASH}</div>
+      <div class="facts">${lead ? `<span>Beat the bid on <b>${lead.beat} of ${lead.n}</b> job${lead.n === 1 ? "" : "s"} closed this month</span><span>Best finish <b>${pct1(Math.max(...lead.nms))}</b></span>` : `<span>Nobody on record yet this month.</span>`}<span>Best job of the month: <b>${esc(best.name)}</b> at <b class="${mClass(best.nm)}">${pct1(best.nm)}</b>${best.people.length ? ` · ${esc(best.people.map(shortName).join(" + "))}` : ""}</span></div>
+    </div>
+    <div class="spotstats">
+      <div class="stat"><span class="eyebrow">Closed</span><span class="v">${jobs.length}</span><span class="hint">finished, invoiced, costed</span></div>
+      <div class="stat"><span class="eyebrow">Beat the bid</span><span class="v ${beats.length / jobs.length >= .67 ? "g" : beats.length / jobs.length >= .5 ? "y" : "r"}">${beats.length} of ${jobs.length}</span><span class="hint">actual met the bid margin</span></div>
+      <div class="stat"><span class="eyebrow">Month avg</span><span class="v ${mClass(jobs.reduce((a, j) => a + j.nm, 0) / jobs.length)}">${pct1(jobs.reduce((a, j) => a + j.nm, 0) / jobs.length)}</span><span class="hint">net margin · goal 15%</span></div>
+    </div>
+    <div class="spotlist">${rows}</div>` : `<div class="empty">Nothing has closed and fully invoiced in ${esc(m.l)} yet. The fight is still on.</div>`}
+  </section>`;
+}
+function formGuide(jobs, pj) {
+  const done = [...jobs.filter(isScored)].sort((a, b) => a.completed.localeCompare(b.completed));
+  if (!done.length && !pj.length) return "";
+  return `<div class="form"><span class="lbl">Finished jobs · beat / missed the bid · in progress</span>${done.map(j => `<i class="${j.nm_bid == null ? "" : j.nm >= j.nm_bid ? "w" : "l"}" title="${esc(j.name)} · ${pct1(j.nm)}${j.nm_bid != null ? " vs bid " + pct1(j.nm_bid) : ""}"></i>`).join("")}${pj.map(j => `<i class="p" title="${esc(j.name)} · ${esc(j.status)}"></i>`).join("")}</div>`;
+}
+function personCard(p, jobs, rankInTeam, isLead) {
+  const s = stats(jobs), r = st.score ? scoreOf(s) : null, pj = progForPerson(p), empty = !s.scored, hp = hrsPct(s);
+  const open = st.open === p;
+  return `<button class="person ${empty ? "empty" : ""} ${isLead && !empty ? "lead" : ""}" data-open="${esc(p)}" aria-expanded="${open}">
+    <span class="open"><svg viewBox="0 0 24 24"><path d="${open ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"}"/></svg></span>
+    <div class="row1"><span class="avatar" style="background:${colorFor(p)}">${esc(initials(p))}</span>
+      <span class="nm">${esc(p)}<small>${empty ? (pj.length ? `${pj.length} in progress · none finished` : "no jobs yet") : `${s.scored} finished${pj.length ? ` · ${pj.length} in progress` : ""}`}</small></span>
+      ${empty ? "" : st.score ? `<span class="sc ${scoreCls(r.score)}">${r.score}<small>score</small></span>` : `<span class="sc ${mClass(s.avg)}">${pct1(s.avg)}<small>avg margin</small></span>`}</div>
+    ${formGuide(jobs, pj)}
+    ${empty ? "" : `<div class="mini">
+      <div class="m"><span>Margin</span><span class="b"><i class="${mClass(s.avg)}" style="width:${Math.round(clamp(s.avg / 30) * 100)}%"></i></span><b>${pct1(s.avg)}</b></div>
+      ${r ? `<div class="m"><span>Beat bid</span><span class="b"><i class="${r.parts.bid >= .67 ? "g" : r.parts.bid >= .5 ? "y" : "r"}" style="width:${Math.round(r.parts.bid * 100)}%"></i></span><b>${r.counts.beat}/${r.counts.bid}</b></div>` : ""}
+      <div class="m"><span>Labor</span><span class="b"><i class="${hrsClass(hp)}" style="width:${hp == null ? 0 : Math.round(clamp(1 - Math.max(0, hp - 100) / 50) * 100)}%"></i></span><b>${hp == null ? DASH : pct0(hp)}</b></div>
+    </div>`}
+  </button>`;
+}
+function assignCell(j) {
+  const chips = j.people.map(p => `<button class="achip" data-off="${esc(j.id)}" data-name="${esc(p)}" title="Take ${esc(j.name)} off ${esc(p)}">${esc(shortName(p))} <b>×</b></button>`).join("");
+  const opts = ROSTER().filter(p => !j.people.includes(p)).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+  return `<div class="assign-in">${chips || `<span class="gr">nobody</span>`}<select class="aadd" data-add="${esc(j.id)}" aria-label="Add a person to ${esc(j.name)}"><option value="">+ add…</option>${opts}</select>${j.pending ? `<button class="areset" data-reset="${esc(j.id)}">undo</button>` : ""}</div>`;
+}
+const jobById = (id) => JOBS_ALL().find(j => j.id === id) || PROG_ALL().find(j => j.id === id) || null;
+function setPending(id, people) { const j = jobById(id); if (!j) return; PEND[id] = { set: [...new Set(people)], name: j.name }; savePend(); render(); }
+function corrText() { return Object.entries(PEND).map(([id, p]) => `#${id} ${p.name} → ${p.set.length ? p.set.join(" + ") : "(no one)"}`).join("\n"); }
+function pendPanel() {
+  const rows = Object.entries(PEND);
+  return `<section class="pend"><div class="head"><span class="eyebrow">Fix who gets credit</span><button class="chip" data-edit="off">Done</button></div>
+    <p class="hint">${APP_MODE && CAN_SAVE ? `Tap a name on any job row to take the job off that person, or pick a name to add one. The board recalculates right away. Tap <b>Save for everyone</b> and the change is kept with the app, survives the nightly refresh, and every admin sees it.` : APP_MODE ? `Only admins can change who gets credit. Ask Koy.` : `Tap a name on any job row to take the job off that person, or pick a name to add one. The board recalculates on this device right away. To make it stick for everyone who opens the link, copy the list below and send it to Claude; it gets baked into the next version. ${D.corrections && D.corrections.length ? `${D.corrections.length} earlier correction${D.corrections.length === 1 ? "" : "s"} are already baked in.` : ""}`}</p>
+    ${rows.length ? `<ul class="pendlist">${rows.map(([id, p]) => `<li><span><b>#${esc(id)} ${esc(p.name)}</b> → ${p.set.length ? esc(p.set.map(shortName).join(" + ")) : "<i>no one</i>"}</span><button data-drop="${esc(id)}" aria-label="Undo">undo</button></li>`).join("")}</ul>
+    ${APP_MODE && CAN_SAVE ? `<div class="pendbar"><button class="chip" data-save aria-pressed="true">Save for everyone</button><button class="chip" data-clear>Clear all</button><span id="copied" class="hint"></span></div>` :
+    `<div class="pendbar"><button class="chip" data-copy>Copy corrections</button><button class="chip" data-clear>Clear all</button><span id="copied" class="hint"></span></div>
+    <textarea id="corrtext" readonly aria-label="Corrections to send">${esc(corrText())}</textarea>`}` : `<p class="hint gr">No changes ${APP_MODE ? "waiting to be saved" : "on this device yet"}.</p>`}
+    ${(D.corrections || []).length ? `<details class="dd" style="margin-top:10px"><summary>Saved corrections<span class="cnt">${D.corrections.length}</span></summary><div class="body"><ul class="pendlist" style="margin-top:10px">${D.corrections.map(c => `<li><span><b>#${esc(c.job)} ${esc(c.name || "")}</b> → ${(c.set || []).length ? esc(c.set.map(shortName).join(" + ")) : "<i>no one</i>"}${c.note ? `<small class="hint"> · ${esc(c.note)}</small>` : ""}</span>${APP_MODE && CAN_SAVE ? `<button data-unbake="${esc(c.job)}" aria-label="Remove this correction">remove</button>` : ""}</li>`).join("")}</ul></div></details>` : ""}
+  </section>`;
+}
+function jobTable(jobs, G, showStatus) {
+  const rows = [...jobs].sort((a, b) => (b.completed || "").localeCompare(a.completed || "")).map(j => {
+    const Gj = typeof G === "function" ? G(j) : G;
+    const hp = j.hrs_est ? j.hrs_act / j.hrs_est * 100 : null, mp = j.mat_est ? (j.mat_act - j.mat_est) / j.mat_est * 100 : null;
+    const sc = G ? true : isScored(j);
+    return `<tr class="${sc ? "" : "dim"}"><td class="nm">${esc(j.name)}<span class="sm">#${esc(j.id)}${showStatus ? " · " + esc(j.status) + " · " + stageLabel(j) + " · not scored" : " · completed " + dateS(j.completed)}${j.people.length ? "" : " · no foreman on record"}${sc ? "" : " · " + esc(j.why)}</span></td>
+      <td>${sc ? mPill(j.nm, Gj) : `<span class="pill gr"><i></i>${j.nm == null ? DASH : pct1(j.nm)}</span>`}${j.nm_bid != null ? `<span class="sm">bid ${pct1(j.nm_bid)}${sc && !G ? (j.nm >= j.nm_bid ? " · beat it" : " · missed it") : ""}</span>` : ""}</td>
+      <td class="n num ${sc && j.gm != null ? "" : "gr"}">${j.gm == null ? DASH : pct1(j.gm)}</td>
+      <td class="n num ${hp == null ? "gr" : hrsClass(hp)}">${hp == null ? DASH : pct0(hp)}</td>
+      <td class="n num ${mp == null ? "gr" : matClass(mp)}">${mp == null ? DASH : signed0(mp)}</td>
+      ${st.score && !G ? `<td class="n num ${!j.qc || !j.qc.walk ? "gr" : ""}">${j.qc && j.qc.walk ? j.qc.misses + j.qc.minors : j.qc ? "no walk" : "not in app"}</td>` : ""}
+      ${st.edit ? `<td class="assign">${assignCell(j)}</td>` : ""}</tr>`;
+  }).join("");
+  return `<div class="tbl-wrap"><table><thead><tr><th>Job</th><th>Net margin</th><th class="n">Gross margin</th><th class="n">Labor vs bid</th><th class="n">Material vs est</th>${st.score && !G ? `<th class="n">QC items</th>` : ""}${st.edit ? `<th>Who gets credit</th>` : ""}</tr></thead><tbody>${rows || `<tr><td colspan="7" class="gr">Nothing here in this window.</td></tr>`}</tbody></table></div>`;
+}
+const progBlock = (pj) => pj.length ? `<div class="eyebrow" style="margin:14px 0 0">In progress · ${pj.length} job${pj.length === 1 ? "" : "s"} · not scored</div>${jobTable(pj.map(j => ({ ...j, completed: "", gm: null })), stageScale, true)}` : "";
+function personDetail(p, jobs) {
+  const s = stats(jobs), r = st.score ? scoreOf(s) : null, pj = progForPerson(p), empty = !s.scored, hp = hrsPct(s), mp = matPct(s);
+  return `<div class="detail"><div class="dh"><span class="avatar" style="background:${colorFor(p)}">${esc(initials(p))}</span><span class="nm">${esc(p)}</span><button class="x" data-open="${esc(p)}">Close</button></div>
+    <div class="pstats">
+      <div class="stat"><span class="eyebrow">Avg net margin</span><span class="v ${mClass(s.avg)}">${s.avg == null ? DASH : pct1(s.avg)}</span><span class="hint">goal 15% · ${s.scored} finished job${s.scored === 1 ? "" : "s"}</span></div>
+      <div class="stat"><span class="eyebrow">Gross margin</span><span class="v ${empty ? "gr" : ""}">${s.gm == null ? DASH : pct1(s.gm)}</span><span class="hint">before overhead</span></div>
+      <div class="stat"><span class="eyebrow">Labor vs bid</span><span class="v ${hp == null ? "gr" : hrsClass(hp)}">${hp == null ? DASH : pct0(hp)}</span><span class="hint">hours used · under 100% good</span></div>
+      <div class="stat"><span class="eyebrow">Material vs est</span><span class="v ${mp == null ? "gr" : matClass(mp)}">${mp == null ? DASH : signed0(mp)}</span><span class="hint">at or under 0% good</span></div>
+      ${r ? `<div class="stat"><span class="eyebrow">Beat the bid</span><span class="v ${r.parts.bid == null ? "gr" : r.parts.bid >= .67 ? "g" : r.parts.bid >= .5 ? "y" : "r"}">${r.parts.bid == null ? DASH : pct0(r.parts.bid * 100)}</span><span class="hint">of ${r.counts.bid} jobs · met own bid margin</span></div>
+      <div class="stat"><span class="eyebrow">QC items per job</span><span class="v ${r.qcItems == null ? "gr" : r.qcItems <= 2 ? "g" : r.qcItems <= 5 ? "y" : "r"}">${r.qcItems == null ? DASH : (Math.round(r.qcItems * 10) / 10)}</span><span class="hint">${r.counts.qc ? `on ${r.counts.qc} of ${s.scored} jobs · info only` : "no QC walk in the app"}</span></div>` : ""}
+    </div>
+    ${jobTable(jobs)}${progBlock(pj)}</div>`;
+}
+function teamBlock(x, rank) {
+  const t = x.t, s = x.s, tp = progForTeam(t.key);
+  const people = t.members.map(p => ({ p, jobs: forPerson(s.jobs, p) })).map(y => { const s2 = stats(y.jobs); return { ...y, s: s2, r: st.score ? scoreOf(s2) : null }; }).sort(rankSort);
+  const openP = people.find(y => y.p === st.open);
+  return `<section class="teamblock ${rank === 1 && s.scored ? "first" : ""}">
+    <div class="th"><span class="rank">${s.scored ? ordinal(rank) : DASH}</span><span class="nm">${esc(t.name)}</span>
+      <span class="meta">${s.scored ? `${st.score ? `<span class="pill ${scoreCls(x.r.score)}"><i></i>${x.r.score} pts</span>` : ""}${mPill(s.avg)}<span>${s.scored} finished</span>` : `<span class="gr">nothing finished yet</span>`}${tp.length ? `<span>· ${tp.length} in progress</span>` : ""}</span></div>
+    <div class="people">${people.map((y, i) => personCard(y.p, y.jobs, i + 1, i === 0 && y.s.scored > 0)).join("")}</div>
+    ${openP ? personDetail(openP.p, openP.jobs) : ""}
+  </section>`;
+}
+
+/* home */
+function render() {
+  const teamKeys = new Set(TEAMS.filter(t => t.division === st.division).map(t => t.key));
+  const onTeam = (j) => j.teams.some(k => teamKeys.has(k));
+  // Everybody counts only jobs that belong to a team (Koy 2026-10-16); off-team people are not shown anywhere.
+  const jobs = JOBS().filter(onTeam), all = stats(jobs), prog = PROG().filter(onTeam);
+  const teams = TEAMS.filter(t => t.division === st.division).map(t => { const s = stats(forTeam(jobs, t.key)); return { t, s, r: st.score ? scoreOf(s) : null }; }).sort(rankSort);
+  const allR = st.score ? scoreOf(all) : null;
+  const winLbl = WINS.find(w => w.k === st.win).l.toLowerCase();
+  const offTeam = [];
+  const known = new Set([...TEAMS.flatMap(t => t.members), ...D.solo, ...D.former, ...D.office]);
+  const others = [...new Set([...D.solo.filter(p => !teamOf(p)), ...D.former, ...offTeam.flatMap(j => j.people).filter(p => !known.has(p) || D.office.includes(p))])];
+  const nobody = offTeam.filter(j => !j.people.length);
+  const stageRows = (filter, G) => {
+    const rows = TEAMS.filter(t => t.division === st.division).map(t => ({ name: t.name, js: prog.filter(j => filter(j) && j.teams.includes(t.key)) }));
+    const everyone = prog.filter(filter);
+    const line = (r) => { const a = r.js.length ? r.js.reduce((s, j) => s + j.nm, 0) / r.js.length : null; return `<div class="srow"><span class="who">${esc(r.name)}</span><span class="n">${r.js.length} job${r.js.length === 1 ? "" : "s"}</span>${a == null ? `<span class="pill gr"><i></i>${DASH}</span>` : mPill(a, G)}</div>`; };
+    return rows.map(line).join("") + line({ name: "Everybody", js: everyone });
+  };
+  const progJobsTable = (filter, G) => jobTable(prog.filter(filter).map(j => ({ ...j, completed: "", gm: null })), G, true);
+  const stagePanel = (title, sub, filter, G) => `<div class="panel"><h3>${title} <span>${sub}</span></h3>${stageRows(filter, G)}<details class="dd"><summary>Jobs<span class="cnt">${prog.filter(filter).length}</span></summary><div class="body">${progJobsTable(filter, G)}</div></details></div>`;
+
+  if (D.loading) { mount($("#app"), `<div class="empty" style="padding:40px 16px;text-align:center;color:var(--ink-3)">Loading the scoreboard…</div>`); return; }
+  if (!D.jobs.length && !D.prog.length) { mount($("#app"), `<div class="empty" style="padding:40px 16px;text-align:center;color:var(--ink-3)">${D.loadError ? esc(D.loadError) : "No Simpro numbers yet. The nightly pull has not run, or the first pull is still going."}</div>`); return; }
+  mount($("#app"), `
+  ${st.edit ? pendPanel() : ""}
+  <section class="arena stagger">
+    <div class="head"><span class="eyebrow">${esc(st.division)} · ${esc(winLbl)} · ${st.score ? "season standings" : "avg net margin"}</span><span class="sub">${all.scored} finished team jobs on the board${allR ? ` · Everybody score <b class="${scoreCls(allR.score)}">${allR.score}</b>` : ""} · Everybody avg ${all.avg == null ? DASH : `<b class="${mClass(all.avg)}">${pct1(all.avg)}</b>`}</span></div>
+    ${podium(teams)}
+  </section>
+  ${race(teams, all)}
+  ${spotlight()}
+
+  <h2 class="sect">Teams <span class="cnt">${teams.length}</span><span class="why">tap a name for their jobs</span></h2>
+  ${teams.map((x, i) => teamBlock(x, i + 1)).join("")}
+  <!-- people not on a team are not shown (Koy 2026-10-16); their finished jobs still count toward Everybody -->
+
+  <h2 class="sect">In progress <span class="cnt">${prog.length} jobs</span><span class="why">context only · never scored</span></h2>
+  <div class="stagegrid">
+    ${stagePanel("Still in rough", "Rough-In and earlier · 45 / 39", isEarly, G_ROUGH)}
+    ${stagePanel("Post-rough", "Rough-In Complete · 45 / 39", isRough, G_ROUGH)}
+    ${stagePanel("Finishing", "Finish + Punch List · 15 / 10", isFin, G_DONE)}
+  </div>
+  <div class="note">Every active Simpro job. A job still in rough is mostly the bid talking; it moves right as Simpro status changes and joins the board once it is complete, 100% invoiced, and costed.</div>
+
+  <h2 class="sect rules-h">How the score works <span class="why">every job is a fight against its own bid</span></h2>
+  <div class="rules">
+    <div class="rule"><div class="pts">50<small>points</small></div><h4>Margin</h4><p>Average net margin on finished jobs, divided by 30. Hit the 15% goal and you earn half the points. Double it and you earn them all.</p></div>
+    <div class="rule"><div class="pts">30<small>points</small></div><h4>Beat the bid</h4><p>Share of your finished jobs where the actual net margin met or beat the margin it was bid at. Every job is a win or a loss.</p></div>
+    <div class="rule"><div class="pts">20<small>points</small></div><h4>Labor</h4><p>Per job: finish at or under bid hours for full credit, 25% over for half, 50% over for none. Averaged across your jobs.</p></div>
+  </div>
+  <div class="legend">
+    <div class="row"><b>Finished jobs</b>${mPill(18)} 15% and up ${mPill(12)} 10 to 15% ${mPill(4)} under 10%</div>
+    <div class="row"><b>Still in rough / post-rough</b>${mPill(50, G_ROUGH)} 45% and up ${mPill(41, G_ROUGH)} 39 to 45% ${mPill(30, G_ROUGH)} under 39%</div>
+    <div class="row"><b>Form strip</b><span class="form" style="display:inline-flex"><i class="w"></i></span> beat the bid <span class="form" style="display:inline-flex"><i class="l"></i></span> missed it <span class="form" style="display:inline-flex"><i class="p"></i></span> in progress</div>
+  </div>
+  <details class="dd src"><summary>Where every number comes from</summary><div class="body"><div class="tbl-wrap compact" style="margin-top:10px"><table>
+      <tr><td>Which jobs</td><td>Simpro jobs whose <b>Stage</b> is Complete, Invoiced or Archived, <b>InvoicePercentage = 100</b>, with a <b>CompletedDate</b> inside the season window. A finished job that is not fully invoiced yet is not shown (${NOT_INVOICED().length} waiting right now). In-progress jobs are never pulled into the score.</td></tr>
+      <tr><td>Scored when</td><td>Simpro has real costs posted on the job (NettMargin.Actual is not the empty 100% and material, labor or hours are above zero). Otherwise the job is listed grey with the reason.</td></tr>
+      <tr><td>Net margin</td><td><b>Totals.NettMargin.Actual</b> per job. Team, person and Everybody headlines are the plain average of their finished jobs.</td></tr>
+      <tr><td>Bid margin</td><td><b>Totals.NettMargin.Estimate</b> — the margin the job was bid at. Beat the bid = actual ≥ bid.</td></tr>
+      <tr><td>Gross margin</td><td><b>Totals.GrossMargin.Actual</b>, averaged.</td></tr>
+      <tr><td>Labor hours vs bid</td><td><b>ResourcesCost.LaborHours</b> Actual ÷ Estimate, summed first, then divided.</td></tr>
+      <tr><td>Material vs estimate</td><td><b>MaterialsCost</b> (Actual − Estimate) ÷ Estimate, summed first, shown as a percentage only.</td></tr>
+      <tr><td>QC items</td><td>From the app's QC walks, shown on the person detail as information only. Not in the score: it depends on who walked, and the app only saw about half the jobs.</td></tr>
+      <tr><td>Who gets credit</td><td>The app's job record: its <b>foreman</b> and <b>lead</b> (matched to Simpro by job number). Falls back to Simpro's Technicians when the app has no record. A job counts for everyone who ran it, once per team.</td></tr>
+      <tr><td>Residential / Commercial</td><td>Simpro Business Group (custom field 67) when set; otherwise the Commercial team's jobs count as commercial and everything else as residential.</td></tr>
+      <tr><td>Hidden on purpose</td><td>No money at all. Total cost, net profit $, contract $, material $, labor $ and overhead never appear anywhere on this board. Percentages only.</td></tr>
+      <tr><td>Small jobs</td><td>Jobs under $2,500 contract (doorbells, timers, service calls) are out by default; the header toggle lets them in.</td></tr>
+      <tr><td>Temp peds &amp; extras</td><td>Names matching temp power, temp ped, phase, T&amp;M, EV charger, light change, whip or STC are out of every average unless the header toggle lets them in.</td></tr>
+      <tr><td>In progress</td><td>Every job with Simpro Stage = Progress, on the person it belongs to and in the three panels by status. Never scored. Jobs still in Pending stage are not pulled.</td></tr>
+    </table></div></div></details>
+  `);
+  mount($("#foot"), `<div class="in"><img src="/hs-logo-white.png" alt="Homestead Electric"><div><b>Homestead Electric</b><br>Crew scoreboard · finished &amp; fully invoiced jobs only · percentages, never dollars</div><div class="r">Numbers straight from Simpro, read-only<br>Standalone page · not part of the app<br><button class="editlink" data-edit="on">Fix who gets credit</button></div></div>`);
+  save();
+  countUp();
+}
+function countUp() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  document.querySelectorAll(".count").forEach(el => {
+    const to = Number(el.dataset.to); if (!Number.isFinite(to)) return;
+    const small = el.querySelector("small"); const t0 = performance.now(), dur = 900;
+    const step = (now) => { const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3); el.replaceChildren(document.createTextNode(String(Math.round(to * e))), small); if (k < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  });
+}
+
+/* events */
+document.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-div]"); if (tab) { st.division = tab.dataset.div; st.open = ""; renderTabs(); renderFilters(); render(); return; }
+  const win = e.target.closest("[data-win]"); if (win) { st.win = win.dataset.win; renderFilters(); render(); return; }
+  const mo = e.target.closest("[data-month]"); if (mo) { st.month = mo.dataset.month; render(); return; }
+  const tg = e.target.closest("[data-tg]"); if (tg) { st[tg.dataset.tg] = !st[tg.dataset.tg]; renderFilters(); render(); return; }
+  const ed = e.target.closest("[data-edit]"); if (ed) { st.edit = ed.dataset.edit === "on"; if (!st.edit && location.hash === "#edit") history.replaceState(null, "", location.pathname + location.search); render(); if (st.edit) window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  const off = e.target.closest("[data-off]"); if (off) { const j = jobById(Number(off.dataset.off)); if (j) setPending(j.id, j.people.filter(p => p !== off.dataset.name)); return; }
+  const rs = e.target.closest("[data-reset],[data-drop]"); if (rs) { delete PEND[Number(rs.dataset.reset || rs.dataset.drop)]; savePend(); render(); return; }
+  if (e.target.closest("[data-clear]")) { PEND = {}; savePend(); render(); return; }
+  if (e.target.closest("[data-save]")) { postCorrections(mergedCorrections()); const c = $("#copied"); if (c) c.textContent = "Saving…"; return; }
+  const ub = e.target.closest("[data-unbake]"); if (ub) { postCorrections((D.corrections || []).filter(c => Number(c.job) !== Number(ub.dataset.unbake))); return; }
+  if (e.target.closest("[data-copy]")) { const txt = corrText(); const done = () => { const c = $("#copied"); if (c) c.textContent = "Copied. Paste it to Claude."; }; const fallback = () => { const ta = $("#corrtext"); if (ta) { ta.focus(); ta.select(); } const c = $("#copied"); if (c) c.textContent = "Select the text below and copy it."; };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, fallback); else fallback(); return; }
+  const op = e.target.closest("[data-open]"); if (op) { st.open = st.open === op.dataset.open ? "" : op.dataset.open; render(); const d = document.querySelector(".detail"); if (d && st.open) d.scrollIntoView({ block: "nearest", behavior: "smooth" }); return; }
+});
+document.addEventListener("change", (e) => { const sel = e.target.closest("[data-add]"); if (sel && sel.value) { const j = jobById(Number(sel.dataset.add)); if (j) setPending(j.id, [...j.people, sel.value]); } });
+window.addEventListener("hashchange", () => { if (location.hash === "#edit" && !st.edit) { st.edit = true; render(); } });
+$("#theme").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+});
+/* ── app mode: data from the parent tab, corrections back to it ───────────── */
+function mergedCorrections() {
+  const byJob = {}; (D.corrections || []).forEach(c => { byJob[Number(c.job)] = { job: Number(c.job), name: c.name || "", set: Array.isArray(c.set) ? c.set : [], note: c.note || "" }; });
+  Object.entries(PEND).forEach(([id, p]) => { byJob[Number(id)] = { job: Number(id), name: p.name || "", set: p.set || [], note: "Scoreboard edit " + new Date().toISOString().slice(0, 10) }; });
+  return Object.values(byJob).sort((a, b) => a.job - b.job);
+}
+function postCorrections(list) { if (!APP_MODE) return; try { window.parent.postMessage({ type: "sb-corrections", list }, location.origin); } catch {} }
+// Once the app has saved, drop pending entries that now match what came back.
+function reconcilePending() {
+  const baked = {}; (D.corrections || []).forEach(c => { baked[Number(c.job)] = (c.set || []).slice().sort().join("|"); });
+  let changed = false;
+  Object.keys(PEND).forEach(id => { if (baked[Number(id)] !== undefined && baked[Number(id)] === (PEND[id].set || []).slice().sort().join("|")) { delete PEND[id]; changed = true; } });
+  if (changed) savePend();
+}
+if (APP_MODE) {
+  renderTabs(); renderFilters(); render();
+  window.addEventListener("message", (e) => {
+    if (e.origin !== location.origin || e.source !== window.parent || !e.data || e.data.type !== "sb-data") return;
+    const p = e.data.payload || {};
+    if (!window.SB_SHAPE) { mount($("#app"), `<div class="empty">This page is missing its rules module.</div>`); return; }
+    D = window.SB_SHAPE.shapeScoreboard(p); CAN_SAVE = !!p.canEdit;
+    if (p.error) D.loadError = p.error;
+    reconcilePending(); renderTabs(); renderFilters(); render();
+    const c = $("#copied"); if (c) c.textContent = "";
+  });
+  try { window.parent.postMessage({ type: "sb-ready" }, location.origin); } catch {}
+  // Opened on its own (no app around it): say so instead of loading forever.
+  setTimeout(() => { if (D.loading) mount($("#app"), `<div class="empty" style="padding:40px 16px;text-align:center;color:var(--ink-3)">Open this from the app's Scoreboard tab. On its own this page has no numbers to show.</div>`); }, 4000);
+} else { renderTabs(); renderFilters(); render(); }
+})();
+</script>
+
+</html>

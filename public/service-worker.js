@@ -1,4 +1,4 @@
-const CACHE = "homestead-v549";
+const CACHE = "homestead-v550";
 
 // Install — skip waiting immediately
 self.addEventListener("install", e => {
@@ -45,8 +45,8 @@ self.addEventListener("fetch", e => {
           // should be. Fail honestly instead so the caller can say "not
           // downloaded yet". Both are cached above on their first online load.
           const pathname = new URL(e.request.url).pathname;
-          if (pathname.startsWith("/sops/") || pathname.startsWith("/tools/")) {
-            return new Response(pathname.startsWith("/tools/")
+          if (pathname.startsWith("/sops/") || pathname.startsWith("/tools/") || pathname.startsWith("/scoreboard/")) {
+            return new Response(pathname.startsWith("/tools/") || pathname.startsWith("/scoreboard/")
               ? "Tool not cached on this device yet — open it once while online."
               : "Guide not cached on this device yet.", {
               status: 504, headers: { "Content-Type": "text/plain" }
