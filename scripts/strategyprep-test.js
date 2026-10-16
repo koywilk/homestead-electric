@@ -91,9 +91,9 @@ function fixture(over = {}) {
   t("index: Hideout has Treycen + Bailey Mon (simpro)", eq(idx.byJob.get("HIDE").days[0].people, ["Treycen Rollene", "Bailey Smith"]) && idx.byJob.get("HIDE").days[0].source === "simpro", JSON.stringify(idx.byJob.get("HIDE")));
   t("index: Oak Hill all five days", Object.keys(idx.byJob.get("OAK").days).length === 5);
   t("index: Namjoshi has NO booking (lead field is not a booking)", !idx.byJob.has("NAM"));
-  t("index: byPerson Treycen Mon → The Hideout", idx.byPerson.get("treycen").days[0].has("The Hideout"));
+  t("index: byPerson Treycen Mon → The Hideout", idx.byPerson.get("treycen r").days[0].has("The Hideout"));
   t("index: Simpro job unknown to the app is kept, not dropped", idx.unknownSimpro.length === 1 && idx.unknownSimpro[0].pid === "9999" && idx.unknownSimpro[0].people[0] === "Zane Watkins");
-  t("index: activity rows ignored", !idx.byPerson.has("james"));
+  t("index: activity rows ignored", !idx.byPerson.has("james c"));
   t("index: plannerPresent false when doc null", idx.plannerPresent === false && idx.simproOk === true);
 
   const c = S.classifySchedule(live, idx, w.weekYmds, w.today);
@@ -110,6 +110,35 @@ function fixture(over = {}) {
   const all = [...ids("booked"), ...ids("idle"), ...ids("starts"), ...ids("onHold"), ...ids("between")];
   t("every live job lands in exactly one bucket", all.length === live.length && new Set(all).size === live.length, JSON.stringify(all));
   t("no dead fields read", !/roughScheduledDate|finishScheduledDate|lastActivityAt/.test(require("fs").readFileSync(require.resolve("../functions/strategyPrep.js"), "utf8")));
+
+  // People are keyed by first name + last initial (the app's two-Jacobs rule), never first name alone.
+  t("personKey: first name + last initial", S.personKey("Treycen Rollene") === "treycen r" && S.personKey("Jacob Nuffer") === "jacob n" && S.personKey("Jacob Spackman") === "jacob s" && S.personKey("Paul") === "paul");
+  {
+    const f2 = fixture();
+    const live2 = S.liveJobs(f2.jobs);
+    const ent = [...f2.scheduleEntries,
+      { Type: "job", Date: "2026-10-21", Project: { ProjectID: 1302 }, Staff: { Name: "Jacob Nuffer" }, Blocks: [{ Hrs: 10 }] },
+      { Type: "job", Date: "2026-10-21", Project: { ProjectID: 1302 }, Staff: { Name: "Jacob Spackman" }, Blocks: [{ Hrs: 10 }] }];
+    const i2 = S.buildScheduleIndex(ent, null, live2, w.weekYmds);
+    t("two Jacobs on one job-day are both kept", i2.byJob.get("HIDE").days[2].people.length === 2 && eq(i2.byJob.get("HIDE").days[2].people, ["Jacob Nuffer", "Jacob Spackman"]), JSON.stringify(i2.byJob.get("HIDE").days[2]));
+    t("two Jacobs are two byPerson entries", i2.byPerson.has("jacob n") && i2.byPerson.has("jacob s") && !i2.byPerson.has("jacob"));
+    const c2 = S.classifySchedule(live2, i2, w.weekYmds, w.today);
+    t("booked row lists both Jacobs", c2.booked.find(r => r.jobId === "HIDE").people.filter(p => /^Jacob/.test(p)).length === 2);
+  }
+  {
+    const f3 = fixture();
+    const live3 = S.liveJobs(f3.jobs);
+    const planner = { assignments: { OAK_0: { lead: "Louis Hoffman", crew: [] } } };
+    const i3 = S.buildScheduleIndex(f3.scheduleEntries, planner, live3, w.weekYmds);
+    t("same person from Simpro + planner is ONE person, source both", i3.byJob.get("OAK").days[0].people.length === 1 && i3.byJob.get("OAK").days[0].source === "both" && i3.plannerPresent === true, JSON.stringify(i3.byJob.get("OAK").days[0]));
+  }
+  {
+    const f4 = fixture();
+    f4.scheduleEntries.push({ Type: "job", Date: "2026-10-20", Project: { ProjectID: 1419 }, Staff: { Name: "Keegan Wilkinson" }, Blocks: [{ Hrs: 10 }] });
+    const live4 = S.liveJobs(f4.jobs);
+    const c4 = S.classifySchedule(live4, S.buildScheduleIndex(f4.scheduleEntries, null, live4, w.weekYmds), w.weekYmds, w.today);
+    t("trailing-space simproNo matches: Lot 208 moves idle -> booked", c4.booked.some(r => r.jobId === "L208" && r.days === "Tue") && !c4.idle.some(r => r.jobId === "L208"), JSON.stringify(c4.booked.map(r => r.jobId)));
+  }
 }
 
 if (failures) { console.error(`\n${failures} failing`); process.exit(1); }

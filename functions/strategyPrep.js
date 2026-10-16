@@ -49,7 +49,9 @@ const daysBetween = (a, b) => Math.round((startOfDay(a) - startOfDay(b)) / 86400
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const fmtShort = (d) => d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
 const fmtMD = (d) => d ? `${d.getMonth() + 1}/${d.getDate()}` : "";
-const firstKey = (name) => String(name || "").trim().toLowerCase().split(/\s+/)[0];
+const firstKey = (name) => String(name || "").trim().toLowerCase().split(/\s+/)[0];   // display helper only — NOT identity
+// Identity key: first name + last initial, so two people sharing a first name stay two people ("jacob n" vs "jacob s").
+const personKey = (name) => { const t = String(name || "").trim().toLowerCase().split(/\s+/).filter(Boolean); return t.length > 1 ? `${t[0]} ${t[t.length - 1][0]}` : (t[0] || ""); };
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const arr = (v) => (Array.isArray(v) ? v : []);
 const clip = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : s; };
@@ -118,9 +120,9 @@ function buildScheduleIndex(scheduleEntries, plannerDoc, live, weekYmds) {
   const note = (job, di, person, source) => {
     if (!byJob.has(job.id)) byJob.set(job.id, { days: {} });
     const d = byJob.get(job.id).days; if (!d[di]) d[di] = { people: [], source };
-    if (!d[di].people.some(p => firstKey(p) === firstKey(person))) d[di].people.push(person);
+    if (!d[di].people.some(p => personKey(p) === personKey(person))) d[di].people.push(person);
     if (d[di].source !== source) d[di].source = "both";
-    const k = firstKey(person); if (!byPerson.has(k)) byPerson.set(k, { name: person, days: {} });
+    const k = personKey(person); if (!byPerson.has(k)) byPerson.set(k, { name: person, days: {} });
     const pd = byPerson.get(k).days; if (!pd[di]) pd[di] = new Set(); pd[di].add(job.name);
   };
   arr(scheduleEntries).forEach(s => {
@@ -131,7 +133,7 @@ function buildScheduleIndex(scheduleEntries, plannerDoc, live, weekYmds) {
     const j = jobBySn.get(pid);
     if (j) { note(j, di, nm, "simpro"); return; }
     if (!unknown.has(pid)) unknown.set(pid, { pid, days: new Set(), people: [] });
-    const u = unknown.get(pid); u.days.add(di); if (!u.people.some(p => firstKey(p) === firstKey(nm))) u.people.push(nm);
+    const u = unknown.get(pid); u.days.add(di); if (!u.people.some(p => personKey(p) === personKey(nm))) u.people.push(nm);
   });
   const assignments = (plannerDoc && plannerDoc.assignments) || {};
   const liveById = new Map(live.map(j => [j.id, j]));
@@ -150,7 +152,7 @@ function classifySchedule(live, idx, weekYmds, today) {
   const inWindow = (d) => d && weekYmds.includes(ymd(d));
   const elsewhere = (j, di) => {
     const who = [["foreman", hasForeman(j) ? j.foreman : ""], ["lead", leadOf(j)]].filter(x => x[1]);
-    return who.map(([role, name]) => { const p = idx.byPerson.get(firstKey(name)); const there = p && p.days[di] ? [...p.days[di]].filter(n => n !== j.name) : [];
+    return who.map(([role, name]) => { const p = idx.byPerson.get(personKey(name)); const there = p && p.days[di] ? [...p.days[di]].filter(n => n !== j.name) : [];
       return there.length ? `${role} ${name} is at ${there.join(" / ")} ${DAY_LBL[di]}` : ""; }).filter(Boolean);
   };
   live.forEach(j => {
@@ -164,7 +166,7 @@ function classifySchedule(live, idx, weekYmds, today) {
     const startOf = (p) => { const s = effStatus(j, p); if (STARTED_ST.has(s) || pctOf(j, p) > 0) return null; const d = toDateAny(j[p + "ProjectedStart"]); return d ? { phase: p, date: d, confirmed: !!j[p + "StartConfirmed"] || ["scheduled", "date_confirmed"].includes(s) } : null; };
     const start = startOf("rough") || startOf("finish");
     if (bookedDays.length) {
-      const seen = new Set(), people = []; bookedDays.forEach(di => b.days[di].people.forEach(p => { const k = firstKey(p); if (!seen.has(k)) { seen.add(k); people.push(p); } }));
+      const seen = new Set(), people = []; bookedDays.forEach(di => b.days[di].people.forEach(p => { const k = personKey(p); if (!seen.has(k)) { seen.add(k); people.push(p); } }));
       out.booked.push({ ...base, firstDay: bookedDays[0], days: daysLabel(bookedDays), people, source: [...new Set(bookedDays.map(di => b.days[di].source))].join("+"), qcNeeds: j.qcStatus === "needs" || j.finishQcStatus === "needs", start: start && inWindow(start.date) ? { ...start } : null });
       return;
     }
@@ -194,5 +196,5 @@ function classifySchedule(live, idx, weekYmds, today) {
   return out;
 }
 
-module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
+module.exports = { TZ, MARGIN_TARGET, CAPS, DAY_LBL, SPECIAL_JOB, PREP_ITEMS, WAIT_BUCKETS, toDateAny, startOfDay, addDays, daysBetween, ymd, fmtShort, fmtMD, firstKey, personKey, plural, arr, clip, esc, stripHtml, fmtMoney, median,
   snOf, effStatus, pctOf, hasForeman, leadOf, liveJobs, walkPunch, openPunchCount, waitingItems, openQuestions, waitBucket, prepOf, weekOf, daysLabel, buildScheduleIndex, classifySchedule, docsRequests };
